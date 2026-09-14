@@ -13,7 +13,7 @@ These pages answer a specific question about the shipped product: what a command
 | [getting-started.md](./cli/getting-started.md) | Opening, reaching, and diagnosing a local room: `rimz`, `start`, `attach`, `sessions`, `list`, `setup`, and `doctor`. |
 | [remote.md](./cli/remote.md) | `rimz remote`: attaching to a room on another host over SSH, aliases, remote setup, and dev-server forwards. |
 | [web.md](./cli/web.md) | `rimz web`: opening a room in the browser, read-only broadcasts, the ttyd daemons, the machine credential, and the JSON payloads. |
-| [agents.md](./cli/agents.md) | `rimz agents`: cards, launching panes and teams, supervised `-p` runs, focus, stop, resume, budgets, and the address grammar every agent-facing command shares. |
+| [agents.md](./cli/agents.md) | `rimz agents`: launching layouts and team roles, supervised `-p` runs, resume, launch plans, agent cards and the verbs that drive one agent, attribution, and the address grammar every agent-facing command shares. |
 | [subagents.md](./cli/subagents.md) | `rimz subagents`: delegating one bounded prompt to a supervised child, fanout, waits, and the agent-only launch rule. |
 | [teams.md](./cli/teams.md) | `rimz teams`: listing, inspecting, launching, resuming, and driving named teams, stage flips, and installing team bundles. |
 | [asks.md](./cli/asks.md) | `rimz asks` and `rimz answer`: reading the prompt that blocks an agent and answering it in the agent's native UI. |
@@ -24,6 +24,7 @@ These pages answer a specific question about the shipped product: what a command
 | [events.md](./cli/events.md) | `rimz events`: following lifecycle transitions as JSON lines, the event schema, and emitting signals. |
 | [accounts.md](./cli/accounts.md) | `rimz accounts`: declaring named provider accounts as separate provider homes. |
 | [stats.md](./cli/stats.md) | `rimz stats`: account-global token and dollar history, windows, and breakdowns. |
+| [budget.md](./cli/budget.md) | `rimz agents budget` and `rimz budget`: inspecting and changing one agent's dollar cap and the room and provider-account daily caps. |
 | [providers.md](./cli/providers.md) | `rimz providers`: login status, rate-limit windows, credits, spend, and daily-cap state, with freshness and JSON fields. |
 | [channel.md](./cli/channel.md) | `rimz channel`: durable named lanes without a Git checkout. |
 | [worktree.md](./cli/worktree.md) | `rimz worktree`: creating, entering, landing, removing, and sweeping RimZ-owned Git worktrees. |

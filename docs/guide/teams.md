@@ -223,4 +223,4 @@ The room treats a team as a single line of work: the sidebar names the active gr
 - [Examples → forge](../../examples/README.md) — the shipped forge fragment: install, prerequisites, and try-before-install.
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
 - [Teams CLI reference](../reference/cli/teams.md) — discover, inspect, install, launch, resume, and drive named teams.
-- [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.
+- [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents` surface.

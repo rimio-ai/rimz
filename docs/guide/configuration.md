@@ -483,7 +483,7 @@ An inline spec like `rimz agents "claude,codex+term"` keeps the same shape gramm
 5. adapter-supported virtual `<kind>-<mode>` cells (`claude-auto`, `codex-ask`, `codex-yolo`, …).
 6. executables found on PATH.
 
-The [agents CLI reference](../reference/cli/agents.md) lists the built-in virtual cells in full.
+The [agents CLI reference](../reference/cli/agents.md#permission-mode-cells) lists which kinds have each permission-mode cell.
 
 `rimz subagents` uses the same resolution order except that step 2 reads `[subagents.profiles]`. If a profile exists only in the other namespace, launch fails with the section to move or copy it to.
 

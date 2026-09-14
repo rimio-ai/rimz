@@ -1,238 +1,199 @@
 # Agent control CLI
 
-`rimz agents` is the single launcher and card surface for the fleet: list the room's agents, launch laid-out panes and teams, drive supervised script turns, then focus, wait on, or stop what you started. What it does on your machine is thin — it renders a profile into the stock CLI's own flags (`claude --model … --allowed-tools …`, nothing you couldn't type) and runs that command in your Zellij or tmux, in the pane you stand in for one agent or a fresh tab for a layout or worktree. The agent process is the official CLI; its session files land where that CLI always puts them, so `claude --resume` and the provider's own apps keep working. `agents stop` ends a pane the way Ctrl+C would, and `--resume` reopens a closed cohort. Why you reach for a profile or a team instead of a bare CLI is the [agents guide](../../guide/fleet.md).
+`rimz agents` launches agents into panes and reads and drives the agents already running in the room. Bare `rimz agents` lists the current channel's agent cards; `rimz agents <SPEC> [PROMPT]` launches; each subcommand below acts on launches, lanes, or one agent. Run these commands from inside the room, or from any directory that resolves to the same workspace ([which room a command reaches](../cli.md#which-room-a-command-reaches)). `rimz agents <subcommand> --help` prints every flag.
 
-This page also defines the [address grammar](#addressing-agents) that every agent-facing command shares. Run these from inside the room or anywhere that resolves to the same workspace.
+Why you would launch through RimZ instead of the bare CLI is the [agents guide](../../guide/fleet.md). Profiles, commands, and teams are configured in the [configuration guide](../../guide/configuration.md#agent-profiles-commands-and-teams), and the launch machinery is [fleet.md](../../internals/harness/fleet.md).
 
-A typical session threads several commands together:
+| Task | Commands | Section |
+| --- | --- | --- |
+| Launch agents, a layout, or a team role | `rimz agents <SPEC>`, `launch` | [Launch agents](#launch-agents) |
+| Run one scripted, exit-coded turn | `rimz agents <SPEC> <PROMPT> -p` | [Supervised runs](#supervised-runs--p) |
+| Reopen closed agents | `--resume`, `resume` | [Resume agents](#resume-agents) |
+| See what a launch would run | `profiles`, `explain` | [Inspect profiles and launch plans](#inspect-profiles-and-launch-plans) |
+| Add a third-party agent kind | `register`, `check` | [Register a third-party kind](#register-a-third-party-kind) |
+| Read and drive running agents | `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `fork`, `wait`, `refresh`, `stop`, `restart`, `compact` | [List and manage agents](#list-and-manage-agents) |
+| Cap one agent's spend | `budget` | [Budget CLI](./budget.md#cap-one-agent) |
 
-```sh
-rimz agents claude,codex --worktree=auth-refresh "Refactor token refresh; keep the public API stable."
-rimz message --steer @claude#auth-refresh "Start with the refresh-token rotation path."
-rimz message @codex#auth-refresh "After your turn, add coverage for the expiry edge cases."
-rimz agents focus @claude#auth-refresh        # jump to the pane when it needs you
-```
-
-Each command around `rimz agents` has its own page: [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and drives raw panes, [`rimz loop`](./loop.md) schedules turns and exposes the live `rimz loop watch` dashboard, and [`rimz channel`](./channel.md) and [`rimz worktree`](./worktree.md) manage the lanes they work in. The profiles, teams, and launch grammar these commands consume are configured per machine in the [configuration guide](../../guide/configuration.md#agent-profiles-commands-and-teams); the launch, run, and delivery machinery lives in [fleet.md](../../internals/harness/fleet.md).
+Neighbouring commands have their own pages: [`rimz teams`](./teams.md) launches and drives configured teams, [`rimz subagents`](./subagents.md) launches supervised children from an agent, [`rimz message`](./message.md) talks to live agents, [`rimz transcript`](./transcript.md) reads the chat log, [`rimz pane`](./pane.md) reads and types into raw panes, and [`rimz channel`](./channel.md) and [`rimz worktree`](./worktree.md) manage lanes.
 
 ## Addressing agents
 
-`message`, `transcript`, `pane capture`/`send`/`focus`, and the `agents show`/`logs`/`history`/`focus`/`fork`/`wait`/`stop`/`restart`/`refresh` verbs share one address grammar: `@<handle>` names who, an optional `#<channel>` names the stamped lane, and a raw pane id is the precise fallback. This is the one place it is spelled out; every agent-facing command assumes it.
+Every command that names an agent uses one address grammar: `@<handle>` names who, an optional `#<channel>` names the lane, and a raw pane id names one pane exactly. This section is the one definition; `message`, `transcript`, `pane capture`/`send`/`focus`, and the `agents` management verbs all assume it. The resolution rules behind it are in [fleet.md → The address](../../internals/harness/fleet.md#the-address).
 
-The [`pane` commands](./pane.md) additionally accept the literal `sidebar` for the session's sidebar pane.
+These handles name one agent:
 
-**Handles that name one agent:**
+| Handle | Names |
+| --- | --- |
+| `@coder` | A team or ad-hoc role. It follows the launch's current conversation; earlier conversations in the same seat stay readable through `show`, `history`, and `fork` but never receive messages. |
+| `@writer` | An explicit name from a single-agent launch, such as `rimz agents claude --name writer`. |
+| `@swift-otter` | The pet name RimZ gives every launch. |
+| `@claude-2` | A kind plus ordinal. The ordinal appears only when two agents of a kind share one lane. |
+| `@<session-prefix>` | A leading slice of the provider session id. |
+| `@me` | The calling agent, from an agent pane: accepted by single-agent commands, direct messages, and loop delivery targets. `me` is reserved and cannot name an agent, profile, command, or team. |
 
-- `@coder` — a team or ad-hoc role; it names the launch's current conversation, so the handle follows whichever same-instance conversation currently occupies the launch. Other conversations remain audit records resolvable by `agents show`, `history`, or `fork`; a live pane has one message recipient, so shadowed siblings are never message targets.
-- `@writer` — an explicit name from a single-agent launch such as `rimz agents claude --name writer`.
-- `@swift-otter` — a pet name.
-- `@claude-2` — a kind plus ordinal (the ordinal appears only when two of a kind share one worktree).
-- `@<session-prefix>` — a leading slice of the session id.
-- `@me` — the identifiable calling agent for single-agent commands, direct messages, and loop delivery targets. Run it from an agent pane; `me` is reserved and cannot name an agent, profile, command, or team.
+These handles name a type and can match several agents:
 
-**Handles that name a type and fan out:**
+| Handle | Names |
+| --- | --- |
+| `@claude` | Every agent of that kind in the channel. |
+| `@planner` | Every agent launched under that [profile](../../guide/configuration.md#agent-profiles-commands-and-teams). |
+| `@all` | Every agent in the channel at resolution time. |
 
-- `@claude` — an agent kind; every Claude in the channel.
-- `@planner` — a [profile](../../guide/configuration.md#agent-profiles-commands-and-teams) you defined; every agent launched under it.
-- `@all` — everyone in the channel at resolution time; `message` excludes its RimZ-launched caller before dispatch.
+A channel scopes the lookup. Without one, the channel is the named-channel tab or worktree you run the command in; a team member launched in place carries `RIMZ_CHANNEL=<dir>/<team>`, so its own commands default to that lane.
 
-**Channels** scope the lookup to a named lane, worktree, or in-place team lane stamped at launch:
+| Form | Matches |
+| --- | --- |
+| `#design` | A named channel created by [`rimz channel`](./channel.md). The flag spelling is `--channel design`. |
+| `#auth-refresh` | A worktree lane, by branch, generated worktree name, or directory basename. The flag spelling is `--worktree auth-refresh`. |
+| `#query-engine/forge` | The team `forge` launched in place from the `query-engine` directory. |
+| `tmux:%12`, `zellij:terminal_3` | One pane by id, ignoring channels. The [`pane` commands](./pane.md) also accept the literal `sidebar`. |
 
-- `#design` matches a named channel created by [`rimz channel`](./channel.md); `--channel design` is the flag spelling.
-- `#auth-refresh` matches by branch, generated worktree name, or directory basename; `--worktree auth-refresh` is the worktree flag spelling.
-- `#query-engine/forge` matches the named team `forge` launched in-place from the `query-engine` directory.
-- The default channel is the named-channel tab or worktree you run the command in.
-- A team member pane launched in-place carries `RIMZ_CHANNEL=<dir>/<team>`, so its own `rimz` commands default to that stamped lane.
-- A pane id (`tmux:%12`, `zellij:terminal_3`) addresses one pane directly and ignores channels.
+How many matches a command accepts:
 
-**One agent or many:**
+| Commands | Rule |
+| --- | --- |
+| `show`, `logs`, `history`, `focus`, `fork`, `restart`, `compact`, `budget` | Exactly one agent. An address that matches several fails and lists the candidates. |
+| `stop` | One agent; `--all` acts on every match. |
+| `wait` | One or more references, each resolved independently. |
+| `refresh` | One agent with a reference; every live root agent in the channel without one; the whole workspace with `--all`. |
+| `message` | One agent unless you opt into fan-out with `--all` or address `@all`. |
 
-- The management verbs (`show`, `logs`, `history`, `focus`, `fork`, `stop`, and `restart`) act on exactly one agent, so a handle that matches several is an error that lists the candidates to pick from. `wait` accepts one or more independently resolved references. `stop --all` fans out to every match for the reference. `refresh` without a reference covers every live root agent in the current channel, and `refresh --all` widens to the workspace; with a reference it acts on exactly one agent.
-- `message` fan-outs are explicit: a multi-match is ambiguous until you opt in with `--all` or address `@all`. A human-authored `@all` delivers to every match; an agent-authored `@all` excludes that caller and errors when no peers remain. Explicit selector fan-outs such as `--all @claude` keep every match. Each delivery is prefixed with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message.
+A fan-out message is prefixed with the addressed handle (`@all,`, `@claude,`) so receivers read it as a group message. A human-sent `@all` reaches every match. An agent-sent `@all` skips the sender and fails when no other agent remains; an explicit `--all @claude` from an agent keeps every match. The [message reference](./message.md) owns delivery.
 
-The `@` sigil is required for `message`, where it also keeps a target from being read as a launch spec. `show`, `logs`, `history`, `fork`, `wait`, `stop`, `restart`, and `refresh` also accept a bare selector (`swift-otter`), and `transcript`, `wait`, and `stop` also accept a run id. The deeper resolution rules are in [fleet.md → The address](../../internals/harness/fleet.md#the-address).
+`message` requires the `@` sigil, which also keeps a target from being read as a launch spec. `show`, `logs`, `history`, `fork`, `wait`, `stop`, `restart`, and `refresh` also accept a bare selector (`swift-otter`), and `wait` and `stop` (like `rimz transcript`) also accept a supervised run id. `rimz agents @coder` is refused with a hint to use `rimz agents show @coder`.
 
-## Agents
-
-`rimz agents` is the card surface and the single launcher. The subsections below cover the forms worth knowing; run `rimz agents --help` (and `--help` on each subcommand) for the full flag list.
-
-Agent launches validate every discovered `~/.agents` fragment before resolving the requested spec. A syntax error or invalid fragment fails at entry with its source path and fix; unknown fields instead print a warning, are ignored, and can be removed with `rimz setup`.
-
-Projected card `status` values are `idle`, `running`, `waiting`, `failed`, `paused`, `success`, and `sleeping`. `sleeping` means a resting agent has an instance one-shot delivery armed for its session in this workspace: a timer, watched command, or one-shot/deadline signal delivery. Standing subscriptions do not count, and working, waiting, failed, paused, or live-child delegation takes precedence. JSON exposes `pending_waits` with each wait's name, trigger, and optional arm timestamp; timers sort by due time before commands and signals, with names breaking ties. The status is derived, not a hook-reported lifecycle value; `--when` continues to accept only raw statuses.
-
-### Discover agent profiles
-
-```sh
-rimz agents profiles
-rimz agents profiles --path
-rimz agents profiles --json --path
-```
-
-`profiles` lists `[agents.profiles]` profiles and configured launch commands as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` to distinguish profiles from commands. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-profile catalog. Teams are excluded because the catalog describes reusable cell types rather than cohort layouts.
-
-### Explain a launch
-
-```sh
-rimz agents explain <profile|team.role|@handle> [overrides] [--json | --prompt]
-rimz agents explain coder --model gpt-6-astra --effort high
-rimz agents explain forge.coder --json
-rimz agents explain @coder
-rimz agents explain coder --prompt > prompt.md
-```
-
-`explain` prints one agent's launch plan without opening a pane, minting an identity, writing store records, or materializing prompt artifacts, room tmp, or skill copies. A profile or `<team>.<role>` follows fresh-launch resolution and works without an existing room store; multi-cell layouts are rejected. Agent names and launch ids are minted only at launch, not during profile inspection. An `@handle` requires existing room state and describes restart from the recorded identity and current profile configuration, not the original launch command: it resumes a recorded conversation when supported, otherwise shows a fresh-launch reason. In that fresh-restart case, inspection retains the recorded name and launch id; actual restart allocates a new id and may choose a new name. Missing or incompatible profile posture is shown bare with a degraded warning.
-
-Profile plans accept `--ask`, `--yolo`, `--model`, `--agent`, `--effort`, `--isolation`, `--system-prompt-file`, repeatable `--append-system-prompt-file`, `--budget AMOUNT[/day]`, and provider arguments after `--`. `--ask` and `--yolo` conflict; they fill only an unset permission mode, so an explicit profile mode wins. Model and effort overrides replace profile values. The report's `overrides` list records supplied flags, not proof that each won. All overrides, including budget and passthrough arguments, are refused with `@handle`; edit the profile or inspect a fresh profile launch instead.
-
-The default report includes the profile chain, action, cwd, effective settings, provider and wrapped argv, launch environment overrides and unset keys, prompt sources and composed text, RimZ reminder delivery, and sandbox mounts, pins, skill copies, and omissions. The chain includes the replacement base selected by `--agent`: `writer ← claude` becomes `writer ← codex` with `--agent codex`, or `writer ← fast ← codex` when the replacement profile is `fast`. The environment is not the entire ambient environment. `--json` carries `target`, `kind`, `action`, `action_note`, `name`, `launch_id`, `cwd`, `profile`, `overrides`, `mode`, `model`, `effort`, `budget`, `skills`, `program`, `provider_argv`, `argv`, `env`, `unset`, `redacted_keys`, `prompt`, `sandbox`, and `warnings`.
-
-`--prompt` preserves the composed configured system-prompt text and appends the RimZ reminder after two newline characters. Typed system-prompt files must be readable UTF-8; both launch and inspection refuse them otherwise, including a single base file delivered through a provider path flag. It does not reveal hidden provider-default instructions or expand native prompt options supplied through raw provider arguments; those arguments remain visible in the argv report. It still prints the reminder when the provider has no append-system-text channel, with a stderr notice that the reminder is not delivered. Warnings also go to stderr. `--prompt` and `--json` are mutually exclusive.
-
-Human and JSON reports replace trusted project `[[agents]]` env values with `<redacted>` in the environment map, matching argv environment tokens, and sandbox pins. Redaction follows environment keys, not value substrings: paths derived from those values remain visible in mounts, skill copies, warnings, and errors. Other values, user prompt text, and raw configured arguments remain full; there is no `--show-secrets` flag. Sandbox planning uses the invoking environment merged with launch overrides, not a captured environment from the target pane, so differing home, XDG, provider-home, or mux variables can change the view. Configured sandbox and skill capabilities must pass the same preflights as launch; a failed preflight is an error, not a partial plan.
-
-### Register a third-party kind
-
-```sh
-rimz agents register mybot           # scaffold $XDG_CONFIG_HOME/rimz/agents.d/mybot
-rimz agents register --check         # validate every machine-tier plugin
-rimz agents check mybot --replay events.jsonl # validate one plugin and replay canonical envelopes
-```
-
-The scaffold contains the manifest, setup guide, canonical forwarding shim, and stub probes. The [agent plugin reference](../agent-plugins.md) defines the bundle and wire contracts. A valid plugin kind works anywhere a built-in kind does, including inline layouts, profiles, teams, supervised runs, coverage, and messaging.
+## Launch agents
 
 ### Launch a layout
 
-A `<SPEC>` is a shape, and the optional `PROMPT` goes to exactly one leader: a named team's configured `leader` role, its first declared role by default, or otherwise the first agent cell. A repeated first cell must have an inline role to make the target unambiguous; use `rimz message @all` after launch for a broadcast.
-
-The final launch prompt is capped at 120 KiB (122880 bytes) because the provider receives it as one argv element. This applies to interactive and supervised (`-p`) launches, including prompt content read with `--stdin` and any reminder text that must be appended to the prompt. Oversized prompts fail before launch or run records are created, with the limit named in the error. Move supporting detail into a file the agent is instructed to read when the assignment exceeds that limit.
+`rimz agents <SPEC> [PROMPT]` opens the panes a spec describes and starts each agent's stock CLI in one of them. `rimz agents launch <SPEC>` is the same command with an explicit verb.
 
 ```sh
-rimz agents peer                                    # built-in claude,codex side by side
-rimz agents launch peer                             # explicit launch verb, same payload
-rimz agents claude,codex+term                       # Claude | Codex tiled over a shell
-rimz agents claude/codex/term                       # one Zellij stack; tmux tiles rows
-rimz agents claude,codex --channel=design "Draft the API shape."  # prompt Claude, the first cell
-rimz agents claude,codex --worktree=cli-docs "Review the CLI docs." # prompt Claude, the first cell
-rimz agents codex --from-pr 42 "Review this pull request."
+rimz agents peer                                    # built-in team: claude,codex side by side
+rimz agents claude,codex+term                       # Claude | Codex, tiled over a shell
+rimz agents claude/codex/term                       # one Zellij stack; tmux tiles the rows
+rimz agents claude:planner,codex:coder -w feat-x    # ad-hoc role handles in a worktree
+rimz agents claude,codex --channel=design "Draft the API shape."   # prompt goes to Claude
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
+rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents forge.planner                            # re-add one role of team forge
-rimz agents planner                                  # same, from a pane in the forge team's channel
-rimz agents claude --worktree "Take one approach."   # parallel attempts, each in its own fresh worktree
-rimz agents claude --worktree "Take another approach."
+rimz agents claude --worktree "Take one approach."   # each run gets its own fresh worktree
 ```
 
-The bare spec and `launch` verb are equivalent: use whichever reads better in a command chain.
-Fresh launches that open a new pane or tab print the absolute checkout path and each member's handle, provider, and resolved model (`-` when unset). If you supplied a prompt, a shortened echo names its recipient. Non-team launches include a copy-ready `Reach` command targeting the resolved leader, or the first minted member when no leader resolves. Startup remains asynchronous: the receipt records launch inputs, not provider readiness. Named teams use the compact [team receipt](./teams.md#launch-a-team) with lane, path, board filename, members, and configured signal bindings; in-place launches replace the command pane directly and print no receipt.
+A spec is one of three things:
 
-When a RimZ-launched agent runs this command, each new agent is an independent top-level peer with its own sidebar row. `[agents] max-chain-length` bounds successive agent-to-agent launches (three by default); an over-limit command refuses before it creates launch state. Agents that want a parented, one-prompt child with the safe flags implied use the agent-only [`rimz subagents`](./subagents.md) doorway instead. Only that doorway creates a subagent relationship, and a subagent cannot launch agents or subagents.
+| Spec | Launches |
+| --- | --- |
+| A team name | The [team](../../guide/configuration.md#agent-profiles-commands-and-teams)'s layout. [`rimz teams`](./teams.md#launch-a-team) is the doorway for configured cohorts. The built-in `peer` team is the roleless `claude,codex`. |
+| `<team>.<role>` | One declared role of a running or stopped team, with the same role handle and team lane. Inside that team's lane the bare role is enough: `rimz agents planner` in `#forge` means `rimz agents forge.planner`. A bare role that also names a profile or command resolving to a different agent is ambiguous and refused. |
+| An inline layout | Cells joined by `,` (columns), `+` (tiled rows), or `/` (a stacked row group; Zellij stacks, tmux tiles). |
 
-The spec is a named [team](../../guide/configuration.md#agent-profiles-commands-and-teams), one declared role of a team as `<team>.<role>`, or an inline grammar: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is `term`, an agent kind, a virtual `<kind>-<mode>` cell, a configured profile, or a configured command; an agent cell may use `<cell>:<role>` for an ad-hoc role handle. Use `rimz agents <team>.<role>` to re-add one role of a running or stopped team with the same role handle and stamped team lane. Inside that team's channel the bare role is enough — `rimz agents planner` in `#forge` means `rimz agents forge.planner`, and the role joins the lane it resolved from. RimZ reads the lane's team from the stamps its agents carry, so the shorthand works in a worktree lane and an in-place `<dir>/<team>` lane alike. A bare role that also names a profile or command resolving to a different agent is ambiguous and refuses; launch `<team>.<role>` or rename one of them. The built-in `peer` team is the roleless `claude,codex`. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
+Each inline cell is `term` (a plain shell), an agent kind, a [permission-mode cell](#permission-mode-cells) such as `claude-plan`, a configured profile, a configured command, or any executable on your `PATH`. Add `:<role>` to an agent cell for an ad-hoc role handle. Quote a spec that contains `+`, a space, or anything else your shell expands. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
 
-`rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
-`rimz agents` sets what an agent is — model, effort, prompts, permission posture, name, pane placement, supervised runs.
-The configured-team doorway and team lifecycle verbs are in [`rimz teams`](./teams.md).
+The optional `PROMPT` goes to exactly one leader: the team's configured `leader` role, else its first declared role, else the first agent cell. When the first cell repeats (`claude,claude`), give it a role so the target is unambiguous. To send every agent the same text, launch without a prompt and use `rimz message @all`. A second positional that is itself a cell (`rimz agents claude codex`) is refused with a `rimz agents a,b` hint, and a scope such as `rimz agents '#auth'` takes no prompt.
 
-Permission-mode cells set the launch posture: `-ask`, `-plan`, `-auto`, and `-yolo`. Every registered kind has `-ask` and `-plan`. `-auto` and `-yolo` exist wherever the adapter declares argv for them, which is every kind except `droid` (no `-yolo`), `opencode` (no `-auto`), and `amp`, `kiro`, and `pi`, which carry `-ask` and `-plan` alone. A posture the agent expresses through no launch flag still resolves as a cell and simply adds no argv, so `codex-plan` and `grok-plan` keep the default posture while `claude-plan` and `antigravity-plan` pass native plan mode. Grok Ask maps to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`. On the command line, `--ask` keeps native prompts and `--yolo` passes the adapter's bypass flags; with neither, each provider keeps its own prompting.
+A launch that opens a new pane or tab prints a receipt: the checkout path, then each member's handle, provider, and resolved model (`-` when unset). When you gave a prompt, a shortened echo names its recipient, and non-team launches add a copy-ready `Reach` command for the leader. The receipt records what was launched; the agents start asynchronously. A named team prints the [team receipt](./teams.md#launch-a-team) instead, and a launch that takes over the current pane prints none.
 
-A second positional that is itself a known cell is rejected with a `rimz agents a,b` hint, so the old space-separated fan-out never silently becomes a prompt.
+Launches refuse before they create any pane or record when:
 
-### Resume a cohort
+- the final prompt exceeds 120 KiB (122880 bytes), counting `--stdin` content and any reminder text appended to it, because the provider receives the prompt as one argument (move detail into a file the agent reads);
+- an agent-launched command would exceed `[agents] max-chain-length` successive agent-to-agent launches (default `3`);
+- a discovered `~/.agents` config fragment has a syntax error or invalid value (the error names the file and the fix; unknown fields only warn, and `rimz setup` removes them).
 
-`--resume` relaunches a prior cohort matching the same spec; `--continue` is the same visible alias. It reads identity, cwd, and channel from the store, so a closed cohort comes back where it was. Use the [place-first `resume` verb](#resume-a-lane-by-place) when the lane is known and the original spec is not.
+When an agent runs `rimz agents`, each new agent is an independent top-level peer with its own sidebar row. A parented child with one prompt comes only from the agent-only [`rimz subagents`](./subagents.md) command, and a subagent cannot launch agents or subagents.
 
-```sh
-rimz agents forge --resume                           # reopen the newest closed forge cohort
-rimz agents forge -w restore-living-team --resume    # reopen that exact team instance
-rimz agents claude,codex --resume                    # reopen the newest matching inline cohort
-rimz agents claude --resume                          # resume the freshest closed Claude session
-rimz agents astra --resume                           # resume the freshest closed session launched from the astra profile
-```
+`rimz agents` shapes individual agents: model, effort, prompts, permission posture, name, placement, and supervised runs. [`rimz teams`](./teams.md) owns where a configured cohort runs, whether it resumes, and what each member may spend.
 
-What matches what:
+### Permission-mode cells
 
-- A team resumes by team name and role; an inline multi-agent spec resumes by the saved launch group and cell order; a single kind resumes the freshest closed root session of that kind; a profile resumes the freshest closed root session launched from that profile.
-- Add `-w <NAME>` to resume that exact worktree's cohort. Use bare `-w`, or omit the flag while running inside a worktree, to scope resume to that worktree; run from the project root to keep the room-wide newest-by-spec behavior.
-- Cleanly closed cohort members still match when their worktree exists. Cells with no resumable prior member launch fresh in the matched cohort's cwd and channel. A matched member that is still live refuses the command, so the room does not duplicate the same address.
+A `<kind>-<mode>` cell launches that kind with one permission posture. RimZ renders the posture into the adapter's own flags; a mode the adapter expresses through no flag still launches and adds no arguments.
 
-A single-cell resume run from the cohort's own directory takes over the launching pane, so an exited team member comes back in its origin pane — the exit hint an agent leaves behind (`resume with rimz agents forge.coder --resume`) works from the very shell it dropped into. Run from anywhere else, a lane-scoped resume opens its own tab. A spec that matches nothing fails naming the specs the same scope can still resume.
+| Cell | Available for | Launch posture |
+| --- | --- | --- |
+| `<kind>-ask` | every kind | the agent asks before tool use |
+| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (`claude-plan`, `antigravity-plan`); the default posture otherwise (`codex-plan`, `grok-plan`) |
+| `<kind>-auto` | every kind except `opencode`, `amp`, `kiro`, and `pi` | the adapter's automatic-approval flags |
+| `<kind>-yolo` | every kind except `droid`, `amp`, `kiro`, and `pi` | the adapter's bypass flags |
 
-Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--model`, `--effort`, `--isolation`, `--ask`, `--yolo`, `-p`, system-prompt flags, and passthrough args after `--`.
-
-`--fresh` is the other answer to the same situation: it starts new sessions in a named worktree whose cohort has closed, keeping the checkout and its files as they are.
-
-```sh
-rimz agents forge -w restore-living-team --fresh   # new sessions in that worktree, same files
-```
-
-It conflicts with `--resume` and `--from-pr`, is unsupported with `-p`, and needs a named worktree (`-w NAME`, not bare `-w`). It answers the relaunch reconciliation described under [Channel, worktree, and placement](#channel-worktree-and-placement); a standalone single-agent spec already launches fresh and does not reconcile a cohort.
-
-### Resume a lane by place
-
-`resume [SCOPE]` makes one lane whole from its durable agent records without retyping the team or layout. Scope accepts the same `#channel`, worktree name, branch, directory name, and path spellings as `agents list`; `--from-pr <number|url>` resolves a RimZ worktree's recorded PR provenance first and the legacy `pr-<N>` name second. Resolution is local and performs no network request or worktree creation.
-
-```sh
-rimz agents resume '#docs'        # resume the docs lane
-rimz agents resume pr-69          # resume by worktree name
-rimz agents resume -w pr-69       # flag spelling of the same worktree scope
-rimz agents resume --from-pr 69   # resume the local worktree created from PR 69
-rimz agents resume                # inside a worktree: that lane; at project root: list lanes
-```
-
-| Lane state | Result |
-|---|---|
-| every member live | focuses the freshest member's pane and exits successfully |
-| some members live | splits only the closed members back into the live tab and reports each skipped live handle |
-| every member closed | rebuilds team layouts in declared order and restores stray agents as flat panes |
-
-Soft reset preserves the lane's durable session identity, including exact provider ids, roles, teams, and placement, so a reset resumes with the same handles. When those RimZ records are genuinely gone, Claude and Codex fall back to their provider-owned local session stores and restore the newest concurrent working set with exact session ids. Provider-only recovery is flat because role and team identity exists only in RimZ; the resumed hooks record the recovered session again on first activity. Older disjoint runs stay closed and are reported by kind and session id.
-
-At the project root, the bare listing includes worktree lanes found only in the Claude or Codex session store as closed lanes. Each provider store is scanned once per local worktree.
-
-`--bg` leaves focus where it is when panes or tabs open. Profiles and team layouts render from the current `agents.toml`, while session identity, role, team, channel, and working directory come from the durable records. This is place-first recovery; [spec-first `--resume`](#resume-a-cohort) remains the form for choosing a prior cohort by team or layout.
-
-Failures name the fix: an unknown scope reports `no lane '#docs' in this workspace`; a removed checkout reports `worktree for '#docs' was removed; recreate it with rimz agents <spec> -w docs`; a PR with no local worktree reports `PR 69 has no local worktree; start one with rimz agents <spec> --from-pr 69`; and `nothing to resume in '#docs'` means neither the RimZ store nor the supported provider stores contain a resumable session for that lane.
+On the command line, `--ask` keeps native permission prompts and `--yolo` passes the adapter's bypass flags; with neither, each CLI keeps its own default. Each agent's exact flags are in its mapping doc, linked from [agent support](../agent-support.md#per-agent-mappings).
 
 ### Shared launch params
 
-These broadcast to every agent cell, and each adapter renders them into its own native flags.
+These flags apply to every agent cell in the launch, and each adapter renders them into its own native flags.
 
-- `--agent <PROFILE|KIND>` re-bases every agent cell onto that profile or registered provider: the replacement supplies the engine, the cell keeps its role. Provider, model, and effort come from the replacement whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's value, while a provider change drops the cell's model and keeps its effort. Mode, budget, `auto-compact`, skills, and prompt files carry from the original profile, and the replacement only fills their gaps. Raw `args` carry on a same-provider re-base, but a provider change silently takes them from the replacement instead. A profile such as `[agents.profiles.codex]` can therefore hold the Codex model and raw flags used whenever `--agent codex` swaps a launch to Codex. Later command-line flags still win, and adapter-incompatible typed fields fail before RimZ creates a pane. This is a fresh-launch override: it conflicts with `--resume`, is not recorded as a profile edit, and a later `restart` refuses when the profile resolves back to a different provider.
-- `--model`, `--effort`, `--budget <AMOUNT[/day]>`, and `--system-prompt-file` carry the same meaning and resolution rules as the [profile fields](../../guide/configuration.md#profiles) of the same names. Repeat `--append-system-prompt-file <PATH>` to replace the inherited fragment list in command-line order. A bare budget caps the session; `/day` resets at the configured local day boundary. `--effort` levels are provider-specific: Claude `low|medium|high|xhigh|max`, Codex `minimal|low|medium|high|xhigh`, Pi `off|minimal|low|medium|high|xhigh`.
-- `--isolation host|sandbox` runs every launched agent under that isolation instead of the machine's `agents.isolation`, for this launch only. `sandbox` runs the same bubblewrap preflight and refuses before any pane opens. The override is recorded on the agent, so `restart`, `fork`, resume, room rebirth, and its `rimz subagents` children replay it; an agent launched without it follows the machine setting at each relaunch.
-- `--description <TEXT>` is a card label only: it seeds the card's second line, never enters the agent's argv or environment, and the agent's own session preview replaces it.
-- `--name <HANDLE>` applies to a single-agent launch and makes that user-chosen name the rendered handle after any team role, so `rimz agents claude --name writer` appears as `@writer` in lists, sidebar cards, and peer message prefixes. Bare launches still get an internal pet name for stable instance addressing, but they render as `@<kind>` when that is unambiguous.
+| Flag | Effect |
+| --- | --- |
+| `--model <MODEL>` | Model for every agent cell, replacing the profile's. |
+| `--effort <LEVEL>` | Reasoning effort, passed to the provider's effort flag without validation. Levels are provider-specific; see each agent's mapping doc from [agent support](../agent-support.md#per-agent-mappings). |
+| `--budget <AMOUNT[/day]>` | Dollar cap per agent: a bare amount caps the session, `/day` resets at the local day boundary. Inspect or change it later with [`rimz agents budget`](./budget.md#cap-one-agent). |
+| `--system-prompt-file <PATH>` | Replace each agent's base system prompt with the file. |
+| `--append-system-prompt-file <PATH>` | Repeatable. Replaces the inherited fragment list with these files, in command-line order. |
+| `--ask`, `--yolo` | Permission posture; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
+| `--agent <PROFILE\|KIND>` | Re-base every agent cell onto another profile or provider (below). |
+| `--isolation host\|sandbox` | Isolation for this launch instead of the machine's `agents.isolation` (below). |
+| `-n`, `--name <NAME>` | Handle for a single-agent launch: `rimz agents claude --name writer` appears as `@writer`. Without it the agent renders as `@<kind>` when that is unambiguous, and keeps a pet name for exact addressing. |
+| `--description <TEXT>` | Seeds the card's second line until the agent names its own session. It never reaches the agent's argv or environment. |
+| `-- <ARGS>...` | Raw arguments appended to every agent cell's command. |
+
+The profile fields these flags override are described in the [configuration guide](../../guide/configuration.md#profiles).
+
+`--agent` swaps the engine and keeps the job. The replacement profile or kind supplies the provider, and supplies model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's values, while a provider change drops the cell's model and keeps its effort. Permission mode, budget, `auto-compact`, skills, and prompt files carry over from the original profile, and the replacement fills only what the original left unset. Raw profile `args` carry over on a same-provider re-base; on a provider change they come from the replacement instead, so a profile such as `[agents.profiles.codex]` can hold the Codex model and flags used whenever `--agent codex` swaps a launch to Codex. Command-line flags still win, and typed fields the new adapter cannot express fail before any pane opens. `--agent` applies to this launch only: it conflicts with `--resume`, and a later `restart` refuses when the profile resolves back to a different provider.
+
+`--isolation sandbox` runs the bubblewrap preflight and refuses before any pane opens when it fails. The override is recorded on each agent, so `restart`, `fork`, resume, room rebirth, and the agent's `rimz subagents` children keep it. An agent launched without the flag follows the machine setting each time it relaunches.
 
 ### Channel, worktree, and placement
 
-`-w`/`--worktree` reuses or creates a named worktree (`--worktree=docs` or `--worktree docs`); bare `--worktree` creates a fresh generated one. The name carries no leading `#`: `-w feat-a` creates worktree `feat-a` on channel `#feat-a`, while `-w '#feat-a'` fails with `invalid worktree name`, and with shell comments enabled, the shell discards `#feat-a` from `-w #feat-a` before RimZ runs, so the launch behaves as a bare `-w` and generates a name. Branch-style spelling is accepted: `--worktree=feat/great` creates branch `feat/great` and worktree/channel/tab `feat-great`. `--from-pr <number|url>` creates the worktree from a pull request head and implies a worktree launch; pair it with `--worktree <NAME>` to name the worktree, or accept the `pr-<N>` worktree name. A PR URL must match `origin`; `gh` or `tea` configures the source branch's push destination, while an unsupported forge creates a review-only checkout with pushes unconfigured. A worktree launch names its backend tab `#<NAME>`, matching the channel in agent addresses. Within the room's repository, worktrees RimZ creates are marked and cleaned up with [`rimz worktree remove`](./worktree.md) or the `rimz gc` sweep.
+A launch runs in the room root by default. These flags choose a lane instead:
 
-An existing unmarked linked worktree in the configured directory can be entered after terminal confirmation (default no), provided it belongs to the launch repository. RimZ does not adopt or seed it, and automatic cleanup, `remove`, and `gc` leave it alone. Non-terminal launches refuse and ask you to rerun in a terminal. This does not bypass `--from-pr` provenance checks.
+| Flag | Effect |
+| --- | --- |
+| `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on channel `#NAME` in a tab named `#NAME`. Bare `-w` creates a fresh worktree with a generated name. |
+| `--from-pr <NUMBER\|URL>` | Create or reuse a worktree from a pull request's head, named `pr-<N>` unless `-w NAME` names it. |
+| `--channel <NAME>` | Launch into the durable named channel `NAME` in the room root, registering it when missing, in a tab named `#NAME`. Manage channels with [`rimz channel`](./channel.md). |
 
-Creation uses the current directory's main Git repository, including when the command runs from one of its linked worktrees. If that repository differs from the room root, RimZ shows both paths and asks before proceeding. The room's `worktree list`, `worktree remove`, and `gc` commands do not cross that repository boundary: run removal from the worktree's own repository, or use plain `git worktree remove`. A non-interactive launch refuses the ambiguity; pass `--root <current-git-root>` to name the intended repository explicitly, or run the command from the room's checkout. When the current directory is not in a Git repository, the room root remains the creation root.
+Spell the worktree name without the channel's `#`. `-w feat-a` gives channel `#feat-a`; `-w '#feat-a'` fails with `invalid worktree name`; and an unquoted `-w #feat-a` in a shell with comments enabled reaches RimZ as a bare `-w` and generates a name. A branch-style name is accepted: `-w feat/great` creates branch `feat/great` with worktree, channel, and tab `feat-great`.
 
-Relaunching a named team, or an inline spec of at least two cells, into the same named worktree reconciles with existing state before it creates anything. A live cohort focuses its current tab and exits, including in a user-owned worktree. For closed cohorts in RimZ-managed trees, work in progress prompts `(resume/fresh/cancel)` with `resume` as the default; a clean and merged tree prompts `(remove/fresh/cancel)` with `cancel` as the default, where `remove` deletes the worktree and its branch before launching. Enter takes the default, an unrecognized answer cancels, and canceling prints `canceled; nothing launched`. Without a terminal on stdin, both cases print the resume-or-remove command and the `--fresh` command instead of prompting. A closed cohort in a user-owned tree takes the entry-confirmation path instead; use `--resume` to resume it explicitly.
+A `--from-pr` URL must match the `origin` remote. With `gh` or `tea` available, RimZ configures the source branch's push destination; on an unsupported forge the checkout is review-only, with pushes unconfigured. Worktrees RimZ creates carry a marker and are cleaned up with [`rimz worktree remove`](./worktree.md) or `rimz gc`; the [worktrees guide](../../guide/worktrees.md) covers the workflow.
 
-`fresh` starts new sessions in the checkout that is already there. It removes nothing: the worktree, the branch, and every file in the tree survive, so the previous run's team scratch files are still on disk and appear in the launch reminder of every member whose adapter takes one. It retires nothing in the store either; the closed members keep their rows, the new members mint new handles in the same channel, and messages still waiting for the old members are archived by the next `rimz gc`.
+RimZ creates the worktree from the current directory's main Git repository, including when you run from one of its linked worktrees, and falls back to the room root outside any Git repository. Two cases ask first:
 
-Add `--resume` or `--continue` to force a resume of the named worktree's prior cohort even when the worktree is clean or merged, or `--fresh` to take the fresh choice with no reconciliation prompt. Entry into a user-owned tree still needs confirmation. `--fresh` never duplicates a live cohort: that case still focuses the running tab.
+- When that repository differs from the room root, RimZ shows both paths and asks. A non-interactive launch refuses; pass `--root <git-root>` or run from the room's checkout. The room's `worktree list`, `worktree remove`, and `gc` do not reach worktrees of the other repository, so remove those from their own repository or with `git worktree remove`.
+- When `-w NAME` names an existing linked worktree RimZ did not create, in the configured worktree directory and of the same repository, RimZ asks before entering it (default no). It never adopts or seeds that worktree, and `remove` and `gc` leave it alone. A non-interactive launch refuses. `--from-pr` provenance checks still apply.
 
-`--channel <NAME>` launches into a durable named channel, registering it when missing and naming the backend tab `#<NAME>`. Named channels run in the room root and are managed with [`rimz channel`](./channel.md).
+Placement decides whether the launch takes over your pane, splits it, or opens a tab. Under the default `auto` policy, a worktree launch, a named-channel launch, or a multi-cell spec opens its own tab, and any other single-cell launch (including a single team role) takes over the current pane and returns to the shell when the agent exits. The [`[agents] placement`](../../guide/configuration.md#placement) setting changes the default; these flags override it for one launch:
 
-Placement follows intent under the default `auto` policy: a named-channel launch, a worktree launch, or a multi-cell spec opens its own tab, and a one-cell non-worktree launch, including a single team role, takes over the current pane and returns to the shell when it exits. `--new-pane` forces a split (rejected for a multi-cell spec), `--new-tab` forces a tab, and `--bg` downgrades an in-place launch to a split so focus stays put — that is `--bg`'s placement meaning at launch; combined with `-p` it instead detaches from a supervised run, covered under [Supervised runs](#supervised-runs--p). The per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) default sets the policy when no flag is given. The split-versus-tab mechanics are in [fleet.md → Placement](../../internals/harness/fleet.md#placement).
+| Flag | Placement |
+| --- | --- |
+| `--new-pane` | Split the current tab. Single agent cell only. |
+| `--new-tab` | Open a new tab (tmux window). |
+| `--bg` | Keep focus where it is: an in-place launch becomes a split. With `-p`, `--bg` instead returns from a supervised run at once; see [Supervised runs](#supervised-runs--p). |
+
+The split-versus-tab mechanics are in [fleet.md → Placement](../../internals/harness/fleet.md#placement).
+
+### Relaunch into a named worktree
+
+Launching a named team, or an inline spec of two or more cells, into a named worktree that already has a cohort reconciles with that cohort before creating anything:
+
+| Existing cohort | Result |
+| --- | --- |
+| live | Focuses its tab and exits, in any worktree. |
+| closed, RimZ-owned worktree with work in progress | Prompts `(resume/fresh/cancel)`, default `resume`. |
+| closed, RimZ-owned worktree that is clean and merged | Prompts `(remove/fresh/cancel)`, default `cancel`. `remove` deletes the worktree and its branch, then launches. |
+| closed, worktree RimZ did not create | Asks to enter the worktree, as above; add `--resume` to resume the cohort. |
+
+Enter takes the default, and an unrecognized answer or end of input prints `canceled; nothing launched`. Without a terminal on stdin, RimZ prints the resume-or-remove command and the `--fresh` command instead of prompting. A single-agent spec launches fresh without reconciling.
+
+Two flags answer the prompt in advance. `--resume` (or `--continue`) resumes the prior cohort even when the worktree is clean or merged; see [Resume a cohort](#resume-a-cohort). `--fresh` starts new sessions in the existing checkout:
+
+```sh
+rimz agents forge -w restore-living-team --fresh   # new sessions, same checkout and files
+```
+
+`--fresh` removes nothing. The worktree, its branch, and every file survive, so the previous run's team scratch files still appear in each member's launch reminder where the adapter takes one. The closed members keep their store rows, the new members get new handles in the same channel, and messages still queued for the old members are archived by the next `rimz gc`. `--fresh` needs a named worktree (`-w NAME`), conflicts with `--resume` and `--from-pr`, is refused with `-p`, and never duplicates a live cohort: that case still focuses the running tab. The decision logic is in [fleet.md → Cohort relaunch reconciliation](../../internals/harness/fleet.md#cohort-relaunch-reconciliation).
 
 ### Supervised runs (`-p`)
 
-`-p` launches exactly one supervised agent pane, waits for the root turn, prints the result, and exits with the run's status code (`0` completed, `1` failed, `123` verify failed, `124` timed out, `125` budget exceeded, `130` canceled), so a script branches on the outcome. A fresh Qwen supervised launch also exits `125` before opening a pane when a matching exact-account Alibaba window is exhausted; missing or mismatched readings leave an ordinary launch available. The turn still runs in a real pane you can watch and steer while the pipeline waits. Text mode keeps stdout as the final assistant answer using the shared [agent-prose rendering rule](../cli.md#agent-prose); failed, verify-failed, timed-out, budget-exceeded, or canceled runs print status, captured evidence when present, and transcript path on stderr.
-
-### Inspect and change a budget
-
-Why you cap spend, and what a park means, is the [budgets guide](../../guide/budget.md); this is the command surface.
-
-`rimz agents budget @coder` prints current spend, cap, window, and park state. Set a new cap with `rimz agents budget @coder 10`, add headroom with `+5`, or remove the cap with `clear`. Raising or clearing a parked cap queues the configured continue prompt by default; pass `--no-continue` to leave the agent at rest.
-
-`rimz budget` owns the two broader daily scopes. With no value it prints this room's fleet cap, source, local-day spend, and park state plus every configured provider-account cap. Config is the on-switch: `harness.budget` arms the room cap, and `[accounts.budget].<kind>` arms an account cap only when that adapter exposes durable account-spend history. Unknown or ineligible kinds are rejected by config validation, room start, and `rimz budget --account` before a ledger is written; Cursor's live local price remains available to per-agent and room caps but not an account-day cap. `rimz budget 20/day`, `+10`, or `off` adjusts, raises, or disables the armed room cap; `clear` aliases `off`, and `--account <kind>` applies the same operation to an eligible login across rooms. Daily caps require `/day`, while relative raises stay bare (`+10`). A change nudges affected parked agents in the current room unless `--no-continue` is set.
-
-Room and account caps gate automation before it launches: `agents -p` exits `125`, and loop fires record `budget skipped`. Matching exact-account Alibaba quota applies the same outcome to fresh managed Qwen launches without turning provider quota into a configurable dollar cap. Interactive launches remain available, and one human message after a park waives that agent's next turn.
+`-p` (`--print`) launches exactly one agent in a real pane, waits for its turn to finish, prints the result, and exits with the run's status, so a script branches on the outcome. The pane stays watchable and steerable while the script waits. The [scripting guide](../../guide/scripting.md) teaches the workflow.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
@@ -241,179 +202,467 @@ rimz agents claude "Review the diff." -p --effort high --system-prompt-file ./re
 cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause' > out.txt
 ```
 
-- `--bg` with `-p` prints the run's pet name and returns immediately; use that name with `message --steer`, `agents wait`, `agents show`, or `agents stop`. (Without `-p`, `--bg` is a placement flag — see [Channel, worktree, and placement](#channel-worktree-and-placement).)
-- `--output-format` shapes the print: `text` (default) prints the final assistant message, `json` prints the full run record, `stream-json` emits run events as NDJSON while the turn runs (incompatible with `--bg`). The JSON `run_id` opens the RimZ transcript log with `rimz transcript <run_id>`; the JSON `transcript_path` is the provider-native session file used for streaming, context, and spend enrichment.
-- `--stdin` adds stdin to the text prompt and reads it to EOF, wrapping it in `<stdin>…</stdin>` tags after a positional `PROMPT` when both are present.
-- `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` plus explicit `--stdin` content; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt or `--stdin`.
-- `--max-turns <N>` caps the agentic turn count where the adapter exposes a native limit (Claude today); an agent without one refuses the run.
-- `--retries <N>` reruns only failed (exit `1`) turns, up to `N` more attempts, with the previous failure tail appended to the original prompt. `--timeout` and `--budget` apply per attempt; timeout, budget, and cancel results never retry; the final attempt decides the exit code. Retries require a blocking text or JSON run and refuse `--bg` and `--output-format stream-json`.
-- `--verify <CMD>` runs the command in the run cwd after every completed turn and re-prompts the same session with failure evidence until it passes. `--max-attempts <N>` is the total agent-turn cap, defaults to `3`, and must be at least `1`; exhaustion exits `123`. The verify command uses `--timeout` or a five-minute default, a timed-out verify is red, and both flags refuse `--bg` and `--output-format stream-json`.
-- Ctrl+C on a blocking `-p` cancels the run, exits `130`, and lets the wrapper stop the agent before the pane is reclaimed.
+| Exit | Run status |
+| --- | --- |
+| `0` | completed |
+| `1` | failed |
+| `123` | verify failed: `--verify` still red after `--max-attempts` |
+| `124` | timed out |
+| `125` | budget exceeded, including a room or account cap with no headroom at launch |
+| `130` | canceled, including Ctrl+C on a blocking run |
 
-Supervised runs need installed and trusted hooks, because hooks are the completion signal. A Codex run additionally needs a recorded trust decision for the launch directory, since Codex otherwise opens its directory-trust screen and never reads the prompt; answer that screen once in an interactive `codex` session there, or add a `[projects."<path>"] trust_level` entry to your Codex config. Both checks refuse at the entry point with the fix, before the run record or the pane. The run records, wakeup socket, streaming, and pane cleanup are in [scripting.md](../../internals/harness/scripting.md).
+In text mode, stdout carries only the final assistant answer, rendered by the shared [agent-prose rule](../cli.md#agent-prose). Any status other than completed prints the status, captured evidence when present, and the transcript path on stderr. Ctrl+C on a blocking run cancels it and lets the wrapper stop the agent before the pane is reclaimed.
 
-### List and manage agents
+| Flag | Effect |
+| --- | --- |
+| `--output-format text\|json\|stream-json` | `text` (default) prints the final assistant message; `json` prints the full run record; `stream-json` prints run events as NDJSON while the turn runs. The JSON `run_id` opens the RimZ transcript with `rimz transcript <run_id>`; `transcript_path` is the provider's own session file. |
+| `--input-format text\|stream-json` | `text` (default) uses the positional `PROMPT` plus `--stdin` content; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt or `--stdin`. |
+| `--stdin` | Read stdin to EOF as prompt content. With a positional prompt, the prompt comes first and stdin follows inside `<stdin>…</stdin>` tags. |
+| `--timeout <DURATION>` | Cap the run; exceeding it exits `124`. |
+| `--bg` | Print the run's pet name and return immediately. Use that name with `agents wait`, `agents show`, `agents stop`, or `message --steer`. Refuses `--output-format stream-json`. |
+| `--keep` | Leave the pane open after the run completes; `rimz agents stop` reclaims it. |
+| `--max-turns <N>` | Cap agentic turns through the CLI's native limit (Claude and Grok `--max-turns`, Qwen `--max-session-turns`). Other kinds refuse the run with `<agent> does not support --max-turns`. |
+| `--retries <N>` | Rerun a failed (exit `1`) run up to `N` more times, appending the previous failure tail to the prompt. `--timeout` and `--budget` apply per attempt, timeout, budget, and cancel never retry, and the last attempt sets the exit code. |
+| `--verify <CMD>` | After each completed turn, run `CMD` in the run's directory; while it fails, re-prompt the same session with the failure evidence. The command's timeout is `--timeout`, or five minutes; a timed-out verify counts as failed. |
+| `--max-attempts <N>` | Total agent turns allowed while making `--verify` pass. Default `3`, minimum `1`; requires `--verify`. Exhaustion exits `123`. |
+
+`--retries` and `--verify` need a blocking `text` or `json` run: both refuse `--bg` and `--output-format stream-json`.
+
+A supervised run refuses at entry, before it writes a run record or opens a pane, when:
+
+- RimZ's hooks for the agent are not installed and trusted, because hooks are the completion signal;
+- a Codex run's launch directory has no recorded Codex trust decision, because Codex would open its directory-trust screen and never read the prompt (answer that screen once in an interactive `codex` session there, or add a `[projects."<path>"] trust_level` entry to your Codex config);
+- the room or provider-account daily cap has no headroom (exit `125`; see the [Budget CLI](./budget.md#what-a-cap-blocks));
+- a fresh Qwen run's exact Alibaba account has an exhausted quota window (exit `125`); missing or mismatched readings allow the launch.
+
+Run records, the completion wakeup, streaming, and pane cleanup are described in [scripting.md](../../internals/harness/scripting.md).
+
+## Resume agents
+
+A closed agent's session files stay where its CLI wrote them, so RimZ can reopen it with the provider's own resume. There are two entry points: `--resume` when you know the spec you launched, and `resume` when you know the lane.
+
+### Resume a cohort
+
+`--resume` (alias `--continue`) relaunches the prior cohort that matches the spec, taking identity, working directory, and channel from the store:
 
 ```sh
-rimz agents                              # room root-agent cards, current channel
-rimz agents '#auth-refresh'              # one lane's cards
-rimz agents ps --all                     # every room channel; alias for list
-rimz agents list '#auth-refresh'         # same lane filter through the list verb
-rimz agents list -w auth-refresh         # one room branch / worktree / dir
-rimz agents inspect swift-otter          # describe-style card, cost, messages, transcript tail
-rimz agents show swift-otter --capture   # report plus the pane's visible text
-rimz agents logs swift-otter -n 20       # one agent's transcript tail
-rimz agents logs swift-otter -f          # follow new transcript lines
-rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
-rimz agents attribution --md             # durable lane credit for a pull request
-rimz agents top --once -w auth-refresh   # one lane's resource-ranked fleet table
-rimz agents focus @claude-2#cli-docs     # jump to the pane
-rimz agents fork @coder --name twin      # branch a conversation into a new agent
-rimz agents restart @claude-2#cli-docs   # replace its pane and resume it
-rimz agents compact @claude-2#cli-docs   # compact context at the next turn boundary
-rimz agents resume '#cli-docs'           # fill every closed place in one lane
-rimz agents wait swift-otter --stream    # block until it lands, tailing the transcript
-rimz agents wait otter fox --any         # race agents; print the first finisher
-rimz agents refresh                      # force-refresh the channel's live agent cards
-rimz agents refresh @codex               # force-refresh one agent card's local context
-rimz agents refresh --all                # force-refresh every live root agent card
-rimz agents stop run_0123…               # cancel a run or close a pane
-rimz agents stop @claude --all           # stop every matching Claude in scope
+rimz agents forge --resume                           # the newest closed forge cohort
+rimz agents forge -w restore-living-team --resume    # that worktree's forge cohort
+rimz agents claude,codex --resume                    # the newest matching inline cohort
+rimz agents claude --resume                          # the freshest closed Claude session
+rimz agents astra --resume                           # the freshest closed session of profile astra
 ```
 
-| Verb | Acts on | What it does |
-|---|---|---|
-| `list` (bare `agents`; `ps` alias) | the current channel; `--all` for the room | attention-ordered agent cards |
-| `show` (`inspect` alias) | one agent | describe-style report: activity, context, cost, messages, transcript tail |
-| `logs` | one agent | transcript tail; `-f` follows |
-| `history` | one live or stopped agent | per-turn duration, tokens, cost, and outcome |
-| `attribution` | the current lane; `--all` for the room | durable agent, model, time, token, and cost credit |
-| `top` | live root agents | resource-ranked fleet table |
-| `focus` | one agent | jumps to its pane |
-| `fork` | one live or stopped root agent | branches its full conversation into a new agent |
-| `wait` | one or more runs or agents | blocks until all land; `--any` returns on the first |
-| `refresh` | one agent, the channel, or `--all` | force-refreshes card context |
-| `stop` | one run or agent; `--all` fans out | cancels a run or closes the pane |
-| `restart` | one live agent | replaces its pane and resumes its provider session |
-| `compact` | one agent with a bound pane | submits its native context-compaction command at a turn boundary |
-| `resume` | one lane | focuses a whole live lane or restores its closed members |
+| Spec | Matches |
+| --- | --- |
+| a team | the cohort by team name, member by role |
+| an inline multi-agent spec | the saved launch group, member by cell order |
+| a single kind | the freshest closed root session of that kind |
+| a profile | the freshest closed root session launched from that profile |
 
-`list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `fork` starts a new agent without changing its source, `stop` ends an agent, `restart` deliberately ends and replaces one, `compact` asks one to compact its context, and `resume` restores the closed portion of a lane.
+Scope follows the worktree. `-w NAME` resumes that worktree's cohort; bare `-w`, or no flag while you stand in a worktree, scopes to the current worktree; from the project root, the newest match anywhere in the room wins.
+
+A matched member that is still live refuses the command, so an address is never duplicated. Cleanly closed members still match while their worktree exists, and a cell with no resumable member launches fresh in the cohort's directory and channel. A spec that matches nothing fails and names the specs the same scope can resume.
+
+A single-cell resume run from the cohort's own directory takes over the current pane, so the hint an exiting team member leaves (`resume with rimz agents forge.coder --resume`) works from the shell it dropped into. Run from anywhere else, a lane-scoped resume opens its own tab.
+
+Resume takes identity from the store, so it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--budget`, `--model`, `--effort`, `--agent`, `--isolation`, `--ask`, `--yolo`, `-p`, the system-prompt flags, and passthrough arguments.
+
+### Resume a lane by place
+
+`rimz agents resume [SCOPE]` makes one lane whole again from its recorded agents, without retyping the team or layout:
+
+```sh
+rimz agents resume '#docs'        # the docs lane
+rimz agents resume pr-69          # by worktree name
+rimz agents resume -w pr-69       # flag spelling of the same scope
+rimz agents resume --from-pr 69   # the local worktree created from PR 69
+rimz agents resume                # in a worktree: that lane; at the project root: list resumable lanes
+```
+
+`SCOPE` takes a `#channel`, worktree name, branch, directory name, or path, as `agents list` does. `--from-pr <NUMBER|URL>` finds the worktree by its recorded pull-request provenance, then by the name `pr-<N>`. Resolution is local: no network request, no worktree creation.
+
+| Lane state | Result |
+| --- | --- |
+| every member live | Focuses the freshest member's pane and exits `0`. |
+| some members live | Splits only the closed members back into the live tab and reports each live handle it skipped. |
+| every member closed | Rebuilds team layouts in declared order and restores other agents as flat panes. |
+
+Each restored agent keeps its session id, role, team, channel, and working directory from the store, so a lane comes back under the same handles after a soft reset. Profiles and team layouts render from the current `agents.toml`. `--bg` keeps focus where it is.
+
+When RimZ's own records for a lane are gone, Claude and Codex sessions are recovered from the providers' local session stores: the newest concurrent set of sessions comes back, with exact session ids, as flat panes without roles or teams (those exist only in RimZ). Older, non-overlapping sessions stay closed and are reported by kind and session id. At the project root, the bare listing includes worktree lanes found only in those provider stores.
+
+| Error | Meaning |
+| --- | --- |
+| `no lane '#docs' in this workspace` | The scope matches no lane. |
+| `worktree for '#docs' was removed; recreate it with rimz agents <spec> -w docs` | The lane's checkout is gone. |
+| `PR 69 has no local worktree; start one with rimz agents <spec> --from-pr 69` | No local worktree came from that pull request. |
+| `nothing to resume in '#docs'` | Neither RimZ nor the Claude and Codex session stores hold a resumable session for the lane. |
+
+Resume planning is described in [fleet.md → Resume and rebirth](../../internals/harness/fleet.md#resume-and-rebirth).
+
+## Inspect profiles and launch plans
+
+### Discover agent profiles
+
+`rimz agents profiles` lists the configured `[agents.profiles]` profiles and launch commands as compact cards, with each profile's description. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams`](./teams.md#list-teams).
+
+```sh
+rimz agents profiles
+rimz agents profiles --path          # add each entry's defining file
+rimz agents profiles --json --path
+```
+
+JSON includes `source` (`profile` or `command`) and, only with `--path`, the absolute `path`.
+
+### Explain a launch
+
+`rimz agents explain` prints the launch plan for one agent without launching it. It opens no pane, mints no name or launch id, writes no store record, and creates no prompt files, room tmp, or skill copies.
+
+```sh
+rimz agents explain coder --model gpt-6-astra --effort high
+rimz agents explain forge.coder --json
+rimz agents explain @coder
+rimz agents explain coder --prompt > prompt.md
+```
+
+| Target | Describes |
+| --- | --- |
+| a profile or `<team>.<role>` | A fresh launch, resolved exactly as a launch would be. Works without a room. A multi-cell layout is refused. |
+| an `@handle` | What `restart` would run for that recorded agent under the current profile configuration: a resume of the recorded conversation when supported, otherwise a fresh launch with the reason. A fresh-restart plan shows the recorded name and launch id, although a real restart allocates a new id and may pick a new name. Needs existing room state. |
+
+With a profile target, `explain` accepts the launch overrides `--ask`, `--yolo`, `--model`, `--agent`, `--effort`, `--isolation`, `--system-prompt-file`, `--append-system-prompt-file`, `--budget`, and passthrough arguments after `--`, with the same precedence as a launch: `--ask` and `--yolo` fill only an unset permission mode. The report's `overrides` list records the flags you passed, not that each one won. An `@handle` target refuses every override.
+
+The default report shows:
+
+- the profile chain, including a replacement from `--agent` (`writer ← claude` becomes `writer ← codex`, or `writer ← fast ← codex` when the replacement is profile `fast`);
+- the action, working directory, and effective settings;
+- the provider argv and the wrapped argv;
+- the launch's environment overrides and unset keys (not the whole ambient environment);
+- prompt sources, the composed prompt text, and how the RimZ reminder is delivered;
+- sandbox mounts, pins, skill copies, and omissions.
+
+`--json` emits the same plan with the fields `target`, `kind`, `action`, `action_note`, `name`, `launch_id`, `account`, `cwd`, `profile`, `overrides`, `mode`, `model`, `effort`, `budget`, `skills`, `program`, `provider_argv`, `argv`, `env`, `unset`, `redacted_keys`, `prompt`, `sandbox`, and `warnings`.
+
+`--prompt` prints only the composed configured system prompt, then two newlines and the RimZ reminder. It cannot show a provider's built-in instructions or prompt options passed as raw provider arguments (those appear in the argv report). When the provider has no channel for appended system text, it still prints the reminder and notes on stderr that the reminder is not delivered. `--prompt` and `--json` conflict; warnings go to stderr.
+
+Explain applies the same checks as a launch. System-prompt files must be readable UTF-8, and configured sandbox and skill capabilities must pass their preflights: a failure is an error, never a partial plan. A profile whose permission posture is missing or incompatible is shown without it, with a warning.
+
+Secrets from trusted project `[[agents]]` `env` values print as `<redacted>` in the environment map, the matching argv environment tokens, and sandbox pins. Redaction goes by environment key, not by value, so paths derived from a secret value stay visible in mounts, skill copies, warnings, and errors. Everything else prints in full, and there is no flag to reveal secrets. Sandbox planning uses the environment `explain` runs in plus the launch overrides, not the target pane's environment, so a different home, XDG, provider-home, or multiplexer variable can change the planned view.
+
+### Register a third-party kind
+
+`rimz agents register` scaffolds a machine-tier agent plugin, and `rimz agents check` validates one:
+
+```sh
+rimz agents register mybot                       # scaffold $XDG_CONFIG_HOME/rimz/agents.d/mybot
+rimz agents register --check                     # validate every configured plugin, creating nothing
+rimz agents check mybot --replay events.jsonl    # validate one plugin and replay canonical envelopes
+rimz agents check mybot --spend-file session.jsonl   # also run the spend probe on a transcript
+```
+
+The scaffold holds the manifest, a setup guide, the canonical forwarding shim, and stub probes. A valid plugin kind works anywhere a built-in kind does: inline layouts, profiles, teams, supervised runs, coverage, and messaging. The [agent plugin reference](../agent-plugins.md) defines the bundle and wire contracts.
+
+## List and manage agents
+
+```sh
+rimz agents                              # root-agent cards, current channel
+rimz agents '#auth-refresh'              # one lane's cards
+rimz agents list --all                   # every channel in the room
+rimz agents show swift-otter --capture   # full report plus the pane's visible text
+rimz agents logs swift-otter -f          # follow the transcript
+rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
+rimz agents attribution --md             # lane credit for a pull request
+rimz agents top --once --all             # one resource-ranked table of the room
+rimz agents focus @claude-2#cli-docs     # jump to the pane
+rimz agents fork @coder --name twin      # branch a conversation into a new agent
+rimz agents wait otter fox --any         # race two agents; print the first finisher
+rimz agents stop @claude --all           # stop every matching Claude in scope
+rimz agents restart @claude-2#cli-docs   # replace the pane and resume the session
+rimz agents compact @coder               # compact context at the next turn boundary
+```
+
+| Verb | Acts on | Does |
+| --- | --- | --- |
+| `list` (bare `agents`; aliases `ls`, `ps`) | the current channel; a scope; `--all` for the room | attention-ordered agent cards |
+| `show` (alias `inspect`) | one agent, live or stopped | full report: activity, context, placement, run, messages, transcript tail |
+| `logs` | one agent | transcript tail; `-f` follows |
+| `history` | one agent, live or stopped | per-turn duration, tokens, cost, and outcome |
+| `attribution` | the current lane; a scope; `--all` for the room | agent, model, time, token, and cost credit |
+| `top` | live agents in the current channel; `-w` or `--all` | resource-ranked table |
+| `focus` | one agent | jumps to its pane |
+| `fork` | one root agent, live or stopped | opens a copy of its conversation as a new agent |
+| `wait` | one or more runs or agents | blocks until all finish; `--any` returns on the first |
+| `refresh` | one agent, the channel, or `--all` | re-reads card context now |
+| `stop` | one run or agent; `--all` for every match | cancels the run or closes the pane |
+| `restart` | one live agent | replaces its pane and resumes its session |
+| `compact` | one agent with a bound pane | sends its native compaction command at a turn boundary |
+
+`list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` change no agent. `fork` starts a new agent and leaves its source untouched; `stop`, `restart`, and `compact` act on the agent. [Resume a lane by place](#resume-a-lane-by-place) covers `resume`, and the [Budget CLI](./budget.md#cap-one-agent) covers `budget`.
 
 #### `list`
 
-Bare `rimz agents` lists the live room's pane-backed root-agent cards in attention order, scoped to the current channel and widened with `list --all`; run it inside a live room or enter one with `rimz start` or `rimz attach`. `ps` is an alias for `list`, `-w/--worktree` selects one lane, and `--json` selects JSON output for both.
+`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. It needs a live room: enter one with `rimz start` or `rimz attach`.
 
-Rows group under channel section headers: `⑂` marks a worktree-backed or isolated lane, `#` marks a plain lane, a bare label marks the room root, and a dim `external` tail holds agents outside the project. Header glyphs follow the configured theme glyph set, including Nerd Font presets, and a shared team appears in the header as `· <team> team`.
+```console
+$ rimz agents
+AGENT         STATUS   MODEL         CTX  TOKENS  AGE
 
-`--json` emits the versioned projection `{"schema":1,"agents":[...]}`. Each entry is the same card the table renders rather than the provider-shaped durable rollup: `id`, `kind`, `handle`, `name`, `name_explicit`, `profile`, `role`, `team`, `mode`, and `me` identify it; `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, and `description` describe its projected activity; and `model`, `context`, `stats`, `timeline`, `placement`, `budget`, and `sub_agents` carry the normalized detail.
+⑂ auth-refresh · forge team
+@planner      waiting  opus@high      42%     78k   2m
+  which rotation strategy should we use?
 
-Nested fields are stable too. `model` carries `id`, `effort`, and the rendered `label`; `context` carries `fill_pct`, occupied `used_tokens`, `window`, `severity`, completed `compactions`, and current `compacting`; `stats` carries the token split, `cost_usd` (the live session plus pane-backed children it launched), RimZ's provider-neutral `active_secs` estimate, `tool_calls`, and the optional open `tool_repeat` run; `timeline` carries registration, turn-start, activity, and observation timestamps; `placement` carries `channel`, `worktree`, `branch`, `pane`, and `pr`; and `budget` carries the effective ledger-resolved `cap`, live `spent_usd`, `parked`, and the current `park` label. A PR carries `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`).
+@coder        running  gpt-5.5@high   31%     54k   0s
+  wire up the refresh-token path
+```
 
-Every report key is present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty. The raw provider `AgentContext` is outside this schema.
+Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain channel, and a bare label the room root; agents outside the project collect under a dim `external` header. A header adds `· <team> team` for a shared team and the lane's pull-request number and CI glyph when one is known. Glyphs follow the configured theme glyph set.
 
-`me` marks at most one entry. RimZ first matches the caller's normalized `TMUX_PANE` or `ZELLIJ_PANE_ID` to the published pane binding, then falls back to the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity; calls outside a recognized agent leave every entry false.
+| Column | Shows |
+| --- | --- |
+| `AGENT` | The shortest handle you can type under that header: the role (`@coder`), else the `--name` (`@writer`), else the profile (`@planner`), else `@<kind>`, with an ordinal only when two of a kind share a lane. |
+| `STATUS` | The card status (below). |
+| `MODEL` | Model and effort, as `model@effort`. |
+| `CTX` | Context-window fill. |
+| `TOKENS` | Session tokens. |
+| `AGE` | Time since the agent was last seen active. |
 
-| Column | What it shows |
-|---|---|
-| `AGENT` | the shortest handle you can type back under that header — its role (`@coder`), else its explicit `--name` (`@writer`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one lane |
-| `STATUS` | the plain status label, with provider-limit and API-error turns projected to `paused` or `failed`; `show` carries the turn phase when you need it |
+Under each row, the agent's activity description (the line the sidebar card shows) wraps to at most three indented lines, ending in an ellipsis when cut.
 
-The activity description — the same field the sidebar card shows — renders under each row, whitespace-collapsed and wrapped to at most three indented lines with an ellipsis when truncated; agents without one omit the description block.
+| Status | Meaning |
+| --- | --- |
+| `running` | A turn is in progress. |
+| `waiting` | The agent is waiting on you: a question, a permission prompt, or a plan to approve. |
+| `idle` | At rest, including after an interrupted turn. |
+| `success` | The last turn completed. |
+| `failed` | The last turn failed. |
+| `paused` | Parked by a provider limit or a budget cap. |
+| `sleeping` | At rest with a one-shot delivery armed for its session in this workspace: a timer, a watched command, or a one-shot or deadline signal. Standing subscriptions do not count, and running, waiting, failed, paused, or a live child take precedence. |
+
+The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`. `show` adds the turn phase.
+
+`--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record, and every key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
+
+| Field | Contents |
+| --- | --- |
+| `id`, `kind`, `handle`, `name`, `name_explicit`, `profile`, `role`, `team`, `mode` | Identity. |
+| `me` | `true` on at most one entry: the caller. RimZ matches `TMUX_PANE` or `ZELLIJ_PANE_ID` to the pane binding first, then the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity. Outside an agent pane every entry is `false`. |
+| `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. |
+| `pending_waits` | Armed one-shot deliveries, each with its name, trigger, and optional arm timestamp. Timers come first by due time, then commands and signals; names break ties. |
+| `model` | `id`, `effort`, and the rendered `label`. |
+| `context` | `fill_pct`, `used_tokens`, `window`, `severity`, `compactions` (completed), and `compacting` (in progress). |
+| `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
+| `timeline` | Registration, turn-start, activity, and observation timestamps. |
+| `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
+| `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. |
+| `sub_agents` | Nested children. |
 
 #### `show` / `inspect`
 
-For what a profile would launch or an agent would restart with, use [`explain`](#explain-a-launch); `show` describes recorded activity and placement instead.
+`rimz agents show <REF>` prints one agent's report in the sections Agent, Activity, Context, Placement, Run, Messages, and Recent transcript. It works for live agents and for stopped ones still in the audit record. To see what an agent would launch or restart with, use [`explain`](#explain-a-launch).
 
-`show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section's cost, token split, and active time cover the durable agent seat's lifetime across resumed sessions and pane-backed children it launched. Attribution uses the same all-in cost and token fold across every subagent the member spawned; addressing a child directly reports that child's own session. Live context fill, window, tool activity, and the no-transcript fallback remain session-scoped. An open identical-tool run appears once it reaches the configured warning threshold (`Bash ×23, 4m`). `--capture` appends a Capture section that frames the bound pane's visible area with its pane id in the top border (an error when the agent has no bound pane), and `--ansi` keeps colors inside that frame.
+Context cost, token split, and active time cover the agent's seat for its whole life: every resumed session plus the pane-backed children it launched. Addressing a child directly reports that child alone. Context fill, window, and tool activity describe the current session. An open run of identical tool calls appears once it reaches the configured warning threshold, as `Bash ×23, 4m`.
 
-The Messages section shows conversation records only: your sends and attributed agent sends. When system messages are hidden, a faint hint gives the nonzero count and points to `rimz message list --all --system @<agent>` so the records remain visible from any lane, including archived messages; no hint appears when the count is zero.
+The Messages section lists your messages and agents' attributed messages. When it hides system messages, a faint line gives their count and the command that lists them, `rimz message list --all --system @<agent>`.
 
-`show --json` places the same projected agent entry under `agent`, with `stale`, rich `ask`, `run`, `messages`, and raw `capture` data as show-only siblings when applicable. `messages` is the same conversation-only filtered list, without a hidden count. A stopped audit agent keeps the full stable entry shape, with published-row fields such as context severity and active time set to `null`. Supervised `-p` runs shape their output with `--output-format` instead.
+When room tmp exists, `show` prints its host path and notes that sandboxed panes mount it at `/tmp`. The directory is shared by the room's sandboxed agents and survives an agent restart; its lifecycle is in [sandbox.md → Room tmp](../../internals/sandbox.md#room-tmp).
 
-When room tmp exists, `show` reports its host path and notes that sandboxed panes mount it at `/tmp`; JSON exposes `tmp_dir` (renamed from `scratch_dir`, a wire-format change). Room tmp is shared across the room's sandboxed agents, survives agent restart, and is removed by room teardown ([mount-view lifecycle](../../internals/sandbox.md#room-tmp)).
+| Flag | Effect |
+| --- | --- |
+| `--capture` | Append a Capture section framing the pane's visible area, with the pane id in the top border. An agent without a bound pane is an error. |
+| `--ansi` | Keep colors inside the capture frame. |
+| `--json` | Emit the report: the [`list` entry](#list) under `agent`, plus `stale`, the full `ask`, `run`, `messages` (the same filtered list, without the hidden count), `capture`, and `tmp_dir` when they apply. A stopped agent keeps every entry key, with live-only fields such as context severity and active time `null`. |
 
 #### `logs`
 
-`logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as [`rimz transcript @ref`](./transcript.md): human output hides subagent digests, waits, and `rimz`-authored prompts together with the output of the turns they open; JSON retains them.
+`rimz agents logs <REF>` prints one agent's transcript as a chat log, with the same scope and rendering as [`rimz transcript @ref`](./transcript.md). Human output hides subagent digests, waits, and `rimz`-authored prompts along with the output of the turns they open; JSON keeps them.
+
+| Flag | Effect |
+| --- | --- |
+| `-n, --tail <N>` | Keep the last `N` chat lines. |
+| `-f, --follow` | Print new lines as they land. Conflicts with `--all`. |
+| `--all` | Include earlier sessions. |
+| `--json` | Emit JSON, or NDJSON with `--follow`. |
 
 #### `history`
 
-`history <ref>` groups the provider transcript at each user message and assigns the session's API responses to those time spans, counting duplicate `(message.id, requestId)` rows once. The table reports local start time, duration, fresh-input and output tokens, price, best-effort outcome, and prompt preview; `-n/--tail N` keeps the newest turns and `--json` emits the full records including cache-read tokens, cache-write tokens, and API-call count. `done` means an assistant reply closed the turn, `open` is the live in-flight final turn, and `cut` means the turn or session ended without an assistant reply. Live resolution falls back to the audit rollup, so stopped sessions remain readable while their provider transcript exists. Per-turn grouping requires an adapter with normalized transcript and spend coverage; see [agent support](../agent-support.md) for the current per-adapter surface.
+`rimz agents history <REF>` splits the session's provider transcript into turns, one per user message, and assigns each API response to its turn.
+
+```console
+$ rimz agents history @coder -n 3
+START             DUR  TOKENS       COST     OUTCOME  PROMPT
+2026-07-08 15:12   8m  ↘4k ↗510     $0.4210  done     implement refresh-token rotation
+2026-07-08 15:38   3m  ↘1k ↗284     $0.2870  done     add coverage for expiry edge cases
+2026-07-08 15:44  12s  ↘320 ↗0      $0.0310  open     run the focused integration tests
+3 turns · 54k tokens · $0.7390
+```
+
+`TOKENS` shows fresh input and output. `OUTCOME` is best-effort: `done` means an assistant reply closed the turn, `open` is the live final turn, and `cut` means the turn or session ended without a reply. A response repeated under the same message and request id counts once. `-n, --tail <N>` keeps the newest `N` turns, and `--json` emits full records, adding cache-read tokens, cache-write tokens, and the API-call count.
+
+A stopped agent's history stays readable while its provider transcript exists. Per-turn history needs an adapter with normalized transcript and spend coverage; [agent support](../agent-support.md) lists which have it.
 
 #### `attribution`
 
-`attribution [SCOPE] [--branch BRANCH]` credits the root agents that worked the selected lane even after their panes and processes exit. `SCOPE` accepts the same `#channel`, worktree, directory name, and path spellings as `list`; a slash spelling is a lane alias, not a branch filter. The default is the caller's current lane, and `--all` covers every lane in the room. `--branch BRANCH` selects a branch explicitly; otherwise attribution uses the selected checkout's current HEAD branch. `--all`, detached HEAD, or a selection without one common checkout infers no branch filter; an explicit `--branch` still applies with `--all`. It reads durable and local provider state without requiring a live multiplexer.
+`rimz agents attribution [SCOPE]` credits the root agents that worked a lane, including agents whose panes have already exited. Use it to credit a pull request: `--md` prints a block for the PR body. It reads the store and provider transcripts and needs no live multiplexer. How records are selected and folded is in [attribution.md](../../internals/agents/attribution.md).
 
-The scope selects the lane; the lane's current worktree lifetime and observed branch membership decide what counts inside it. A worktree RimZ created carries a creation timestamp in its [marker](./worktree.md), and attribution admits only the records registered at or after it, so a checkout removed and recreated under the same name credits the current incarnation alone rather than every generation the name ever had. A record whose checkout no longer exists counts nowhere, which is how removing a worktree removes its attribution; nothing is deleted, the audit rollup and provider transcripts keep the records, and `rimz agents show` still reports an excluded session when you address it directly. A checkout RimZ did not create has no timestamp boundary, but branch filtering still applies. Roots and the pane-backed children they launched are each admitted by their own checkout and their own registration time. Attribution infers no commit or time window of its own; JSON timestamps let callers apply a narrower one.
+| Flag | Effect |
+| --- | --- |
+| `SCOPE` | A `#channel`, worktree, path, or directory name, as for `list`. Default: the caller's current lane. A slash spelling names a lane, not a branch. |
+| `--all` | Every lane in the room. |
+| `--branch <BRANCH>` | Credit only agents observed on `BRANCH`. Default: the selected checkout's current branch. With `--all`, detached HEAD, or a scope spanning several checkouts, no branch filter applies unless you pass this flag. |
+| `--md` | Emit a collapsed `<details>` block for a pull-request body. |
+| `--json` | Emit the schema 7 document. Conflicts with `--md`. |
 
-Under a branch filter, a root identity must have durable launch or lifecycle evidence of being observed on that branch; records without branch evidence are excluded. Launched children follow their admitted parent without a separate branch check. Figures cover each admitted identity's whole effort, not just its time on the selected branch: an identity observed on several branches can contribute its full figures to each branch's report. JSON `scope.branch` is the applied filter, or `null` when no branch filter applies.
+Which agents count:
 
-The panel names the applied `branch <name>` above the groups, including when the scope has no records left. When the selected records share one RimZ-created checkout, the same header also shows `since <timestamp>`, using the configured local time zone at minute resolution (`YYYY-MM-DD HH:MM`). JSON preserves the exact RFC 3339 boundary as `scope.since`; `--md` omits both scope labels. A scope spanning several checkouts, an unmarked checkout, or a removed one leaves the boundary absent.
+- An agent counts in a lane while its checkout still exists. Removing a worktree removes its agents from the report; nothing is deleted, and `rimz agents show` still reports the session.
+- A worktree RimZ created counts only agents registered at or after its creation, so a worktree removed and recreated under the same name credits only its current life. The header then shows `since <YYYY-MM-DD HH:MM>` in the configured time zone. A checkout RimZ did not create has no such boundary.
+- Under a branch filter, a root agent counts only with recorded evidence of being on that branch; the children it launched follow it. Figures cover each counted agent's whole effort, so an agent seen on several branches reports its full figures under each.
+- A child launched from a pane counts in its parent's lane, wherever its own pane ran, and drops out once its parent leaves the audit record.
+- An agent that never opened a turn and has no recorded activity, messages, tokens, or cost is omitted. The panel and JSON keep an agent that opened a turn with no statistics; `--md` omits it and recomputes totals.
+- An unreadable checkout or malformed worktree marker leaves its agents out and prints a warning on stderr naming the path.
+- Several sessions of one contributor (after compaction or `/clear`) fold into one member when they share a team role, launch cell, explicit name, or pane; `sessions` counts them.
 
-An unreadable checkout or malformed marker leaves its sessions out of seat totals rather than failing the command. A warning on stderr names each affected path. Direct inspection with `agents show` still shows the addressed session itself, even when it cannot join seat totals.
+The panel names the applied `branch <name>` and any `since` boundary above the groups, then groups members by team. Each member line shows handle, provider, and model with effort, followed by labelled lines in the order `effort`, `subagents`, `activity`, `messages`, `tokens`; an unavailable figure's line or part is omitted.
 
-Agents that never opened a turn and have no recorded active time, asks, messages, tool calls, compactions, subagents, tokens, or cost are omitted from the listing and agent counts. The panel and JSON retain an agent that durably opened a turn even when those statistics are unavailable; `--md` omits that stat-less row and recomputes its groups and totals.
+- `effort` is active time and cost. Cost and tokens are all-in: the member plus every subagent it spawned, the same figure `agents show`, `teams show`, and the sidebar report.
+- `subagents` breaks that spend down by task as `{count} × {task}, … · {cost}`; the cost is already inside `effort`. Tasks come from provider-reported types and launch profiles, and missing or description-like types group as `other`.
+- `activity` leads with asks, then tool calls.
+- `messages` reads `{n} from you · {n} from teammates · {n} to teammates`, excluding RimZ automation. Sent messages are credited by handle, so a message sent by an excluded session still credits the handle a counted session holds.
 
-The default panel groups members by team and shows provider, model and effort, then labelled lines in the order `effort`, `subagents`, `activity`, `messages`, and `tokens`. Asks lead the activity line. Messages read `{n} from you · {n} from teammates · {n} to teammates`; totals count received messages once and exclude RimZ-authored automation. Member, group, and document cost and token figures are all-in: they cover the member seat and every subagent it spawned, the same fold used by `agents show`, `teams show`, and the sidebar. The subagents line breaks that spend down by task as `{count} × {task}, … · {cost}`; the trailing cost is already included in the effort line above, not an addition. Provider-reported types and launch profiles supply task labels, while description-like or missing types fold into `other`. A pane-backed child is credited to the lane of the parent that launched it regardless of which checkout its pane ran in; once that parent leaves the audit rollup, the child is omitted. A single team group omits the trailing `Total` line that would repeat its caption; a teamless group has no caption and keeps `Total`. A `Models` section follows the last member and precedes `Total`, one row per model id as the provider transcript named it, `unknown` where the transcript named none, each row reading `{cost} · {token split}`. The rows split the same all-in spend the document totals report, by model instead of by seat: the model on a member line comes from that seat's latest session, while a row here sums every counted transcript entry that named that id, subagents included. Rows sort by cost descending (unpriced last), then token total descending, then model id ascending (`unknown` last only when cost and tokens tie). The section renders whenever it has a row, including in the single-team case that omits `Total`. Any unavailable or empty labelled figure is omitted rather than printed as an unknown placeholder.
+A `Models` section follows the members: one row per model id the transcripts named (`unknown` where none), each `{cost} · {token split}`. It splits the same all-in spend by model, subagents included, so a member's heading model (its latest session's) can differ from the rows. Rows sort by cost, highest first (unpriced last), then by tokens, then by model id. A `Total` line ends the panel, except that a lone team group omits it because its caption already carries the totals.
 
-`--md` emits the panel's figures and wording as a collapsed `<details>` receipt for a pull-request body, while omitting opened-turn-only members and recomputing the totals. The summary links RimZ to its repository. Member bullets sit under an `**Agents**` heading. The same model rows follow the member bullets as a `**Models**` block, one bullet per row as `` - `{model id}` — {cost} · {token split} ``, with `unknown` left outside the code span; the summary line stays the totals summary and gains no model figures. An empty scope emits no Markdown. `--json` emits a schema 7 document, and `--json` conflicts with `--md`.
+```console
+$ rimz agents attribution
+since 2026-09-06 21:26
+forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
 
-The JSON document carries `schema`, `generated_at`, `rimz_version`, `scope`, `groups`, `models`, and `totals`. `scope` has `selector`, `channel`, `branch`, `worktree`, and `since`, the lane's worktree creation timestamp or `null`; each group has `team`, `totals`, and `members`; a team has `name` and launch-ordered `roles`. A member has `handle`, `role`, `name`, `kind`, `provider`, `model`, `effort`, `presence`, `me`, `launch_ordinal`, `sessions`, `registered_at`, `last_activity`, `active_secs`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens`, `cost_usd`, `subagents`, and `models`. `sessions` counts the member seat's own continuation records; pane-backed children never count as sessions. `asks_answered` joins durable answer records to their ask id. `presence` is `live` or `exited`; `messages` has `from_user`, `from_teammates`, and `to_teammates`; `tokens` has `input`, `output`, `cache_write`, and `cache_read`; each subagent group has `task`, `count`, and `cost_usd`. A model row has `model`, `null` when the transcript named none, plus the same `tokens` split and `cost_usd`; both lists arrive in the rendered order. A member's `models` splits that member's own all-in figures; the document's `models` folds the listed members' rows and is the list the panel and `--md` render. Groups carry no model list. Group and document totals have `agents`, `active_secs`, `wall_clock_secs`, `cost_usd`, `asks`, `asks_answered`, `tool_calls`, `compactions`, the same message counts, and the same token split. Member and total `cost_usd` and `tokens` include the seat and every subagent it spawned; active time, asks, tool calls, compactions, and messages remain seat-only. A missing active-time or cost figure is `null`, never a wall-clock or zero substitute.
+  @planner · Claude · claude-fable-5-1@high
+      effort:    17m active · $9.66
+      subagents: 2 × explorer, 1 × designer · $3.51
+      activity:  46 tool calls
+      messages:  1 from you · 3 from teammates · 7 to teammates
+      tokens:    469.5k input, 83.9k output, 142.1k cache write, 7.6m cache read
+[...]
+```
 
-One contributor can own several provider sessions: compaction continuation and `/clear` start fresh session ids while keeping the same team role, launch cohort cell, explicit name, or pane seat. Attribution folds those records into one member in that order of identity strength, keeps provider kind in the key, and publishes `sessions` so the fold stays auditable.
+`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**`, and model bullets under `**Models**` as `` - `{model id}` — {cost} · {token split} `` (with `unknown` outside the code span). It omits the `branch` and `since` labels, and an empty scope emits nothing.
 
-Identity, presence, tool calls, compactions, subagent identity, and clocks come from the store's audit rollup, which retains ended sessions; attribution admits only those within their checkout's current life. A session's registration timestamp is set once, when RimZ first saw it, so resuming a session that predates the current checkout leaves it outside the count. Prompts, agent messages, and asks come from RimZ's append-only conversation transcript; matched system nudges carry RimZ's sender identity and do not count as prompts from you. Transcript entries written before this distinction can still count historical system nudges as user prompts. Sent-message credit joins the sender's rendered handle because message records do not carry its session id, so a message sent by an excluded session still credits the handle a counted session now holds. Tokens and dollars come together from the adapter's historical spend parser and the shared price book; companion child transcripts split the subagent portion by child before it is grouped by type. Estimated active time comes from the per-session runtime sidecar; `rimz gc` removes stale sidecars after its runtime retention (24 hours by default), so old credit keeps its agent and transcript figures while `active_secs` becomes `null`.
+The `--json` document has the keys `schema` (`7`), `generated_at`, `rimz_version`, `scope`, `groups`, `models`, and `totals`. A missing active-time or cost figure is `null`, never zero or wall-clock time. Lists arrive in rendered order.
+
+| Object | Fields |
+| --- | --- |
+| `scope` | `selector`, `channel`, `branch` (the applied filter or `null`), `worktree`, `since` (RFC 3339 boundary or `null`) |
+| group | `team` (`name` and launch-ordered `roles`, or `null`), `totals`, `members` |
+| member | `handle`, `role`, `name`, `kind`, `provider`, `model`, `effort`, `presence` (`live` or `exited`), `me`, `launch_ordinal`, `sessions`, `registered_at`, `last_activity`, `active_secs`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens`, `cost_usd`, `subagents`, `models` |
+| `messages` | `from_user`, `from_teammates`, `to_teammates` |
+| `tokens` | `input`, `output`, `cache_write`, `cache_read` |
+| subagent group | `task`, `count`, `cost_usd` |
+| model row | `model` (`null` when unnamed), `tokens`, `cost_usd` |
+| `totals` (group and document) | `agents`, `active_secs`, `wall_clock_secs`, `cost_usd`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens` |
+
+`cost_usd` and `tokens` are all-in at every level; `active_secs`, asks, tool calls, compactions, and messages count the member's own seat. `sessions` counts the seat's own sessions, never children. A member's `models` splits that member's figures; the document's `models` is the list the panel and `--md` render, and groups carry none. Active time comes from per-session sidecars that `rimz gc` removes after its runtime retention (24 hours by default); older credit keeps its other figures with `active_secs` set to `null`.
 
 #### `top`
 
-`top` ranks live pane-backed agents, including launched children nested in a parent card, by process-tree resources: CPU, memory, I/O per second, process count, context fill, tokens, and age. It streams by default; `--once` takes two samples 500 ms apart and exits for scripts, while `-w/--worktree` selects one lane. Resource columns read `-` on platforms or panes where process metrics are unavailable, while context and token columns still render.
+`rimz agents top` ranks live pane-backed agents, with launched children nested under their parent, by the resources their pane's process tree uses.
+
+```console
+$ rimz agents top --once
+4 agents · 2 running · 143% CPU · 1.9G MEM · 248k tokens
+AGENT         STATUS   CPU   MEM  IO/S  PROCS  CTX  TOKENS  AGE
+@coder        running  96%  892M  4M/s     12  31%     54k  0s
+@planner      waiting   2%  410M     -      6  42%     78k  2m
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--once` | Take two samples 500 ms apart, print one table, and exit. Without it, `top` refreshes until you quit. |
+| `--interval <DURATION>` | Refresh interval (`2s`, `500ms`, or bare seconds). Default 2 seconds. |
+| `--all` | Every channel in the room instead of the current channel. |
+| `-w, --worktree <NAME>` | One worktree or channel. Conflicts with `--all`. |
+
+Resource columns read `-` where process metrics are unavailable for the platform or pane; context and token columns still render.
 
 #### `focus`
 
-`focus` jumps to an agent's pane.
+`rimz agents focus <REF>` moves your multiplexer focus to the agent's pane.
 
 #### `fork`
 
-`fork <ref>` resolves one live agent in the current channel first, then falls back to the stopped-agent audit rollup, and opens a provider-native copy with the full conversation history under a new session id. The source stays untouched. The fork replays the source profile's rendered launch posture — system prompt files, model, effort, permission argv, and profile args — through the same seam as restart, preserving profile-declared prompts and tool configuration instead of reverting to provider defaults. A profile that no longer resolves forks bare with a warning, while a profile that now names a different provider refuses. Prompt-cache lineage remains provider-controlled and may start cold under the fork's new session identity. The fork carries the source channel and drops team and role identity so the original role handle stays unique.
+`rimz agents fork <REF>` opens a new agent holding a copy of another agent's full conversation, under a new session id, and leaves the source untouched. It resolves a live agent in the current channel first, then a stopped agent in the audit record.
 
-The fork always opens in the source agent's recorded worktree. A plain fork takes over the launching pane; `--new-pane` splits it into the current view, `--new-tab` opens a separate view, and `--bg` implies a background split. `--name/-n <name>` pins its handle. The fork keeps the source's recorded `--isolation` override; `--isolation host|sandbox` replaces it. Cross-worktree forks and a first prompt are outside this command; send the first new instruction with `rimz message` after the fork opens.
+```sh
+rimz agents fork @coder --name twin
+```
 
-| Agent | Native fork argv |
+The fork reuses the source profile's launch posture (system prompt files, model, effort, permission flags, and profile arguments), rendered from current configuration as `restart` does. A profile that no longer resolves forks without it and warns; a profile that now names a different provider refuses. The fork keeps the source's channel but not its team or role, so the role handle stays unique. Prompt caching is up to the provider and may start cold.
+
+The fork always opens in the source agent's worktree. By default it takes over the current pane; `--new-pane` splits the current tab, `--new-tab` opens a new one, and `--bg` splits and keeps focus where it is. `-n, --name <NAME>` sets its handle. It keeps the source's recorded `--isolation`, and `--isolation host|sandbox` replaces it. A fork takes no prompt: send the first instruction with `rimz message` once it opens.
+
+| Agent | Native fork command |
 | --- | --- |
 | Claude | `claude --resume <id> --fork-session` |
 | Codex | `codex fork <id>` |
-| Pi | `pi --fork <id>` |
+| Droid | `droid --fork <id>` |
+| Grok | `grok --resume <id> --fork-session` |
 | OpenCode | `opencode --session <id> --fork` |
+| Pi | `pi --fork <id>` |
+| Qwen | `qwen --resume <id> --fork-session` |
+
+Other kinds, including plugins, cannot fork.
 
 #### `wait`
 
-`wait` blocks on supervised runs (by run id or pet name) and interactive agents finishing a turn: `idle`, `success`, or `failed` after a turn has opened. A sleeping agent (an armed one-shot wait) and a freshly registered agent that never opened a turn keep the wait blocked. One reference keeps the answer-oriented behavior: a plain run wait prints the final assistant message, `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing.
+`rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. A sleeping agent (one with an armed one-shot wait) and a freshly registered agent that never opened a turn keep the wait blocked. A reference is a run id, a pet name, or any address.
 
-Several references form a join. Text mode prints each final answer in completion order under a `--- <name> ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose); only abnormal results add a status suffix. Diagnostics on stderr carry the same header. `--json` prints one labeled map `{name: {status, exit, cost, transcript_path, last_message}}` after every target settles. The command succeeds when every target completes; otherwise it exits with the first non-completed target's status code in argument order. `--stream` accepts one target because one stdout stream has one transcript.
+With one reference, `wait` prints the final assistant message. `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays the transcript from the top before tailing.
 
-`--any` returns on the first terminal target regardless of success or failure, prints the same labeled answer block for the winner, and exits with that target's status code; JSON mode prints the labeled map with only the winner. The other targets keep running. `--timeout` caps the whole wait and exits `124` without changing pending targets; text mode names each unfinished target on stderr as `--- <name> (timed out) ---`, while JSON mode stamps unfinished targets `timed_out` in the result map before exiting.
+Several references form a join. Text mode prints each final answer in completion order under a `--- <name> ---` header, rendered by the [agent-prose rule](../cli.md#agent-prose), and adds a status suffix only to abnormal results; stderr diagnostics carry the same header. `--json` prints one map after every target settles, `{name: {status, exit, cost, transcript_path, last_message, error}}`, omitting `cost`, `transcript_path`, `last_message`, and `error` when they have no value. `--stream` accepts one reference.
 
-`rimz subagents wait` delegates to this join after restricting references to the calling agent's own children; it requires at least one name and lists the children when given none.
+| Flag | Effect |
+| --- | --- |
+| `--any` | Return when the first target finishes, successfully or not, printing its answer block (or a one-entry map with `--json`). The other targets keep running. Conflicts with `--stream`. |
+| `--timeout <DURATION>` | Cap the whole wait. On expiry `wait` exits `124` and leaves the targets running; text mode names each unfinished target on stderr as `--- <name> (timed out) ---`, and JSON mode marks them `timed_out`. |
+| `--stream` | Tail the transcript while waiting. One reference only. |
+| `--from-start` | With `--stream`, replay from the top first. |
+| `--json` | Labeled result map; with `--stream`, NDJSON run events. |
+
+The exit code is `0` when every target completes; otherwise it is the status code of the first target, in argument order, that did not complete ([exit codes](#supervised-runs--p)). With `--any`, it is the winner's code. [`rimz subagents wait`](./subagents.md) runs the same join restricted to the caller's own children.
 
 #### `refresh`
 
-`refresh` forces the transcript tail re-read past the stat gate, re-runs Codex turn-death confirmation against the live pane when one is bound, spawns the kind's detached rich-context helper when one exists, and wakes sidebars after an inline merge. With a reference it resolves exactly one agent in scope; without a reference it refreshes every live root agent in the current channel; with `--all` it takes no reference and covers every live root agent in the workspace.
+`rimz agents refresh [REF]` re-reads card context now instead of waiting for the next change. It re-reads the transcript tail, re-checks a Codex turn that looks dead against its live pane, starts the kind's rich-context helper when one exists, and wakes the sidebars. With a reference it refreshes exactly one agent; without one, every live root agent in the current channel; with `--all` (no reference), every live root agent in the workspace.
 
 #### `stop`
 
-`stop` tears down a run's pane — canceling supervision while the run is live, reclaiming a completed `--keep` pane — or closes the agent's pane when the ref names no run. It ends the CLI process the way Ctrl+C would; the provider's session files stay on disk, so a stopped agent is one `--resume` away. A parent stop first stops its live RimZ-launched subagents; this also applies when `rimz teams stop` reaches that parent. Without `--all`, `stop` resolves to exactly one agent; with `--all`, it resolves every match, prints one result line per agent, and exits non-zero if any stop failed.
+`rimz agents stop <REF>` ends an agent's CLI process the way Ctrl+C would. For a live supervised run it cancels the run; for a completed run kept open with `--keep` it reclaims the pane; for an agent it closes the pane. The provider's session files stay on disk, so a stopped agent is one [`--resume`](#resume-agents) away.
+
+Stopping a parent first stops its live children launched with `rimz subagents`, including when [`rimz teams stop`](./teams.md#drive-a-live-team) reaches the parent. Without `--all`, the reference must match one agent. With `--all`, `stop` acts on every match, prints one result line per agent, and exits `1` if any stop failed.
 
 #### `restart`
 
-`restart <ref>` acts on one live pane. It focuses that pane, opens its replacement in the same layout position, then closes the old pane; focus follows the replacement on both Zellij and tmux. The replacement re-renders the stamped profile from current configuration, preserves role, team, channel, and permission mode, and uses the provider's native session resume. One-off model, `--agent`, and passthrough flags are not durable and are not replayed. If the profile now resolves to a different provider — including a session launched through `--agent` — restart refuses and points back to `rimz agents <profile> --agent <kind>` for an explicit fresh launch. When no resume command or recorded conversation exists, restart launches fresh and prints `restarted fresh as @<allocated-name> — <reason>`; the allocator may choose a new name while the old live card still owns its handle, so the output makes that degraded rename explicit.
+`rimz agents restart <REF>` replaces one live agent's pane and resumes its provider session. It focuses the pane, opens the replacement in the same layout position, and closes the old pane; focus follows the replacement on Zellij and tmux.
+
+The replacement renders the agent's profile from current configuration, so profile edits take effect, and keeps its role, team, channel, permission mode, and `--isolation`. One-off launch flags (`--model`, `--agent`, passthrough arguments) are not recorded and do not carry over. When the profile now resolves to a different provider, including an agent launched with `--agent`, restart refuses and points to `rimz agents <profile> --agent <kind>` for an explicit fresh launch.
+
+When the provider has no resume command or no recorded conversation, restart launches fresh and prints `restarted fresh as @<name> — <reason>`. The fresh agent may get a new name, because the old card still holds its handle while the replacement starts.
 
 #### `compact`
 
-`rimz agents compact @handle [INSTRUCTION]` queues the agent's native context-compaction command and attempts delivery at a turn boundary. An idle agent receives it immediately; a running or waiting agent keeps it queued until its next boundary. There is no `--steer` or `--force`. Output is `compacting @handle (msg_...)` when sent, or `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary` when queued; sent means submitted, not finished.
+`rimz agents compact <REF> [INSTRUCTION]` queues the agent's native context-compaction command and delivers it at a turn boundary: at once for an idle agent, or when a running or waiting agent's turn ends. There is no way to force it into a live turn.
 
-Omit `INSTRUCTION` to use [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction). A positional string replaces that brief for adapters accepting trailing text (Claude today); `""` sends the bare command. An explicit instruction, including `""`, is refused for bare-command adapters rather than silently dropped; rerun without the instruction. An agent without a bound pane or a native compaction command is also refused.
+| Output | Meaning |
+| --- | --- |
+| `compacting @handle (msg_...)` | Sent. The command was submitted; compaction may still be running. |
+| `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary` | Queued until the turn ends. |
 
-The command refuses an agent that is currently compacting, already has a live compaction command in its queue, or last received a compaction with no user turn since: a compaction never follows a compaction; the next user turn re-arms it. Refusals print the reason to stderr, leave stdout empty, and exit `1`. This is an operator action, recorded as a durable message and audit event, not an automation assist.
+Without `INSTRUCTION`, the command uses the [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction) brief. An instruction replaces that brief on adapters that accept trailing text (Claude), and `""` sends the bare command. Other adapters refuse any instruction, including `""`; rerun without one.
 
-Adapters without native turn-start hooks (Kiro today) are refused because RimZ cannot enforce this guarantee for them; use their native compaction command in the agent's own pane instead.
+The command refuses, printing the reason on stderr with empty stdout and exit `1`, when the agent:
+
+- is compacting now, already has a compaction queued, or has taken no user turn since its last compaction;
+- has no bound pane or no native compaction command;
+- has no native turn-start hook (Kiro), because RimZ could not guarantee a compaction never follows a compaction; use the native command in the agent's pane.
+
+Each compaction is recorded as a message and an audit event, as an operator action rather than an automation assist.

@@ -126,5 +126,5 @@ The gate rides loop tasks only, on `--agent` and `--wait` actions, and it is eva
 - [Loops](./loops.md#keep-the-fleet-moving) — auto-continue, task budgets, and hands-off recovery in one loop.
 - [Scripting](./scripting.md) — the `-p` exit-code contract, including `125` for a run over budget.
 - [Configuration → dollar budgets](./configuration.md#dollar-budgets) — the `harness.turn_budget`, `harness.budget`, and `[accounts.budget]` keys.
-- [Budget reference](../reference/cli/agents.md#inspect-and-change-a-budget) — the complete `rimz budget` and `rimz agents budget` surface.
+- [Budget reference](../reference/cli/budget.md) — the complete `rimz budget` and `rimz agents budget` surface.
 - [Providers internals](../internals/agents/providers.md) — spend windows, ledgers, and park mechanics in depth.
