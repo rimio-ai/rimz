@@ -41,7 +41,7 @@ rimz config get theme.display.max_cols    # one value
 rimz config get sidebar --json
 ```
 
-`get` shows the effective config: your overrides layered over the built-in defaults. It answers "what is RimZ actually using", not "what did I write", so a key you never set still prints the default it is following.
+`get` shows the effective config: your overrides layered over the built-in defaults. It answers "what is RimZ actually using", not "what did I write", so most keys you never set print the default they follow. An optional key whose default is resolved at runtime, such as `theme.scheme`, reports `config key ... is unset` instead; the [config reference](../reference/cli/config.md#read-a-value) explains.
 
 ## Where your configuration lives
 

@@ -184,7 +184,7 @@ rimz setup [--yes]
 | `--yes` | Merges config against the templates, repairs `~/.agents` fragments, and writes missing files. Installs no hooks, grants no trust, and changes no appearance or automation setting. |
 | Without a terminal and without `--yes` | Nothing. Prints the report and `No terminal input is available; setup changed nothing.` |
 
-A merge names every file it wrote, merged, or left untouched. An unparseable file is left as it is, and interactive setup stops at that point until you fix it. What a merge keeps and removes is defined in the [configuration guide](../../guide/configuration.md#generate-and-refresh-the-files). The hook summary points at `rimz hooks install --dry-run` for the exact diffs. [`rimz config init --force`](./config.md#read-and-edit-config) is the clean reset. The walkthrough is the [setup guide](../../guide/setup.md).
+A merge names every file it wrote, merged, or left untouched. An unparseable file is left as it is, and interactive setup stops at that point until you fix it. What a merge keeps and removes is defined in the [configuration guide](../../guide/configuration.md#generate-and-refresh-the-files). The hook summary points at `rimz hooks install --dry-run` for the exact diffs. [`rimz config init --force`](./config.md#write-the-templates) is the clean reset. The walkthrough is the [setup guide](../../guide/setup.md).
 
 ## Diagnose with doctor
 
