@@ -142,8 +142,8 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         gap: "no native post-compact hook",
     },
     subagents: ConcernCoverage::Partial {
-        via: "child hooks joined to parent subagent.started/subagent.completed records",
-        gap: "no child tool/permission hooks",
+        via: "child hooks joined to parent subagent.started agentId and subagent.completed",
+        gap: "child permission requests arrive on the parent session",
     },
     launch_reminders: ConcernCoverage::Unsupported {
         reason: "no additive system-text launch channel is implemented",
@@ -160,8 +160,8 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "statusline window/fill/occupied/current and cumulative token scopes",
     },
     realtime_cost: ConcernCoverage::Partial {
-        via: "statusline cumulative token scopes priced by the local book",
-        gap: "estimated: totals priced at the currently-resolved model; premium-request billing is not modeled",
+        via: "statusline ai_used credits, else token scopes priced by the local book",
+        gap: "without credits, totals are estimated at the currently-resolved model",
     },
     rich_context: ConcernCoverage::Wired {
         via: "command statusline payload with metadata-only OTel fallback",
@@ -170,7 +170,7 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "$COPILOT_HOME/hooks/rimz.json + reversible settings.json statusline",
     },
     account_spend: ConcernCoverage::Partial {
-        via: "finalized session.shutdown history priced by the local book",
+        via: "finalized session.shutdown credits, else tokens priced by the local book",
         gap: "no authoritative account dollar ledger",
     },
     tool_stats: ConcernCoverage::Unsupported {
@@ -187,11 +187,11 @@ const COPILOT_USER_COVERAGE: UserCoverage = UserCoverage {
     },
     live: CapabilityLevel::Partial {
         shows: "context fill, current-call composition, session tokens, and a dollar figure",
-        limit: "dollars are estimated at the resolved model rather than billed premium requests",
+        limit: "without metered AI credits, dollars are estimated at the resolved model",
     },
     history: CapabilityLevel::Partial {
         shows: "per-session tokens and dollars in rimz stats",
-        limit: "the dollars are a local estimate rather than a billing ledger",
+        limit: "dollars come from session credits rather than an account billing ledger",
     },
     account: CapabilityLevel::Partial {
         shows: "plan plus named monthly credit and chat windows",
@@ -201,8 +201,8 @@ const COPILOT_USER_COVERAGE: UserCoverage = UserCoverage {
         note: "permission requests and agent questions reach rimz asks with their options",
     },
     subagents: CapabilityLevel::Partial {
-        shows: "children appear at start with their model and finish with exact tokens",
-        limit: "child tool and permission activity stays invisible",
+        shows: "children appear with their model, track tools, and finish with exact tokens",
+        limit: "a child's permission request waits on the parent card instead",
     },
 };
 
@@ -221,12 +221,12 @@ const COPILOT_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
         event: "permissionRequest",
     },
     subagent_started: HookCoverage::Derived {
-        via: "child userPromptSubmitted joined to parent subagent.started model metadata",
-        gap: "no child tool/permission hooks",
+        via: "child userPromptSubmitted joined to parent subagent.started agentId",
+        gap: "child permission requests arrive on the parent session",
     },
     subagent_stopped: HookCoverage::Derived {
         via: "child agentStop plus parent subagent.completed token reconciliation",
-        gap: "no child tool/permission hooks",
+        gap: "child permission requests arrive on the parent session",
     },
     compacting: HookCoverage::Native {
         event: "preCompact",

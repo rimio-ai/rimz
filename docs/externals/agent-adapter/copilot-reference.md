@@ -140,7 +140,7 @@ No hook fires after compaction, on a model or effort change, on a rate limit, or
 
 `stop_hook_active` is `true` when a prior `block` from the same hook already forced this turn to continue. `subagentStop.response` carries the full final subagent text (`last_assistant_message` in the VS Code dialect), because the hook fires before large-response spill handling.
 
-The built-in `general-purpose` agent emits neither `subagentStart` nor `subagentStop`. The other built-in agents (`explore`, `task`, `code-review`, `rubber-duck`, `research`, `security-review`) and user custom agents emit both. The docs do not say whether `subagentStop.agentId` is unique per child run or names the definition.
+The built-in `general-purpose` agent emits neither `subagentStart` nor `subagentStop`. The other built-in agents (`explore`, `task`, `code-review`, `rubber-duck`, `research`, `security-review`) and user custom agents emit both. The docs do not say whether `subagentStop.agentId` is unique per child run or names the definition. In a Copilot CLI 1.0.83 capture, a `general-purpose` child and an `explore` child each emitted both events: `subagentStart` carried the parent `sessionId` and `agentName`, and `subagentStop.agentId` was that child run's UUID.
 
 The reference does not define the file behind `transcriptPath` or promise that it is `session-state/<sessionId>/events.jsonl`; the 1.0.70 capture below shows that it is for a root `agentStop`.
 
@@ -155,6 +155,8 @@ Live captures show payload shapes the reference does not describe. They are comp
 Copilot CLI 1.0.71 sent `preToolUse`, `postToolUse`, and `postToolUseFailure` tool detail as a batch, `toolCalls: [{name, args}]`, in place of the documented singular `toolName`/`toolArgs`. `args` arrived either as an object or as a JSON-encoded string, and one batch could hold `ask_user` beside other calls. Selecting or dismissing an `ask_user` question emitted `postToolUse` before the next assistant output. `postToolUseFailure.error` is a string, unlike the object in `errorOccurred`.
 
 Copilot CLI 1.0.71 fired the ordinary `userPromptSubmitted` and `agentStop` hooks once per `general-purpose` child. Each child payload set `sessionId` to the parent's `task` tool `toolCallId` (a `toolu_…` value), kept the parent `cwd`, and carried an empty `transcriptPath`; two simultaneous children produced distinct IDs.
+
+Copilot CLI 1.0.83 gives each child a UUID `sessionId` instead, equal to the top-level `agentId` on the parent's `subagent.started`, `subagent.completed`, and child tool records, while `toolCallId` becomes a `call_…` value. The child also fires `userPromptTransformed`, `preToolUse`, and `postToolUse` under that UUID, and its `agentStop.transcriptPath` names the parent's `events.jsonl`. A child's `permissionRequest` carries the parent `sessionId`, with extra `hookName`, `toolInput`, and `permissionSuggestions` fields.
 
 Copilot CLI 1.0.70 ran the hooks of a fresh prompt-seeded (`-i`) turn in the order `userPromptSubmitted`, `sessionStart`, `agentStop`, `sessionEnd`, and `sessionStart.initialPrompt` repeated the already-submitted prompt. A root `agentStop.transcriptPath` named `$COPILOT_HOME/session-state/<sessionId>/events.jsonl`.
 
@@ -592,7 +594,6 @@ These surfaces have no published contract at 1.0.83, so anything built on them r
 - the `--output-format json` record schema;
 - the statusline input schema, its timeout, and its environment;
 - the shell that runs command-hook `bash` strings, and the placement of the 1.0.81 `traceparent` fields;
-- whether `subagentStop.agentId` identifies one child run;
 - the `copilot_internal/user` response.
 
 RimZ's mapping of these surfaces and the gaps it records are in [adapter_copilot.md](../../internals/agents/adapter_copilot.md#known-gaps).
