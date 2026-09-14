@@ -651,7 +651,7 @@ fn foreign_team_member_cannot_flip_the_selected_worktree_as_a_user() {
 }
 
 #[test]
-fn flip_compaction_threshold_is_checked_before_queuing_for_done() {
+fn flip_compaction_threshold_is_checked_before_queuing() {
     for live_pane in [true, false] {
         for used in [None, Some(99_999), Some(100_000), Some(100_001)] {
             let fixture = Fixture::new();
@@ -663,7 +663,7 @@ fn flip_compaction_threshold_is_checked_before_queuing_for_done() {
                 fixture.context_tokens("coder", used);
             }
             std::fs::write(fixture.board(), BOARD).unwrap();
-            let output = success(fixture.flip("Done", Some("coder"), Some("Finished building.")));
+            let output = success(fixture.flip("Review", Some("coder"), Some("Finished building.")));
             let messages = fixture.env.store().list_pending_messages().unwrap();
             let reached = used.is_some_and(|used| used >= 100_000);
             assert_eq!(
@@ -701,7 +701,7 @@ fn flip_compaction_threshold_is_checked_before_queuing_for_done() {
             assert!(
                 std::fs::read_to_string(fixture.board())
                     .unwrap()
-                    .contains("Stage: Done\n")
+                    .contains("Stage: Review (@reviewer)\n")
             );
             assert_eq!(fixture.signals().len(), 1);
         }
@@ -738,7 +738,7 @@ fn flip_compaction_inherits_harness_threshold_unless_role_overrides_it() {
         fixture.live_panes(&["terminal_3"]);
         fixture.context_tokens("coder", 150_000);
         std::fs::write(fixture.board(), BOARD).unwrap();
-        let output = success(fixture.flip("Done", Some("coder"), Some("Finished.")));
+        let output = success(fixture.flip("Review", Some("coder"), Some("Finished.")));
         assert_eq!(
             output.contains("compact  queued"),
             expected_threshold.is_some(),
@@ -759,6 +759,25 @@ fn flip_compaction_inherits_harness_threshold_unless_role_overrides_it() {
             );
         }
     }
+}
+
+#[test]
+fn flipping_own_stage_to_done_never_compacts() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.live_panes(&["terminal_3"]);
+    fixture.context_tokens("coder", 150_000);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let output = success(fixture.flip("Done", Some("coder"), Some("Finished.")));
+    assert!(!output.contains("compact"), "{output}");
+    assert!(fixture.env.store().list_messages().unwrap().is_empty());
+    assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).is_empty());
+    assert!(
+        std::fs::read_to_string(fixture.board())
+            .unwrap()
+            .contains("Stage: Done\n")
+    );
+    assert_eq!(fixture.signals().len(), 1);
 }
 
 #[test]
@@ -829,7 +848,7 @@ fn compaction_delivery_error_does_not_fail_a_completed_flip() {
                 .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
                 .env(rimz::harness::launch::ENV_AGENT_ID, "launch_coder")
                 .env("RIMZ_TEST_ZELLIJ_MODE", "fail-write")
-                .args(["teams", "flip", "Done", "Finished.", "--team", "forge"])
+                .args(["teams", "flip", "Review", "Finished.", "--team", "forge"])
                 .output()
                 .unwrap(),
         );
@@ -844,7 +863,7 @@ fn compaction_delivery_error_does_not_fail_a_completed_flip() {
         assert!(
             std::fs::read_to_string(fixture.board())
                 .unwrap()
-                .contains("Stage: Done\n")
+                .contains("Stage: Review (@reviewer)\n")
         );
         assert_eq!(fixture.signals().len(), 1);
         let messages = fixture.env.store().list_pending_messages().unwrap();
@@ -1045,6 +1064,7 @@ fn same_role_and_foreign_stage_do_not_compact_or_enqueue() {
         assert!(output.contains(expected), "{output}");
         assert!(!output.contains("compact"), "{output}");
         assert!(fixture.env.store().list_messages().unwrap().is_empty());
+        assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).is_empty());
     }
     let board = std::fs::read_to_string(fixture.board()).unwrap();
     assert!(board.contains("Stage: Done\n"));
