@@ -25,10 +25,14 @@ pub(super) struct HookPayload {
     pub title: Option<String>,
     pub level: Option<String>,
     pub error: Option<String>,
+    pub error_details: Option<String>,
     pub reason: Option<String>,
+    pub cancelled_by: Option<String>,
+    pub last_assistant_message: Option<String>,
     pub subagent_id: Option<String>,
     pub subagent_type: Option<String>,
     pub description: Option<String>,
+    /// Sent only by releases whose parent session fired `SubagentStop`.
     pub exit_code: Option<i32>,
 }
 

@@ -109,7 +109,7 @@ fn launch_keeps_streaming_flags_out_of_interactive_sessions() {
 }
 
 #[test]
-fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
+fn lifecycle_maps_exact_asks_legacy_stop_reasons_and_parent_fired_subagent_stop() {
     let adapter = GrokAdapter;
     let ask = hook_lifecycle(
         &adapter,
@@ -184,6 +184,158 @@ fn lifecycle_maps_exact_asks_stop_reasons_and_subagent_cancellation() {
 }
 
 #[test]
+fn turn_end_reports_settle_the_turn_through_the_state_machine() {
+    use crate::agents::AgentStatus;
+    use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
+
+    let adapter = GrokAdapter;
+    let running = LifecycleState {
+        status: AgentStatus::Running,
+        phase: TurnPhase::Reasoning,
+        compacting: false,
+    };
+    for (event, payload, status) in [
+        (
+            "stop",
+            json!({"sessionId":"s1","reason":"end_turn","lastAssistantMessage":"done"}),
+            AgentStatus::Success,
+        ),
+        (
+            "stop_failure",
+            json!({"sessionId":"s1","error":"invalid_request","errorDetails":"HTTP 400"}),
+            AgentStatus::Failed,
+        ),
+        (
+            "stop_cancelled",
+            json!({"sessionId":"s1","reason":"user_interrupt","cancelledBy":"user"}),
+            AgentStatus::Idle,
+        ),
+        (
+            "stop_cancelled",
+            json!({"sessionId":"s1","reason":"max_turns","cancelledBy":"runtime"}),
+            AgentStatus::Idle,
+        ),
+    ] {
+        let signal = hook_signal(&adapter, event, &payload);
+        assert_eq!(
+            step(Some(&running), None, None, &signal).next.status,
+            status,
+            "{event} {payload}"
+        );
+    }
+
+    let failure = hook_output(
+        &adapter,
+        "StopFailure",
+        &json!({"sessionId":"s1","error":"rate_limit","errorDetails":"HTTP 429","lastAssistantMessage":"partial"}),
+    );
+    let error = failure.turn_error().cloned().unwrap();
+    assert_eq!(error.class, TurnErrorClass::PausedRateLimit);
+    assert_eq!(error.label.as_deref(), Some("HTTP 429"));
+    assert_eq!(failure.final_message(), Some("partial"));
+    assert_eq!(
+        hook_output(
+            &adapter,
+            "StopFailure",
+            &json!({"sessionId":"s1","error":"server_error"})
+        )
+        .turn_error()
+        .map(|error| error.class),
+        Some(TurnErrorClass::PausedOverloaded)
+    );
+    assert_eq!(
+        hook_output(
+            &adapter,
+            "Stop",
+            &json!({"sessionId":"s1","reason":"end_turn","lastAssistantMessage":"  done  "})
+        )
+        .final_message(),
+        Some("done")
+    );
+    assert!(
+        hook_observation(
+            &adapter,
+            "Stop",
+            &json!({"sessionId":"s1","reason":"channel_closed","stopHookActive":false})
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn child_session_hooks_resolve_the_child_without_claiming_a_parent() {
+    let adapter = GrokAdapter;
+    let gate = hook_lifecycle(
+        &adapter,
+        "SubagentStop",
+        &json!({"sessionId":"child-1","subagentId":"child-1","subagentType":"explore","phase":"gate","lastAssistantMessage":"found it"}),
+    );
+    assert_eq!(gate.agent_id.as_deref(), Some("child-1"));
+    assert_eq!(gate.parent_agent_id, None);
+    assert_eq!(gate.signal, TURN_COMPLETED);
+
+    let failure = hook_output(
+        &adapter,
+        "StopFailure",
+        &json!({"sessionId":"child-1","subagentType":"explore","error":"server_error","lastAssistantMessage":"partial"}),
+    );
+    assert!(matches!(
+        failure.lifecycle().map(|observation| &observation.signal),
+        Some(LifecycleSignal::TurnEnded { errored: true, .. })
+    ));
+    assert_eq!(failure.final_message(), None);
+
+    for (cancelled_by, errored) in [("user", false), ("runtime", true)] {
+        assert_eq!(
+            hook_signal(
+                &adapter,
+                "StopCancelled",
+                &json!({"sessionId":"child-1","subagentType":"explore","reason":"no_progress","cancelledBy":cancelled_by})
+            ),
+            LifecycleSignal::TurnEnded {
+                errored,
+                parked_on_background: false,
+            }
+        );
+    }
+    assert!(
+        hook_observation(
+            &adapter,
+            "SessionEnd",
+            &json!({"sessionId":"child-1","subagentType":"explore","reason":"shutdown"})
+        )
+        .is_none()
+    );
+    assert_eq!(
+        hook_signal(
+            &adapter,
+            "SessionEnd",
+            &json!({"sessionId":"s1","reason":"shutdown"})
+        ),
+        LifecycleSignal::Ended
+    );
+}
+
+#[test]
+fn launch_appends_reminders_through_rules_and_compacts_with_guidance() {
+    let adapter = GrokAdapter;
+    assert_eq!(
+        adapter.append_system_text_channel(),
+        Some(SystemTextChannel::TextFlag {
+            flags: vec!["--rules".to_owned(), "--append-system-prompt".to_owned()],
+        })
+    );
+    assert_eq!(
+        adapter
+            .spec()
+            .launch
+            .compact_command
+            .map(|command| command.instruction),
+        Some(super::super::CompactInstruction::Trailing)
+    );
+}
+
+#[test]
 fn lifecycle_classifies_tool_effects_and_compaction_source() {
     let adapter = GrokAdapter;
     for (tool, mutates, edits) in [
@@ -236,7 +388,7 @@ fn lifecycle_classifies_tool_effects_and_compaction_source() {
 
 #[test]
 fn managed_catalog_is_passive_and_excludes_pre_tool_use() {
-    assert_eq!(install::catalog().len(), 12);
+    assert_eq!(install::catalog().len(), 13);
     assert!(install::catalog().iter().all(|hook| !hook.synchronous));
     assert!(
         !install::catalog()

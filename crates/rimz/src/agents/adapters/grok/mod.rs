@@ -102,7 +102,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
         max_turn_flag: Some("--max-turns"),
         compact_command: Some(super::CompactCommand {
             command: "/compact",
-            instruction: super::CompactInstruction::Unsupported,
+            instruction: super::CompactInstruction::Trailing,
         }),
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
@@ -114,7 +114,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
 
 const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     turn_lifecycle: ConcernCoverage::Wired {
-        via: "SessionStart/UserPromptSubmit/Stop",
+        via: "SessionStart/UserPromptSubmit/Stop/StopFailure/StopCancelled",
     },
     permission: ConcernCoverage::Wired {
         via: "Notification:permission_prompt",
@@ -134,9 +134,7 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Wired {
         via: "SubagentStart/SubagentStop",
     },
-    launch_reminders: ConcernCoverage::Unsupported {
-        reason: "no additive system-text launch channel is implemented",
-    },
+    launch_reminders: ConcernCoverage::Wired { via: "--rules" },
     background_parking: ConcernCoverage::Unsupported {
         reason: "stock Grok hooks expose no background parking lifecycle",
     },
@@ -256,8 +254,14 @@ pub(super) const GROK_HOOKS: &[HookEventSpec] = &[
     .with_lifecycle_fallback(),
     HookEventSpec::lifecycle(
         "StopFailure",
-        r#"{"sessionId":"s1","error":"failed"}"#
-    ),
+        r#"{"sessionId":"s1","error":"server_error","errorDetails":"HTTP 500"}"#
+    )
+    .progress(),
+    HookEventSpec::lifecycle(
+        "StopCancelled",
+        r#"{"sessionId":"s1","reason":"user_interrupt","cancelledBy":"user"}"#
+    )
+    .progress(),
     HookEventSpec::lifecycle(
         "Stop",
         r#"{"sessionId":"s1","reason":"end_turn"}"#
@@ -293,6 +297,7 @@ const KNOWN_EVENTS: &[&str] = &[
     "PostToolUseFailure",
     "Notification",
     "StopFailure",
+    "StopCancelled",
     "Stop",
     "SubagentStart",
     "SubagentStop",
@@ -338,6 +343,12 @@ impl crate::agents::capabilities::LaunchCapability for GrokAdapter {
             env.get("HOME").map(std::ffi::OsStr::new),
         )
     }
+
+    fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
+        Some(SystemTextChannel::TextFlag {
+            flags: vec!["--rules".to_owned(), "--append-system-prompt".to_owned()],
+        })
+    }
 }
 
 impl crate::agents::capabilities::HookCapability for GrokAdapter {
@@ -355,7 +366,8 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
         );
         decoded.set_turn_error(
             match canonical.as_str() {
-                "StopFailure" | "PostToolUseFailure" => parsed.error.as_deref(),
+                "StopFailure" => parsed.error_details.as_deref().or(parsed.error.as_deref()),
+                "PostToolUseFailure" => parsed.error.as_deref(),
                 "Notification" if parsed.notification_type.as_deref() == Some("agent_error") => {
                     parsed.error.as_deref().or(parsed.message.as_deref())
                 }
@@ -365,18 +377,23 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
                 let label = non_empty_trimmed(raw_label)
                     .map(|label| label.chars().take(160).collect::<String>());
                 AgentTurnError {
-                    class: TurnErrorClass::classify_label(label.as_deref()),
+                    class: turn_error_class(&canonical, parsed.error.as_deref(), label.as_deref()),
                     at: Timestamp::now(),
                     label,
                 }
             }),
         );
-        let Some(signal) = lifecycle_signal(self.spec(), &canonical, &parsed) else {
-            return Ok(decoded);
-        };
-        let is_subagent = matches!(canonical.as_str(), "SubagentStart" | "SubagentStop");
         let root_id = parsed.session_id.as_deref().and_then(non_empty_trimmed);
         let child_id = parsed.subagent_id.as_deref().and_then(non_empty_trimmed);
+        // Grok 1.0.30 fires `SubagentStop` from inside the child as its turn
+        // gate, so the envelope session is the child itself. Releases that fired
+        // it from the parent sent the parent's session and an exit code.
+        let child_gate = canonical == "SubagentStop" && root_id.is_some() && root_id == child_id;
+        let Some(signal) = lifecycle_signal(self.spec(), &canonical, &parsed, child_gate) else {
+            return Ok(decoded);
+        };
+        let is_subagent =
+            matches!(canonical.as_str(), "SubagentStart" | "SubagentStop") && !child_gate;
         if is_subagent && (root_id.is_none() || child_id.is_none()) {
             return Ok(decoded);
         }
@@ -445,11 +462,27 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
                 .and_then(|value| value.reasoning_effort.clone());
             observation.description = summary.as_ref().and_then(transcript::Summary::title);
         }
+        let root_turn_end = matches!(canonical.as_str(), "Stop" | "StopFailure" | "StopCancelled")
+            && parsed.subagent_type.is_none();
         decoded.set_final_message(
-            (canonical == "Stop")
-                .then_some(observation.transcript_path.as_deref())
-                .flatten()
-                .and_then(|path| transcript::last_assistant_message(Path::new(path))),
+            root_turn_end
+                .then(|| {
+                    parsed
+                        .last_assistant_message
+                        .as_deref()
+                        .and_then(non_empty_trimmed)
+                        .or_else(|| {
+                            // Releases before `lastAssistantMessage` report only
+                            // a completed `Stop`; its branch fold stays the fallback.
+                            (canonical == "Stop")
+                                .then_some(observation.transcript_path.as_deref())
+                                .flatten()
+                                .and_then(|path| {
+                                    transcript::last_assistant_message(Path::new(path))
+                                })
+                        })
+                })
+                .flatten(),
         );
         decoded.attach_lifecycle(observation);
         Ok(decoded)
@@ -638,11 +671,32 @@ fn notification_ask(payload: &payloads::HookPayload) -> Option<AskKind> {
     }
 }
 
+fn turn_error_class(event_name: &str, error: Option<&str>, label: Option<&str>) -> TurnErrorClass {
+    match (event_name, error) {
+        ("StopFailure", Some("rate_limit")) => TurnErrorClass::PausedRateLimit,
+        ("StopFailure", Some("server_error")) => TurnErrorClass::PausedOverloaded,
+        (
+            "StopFailure",
+            Some("authentication_failed" | "invalid_request" | "max_output_tokens"),
+        ) => TurnErrorClass::Failed,
+        _ => TurnErrorClass::classify_label(label),
+    }
+}
+
+/// A clean turn end. Inside a child session the shared subagent correlation
+/// turns it into the child's stop under its recorded parent.
+const TURN_COMPLETED: LifecycleSignal = LifecycleSignal::TurnEnded {
+    errored: false,
+    parked_on_background: false,
+};
+
 fn lifecycle_signal(
     spec: &AgentSpec,
     event_name: &str,
     payload: &payloads::HookPayload,
+    child_gate: bool,
 ) -> Option<LifecycleSignal> {
+    let inside_child = payload.subagent_type.is_some();
     Some(match event_name {
         "SessionStart" => LifecycleSignal::Registered,
         "UserPromptSubmit" => LifecycleSignal::TurnStarted,
@@ -670,19 +724,28 @@ fn lifecycle_signal(
             native_key: payload.prompt_id.clone(),
         },
         "Stop" => match payload.reason.as_deref() {
-            Some("end_turn") => LifecycleSignal::TurnEnded {
-                errored: false,
-                parked_on_background: false,
-            },
+            Some("end_turn") => TURN_COMPLETED,
+            // Releases before `StopCancelled` and `StopFailure` replaced these.
             Some("cancelled") => LifecycleSignal::TurnInterrupted { turn_id: None },
             Some("error") => LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
             },
-            Some("channel_closed" | "shutdown") | None => return None,
-            Some(_) => return None,
+            Some(_) | None => return None,
         },
+        "StopFailure" => LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+        },
+        // A child cannot rest idle, so its unfinished turn resolves the child:
+        // failed when the runtime cut it off, settled when the user declined.
+        "StopCancelled" if inside_child => LifecycleSignal::TurnEnded {
+            errored: payload.cancelled_by.as_deref() != Some("user"),
+            parked_on_background: false,
+        },
+        "StopCancelled" => LifecycleSignal::TurnInterrupted { turn_id: None },
         "SubagentStart" => LifecycleSignal::SubagentStarted,
+        "SubagentStop" if child_gate => TURN_COMPLETED,
         "SubagentStop" => LifecycleSignal::SubagentStopped {
             errored: payload.exit_code.is_some_and(|code| code > 0),
         },
@@ -695,8 +758,10 @@ fn lifecycle_signal(
             },
             failed: false,
         },
+        // A child's session end follows the turn report that already resolved
+        // the child, and no child signal means "session closed".
+        "SessionEnd" if inside_child => return None,
         "SessionEnd" => LifecycleSignal::Ended,
-        "StopFailure" | "PermissionDenied" | "PreToolUse" => return None,
         _ => return None,
     })
 }
