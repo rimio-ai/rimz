@@ -14,7 +14,7 @@ These pages answer a specific question about the shipped product: what a command
 | [remote.md](./cli/remote.md) | `rimz remote`: attaching to a room on another host over SSH, aliases, remote setup, and dev-server forwards. |
 | [web.md](./cli/web.md) | `rimz web`: opening a room in the browser, read-only broadcasts, the ttyd daemons, the machine credential, and the JSON payloads. |
 | [agents.md](./cli/agents.md) | `rimz agents`: launching layouts and team roles, supervised `-p` runs, resume, launch plans, agent cards and the verbs that drive one agent, attribution, and the address grammar every agent-facing command shares. |
-| [subagents.md](./cli/subagents.md) | `rimz subagents`: delegating one bounded prompt to a supervised child, fanout, waits, and the agent-only launch rule. |
+| [subagents.md](./cli/subagents.md) | `rimz subagents`: launching supervised children from an agent, fanout, the fleet report, waits, list and stop, profiles, and pane placement. |
 | [teams.md](./cli/teams.md) | `rimz teams`: listing, inspecting, launching, resuming, and driving named teams, stage flips, and installing team bundles. |
 | [asks.md](./cli/asks.md) | `rimz asks` and `rimz answer`: reading the prompt that blocks an agent and answering it in the agent's native UI. |
 | [message.md](./cli/message.md) | `rimz message`: parking text for the next turn boundary, steering a live turn, scheduling, reply waits, and the inbox verbs. |

@@ -1,105 +1,111 @@
 # Subagents
 
-`rimz subagents` provides launch and lifecycle verbs for delegating one bounded prompt to a supervised child, plus read-only discovery from any shell. It is syntax sugar over `rimz agents`: the child gets a real pane, durable run record, petname, parent link, and sidebar entry without making the parent choose the supervision flags.
+`rimz subagents` lets an agent hand one bounded prompt to a supervised child agent and collect the result. The child is a full RimZ agent: its own pane, provider process, durable run record, petname address, and a card nested under its parent in the sidebar. A launch is the same supervised background run as `rimz agents <PROFILE> <PROMPT> -p --bg --timeout 30m`, with the supervision flags chosen for the caller. The [scripting guide](../../guide/scripting.md#agents-scripting-agents) teaches the workflow, and [subagents.md](../../internals/harness/subagents.md) describes the mechanics.
 
-Launch, `fanout`, `wait`, and `stop` run only from an agent RimZ can identify through its launch environment or live process ancestry. A user-shell invocation of one of those verbs fails before opening the room and points to `rimz agents` or `rimz teams`; the read-only `list` and `profiles` verbs work in either context. The mechanics behind the sugar — the direct-parent stamp, no-further-launch rule, caller-scoped lifecycle verbs, and what closes a finished child — are in [subagents.md](../../internals/harness/subagents.md).
+Launching, joining, and stopping need a calling agent that RimZ can identify, through its launch environment or its live process ancestry. The read-only verbs work from any shell:
 
-A child launched through this doorway must complete its assignment directly and cannot spawn further agents. RimZ appends that instruction to the provider's system prompt when it has a native launch flag, falls back to the user prompt for other providers, disables the provider's native delegation tool where a verified restriction exists, and refuses both `rimz agents` and `rimz subagents` when the caller is itself a subagent.
-
-## Launch and fan out work
-
-```sh
-rimz subagents fanout tasks.json
-printf '%s\n' '[{"profile":"codex","prompt":"find the smallest safe fix"}]' \
-  | rimz subagents fanout
-rimz subagents fanout tasks.json --wait
-
-rimz subagents fanout --wait <<'JSON'
-[
-  {"profile":"codex","prompt":"review correctness; report concrete findings"},
-  {"profile":"claude","prompt_file":"/tmp/review-brief.md"}
-]
-JSON
-```
-
-`fanout` reads a JSON task array from `FILE`, or from stdin when `FILE` is omitted. It validates the whole list and opens each child pane in sequence. The children run in parallel after their panes open, and each minted petname prints as it launches.
-
-By default, `fanout` returns after launching. Once every launched child in the parent's current fleet has settled, one status-only `SUBAGENT_REPORT` digest from `@rimz` lists their outcomes and the response file of each, leaving the read to the parent. Use `--wait[=DURATION]` to join exactly the children from that fanout, optionally with a caller-side deadline; each answer prints as it finishes under a `--- petname ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose), with a status suffix only for an abnormal outcome, and the command exits nonzero if any child does. Waiting reads durable results; if every child listed by one queued digest prints inline while the parent's turn is still open, RimZ cancels that redundant digest, while any unread row keeps it queued. This wait deadline is distinct from the children's `--timeout`. With background fanout `--json`, RimZ emits a map from petname to `run_id`; with `--wait --json`, fanout emits the same labeled result map as a plural `rimz subagents wait <names> --json`, including each run's `last_message` when available.
-
-Each array entry has the single-launch fields that make sense for data-driven delegation:
-
-| Field | Required | Meaning |
+| Verb | Runs from | Does |
 | --- | --- | --- |
-| `profile` | yes | A configured subagent profile, agent kind, or shared command |
-| `prompt` | exactly one | Complete task supplied by the parent |
-| `prompt_file` | exactly one | File whose contents become the prompt; exclusive with `prompt` |
-| `model` | no | Model override |
-| `agent` | no | Profile or provider-kind rebase |
-| `effort` | no | Reasoning effort |
-| `timeout` | no | This child's deadline |
-| `max_turns` | no | Maximum agentic turns |
-| `description` | no | Initial child-card description |
+| `rimz subagents <PROFILE> <PROMPT>`, `launch` | an agent | [Launch one child](#launch-one-child) |
+| `fanout [FILE]` | an agent | [Launch one child per task](#fan-out-a-task-list) in a JSON array |
+| `wait <NAME>...` | an agent | [Join](#join-results-with-wait) the named children and print their answers |
+| `stop <NAME>...`, `stop --all` | an agent | [Stop](#stop-children) live children |
+| `list` (alias `ls`), bare `rimz subagents` | any shell | [List](#list-children) children |
+| `profiles` | any shell | [List the profiles](#discover-profiles) a child can launch from |
 
-Relative `prompt_file` paths resolve from the caller's current working directory, and every child works in the parent's checkout like a [single launch](#launch-one-child). A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use `[subagents.profiles]` for provider arguments or separate single launches when children need different lifecycle controls.
-
-All tasks are validated before the first launch. If a runtime failure occurs after some children have started, the error names them; they keep their normal deadline and cleanup behavior and remain available to `subagents wait` and `subagents stop`.
+From a user shell, an agent-only verb fails before it touches the room, and the error points at `rimz subagents list`, `rimz agents`, and `rimz teams`. A child cannot launch anything itself ([Children cannot delegate](#children-cannot-delegate)).
 
 ## Launch one child
 
 ```sh
-rimz subagents claude "trace the authentication call path"
+rimz subagents claude "trace the authentication call path" --description "trace auth path"
+rimz subagents launch reviewer --prompt-file /tmp/review-brief.md
+rimz subagents codex "find the smallest safe fix" --wait=10m
 ```
 
-Each launch is equivalent to a one-cell `rimz agents <profile> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately and writes a callback notice to stderr, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child like `subagents wait <name>`, including its final message or failure tail. `--json` is accepted on a single launch only with `--wait`; it emits the full run record, the same shape as `subagents wait <name> --json`, without the human petname line.
-
-Read a child's conversation with `rimz transcript @<petname>`. Channel, `@all`, and parent-focused transcript views leave launched-child conversations out.
+The bare form and `launch` are the same command. `PROFILE` is a `[subagents.profiles]` profile, an agent kind (`claude`, `codex`, ...), or an `[agents.commands]` command. The launch prints the child's petname on stdout and returns at once, with a notice on stderr, so a parent can start several children in a row and keep working. A later `rimz subagents wait <petname>` or the [fleet report](#the-fleet-report) delivers the result.
 
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
-second=$(rimz subagents launch reviewer "review the proposed API")
+second=$(rimz subagents reviewer "review the proposed API")
 rimz subagents wait "$first" "$second"
 ```
 
-The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument or with `--prompt-file PATH`. Relative `--prompt-file` paths resolve from the shell's current directory, so a parent can write a brief anywhere and hand it over.
-
-The final launch prompt is capped at 120 KiB (122880 bytes), including any reminder text that the provider requires in the prompt itself. `--prompt-file` avoids putting the brief in your shell command, but the provider still receives its contents as one argv element. An oversized prompt is refused before launch or run records are created; the error names the limit. Shorten the assignment or put supporting detail in a file the child is instructed to read.
-
-The child works in the parent's checkout (the directory the parent itself was launched in), whatever directory the launch command runs from, and it inherits the parent's lane. A launch refuses when that checkout no longer exists rather than starting the child somewhere else. Every child is a supervised run, so the [supervised-run requirements](./agents.md#supervised-runs--p) apply: installed and trusted hooks, and, for a Codex child, a recorded trust decision for that checkout.
-
-Children of a team member share companion tabs named `<view> subagents`, with numbered overflow tabs. Each companion starts with two side-by-side columns, then grows rows up to eight tiled child panes: four rows per column, excluding the sidebar. Placement targets approximately equal pane areas; a small terminal or an existing layout that cannot be safely split may overflow earlier. Solo callers retain their side-column layout, using these companion tabs as fallback. See the [scripting guide](../../guide/scripting.md#agents-scripting-agents) for the workflow.
-
-| Behavior | Default | Override |
+| Flag | Default | Effect |
 | --- | --- | --- |
-| Result | one status digest from `@rimz` after the fleet settles; read the response files it lists, or `rimz subagents wait @…` for the text | `--wait[=DURATION]` joins inline when it reaches the result |
-| Checkout | parent's checkout | fixed |
-| Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
-| Isolation | parent's recorded `--isolation` override, else machine `agents.isolation` | `--isolation host\|sandbox` |
-| Pane after completion | closes when the run settles | `--keep` holds it until `rimz subagents stop` |
-| Address | minted petname | fixed |
+| `PROMPT` or `--prompt-file <PATH>` | required | The whole assignment. A relative path resolves from the shell's current directory. An empty prompt is refused. |
+| `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
+| `--json` | off | With `--wait`, print the full run record instead of the petname and answer. Refused without `--wait`. |
+| `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Stop the child after this long. Units `s`, `m`, `h`, `d`. |
+| `--keep` | off | Hold the pane after the child finishes and after the parent exits, until `rimz subagents stop` closes it. |
+| `--isolation host\|sandbox` | the parent's recorded `--isolation` override, else `agents.isolation` | Run the child under this isolation. |
+| `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
+| `--model`, `--agent`, `--effort`, `--max-turns`, `-- <ARGS>` | from the profile | Override the model, re-base onto another profile or kind, set reasoning effort, cap agentic turns, or append provider argv. |
 
-A finished child's in-pane wrapper stamps its durable end and closes the pane after stopping the provider. The run result remains joinable, and the finished child stays on the parent card until the parent's next prompt boundary. `--keep` instead holds the pane after completion and past parent exit, until `rimz subagents stop` closes it; `rimz gc` does not reclaim it.
+Run `rimz subagents launch --help` for the exact spellings. The global flags are on the [CLI page](../cli.md#global-flags).
 
-The single-launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
+The complete launch prompt is capped at 120 KiB (122,880 bytes), counting any instruction text RimZ adds to the prompt for providers without an appended system prompt. `--prompt-file` keeps the brief out of the shell command, but the provider still receives its contents as one argument. An oversized prompt is refused before any run record exists, and the error names the limit; put supporting detail in a file the child is told to read.
 
-Model, provider/profile rebasing, effort, description, turn cap, and raw provider arguments remain available. Run `rimz subagents launch --help` for their exact spellings.
+The child works in the parent's checkout, the directory the parent itself was launched in, whatever directory the launch command runs from. It joins the parent's lane. When that checkout no longer exists, the launch refuses instead of starting the child elsewhere.
 
-## Discover agent profiles
+A launch refuses before it writes a run record or opens a pane when:
+
+- the caller is not an identifiable agent, or is itself a subagent;
+- the profile or `--agent` re-base is outside the caller's [allowlist](#discover-profiles), or names an `[agents.profiles]` profile (the error names both sections);
+- the [supervised-run requirements](./agents.md#supervised-runs--p) fail: RimZ's hooks for the agent are not installed and trusted, or a Codex child's checkout has no recorded Codex trust decision;
+- the room or provider-account daily cap has no headroom, or a fresh Qwen run's account has an exhausted quota window. This refusal exits `125` ([What a cap blocks](./budget.md#what-a-cap-blocks)).
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | The child launched. With `--wait`, the child completed. |
+| `1` | The launch was refused or failed. With `--wait`, the child failed. |
+| `125` | A room or account cap, or a Qwen quota window, refused the launch. With `--wait`, the child's run ended `budget_exceeded`. |
+| `123`, `124`, `130` | With `--wait` only: the run's status, or `124` when the `--wait` deadline expired ([exit codes](./agents.md#supervised-runs--p)). |
+
+`rimz subagents` has no `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output or input formats, `--retries`, or `--verify`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
+
+## Fan out a task list
 
 ```sh
-rimz subagents profiles
-rimz subagents profiles --path
-rimz subagents profiles --json --path
+rimz subagents fanout tasks.json
+rimz subagents fanout --wait <<'JSON'
+[
+  {"profile": "codex", "prompt": "review correctness; report concrete findings"},
+  {"profile": "claude", "prompt_file": "/tmp/review-brief.md", "description": "review interface"}
+]
+JSON
 ```
 
-`profiles` lists `[subagents.profiles]` profiles and configured launch commands available for one child as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` (`profile` or `command`). `[agents.profiles]` entries are excluded. Registered agent kinds remain directly launchable but are omitted from this catalog. It also works from a user shell.
+`fanout` reads a JSON array of tasks from `FILE`, or from stdin when `FILE` is omitted, and launches one child per task. RimZ validates the whole array before the first launch, then opens the panes one at a time; each child starts working as soon as its pane opens. An empty array, an unknown key, or a task without exactly one of `prompt` and `prompt_file` fails the whole list.
 
-Inside an agent whose `[agents.profiles]` entry sets `subagents = [...]`, the catalog includes only listed profiles. A launch naming any other positional profile or `--agent` rebase is refused before RimZ creates a run or pane. Team names are excluded because a subagent launch creates one agent, not a cohort.
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `profile` | yes | Profile, agent kind, or command, as for a single launch |
+| `prompt` | one of the two | The assignment |
+| `prompt_file` | one of the two | File whose contents become the assignment; a relative path resolves from the current directory |
+| `description` | no | Child card description and fleet report task label |
+| `timeout` | no | This child's deadline, as a duration string (`"45m"`) |
+| `model` | no | Model override |
+| `agent` | no | Re-base onto another profile or kind |
+| `effort` | no | Reasoning effort |
+| `max_turns` | no | Maximum agentic turns |
 
-RimZ places this same filtered catalog in each launched agent's system reminder when its adapter supports native appended system text. With no configured profiles or commands, the reminder says that no subagent profiles are configured instead of showing an empty list.
+A task's `timeout` wins over the fanout's `--timeout`, which wins over `[agents.subagents] timeout`. `--keep` applies to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's isolation, and profiles in `[subagents.profiles]` carry provider arguments. Use separate single launches when children need different lifecycle controls.
 
-## Reports
+| Mode | stdout |
+| --- | --- |
+| default | Each petname as its child launches; a count and notice go to stderr |
+| `--json` | One object mapping each petname to `{"run_id": "..."}` |
+| `--wait[=DURATION]` | Each answer as it finishes, under a `--- <petname> ---` header, with a status suffix only for an abnormal outcome; the exit code follows [`agents wait`](./agents.md#wait) |
+| `--wait --json` | The labeled result map of [`agents wait --json`](./agents.md#wait) |
 
-Background children signal settlement through the ordinary durable message queue. Once no launched child in the parent's fleet has a non-terminal newest run, RimZ writes their responses to room tmp and parks one digest until the parent can receive at a successful or idle boundary:
+A fanout of one task under `--wait` behaves like a single join: the bare answer without a header, or the full run record with `--json`.
+
+A launch that fails partway stops the remaining launches. The error names the children already started; they keep running under their normal deadline and stay reachable through `subagents wait` and `subagents stop --all`. A cap refusal partway exits `125` with the same message.
+
+## The fleet report
+
+A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. The message is parked and delivered at the parent's next turn boundary:
 
 ```text
 Type: SUBAGENT_REPORT
@@ -111,60 +117,140 @@ All 3 subagents settled:
 - @slow-reviewer: timed out after 30m; provider did not stop, task: "review correctness", response: /tmp/rimz-subagents/slow-reviewer.output (12 lines)
 ```
 
-For more than one child the header is `All {n} subagents settled:`; for one it is `Your subagent settled:`. The digest is heading and rows only: it ends at the last row and asks for nothing, because the response paths are already in the rows and reading them is the parent's call. Rows use `- @{name}: {status_label} {in|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({N} lines)`, or end with `, no response`. Timed-out runs use `after`, every other status uses `in`, and elapsed time is compact. The task is the launcher's description rather than the profile; without one, it is a bounded preview of the prompt's first line, omitted if empty. Rows follow child registration order and duplicate audit rows for one run are deduplicated by run id.
+The report lists status and where each answer is, and asks for nothing: reading the response files is the parent's call. It never carries a child's answer text; `rimz subagents wait <names>` prints the answers, and `--json` gives structured results.
 
-For every status, a non-empty `last_message` is written to `rimz-subagents/<handle>.output` under room tmp, adding a trailing newline only when missing. The count measures physical file lines, including blank lines (`1 line` or `{N} lines`); an absent or empty message reads `no response`. A non-completed status appends `; {reason}` when `failure_tail` has a non-empty line, using its last non-empty line. Under sandbox isolation, paths are `/tmp/rimz-subagents/<handle>.output`; host mode shows the host room-tmp path. Files are removed when the room closes. Read whichever response files you need, or print the same answers inline with `rimz subagents wait <names>`; opening a file does not mark the child joined, and joining a row a delivered digest already listed changes nothing you can observe. The digest never carries a child's response text or JSON; use `rimz subagents wait <names> --json` for structured results.
+| Part | Format |
+| --- | --- |
+| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more |
+| Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({N} lines)`, or ending `, no response` |
+| Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled` |
+| `in` / `after` | `after` for a timed-out child, `in` for every other status; elapsed time is compact (`4m12s`) |
+| Reason | The last non-empty line of the run's failure tail, for a status other than completed |
+| Task | The launch `--description`, else a shortened first line of the prompt, omitted when empty |
+| Response | The child's final message in `rimz-subagents/<name>.output` under room tmp, with its line count (`1 line`, `{N} lines`, blank lines included); `no response` when the message is empty |
 
-A child launched while the fleet is still running joins that fleet; one launched after digest composition starts belongs to the next. Children whose result a join printed while the parent's turn was open, and children the parent stopped, are excluded from a digest that has not yet been composed. A join that finishes after that turn ended still prints its results, but the parent may not have read them, so those rows stay in the digest and the parent is woken with them at its next boundary. A [`rimz agents wait`](./agents.md#wait) you run from your own shell always counts as read and still cancels a fully read digest. RimZ stamps every listed row with the digest id before queueing, so a join cannot cancel a half-observed row set. For a queued digest, a wait or stop cancels only that digest and only after every listed child has been read or stopped; a digest with any unread row stands. Simultaneous last settlers race on first-writer-wins stamps, so each row appears at most once and none is lost. No digest is sent when the parent has ended. Durable run records remain the result truth: `list` shows them and `wait` can read their full results after panes close, and the elected producer's once-per-minute orphan scan reconstructs a missed digest from those records.
+Rows follow launch order. Under sandbox isolation the path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. The files are removed when the room closes, and opening one does not count as reading the result.
 
-## Join results manually
+A fleet is every child launched before the report is composed. A child launched while its siblings still run joins that fleet; one launched after composition starts belongs to the next. No report is sent when the parent has ended.
+
+A child drops out of a report that has not been composed yet when:
+
+- a join (`subagents wait`, `fanout --wait`, or `--wait` on a launch) printed its result while the parent's turn was open;
+- a [`rimz agents wait`](./agents.md#wait) from a user shell printed its result;
+- the parent stopped it with `rimz subagents stop`.
+
+A join that finishes after the parent's turn has ended still prints, but its rows stay in the report, so the parent is woken with them at its next boundary. A report already queued is canceled only when every row it lists has been read or stopped, and a delivered report cannot be recalled. A child stopped by someone else with `rimz agents stop @child` still appears as `canceled`. If the normal report is missed, the room's sidebar producer rebuilds it from the run records within about a minute ([backstops](../../internals/harness/subagents.md#backstops)).
+
+## Join results with wait
 
 ```sh
 rimz subagents wait calm-fox
 rimz subagents wait calm-fox bright-owl
 rimz subagents wait calm-fox bright-owl --any
 rimz subagents wait calm-fox --stream
-rimz subagents wait calm-fox --json
+rimz subagents wait calm-fox bright-owl --json --timeout 10m
 ```
 
-The fleet digest links response files; `wait` remains the inline read and join path, including for a result needed before the fleet settles or for durable history after room tmp is gone. At least one child name is required; a bare `wait` fails and lists this agent's subagents. Names must resolve inside the caller's own children. A single result prints as a bare answer; plural and `--any` waits label each answer with its child name. Joins, streaming, JSON, timeout behavior, output, and exit codes are unchanged and use the same durable machinery as [`rimz agents wait`](./agents.md#wait).
+`subagents wait` is [`rimz agents wait`](./agents.md#wait) restricted to the caller's own children: the same output, `--any`, `--stream`, `--timeout`, JSON map, and exit codes. Use it when the next step needs a child's text before the fleet settles, or to reread a result after its pane and response file are gone; results stay readable from the durable run record.
 
-The result is available as soon as the run settles and remains available after the pane closes, because the run record, not the pane, is truth.
+At least one name is required. A bare `wait` fails and lists the caller's children, so a copied command never joins an older fleet by accident. A name that is not one of the caller's children fails with ``` `<name>` is not one of this agent's subagents ```.
 
-## Inspect and drive children
+## List children
 
 ```sh
 rimz subagents
 rimz subagents list --json
+```
+
+Bare `rimz subagents` and `list` are the same read-only command. Which children it shows depends on the caller:
+
+| Caller | Lists | Columns |
+| --- | --- | --- |
+| an agent | that agent's own children, finished ones included | `SUBAGENT`, `KIND`, `STATUS`, `RUN` |
+| a user shell in a channel | every child in the current channel | `SUBAGENT`, `PARENT`, `CHANNEL`, `KIND`, `STATUS`, `RUN` |
+| a user shell with no current channel | every child in the room | the same six columns |
+
+`STATUS` is the child's live agent status and `RUN` its newest run's outcome; the description prints as a muted line under each row. Provider-native subagents, which run inside the parent's own process, are not listed.
+
+A plain shell in the project directory has no current channel even when a team runs in place there, because an in-place team's `<directory>/<team>` lane is carried by its panes, not the directory. `list` from that shell shows every channel, and the `CHANNEL` column tells the lanes apart.
+
+`--json` prints an array with one object per child:
+
+| Field | Meaning |
+| --- | --- |
+| `name`, `handle` | Petname, and the same with `@` |
+| `parent` | The parent's handle |
+| `channel` | The child's lane; omitted when it has none |
+| `kind` | Agent kind |
+| `status` | Live agent status |
+| `description` | Current one-line description; omitted when empty |
+| `run_id`, `run_status` | Newest supervised run and its status; omitted when there is no run |
+
+## Stop children
+
+```sh
 rimz subagents stop calm-fox
 rimz subagents stop --all
 ```
 
-Bare `rimz subagents` is the same read-only operation as `list`. Inside an agent it lists that agent's own RimZ-launched children, including completed children retained in durable history. From a user shell it lists every RimZ-launched child in the current channel; when the shell has no current channel, it lists children across all channels. Provider-native subagents are not part of either list.
+`stop` cancels the caller's named live children, or every live child with `--all`, and prints `stopped @<name>` for each. A child that fails to stop prints `error @<name>: <reason>`, and the command exits `1` after trying the rest. With no live child it fails with `this agent has no live subagents to stop`.
 
-In a user shell, each human-readable row names the child's parent and channel alongside its live status, newest supervised-run outcome, and current one-line description. The agent-scoped table keeps its compact four columns; JSON includes `parent` and `channel` in both scopes. A plain user shell in the project directory cannot derive an in-place team's stamped `<directory>/<team>` lane because that lane is carried by the launched panes rather than the shared directory. Such a shell has no current channel, so `list` deliberately broadens to all channels and the reported channel distinguishes the rows.
+Stopping declines the child's result: it leaves the fleet report as described [above](#the-fleet-report). The canceled run stays in the record, so `wait` still reads it. `stop` is also the only way to close a `--keep` pane; `rimz gc` does not reclaim it.
 
-`stop` remains agent-only and accepts only live children of that caller. Stopping a child declines its result, which excludes it from a `SUBAGENT_REPORT` that has not yet been composed; a queued digest is canceled once every row has been read or stopped. The canceled run remains durable and can still be read with `wait`. A child stopped from outside its parent with `rimz agents stop @child` still reports its canceled status to the parent.
+Stopping a parent with `rimz agents stop`, or through `rimz teams stop`, stops its live children first, `--keep` children included.
 
-`restart` and `resume` are deliberately absent in v1: the durable run record does not yet retain every launch argument needed to reproduce the supervised deadline, wait, and self-close contracts. Relaunch the same profile and prompt to start a fresh child, matching the Agent-tool model.
+There is no `restart` or `resume` for a child. To retry, launch the same profile and prompt again. A child is addressable as `@<petname>` for `rimz message` and `rimz pane`, but a supervised child runs one prompt and is not built to read messages mid-run. A message can park against a finished child's address, but nothing resumes the child to read it.
 
-Stopping a parent through `rimz agents stop` stops its live pane-backed children first. The same cascade applies when `rimz teams stop` stops that parent.
+## Discover profiles
 
-Every child is addressable as `@<petname>`. A supervised print-mode provider is not an interactive message consumer, so do not depend on mid-run steering. A message can park against the address, but v1 does not automatically resume a finished child to consume it.
+```sh
+rimz subagents profiles
+rimz subagents profiles --path
+rimz subagents profiles --json --path
+```
 
-## Parentage and sidebar placement
+`profiles` lists what a child can launch from as compact cards: `[subagents.profiles]` profiles with their agent, model, effort, and description, and `[agents.commands]` commands. It works from any shell. `--path` adds each entry's defining file.
 
-Only `rimz subagents` creates a parented pane-backed child. The child appears in the subagent section nested under its direct parent and is not duplicated as a top-level card. Its turn-scoped entry shows the launch profile, description, cumulative displayed session tokens (input, cache writes, and output; cache reads excluded), and own session cost; the petname is its address in `list`, `wait`, and `rimz message`. The parent card keeps a lifetime `⧉` stats line with the count and known cost of both launched and provider-native children as far back as store GC retains them. That line is a breakdown, not an amount to add to the parent's figure: native spend is already inside the parent session, while launched-child spend is the portion added to its all-in live and lifetime figures in the sidebar, `agents show`, teams, and attribution. Attribution groups both mechanisms by task as `{count} × {task}, … · {cost}`; the trailing cost likewise breaks down the parent's effort figure rather than adding to it.
+Agent kinds are launchable directly but are not listed. `[agents.profiles]` entries belong to `rimz agents` and are not listed either, and neither are teams, because a launch creates one agent.
 
-Subagent launches are not capped by `[agents] max-chain-length`; that setting governs successive top-level peer launches through `rimz agents` and `rimz teams`. Instead, a subagent cannot launch anything through either doorway. A refused call creates no run, pane, worktree, or provisional agent.
+`--json` prints an array of objects with `name` and `source` (`profile` or `command`), plus `agent`, `model`, `effort`, and `description` when set, and the absolute `path` only with `--path`.
 
-Pane-backed children also share a physical zone instead of repeatedly reshaping the caller's view. A solo parent's first child opens in a right-hand column and later children stack there (native Zellij stacks, equal-height tmux panes). A member of a launched team sends its children to one companion `<view> subagents` tab shared by that team's view on both backends; the companion opens immediately after the launcher's tab. If a solo child column has no room for another split, RimZ falls back to the companion tab, then to a generic run tab if needed. If a team companion is full, the overflow child opens in a generic run tab rather than failing the run or creating a second companion. Once the last child pane closes, the companion sidebar exits and the empty tab collapses with it.
+An `[agents.profiles]` entry can restrict what its agents launch with `subagents = [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents = []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and an `Add one under [subagents.profiles] or [agents.commands].` line.
 
-## Configure launch defaults
+At launch, RimZ also gives each agent this same filtered catalog in its appended system prompt, on providers that support one. The catalog says so when delegation is disabled or nothing is configured.
+
+## Children cannot delegate
+
+A child launched through `rimz subagents` is told to complete its assignment itself, and it cannot start further agents:
+
+- RimZ refuses `rimz agents`, `rimz teams`, and `rimz subagents` launches whose caller is a subagent, before any run, pane, or worktree exists.
+- The instruction goes into the provider's appended system prompt where the adapter supports one (Claude, Codex, Qwen, Droid), and onto the end of the user prompt otherwise.
+- Where the provider has a verified switch, its native delegation tool is disabled: Claude's `Agent` tool is denied, Codex's `multi_agent` feature is turned off, and OpenCode's `task` permission is denied. Other providers get the instruction only.
+
+`[agents] max-chain-length` does not apply to subagent launches, since a child cannot extend the chain. It governs successive peer launches through `rimz agents` and `rimz teams`.
+
+## Panes and the sidebar
+
+Children open in a shared zone instead of splitting the caller's view each time. The first rule that applies places the child:
+
+| Situation | Where the child opens |
+| --- | --- |
+| The caller's view already has a `<view> subagents` companion tab with room | That companion tab; when every one is full, the next numbered one (`<view> subagents 2`, `3`, ...) |
+| The caller is a team member | A new companion tab right after the caller's tab |
+| The caller is solo and already has a child beside its pane | Stacked with that child (a native stack on Zellij, equal-height rows on tmux) |
+| The caller is solo | A column split to the right of the caller's pane; a companion tab when the split fails |
+
+A companion tab starts with two side-by-side columns and adds rows, keeping pane areas roughly equal, up to eight children (four rows per column, not counting the sidebar). A small terminal or rearranged panes can overflow to the next companion tab sooner. When RimZ cannot read the pane layout, the child opens in an ordinary run tab. A finished child's pane closes itself unless `--keep` is set, and a companion tab closes with its last child pane. The full placement rules are in [pane zones](../../internals/harness/subagents.md#pane-zones).
+
+In the sidebar a child appears only under its direct parent's card, never as a duplicate top-level card, and a finished child stays there until the parent's next prompt. The parent's `⧉ subagents (N)` line counts both launched and provider-native children; the [sidebar page](../../interface/sidebar.md#the-card) describes it. A launched child's spend is added to the parent's all-in figures in the sidebar, `agents show`, teams, and [attribution](./agents.md#attribution).
+
+`rimz transcript @<petname>` reads a child's conversation; channel and `@all` transcript views leave children out ([transcript](./transcript.md)).
+
+## Configure the default timeout
 
 ```toml
 [agents.subagents]
-timeout = "30m"
+timeout = "45m"
 ```
 
-`timeout` uses the CLI duration syntax (`s`, `m`, `h`, `d`). The deadline is stored on each run and enforced by the room producer even if the parent never calls `wait`. A stale `budget` key in this table is rejected at config load; spend limits belong to the parent.
+`[agents.subagents]` in `agents.toml` holds one key, `timeout`: the deadline for every child that sets no `--timeout` or task `timeout`, in the duration syntax `s`, `m`, `h`, `d`. It defaults to `30m`. The room enforces the deadline even when no one waits on the child.
