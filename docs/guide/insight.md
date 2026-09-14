@@ -23,7 +23,7 @@ You read it two ways. `rimz stats` prints the whole history on demand, from anyw
 
 For a shell or a script, `rimz stats --json` emits the per-day buckets that scripts can use for their own trend windows, the usage windows, both breakdowns (including `cache_hit_pct` when the input-side denominator exists), tool-call totals and per-name `tools` maps, the insights, and the structured assists rollup plus events. `rimz stats --assists` prints the complete newest-first assist timeline with the redeem request id and reset windows, continue and compact message and agent ids, and restored workspace and session. `rimz stats --refresh` instead holds the panel open and repaints it every minute; this is the live pane the `rimzd` daemon view carries.
 
-`rimz stats` only reads. It touches no agent, writes nothing to your sessions, and prints from a cache RimZ keeps under its own state directory. Its one network call is the weekly price-table refresh described below, which `RIMZ_PRICING_OFFLINE=1` turns off.
+`rimz stats` touches no agent and writes nothing to your sessions. It prints from a cache RimZ keeps under its own state directory, and builds that cache from your transcripts when none exists; only that walk writes files or fetches the price table described below, which `RIMZ_PRICING_OFFLINE=1` turns off. A one-shot run prints the cache however old it is; [how fresh the figures are](../reference/cli/stats.md#how-fresh-the-figures-are) lists what each mode reads, writes, and fetches.
 
 ## In the sidebar, live
 
