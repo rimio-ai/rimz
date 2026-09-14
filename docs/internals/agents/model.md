@@ -134,6 +134,8 @@ Claude wakes a parked parent by injecting the finished background task's notific
 
 A parked row is still `running`, so an `ended` fails it like any other running row.
 
+The park bit says only that something is pending. Which background shells run is a separate durable list, `background_shells`, folded from the adapter's `BackgroundShellReport` (a launch adds one, a task list replaces them, a finish notice drops some) and carried forward; `ended` and `registered` clear it. The list never moves status or phase, and the sidebar lists it in the card's waits section ([adapter_claude.md](./adapter_claude.md#background-shells)).
+
 ### Subagents
 
 A `subagent_stopped` resolves the child row, and the sidebar keeps that `✓` or `!` through the parent's user-authored turn ([sidebar.md](../sidebar/sidebar.md#sub-agent-lists)). A child owns its own `agent_id`, so its signals never move the parent's status or phase, with one exception. Some providers raise a child's native prompt on the parent session. When a child's `tool_used` carries the native key of the parent's open ask, Store appends a derived `SubagentAskAnswered` `tool_used` with that key to the parent, which clears the wait like the parent's own answer edge. A key identifies the call as precisely as the provider's wire allows: a tool call id where the provider sends one, and for Copilot a digest of tool name and command text, so a child running a byte-identical command also clears a parent's own ask for it. Any other child tool leaves the parent ask open, and a keyless ask never clears from a child.

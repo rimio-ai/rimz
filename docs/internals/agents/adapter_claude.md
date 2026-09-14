@@ -25,13 +25,13 @@ Every installed hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cl
 | Native event | Channel | [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) | Notes |
 | --- | --- | --- | --- |
 | `SessionStart` | lifecycle | `Registered`; `CompactionEnded { auto: None }` for source `compact` | stamps lineage ([conversation replacement](#conversation-replacement)) and the [birth account key](#birth-account-key); model from the payload, tokens from the transcript |
-| `UserPromptSubmit` | lifecycle | `TurnStarted` | sanitized prompt as `task` |
-| `Stop` | lifecycle | `TurnEnded { errored, parked_on_background }` | see [turn endings](#turn-endings) |
+| `UserPromptSubmit` | lifecycle | `TurnStarted` | sanitized prompt as `task`; a `<task-notification>` prompt drops the [background shells](#background-shells) it reports finished |
+| `Stop` | lifecycle | `TurnEnded { errored, parked_on_background }` | see [turn endings](#turn-endings); `background_tasks` replaces the [background shells](#background-shells) |
 | `StopFailure` | lifecycle | none | writes `AgentContext.turn_error` |
 | `SessionEnd` | lifecycle | `Ended` | stamps `ended_at`; the runtime hides the retained resumable row |
 | `Notification` | lifecycle | none | |
 | `PreToolUse` | lifecycle | `ToolUsed { mutates: false, edits: false, name: None }` | proof of work only |
-| `PostToolUse` | lifecycle | `ToolUsed { mutates, edits, name }` | every tool, named; answered asks record their answers |
+| `PostToolUse` | lifecycle | `ToolUsed { mutates, edits, name }` | every tool, named; answered asks record their answers; a backgrounded `Bash` starts a [background shell](#background-shells) |
 | `PreCompact` | lifecycle | `Compacting` | opens the [compaction bracket](./model.md#the-compaction-bracket) |
 | `PostCompact` | lifecycle | `CompactionEnded { auto }` | carries the manual or auto trigger |
 | `SubagentStart` | lifecycle | `SubagentStarted` | see [Subagents](#subagents) |
@@ -55,6 +55,16 @@ A broad `PreToolUse` is unnamed proof of work. Store appends it only under the r
 ### Turn endings
 
 `Stop` carries two bits. `errored` comes from the shared `stop_payload_errored`. `parked_on_background` is set when the payload's `background_tasks` holds a task whose status is neither `completed` nor `failed`, or `session_crons` is non-empty (both fields exist from Claude Code 2.1.145). [model.md](./model.md#turn-endings-and-parked-turns) turns those into the final status: a clean parked stop stays `running` with a `⋯ bg` marker, and an error always wins.
+
+### Background shells
+
+A root session's hooks report its background shells as a `BackgroundShellReport` on the observation, and the rollup folds them into `AgentState.background_shells` ([model.md](./model.md#turn-endings-and-parked-turns)):
+
+- A `PostToolUse` for `Bash` whose `tool_response` carries `backgroundTaskId` starts a shell with the `tool_input` command and description. Claude fires it at launch, both for `run_in_background` and for a foreground command auto-backgrounded past its timeout.
+- A `Stop` with a `background_tasks` array replaces the list with its pending entries of `type` `shell`. An entry without `type`, from an older build, counts when it carries `command`. A `Stop` without the array (before 2.1.145) leaves the list alone.
+- A `UserPromptSubmit` whose prompt is one or more `<task-notification>` blocks drops each `<task-id>` whose `<status>` is not `running`.
+
+Subagent hooks report nothing: they target the child row, and the parent's `Stop` lists every shell. `SubagentStop.background_tasks` is parent-scoped and ignored.
 
 `StopFailure` is Claude's provider-error certificate. It appends no `agent.lifecycle` envelope, so the rollup stays `running`, and it writes a turn-error marker instead, classified from `error` and the capped `last_assistant_message` label by the same `classify_api_error` the [turn-death marker](#turn-death-marker) uses. On `Stop`, when no `StopFailure` certificate applies, `decode_hook` also runs the turn-death scan over the transcript tail, which covers Claude builds without `StopFailure` and sessions whose hooks were installed late.
 

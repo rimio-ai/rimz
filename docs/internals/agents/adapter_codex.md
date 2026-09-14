@@ -41,7 +41,7 @@ Every hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex`, and 
 | `PreCompact` | `.*` | `Compacting` |
 | `PostCompact` | `.*` | `CompactionEnded` with the auto or manual trigger |
 
-Root `Registered`, `TurnStarted`, and compaction closes from `SessionStart` also carry the rollout lineage ([session registration](#session-registration-and-launch-quirks)). Codex has a `SessionEnd` hook, and RimZ leaves it unwired because upstream also fires it when the app-server unloads an idle thread, which does not prove the pane died. The [reaper](./instances.md#session-death) stamps the end once pane liveness proves the process gone. Codex has no `Notification` hook and no background-task parking, so `parked_on_background` is always false.
+Root `Registered`, `TurnStarted`, and compaction closes from `SessionStart` also carry the rollout lineage ([session registration](#session-registration-and-launch-quirks)). Codex has a `SessionEnd` hook, and RimZ leaves it unwired because upstream also fires it when the app-server unloads an idle thread, which does not prove the pane died. The [reaper](./instances.md#session-death) stamps the end once pane liveness proves the process gone. Codex has no `Notification` hook and no background-task parking, so `parked_on_background` is always false. Background shells are unsupported for the same reason: current sessions run commands through the code_mode `exec` and `wait` tools, which fire no `PreToolUse` or `PostToolUse`, and `Stop` carries no task list.
 
 ### Tool events
 
