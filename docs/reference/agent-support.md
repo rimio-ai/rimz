@@ -88,10 +88,10 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 ### Copilot
 
-- The wrapped statusline supplies the resolved model, effort, context tokens, and cumulative session tokens. The live dollar figure is an estimate at that model; when the statusline is missing or replaced, RimZ falls back to OpenTelemetry metadata.
-- History adds per-model tokens and locally estimated dollars to `rimz stats` and the provider dashboard. These are not billing figures.
+- The wrapped statusline supplies the resolved model, effort, context tokens, and cumulative session tokens. The live dollar figure comes from the session's AI credits at $0.01 per credit, or is an estimate at that model when credits are absent; when the statusline is missing or replaced, RimZ falls back to OpenTelemetry metadata.
+- History adds per-model tokens and credit-metered dollars (local estimates where credits are absent) to `rimz stats` and the provider dashboard. These are not an account billing ledger.
 - Questions raise Waiting and clear as soon as the tool that asked completes.
-- Children appear with their model when they start and their exact token total when they finish. Their tool calls and permission prompts stay invisible.
+- Children appear with their model when they start, show their tool activity, and report their exact token total when they finish. A child's permission prompt arrives on the parent session, so the parent card waits until the parent's next hook.
 - The account shows the plan and the monthly `cr`, `cht`, and `prm` windows. There are no 5-hour or weekly windows, and IDE completions, extra credits, account dollars, and remote control are unsupported.
 
 ### Cursor
