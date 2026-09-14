@@ -316,7 +316,7 @@ path = "crates/rimz/src/store"
 # Conversation surfaces share sender classification with the CLI binary.
 # Flip and smart compaction share the typed occupied-context threshold predicate.
 # The carryover parse counter is re-exported through testkit beside the event-log byte counters.
-surface-budget = 345
+surface-budget = 341
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1538,6 +1538,96 @@ reason = "MessageEdit::apply is called by CLI requeue as well as the writer; nar
 kind = "item"
 key = "store::writer::AgentLaunchScope"
 reason = "Fork, launch and restart assemble fields from different sources, with restart copying the card channel; a constructor would only rename that assembly (pass 17b)."
+
+[[verdict]]
+kind = "item"
+key = "store::event::AgentLaunchState"
+reason = "Constructed by the CLI binary's transcript tests and the integration crate's agent_launch suite, which see only pub (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::event::AgentLaunchPayload"
+reason = "Constructed by the CLI binary's transcript tests and the integration crate's agent_launch suite, which see only pub (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::event::agent_launched"
+reason = "Constructed by the CLI binary's transcript tests and the integration crate's agent_launch suite, which see only pub (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::event::AgentAttachPayload"
+reason = "Field of the pub EventKind::AgentAttach variant and parameter of pub agent_attached; narrowing is a private-interface lint (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::event::MessageEventMethod"
+reason = "Named by message/reply tests and the integration crate; parse keeps the legacy message.removed spelling (20f455f0b) so mixed-binary workspaces read old events (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::event::message_event"
+reason = "The queue writer passes dynamic method and reason at seven sites; named per-method constructors would add lines (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::MessageStatus"
+reason = "The pending and removed serde aliases are load-bearing: 20f455f0b kept legacy store parsing so mixed-binary workspaces read old records (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::gate_open"
+reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::with_when"
+reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::with_address"
+reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::with_body"
+reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::with_not_before"
+reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::with_reply_wait"
+reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::new_for_card"
+reason = "Its enter is live (--no-enter, requeue); the integration crate and production both call it (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::MAX_DELIVERY_ATTEMPTS"
+reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::message::sent_reconcile_deadline"
+reason = "Reached by the integration crate, which sees only pub, and called in production (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::SESSION_PROBE_MARKER_PREFIX"
+reason = "GC marker lifetimes are store::gc's by the sidebar contract; the sidebar session probe reads them and the integration gc suite pins them (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::SESSION_PROBE_MARKER_TTL"
+reason = "GC marker lifetimes are store::gc's by the sidebar contract; the sidebar session probe reads them and the integration gc suite pins them (pass 21b)."
 
 [[verdict]]
 kind = "item"

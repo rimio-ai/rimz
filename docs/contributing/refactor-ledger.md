@@ -66,9 +66,12 @@ One row per module at the granularity `survey` ranks (`store/snapshot`, `agents/
 | `sidebar_pane/render/(root)` | holds; landed pass-18b | `134e4e8db` | 30 | reviewed as the render bundle (root, compose, layout, sections). |
 | `sidebar_pane/render/compose` | holds; landed pass-18b | `134e4e8db` | 30 | reviewed as the render bundle. |
 | `sidebar_pane/render/sections` | holds; landed pass-18b | `134e4e8db` | 30 | the full-frame snapshot suite pins root → compose → chrome/sections; width budgets are distinct rules; `text_width`/`clip` are the layout vocabulary. |
-| `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b | — | — | owns every record it persists, imports nothing above it; `snapshot` and `writer` have their own rows; `event`, `message`, `gc` interiors are candidates. |
+| `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b | — | — | owns every record it persists, imports nothing above it; `snapshot`, `writer`, `event`, `message` and `gc` have their own rows; `event_log`, `agent_context`, `runtime` and `sidecar` interiors are candidates. |
 | `store/snapshot` | holds; landed pass-15a | `922b15292` | 30 | snapshot-owned live projection and grouping; one private reducer owner; wire, fold, binding and assemblers hold. |
 | `store/writer` | holds; landed pass-17b | `793e3fd0a` | 30 | one log boundary with four cache policies; one publish tail; launch vocabulary, queue method pairs, reap and outcome types hold. |
+| `store/event` | holds; landed pass-21b | `19c872874` | 30 | launch/attach payloads and `MessageEventMethod` stay `pub` (binary crate, integration crate, or `EventKind` signature reach); `message_event` keeps dynamic method/reason for the queue writer; legacy `message.removed` parse holds; `params_value` is test-only. |
+| `store/message` | holds; landed pass-21b | `19c872874` | 30 | builders, `gate_open`, `new_for_card`, `MAX_DELIVERY_ATTEMPTS` and `sent_reconcile_deadline` stay `pub` for the integration crate; `pending`/`removed` status aliases hold for mixed-binary workspaces; header grammar and codec hold. |
+| `store/gc` | holds; landed pass-21b | `19c872874` | 30 | probe-marker lifetimes stay `pub` in `store::gc` (sidebar reader, integration crate); live-room exporter check pinned by `b58b6594c`; the three `rimz gc` wrappers hold. |
 | `wakeup` | landed pass-5 | — | — | the sidebar wire at L2 below `store`. |
 | `workspace` | landed pass-3; pass-5 | — | — | owns the room identity pin env keys and channel shell argv; interior a candidate. |
 | `worktree` | landed pass-8 | — | — | interior a candidate. |
@@ -118,6 +121,7 @@ Candidates a pass judged real but could not land, each with the condition that u
 - `harness/auto_continue`: `ResumeConfig::auto_continue_backoff(retries)` absorbing the ramp interpretation (`ce0c00897` pins the empty-ramp 300 s fallback).
 - `harness/schedule/config_edit.rs`: the `parse_text` seam takes a filename plus an unused `agents_home`.
 - `message`: `ReplyWait::run` three methods → one plus `ReplyEvent` (timing pinned by `27077a848`/`cfe1240a3`); `compact_idle` absorbing idle preflight needs `send_compact` to return the id.
+- `store/message` ↔ `address`: `address::message_header` respells the `Type:`/`From:`/`Content:` literals `store::message` parses; a store-owned `compose_header` measured line-neutral (pass 21b), so it waits for a header grammar change that edits both sides.
 - `room/mod.rs:88-99` repeats `workspace::channel_shell_argv`'s room-pin map.
 - `proc::in_pane_agent_start` is uncalled; its eager `then_some(starts[0])` panics on an empty match. Deletion trips `dead_code`; reported, not fixed.
 - `agents/adapters/codex`: transcript lookup ignores `CODEX_HOME` (`codex/transcript.rs`), substring daemon classification (`codex/process.rs`), per-attempt refresh budget (`codex/app_server.rs`); reported, not fixed.
