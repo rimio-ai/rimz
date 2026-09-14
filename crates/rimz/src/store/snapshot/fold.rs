@@ -67,6 +67,7 @@ pub mod testkit {
     static CARRYOVER_BYTES_PARSED: AtomicU64 = AtomicU64::new(0);
 
     /// `agents.carryover.json` bytes parsed since process start.
+    #[cfg(feature = "testkit")]
     pub fn carryover_bytes_parsed() -> u64 {
         CARRYOVER_BYTES_PARSED.load(Ordering::Relaxed)
     }
