@@ -56,8 +56,9 @@ pub(super) fn even_column_heights(total_height: u64, pane_count: usize) -> Vec<u
 
 /// A tmux window name with its reserved separators neutralized. tmux parses a
 /// colon as the `session:window` boundary and a dot as the `window.pane`
-/// boundary in a target spec, so `new-window -n` rejects a name carrying
-/// either (`invalid window name: run: codex`). Channel labels and run-pane
+/// boundary in a target spec, so a name carrying either cannot be targeted by
+/// name (`lead_window`), and tmux 3.7 rejects it outright (`invalid window
+/// name: run: codex`; 3.7a accepts it again). Channel labels and run-pane
 /// titles are human text that can carry both, so map each to a dash before the
 /// name reaches tmux; Zellij tab names have no such constraint, so the mapping
 /// stays inside this backend.
