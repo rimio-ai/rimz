@@ -102,6 +102,30 @@ fn kiro_global_hook_install_gates_version_reclaims_legacy_and_routes_neutrally()
     );
     assert!(!path.exists(), "refused install must not write config");
 
+    let claude = bin.join("claude");
+    std::fs::write(&claude, "#!/bin/sh\nexit 0\n").expect("write Claude stub");
+    std::fs::set_permissions(
+        &claude,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .expect("chmod Claude stub");
+    let detected = env
+        .rimz()
+        .args(["hooks", "install", "--dry-run"])
+        .env("PATH", &search_path)
+        .output()
+        .expect("spawn detected dry run");
+    assert!(
+        detected.status.success(),
+        "an old Kiro CLI must not block detected installs: {detected:?}"
+    );
+    let preview = String::from_utf8_lossy(&detected.stdout);
+    assert!(
+        preview.contains("claude") && !preview.contains("kiro"),
+        "{preview}"
+    );
+    std::fs::remove_file(&claude).expect("remove Claude stub");
+
     std::fs::create_dir_all(path.parent().expect("hook parent")).expect("mkdir hook parent");
     std::fs::write(
         &path,

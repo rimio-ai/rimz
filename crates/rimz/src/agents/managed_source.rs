@@ -31,6 +31,13 @@ pub trait ManagedIntegration: Sync {
         false
     }
 
+    /// Why an install on this machine would be refused before touching any
+    /// file, such as an installed CLI too old for the hook surface. Detected
+    /// installs skip a blocked adapter; an install that names it still refuses.
+    fn install_blocker(&self) -> Option<String> {
+        None
+    }
+
     fn wiring_input_paths(
         &self,
         _descriptor: &AgentSpec,

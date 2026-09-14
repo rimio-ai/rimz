@@ -49,6 +49,12 @@ impl ManagedIntegration for KiroManagedIntegration {
     fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
         hooks_path(login_env).is_ok_and(|path| managed_at(&path))
     }
+
+    fn install_blocker(&self) -> Option<String> {
+        refuse_old_cli(installed_cli_version())
+            .err()
+            .map(|err| err.to_string())
+    }
 }
 
 fn installed_cli_version() -> Option<CliVersion> {
