@@ -77,7 +77,7 @@ A `rimz start` that creates the session, run from a terminal, can ask up to four
 | Trust this project's config | The project ships `.rimz/config.toml` with an ungranted executable surface, and you have not declined this version | No |
 | Recover prior agents | The room is reborn with agents from its previous session | Yes |
 
-A start without a terminal on stdin, including a remote reconnect, asks nothing: it prints a notice for missing hooks, leaves trust unchanged, and recovers prior agents. Hooks are covered in [Hooks and trust](./hooks-trust.md), trust in the [security guide](../../guide/security.md).
+A start without a terminal on stdin, including a remote reconnect, asks nothing: it prints a notice for missing hooks, leaves trust unchanged, and recovers prior agents. The commands behind these prompts are in [agent hooks](./hooks-trust.md#agent-hooks) and [project trust](./hooks-trust.md#project-trust); the trust model is in the [security guide](../../guide/security.md).
 
 ### Resume on rebirth
 
