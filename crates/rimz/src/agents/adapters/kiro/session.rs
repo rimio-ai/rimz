@@ -641,10 +641,11 @@ pub(super) fn transcript_for_session(
 
 /// The reply that closed the latest turn: the last `Say` record, when no user
 /// prompt follows it. Kiro writes the turn's assistant records before it runs
-/// the `Stop` hook.
+/// the `Stop` hook. The bounded tail keeps the hook's cost flat as the
+/// session grows.
 pub(super) fn last_reply(session_id: &str, login_env: &BTreeMap<String, String>) -> Option<String> {
     let path = transcript_for_session(session_id, login_env)?;
-    last_reply_in(&fs::read_to_string(path).ok()?)
+    last_reply_in(&read_transcript_tail(&path)?)
 }
 
 pub(super) fn last_reply_in(lines: &str) -> Option<String> {
