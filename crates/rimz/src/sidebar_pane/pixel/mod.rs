@@ -1,12 +1,12 @@
 //! Shared kitty graphics transport for pane-resident pixel surfaces.
 
-pub(crate) mod meter;
+pub(super) mod meter;
 mod pacing;
-pub(crate) mod probe;
-pub(crate) mod tty;
+pub(super) mod probe;
+mod tty;
 
 pub use pacing::LiveGraphicsPacer;
-pub(crate) use probe::detect as detect_pixel_render_caps;
+pub(super) use probe::detect as detect_pixel_render_caps;
 pub use probe::{PixelRenderCaps, detect_env as detect_pixel_render_env};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,23 +17,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ratatui::style::Color;
 
 const ESC: u8 = 0x1b;
-pub(crate) const BEGIN_SYNC: &[u8] = b"\x1b[?2026h";
-pub(crate) const END_SYNC: &[u8] = b"\x1b[?2026l";
+pub(super) const BEGIN_SYNC: &[u8] = b"\x1b[?2026h";
+pub(super) const END_SYNC: &[u8] = b"\x1b[?2026l";
 const CHUNK_SIZE: usize = 4096;
-pub(crate) const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
+pub(super) const IMAGE_ID_COLOR_MASK: u32 = 0x00ff_ffff;
 pub(crate) const PLACEHOLDER: char = '\u{10eeee}';
-pub(crate) const RESIDENT_REFRESH_MS: u64 = 2000;
-pub(crate) const MIN_RESEND_SPACING_MS: u64 = 250;
+pub(super) const RESIDENT_REFRESH_MS: u64 = 2000;
+pub(super) const MIN_RESEND_SPACING_MS: u64 = 250;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RgbaImage {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) data: Vec<u8>,
+pub(super) struct RgbaImage {
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) data: Vec<u8>,
 }
 
 impl RgbaImage {
-    pub(crate) fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
+    pub(super) fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
         let offset = ((y * self.width + x) * 4) as usize;
         self.data[offset..offset + 4].try_into().unwrap_or_default()
     }
@@ -66,7 +66,7 @@ struct Resident<C> {
 /// Generic terminal image residency. Content bytes stay caller-owned and are
 /// produced only after first-send/change/stale policy requests transmission.
 #[derive(Debug)]
-pub(crate) struct ImageResidency<K, C> {
+pub(super) struct ImageResidency<K, C> {
     wrap: bool,
     images: BTreeMap<K, Resident<C>>,
     resident_ids: BTreeSet<u32>,
@@ -74,7 +74,7 @@ pub(crate) struct ImageResidency<K, C> {
 }
 
 impl<K: Ord, C: Eq> ImageResidency<K, C> {
-    pub(crate) fn new(wrap: bool) -> Self {
+    pub(super) fn new(wrap: bool) -> Self {
         Self {
             wrap,
             images: BTreeMap::new(),
@@ -83,7 +83,7 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
         }
     }
 
-    pub(crate) fn ensure<W: Write>(
+    pub(super) fn ensure<W: Write>(
         &mut self,
         writer: &mut W,
         request: ImageRequest<K, C>,
@@ -148,12 +148,12 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
 
     /// Forget content without deleting terminal IDs, allowing in-place image
     /// replacement for a new pet and payload release while disabled.
-    pub(crate) fn invalidate(&mut self) {
+    pub(super) fn invalidate(&mut self) {
         self.images.clear();
         self.last_resend_ms = None;
     }
 
-    pub(crate) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    pub(super) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
         write_synchronized_pixel_output(writer, |writer| {
             for image_id in std::mem::take(&mut self.resident_ids) {
                 writer.write_all(&wrap_pixel_payload(&delete(image_id), self.wrap))?;
@@ -165,17 +165,17 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
     }
 
     #[cfg(test)]
-    pub(crate) fn contains_key(&self, key: &K) -> bool {
+    pub(super) fn contains_key(&self, key: &K) -> bool {
         self.images.contains_key(key)
     }
 
     #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.images.is_empty()
     }
 
     #[cfg(test)]
-    pub(crate) fn mark_resident(&mut self, key: K, image_id: u32, content: C, now_ms: u64) {
+    pub(super) fn mark_resident(&mut self, key: K, image_id: u32, content: C, now_ms: u64) {
         self.images.insert(
             key,
             Resident {
@@ -188,24 +188,24 @@ impl<K: Ord, C: Eq> ImageResidency<K, C> {
     }
 
     #[cfg(test)]
-    pub(crate) fn resident_contains(&self, image_id: u32) -> bool {
+    pub(super) fn resident_contains(&self, image_id: u32) -> bool {
         self.resident_ids.contains(&image_id)
     }
 
     #[cfg(test)]
-    pub(crate) fn resident_is_empty(&self) -> bool {
+    pub(super) fn resident_is_empty(&self) -> bool {
         self.resident_ids.is_empty()
     }
 }
 
-pub(crate) struct ImageRequest<K, C> {
-    pub(crate) key: K,
-    pub(crate) image_id: u32,
-    pub(crate) content: C,
-    pub(crate) now_ms: u64,
-    pub(crate) cols: u16,
-    pub(crate) rows: u16,
-    pub(crate) synchronized: bool,
+pub(super) struct ImageRequest<K, C> {
+    pub(super) key: K,
+    pub(super) image_id: u32,
+    pub(super) content: C,
+    pub(super) now_ms: u64,
+    pub(super) cols: u16,
+    pub(super) rows: u16,
+    pub(super) synchronized: bool,
 }
 
 // Kitty's complete rowcolumn-diacritics list, derived from Unicode 6.0.
@@ -519,7 +519,7 @@ pub fn write_synchronized_pixel_output<W: Write>(
     body_result.and(end_result)
 }
 
-pub(crate) fn runtime_image_id_base() -> u32 {
+pub(super) fn runtime_image_id_base() -> u32 {
     let pid = std::process::id();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -530,7 +530,7 @@ pub(crate) fn runtime_image_id_base() -> u32 {
     if base == 0 { 0x520000 } else { base }
 }
 
-pub(crate) fn sprite_image_id(id_base: u32, sprite_index: usize) -> u32 {
+pub(super) fn sprite_image_id(id_base: u32, sprite_index: usize) -> u32 {
     let id = id_base.wrapping_add(sprite_index as u32) & IMAGE_ID_COLOR_MASK;
     id.max(1)
 }
@@ -565,7 +565,7 @@ pub fn virtual_place(image_id: u32, cols: u16, rows: u16, quiet: u8) -> Vec<u8> 
     )
 }
 
-pub(crate) fn delete(image_id: u32) -> Vec<u8> {
+fn delete(image_id: u32) -> Vec<u8> {
     kitty_escape(&format!("a=d,d=i,i={image_id},q=2"), &[])
 }
 
@@ -608,7 +608,7 @@ pub fn inline_placeholder_row(image_id: u32, row: u16, cols: u16) -> Vec<u8> {
     out
 }
 
-pub(crate) fn placeholder_cluster(row: u16, col: u16) -> String {
+pub(super) fn placeholder_cluster(row: u16, col: u16) -> String {
     let mut out = String::with_capacity(10);
     out.push(PLACEHOLDER);
     out.push(diacritic(row));
@@ -624,7 +624,7 @@ fn image_id_rgb(image_id: u32) -> (u8, u8, u8) {
     )
 }
 
-pub(crate) fn image_id_color(image_id: u32) -> Color {
+pub(super) fn image_id_color(image_id: u32) -> Color {
     let (red, green, blue) = image_id_rgb(image_id);
     Color::Rgb(red, green, blue)
 }
@@ -638,7 +638,7 @@ fn diacritic(value: u16) -> char {
     ROW_COLUMN_DIACRITICS[usize::from(value).min(ROW_COLUMN_DIACRITICS.len() - 1)]
 }
 
-pub(crate) fn placeholder_columns_supported(width: usize) -> bool {
+pub(super) fn placeholder_columns_supported(width: usize) -> bool {
     width <= ROW_COLUMN_DIACRITICS.len() && u16::try_from(width).is_ok()
 }
 

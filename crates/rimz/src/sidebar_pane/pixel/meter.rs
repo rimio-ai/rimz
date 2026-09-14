@@ -18,16 +18,16 @@ const METER_ID_CAPACITY: u32 = 512;
 /// The exact pixel shape of one context meter. Quantizing before interning keeps
 /// visually identical sub-pixel updates on the same terminal image id.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct MeterRaster {
-    pub(crate) width_cells: u16,
+pub(in crate::sidebar_pane) struct MeterRaster {
+    pub(in crate::sidebar_pane) width_cells: u16,
     fill_px: u32,
-    pub(crate) health: [u8; 3],
+    pub(in crate::sidebar_pane) health: [u8; 3],
     runs: Vec<(u32, [u8; 3])>,
-    pub(crate) track: [u8; 3],
+    pub(in crate::sidebar_pane) track: [u8; 3],
 }
 
 impl MeterRaster {
-    pub(crate) fn new(
+    pub(in crate::sidebar_pane) fn new(
         width_cells: u16,
         fill: f64,
         mut health: [u8; 3],
@@ -77,7 +77,7 @@ struct Entry {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MeterPixels {
-    pub(crate) id_base: u32,
+    pub(in crate::sidebar_pane) id_base: u32,
     table: BTreeMap<MeterRaster, Entry>,
     clock: u64,
     /// Image ids referenced by the terminal's previous frame. They stay
@@ -87,7 +87,7 @@ pub(crate) struct MeterPixels {
 }
 
 impl MeterPixels {
-    pub(crate) fn new(id_base: u32) -> Self {
+    pub(in crate::sidebar_pane) fn new(id_base: u32) -> Self {
         Self {
             id_base,
             table: BTreeMap::new(),
@@ -97,14 +97,14 @@ impl MeterPixels {
         }
     }
 
-    pub(crate) fn begin_frame(&mut self) {
+    pub(in crate::sidebar_pane) fn begin_frame(&mut self) {
         self.clock = self.clock.wrapping_add(1);
     }
 
     /// Return the content-stable image id, or fall back to the cell bar when the
     /// fixed id window is entirely protected by either terminal-visible images
     /// or placeholders already composed in this frame.
-    pub(crate) fn intern(&mut self, raster: MeterRaster) -> Option<u32> {
+    pub(in crate::sidebar_pane) fn intern(&mut self, raster: MeterRaster) -> Option<u32> {
         if let Some(entry) = self.table.get_mut(&raster) {
             entry.touched = self.clock;
             return Some(meter_image_id(self.id_base, entry.index));
@@ -142,7 +142,7 @@ impl MeterPixels {
 
     /// Replace the previous-frame protection set with ids referenced by the
     /// final viewport. This pass observes placeholders without rewriting them.
-    pub(crate) fn observe_visible(&mut self, lines: &[Line<'static>]) {
+    pub(in crate::sidebar_pane) fn observe_visible(&mut self, lines: &[Line<'static>]) {
         let interned = self
             .table
             .values()
@@ -171,7 +171,9 @@ impl MeterPixels {
         self.visible = visible;
     }
 
-    pub(crate) fn visible_rasters(&self) -> impl Iterator<Item = (u32, &MeterRaster)> {
+    pub(in crate::sidebar_pane) fn visible_rasters(
+        &self,
+    ) -> impl Iterator<Item = (u32, &MeterRaster)> {
         self.table.iter().filter_map(|(raster, entry)| {
             let image_id = meter_image_id(self.id_base, entry.index);
             self.visible
@@ -254,18 +256,18 @@ fn clear_rect(image: &mut RgbaImage, x: u32, y: u32, width: u32, height: u32) {
 }
 
 #[derive(Debug)]
-pub(crate) struct MeterPainter {
+pub(in crate::sidebar_pane) struct MeterPainter {
     residency: ImageResidency<u32, MeterRaster>,
 }
 
 impl MeterPainter {
-    pub(crate) fn new(wrap: bool) -> Self {
+    pub(in crate::sidebar_pane) fn new(wrap: bool) -> Self {
         Self {
             residency: ImageResidency::new(wrap),
         }
     }
 
-    pub(crate) fn ensure_transmitted<W: Write>(
+    pub(in crate::sidebar_pane) fn ensure_transmitted<W: Write>(
         &mut self,
         writer: &mut W,
         image_id: u32,
@@ -291,7 +293,7 @@ impl MeterPainter {
         Ok(())
     }
 
-    pub(crate) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    pub(in crate::sidebar_pane) fn clear<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
         self.residency.clear(writer)
     }
 }

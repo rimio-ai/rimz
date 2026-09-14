@@ -103,7 +103,11 @@ struct RenderingClient {
     pid: u32,
 }
 
-pub(crate) fn detect(mux: MuxName, session_name: &str, prev: PixelRenderCaps) -> PixelRenderCaps {
+pub(in crate::sidebar_pane) fn detect(
+    mux: MuxName,
+    session_name: &str,
+    prev: PixelRenderCaps,
+) -> PixelRenderCaps {
     detect_with(mux, session_name, prev, &LiveProbe)
 }
 
@@ -122,7 +126,7 @@ trait Probe {
     fn env_var(&self, key: &str) -> Option<String>;
 }
 
-pub(crate) fn escalate_own_pane_passthrough() -> io::Result<()> {
+pub(in crate::sidebar_pane) fn escalate_own_pane_passthrough() -> io::Result<()> {
     escalate_with(&LiveProbe)
 }
 
