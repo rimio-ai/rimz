@@ -71,7 +71,9 @@ use super::aggregate::{
 /// managed contracted rates, so finalized Claude sessions need one cold reprice.
 /// v24 rejects Claude null fields only at their schema paths, so finalized
 /// Claude sessions whose nested iteration `model` is null rebuild once.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 24;
+/// v25 drops Grok child-session transcripts whose usage the parent already
+/// folds, so finalized child sessions cached with priced entries rebuild once.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 25;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
