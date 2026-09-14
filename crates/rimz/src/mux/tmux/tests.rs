@@ -183,12 +183,8 @@ fn tab_status_clear_commands_probe_and_restore_automatic_rename() {
 
 #[test]
 fn readonly_attach_blocks_input_and_ignores_viewer_size() {
-    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
-    backend
-        .version
-        .set("tmux 3.5".to_owned())
-        .expect("fresh version cache");
-    let spec = backend.attach_readonly_command("rimz-test");
+    let spec = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server")
+        .attach_readonly_command("rimz-test");
 
     assert_eq!(
         verb_args(&spec),
