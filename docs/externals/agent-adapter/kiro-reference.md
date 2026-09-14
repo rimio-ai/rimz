@@ -53,7 +53,7 @@ The engine is chosen per launch. `--agent-engine <v1|v2|v3>` selects it and defa
 
 `kiro-cli chat` takes one optional positional argument, `[INPUT]`, "The first question to ask" (`kiro-cli chat --help`). The docs pass it without a separator: `kiro-cli chat --effort high "Refactor this module for testability"` ([CLI commands](https://kiro.dev/docs/reference/cli-commands/)).
 
-A prompt after `--` passes the Rust parser but the v3 terminal UI drops it. `kiro-cli chat --v3 -- --bogus extra` fails with `error: unexpected argument 'extra' found`, which shows that both `kiro-cli` and `kiro-cli-chat` accept `--` and bind the next token to `INPUT`. The TUI bundle then parses the argument list again with its own loop: a token that starts with `-` and is not a known flag is treated as an unknown option, and the loop consumes the following token as that option's value. Run against `["chat","--v3","--","ping"]`, the loop returns no `input`; against `["chat","--v3","ping"]` it returns `input: "ping"`. Whether `kiro-cli-chat` hands the TUI its original argument list or a rebuilt one is not visible from the binary, so the drop is shown at the TUI parser and not in a live session.
+A prompt after `--` passes the Rust parser but the v3 terminal UI drops it. `kiro-cli chat --v3 -- --bogus extra` fails with `error: unexpected argument 'extra' found`, which shows that both `kiro-cli` and `kiro-cli-chat` accept `--` and bind the next token to `INPUT`. The TUI bundle then parses the argument list again with its own loop: a token that starts with `-` and is not a known flag is treated as an unknown option, and the loop consumes the following token as that option's value. Run against `["chat","--v3","--","ping"]`, the loop returns no `input`; against `["chat","--v3","ping"]` it returns `input: "ping"`. A live 2.21.4 session confirms the drop: `kiro-cli chat --v3 -- 'Reply with the single word ok'` opens a session that runs no turn, while the same prompt without `--` runs.
 
 | Flag | Meaning (`kiro-cli chat --help`, 2.21.4) |
 | --- | --- |
@@ -104,7 +104,7 @@ The v3 engine writes one directory per session, bucketed by workspace:
 
 The bucket is the first 16 hex characters of SHA-256 over the session's workspace paths. The engine normalizes each path (absolute, forward slashes, no trailing slash, lowercased on Windows), sorts them, and joins them with a NUL byte; a session with no workspace path uses the bucket `_global` (engine bundle, the `createHash("sha256")` call that feeds `computeWorkspaceHash`). For one workspace this is SHA-256 of the exact absolute path. To find an existing session, the engine tries the caller's bucket, then the session index, then every bucket directory.
 
-The sessions root and `KIRO_HOME` disagree between docs and wire. The settings reference says `KIRO_HOME` "Overrides the `~/.kiro` directory used for global agents, prompts, skills, steering, settings, and sessions" ([Settings](https://kiro.dev/docs/reference/settings/)). The engine bundle sets `sessionsPath` to `<homeDir>/.kiro/sessions`, with `homeDir` defaulting to Node's `os.homedir()`, and contains no `KIRO_HOME` read; the TUI bundle and `kiro-cli-chat` do read `KIRO_HOME` for their own paths. Whether the launcher passes the engine a home or sessions path derived from `KIRO_HOME` is not visible from the bundles. The session-management page also describes storage as "SQLite database in `~/.kiro/`" ([Session management](https://kiro.dev/docs/cli/chat/session-management/)); that describes the v2 engine, and the v3 store is the file layout above.
+The sessions root and `KIRO_HOME` disagree between docs and wire. The settings reference says `KIRO_HOME` "Overrides the `~/.kiro` directory used for global agents, prompts, skills, steering, settings, and sessions" ([Settings](https://kiro.dev/docs/reference/settings/)). The engine bundle sets `sessionsPath` to `<homeDir>/.kiro/sessions`, with `homeDir` defaulting to Node's `os.homedir()`, and contains no `KIRO_HOME` read; the TUI bundle and `kiro-cli-chat` do read `KIRO_HOME` for their own paths. A live 2.21.4 launch with `KIRO_HOME` set wrote `settings/cli.json` under that directory but created the session under `$HOME/.kiro/sessions/`, and hooks under `$HOME/.kiro/hooks/` fired: the sessions root and global hooks ignore `KIRO_HOME`. The session-management page also describes storage as "SQLite database in `~/.kiro/`" ([Session management](https://kiro.dev/docs/cli/chat/session-management/)); that describes the v2 engine, and the v3 store is the file layout above.
 
 The engine creates `session.json` and an empty `messages.jsonl` before the first prompt (captured on 2.12.1). It validates `session.json` against this schema on load (engine bundle, the object with `schemaVersion`, `dataModelVersion`, and `workspacePaths`):
 
@@ -173,7 +173,7 @@ Two captured turns show the order inside a turn (captured on 2.12.1):
 - Plain reply: `user`, `turn_start`, `assistant` (`Say`), `session_metadata` (`contextUsage`), `usage_summary`, `session_event` (`session_pause`, `success`), `turn_end` (`end_turn`), `session_start`.
 - Approved write: `user`, `turn_start`, `pending_interaction` (`tool_approval`), `session_metadata`, `interaction_resolved` (`selected`, `accept`), `tool_call` (`fs_write`, `approved`), `tool_result` (`success: true`), `assistant` (`Say`), `session_metadata`, `session_event` (`session_pause`), `turn_end`, `session_start`.
 
-No denial, cancellation, failure, or `user_input` question turn was captured.
+A 2.21.4 turn that failed with `ModelThrottleError` wrote `user`, `turn_start`, `session_metadata`, `usage_summary` (`failed`), `session_event` (`session_pause`, `failed`), and `turn_end` (`error`), with no `assistant` record; `session_start` still followed the first turn. `/compact` wrote a `tombstone` and an `assistant` record under the same session id. No denial, cancellation, or `user_input` question turn was captured.
 
 ### Other session classes
 
@@ -219,7 +219,7 @@ Triggers are PascalCase; the engine also accepts IDE and 2.x names as aliases (e
 | `PostFileCreate` · `PostFileSave` · `PostFileDelete` | `fileCreated` · `fileEdited`, `AfterFileEdit` · `fileDeleted` | After the agent changes a file | file path | no |
 | `Manual` | `userTriggered` | On demand | not evaluated | no |
 
-The docs disagree with the wire on three hook points. The hooks migration page says `Stop` fires when the "Session ends" and that a `UserPromptSubmit` matcher tests the prompt text ([Hooks migration](https://kiro.dev/docs/cli/v3/hooks-migration/)); the matcher code evaluates no matcher for `UserPromptSubmit`, and the 2.12.1 store records one `Stop` invocation per turn `executionId`. The same page documents a `{{filePath}}` command template, which does not occur in the engine bundle; the command action substitutes only `${WORKSPACE_ROOT}`, with the session cwd. The hook actions page's CLI tab still describes the 2.x agent-config form (`timeout_ms`, default 30000 ms).
+The docs disagree with the wire on three hook points. The hooks migration page says `Stop` fires when the "Session ends" and that a `UserPromptSubmit` matcher tests the prompt text ([Hooks migration](https://kiro.dev/docs/cli/v3/hooks-migration/)); the matcher code evaluates no matcher for `UserPromptSubmit`, and the 2.12.1 store records one `Stop` invocation per turn `executionId`. `Stop` runs only when the turn graph reaches its agent-stop step: `end_turn`, `max_tokens`, and `refusal` turns reach it, while a model error other than context overflow, or a cancel, throws out of the graph and skips it (engine bundle, `completeWithError` and `completeWithAbort`; a live throttled turn fired no `Stop`). It runs before `turn_end` is written, after the turn's `Say` record is on disk. `/compact` fires no hook. Both server entry points hardcode `workspaceTrusted` and `v2Hooks` to true, so the untrusted-workspace suppression path never runs in this build. The same page documents a `{{filePath}}` command template, which does not occur in the engine bundle; the command action substitutes only `${WORKSPACE_ROOT}`, with the session cwd. The hook actions page's CLI tab still describes the 2.x agent-config form (`timeout_ms`, default 30000 ms).
 
 A command hook receives one JSON object on stdin (engine bundle, the hook input builder):
 
@@ -292,9 +292,7 @@ Kiro presents CLI 3.0 as an early release that runs beside the 2.x engines, with
 
 ## Undocumented behaviour
 
-1. Whether `kiro-cli-chat` passes a positional prompt that follows `--` through to the v3 terminal UI.
-2. Whether the v3 engine's sessions root and global hook directory follow `KIRO_HOME`.
-3. Record order for denied, cancelled, failed, and `user_input` turns on a live session, and whether `session_start` still lands after the first turn on the baseline.
-4. The exact `turn_end.stopReason` values beyond `end_turn` and `cancelled`, and when `session.json` reaches `completed`.
-5. The `stream-json` event schema beyond the `runError` and `runFinished` names.
-6. Whether `SessionStart` hooks record a `ContextualHookInvoked` entry: the 2.12.1 store holds none for a configured `SessionStart` command.
+1. Record order for denied, cancelled, and `user_input` turns on a live session.
+2. The `turn_end.stopReason` values beyond `end_turn`, `cancelled`, and `error`, and when `session.json` reaches `completed`.
+3. The `stream-json` event schema beyond the `runError` and `runFinished` names.
+4. Why `SessionStart` records no `ContextualHookInvoked` entry: on 2.21.4 the command runs and receives its stdin payload, but the captured store holds invocation records only for `UserPromptSubmit` and `Stop`.
