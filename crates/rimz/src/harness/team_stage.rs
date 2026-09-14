@@ -139,7 +139,7 @@ pub enum Delivery {
 #[derive(Debug)]
 pub enum Compaction {
     NotConfigured,
-    NotHandedOff,
+    Ineligible,
     BelowThreshold,
     Sent {
         message_id: MessageId,
@@ -330,7 +330,7 @@ pub fn rewake(
         to: stage.name,
         owner: owner.map(str::to_owned),
         delivery,
-        compaction: Compaction::NotHandedOff,
+        compaction: Compaction::Ineligible,
         signal_event,
     }))
 }
@@ -611,8 +611,9 @@ fn compact_flipper(
     let Some(policy) = request.flip_compact else {
         return Compaction::NotConfigured;
     };
-    if !hands_off(&request.by, request.team, from, owner) {
-        return Compaction::NotHandedOff;
+    // Compaction serves the work that continues after the hand-off; `Done` has no owner and no next turn.
+    if owner.is_none() || !hands_off(&request.by, request.team, from, owner) {
+        return Compaction::Ineligible;
     }
     let occupied = agent.occupied_context_tokens();
     let window = agent.resolved_context_window();

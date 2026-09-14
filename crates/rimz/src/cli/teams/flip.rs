@@ -205,7 +205,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         )?,
         Compaction::Sent { .. } => writeln!(out, "  compact  sent")?,
         Compaction::Skipped { reason } => writeln!(out, "  compact  skipped: {reason}")?,
-        Compaction::BelowThreshold | Compaction::NotConfigured | Compaction::NotHandedOff => {}
+        Compaction::BelowThreshold | Compaction::NotConfigured | Compaction::Ineligible => {}
     }
     Ok(())
 }
