@@ -47,7 +47,7 @@ Codex runs a new hook only after you trust it inside Codex. When its installed h
 | `amp` | `${XDG_CONFIG_HOME:-~/.config}/amp/plugins/rimz.ts` | Whole file |
 | `antigravity` | `~/.gemini/config/hooks.json`, `~/.gemini/antigravity-cli/settings.json` | Merge; wraps the statusline |
 | `copilot` | `${COPILOT_HOME:-~/.copilot}/hooks/rimz.json`, `${COPILOT_HOME:-~/.copilot}/settings.json` | Whole hook file; wraps the statusline |
-| `cursor` | `~/.cursor/hooks.json`, `~/.cursor/cli-config.json` | Merge of both files as one write; wraps the statusline |
+| `cursor` | `~/.cursor/hooks.json`, `cli-config.json` in Cursor's config home (see [config homes](../agent-support.md#config-homes-and-skills)) | Merge of both files as one write; wraps the statusline |
 | `droid` | `~/.factory/settings.json` | Merge |
 | `grok` | `${GROK_HOME:-~/.grok}/hooks/rimz.json` | Merge |
 | `kimi` | `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml` | Merge into `[[hooks]]` |
