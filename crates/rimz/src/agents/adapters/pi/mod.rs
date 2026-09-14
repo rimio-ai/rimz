@@ -31,13 +31,13 @@
 //! child's own session id, so its model, effort, context, and usage envelopes
 //! enrich the nested row. Background tasks stay declared off.
 
-pub(crate) mod account;
+mod account;
 mod ask;
-pub(crate) mod payloads;
-pub(crate) mod spend;
-pub(crate) mod transcript;
+mod payloads;
+mod spend;
+mod transcript;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -309,7 +309,7 @@ const PI_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
 );
 
 #[derive(Clone, Debug, Default)]
-pub struct PiAdapter;
+pub(in crate::agents) struct PiAdapter;
 
 impl crate::agents::capabilities::CoreCapability for PiAdapter {
     fn spec(&self) -> &'static AgentSpec {
@@ -609,7 +609,7 @@ impl crate::agents::capabilities::SpendingCapability for PiAdapter {
         resume: Option<&crate::agents::spending::SpendCursor>,
         prices: &PriceBook,
     ) -> crate::agents::spending::SpendParse {
-        spend::parse_pi_spend(path, resume, prices)
+        spend::parse(path, resume, prices)
     }
 }
 

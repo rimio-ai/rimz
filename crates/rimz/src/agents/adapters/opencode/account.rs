@@ -16,10 +16,10 @@ fn config() -> Config {
     }
 }
 
-pub(crate) fn probe() -> crate::agents::account::AccountProbe {
+pub(super) fn probe() -> crate::agents::account::AccountProbe {
     crate::agents::delegated_account::probe_account(&config())
 }
 
-pub(crate) fn probe_usage() -> AccountUsageProbe {
+pub(super) fn probe_usage() -> AccountUsageProbe {
     crate::agents::delegated_account::probe_account_usage(&config())
 }

@@ -7,7 +7,7 @@ mod payloads;
 mod spend;
 mod transcript;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 use std::collections::BTreeMap;
 
 use std::path::{Path, PathBuf};
@@ -229,10 +229,10 @@ const GROK_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
 };
 
-pub(super) const RIMZ_HOOK_COMMAND: &str = "rimz hooks feed --source grok";
-pub(super) const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source grok";
+const RIMZ_HOOK_COMMAND: &str = "rimz hooks feed --source grok";
+const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source grok";
 
-pub(super) const GROK_HOOKS: &[HookEventSpec] = &[
+const GROK_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle( "SessionStart", r#"{"sessionId":"s1"}"#).progress(),
     HookEventSpec::lifecycle(
         "UserPromptSubmit",
@@ -311,7 +311,7 @@ const KNOWN_EVENTS: &[&str] = &[
 ];
 
 #[derive(Clone, Debug, Default)]
-pub struct GrokAdapter;
+pub(in crate::agents) struct GrokAdapter;
 
 impl crate::agents::capabilities::CoreCapability for GrokAdapter {
     fn spec(&self) -> &'static AgentSpec {
@@ -569,7 +569,7 @@ impl crate::agents::capabilities::SpendingCapability for GrokAdapter {
     }
 }
 
-pub(crate) fn refresh_resolved_context(
+fn refresh_resolved_context(
     path: &Path,
     events: Option<&Path>,
     ctx: &LocalContextRefreshCtx<'_>,

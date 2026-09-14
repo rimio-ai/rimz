@@ -16,7 +16,7 @@ impl crate::agents::capabilities::RuntimeControlCapability for KiroAdapter {}
 #[cfg(test)]
 mod tests;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -275,7 +275,7 @@ const KIRO_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
 );
 
 #[derive(Clone, Debug, Default)]
-pub struct KiroAdapter;
+pub(in crate::agents) struct KiroAdapter;
 
 impl crate::agents::capabilities::CoreCapability for KiroAdapter {
     fn spec(&self) -> &'static AgentSpec {

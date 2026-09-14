@@ -52,7 +52,7 @@ pub use load::{
 };
 pub use manifest::valid_kind;
 
-pub struct PluginAdapter {
+struct PluginAdapter {
     manifest: &'static PluginManifest,
     plugin_dir: &'static Path,
     spec: &'static AgentSpec,

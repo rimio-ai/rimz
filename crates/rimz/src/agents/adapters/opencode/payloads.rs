@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// The flattened payload the RimZ OpenCode plugin posts for every event.
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct OpencodeHookPayload {
+pub(super) struct OpencodeHookPayload {
     pub session_id: Option<String>,
     pub parent_session_id: Option<String>,
     pub prompt: Option<String>,
@@ -35,11 +35,11 @@ pub(crate) struct OpencodeHookPayload {
 }
 
 /// Tolerant parse: unusable payloads degrade to an empty enrichment record.
-pub(crate) fn parse_payload(payload: &Value) -> OpencodeHookPayload {
+pub(super) fn parse_payload(payload: &Value) -> OpencodeHookPayload {
     serde_json::from_value(payload.clone()).unwrap_or_default()
 }
 
-pub(crate) fn errored(parsed: &OpencodeHookPayload) -> bool {
+pub(super) fn errored(parsed: &OpencodeHookPayload) -> bool {
     parsed.is_error.unwrap_or(false)
         || parsed
             .error_message
