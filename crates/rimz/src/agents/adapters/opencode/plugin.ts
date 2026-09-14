@@ -33,10 +33,25 @@ type Envelope = Record<string, unknown> & {
 
 const RIMZ = process.env.RIMZ_BIN || "rimz";
 const RIMZ_ARGS = ["hooks", "feed", "--source", "opencode"];
+const LAUNCH_REMINDERS_ENV = "RIMZ_LAUNCH_REMINDERS";
+const LAUNCH_REMINDERS = Symbol.for("rimz.launch-reminders");
 const DEFAULT_SESSION_TITLE =
   /^(?:New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
+// RimZ launch reminders ride the launch env. The first plugin instance in a
+// process claims them off `process.env`, so tool subprocesses and nested agents
+// never inherit a root's reminders.
+function claimLaunchReminders(): string | undefined {
+  const claimed = globalThis as Record<symbol, string | undefined>;
+  if (!(LAUNCH_REMINDERS in claimed)) {
+    claimed[LAUNCH_REMINDERS] = process.env[LAUNCH_REMINDERS_ENV] || undefined;
+    delete process.env[LAUNCH_REMINDERS_ENV];
+  }
+  return claimed[LAUNCH_REMINDERS];
+}
+
 export const RimzPlugin: Plugin = async (input) => {
+  const launchReminders = claimLaunchReminders();
   const children = new Map<string, string>();
   const childModels = new Map<string, string>();
   const gauge = new Map<string, Gauge>();
@@ -487,6 +502,12 @@ export const RimzPlugin: Plugin = async (input) => {
         tool_name: hookInput.tool,
         is_error: Boolean(output.metadata?.error || output.metadata?.isError),
       }));
+    },
+
+    "experimental.chat.system.transform": async (hookInput, output) => {
+      const sessionID = hookInput.sessionID;
+      if (!launchReminders || !sessionID || children.has(sessionID)) return;
+      output.system.push(launchReminders);
     },
 
     "experimental.session.compacting": async (hookInput) => {

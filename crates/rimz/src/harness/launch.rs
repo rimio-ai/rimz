@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::capabilities::SystemTextChannel;
+use crate::agents::capabilities::{EXTENSION_SYSTEM_TEXT_ENV, SystemTextChannel};
 use crate::disk::paths::RuntimePaths;
 use crate::harness::launch_reminders::LaunchReminders;
 use crate::harness::prompt_compose::{TEXT_PROMPT_LIMIT, prompt_artifact_path};
@@ -678,10 +678,11 @@ fn compile_agent_process_with_extra_env(
         adapter.lockdown_subagent_args(action.extra_args_mut());
     }
     let reminder = crate::harness::launch_reminders::render(request, reminders, cwd);
-    if let Some(channel) = adapter.append_system_text_channel()
+    let channel = adapter.append_system_text_channel();
+    if let Some(matcher) = channel.as_ref().and_then(SystemTextChannel::arg_matcher)
         && let Some(text) = &reminder
     {
-        merge_appended_system_text(action.extra_args_mut(), &channel, text);
+        merge_appended_system_text(action.extra_args_mut(), &matcher, text);
     }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
@@ -693,7 +694,13 @@ fn compile_agent_process_with_extra_env(
             })?;
     let trusted_env = trusted_agent_env(project_root, kind)?;
     let secret_keys = trusted_env.keys().cloned().collect();
-    let env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
+    let mut env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
+    if channel == Some(SystemTextChannel::ExtensionEnv) {
+        env.insert(
+            EXTENSION_SYSTEM_TEXT_ENV.to_owned(),
+            reminder.clone().unwrap_or_default(),
+        );
+    }
     let unset = BTreeSet::new();
     let argv = login_shell_argv(&env, &unset, &provider_argv);
     Ok(CompiledAgentProcess {
@@ -709,28 +716,33 @@ fn compile_agent_process_with_extra_env(
 
 fn merge_appended_system_text(
     extra_args: &mut Vec<String>,
-    channel: &SystemTextChannel,
+    matcher: &crate::agents::PresetArgMatcher,
     text: &str,
 ) {
-    let matcher = crate::agents::PresetArgMatcher::from(channel);
+    use crate::agents::PresetArgMatcher;
+
     let Some(existing) = matcher.occurrences(extra_args).into_iter().last() else {
-        if let Some((flag, value)) = render_system_text_channel(channel, text) {
+        if let Some((flag, value)) = render_system_text_channel(matcher, text) {
             extra_args.extend([flag, value]);
         }
         return;
     };
 
-    let existing_text = match channel {
-        SystemTextChannel::TextFlag { .. } => existing.value.clone(),
-        SystemTextChannel::ConfigKey { .. } => parse_toml_string_or_raw(&existing.value),
+    let existing_text = match matcher {
+        PresetArgMatcher::ConfigKey { .. } => parse_toml_string_or_raw(&existing.value),
+        PresetArgMatcher::TextFlag(_)
+        | PresetArgMatcher::Flag(_)
+        | PresetArgMatcher::EnvPathVar(_) => existing.value.clone(),
     };
     let merged = format!("{existing_text}\n\n{text}");
-    let (single_token_value, separate_value) = match channel {
-        SystemTextChannel::TextFlag { .. } => (merged.clone(), merged),
-        SystemTextChannel::ConfigKey { key, .. } => {
+    let (single_token_value, separate_value) = match matcher {
+        PresetArgMatcher::ConfigKey { key, .. } => {
             let quoted = toml::Value::String(merged).to_string();
             (quoted.clone(), format!("{key}={quoted}"))
         }
+        PresetArgMatcher::TextFlag(_)
+        | PresetArgMatcher::Flag(_)
+        | PresetArgMatcher::EnvPathVar(_) => (merged.clone(), merged),
     };
     if existing.argv_range.len() == 1 {
         let arg = &mut extra_args[existing.argv_range.start];
@@ -741,13 +753,19 @@ fn merge_appended_system_text(
     }
 }
 
-fn render_system_text_channel(channel: &SystemTextChannel, text: &str) -> Option<(String, String)> {
-    match channel {
-        SystemTextChannel::TextFlag { flags } => Some((flags.first()?.clone(), text.to_owned())),
-        SystemTextChannel::ConfigKey { flags, key } => Some((
+fn render_system_text_channel(
+    matcher: &crate::agents::PresetArgMatcher,
+    text: &str,
+) -> Option<(String, String)> {
+    use crate::agents::PresetArgMatcher;
+
+    match matcher {
+        PresetArgMatcher::TextFlag(flags) => Some((flags.first()?.clone(), text.to_owned())),
+        PresetArgMatcher::ConfigKey { flags, key } => Some((
             flags.first()?.clone(),
             format!("{key}={}", toml::Value::String(text.to_owned())),
         )),
+        PresetArgMatcher::Flag(_) | PresetArgMatcher::EnvPathVar(_) => None,
     }
 }
 

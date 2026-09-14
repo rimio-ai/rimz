@@ -205,7 +205,7 @@ The wrapper removes matching raw replacement argv before adding the materialized
 
 #### Launch reminders
 
-What RimZ tells the agent about itself arrives as one `<system_reminder>` tag, which the process compiler merges through the adapter's native append-system-text channel. The wrapper collects the parts as a `LaunchReminders` value, and [`launch_reminders.rs`](../../../crates/rimz/src/harness/launch_reminders.rs) renders them as blank-line separated paragraphs in a fixed order. When no paragraph applies, no tag is appended.
+What RimZ tells the agent about itself arrives as one `<system_reminder>` tag, which the process compiler delivers through the adapter's append-system-text channel: merged into a native argv flag or config key, or, for Pi and OpenCode, exported as `RIMZ_LAUNCH_REMINDERS` (empty when no paragraph applies) for RimZ's in-process extension to append to the root session's system prompt. The wrapper collects the parts as a `LaunchReminders` value, and [`launch_reminders.rs`](../../../crates/rimz/src/harness/launch_reminders.rs) renders them as blank-line separated paragraphs in a fixed order. When no paragraph applies, no tag is appended.
 
 | Order | Paragraph | Present when |
 | --- | --- | --- |
@@ -219,7 +219,7 @@ The team paragraph (`launch_context.rs`) opens with one identity sentence (`You 
 
 The model fragment is `on <model>`, rendered by `agents::model_display::display_model`, with effort left out. Without a team paragraph it becomes its own line, opening with the role or else the profile (`You are @planner, running on Opus 4.8.`, or `You are running on …` when the launch carries neither). A launch that knows no model gets no fragment instead of a guess at the provider default.
 
-These paragraphs reach Claude, Qwen, Droid, and Codex. Other providers get only the child no-delegation body, through a user-prompt fallback.
+These paragraphs reach Claude, Qwen, Droid, Codex, and Grok through native launch arguments, and Pi and OpenCode through their RimZ extension. Other providers get only the child no-delegation body, through a user-prompt fallback.
 
 #### Direct exec or resident wrapper
 

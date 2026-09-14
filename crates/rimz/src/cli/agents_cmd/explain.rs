@@ -433,10 +433,17 @@ impl<'a> ExplainReport<'a> {
                     .map(channel_label),
                 artifact: plan.prompt.artifact.as_deref(),
                 reminder: process.reminder.as_deref(),
-                reminder_channel: plan
-                    .reminder_channel
-                    .as_ref()
-                    .map(|channel| channel_label(PresetArgMatcher::from(channel))),
+                reminder_channel: plan.reminder_channel.as_ref().map(|channel| {
+                    channel.arg_matcher().map_or_else(
+                        || {
+                            format!(
+                                "rimz extension ({})",
+                                rimz::agents::capabilities::EXTENSION_SYSTEM_TEXT_ENV
+                            )
+                        },
+                        channel_label,
+                    )
+                }),
                 reminder_delivered: plan.reminder_channel.is_some() && process.reminder.is_some(),
             },
             sandbox,

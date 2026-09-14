@@ -143,8 +143,8 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Wired {
         via: "SubagentStart/SubagentStop",
     },
-    launch_reminders: ConcernCoverage::Unsupported {
-        reason: "no launch flag or config key carries additive system text",
+    launch_reminders: ConcernCoverage::Wired {
+        via: "plugin experimental.chat.system.transform",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
@@ -350,7 +350,10 @@ impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
         )
     }
 
-    // TODO(launch-reminders): carry additive system text through the OpenCode plugin.
+    fn append_system_text_channel(&self) -> Option<crate::agents::capabilities::SystemTextChannel> {
+        Some(crate::agents::capabilities::SystemTextChannel::ExtensionEnv)
+    }
+
     fn lockdown_subagent_env(&self, env: &mut std::collections::BTreeMap<String, String>) {
         const PERMISSION_ENV: &str = "OPENCODE_PERMISSION";
 

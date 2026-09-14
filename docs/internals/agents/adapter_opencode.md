@@ -48,7 +48,7 @@ OpenCode follows the latest root conversation inside one live pane. `/new` hands
 
 **Resume.** `opencode --session <session_id>` restores a recorded session; the launching pane sets cwd and the plugin re-emits lifecycle events from the resumed server.
 
-OpenCode has no launch flag or config key for additive system text, so RimZ cannot append catalog or team launch reminders until its plugin carries them.
+OpenCode has no launch flag or config key for additive system text, so launch reminders ride the plugin. RimZ exports the rendered text as `RIMZ_LAUNCH_REMINDERS`; the first plugin instance in the process claims it into a `globalThis` marker and deletes it from `process.env`, so tool subprocesses and nested agents never inherit it. `experimental.chat.system.transform` then pushes the text as one more system entry for every request that carries a `sessionID` the plugin has not seen created as a child (OpenCode 1.18.30 `LLMRequestPrep.prepare`). Sessionless requests, such as agent generation, get none.
 
 ## Context and transcript
 
@@ -91,4 +91,5 @@ Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps b
 - **No realtime balance transport.** The plugin sees no provider response headers, so budget bars come entirely from the out-of-band OAuth usage probe. An API-key or `wellknown` credential has no OAuth token and shows account identity and spend without bars.
 - **No `Fresh` lineage.** The wire does not distinguish `/new` from a fork copy, so RimZ records neither and relies on same-process supersession.
 - **Background parking and remote control** remain unsupported in OpenCode 1.18.30.
+- **Launch reminders reach title generation too.** The system transform receives only `sessionID` and `model`, so the root session's small-model title request carries the reminders as well.
 - **`OPENCODE_DB` override.** RimZ discovers the standard data directory and selects its most recent logical database; an explicit upstream database path is not yet honored.
