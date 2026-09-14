@@ -407,7 +407,7 @@ These are the flags a launch or resume plan uses; `pi --help` lists the rest.
 | `--model <pattern>` | model pattern or id; accepts `provider/id` and a `:<thinking>` suffix |
 | `--models <patterns>` | comma-separated patterns for Ctrl+P cycling |
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
-| `--system-prompt <text>`, `--append-system-prompt <text>` | replace the system prompt; append text or file contents (repeatable) |
+| `--system-prompt <text>`, `--append-system-prompt <text>` | replace the system prompt; append text or file contents (repeatable). Any `--append-system-prompt` replaces the discovered `APPEND_SYSTEM.md` instead of adding to it (`dist/core/resource-loader.js`, `DefaultResourceLoader.reload`) |
 | `--extension`, `-e <path>`, `--no-extensions`, `-ne` | load an extension; disable discovery |
 | `--tools`, `-t`, `--exclude-tools`, `-xt`, `--no-tools`, `-nt`, `--no-builtin-tools`, `-nbt` | tool allowlist, denylist, and defaults |
 | `--approve`, `-a` / `--no-approve`, `-na` | trust or ignore project-local files for this run; non-interactive modes never show a trust prompt |
