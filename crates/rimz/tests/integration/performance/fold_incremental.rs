@@ -10,7 +10,7 @@
 
 use rimz::store::event_log::{self, testkit::bytes_read};
 use rimz::store::snapshot::RollupCursor;
-use rimz::store::snapshot::fold_testkit::carryover_bytes_parsed;
+use rimz::testkit::carryover_bytes_parsed;
 use rimz::testkit::fleet::{
     SESSION_NAME, registered_lifecycle, seed_fleet_store, seed_history_carryover, synthetic_panes,
 };

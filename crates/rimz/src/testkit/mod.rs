@@ -9,6 +9,7 @@ pub mod sandbox;
 pub use crate::disk::atomic::testkit::fsync_count;
 pub use crate::proc::testkit::spawn_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_written};
+pub use crate::store::snapshot::fold_testkit::carryover_bytes_parsed;
 
 /// Stop a test subprocess at an I/O boundary until its controller releases it.
 pub(crate) fn rendezvous(env: &str) {

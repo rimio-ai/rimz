@@ -22,7 +22,7 @@ mod tests;
 
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
 /// behind this module's read-only boundary and never import `crate::store`.
-pub use crate::store::snapshot::{AgentRollup, RollupCursor};
+pub use crate::store::snapshot::RollupCursor;
 
 /// Long-lived consumer context and incremental store-rollup state.
 pub struct PublishedSnapshotReader {

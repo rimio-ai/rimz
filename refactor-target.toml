@@ -314,7 +314,8 @@ path = "crates/rimz/src/store"
 # Exec cleanup probes waiter liveness without owning socket paths.
 # Conversation surfaces share sender classification with the CLI binary.
 # Flip and smart compaction share the typed occupied-context threshold predicate.
-surface-budget = 344
+# The carryover parse counter is re-exported through testkit beside the event-log byte counters.
+surface-budget = 345
 
 [[module]]
 path = "crates/rimz/src/theme"

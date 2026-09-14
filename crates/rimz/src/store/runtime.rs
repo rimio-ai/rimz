@@ -55,7 +55,7 @@ impl RuntimeProjection {
 
     /// The runtime-scoped projection over borrowed rows, cloning only the
     /// rows it keeps — a long-lived reader's rollup stays shared.
-    pub fn runtime_from_refs<'a>(agents: impl IntoIterator<Item = &'a AgentState>) -> Self {
+    pub(super) fn runtime_from_refs<'a>(agents: impl IntoIterator<Item = &'a AgentState>) -> Self {
         let agents = agents.into_iter().collect::<Vec<_>>();
         let visible_parents = agents
             .iter()
