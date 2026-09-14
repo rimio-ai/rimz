@@ -21,7 +21,7 @@ These pages answer a specific question about the shipped product: what a command
 | [wait.md](./cli/wait.md) | `rimz wait`: a self-only wakeup after a delay, a process exit, or a watched command. |
 | [transcript.md](./cli/transcript.md) | `rimz transcript`: rendering a channel or one agent from RimZ's durable transcript log. |
 | [pane.md](./cli/pane.md) | `rimz pane`: pane targets, listing, capturing, sending text and keys, focus, zoom, split, detach, and per-pane bandwidth. |
-| [events.md](./cli/events.md) | `rimz events`: following lifecycle transitions as JSON lines, the event schema, and emitting signals. |
+| [events.md](./cli/events.md) | `rimz events`: following lifecycle and signal lines as JSON Lines, both line schemas and signal sources, emitting signals, and the reserved families. |
 | [accounts.md](./cli/accounts.md) | `rimz accounts`: declaring named provider accounts as separate provider homes. |
 | [stats.md](./cli/stats.md) | `rimz stats`: account-global token and dollar history, windows, and breakdowns. |
 | [budget.md](./cli/budget.md) | `rimz agents budget` and `rimz budget`: inspecting and changing one agent's dollar cap and the room and provider-account daily caps. |
