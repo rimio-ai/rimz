@@ -62,8 +62,6 @@ enum Payload {
     },
     #[serde(rename = "turn_end")]
     TurnEnd {
-        #[serde(rename = "executionId")]
-        execution_id: Option<String>,
         #[serde(rename = "stopReason")]
         stop_reason: Option<String>,
     },
@@ -207,13 +205,27 @@ enum TurnState {
     Running(TurnPhase),
     Waiting,
     Success,
+    Failed,
 }
 
 impl TurnState {
+    /// `session.json` `status` is `in_progress` while a turn runs and one of
+    /// `waiting_on_user`, `idle`, `completed`, or `failed` once it closes.
     fn from_metadata_status(status: Option<&str>) -> Self {
         match status {
-            Some("active" | "running") => Self::Running(TurnPhase::Reasoning),
+            Some("in_progress") => Self::Running(TurnPhase::Reasoning),
+            Some("failed") => Self::Failed,
             _ => Self::Idle,
+        }
+    }
+
+    /// The engine closes every turn from its stop reason: `cancelled` aborts,
+    /// `refusal` and `error` fail, and any other reason succeeds.
+    fn from_stop_reason(stop_reason: &str) -> Self {
+        match stop_reason {
+            "cancelled" => Self::Idle,
+            "refusal" | "error" => Self::Failed,
+            _ => Self::Success,
         }
     }
 
@@ -223,6 +235,7 @@ impl TurnState {
             Self::Running(phase) => (AgentStatus::Running, phase),
             Self::Waiting => (AgentStatus::Waiting, TurnPhase::Idle),
             Self::Success => (AgentStatus::Success, TurnPhase::Idle),
+            Self::Failed => (AgentStatus::Failed, TurnPhase::Idle),
         }
     }
 }
@@ -283,10 +296,7 @@ impl FoldedSession {
             Payload::SessionEvent { category, context } => {
                 self.apply_successful_pause(category, context);
             }
-            Payload::TurnEnd {
-                execution_id,
-                stop_reason,
-            } => self.apply_successful_turn_end(execution_id, stop_reason),
+            Payload::TurnEnd { stop_reason } => self.apply_turn_end(stop_reason),
             Payload::Assistant { .. } | Payload::Unknown => {}
         }
     }
@@ -344,7 +354,12 @@ impl FoldedSession {
         status: Option<String>,
     ) {
         if non_empty(tool_call_id.as_deref()).is_none()
-            || non_empty(status.as_deref()) != Some("approved")
+            // 2.12.1 recorded an approved call as `approved`; 2.21.4 records
+            // the finished call once, as `completed`.
+            || !matches!(
+                non_empty(status.as_deref()),
+                Some("approved" | "executing" | "completed")
+            )
             || !self.pending.is_empty()
         {
             return;
@@ -405,15 +420,14 @@ impl FoldedSession {
         }
     }
 
-    fn apply_successful_turn_end(
-        &mut self,
-        execution_id: Option<String>,
-        stop_reason: Option<String>,
-    ) {
-        if non_empty(execution_id.as_deref()).is_some()
-            && stop_reason.as_deref() == Some("end_turn")
-        {
-            self.turn = TurnState::Success;
+    fn apply_turn_end(&mut self, stop_reason: Option<String>) {
+        let Some(stop_reason) = non_empty(stop_reason.as_deref()) else {
+            return;
+        };
+        self.turn = TurnState::from_stop_reason(stop_reason);
+        if !matches!(self.turn, TurnState::Success) {
+            self.pending.clear();
+            self.waiting = None;
         }
     }
 }

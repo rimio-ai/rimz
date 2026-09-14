@@ -270,6 +270,13 @@ fn discovery_validates_layout_and_folds_ordered_records() {
     assert!(local_state(observation).latest_prompt.is_none());
     assert!(local_state(observation).context_pct.is_none());
 
+    metadata["status"] = serde_json::json!("in_progress");
+    std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
+    assert_eq!(
+        local_state(&session::discover_under(dir.path(), &workspace)[0]).status,
+        crate::agents::AgentStatus::Running
+    );
+
     std::fs::write(
         session_dir.join("messages.jsonl"),
         include_str!("tests/fixtures/stock_ping/messages.jsonl"),
@@ -323,17 +330,17 @@ fn discovery_validates_layout_and_folds_ordered_records() {
         );
     }
 
-    metadata["status"] = serde_json::json!("active");
+    metadata["status"] = serde_json::json!("failed");
     std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
     std::fs::write(session_dir.join("messages.jsonl"), b"").unwrap();
     let observation = &session::discover_under(dir.path(), &workspace)[0];
     assert_eq!(
         local_state(observation).status,
-        crate::agents::AgentStatus::Running
+        crate::agents::AgentStatus::Failed
     );
     assert_eq!(
         local_state(observation).phase,
-        crate::agents::TurnPhase::Reasoning
+        crate::agents::TurnPhase::Idle
     );
 
     metadata["status"] = serde_json::Value::Null;
@@ -461,6 +468,61 @@ fn approval_waiting_resolution_tool_activity_and_context_clamp_follow_file_order
     assert_eq!(settled.0, crate::agents::AgentStatus::Success);
     assert_eq!(settled.1, crate::agents::TurnPhase::Idle);
     assert_eq!(settled.3, Some(100));
+}
+
+#[test]
+fn kiro_2_21_4_shell_turn_waits_then_settles_in_file_order() {
+    let lines = include_str!("tests/fixtures/stock_shell_2_21_4/messages.jsonl");
+    let pending_end = lines.find("-resolved\"").unwrap();
+    let pending = session::fold_for_test(&lines[..pending_end]);
+    assert_eq!(pending.0, crate::agents::AgentStatus::Waiting);
+    assert_eq!(pending.2.as_deref(), Some("Run Command requires approval"));
+
+    let result_start = lines
+        .find("-result\",\"timestamp\":\"2026-09-14T05:48")
+        .unwrap();
+    let running = session::fold_for_test(&lines[..result_start]);
+    assert_eq!(running.0, crate::agents::AgentStatus::Running);
+    assert!(running.2.is_none());
+
+    let settled = session::fold_for_test(lines);
+    assert_eq!(settled.0, crate::agents::AgentStatus::Success);
+    assert_eq!(settled.1, crate::agents::TurnPhase::Idle);
+    assert!(settled.3.is_some());
+}
+
+#[test]
+fn completed_tool_calls_drive_the_editing_phase() {
+    let lines = concat!(
+        "{\"id\":\"start\",\"timestamp\":\"2025-01-01T00:00:01Z\",\"payload\":{\"type\":\"turn_start\",\"executionId\":\"turn\"}}\n",
+        "{\"id\":\"call\",\"timestamp\":\"2025-01-01T00:00:02Z\",\"payload\":{\"type\":\"tool_call\",\"toolCallId\":\"tool\",\"toolName\":\"fs_write\",\"status\":\"completed\"}}\n",
+    );
+    let folded = session::fold_for_test(lines);
+    assert_eq!(folded.0, crate::agents::AgentStatus::Running);
+    assert_eq!(folded.1, crate::agents::TurnPhase::Acting);
+}
+
+#[test]
+fn turn_end_stop_reasons_settle_cancelled_and_failed_turns() {
+    let pending = "{\"id\":\"pending\",\"timestamp\":\"2025-01-01T00:00:01Z\",\"payload\":{\"type\":\"pending_interaction\",\"interactionType\":\"tool_approval\",\"toolCallId\":\"tool\",\"question\":\"Approve tool\"}}\n";
+    for (stop_reason, status) in [
+        ("cancelled", crate::agents::AgentStatus::Idle),
+        ("error", crate::agents::AgentStatus::Failed),
+        ("refusal", crate::agents::AgentStatus::Failed),
+        ("max_tokens", crate::agents::AgentStatus::Success),
+    ] {
+        let lines = format!(
+            "{pending}{{\"id\":\"end\",\"timestamp\":\"2025-01-01T00:00:02Z\",\"payload\":{{\"type\":\"turn_end\",\"stopReason\":\"{stop_reason}\"}}}}\n"
+        );
+        let folded = session::fold_for_test(&lines);
+        assert_eq!(folded.0, status, "{stop_reason}");
+        assert_eq!(folded.1, crate::agents::TurnPhase::Idle, "{stop_reason}");
+        assert_eq!(
+            folded.2.is_some(),
+            status == crate::agents::AgentStatus::Success,
+            "{stop_reason}"
+        );
+    }
 }
 
 #[test]

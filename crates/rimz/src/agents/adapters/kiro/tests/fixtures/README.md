@@ -4,6 +4,8 @@ The stock interactive captures launched `kiro-cli chat --v3` in disposable direc
 
 The UI reported a root session identity shaped as `sess_<uuid>`. Kiro CLI's stock structured store pairs `session.json` and `messages.jsonl` under the workspace-hash bucket. The older `root/*.history` fixture remains exclusion evidence: readline history alone carries no assistant, lifecycle, context, or tool result.
 
+`stock_shell_2_21_4/` is a Kiro CLI 2.21.4 capture of the same launch: two turns, the second approving one `execute_bash` call. It preserves the `fetch_cloud_config` tool call written before `turn_start`, the `pending_interaction` and `interaction_resolved` pair, the tool call recorded as `completed` rather than `approved`, and `in_progress` metadata status.
+
 The attempted hook files produced no command invocation or stdin payload. Pulled store evidence therefore supports transcript and live display without claiming executable hook coverage or structured Ask/Answer routing.
 
 The paired UUID-only JSON and JSONL samples came from an ACP-hosted non-interactive session whose metadata says `session_created_reason: "subagent"`. They demonstrate a distinct session class and do not define the stock interactive adapter contract.
