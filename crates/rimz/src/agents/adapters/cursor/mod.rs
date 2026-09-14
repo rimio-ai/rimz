@@ -439,10 +439,11 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
     }
 
     fn derive_subagent_observations(&self, workspace: &Path) -> Vec<AgentLifecycleObservation> {
-        let Some(home) = session::cursor_home(std::env::var_os("HOME").as_deref()) else {
+        let Some(roots) = session::CursorRoots::resolve(&crate::agents::login::ambient_env())
+        else {
             return Vec::new();
         };
-        self.derive_subagent_observations_under(&home, workspace)
+        self.derive_subagent_observations_under(&roots, workspace)
     }
 }
 
@@ -518,16 +519,18 @@ impl crate::agents::capabilities::SessionCapability for CursorAdapter {
     ) -> Vec<LocalSessionObservation> {
         workspaces
             .iter()
-            .flat_map(|workspace| session::discover_under(home, workspace))
+            .flat_map(|workspace| {
+                session::discover_under(&session::CursorRoots::single(home), workspace)
+            })
             .collect()
     }
 
     fn discover_local_sessions(
         &self,
         workspaces: &[&Path],
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<LocalSessionObservation> {
-        session::discover(workspaces)
+        session::discover(workspaces, login_env)
     }
 }
 
@@ -667,10 +670,10 @@ fn parse_cursor_version(output: &str) -> Option<String> {
 impl CursorAdapter {
     fn derive_subagent_observations_under(
         &self,
-        home: &Path,
+        roots: &session::CursorRoots,
         workspace: &Path,
     ) -> Vec<AgentLifecycleObservation> {
-        session::discover_subagent_chats(home, workspace)
+        session::discover_subagent_chats(roots, workspace)
             .into_iter()
             .flat_map(|record| {
                 let mut observations = vec![Self::mapped_subagent_observation(
