@@ -3,6 +3,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::agents::payload::non_empty_trimmed;
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct CommonPayload {
@@ -40,9 +42,25 @@ pub(super) struct PostToolPayload {
     #[serde(flatten)]
     pub common: CommonPayload,
     pub error: Option<Value>,
+    /// Absent before the 1.2 hook contract added the completed tool call.
+    #[serde(rename = "toolCall")]
+    pub tool_call: Option<ToolCall>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(super) struct ToolCall {
+    pub name: Option<String>,
 }
 
 impl PostToolPayload {
+    pub(super) fn tool_name(&self) -> Option<String> {
+        self.tool_call
+            .as_ref()
+            .and_then(|call| call.name.as_deref())
+            .and_then(non_empty_trimmed)
+    }
+
     pub(super) fn failed(&self) -> bool {
         match self.error.as_ref() {
             None | Some(Value::Null) => false,

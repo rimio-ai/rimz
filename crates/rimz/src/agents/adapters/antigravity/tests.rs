@@ -145,6 +145,48 @@ fn native_hooks_normalize_lifecycle() {
 }
 
 #[test]
+fn post_tool_use_tool_call_names_the_tool_when_present() {
+    let named = |name: Option<&str>| LifecycleSignal::ToolUsed {
+        mutates: false,
+        edits: false,
+        name: name.map(ToOwned::to_owned),
+        native_key: None,
+        turn_id: None,
+    };
+    for (tool_call, expected) in [
+        (
+            json!({"name": " browser_click_element ", "args": {"Index": 3}}),
+            Some("browser_click_element"),
+        ),
+        (json!({"name": "  "}), None),
+        (json!({"args": {}}), None),
+        (json!(null), None),
+    ] {
+        let payload = with(
+            &hook_payload(),
+            [("toolCall", tool_call), ("stepIdx", json!(4))],
+        );
+        assert_eq!(
+            hook_signal(&AntigravityAdapter, "PostToolUse:observed", &payload),
+            named(expected)
+        );
+    }
+    let edited = hook_signal(
+        &AntigravityAdapter,
+        "PostToolUse:edit",
+        &with(
+            &hook_payload(),
+            [("toolCall", json!({"name": "write_to_file"}))],
+        ),
+    );
+    assert!(matches!(
+        edited,
+        LifecycleSignal::ToolUsed { mutates: true, edits: true, name: Some(ref name), .. }
+            if name == "write_to_file"
+    ));
+}
+
+#[test]
 fn catalog_events_without_lifecycle_signal_keep_context_identity() {
     let camel = hook_output(&AntigravityAdapter, "PostInvocation", &hook_payload());
     assert_eq!(
@@ -437,6 +479,34 @@ fn statusline_normalizes_reasoning_qualifiers_without_changing_model_id() {
             ),
             (Some("  provider/model:id  "), Some(model), effort, thinking)
         );
+    }
+}
+#[test]
+fn statusline_native_model_effort_wins_over_label_qualifier() {
+    for (model, effort) in [
+        // Live 1.2.2 shape: the label qualifier and native effort agree.
+        (
+            json!({"id": "Gemini 3.8 Flash (Low)", "display_name": "Gemini 3.8 Flash (Low)", "effort": "low"}),
+            Some("low"),
+        ),
+        (
+            json!({"display_name": "Gemini 3.1 Pro (Low)", "effort": " HIGH "}),
+            Some("high"),
+        ),
+        (
+            json!({"display_name": "Gemini 3.1 Pro (Medium)", "effort": ""}),
+            Some("medium"),
+        ),
+        (json!({"display_name": TURBO, "effort": "low"}), Some("low")),
+    ] {
+        let context = AntigravityAdapter
+            .observe_context(
+                "antigravity",
+                &json!({"conversation_id": SESSION_ID, "model": model}),
+            )
+            .unwrap()
+            .context;
+        assert_eq!(context.effort.as_deref(), effort);
     }
 }
 #[test]

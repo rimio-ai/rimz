@@ -28,6 +28,9 @@ pub(super) struct StatuslinePayload {
 struct Model {
     id: Option<String>,
     display_name: Option<String>,
+    /// Native selector effort, first captured from 1.2.2; older releases only
+    /// carry it as the display label's parenthesized qualifier.
+    effort: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -142,8 +145,15 @@ impl StatuslinePayload {
     }
 
     pub(super) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
-        let (model_display_name, effort, thinking_enabled) =
+        let (model_display_name, label_effort, thinking_enabled) =
             normalize_model_display(self.model.display_name);
+        let effort = self
+            .model
+            .effort
+            .as_deref()
+            .and_then(non_empty_trimmed)
+            .map(|effort| effort.to_ascii_lowercase())
+            .or(label_effort);
         let settle = (self.tool_confirmation_pending == Some(true))
             .then(|| TurnSettle::new(observed_at, TurnSettleOutcome::NativeWait));
         let has_current_usage = self.context_window.current_usage.input_tokens.is_some()
@@ -202,7 +212,7 @@ impl StatuslinePayload {
     }
 }
 
-/// Antigravity CLI 1.1.2 publishes the selected human label in `model.id`
+/// Antigravity CLI 1.1.2 through 1.2.2 publishes the selected human label in `model.id`
 /// (`Gemini 3.5 Flash (Medium)`) while hooks carry a canonical-shaped hint.
 /// Keep that provider identity untouched in `AgentContext`, but let a captured
 /// terminal reasoning qualifier expose conservative exact-table candidates for
