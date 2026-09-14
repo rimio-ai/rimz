@@ -330,10 +330,13 @@ fn validate_session_dir(
     let state: Value =
         serde_json::from_slice(&std::fs::read(candidate.join("state.json")).ok()?).ok()?;
     state.as_object()?;
-    if let (Some(expected), Some(recorded)) = (
-        cwd,
-        state.get("workDir").and_then(Value::as_str).map(Path::new),
-    ) && !paths_match(expected, recorded)
+    // Metadata version 2 records `cwd`; older sessions carry `workDir` until Kimi rewrites them.
+    let recorded = ["cwd", "workDir"]
+        .into_iter()
+        .find_map(|key| state.get(key).and_then(Value::as_str))
+        .map(Path::new);
+    if let (Some(expected), Some(recorded)) = (cwd, recorded)
+        && !paths_match(expected, recorded)
     {
         return None;
     }
@@ -708,6 +711,17 @@ mod tests {
             session_dir_under(dir.path(), "s1", Some(Path::new("/tmp/project"))).as_deref(),
             Some(std::fs::canonicalize(&session).unwrap().as_path())
         );
+        assert_eq!(
+            session_dir_under(dir.path(), "s1", Some(Path::new("/other"))),
+            None
+        );
+
+        std::fs::write(
+            session.join("state.json"),
+            r#"{"id":"s1","version":2,"cwd":"/tmp/project","agents":{}}"#,
+        )
+        .unwrap();
+        assert!(session_dir_under(dir.path(), "s1", Some(Path::new("/tmp/project"))).is_some());
         assert_eq!(
             session_dir_under(dir.path(), "s1", Some(Path::new("/other"))),
             None
