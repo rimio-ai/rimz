@@ -247,7 +247,10 @@ fn cursor_roots_read_the_config_dir_before_the_legacy_home() {
         session::CursorRoots::resolve(&env(&[("HOME", "/h")])),
         Some(session::CursorRoots::single(Path::new("/h/.cursor")))
     );
-    #[cfg(target_os = "linux")]
+    assert_eq!(
+        session::CursorRoots::resolve(&env(&[("HOME", "/h"), ("CURSOR_CONFIG_DIR", " ")])),
+        Some(session::CursorRoots::single(Path::new("/h/.cursor")))
+    );
     assert_eq!(
         session::CursorRoots::resolve(&env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/x")])),
         Some(session::CursorRoots::new(
