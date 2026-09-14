@@ -111,8 +111,8 @@ pub use observation::{
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub(crate) use payload::{
-    CONTROL_TAG_PREFIXES, finished_task_notification_ids, non_empty_trimmed,
-    optional_payload_string, sanitize_user_prompt, stop_payload_errored,
+    CONTROL_TAG_PREFIXES, non_empty_trimmed, optional_payload_string, sanitize_user_prompt,
+    stop_payload_errored,
 };
 pub use pricing::{PriceBook, Pricing, TokenSplit};
 pub use registry::{

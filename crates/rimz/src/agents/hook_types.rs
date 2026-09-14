@@ -651,7 +651,7 @@ pub struct BackgroundTask {
 }
 
 impl BackgroundTask {
-    pub fn is_pending(&self) -> bool {
+    pub(in crate::agents) fn is_pending(&self) -> bool {
         self.status
             .as_deref()
             .is_none_or(|status| !matches!(status, "completed" | "failed"))
@@ -659,7 +659,7 @@ impl BackgroundTask {
 
     /// The shell this task is, when it is one. A typeless entry from an older
     /// build counts as a shell only when it carries a command.
-    pub fn as_shell(&self, started_at: Timestamp) -> Option<BackgroundShell> {
+    pub(in crate::agents) fn as_shell(&self, started_at: Timestamp) -> Option<BackgroundShell> {
         let is_shell = match self.kind.as_deref() {
             Some(kind) => kind == "shell",
             None => self.command.is_some(),

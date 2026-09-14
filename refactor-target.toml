@@ -78,7 +78,8 @@ upward-dependencies = ["address"]
 # Turn completion is shared by reply waits and `agents wait`, apart from the delivery gate.
 # Store's fold and follower pass the prior record's turn ids to `lifecycle::step`
 # and advance them through the one shared `lifecycle::turn_ids_after`.
-surface-budget = 988
+# Background shells and their report are folded by store and listed by the renderer.
+surface-budget = 990
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
