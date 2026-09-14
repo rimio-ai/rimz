@@ -557,6 +557,14 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
         DroidAdapter
             .spec()
             .launch
+            .compact_command("keep\nthe plan")
+            .as_deref(),
+        Some("/compact keep the plan")
+    );
+    assert_eq!(
+        DroidAdapter
+            .spec()
+            .launch
             .permission_args(PermissionMode::Auto),
         ["--auto", "medium"]
     );
@@ -585,6 +593,139 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
     // exec-only, so a profile that sets either must fail fast rather than launch
     // with a silently ignored (and prompt-corrupting) flag. The registry-wide
     // `render_preset_characterization` snapshot pins that rejection.
+}
+
+#[test]
+fn notification_types_drive_asks_and_interrupts_through_step() {
+    let running = LifecycleState {
+        status: AgentStatus::Running,
+        phase: TurnPhase::Reasoning,
+        compacting: false,
+    };
+    for (kind, ask) in [
+        ("permission_prompt", AskKind::Permission),
+        ("elicitation_dialog", AskKind::Question),
+    ] {
+        let message = format!("Factory CLI {kind}");
+        let decoded = hook_output(
+            &DroidAdapter,
+            "Notification",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": "/tmp/droid.jsonl",
+                "notification_type": kind,
+                "message": message,
+            }),
+        );
+        assert_eq!(decoded.class(), AgentHookClass::AwaitingUser, "{kind}");
+        assert!(decoded.json_reply().is_none(), "neutral reply for {kind}");
+        let signal = decoded.lifecycle().unwrap().signal.clone();
+        assert_eq!(
+            signal,
+            LifecycleSignal::AwaitingInput {
+                kind: ask,
+                ask_id: None,
+                detail: Some(message.clone()),
+                native_key: None,
+            }
+        );
+        let waiting = step(Some(&running), None, None, &signal).next;
+        assert_eq!(waiting.status, AgentStatus::Waiting, "{kind}");
+
+        let answered = hook_signal(
+            &DroidAdapter,
+            "PostToolUse",
+            &json!({"session_id": "sess-1", "tool_name": "Execute"}),
+        );
+        assert_eq!(
+            step(Some(&waiting), None, None, &answered).next.status,
+            AgentStatus::Running,
+            "{kind}"
+        );
+    }
+
+    let interrupted = hook_signal(
+        &DroidAdapter,
+        "Notification",
+        &json!({"session_id": "sess-1", "notification_type": "idle_prompt"}),
+    );
+    assert_eq!(
+        interrupted,
+        LifecycleSignal::TurnInterrupted { turn_id: None }
+    );
+    let waiting = LifecycleState {
+        status: AgentStatus::Waiting,
+        ..running
+    };
+    for prior in [running, waiting] {
+        assert_eq!(
+            step(Some(&prior), None, None, &interrupted).next.status,
+            AgentStatus::Idle
+        );
+    }
+
+    for older in [
+        json!({"session_id": "sess-1", "message": "Droid needs your permission"}),
+        json!({"session_id": "sess-1", "notification_type": "auth_success"}),
+    ] {
+        let decoded = hook_output(&DroidAdapter, "Notification", &older);
+        assert_eq!(decoded.class(), AgentHookClass::Lifecycle);
+        assert!(decoded.lifecycle().is_none());
+    }
+}
+
+#[test]
+fn compaction_close_routes_to_the_compacted_session() {
+    let decoded = hook_output(
+        &DroidAdapter,
+        "SessionStart",
+        &json!({
+            "session_id": "sess-new",
+            "previous_session_id": "sess-old",
+            "transcript_path": "/tmp/sess-new.jsonl",
+            "source": "compact",
+        }),
+    );
+    let close = decoded.lifecycle().unwrap();
+    assert_eq!(close.agent_id.as_deref(), Some("sess-old"));
+    assert_eq!(
+        decoded.context_agent_id().map(AgentSessionId::as_str),
+        Some("sess-old")
+    );
+    assert_eq!(close.transcript_path, None);
+    assert_eq!(
+        close.signal,
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        }
+    );
+    let compacting = LifecycleState {
+        status: AgentStatus::Running,
+        phase: TurnPhase::Reasoning,
+        compacting: true,
+    };
+    assert!(
+        !step(Some(&compacting), None, None, &close.signal)
+            .next
+            .compacting
+    );
+
+    let resumed = hook_lifecycle(
+        &DroidAdapter,
+        "SessionStart",
+        &json!({
+            "session_id": "sess-new",
+            "previous_session_id": "sess-parent",
+            "transcript_path": "/tmp/sess-new.jsonl",
+            "source": "resume",
+        }),
+    );
+    assert_eq!(resumed.agent_id.as_deref(), Some("sess-new"));
+    assert_eq!(
+        resumed.transcript_path.as_deref(),
+        Some("/tmp/sess-new.jsonl")
+    );
 }
 
 #[test]

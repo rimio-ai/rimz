@@ -62,7 +62,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | OpenCode | ● | ● | ● | ● | ● | ● |
 | Antigravity | ● | ◐ | ◐ | ● | ◐ | ◐ |
 | Copilot | ● | ◐ | ◐ | ◐ | ● | ◐ |
-| Droid | ● | ◐ | ◐ | ✗ | ◐ | ✗ |
+| Droid | ● | ◐ | ◐ | ✗ | ● | ✗ |
 | Cursor | ● | ◐ | ◐ | ◐ | ◐ | ◐ |
 | Amp | ● | ◐ | ◐ | ◐ | ● | ✗ |
 | Kiro | ◐ | ◐ | ◐ | ✗ | ◐ | ✗ |
@@ -103,7 +103,8 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 ### Droid
 
-- Droid has no ask hook. RimZ raises Waiting from the transcript's active `AskUser` call, and you answer in the pane.
+- Permission and question prompts arrive as typed `Notification` hooks and reach `rimz asks`. The hook carries no request id or options, so you answer in the pane.
+- A spec-mode exit shares the tool confirmation and reads as a permission. Releases without a notification type fall back to the transcript's active `AskUser` call.
 - The locally priced session total reaches the card and live budgets. Provider dollars, historical spend, and quota are unavailable.
 
 ### Kiro
@@ -244,7 +245,7 @@ The wiring matrix is the mechanism under the six capabilities: eighteen integrat
 | OpenCode | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
 | Antigravity | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ◐ | ✗ | ✓ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
-| Droid | ✓ | ✗ | ✗ | ◐ | ✗ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
+| Droid | ✓ | ✓ | ◐ | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ◐ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Kiro | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
@@ -289,7 +290,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`; `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | `session_ended` | ◐ derived |
 | Antigravity | ◐ first `PreInvocation` + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker + transcript question | ◐ child `PreInvocation` + parent transcript | ◐ child `Stop` + parent transcript | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ◐ child `userPromptSubmitted` + parent transcript | ◐ child `agentStop` + parent transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
-| Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ transcript `AskUser` | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
+| Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `Notification` | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ◐ local pending `AskQuestion` or plan proposal | `subagentStart` | `subagentStop` | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Kiro | ◐ local store | ◐ `turn_start` | ◐ `turn_end` | ◐ tool records | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |

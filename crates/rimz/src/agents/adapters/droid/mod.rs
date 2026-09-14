@@ -19,7 +19,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use self::install::{MANAGED_SOURCE, droid_settings_path};
-use self::payloads::{parse_session_start, parse_user_prompt_submit};
+use self::payloads::{
+    DroidNotification, DroidNotificationType, parse_notification, parse_session_start,
+    parse_user_prompt_submit,
+};
 #[cfg(test)]
 use super::AgentHookClass;
 use super::definition::{
@@ -28,7 +31,7 @@ use super::definition::{
     ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
-use super::lifecycle::LifecycleSignal;
+use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
     AgentLifecycleObservation, AgentTokenUsage, FieldPatch, HookOutput, HookRouting,
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
@@ -59,8 +62,9 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[],
     },
     capabilities: Capabilities {
-        // Droid renders native permission prompts, but its hooks expose no
-        // structured prompt event RimZ can route or answer.
+        // Droid draws its own permission and question prompts; `Notification`
+        // announces them without an id or options, so the pane stays the
+        // answer surface.
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: false,
@@ -104,7 +108,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         max_turn_flag: None,
         compact_command: Some(super::CompactCommand {
             command: "/compact",
-            instruction: super::CompactInstruction::Unsupported,
+            instruction: super::CompactInstruction::Trailing,
         }),
         presets: super::PresetMatchers::EMPTY,
     },
@@ -114,18 +118,18 @@ const DROID_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     turn_lifecycle: ConcernCoverage::Wired {
         via: "SessionStart/UserPromptSubmit/Stop",
     },
-    permission: ConcernCoverage::Unsupported {
-        reason: "no PermissionRequest hook or structured Notification discriminator",
+    permission: ConcernCoverage::Wired {
+        via: "Notification:permission_prompt",
     },
-    plan_approval: ConcernCoverage::Unsupported {
-        reason: "no plan-approval hook; spec-mode exit is invisible",
+    plan_approval: ConcernCoverage::Partial {
+        via: "Notification:permission_prompt",
+        gap: "the spec-mode exit shares the tool confirmation and reads as a permission",
     },
-    user_question: ConcernCoverage::Partial {
-        via: "v2 transcript AskUser tool calls project a native waiting card",
-        gap: "there is no durable RimZ ask or out-of-band answer API",
+    user_question: ConcernCoverage::Wired {
+        via: "Notification:elicitation_dialog",
     },
     answer: ConcernCoverage::Unsupported {
-        reason: "native prompt choreography is not mapped",
+        reason: "Notification carries no request id or options; answer in the Droid pane",
     },
     compaction: ConcernCoverage::Wired {
         via: "PreCompact/SessionStart:compact",
@@ -141,7 +145,7 @@ const DROID_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     session_end: ConcernCoverage::Wired { via: "SessionEnd" },
     idle_notification: ConcernCoverage::Wired {
-        via: "Notification",
+        via: "Notification:idle_prompt",
     },
     context_usage: ConcernCoverage::Wired {
         via: "v2 session settings lastCallTokenUsage/tokenUsage plus exact configured/model capacity",
@@ -183,9 +187,8 @@ const DROID_USER_COVERAGE: UserCoverage = UserCoverage {
     account: CapabilityLevel::Unsupported {
         reason: "Droid publishes no readable login, plan, or quota",
     },
-    ask: CapabilityLevel::Partial {
-        shows: "a live question raises Waiting and routes you to the pane",
-        limit: "the question stays in Droid's own UI, so rimz asks stays empty",
+    ask: CapabilityLevel::Full {
+        note: "permission and question prompts reach rimz asks; answer in Droid's pane",
     },
     subagents: CapabilityLevel::Unsupported {
         reason: "Droid's subagent signal carries no child identity to nest",
@@ -203,9 +206,8 @@ const DROID_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     tool_used: HookCoverage::Native {
         event: "PostToolUse",
     },
-    awaiting_input: HookCoverage::Derived {
-        via: "v2 transcript AskUser tool call",
-        gap: "no hook or durable ask record",
+    awaiting_input: HookCoverage::Native {
+        event: "Notification",
     },
     subagent_started: HookCoverage::Absent {
         reason: "no child identity",
@@ -233,7 +235,12 @@ const DROID_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle("SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("UserPromptSubmit", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("PostToolUse", r#"{"session_id":"sess-1"}"#).progress(),
-    HookEventSpec::lifecycle("Notification", r#"{"session_id":"sess-1"}"#),
+    HookEventSpec::blocking(
+        "Notification",
+        r#"{"session_id":"sess-1","notification_type":"permission_prompt"}"#,
+        AskKind::Permission,
+    )
+    .with_lifecycle_fallback(),
     HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("PreCompact", r#"{"session_id":"sess-1"}"#),
     HookEventSpec::lifecycle("SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
@@ -252,12 +259,26 @@ impl crate::agents::capabilities::CoreCapability for DroidAdapter {
     #[cfg(test)]
     fn conformance(&self) -> super::AdapterConformance {
         let mut samples = super::hook_types::catalog_classification_corpus(DROID_HOOKS);
-        samples.push(super::ClassificationSample::new(
-            "SessionStart",
-            serde_json::json!({"session_id": "sess-1", "source": "compact"}),
-            AgentHookClass::Lifecycle,
-            None,
-        ));
+        samples.extend([
+            super::ClassificationSample::new(
+                "SessionStart",
+                serde_json::json!({"session_id": "sess-1", "source": "compact"}),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            super::ClassificationSample::new(
+                "Notification",
+                serde_json::json!({"session_id": "sess-1", "notification_type": "elicitation_dialog"}),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::Question),
+            ),
+            super::ClassificationSample::new(
+                "Notification",
+                serde_json::json!({"session_id": "sess-1", "notification_type": "idle_prompt"}),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+        ]);
         super::AdapterConformance {
             classification: samples,
             spend: Some(super::SpendFixture {
@@ -309,13 +330,30 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
-        let mut decoded = decode_catalog_hook(DROID_HOOKS, event_name, None);
-        let agent_id = optional_payload_string(payload, &["session_id"]);
+        let notification = (event_name == "Notification").then(|| parse_notification(payload));
+        let mut decoded = decode_catalog_hook(
+            DROID_HOOKS,
+            event_name,
+            notification.as_ref().and_then(DroidNotification::ask_kind),
+        );
+        let session_start = parse_session_start(payload);
+        // A compaction starts a replacement session; its close belongs to the
+        // session whose `PreCompact` opened the bracket.
+        let compacted_id = (event_name == "SessionStart")
+            .then(|| session_start.compacted_session_id().map(ToOwned::to_owned))
+            .flatten();
+        let agent_id = compacted_id
+            .clone()
+            .or_else(|| optional_payload_string(payload, &["session_id"]));
         decoded.set_routing(HookRouting::session(
             agent_id.as_deref().map(AgentSessionId::from),
         ));
         let signal = match event_name {
-            "SessionStart" => parse_session_start(payload).source.session_start_signal(),
+            "Notification" => match notification.as_ref().and_then(notification_signal) {
+                Some(signal) => signal,
+                None => return Ok(decoded),
+            },
+            "SessionStart" => session_start.source.session_start_signal(),
             "UserPromptSubmit" => LifecycleSignal::TurnStarted,
             "PostToolUse" => LifecycleSignal::ToolUsed {
                 mutates: self.spec().tool_mutates(payload),
@@ -340,7 +378,11 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
             observation.task = sanitize_user_prompt(prompt.as_deref());
             observation.prompt = sanitize_user_prompt(prompt.as_deref());
         }
-        observation.transcript_path = optional_payload_string(payload, &["transcript_path"]);
+        // The replacement session's transcript must not repoint the compacted row.
+        observation.transcript_path = compacted_id
+            .is_none()
+            .then(|| optional_payload_string(payload, &["transcript_path"]))
+            .flatten();
         if let Some(path) = observation.transcript_path.as_deref() {
             let (model, effort) = transcript::identity(Path::new(path));
             observation.launch.model = model;
@@ -348,7 +390,7 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
         }
         if matches!(observation.signal, LifecycleSignal::Registered)
             && matches!(
-                parse_session_start(payload).source,
+                session_start.source,
                 SessionSource::Startup | SessionSource::Clear
             )
         {
@@ -363,6 +405,18 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
         decoded.attach_lifecycle(observation);
         Ok(decoded)
     }
+}
+
+fn notification_signal(notification: &DroidNotification) -> Option<LifecycleSignal> {
+    if notification.notification_type == Some(DroidNotificationType::IdlePrompt) {
+        return Some(LifecycleSignal::TurnInterrupted { turn_id: None });
+    }
+    Some(LifecycleSignal::AwaitingInput {
+        kind: notification.ask_kind()?,
+        ask_id: None,
+        detail: notification.message.clone(),
+        native_key: None,
+    })
 }
 
 impl crate::agents::capabilities::InstallationCapability for DroidAdapter {
