@@ -158,7 +158,7 @@ A rising resident set is usually retained state or a freed arena, not a leak. Cl
 
 A wall-clock profile proves a fix once; a deterministic guard keeps it fixed. Pin subprocess counts with `proc::testkit::spawn_count` and the `git-trace` shim tests, syscall and size budgets with the fsync and byte counter gates, cache behavior with parse-cache and TTL-stamp tests, and wall-clock and allocation medians with `cargo xtask perf` ([performance.md](./performance.md#guarding-it)).
 
-Conclusions flow back into [performance.md](./performance.md): a fixed cost updates the cost map, a removed mistake joins the lessons, and a real deferred win gets ranked in deferred work.
+Conclusions flow back into [performance.md](./performance.md): a fixed cost updates the cost map, a mistake found joins the [anti-patterns](./performance.md#anti-patterns), and a real deferred win gets ranked in [deferred and rejected](./performance.md#deferred-and-rejected).
 
 ## The release baseline
 
@@ -166,4 +166,4 @@ Reproduce this with the steps above and compare before each release. Machine-spe
 
 **July 20, 2026.** Live Zellij room on `xlab-term`: 12 agents across 12 panes, 15 worktree roots, 13 groups, 14 renderers in one workspace. Scheduler-truth CPU over a 12-second window put the elected producer at 0.043 core and a representative consumer at 0.008 core, well inside the `<0.3 core` busy target for the whole room. The producer/consumer ratio is the number that matters: consumers stay near zero because they fold published caches rather than reading the world.
 
-Earlier dated captures are in git history. Their conclusions already live in [performance.md](./performance.md): every optimization they produced is described under [what's optimized](./performance.md#whats-optimized), and every mistake they found is under [lessons from removed anti-patterns](./performance.md#lessons-from-removed-anti-patterns).
+Earlier dated captures are in git history. Their conclusions already live in [performance.md](./performance.md): every optimization they produced is described under [what's optimized](./performance.md#whats-optimized), and every mistake they found is under [anti-patterns](./performance.md#anti-patterns).
