@@ -33,7 +33,7 @@ These flags work on every command and in any position after `rimz`.
 | `-h`, `--help` | Print the flags and defaults of the command it follows. |
 | `-V`, `--version` | Print the RimZ version (top level only). |
 
-Bare `rimz`, `start`, and `attach` also take launch options (`--attach`, `--no-attach`, `--no-resume`, `--refresh-ms`), covered in [Getting started](./cli/getting-started.md).
+Bare `rimz`, `start`, and `attach` also take launch options (`--attach`, `--no-attach` or `--print`, `--no-resume`, `--refresh-ms`), and `start` takes `--account`, covered in [Start the room](./cli/getting-started.md#start-the-room).
 
 ## Conventions
 
