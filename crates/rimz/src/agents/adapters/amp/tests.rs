@@ -287,7 +287,7 @@ fn plugin_source_pins_active_thread_observation_wire_and_pid() {
             .contains("_rimz_managed")
     );
     assert!(PLUGIN_SOURCE.contains("\"hooks\", \"feed\", \"--source\", \"amp\""));
-    assert!(PLUGIN_SOURCE.contains("RIMZ_AGENT_PID"));
+    assert!(PLUGIN_SOURCE.contains("RIMZ_AGENT_PID: String(process.ppid)"));
     assert!(PLUGIN_SOURCE.contains("amp.activeThread.current"));
     assert!(PLUGIN_SOURCE.contains("awaiting-approval"));
     assert!(PLUGIN_SOURCE.contains("filesModifiedByToolCall"));

@@ -59,7 +59,9 @@ export default function (amp: PluginAPI) {
         cwd: payload.cwd,
         env: {
           ...process.env,
-          RIMZ_AGENT_PID: String(process.pid),
+          // Amp runs plugins in a child runtime process; its parent is the
+          // Amp CLI that owns the pane.
+          RIMZ_AGENT_PID: String(process.ppid),
         },
         stdio: ["pipe", "ignore", "ignore"],
       });
@@ -135,13 +137,15 @@ export default function (amp: PluginAPI) {
     void ctx.thread
       .agent()
       .then(({ definition }) => {
-        gauges.set(threadID, {
-          model:
-            definition.kind === "builtin-agent"
-              ? definition.mode
-              : definition.model,
-          effort: definition.reasoningEffort,
-        });
+        gauges.set(
+          threadID,
+          definition.kind === "builtin-agent"
+            ? { model: definition.mode }
+            : {
+                model: definition.model,
+                effort: definition.reasoningEffort,
+              },
+        );
       })
       .catch(() => {
         gauges.delete(threadID);
