@@ -134,7 +134,9 @@ pub(super) fn probe() -> AccountProbe {
     let path = super::paths::auth_path();
     probe_at(
         &path,
-        std::env::var_os("XAI_API_KEY").is_some_and(|value| !value.is_empty()),
+        ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]
+            .into_iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty())),
         Timestamp::now(),
     )
 }

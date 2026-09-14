@@ -31,7 +31,9 @@ pub(super) fn sessions_root() -> PathBuf {
 }
 
 pub(super) fn auth_path() -> PathBuf {
-    home().join("auth.json")
+    std::env::var_os("GROK_AUTH_PATH")
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| home().join("auth.json"), PathBuf::from)
 }
 
 pub(super) fn hooks_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
