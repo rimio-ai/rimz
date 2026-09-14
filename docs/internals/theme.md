@@ -171,7 +171,7 @@ In the sidebar, `Component` in `render/theme/component.rs` is the equivalent for
 | --- | --- |
 | `reset_countdown` | two-unit reset countdown: `5h00m`, `1d01h` |
 | `window_label`, `duration_label` | rate-limit window labels: the scope label if any, else `5h`, `7d`, `90m` |
-| `dollars2`, `dollars_cap` | thousands-grouped dollars; `dollars_cap` drops `.00` on whole amounts |
+| `dollars2`, `dollars_cap` | thousands-grouped dollars; `dollars_cap`, sidebar-only, drops `.00` on whole amounts |
 | `group_thousands` | `12,345` |
 | `compact_count` | whole-unit token counts: `999`, `12k`, `3m` |
 | `fmt_bytes` | 1024-based sizes: `512 B`, `1.5 MB` |
