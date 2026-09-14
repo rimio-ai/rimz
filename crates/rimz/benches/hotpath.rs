@@ -427,13 +427,15 @@ fn fuse_owned_no_overlay(bencher: Bencher) {
 }
 
 /// One appended frame folded onto a warm cursor, at an empty and at a
-/// production-sized (`HISTORY_CARRYOVER`) rotation carryover.
+/// production-sized (`HISTORY_CARRYOVER`) rotation carryover. The fold benches
+/// return the fixture so divan drops its tempdir and cursor outside the timing.
 #[divan::bench(args = [0, HISTORY_CARRYOVER], sample_count = 20, sample_size = 1, skip_ext_time)]
 fn rollup_fold_warm(bencher: Bencher, history_carryover: usize) {
     bencher
         .with_inputs(|| fold_fixture(history_carryover, true))
         .bench_local_values(|mut fixture| {
             divan::black_box(fixture.cursor.fold(&fixture.paths).expect("warm fold"));
+            fixture
         });
 }
 
@@ -444,6 +446,7 @@ fn rollup_fold_unchanged(bencher: Bencher, history_carryover: usize) {
         .with_inputs(|| fold_fixture(history_carryover, false))
         .bench_local_values(|mut fixture| {
             divan::black_box(fixture.cursor.fold(&fixture.paths).expect("unchanged fold"));
+            fixture
         });
 }
 
