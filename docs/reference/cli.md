@@ -80,6 +80,7 @@ Commands that report an outcome add their own codes, so a script branches withou
 | --- | --- | --- |
 | `agents -p`, `agents wait`, `subagents wait`, `message --wait` | The run's status: `0` completed, `1` failed, `123` verify failed, `124` timed out, `125` budget exceeded, `130` canceled | [Supervised runs](./cli/agents.md#supervised-runs--p) |
 | `subagents <PROFILE>`, `subagents fanout` | `125` a room or account cap, or a Qwen quota window, refused the launch; with `--wait`, the run's status | [Launch one child](./cli/subagents.md#launch-one-child) |
+| `loop fire` | An `--agent` action's run status as above; `130` when Ctrl-C interrupts the check; `0` when a gate or check skips the action | [Fire and stop a run](./cli/loop.md#fire-and-stop-a-run) |
 | `answer` | `2` the target is not asking, its ask is no longer current, or its pane cannot be reached; `3` the answer is invalid for the ask or the agent does not support structured answers; `4` the agent did not confirm before the deadline | [Answer an ask](./cli/asks.md#answer-an-ask) |
 
 ### Durations

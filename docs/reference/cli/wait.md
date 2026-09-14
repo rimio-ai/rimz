@@ -133,7 +133,7 @@ A message for an empty output file leaves the `output (...)` segment out, so a s
 
 The watcher writes combined stdout and stderr to `~/.local/state/rimz/workspaces/<workspace-id>/tmp/rimz-waits/<name>.output` as they arrive, along with its own startup errors. The message shows `/tmp/rimz-waits/<name>.output` when the machine's `agents.isolation` is sandbox and the host path otherwise; an agent launched with a different per-launch isolation can see the form that does not match its own view.
 
-Closing the room removes the file. In a long-lived room, `rimz gc` removes it once the wait is gone, no watcher runs, and the file has not been written for 14 days. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#fire-stop-list-show-logs-rename).
+Closing the room removes the file. In a long-lived room, `rimz gc` removes it once the wait is gone, no watcher runs, and the file has not been written for 14 days. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#loop-logs).
 
 ## While a wait is pending
 
