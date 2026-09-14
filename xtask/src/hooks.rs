@@ -7,7 +7,8 @@ use anyhow::Result;
 use crate::runner::run;
 
 /// Activate the repo's tracked git hooks by setting the local `core.hooksPath`
-/// to `.githooks/`, so the committed `pre-commit` fmt gate runs on every commit.
+/// to `.githooks/`, so the committed `pre-commit` gate (fmt, invariants,
+/// docs-links) runs on every commit.
 /// Idempotent — re-running rewrites the same value. The hook script routes git's
 /// call back through `cargo xtask`, so the gate definition stays single-sourced.
 pub(crate) fn install(root: &Path) -> Result<()> {

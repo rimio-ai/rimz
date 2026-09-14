@@ -1,11 +1,30 @@
 #!/bin/sh
-# RimZ pre-commit gate: block a commit that would fail the CI `fmt` gate, so
-# unformatted code never reaches the branch. The check itself lives in xtask
-# (`cargo xtask fmt` -> `cargo fmt --all -- --check`); this shim only routes
-# git's hook call there, keeping one source of truth. Install with
-# `cargo xtask hooks`; bypass a single commit with `git commit --no-verify`.
+# RimZ pre-commit gate: block a commit that would fail a fast CI gate, so
+# unformatted code or a broken architectural boundary never reaches the branch.
+# The checks themselves live in xtask; this shim only routes git's hook call
+# there, keeping one source of truth. Slow gates (check, lint, test) stay with
+# `cargo xtask gate` and CI. Install with `cargo xtask hooks`; bypass a single
+# commit with `git commit --no-verify`.
+
+# Formatting: on failure, apply `cargo fmt --all` to the working tree but do not
+# re-stage it, so a partially staged file never gains unstaged hunks silently.
 if ! cargo xtask fmt; then
+	cargo fmt --all
 	echo >&2
-	echo "pre-commit: formatting check failed — run \`cargo fmt --all\`, re-stage, and commit again." >&2
+	echo "pre-commit: code was not formatted — ran \`cargo fmt --all\`; review the diff, re-stage, and commit again." >&2
+	exit 1
+fi
+
+# Architectural invariants (a load-bearing boundary; greps Rust and Markdown).
+if ! cargo xtask invariants; then
+	echo >&2
+	echo "pre-commit: \`cargo xtask invariants\` failed — fix the boundary violation above and commit again." >&2
+	exit 1
+fi
+
+# Documentation links and #anchors.
+if ! cargo xtask docs-links; then
+	echo >&2
+	echo "pre-commit: \`cargo xtask docs-links\` failed — fix the broken link above and commit again." >&2
 	exit 1
 fi
