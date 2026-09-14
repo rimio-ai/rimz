@@ -124,7 +124,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
     for (status, expected) in [
         ("done", AgentStatus::Success),
         ("error", AgentStatus::Failed),
-        ("cancelled", AgentStatus::Failed),
+        ("cancelled", AgentStatus::Idle),
     ] {
         let ended = hook_lifecycle(
             &AmpAdapter,
@@ -136,6 +136,15 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
             expected
         );
     }
+    let cancelled = hook_lifecycle(
+        &AmpAdapter,
+        "agent_end",
+        &json!({ "session_id": "T-abc123", "status": "cancelled" }),
+    );
+    assert_eq!(
+        cancelled.signal,
+        LifecycleSignal::TurnInterrupted { turn_id: None }
+    );
 }
 
 #[test]
