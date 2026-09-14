@@ -606,6 +606,102 @@ fn subagent_launch_identity_is_not_inherited_from_parent_env() {
 }
 
 #[test]
+fn grok_child_session_hooks_resolve_children_under_the_spawning_parent() {
+    let (_dir, store) = hooks_test_store();
+    let grok = rimz::agents::definition_by_kind("grok").unwrap();
+    let feed = |event: &str, payload: serde_json::Value| feed_pi(&store, grok, event, payload);
+    let agent = |agent_id: &str| {
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|state| state.agent_id == agent_id)
+            .unwrap()
+    };
+    let root = |extra: serde_json::Value| {
+        let mut payload = serde_json::json!({"sessionId": "grok-root", "cwd": "/tmp/hooks-test"});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        payload
+    };
+    let child = |child_id: &str, extra: serde_json::Value| {
+        let mut payload = serde_json::json!({
+            "sessionId": child_id,
+            "cwd": "/tmp/hooks-test",
+            "subagentType": "explore",
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        payload
+    };
+
+    feed("session_start", root(serde_json::json!({"source": "new"})));
+    feed(
+        "user_prompt_submit",
+        root(serde_json::json!({"prompt": "go"})),
+    );
+    for child_id in ["grok-child-ok", "grok-child-failed"] {
+        feed(
+            "subagent_start",
+            root(serde_json::json!({"subagentId": child_id, "subagentType": "explore"})),
+        );
+        feed(
+            "user_prompt_submit",
+            child(child_id, serde_json::json!({"prompt": "map it"})),
+        );
+    }
+    feed(
+        "subagent_stop",
+        child(
+            "grok-child-ok",
+            serde_json::json!({"subagentId": "grok-child-ok", "phase": "gate"}),
+        ),
+    );
+    feed(
+        "session_end",
+        child("grok-child-ok", serde_json::json!({"reason": "shutdown"})),
+    );
+    feed(
+        "stop_failure",
+        child(
+            "grok-child-failed",
+            serde_json::json!({"error": "server_error"}),
+        ),
+    );
+
+    let ok = agent("grok-child-ok");
+    assert_eq!(ok.parent_agent_id.as_deref(), Some("grok-root"));
+    assert_eq!(ok.status, rimz::agents::AgentStatus::Success);
+    let failed = agent("grok-child-failed");
+    assert_eq!(failed.parent_agent_id.as_deref(), Some("grok-root"));
+    assert_eq!(failed.status, rimz::agents::AgentStatus::Failed);
+    assert_eq!(
+        agent("grok-root").status,
+        rimz::agents::AgentStatus::Running
+    );
+
+    feed(
+        "stop_cancelled",
+        root(serde_json::json!({"reason": "user_interrupt", "cancelledBy": "user"})),
+    );
+    assert_eq!(agent("grok-root").status, rimz::agents::AgentStatus::Idle);
+    feed(
+        "user_prompt_submit",
+        root(serde_json::json!({"prompt": "again"})),
+    );
+    feed(
+        "stop_failure",
+        root(serde_json::json!({"error": "invalid_request", "errorDetails": "HTTP 400"})),
+    );
+    assert_eq!(agent("grok-root").status, rimz::agents::AgentStatus::Failed);
+}
+
+#[test]
 fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() {
     let (_dir, store) = hooks_test_store();
     let provider = Box::leak(Box::new(CorrelationTestAdapter::default()));

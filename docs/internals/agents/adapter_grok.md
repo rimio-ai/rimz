@@ -12,11 +12,15 @@ Grok is an eagerly registered stock-TUI adapter. RimZ launches `grok`, installs 
 | `UserPromptSubmit` | start a turn with the sanitized optional prompt |
 | `PostToolUse` / `PostToolUseFailure` | successful descriptor-classified tool activity or failed non-editing activity plus error detail |
 | `Notification` | exact permission, plan, diff-review, or question wait |
-| `Stop` | clean end, interruption, or errored end from `reason` |
-| `StopFailure` | display-only error detail; it does not close a second turn |
-| `SubagentStart` / `SubagentStop` | child bracket keyed by `subagentId`, parented by `sessionId` |
+| `Stop` | clean end for `reason: end_turn`; older releases' `cancelled` and `error` reasons still interrupt or fail the turn, and the session-close `channel_closed`/`shutdown` stops are ignored |
+| `StopFailure` | errored end with `errorDetails` (or the `error` kind) as the label; `rate_limit` pauses on rate limit, `server_error` pauses as overloaded, `authentication_failed`, `invalid_request`, and `max_output_tokens` fail |
+| `StopCancelled` | root session: interruption back to idle; inside a child (`subagentType` present): child end, errored unless `cancelledBy` is `user` |
+| `SubagentStart` | child bracket keyed by `subagentId`, parented by `sessionId` |
+| `SubagentStop` | fired by the child itself (`sessionId` equals `subagentId`, phase `gate`): a completed child turn that shared correlation resolves under the spawning parent; the parent-fired shape of older releases still closes the child from `exitCode` |
 | `PreCompact` / `PostCompact` | compaction bracket with manual/automatic source |
-| `SessionEnd` | end the session |
+| `SessionEnd` | end the session; a child's own `SessionEnd` is ignored because its turn report already resolved it |
+
+Grok 1.0 fires exactly one turn report per turn: `Stop` for a clean end, `StopFailure` for an API error, or `StopCancelled` for a cancel, turn cap, or stalled turn. A child session fires its own hooks with its own `sessionId` and a `subagentType` field, never `Stop`, and no envelope names the parent: shared subagent correlation joins the child through the `SubagentStart` record the parent fired. Supervised final messages prefer the report's `lastAssistantMessage` and fall back to the transcript tail for `Stop`.
 
 Grok uses three naming conventions on one surface: hook config keys are PascalCase, the stdin field is `hookEventName`, and the field's values are snake_case. The classifier accepts snake_case, camelCase, and PascalCase, then returns the canonical PascalCase name before shared lifecycle dispatch.
 
@@ -26,9 +30,9 @@ Notification classification is exact: `permission_prompt` plus `Tool permission 
 
 ## Launch and resume
 
-Interactive launches remain `grok [flags]`. A supervised prompt alone adds `-p <prompt> --output-format streaming-json`; the streaming flags never reach an interactive TUI. Resume is `--resume <id>`, fork is `--resume <id> --fork-session`, model is `--model`, reasoning effort is `--reasoning-effort`, the headless turn cap is `--max-turns`, and manual compaction sends `/compact`.
+Interactive launches remain `grok [flags]`. A supervised prompt alone adds `-p <prompt> --output-format streaming-json`; the streaming flags never reach an interactive TUI. Resume is `--resume <id>`, fork is `--resume <id> --fork-session`, model is `--model`, reasoning effort is `--reasoning-effort`, the headless turn cap is `--max-turns`, manual compaction sends `/compact` with any guidance as trailing text, and launch reminders ride `--rules` (alias `--append-system-prompt`), merged into a user-supplied occurrence so Grok appends one `<human_rules>` block at session creation.
 
-Ask maps to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`. Plan adds no argv because Grok exposes interactive `/plan` but no launch flag that enforces a plan-only posture.
+Ask maps to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`. Plan adds no argv because Grok exposes interactive `/plan` but no launch flag that enforces a plan-only posture: 1.0.30 lists `--permission-mode plan`, yet a session launched with it does not start in plan mode.
 
 ## Context and transcript
 
@@ -46,7 +50,7 @@ Exact `Notification` classification remains authoritative when Grok emits it: pe
 
 ## Account and balance
 
-The account probe reads `${GROK_HOME:-~/.grok}/auth.json` as non-secret metadata. It never retains `key` or `refresh_token`; deserialization records only whether each exists. The freshest valid session login wins over an API-key record, with stable scope order as the final tie-breaker. `XAI_API_KEY` contributes presence only when the file has no usable record. Session/OIDC login is metered, API-key login is unmetered, and malformed auth is unavailable.
+The account probe reads `$GROK_AUTH_PATH`, else `${GROK_HOME:-~/.grok}/auth.json`, as non-secret metadata. It never retains `key` or `refresh_token`; deserialization records only whether each exists. The freshest valid session login wins over an API-key record, with stable scope order as the final tie-breaker. `XAI_API_KEY` or the legacy `GROK_CODE_XAI_API_KEY` contributes presence only when the file has no usable record. Session/OIDC login is metered, API-key login is unmetered, and malformed auth is unavailable.
 
 The adapter makes no network request and reports no billing or quota window.
 
@@ -58,10 +62,16 @@ Native dollars take precedence on active-branch `_x.ai/session/update` `turn_com
 
 Ordinary refreshes resume at the file byte cursor. A rewind in the suffix triggers a cold branch fold with `replace_entries = true`, removing abandoned prompts from the spending cache. The stable dedup identity is the Grok session, prompt, and attributed model.
 
+A child session keeps its own top-level `updates.jsonl`, but the parent's `turn_completed` usage already folds the child in. Spend therefore skips any transcript whose `summary.json` `session_kind` starts with `subagent`; a transcript without that field is priced as before.
+
 ## Known gaps
 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 
 - **No quota or billing window.** The adapter makes no network request, so the provider block carries spend without budget bars.
 - **Realtime cost is completed-turn only.** Native or locally estimated dollars land when `turn_completed` writes usage, never mid-turn.
+- **Child usage that lands after the parent's prompt closed** reaches only Grok's session ledger, never a parent `turn_completed`, so fleet spend undercounts it.
+- **Cache writes are folded into fresh input.** `inputTokens` also includes `cacheCreationTokens`; the Responses backend reports that bucket as zero and per-model rows omit it, so RimZ keeps the cache-read split only.
+- **A late `StopCancelled`** that lands after the next prompt already started can idle the new turn until its next tool event; the report carries no turn identity RimZ correlates.
+- **Plan launches and `--no-subagents`** stay unwired: plan mode is not enforced by the launch flag, and Grok honours `--no-subagents` only in the TUI, not headless runs.
 - **Background parking, remote control, and ACP structured answers** have no native signal. Human answers stay in Grok's pane.
