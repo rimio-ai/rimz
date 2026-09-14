@@ -1,24 +1,40 @@
 # `rimz events`
 
-`rimz events` is the event seam in both directions. `follow` streams each durable agent lifecycle transition and each emitted signal as one JSON object per line, for harnesses that react to agent state without scraping panes or sidebar output. `emit` puts a named signal into the same durable log and fires the tasks subscribed to it.
+`rimz events` reads and writes the workspace's durable event log. `follow` prints each agent lifecycle transition and each signal as one JSON object per line, so a script can react to agent state without reading panes. `emit` appends a named signal of your own and fires the loop tasks subscribed to it.
 
-## Follow lifecycle transitions
+| Command | What it does |
+| --- | --- |
+| `rimz events follow` | Stream lifecycle and signal lines as JSON Lines. |
+| `rimz events emit <NAME>` | Append one signal and fire its subscribers. |
+
+Both take the [global flags](../cli.md#global-flags); `--root` picks the workspace whose log they use.
+
+## Follow the event stream
 
 ```sh
 rimz events follow
-rimz events follow --replay
-rimz --root /path/to/project events follow --json
+rimz events follow --replay | jq 'select(.event == "signal")'
 ```
 
-`follow` starts at the current live edge and waits for new lifecycle events. `--replay` first reads the current active event-log generation from its beginning, then follows new events. Archived generations remain outside replay scope; a follower that is already running drains a rotation's archived tail before it continues on the new active log.
+`follow` starts at the live edge and prints only what is appended after it starts. `--replay` first prints the current log generation from its beginning, then keeps following. The log rotates into an archive once it reaches 64 MiB, or when you run [`rimz workspace rotate-events`](./maintenance.md#workspace-store-tools), and archived generations are never replayed. A follower that is already running when the log rotates reads the rest of the old generation before it moves to the new one, so it misses nothing.
 
-JSON Lines is the command's only output format. `--json` is accepted for consistency with other scripting commands and is implied. Each line is flushed as it is emitted. Logs and archive-gap warnings use stderr, and a downstream reader closing the pipe ends the command successfully.
+| Flag | Effect |
+| --- | --- |
+| `--replay` | Print the current log generation from its first record before following. |
+| `--json` | Accepted and ignored: JSON Lines is the only output. |
 
-The read-only follower lives in [`store::follow`](../../../crates/rimz/src/store/follow.rs) and polls the durable log every 250 ms by default. Set `RIMZ_EVENTS_POLL_MS` to a positive integer number of milliseconds to tune that interval.
+The stream follows these rules:
 
-## Lifecycle event schema
+- stdout carries one JSON object per line, flushed as each line is written.
+- stderr carries warnings, prefixed `rimz: warning:`, when an archived generation is missing or disappears before it is read, or the log generation moves backward. The stream continues after each warning.
+- Ctrl-C, `SIGTERM`, or a reader closing the pipe ends the command with exit code 0. A log that cannot be read ends it with exit code 1.
+- The follower checks the log every 250 ms. Set `RIMZ_EVENTS_POLL_MS` to a positive integer to change the interval; any other value is ignored and the default applies.
 
-Every lifecycle line has this shape:
+Each line's `event` field says which shape it has: `lifecycle` or `signal`. The log's other records (messages, launches, attaches) are not printed. How the follower folds the log into lines is in [publishing transitions](../../internals/agents/model.md#publishing-transitions).
+
+## Lifecycle lines
+
+A lifecycle line is one transition of one agent or provider-native subagent:
 
 ```json
 {"event":"lifecycle","v":1,"event_id":"evt_…","at":"2026-06-01T12:00:00Z","workspace_id":"ws_…","kind":"claude","agent_id":"session-1","agent_name":"coder","signal":{"signal":"turn_ended","errored":false,"parked_on_background":false},"prior_status":"running","status":"success","phase":"idle","transition":{"kind":"normal"},"compaction_closed":false,"waiting_cleared":false}
@@ -26,24 +42,54 @@ Every lifecycle line has this shape:
 
 | Field | Meaning |
 | --- | --- |
-| `event` | Line class: `lifecycle` here, `signal` for an emitted signal. |
-| `v` | Lifecycle envelope schema version. A breaking wire change increments this value. |
-| `event_id` | Durable event-log record identity. |
-| `at` | Event timestamp in RFC 3339 form. |
-| `workspace_id` | Workspace whose event log owns the record. |
-| `kind` | Agent integration kind, such as `claude` or `codex`. |
-| `agent_id` | Provider session identity for the root agent or subagent. |
-| `agent_name` | RimZ card name when the observation carries one; omitted otherwise. |
-| `parent_agent_id` | Root session identity for a subagent event; omitted for root agents. |
-| `signal` | The complete [`LifecycleSignal`](../../internals/agents/model.md#the-state-machine) object, including variant-specific fields. |
-| `prior_status` | Raw lifecycle status immediately before this signal; omitted when no prior state exists in the followed generation. |
-| `status` | Raw lifecycle status after the transition. |
+| `event` | `lifecycle`. |
+| `v` | Schema version of the lifecycle line, currently `1`. A breaking change to the line increments it. |
+| `event_id` | Identity of the durable log record. |
+| `at` | Record timestamp, RFC 3339. |
+| `workspace_id` | Workspace whose log holds the record. |
+| `kind` | Agent kind, such as `claude` or `codex`. |
+| `agent_id` | Provider session id of the agent or subagent. |
+| `agent_name` | The agent's handle without `@`, when the record carries one; omitted otherwise. |
+| `parent_agent_id` | Session id of the root agent, on a subagent's line; omitted for a root agent. |
+| `signal` | The lifecycle signal the agent reported, tagged by its `signal` field, with that signal's own fields. The signals are listed in [the agent model](../../internals/agents/model.md#the-state-machine). |
+| `prior_status` | Status before this transition; omitted when the follower has no earlier state for the agent. At the live edge that state comes from the workspace's current rollup; under `--replay` it builds up from the replayed records, so an agent's first replayed line has none. |
+| `status` | Status after the transition, as the lifecycle records it (for example `running`, `waiting`, `success`). |
 | `phase` | Turn phase after the transition: `idle`, `reasoning`, `acting`, or `parked`. |
-| `transition` | Classification object: `{"kind":"normal"}`, `{"kind":"reconciled","from":"…","reason":"…"}`, or `{"kind":"ignored","reason":"…"}`. |
-| `compaction_closed` | Whether this signal closed an open compaction bracket. |
-| `waiting_cleared` | Whether this signal durably moved the agent off `waiting`. |
+| `transition` | How the state machine classified the signal: `{"kind":"normal"}`, `{"kind":"reconciled","from":"…","reason":"…"}`, or `{"kind":"ignored","reason":"…"}`. |
+| `compaction_closed` | `true` when this signal closed an open context compaction. |
+| `waiting_cleared` | `true` when this signal moved the agent off `waiting`. |
 
-A malformed lifecycle record without an agent identity remains in the audit log but cannot form this strongly typed envelope, so the follower skips it just as the lifecycle rollup quarantines it. Records that are neither `agent.lifecycle` nor `signal.emit` are not projected at all.
+A lifecycle record with no agent session id prints no line.
+
+## Signal lines
+
+A signal line is one signal appended to the log, by `emit` or by RimZ itself:
+
+```console
+$ rimz events follow --replay
+{"event":"signal","v":1,"event_id":"evt_01a06d7d112171d0bdaceff9e4a3c6aa","at":"2026-09-04T17:35:08.065761436Z","workspace_id":"ws_f89e49906df0621ad2765112","name":"deploy.finished","payload":{"env":"prod","version":"1.4.2"},"source":"cli"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `event` | `signal`. |
+| `v` | Schema version of the signal line, currently `1`. |
+| `event_id` | Identity of the durable log record; `emit` prints the same id. |
+| `at` | Record timestamp, RFC 3339. |
+| `workspace_id` | Workspace whose log holds the record. |
+| `name` | Signal name, such as `deploy.finished` or `ci.failed`. |
+| `payload` | The signal's top-level JSON object; `{}` when it has none. |
+| `source` | Who appended it; see the next table. |
+
+| `source` | Appended by | Names |
+| --- | --- | --- |
+| `cli` | `rimz events emit` | Any valid name outside the reserved families. |
+| `forge` | The room's sidebar, when a worktree branch's CI or pull request changes state | `ci.passed`, `ci.failed`, `pr.merged`, `pr.closed` |
+| `lifecycle` | The agent lifecycle hook, when a team member's transition changes its cohort | `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
+| `team` | A team stage flip, and the re-wake of the stage owner when it registers | `team.stage` |
+| `watch` | The watcher of a `rimz wait -- <command>`, at a check-in and when the command exits | `wait.<task-name>` |
+
+Two kinds of signal fire subscribers but print no signal line. An `agent.*` signal is derived from a lifecycle record, and that record's lifecycle line is its durable trace. A `wait.<task-name>` delivery that RimZ sends because the watcher itself died is not written to the log. A watched command's exit code travels only in the delivered message, never in the signal line's payload.
 
 ## Emit a signal
 
@@ -52,7 +98,7 @@ rimz events emit deploy.finished
 rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
 ```
 
-`emit` appends one durable signal record, then fires every loop task in this workspace whose `--signal` subscription matches, in the emitting process:
+`emit` appends one signal record with source `cli`, then fires every loop task subscribed to it in this workspace, and prints the record id, the count of tasks it fired, and one indented line per task:
 
 ```console
 $ rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
@@ -60,38 +106,43 @@ emitted deploy.finished (evt_01a06d7d112171d0bdaceff9e4a3c6aa) · fired 1 tasks
   wait-noble-lane
 ```
 
-A name is lowercase dot-separated words, at most 64 bytes, each segment starting with a lowercase letter or digit and otherwise using letters, digits, `-`, or `_`. `--json` takes one top-level JSON object of at most 64 KiB; subscribers filter on its top-level fields with `--match KEY=VALUE`, and the whole payload reaches the woken agent as one compact JSON line.
+With no subscriber the line reads `fired 0 tasks` and nothing follows. The count leaves out a task that observed the signal and recorded `skipped`, such as a subscription to `deploy.failed`.
 
-Firing has no daemon behind it and no queue in front of it. The emitting process resolves the subscribers itself and spawns one detached run per match, so a signal reaches only the tasks armed for this workspace at that instant: a task armed a second later does not see it, and nothing is replayed when a room opens. A signal subscription fires without a room open; clock delays instead need the room's elder or the loop timer. Signal-triggered deliveries carry `Type: SIGNAL` and park at the receiver's next `done` boundary.
+| Argument | Rule |
+| --- | --- |
+| `<NAME>` | Dot-separated segments, at most 64 bytes in total. Each segment starts with a lowercase letter or digit and contains only lowercase letters, digits, `-`, and `_`. The first segment is the signal's family. |
+| `--json <OBJECT>` | One top-level JSON object, at most 64 KiB as typed (whitespace counts). Omitted, the payload is `{}`. |
+
+Firing happens inside the `emit` process, with no daemon and no queue, so `emit` needs no open room. It spawns one detached run for each enabled subscription that exists in this workspace at that moment; a task added afterwards never sees the signal, and nothing replays it later. A disabled or paused task, or a project task whose project is untrusted, does not fire. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
+
+`emit` refuses these inputs with exit code 1, before it writes anything:
+
+| Input | Error |
+| --- | --- |
+| A name that breaks the rules | ``error: invalid signal name `<name>`; use lowercase dot-separated words, at most 64 bytes`` |
+| A name in a reserved family | ``error: signal name `<name>` is reserved for RimZ`` |
+| A payload over 64 KiB | `error: --json payload exceeds 64 KiB` |
+| A payload that is not valid JSON | `error: parsing --json payload`, followed by the parser's message |
+| A payload that is JSON but not an object | `error: --json payload must be a JSON object` |
+
+If firing fails after the append, `emit` exits 1 with `firing signal tasks`, and the signal record stays in the log.
 
 ### Reserved families
 
-Five families are RimZ's own, and `emit` refuses every name in them, so a caller cannot forge a lifecycle transition, a forge verdict, or another wait's completion:
+Five families belong to RimZ, and `emit` refuses every name in them, including names RimZ never produces (`ci.custom`):
 
 ```console
 $ rimz events emit ci.passed
 error: signal name `ci.passed` is reserved for RimZ
 ```
 
-| Family | Names | Producer |
+| Family | Names RimZ produces | Source |
 | --- | --- | --- |
-| `ci` | `ci.passed`, `ci.failed` | the room's PR-state refresh, through the internal `--source forge` |
-| `pr` | `pr.merged`, `pr.closed` | the same refresh |
-| `agent` | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | the agent lifecycle hook |
-| `team` | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | the same hook, for a transitioning agent that belongs to a team |
-| `wait` | `wait.<task-name>` | a `rimz wait -- <command>` watcher, and the elder's watch-lost rule |
+| `agent` | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | Derived from lifecycle records; no signal line. |
+| `team` | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | `lifecycle` |
+| `team` | `team.stage` ([payload](./teams.md#the-teamstage-signal)) | `team` |
+| `ci` | `ci.passed`, `ci.failed` | `forge` |
+| `pr` | `pr.merged`, `pr.closed` | `forge` |
+| `wait` | `wait.<task-name>` | `watch` |
 
-The hidden `--source forge` that the refresh uses accepts exactly `ci.passed`, `ci.failed`, `pr.merged`, and `pr.closed`, and nothing else. What each built-in signal carries is in [loops.md → the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
-
-### A subscription observes its whole family
-
-A subscriber names one signal (`--signal deploy.finished`) or one family (`--signal 'deploy.*'`), and the family is the first name segment. A subscription observes every signal in its family whose `--match` fields match, then delivers on an exact name match and records `skipped` for another member. That is why a wait on `ci.failed` is not woken by a green build; the skip is a run-log row and nothing else, so the subscription stays armed. A signal from another family, or one that fails a `--match`, is ignored.
-
-Emitted signals rejoin the stream `follow` prints:
-
-```console
-$ rimz events follow --replay
-{"event":"signal","v":1,"event_id":"evt_01a06d7d112171d0bdaceff9e4a3c6aa","at":"2026-09-04T17:35:08.065761436Z","workspace_id":"ws_f89e49906df0621ad2765112","name":"deploy.finished","payload":{"env":"prod","version":"1.4.2"},"source":"cli"}
-```
-
-`source` is `cli` for `rimz events emit`, `forge` for a pull-request or CI transition the room's sidebar observed, `watch` for a `rimz wait -- <command>` completion, and `lifecycle` for a `team.*` edge the agent lifecycle hook derived. An `agent.*` signal fires its subscribers but carries no separate `signal` line, because the `lifecycle` line it was derived from is already its durable record. Arm a subscription with [`rimz loop add --signal`](./loop.md#signals): add bare `--wait` or `--wait @me` for the caller, `--wait @handle` for another live agent, and `--once` for one delivery. Team definitions can [bind signals to roles](../../guide/teams.md#define-your-own-team).
+The sidebar appends forge signals by running `emit` with a hidden `--source forge` flag, which accepts only the four `ci` and `pr` names above. The flag performs no caller check, so the reserved families keep scripts from colliding with RimZ's names but do not authenticate a forge signal. What each built-in signal's payload carries is in [the loops guide](../../guide/loops.md#signals-the-rooms-event-bus) and [the signal vocabulary](../../internals/harness/loops.md#the-signal-vocabulary).
