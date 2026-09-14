@@ -340,7 +340,10 @@ fn qwen_lifecycle(
         });
     observation.prompt = (event_name == "UserPromptSubmit")
         .then(|| parse_user_prompt_submit(payload))
-        .and_then(|value| sanitize_user_prompt(value.prompt.as_deref()));
+        .and_then(|value| {
+            sanitize_user_prompt(value.submitted_prompt.as_deref())
+                .or_else(|| sanitize_user_prompt(value.prompt.as_deref()))
+        });
     observation.task = if let Some(subagent) = &subagent {
         subagent.common.agent_type.clone().or_else(|| {
             subagent_meta.as_ref().and_then(|meta| {

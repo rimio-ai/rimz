@@ -33,7 +33,10 @@ pub(super) struct QwenSessionStart {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct QwenUserPromptSubmit {
+    /// Model-bound text, after slash-command and `@` file expansion.
     pub(super) prompt: Option<String>,
+    /// Composer text as the user typed it (Qwen Code 0.23 and newer).
+    pub(super) submitted_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
