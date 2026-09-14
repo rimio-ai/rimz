@@ -75,7 +75,8 @@ upward-dependencies = ["address"]
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
 # Model sub-cap matching and parent-axis headroom are shared with the renderer.
-surface-budget = 984
+# Turn completion is shared by reply waits and `agents wait`, apart from the delivery gate.
+surface-budget = 987
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -191,7 +192,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Sandbox env pins rebuild shell argv while preserving post-rc account stages.
 # The typed team.stage payload and its flip reader feed transcript rendering.
 # Rebirth reads resumed keys to preflight sandbox-isolated recovered agents.
-surface-budget = 518
+# Wait polls attach pending deliveries so sleeping agents stay unfinished.
+surface-budget = 519
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -216,6 +218,7 @@ upward-dependencies = [
     "harness::assist_log",
     "harness::auto_continue",
     "harness::run",
+    "harness::schedule::pending",
     "sidebar::produce",
 ]
 surface-budget = 67
