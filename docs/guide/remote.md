@@ -40,7 +40,7 @@ rimz remote rename dev devbox                     # rename an alias
 rimz remote rm devbox                             # forget one
 ```
 
-`rimz remote list` groups aliases under their SSH server, with aligned paths or session names and connection settings. The server appears once per group instead of repeating on every row; different SSH users remain separate. Use `rimz remote list --json` for the full targets in scripts.
+`rimz remote list` groups aliases under their SSH server, with each alias's full target (`dev-box:workspace/infra`) and connection settings. Different SSH users remain separate groups. Use `rimz remote list --json` for a flat, scriptable list.
 
 ## A link that heals itself
 

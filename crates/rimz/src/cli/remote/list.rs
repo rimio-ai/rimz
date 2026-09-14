@@ -51,21 +51,11 @@ fn human_table(entries: &[RemoteAlias]) -> render::Table {
             .map(|target| target.ssh_destination().as_str().to_owned());
         groups.entry(destination).or_default().push(entry);
     }
-    let mut table = render::Table::new([
-        "NAME",
-        "PATH / SESSION",
-        "RECONNECT",
-        "RESUME",
-        "MUX",
-        "FORWARD",
-    ])
-    .indent(2);
+    let mut table =
+        render::Table::new(["NAME", "TARGET", "RECONNECT", "RESUME", "MUX", "FORWARD"]).indent(2);
     for (destination, entries) in groups {
         table.section(destination.as_deref().unwrap_or("Invalid targets"));
         for entry in entries {
-            let target = destination.as_ref().map_or(entry.target.as_str(), |host| {
-                &entry.target[host.len() + 1..]
-            });
             let reconnect = if entry.reconnect {
                 "reconnect"
             } else {
@@ -88,7 +78,7 @@ fn human_table(entries: &[RemoteAlias]) -> render::Table {
             };
             table.row([
                 render::cell(entry.name.as_str()).fg(render::palette::accent()),
-                render::cell(target).fg(render::palette::muted()),
+                render::cell(entry.target.as_str()).fg(render::palette::muted()),
                 render::cell(reconnect).fg(reconnect_style),
                 render::cell(no_resume).fg(render::palette::body()),
                 render::cell(mux).dash(),
@@ -183,21 +173,21 @@ mod tests {
             .expect("table renders to an in-memory buffer");
         let rendered = String::from_utf8(buf).expect("table output is utf-8");
         insta::assert_snapshot!(rendered, @r"
-          NAME     PATH / SESSION       RECONNECT     RESUME     MUX     FORWARD
+          NAME     TARGET                              RECONNECT     RESUME     MUX     FORWARD
 
         Invalid targets
-          invalid  missing-target       reconnect     resume     -       auto
+          invalid  missing-target                      reconnect     resume     -       auto
 
         agent@prod-box
-          docs     ~/code/docs          reconnect     resume     -       auto
-          prod     ~/code/query-engine  no-reconnect  no-resume  tmux    off
+          docs     agent@prod-box:~/code/docs          reconnect     resume     -       auto
+          prod     agent@prod-box:~/code/query-engine  no-reconnect  no-resume  tmux    off
 
         dev-box
-          dev      query-engine         reconnect     resume     -       auto
-          tools    workspace/tools      reconnect     resume     zellij  auto
+          dev      dev-box:query-engine                reconnect     resume     -       auto
+          tools    dev-box:workspace/tools             reconnect     resume     zellij  auto
 
         user@[::1]
-          v6       ~/code/with:colon    reconnect     resume     -       auto
+          v6       user@[::1]:~/code/with:colon        reconnect     resume     -       auto
         ");
     }
 }

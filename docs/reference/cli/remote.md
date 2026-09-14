@@ -30,7 +30,7 @@ All relative paths are anchored to remote `HOME`, never the SSH startup director
 | `remote add <name> <target>` | Save an alias in `~/.config/rimz/remote.toml` |
 | `remote update <name> <target>` | Replace a saved alias's target and flags |
 | `remote rename <old> <new>` | Rename a saved alias |
-| `remote list` | Print saved aliases grouped by SSH destination (`[user@]host`), with paths or sessions beneath each server |
+| `remote list` | Print saved aliases grouped by SSH destination (`[user@]host`), with each alias's full `host:path` or session target beneath its server |
 | `remote rm <name>` | Remove a saved alias |
 | `remote reset <alias-or-target>` | Connect with recovery skipped, so the remote room comes up empty |
 
