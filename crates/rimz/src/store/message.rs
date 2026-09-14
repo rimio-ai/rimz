@@ -12,7 +12,7 @@ use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 
 mod codec;
 
-pub use codec::MessageStoreErr;
+pub(super) use codec::MessageStoreErr;
 pub(in crate::store) use codec::{
     append_history_many, list_history, list_pending, maintain_history, read_queue, write_queue,
 };
@@ -23,7 +23,7 @@ pub const DEFAULT_COMMAND_DELIVERY_WINDOW: Duration = Duration::from_secs(180);
 pub const COMMAND_DELIVERY_WINDOW_ENV: &str = "RIMZ_MESSAGE_COMMAND_DELIVERY_WINDOW_MS";
 /// Cap for pre-send delivery failures after a queued claim.
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
-pub const CLAIM_TTL: Duration = Duration::from_secs(15);
+pub(super) const CLAIM_TTL: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "origin")]
