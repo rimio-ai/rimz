@@ -1,7 +1,7 @@
 //! Version-pinned, read-only Cursor CLI local wait and subagent discovery.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read as _;
@@ -47,6 +47,14 @@ struct ChatMetadata {
     updated_at_ms: i64,
     has_conversation: bool,
     cwd: PathBuf,
+    #[serde(default)]
+    is_subagent: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChildChatMetadata {
+    schema_version: u32,
     #[serde(default)]
     is_subagent: bool,
 }
@@ -190,9 +198,38 @@ struct OpenWait {
     waiting_since: Timestamp,
 }
 
+/// Cursor keeps `chats/` in its config directory but `projects/` under
+/// `~/.cursor`; older builds kept both under `~/.cursor`, so that home stays a
+/// trailing chats root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CursorRoots {
+    chats: Vec<PathBuf>,
+    home: PathBuf,
+}
+
+impl CursorRoots {
+    pub(super) fn resolve(env: &BTreeMap<String, String>) -> Option<Self> {
+        use crate::agents::capabilities::LaunchCapability as _;
+        let home = cursor_home(env.get("HOME").map(OsStr::new))?;
+        let config = super::CursorAdapter.config_home(env)?;
+        Some(Self::new(vec![config, home.clone()], home))
+    }
+
+    pub(super) fn new(mut chats: Vec<PathBuf>, home: PathBuf) -> Self {
+        let mut seen = HashSet::new();
+        chats.retain(|root| seen.insert(root.clone()));
+        Self { chats, home }
+    }
+
+    #[cfg(any(test, feature = "testkit"))]
+    pub(super) fn single(home: &Path) -> Self {
+        Self::new(vec![home.to_path_buf()], home.to_path_buf())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DiscoveryKey {
-    home: PathBuf,
+    roots: CursorRoots,
     workspaces: Vec<PathBuf>,
 }
 
@@ -242,7 +279,7 @@ impl DiscoveryCacheHarness {
     ) -> Vec<LocalSessionObservation> {
         self.0.refresh(
             DiscoveryKey {
-                home: home.to_path_buf(),
+                roots: CursorRoots::single(home),
                 workspaces: normalized_workspace_inputs(workspaces),
             },
             now,
@@ -254,12 +291,15 @@ impl DiscoveryCacheHarness {
     }
 }
 
-pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
-    let Some(home) = cursor_home(std::env::var_os("HOME").as_deref()) else {
+pub(super) fn discover(
+    workspaces: &[&Path],
+    login_env: &BTreeMap<String, String>,
+) -> Vec<LocalSessionObservation> {
+    let Some(roots) = CursorRoots::resolve(login_env) else {
         return Vec::new();
     };
     let key = DiscoveryKey {
-        home,
+        roots,
         workspaces: normalized_workspace_inputs(workspaces),
     };
     if key.workspaces.is_empty() {
@@ -274,23 +314,22 @@ impl CursorDiscoverySnapshot {
             topology.record_kind_only_many(key.workspaces.iter().cloned());
             let mut catalog = Vec::new();
             for workspace in &key.workspaces {
-                let Some((bucket, workspace)) = chats_bucket(&key.home, workspace) else {
-                    continue;
-                };
-                topology.record_exact(bucket.clone());
-                let Ok(entries) = fs::read_dir(&bucket) else {
-                    continue;
-                };
-                catalog.extend(
-                    entries
-                        .filter_map(Result::ok)
-                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-                        .map(|entry| ChatCandidate {
-                            workspace: workspace.clone(),
-                            bucket: bucket.clone(),
-                            session: entry.path(),
-                        }),
-                );
+                for (bucket, workspace) in chats_buckets(&key.roots, workspace) {
+                    topology.record_exact(bucket.clone());
+                    let Ok(entries) = fs::read_dir(&bucket) else {
+                        continue;
+                    };
+                    catalog.extend(
+                        entries
+                            .filter_map(Result::ok)
+                            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                            .map(|entry| ChatCandidate {
+                                workspace: workspace.clone(),
+                                bucket: bucket.clone(),
+                                session: entry.path(),
+                            }),
+                    );
+                }
             }
             catalog
         });
@@ -315,7 +354,7 @@ impl CursorDiscoverySnapshot {
             || self.selected_ids != selected_ids
             || transcript_topology_changed
         {
-            self.rebuild_transcripts(&key.home, selected_ids, transcript_topology_changed);
+            self.rebuild_transcripts(&key.roots.home, selected_ids, transcript_topology_changed);
         }
 
         let mut observations = Vec::new();
@@ -465,21 +504,31 @@ pub(super) fn cursor_home(home: Option<&OsStr>) -> Option<PathBuf> {
 }
 
 #[cfg(any(test, feature = "testkit"))]
-pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
+pub(super) fn discover_under(
+    roots: &CursorRoots,
+    workspace: &Path,
+) -> Vec<LocalSessionObservation> {
     let key = DiscoveryKey {
-        home: home.to_path_buf(),
+        roots: roots.clone(),
         workspaces: normalized_workspace_inputs(&[workspace]),
     };
     CursorDiscoverySnapshot::default().refresh(key, Instant::now())
 }
 
-pub(super) fn discover_subagent_chats(home: &Path, workspace: &Path) -> Vec<CursorSubagentRecord> {
-    let Some((bucket, _workspace)) = chats_bucket(home, workspace) else {
-        return Vec::new();
-    };
-    let mut records = newest_chat_dirs(&bucket)
+pub(super) fn discover_subagent_chats(
+    roots: &CursorRoots,
+    workspace: &Path,
+) -> Vec<CursorSubagentRecord> {
+    let mut seen = HashSet::new();
+    let mut records = chats_buckets(roots, workspace)
         .into_iter()
-        .filter_map(|session| subagent_record(home, &bucket, &session))
+        .flat_map(|(bucket, _workspace)| {
+            newest_chat_dirs(&bucket)
+                .into_iter()
+                .filter_map(|session| subagent_record(&roots.home, &bucket, &session))
+                .collect::<Vec<_>>()
+        })
+        .filter(|record| seen.insert(record.child_id.clone()))
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         left.created_at
@@ -489,19 +538,22 @@ pub(super) fn discover_subagent_chats(home: &Path, workspace: &Path) -> Vec<Curs
     records
 }
 
-fn chats_bucket(home: &Path, workspace: &Path) -> Option<(PathBuf, PathBuf)> {
+fn chats_buckets(roots: &CursorRoots, workspace: &Path) -> Vec<(PathBuf, PathBuf)> {
     let workspace = crate::utils::path::normalize_path_lexical(workspace);
-    let workspace_text = workspace.to_str()?;
+    let Some(workspace_text) = workspace.to_str() else {
+        return Vec::new();
+    };
     if !workspace.is_absolute() || !regular_dir(&workspace) {
-        return None;
+        return Vec::new();
     }
-    let bucket = home
-        .join("chats")
-        .join(hex::encode(Md5::digest(workspace_text.as_bytes())));
-    if !regular_dir(&bucket) {
-        return None;
-    }
-    Some((bucket, workspace))
+    let hash = hex::encode(Md5::digest(workspace_text.as_bytes()));
+    roots
+        .chats
+        .iter()
+        .map(|root| root.join("chats").join(&hash))
+        .filter(|bucket| regular_dir(bucket))
+        .map(|bucket| (bucket, workspace.clone()))
+        .collect()
 }
 
 fn newest_chat_dirs(bucket: &Path) -> Vec<PathBuf> {
@@ -610,7 +662,7 @@ fn subagent_record(home: &Path, bucket: &Path, session: &Path) -> Option<CursorS
         .is_some_and(|parent| parent == bucket)
         .then_some(())?;
 
-    metadata_absent(&session.join("meta.json")).then_some(())?;
+    child_metadata_admissible(&session.join("meta.json")).then_some(())?;
     let store_path = session.join("store.db");
     regular_file(&store_path).then_some(())?;
     let (_, store_metadata) = read_store_metadata(&store_path)?;
@@ -874,8 +926,19 @@ fn regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
-fn metadata_absent(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+/// A child chat has no `meta.json` until Cursor's session lister backfills one
+/// marked `isSubagent`.
+fn child_metadata_admissible(path: &Path) -> bool {
+    if fs::symlink_metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) {
+        return true;
+    }
+    bounded_regular_file(path, MAX_META_BYTES)
+        && fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<ChildChatMetadata>(&bytes).ok())
+            .is_some_and(|metadata| {
+                metadata.schema_version == META_SCHEMA_VERSION && metadata.is_subagent
+            })
 }
 
 fn bounded_regular_file(path: &Path, max_bytes: u64) -> bool {

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
+use crate::agents::capabilities::LaunchCapability as _;
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallPreview, HookInstallReport, HookUninstallReport,
     ManagedIntegration, Result, StatusLineChange, agent_config_path, read_optional_file,
@@ -27,49 +28,49 @@ pub(super) static MANAGED_INTEGRATION: CursorManagedIntegration = CursorManagedI
 pub(super) struct CursorManagedIntegration;
 
 impl ManagedIntegration for CursorManagedIntegration {
-    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
         install_into(
             &cursor_hooks_path()?,
-            &cursor_cli_config_path()?,
+            &cursor_cli_config_path(login_env)?,
             &cursor_statusline_state_path()?,
         )
     }
 
-    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
         preview_at(
             &cursor_hooks_path()?,
-            &cursor_cli_config_path()?,
+            &cursor_cli_config_path(login_env)?,
             &cursor_statusline_state_path()?,
         )
     }
 
-    fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
+    fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
         uninstall_from(
             &cursor_hooks_path()?,
-            &cursor_cli_config_path()?,
+            &cursor_cli_config_path(login_env)?,
             &cursor_statusline_state_path()?,
         )
     }
 
-    fn installed(&self, _login_env: &BTreeMap<String, String>) -> bool {
+    fn installed(&self, login_env: &BTreeMap<String, String>) -> bool {
         let Ok(hooks_path) = cursor_hooks_path() else {
             return false;
         };
-        let Ok(config_path) = cursor_cli_config_path() else {
+        let Ok(config_path) = cursor_cli_config_path(login_env) else {
             return false;
         };
         hooks_installed_at(&hooks_path) && statusline_installed_at(&config_path)
     }
 
-    fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
+    fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
         cursor_hooks_path().is_ok_and(|path| managed_artifacts_at(&path))
-            || cursor_cli_config_path().is_ok_and(|path| statusline_artifact_at(&path))
+            || cursor_cli_config_path(login_env).is_ok_and(|path| statusline_artifact_at(&path))
             || cursor_statusline_state_path().is_ok_and(|path| path.exists())
     }
 
-    fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
+    fn wrapped_status_line_command(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
         wrapped_status_line_command_at(
-            &cursor_cli_config_path().ok()?,
+            &cursor_cli_config_path(login_env).ok()?,
             &cursor_statusline_state_path().ok()?,
         )
     }
@@ -83,12 +84,19 @@ pub(super) fn cursor_hooks_path() -> Result<PathBuf> {
     )
 }
 
-pub(super) fn cursor_cli_config_path() -> Result<PathBuf> {
-    agent_config_path(
-        "cursor",
-        "RIMZ_CURSOR_CLI_CONFIG",
-        Path::new(".cursor/cli-config.json"),
-    )
+pub(super) fn cursor_cli_config_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
+    if let Some(raw) = std::env::var_os("RIMZ_CURSOR_CLI_CONFIG").filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(raw));
+    }
+    super::CursorAdapter
+        .config_home(login_env)
+        .map(|home| home.join("cli-config.json"))
+        .ok_or_else(|| AgentErr::Install {
+            agent: "cursor",
+            reason: "$CURSOR_CONFIG_DIR, $XDG_CONFIG_HOME, and $HOME are not set; cannot resolve Cursor cli-config.json"
+                .to_owned(),
+        })
 }
 
 pub(super) fn cursor_statusline_state_path() -> Result<PathBuf> {

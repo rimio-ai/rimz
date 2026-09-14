@@ -215,8 +215,79 @@ impl CursorAskFixture {
     }
 
     fn observations(&self) -> Vec<crate::agents::LocalSessionObservation> {
-        session::discover_under(&self.home, &self.workspace)
+        session::discover_under(&session::CursorRoots::single(&self.home), &self.workspace)
     }
+}
+
+/// Move the fixture's `chats/` tree into a separate Cursor config directory, as
+/// Cursor lays it out when `XDG_CONFIG_HOME` or `CURSOR_CONFIG_DIR` is set.
+fn move_chats_to_config_dir(home: &Path) -> session::CursorRoots {
+    let config = home.parent().unwrap().join("xdg/cursor");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::rename(home.join("chats"), config.join("chats")).unwrap();
+    session::CursorRoots::new(vec![config, home.to_path_buf()], home.to_path_buf())
+}
+
+#[test]
+fn cursor_roots_read_the_config_dir_before_the_legacy_home() {
+    let env = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(
+        session::CursorRoots::resolve(&env(&[("HOME", "/h"), ("CURSOR_CONFIG_DIR", "/c")])),
+        Some(session::CursorRoots::new(
+            vec![PathBuf::from("/c"), PathBuf::from("/h/.cursor")],
+            PathBuf::from("/h/.cursor"),
+        ))
+    );
+    assert_eq!(
+        session::CursorRoots::resolve(&env(&[("HOME", "/h")])),
+        Some(session::CursorRoots::single(Path::new("/h/.cursor")))
+    );
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        session::CursorRoots::resolve(&env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/x")])),
+        Some(session::CursorRoots::new(
+            vec![PathBuf::from("/x/cursor"), PathBuf::from("/h/.cursor")],
+            PathBuf::from("/h/.cursor"),
+        ))
+    );
+    assert_eq!(session::CursorRoots::resolve(&env(&[])), None);
+}
+
+#[test]
+fn cursor_statusline_installs_into_the_cli_config_cursor_reads() {
+    if std::env::var_os("RIMZ_CURSOR_CLI_CONFIG").is_some() {
+        return;
+    }
+    let env = [("HOME", "/h"), ("CURSOR_CONFIG_DIR", "/c")]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        install::cursor_cli_config_path(&env).unwrap(),
+        PathBuf::from("/c/cli-config.json")
+    );
+    assert!(install::cursor_cli_config_path(&BTreeMap::new()).is_err());
+}
+
+#[test]
+fn cursor_ask_is_found_in_the_config_dir_chats_store() {
+    let fixture = CursorAskFixture::new(vec![pending_ask("Which color?", false, None)]);
+    let roots = move_chats_to_config_dir(&fixture.home);
+    assert!(fixture.observations().is_empty());
+    let observations = session::discover_under(&roots, &fixture.workspace);
+    let [observation] = observations.as_slice() else {
+        panic!("expected one open Ask observation from the config dir");
+    };
+    assert!(
+        observation
+            .transcript_path
+            .starts_with(fixture.home.join("projects"))
+    );
 }
 
 #[test]
@@ -376,11 +447,14 @@ impl CursorSubagentFixture {
     }
 
     fn observations(&self) -> Vec<AgentLifecycleObservation> {
-        CursorAdapter.derive_subagent_observations_under(&self.home, &self.workspace)
+        CursorAdapter.derive_subagent_observations_under(
+            &session::CursorRoots::single(&self.home),
+            &self.workspace,
+        )
     }
 
     fn records(&self) -> Vec<session::CursorSubagentRecord> {
-        session::discover_subagent_chats(&self.home, &self.workspace)
+        session::discover_subagent_chats(&session::CursorRoots::single(&self.home), &self.workspace)
     }
 }
 
@@ -826,6 +900,62 @@ fn cursor_chats_store_fails_closed_on_child_identity_schema_and_admission_drift(
     }
 
     assert!(fixture.records().is_empty());
+}
+
+#[test]
+fn cursor_chats_store_admits_children_with_a_backfilled_subagent_sidecar() {
+    let fixture = CursorSubagentFixture::new();
+    let backfilled = fixture.add_child("child-backfilled", Some("parent-1"), Some("explore"), 1, 1);
+    std::fs::write(
+        backfilled.join("meta.json"),
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1,
+            "createdAtMs": 1,
+            "updatedAtMs": 2,
+            "hasConversation": true,
+            "isSubagent": true,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fixture.write_transcript(
+        "child-backfilled",
+        &[
+            cursor_child_user_message("map hooks"),
+            json!({"type":"turn_ended","status":"success"}),
+        ],
+    );
+    let root_sidecar = fixture.add_child(
+        "child-root-sidecar",
+        Some("parent-1"),
+        Some("explore"),
+        2,
+        1,
+    );
+    std::fs::write(
+        root_sidecar.join("meta.json"),
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1,
+            "createdAtMs": 2,
+            "updatedAtMs": 2,
+            "hasConversation": true,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let roots = move_chats_to_config_dir(&fixture.home);
+
+    let records = session::discover_subagent_chats(&roots, &fixture.workspace);
+    let [record] = records.as_slice() else {
+        panic!("expected only the backfilled child, got {records:?}");
+    };
+    assert_eq!(record.child_id, "child-backfilled");
+    assert_eq!(record.task.as_deref(), Some("map hooks"));
+    let observations = CursorAdapter.derive_subagent_observations_under(&roots, &fixture.workspace);
+    assert!(observations.iter().any(|observation| {
+        observation.agent_id.as_deref() == Some("child-backfilled")
+            && observation.signal == LifecycleSignal::SubagentStopped { errored: false }
+    }));
 }
 
 #[test]
