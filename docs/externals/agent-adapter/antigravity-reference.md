@@ -15,7 +15,7 @@ Google publishes no CLI source, so each claim rests on one of these tiers, stron
 | Official docs | the `antigravity.google/docs` pages in [Upstream sources](#upstream-sources), a living site without versioned snapshots | cited by URL |
 | Release notes | `CHANGELOG.md` at the tag, which `agy changelog` prints verbatim | "1.1.28 changelog" |
 | Installed 1.2.2 binary | `agy --help` and subcommand help; the hook contract the binary embeds for its own `/hooks` answer; Go struct tags and protobuf message names in the binary's strings | "1.2.2 help", "embedded hook doc", "1.2.2 binary" |
-| Live captures | a stock 1.1.2 session (hook payloads, transcripts, subagents) and a 1.1.1 SQLite schema probe | "1.1.2 capture", "1.1.1 probe"; not re-captured against 1.2.2 |
+| Live captures | a stock 1.1.2 session (hook payloads, transcripts, subagents), a 1.1.1 SQLite schema probe, and a first-run 1.2.2 session in an untrusted workspace (hook payloads and statusline only, no completed tool step) | "1.1.2 capture", "1.1.1 probe", "1.2.2 capture" |
 | Third-party source | CodexBar commit [`b41715f`](https://github.com/steipete/CodexBar/tree/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8) for the private local service | cited by path |
 
 Where two tiers disagree, the claim follows the wire and [Documentation drift](#documentation-drift) records the disagreement.
@@ -211,13 +211,13 @@ The matcher documents `run_command|view_file` and `browser_.*` as examples. Tool
 | `artifactDirectoryPath` | absolute path of the conversation's artifact directory, `<app_data_dir>/brain/<conversationId>` |
 | `modelName` | model handling the invocation, for example `gemini-3.6-flash-medium` (the embedded doc's example is `auto`) |
 
-`<app_data_dir>` is `~/.gemini/antigravity-cli` for the CLI, `~/.gemini/antigravity` for 2.0, and `antigravity-ide` for the IDE. The 1.1.2 capture's `transcriptPath` named `transcript_full.jsonl`, not the documented `transcript.jsonl`; see [Transcripts](#transcripts).
+The 1.2.2 capture sent `workspacePaths: []` from a workspace that was not yet trusted. `<app_data_dir>` is `~/.gemini/antigravity-cli` for the CLI, `~/.gemini/antigravity` for 2.0, and `antigravity-ide` for the IDE. The 1.1.2 capture's `transcriptPath` named `transcript_full.jsonl`, not the documented `transcript.jsonl`; see [Transcripts](#transcripts).
 
 ### Events
 
 | Event | Fires | Event input | Output |
 | --- | --- | --- | --- |
-| `PreToolUse` | before a tool executes | `toolCall.name`, `toolCall.args`, `stepIdx` (0-based) | required `decision`; optional `reason`, `permissionOverrides[]`, `overwrite` |
+| `PreToolUse` | before a tool executes | `toolCall.name`, `toolCall.args` (the 1.2.2 capture's args also carried `toolAction` and `toolSummary` strings), `stepIdx` (0-based) | required `decision`; optional `reason`, `permissionOverrides[]`, `overwrite` |
 | `PostToolUse` | after a tool completes, tool steps only (1.1.9) | `toolCall` (`name`, `args`), `stepIdx`, optional `error` string, empty on success | `{}` |
 | `PreInvocation` | before each model call | `invocationNum` (0 for the first call of an execution), `initialNumSteps` | optional `injectSteps[]` |
 | `PostInvocation` | after each model invocation completes | same as `PreInvocation` | optional `injectSteps[]`, `terminationBehavior` |
@@ -249,7 +249,7 @@ An injected step (`injectSteps[]`) carries exactly one of `toolCall` (`{name, ar
 
 ### Undocumented hook fields in the 1.2.2 binary
 
-The binary's hook protobuf messages define more than the docs publish. These names come from generated getters in the binary's strings; no page documents them and no capture shows whether the command transport serializes them.
+The binary's hook protobuf messages define more than the docs publish. These names come from generated getters in the binary's strings; no page documents them. The 1.2.2 capture settles one row: a `SessionStart` handler in `hooks.json` ran once, just before the first `PreInvocation` of a session launched with `-i`, with the common input and no event-specific fields. No capture shows whether the other fields are serialized.
 
 | Message | Undocumented fields |
 | --- | --- |
@@ -321,8 +321,8 @@ The terminal-title command ([terminal title](https://antigravity.google/docs/cli
 | `session_id` | backward-compatibility alias of `conversation_id` | docs |
 | `conversation_id` | current conversation ID | docs |
 | `conversation_title` | current conversation title | 1.1.27 changelog, 1.2.2 binary |
-| `transcript_path` | absolute transcript path, optional | docs |
-| `model` | `{id, display_name}`; the docs example and the 1.1.2 capture put the selector label, such as `Gemini 3.5 Flash (Medium)`, in both | docs |
+| `transcript_path` | absolute transcript path, optional; see [Documentation drift](#documentation-drift) | docs |
+| `model` | `{id, display_name, effort}`; the docs example and the 1.1.2 and 1.2.2 captures put the selector label, such as `Gemini 3.5 Flash (Medium)`, in both `id` and `display_name`; `effort` (`low` under `--effort low`) is undocumented | docs, 1.2.2 capture |
 | `workspace` | `{current_dir, project_dir}` | docs |
 | `version` | CLI version | docs |
 | `context_window` | token totals, limit, percentages, and `current_usage`; below | docs |
@@ -634,7 +634,8 @@ Official sources disagree with each other or with the 1.2.2 binary at these poin
 | --- | --- | --- | --- |
 | Plan commands | [CLI reference](https://antigravity.google/docs/cli/reference/) lists `/planning` and `/fast`; the statusline page gives `planning` and `fast` as `execution_mode` examples | 1.1.0 changelog removes both and adds `/plan`; the [modes](https://antigravity.google/docs/cli/modes/) page uses `/plan` and `--mode plan` | use `--mode plan`; treat `execution_mode` values as unknown strings |
 | Working directory | best-practices example passes `--cwd` | 1.2.2 help has no `--cwd` | set the process cwd |
-| Transcript basename | hooks page names `transcript.jsonl` | 1.1.2 hooks sent `transcript_full.jsonl`; embedded instructions define both files | expect either basename |
+| Transcript basename | hooks page names `transcript.jsonl` | 1.1.2 and 1.2.2 hooks sent `transcript_full.jsonl`; embedded instructions define both files | expect either basename |
+| Statusline `transcript_path` | statusline page: absolute transcript path | the 1.2.2 capture named `~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl`, under the 2.0 app-data root, while the same session's hooks named the CLI root's `transcript_full.jsonl` | take the transcript path from hooks |
 | Statusline fields | statusline table lists counts (`artifact_count`, `task_count`) and omits `agent`, `subagents`, `artifacts`, `background_tasks`, `conversation_title`, `cost` | the binary tags all of them; the example script reads `subagents`; changelog adds `conversation_title` and `cost` | tolerate every field as optional |
 | `PostToolUse` input | hooks page lists `toolCall` | embedded hook doc lists only `stepIdx` and `error`; not captured | treat `toolCall` as optional |
 | `PostInvocation` timing | "immediately after each model invocation completes" | embedded hook doc: "after tool calls finish" | not settled without a capture |
