@@ -350,7 +350,7 @@ surface-budget = 341
 path = "crates/rimz/src/theme"
 upward-dependencies = ["agents"]
 # Wait prompts and CLI reports share the byte-size formatter.
-surface-budget = 33
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
@@ -361,7 +361,7 @@ surface-budget = 19
 [[module]]
 path = "crates/rimz/src/trust.rs"
 upward-dependencies = ["agents"]
-surface-budget = 39
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/tui.rs"
@@ -385,7 +385,7 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
-surface-budget = 26
+surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/wakeup"
@@ -1886,6 +1886,106 @@ reason = "Stays pub(super) with OpencodeHookPayload: parse_payload and errored t
 kind = "pass-through"
 key = "agents::adapters::opencode::transcript::sqlite_io"
 reason = "Private rusqlite-to-io error adapter used as map_err(sqlite_io) at seven sites in the same file; deleting it reintroduces io::Error::other at each (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "trust::executable_surface_hash"
+reason = "No production caller, but the integration crate names it to prove the hash moves with every executable-surface field; the binary and integration crates see only pub items (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::SurfaceSummary"
+reason = "Pub field of TrustReport and named by the binary crate's cli/room tests; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::TrustErr"
+reason = "Error type of trust::Result, returned by status, grant, revoke and birth_prompt, which the binary crate calls; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::Result"
+reason = "Return alias of every pub trust entry the binary crate calls; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::ProjectConfig"
+reason = "Named by the integration crate's trust hash tests beside executable_surface_hash (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::ProjectAgents"
+reason = "Type of a pub ProjectConfig field; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::ProjectAgentsTable"
+reason = "Payload of the pub ProjectAgents::Table variant; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::AgentConfig"
+reason = "Element type of the pub ProjectAgents::Entries variant; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::ProjectProfile"
+reason = "Value type of the pub ProjectConfig.profiles map; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::ProjectTask"
+reason = "Value type of the pub ProjectConfig.tasks map; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::HookConfig"
+reason = "Element type of the pub ProjectConfig.hooks list; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "trust::ProjectSubagents"
+reason = "Type of the pub ProjectConfig.subagents field; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::record::write"
+reason = "Production readers are store-only, but the integration crate's zellij support and sidebar supervisor suites publish records through it (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::record::WorkspaceRecordErr"
+reason = "Error type of pub record::read, read_optional and write and of the pub StoreErr and RoomLoginErr variants; the compiler refuses pub(crate) (atlas caveat 13, pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::record::Result"
+reason = "Return alias of pub record::read, read_optional and write; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::pin_env"
+reason = "Named by the integration crate's hooks and run suites (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::known_workspaces_under"
+reason = "Named by the integration crate's zellij reconcile suite (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::WorkspaceErr"
+reason = "Error type of workspace::Result, returned by WorkspaceResolver::resolve, which the binary crate calls; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::Result"
+reason = "Return alias of WorkspaceResolver::resolve; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "theme::BrandColor"
+reason = "Return type of pub resolve_provider_brand and field of ResolvedProviderIdentity, both reached from the binary crate's render palette and session picker; atlas caveat 13 (pass 22b)."
 
 [[verdict]]
 kind = "item"
