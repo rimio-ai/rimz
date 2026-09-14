@@ -106,11 +106,7 @@ pub(in crate::sidebar_pane::render) fn status_style(theme: &Theme, status: Agent
     status_style_at(theme, status, 0)
 }
 
-pub(in crate::sidebar_pane::render) fn status_style_at(
-    theme: &Theme,
-    status: AgentStatus,
-    animation_phase: u64,
-) -> Style {
+pub(super) fn status_style_at(theme: &Theme, status: AgentStatus, animation_phase: u64) -> Style {
     role_style(
         theme,
         crate::sidebar_pane::render::animation::ResolvedAnimations::status_role(status),
@@ -125,7 +121,7 @@ pub(in crate::sidebar_pane::render) fn status_rest_style(
     status_style_with_modifier(theme, status, Modifier::empty())
 }
 
-pub(in crate::sidebar_pane::render) fn status_style_with_modifier(
+pub(super) fn status_style_with_modifier(
     theme: &Theme,
     status: AgentStatus,
     modifier: Modifier,
@@ -163,7 +159,7 @@ fn role_style_with_modifier(theme: &Theme, role: AnimationRole, modifier: Modifi
 
 /// The completed-compaction count marker's tone: the warn slot, kept separate
 /// from cache-write's violet.
-pub(in crate::sidebar_pane::render) fn compacting_style(theme: &Theme) -> Style {
+pub(super) fn compacting_style(theme: &Theme) -> Style {
     theme.styled(Component::Compaction, Modifier::empty())
 }
 
@@ -225,11 +221,7 @@ impl CardAttention {
     }
 }
 
-pub(in crate::sidebar_pane::render) fn card_emphasis(
-    status: AgentStatus,
-    unread: bool,
-    selected: bool,
-) -> CardEmphasis {
+pub(super) fn card_emphasis(status: AgentStatus, unread: bool, selected: bool) -> CardEmphasis {
     if unread {
         CardEmphasis::Blink
     } else if status.needs_a_look() || selected {

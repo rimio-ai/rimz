@@ -14,7 +14,6 @@ use ratatui::text::Line;
 use std::rc::Rc;
 use std::time::Duration;
 
-use super::chrome::abbreviate_under;
 use super::sections::{
     DashboardContext, RowCtx, Tier, WorktreeRenderContext, content_width, dashboard_block,
     fleet_header_lines, fleet_store_lines, open_pr_worst_ci, reset_expiry_heat_amount,

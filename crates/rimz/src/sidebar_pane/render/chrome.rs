@@ -56,14 +56,14 @@ pub(super) fn repo_header_lines(
 
 /// Abbreviate a leading `$HOME` to `~` for the path line, so a deep home path
 /// reads `~/code/query-engine` rather than spilling the absolute prefix.
-pub(super) fn abbreviate_home(path: &str) -> String {
+fn abbreviate_home(path: &str) -> String {
     let home = std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned());
     abbreviate_under(path, home.as_deref())
 }
 
 /// The pure core of [`abbreviate_home`]: collapse a leading `home` prefix to
 /// `~`. A path outside `home`, or with no `home`, passes through unchanged.
-pub(super) fn abbreviate_under(path: &str, home: Option<&str>) -> String {
+fn abbreviate_under(path: &str, home: Option<&str>) -> String {
     match home {
         Some(home) if !home.is_empty() && path == home => "~".to_owned(),
         Some(home) if !home.is_empty() => match path.strip_prefix(home) {
@@ -774,6 +774,26 @@ fn borderless_line(line: Line<'static>, width: usize) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_abbreviation_collapses_only_a_home_prefix() {
+        assert_eq!(
+            abbreviate_under("/home/dev/code/query-engine", Some("/home/dev")),
+            "~/code/query-engine"
+        );
+        assert_eq!(abbreviate_under("/home/dev", Some("/home/dev")), "~");
+        // A path that merely shares a textual prefix is not under home.
+        assert_eq!(
+            abbreviate_under("/home/developer/x", Some("/home/dev")),
+            "/home/developer/x"
+        );
+        // Outside home, or no home, passes through.
+        assert_eq!(
+            abbreviate_under("/srv/code", Some("/home/dev")),
+            "/srv/code"
+        );
+        assert_eq!(abbreviate_under("/srv/code", None), "/srv/code");
+    }
 
     #[test]
     fn help_shows_width_chords_and_remapped_filters() {

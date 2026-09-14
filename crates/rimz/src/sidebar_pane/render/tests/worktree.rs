@@ -1115,22 +1115,3 @@ fn repo_header_shows_name_then_path() {
         "the ⌂ path glyph is gone:\n{rendered}"
     );
 }
-#[test]
-fn home_abbreviation_collapses_only_a_home_prefix() {
-    assert_eq!(
-        abbreviate_under("/home/dev/code/query-engine", Some("/home/dev")),
-        "~/code/query-engine"
-    );
-    assert_eq!(abbreviate_under("/home/dev", Some("/home/dev")), "~");
-    // A path that merely shares a textual prefix is not under home.
-    assert_eq!(
-        abbreviate_under("/home/developer/x", Some("/home/dev")),
-        "/home/developer/x"
-    );
-    // Outside home, or no home, passes through.
-    assert_eq!(
-        abbreviate_under("/srv/code", Some("/home/dev")),
-        "/srv/code"
-    );
-    assert_eq!(abbreviate_under("/srv/code", None), "/srv/code");
-}

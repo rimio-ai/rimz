@@ -274,7 +274,7 @@ impl Theme {
         }
     }
 
-    pub(crate) fn pet_body_enabled(&self) -> bool {
+    pub(in crate::sidebar_pane) fn pet_body_enabled(&self) -> bool {
         !self.no_color
     }
 
@@ -414,7 +414,7 @@ impl Theme {
     }
 
     /// An external-identity tone (brand clay, dollar green) at the active depth.
-    pub(crate) fn identity(&self, id: Identity) -> Color {
+    fn identity(&self, id: Identity) -> Color {
         tone_color(self.palette.identity(id))
     }
 
@@ -448,7 +448,7 @@ impl Theme {
 
     /// Money tone: the fixed dollar green emitted like any identity tone —
     /// true RGB at truecolor depth, nearest xterm bucket at indexed depth.
-    pub(crate) fn money_tone(&self) -> Color {
+    fn money_tone(&self) -> Color {
         self.identity(Identity::Money)
     }
 
@@ -495,7 +495,7 @@ fn rgb_color(rgb: (u8, u8, u8), depth: ColorDepth) -> Color {
     tone_color(Tone::from_rgb(rgb, depth))
 }
 
-pub(super) fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
+fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
     match color {
         Color::Reset => None,
         Color::Black => Some((0x00, 0x00, 0x00)),
