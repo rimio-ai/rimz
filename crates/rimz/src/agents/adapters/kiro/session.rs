@@ -425,8 +425,11 @@ pub(super) fn workspace_bucket(workspace: &Path) -> Option<String> {
     })
 }
 
-pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
-    let Some(home) = super::install::home() else {
+pub(super) fn discover(
+    workspaces: &[&Path],
+    login_env: &BTreeMap<String, String>,
+) -> Vec<LocalSessionObservation> {
+    let Some(home) = super::install::engine_home(login_env) else {
         return Vec::new();
     };
     let key = DiscoveryKey {
@@ -615,8 +618,11 @@ pub(super) fn transcript_for_session_under(home: &Path, session_id: &str) -> Opt
     None
 }
 
-pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
-    transcript_for_session_under(&super::install::home()?, session_id)
+pub(super) fn transcript_for_session(
+    session_id: &str,
+    login_env: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
+    transcript_for_session_under(&super::install::engine_home(login_env)?, session_id)
 }
 
 pub(super) fn valid_transcript(path: &Path, session_id: &str) -> bool {

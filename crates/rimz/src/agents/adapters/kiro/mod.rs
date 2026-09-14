@@ -285,9 +285,9 @@ impl crate::agents::capabilities::SessionCapability for KiroAdapter {
     fn discover_local_sessions(
         &self,
         workspaces: &[&Path],
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<LocalSessionObservation> {
-        session::discover(workspaces)
+        session::discover(workspaces, login_env)
     }
 }
 
@@ -323,11 +323,11 @@ impl crate::agents::capabilities::SpendingCapability for KiroAdapter {
         &self,
         session_id: &str,
         prior_path: Option<&Path>,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| session::valid_transcript(path, session_id)) {
             return Some(path.to_path_buf());
         }
-        session::transcript_for_session(session_id)
+        session::transcript_for_session(session_id, login_env)
     }
 }

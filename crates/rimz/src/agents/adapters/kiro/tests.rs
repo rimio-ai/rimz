@@ -651,6 +651,23 @@ fn hooks_path_prefers_override_then_kiro_home() {
 }
 
 #[test]
+fn session_store_follows_home_not_kiro_home() {
+    let env = BTreeMap::from([
+        ("KIRO_HOME".to_owned(), "/tmp/kiro".to_owned()),
+        ("HOME".to_owned(), "/home/user".to_owned()),
+    ]);
+    assert_eq!(
+        install::engine_home(&env),
+        Some(std::path::PathBuf::from("/home/user/.kiro"))
+    );
+    assert_eq!(
+        KiroAdapter.config_home(&env),
+        Some(std::path::PathBuf::from("/tmp/kiro"))
+    );
+    assert_eq!(install::engine_home(&BTreeMap::new()), None);
+}
+
+#[test]
 fn launch_resume_and_presets_use_v3_surface() {
     assert_eq!(
         KiroAdapter.launch_command(
