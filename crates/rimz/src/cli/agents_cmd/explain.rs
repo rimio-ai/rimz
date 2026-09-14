@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use serde::Serialize;
 
+use rimz::agents::capabilities::SystemTextChannel;
 use rimz::agents::{PermissionMode, PresetArgMatcher, PresetField};
 use rimz::config::{SkillName, effective::LaunchAgents};
 use rimz::harness::budget::BudgetSpec;
@@ -433,9 +434,12 @@ impl<'a> ExplainReport<'a> {
                     .map(channel_label),
                 artifact: plan.prompt.artifact.as_deref(),
                 reminder: process.reminder.as_deref(),
-                reminder_channel: plan.reminder_channel.as_ref().map(|channel| {
-                    PresetArgMatcher::try_from(channel)
-                        .map_or_else(|()| "rimz extension".to_owned(), channel_label)
+                reminder_channel: plan.reminder_channel.as_ref().map(|channel| match channel {
+                    SystemTextChannel::TextFlag { flags } => flags.join(" "),
+                    SystemTextChannel::ConfigKey { flags, key } => {
+                        format!("{} {key}", flags.join(" "))
+                    }
+                    SystemTextChannel::ExtensionEnv => "rimz extension".to_owned(),
                 }),
                 reminder_delivered: plan.reminder_channel.is_some() && process.reminder.is_some(),
             },

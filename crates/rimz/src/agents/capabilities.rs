@@ -22,22 +22,6 @@ pub enum SystemTextChannel {
     ExtensionEnv,
 }
 
-/// The argv shape a channel occupies; the extension channel has none.
-impl TryFrom<&SystemTextChannel> for PresetArgMatcher {
-    type Error = ();
-
-    fn try_from(channel: &SystemTextChannel) -> std::result::Result<Self, ()> {
-        match channel {
-            SystemTextChannel::TextFlag { flags } => Ok(Self::TextFlag(flags.clone())),
-            SystemTextChannel::ConfigKey { flags, key } => Ok(Self::ConfigKey {
-                flags: flags.clone(),
-                key: key.clone(),
-            }),
-            SystemTextChannel::ExtensionEnv => Err(()),
-        }
-    }
-}
-
 #[doc(hidden)]
 pub trait CoreCapability: Send + Sync {
     /// The adapter's static identity, branding, capabilities, and
