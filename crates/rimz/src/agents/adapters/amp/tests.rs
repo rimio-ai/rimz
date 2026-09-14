@@ -56,6 +56,13 @@ fn launch_resume_and_preset_commands_match_amp_cli() {
             "T-abc123".to_owned(),
         ])
     );
+    assert!(
+        AmpAdapter
+            .spec()
+            .launch
+            .preset_arg_matcher(crate::agents::PresetField::Effort)
+            .is_none()
+    );
     assert_eq!(AmpAdapter.spec().launch.fork_command("T-abc123"), None);
     assert_eq!(AmpAdapter.spec().launch.compact_command(""), None);
 }
