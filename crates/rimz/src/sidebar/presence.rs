@@ -6,7 +6,6 @@
 //! mapping. A stale writer returns before any accepted-wake side effect.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -20,7 +19,7 @@ use crate::mux::zellij::pane_topology::{
     pane_topology_cache_is_fresh, read_pane_topology_cache, read_presence_desired,
     write_pane_topology_cache,
 };
-use crate::pane::SIDEBAR_CHROME_TITLE;
+use crate::pane::{SIDEBAR_CHROME_TITLE, command_is_launch_chrome};
 use crate::sidebar::cache::write_presence_stamp;
 use crate::utils::time::unix_now_ms;
 use crate::wakeup::events::SidebarEvent;
@@ -129,7 +128,7 @@ pub fn ingest_zellij_wake(
             .as_ref()
             .is_none_or(|existing| incoming.writer != existing.writer);
         let mut cache = incoming.clone();
-        sanitize_topology_cache(&mut cache);
+        cache.scrub_launch_chrome();
         transitions = derive_zellij_transitions(
             existing.as_ref(),
             &cache,
@@ -602,18 +601,6 @@ fn clear_superseded_conflict(
     Ok(())
 }
 
-fn sanitize_topology_cache(cache: &mut PaneTopologyCache) {
-    for pane in &mut cache.panes {
-        if pane
-            .pane_command
-            .as_deref()
-            .is_some_and(command_is_launch_chrome)
-        {
-            pane.pane_command = None;
-        }
-    }
-}
-
 fn write_plugin_presence_sample(
     state: &StatePaths,
     session_name: Option<String>,
@@ -639,31 +626,6 @@ fn write_plugin_presence_sample(
             last_failure: telemetry.last_failure.clone(),
         },
     );
-}
-
-fn command_is_launch_chrome(command: &str) -> bool {
-    let mut tokens = command.split_whitespace().filter(|token| !token.is_empty());
-    let Some(program) = tokens.next() else {
-        return false;
-    };
-    if program_basename(program) != "rimz" || tokens.next() != Some("agents") {
-        return false;
-    }
-    let Some(spec_or_command) = tokens.next() else {
-        return false;
-    };
-    !matches!(
-        spec_or_command,
-        "list" | "ls" | "show" | "focus" | "wait" | "stop" | "exec"
-    )
-}
-
-fn program_basename(program: &str) -> &str {
-    Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or(program)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -73,8 +73,8 @@ pub(super) struct RawListedPane {
     /// Stable Zellij tab id accepted by `new-pane --tab-id`.
     #[serde(default)]
     tab_id: Option<u64>,
-    /// Current on-screen tab position. Older Zellij versions exposed only
-    /// `tab_id`, where that value also served as the position.
+    /// Current on-screen tab position. Every supported Zellij emits it; a
+    /// listing without it falls back to `tab_id`.
     #[serde(default)]
     tab_position: Option<u64>,
     #[serde(default)]
@@ -87,6 +87,12 @@ pub(super) struct RawListedPane {
     pub(super) title: Option<String>,
     #[serde(default)]
     terminal_command: Option<String>,
+    /// Live foreground command, falling back to the pane shell, that Zellij
+    /// reads from the pane's pty for every listing.
+    #[serde(default)]
+    pane_command: Option<String>,
+    #[serde(default)]
+    pane_cwd: Option<String>,
 }
 
 impl From<RawListedPane> for PaneTopologyPane {
@@ -104,8 +110,8 @@ impl From<RawListedPane> for PaneTopologyPane {
             pane_columns: pane.pane_columns,
             pane_x: pane.pane_x,
             title: pane.title,
-            pane_command: None,
-            pane_cwd: None,
+            pane_command: pane.pane_command.filter(|command| !command.is_empty()),
+            pane_cwd: pane.pane_cwd.filter(|cwd| !cwd.is_empty()),
             pane_pid: None,
             terminal_command: pane.terminal_command,
         }
@@ -524,6 +530,7 @@ impl ZellijBackend {
         {
             merge_topology_enrichment(&mut cache, prior);
         }
+        cache.scrub_launch_chrome();
         Ok(cache)
     }
 

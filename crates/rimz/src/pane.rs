@@ -86,6 +86,30 @@ pub(crate) fn command_is_sidebar_chrome(command: &str) -> bool {
     crate::proc::program_label(command) == SIDEBAR_CHROME_TITLE
 }
 
+/// Whether a pane command is the transient `rimz agents <spec>` launcher rather
+/// than a query subcommand. The launcher's argv is chrome, never a pane tenant,
+/// so every Zellij command source scrubs it before a consumer reads it.
+pub(crate) fn command_is_launch_chrome(command: &str) -> bool {
+    let mut tokens = command.split_whitespace();
+    let Some(program) = tokens.next() else {
+        return false;
+    };
+    let program = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    if program != "rimz" || tokens.next() != Some("agents") {
+        return false;
+    }
+    let Some(spec_or_command) = tokens.next() else {
+        return false;
+    };
+    !matches!(
+        spec_or_command,
+        "list" | "ls" | "show" | "focus" | "wait" | "stop" | "exec"
+    )
+}
+
 /// Runtime owner class for records that should appear in live views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -316,6 +340,28 @@ mod tests {
         assert!(pane("terminal_1", "tab_1", Some("sudo rimz-sidebar")).is_rimz_sidebar());
         assert!(!pane("terminal_1", "tab_1", Some("rimz")).is_rimz_sidebar());
         assert!(!pane("terminal_1", "tab_1", Some("rimz-sidebar-helper")).is_rimz_sidebar());
+    }
+
+    #[test]
+    fn launch_chrome_is_agents_launch_not_agents_subcommand() {
+        assert!(command_is_launch_chrome(
+            "rimz agents claude,codex --worktree=quality-pass"
+        ));
+        assert!(command_is_launch_chrome(
+            "/home/me/.cargo/bin/rimz agents claude --worktree"
+        ));
+        for command in [
+            "cargo build",
+            "rimz agents exec codex",
+            "rimz agents wait swift-otter",
+            "rimz agents list",
+            "rimz agents ls",
+            "rimz agents show swift-otter",
+            "rimz agents focus swift-otter",
+            "rimz agents stop swift-otter",
+        ] {
+            assert!(!command_is_launch_chrome(command), "{command}");
+        }
     }
 
     #[test]

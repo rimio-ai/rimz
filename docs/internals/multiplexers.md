@@ -175,7 +175,7 @@ A pane's launch-name pin is separate from room identity. tmux stores it in the p
 
 The sidebar uses the foreground command for display, the spawn command for identity only while the pane root still runs the spawn program (or the foreground is briefly unreported), and cwd for worktree grouping ([sidebar.md → presence model](./sidebar/sidebar.md#presence-model)). A foreground shell therefore demotes a pane's historical agent argv. Foreground, title, and cwd exist on both backends. Spawn is optional because Zellij omits it for panes created with `action new-pane`, while tmux exposes the static `pane_start_command`. **The parity floor for presence is command plus cwd**, which both backends meet.
 
-Zellij adds two wrinkles. The foreground and cwd fields have changed names across Zellij versions, so the adapter takes the first non-empty field among the names Zellij has emitted. A layout-named `rimz-sidebar` pane always reports `rimz-sidebar` as its foreground, so it filters as chrome even when Zellij omits the command fields.
+Zellij adds two wrinkles. The foreground command reaches RimZ as a full argv string, so every Zellij source (the plugin cache on ingest and the authoritative listing) clears a `rimz agents <spec>` launcher command before a consumer reads it. A layout-named `rimz-sidebar` pane always reports `rimz-sidebar` as its foreground, so it filters as chrome even when Zellij omits the command fields.
 
 tmux exposes `pane_floating_flag` from 3.7; older supported releases expand the unknown format empty and report every pane tiled. Floating agent panes stay addressable but out of the room-row projection, and a self-closing sidebar view closes same-view floating panes before its tiled anchor exits.
 
@@ -401,7 +401,7 @@ A timed-out authoritative read aborts the pass instead of falling back to the to
 
 RimZ passes `auto_layout=false` and `stacked_resize=true`, so `Alt+n` uses Zellij's native focused-pane split along the edge that suits the terminal's cell ratio, and closing a pane returns its space to the sibling it split from. It also pins `stacked_pane_list=false`. Zellij 0.45's list mode keeps collapsed stack members in `list-panes` but marks them suppressed and reports the stack's full rectangle for every member; RimZ filters suppressed panes and relies on per-pane geometry, so the classic representation keeps every agent observable with its own rectangle. The birth tree makes the sidebar and compact bar tree siblings. When an add nests the new sidebar into one row, the same transaction stacks every surviving work pane into the right column; repair of an arbitrary pre-existing multi-column layout only reports.
 
-The producer's shrink-confirmation path bypasses `pane-topology.json` and reads `zellij action list-panes --all --json`, merging cached foreground command and cwd only as enrichment. If that query fails, the backend falls back to the topology cache with a debug log. tmux always lists from the server, so the authoritative flag changes nothing there.
+The producer's shrink-confirmation path bypasses `pane-topology.json` and reads `zellij action list-panes --all --json`, which carries Zellij's own live `pane_command` and `pane_cwd` for every terminal pane; the cached plugin copy fills only a field the listing left empty, and pid and geometry come from the cache the same way. If that query fails, the backend falls back to the topology cache with a debug log. tmux always lists from the server, so the authoritative flag changes nothing there.
 
 ### The daemon view and resumed births
 
@@ -436,7 +436,7 @@ These are the upstream quirks the backend works around. The upstream surfaces ar
 - **A server with no config file births a setup wizard that drops `new-pane` mounts** (layout-born panes mount normally). The test harness seeds a config at the home-relative path Zellij prefers; in production a first-time user dismisses the wizard once and reconcile retries the mount.
 - **Plugin keybinds pause briefly on 0.44.x.** Zellij's `KeybindPipe` completion path can freeze the UI for about a second before a plugin keybind acts. The focus-key jump still lands.
 - **Session names are short and path-unique** (`rimz-<basename-slug>-<hash6>`): readable, under Zellij's macOS AF_UNIX socket budget, and distinct for same-basename roots. When the recorded and derived names diverge, `rimz start` retires the stale session before rebirth.
-- **The presence plugin reports identity and geometry, not live process state.** RimZ derives cwd, pid, and process start through the process backend and treats the spawn command as identity.
+- **The presence plugin reports identity, geometry, foreground command, and cwd, not process identity.** The command follows `CommandChanged` and the cwd follows `CwdChanged`; RimZ resolves pid and process start host-side through the process backend and treats the spawn command as identity.
 - **Tests isolate servers per test.** Tests construct the backend with a private runtime dir, since Zellij locates its server socket under `XDG_RUNTIME_DIR`. This is the counterpart of tmux's `with_socket`, and every command goes through the single `ZellijBackend::cmd` chokepoint, so one field threads isolation everywhere.
 
 ## The Zellij presence plugin
