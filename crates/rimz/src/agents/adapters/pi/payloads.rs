@@ -16,7 +16,7 @@ use super::super::context::{RateLimitWindow, WindowSource};
 /// Pi's compaction cause, added to extension events in 0.79.10.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum PiCompactionReason {
+pub(super) enum PiCompactionReason {
     Manual,
     Threshold,
     Overflow,
@@ -25,7 +25,7 @@ pub(crate) enum PiCompactionReason {
 }
 
 impl PiCompactionReason {
-    pub(crate) const fn auto_flag(&self) -> Option<bool> {
+    pub(super) const fn auto_flag(&self) -> Option<bool> {
         match self {
             Self::Manual => Some(false),
             Self::Threshold | Self::Overflow => Some(true),
@@ -36,7 +36,7 @@ impl PiCompactionReason {
 
 /// The flattened payload the RimZ pi extension posts for every event.
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct PiHookPayload {
+pub(super) struct PiHookPayload {
     /// Every event: stable session identity supplied by the RimZ extension.
     pub session_id: Option<String>,
     /// Every event after Pi reports session metadata: the `/name` title.
@@ -90,7 +90,7 @@ pub(crate) struct PiHookPayload {
 }
 
 #[derive(Debug)]
-pub(crate) struct PiRateLimitWindow {
+pub(super) struct PiRateLimitWindow {
     used_percentage: Option<u8>,
     resets_at: Option<Timestamp>,
     duration_mins: Option<u32>,
@@ -98,7 +98,7 @@ pub(crate) struct PiRateLimitWindow {
 }
 
 impl PiRateLimitWindow {
-    pub(crate) fn to_domain(&self) -> RateLimitWindow {
+    pub(super) fn to_domain(&self) -> RateLimitWindow {
         RateLimitWindow {
             used_percentage: self.used_percentage,
             resets_at: self.resets_at,
@@ -181,7 +181,7 @@ fn timestamp_from_value(value: &Value) -> Option<Timestamp> {
 
 /// Tolerant parse: non-conforming typed fields read as the empty default while
 /// independently valid rate-limit windows survive sibling drift.
-pub(crate) fn parse_payload(payload: &Value) -> PiHookPayload {
+pub(super) fn parse_payload(payload: &Value) -> PiHookPayload {
     let session_id = payload
         .get("session_id")
         .and_then(Value::as_str)
@@ -201,7 +201,7 @@ pub(crate) fn parse_payload(payload: &Value) -> PiHookPayload {
 /// Whether an `agent_end` payload reports a dead turn: an explicit error or
 /// abort `stopReason`, or any `errorMessage` riding the last assistant
 /// message.
-pub(crate) fn agent_end_errored(parsed: &PiHookPayload) -> bool {
+pub(super) fn agent_end_errored(parsed: &PiHookPayload) -> bool {
     matches!(parsed.stop_reason.as_deref(), Some("error" | "aborted"))
         || parsed
             .error_message

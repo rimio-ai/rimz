@@ -15,13 +15,13 @@
 //! `session.deleted` and the server-scoped `dispose` sweep normalize to one
 //! per-session `session_ended` event, with pane liveness as the crash backstop.
 
-pub(crate) mod account;
+mod account;
 mod database;
-pub(crate) mod payloads;
-pub(crate) mod spend;
+mod payloads;
+mod spend;
 mod transcript;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -313,7 +313,7 @@ const OPENCODE_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
 );
 
 #[derive(Clone, Debug, Default)]
-pub struct OpencodeAdapter;
+pub(in crate::agents) struct OpencodeAdapter;
 
 impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
     fn spec(&self) -> &'static AgentSpec {
@@ -659,7 +659,7 @@ impl crate::agents::capabilities::SpendingCapability for OpencodeAdapter {
         resume: Option<&crate::agents::spending::SpendCursor>,
         prices: &PriceBook,
     ) -> crate::agents::spending::SpendParse {
-        spend::parse_opencode_spend(path, resume, prices)
+        spend::parse(path, resume, prices)
     }
 }
 

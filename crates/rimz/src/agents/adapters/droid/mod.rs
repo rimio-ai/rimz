@@ -12,7 +12,7 @@ mod process;
 mod spend;
 mod transcript;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::path::{Path, PathBuf};
 
@@ -252,7 +252,7 @@ const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --sou
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source droid";
 
 #[derive(Clone, Debug, Default)]
-pub struct DroidAdapter;
+pub(in crate::agents) struct DroidAdapter;
 
 impl crate::agents::capabilities::CoreCapability for DroidAdapter {
     fn spec(&self) -> &'static AgentSpec {

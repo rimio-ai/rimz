@@ -9,8 +9,7 @@
 //!
 //! Rows are mutable — a streaming assistant message is updated in place when it
 //! completes — so each refresh cold-folds the whole table and replaces this
-//! database's cache set rather than resuming from a cursor. See
-//! [`parse_opencode_spend`].
+//! database's cache set rather than resuming from a cursor. See [`parse`].
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -95,11 +94,7 @@ struct MessageCache {
 /// refresh reparses the full table and returns `replace_entries`, trading the
 /// append-only O(delta) read for correctness against an in-place store. The
 /// `resume` cursor is ignored.
-pub(crate) fn parse_opencode_spend(
-    path: &Path,
-    _resume: Option<&SpendCursor>,
-    prices: &PriceBook,
-) -> SpendParse {
+pub(super) fn parse(path: &Path, _resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let Some(conn) = open_readonly(path) else {
         return empty_parse(0);
     };
@@ -401,7 +396,7 @@ mod tests {
             ),
         );
 
-        let parsed = parse_opencode_spend(&path, None, &prices());
+        let parsed = parse(&path, None, &prices());
         assert_eq!(parsed.entries.len(), 1);
         let entry = &parsed.entries[0];
         assert!((entry.cost_usd - 0.42).abs() < 1e-9);
@@ -433,7 +428,7 @@ mod tests {
         insert_tool_part(&path, "msg", "read");
         insert_tool_part(&path, "msg", "read");
 
-        let parsed = parse_opencode_spend(&path, None, &prices());
+        let parsed = parse(&path, None, &prices());
 
         assert_eq!(
             parsed.entries[0].tool_calls,
@@ -470,7 +465,7 @@ mod tests {
             }"#,
         );
 
-        let parsed = parse_opencode_spend(&path, None, &prices());
+        let parsed = parse(&path, None, &prices());
         assert_eq!(parsed.entries.len(), 2);
         let expected = 10.0 * 0.000001 + 30.0 * 0.0000001 + 40.0 * 0.0000005 + 20.0 * 0.000002;
         assert!((parsed.entries[0].cost_usd - expected).abs() < 1e-12);
@@ -501,7 +496,7 @@ mod tests {
             }"#,
         );
 
-        let parsed = parse_opencode_spend(&path, None, &prices());
+        let parsed = parse(&path, None, &prices());
         assert_eq!(parsed.entries.len(), 2);
         assert_eq!(parsed.entries[0].output, 50);
         assert!((parsed.entries[0].cost_usd - 50.0 * 0.000004).abs() < 1e-12);
@@ -542,7 +537,7 @@ mod tests {
             }"#,
         );
 
-        let parsed = parse_opencode_spend(&path, None, &prices());
+        let parsed = parse(&path, None, &prices());
         assert_eq!(parsed.entries.len(), 2);
         assert_eq!(
             (
@@ -572,7 +567,7 @@ mod tests {
         ] {
             insert_message(&path, data);
         }
-        let first = parse_opencode_spend(&path, None, &prices());
+        let first = parse(&path, None, &prices());
         assert!(first.entries.is_empty());
         // A mutable store is cold-folded whole: no resume cursor, and the fold is
         // authoritative for the file so it replaces the cache set.
@@ -583,7 +578,7 @@ mod tests {
             &path,
             r#"{"modelID":"gpt-priced","providerID":"openai","tokens":{"input":1,"output":1}}"#,
         );
-        let second = parse_opencode_spend(&path, Some(&first.cursor), &prices());
+        let second = parse(&path, Some(&first.cursor), &prices());
         assert_eq!(second.entries.len(), 1);
         assert!(second.replace_entries);
     }
@@ -601,7 +596,7 @@ mod tests {
             &path,
             r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai"}"#,
         );
-        let mid_stream = parse_opencode_spend(&path, None, &prices());
+        let mid_stream = parse(&path, None, &prices());
         assert!(mid_stream.entries.is_empty());
 
         // The turn completes: the same row is rewritten with tokens+cost, and a
@@ -615,7 +610,7 @@ mod tests {
             &path,
             r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai","tokens":{"input":1,"output":1}}"#,
         );
-        let completed = parse_opencode_spend(&path, Some(&mid_stream.cursor), &prices());
+        let completed = parse(&path, Some(&mid_stream.cursor), &prices());
         assert_eq!(completed.entries.len(), 2);
         assert!((completed.entries[0].cost_usd - 0.5).abs() < 1e-9);
     }
@@ -630,7 +625,7 @@ mod tests {
             &path,
             r#"{"modelID":"gpt-priced","providerID":"openai","tokens":{"input":100,"output":20,"cache":{"read":30},"total":200}}"#,
         );
-        let parsed = parse_opencode_spend(&path, None, &prices());
+        let parsed = parse(&path, None, &prices());
         assert_eq!(parsed.entries.len(), 1);
         let entry = &parsed.entries[0];
         // missing = 200 - (100 + 20 + 30) = 50 → output = 20 + 50 = 70.

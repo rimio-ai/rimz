@@ -175,7 +175,7 @@ pub(super) fn pi_session_roots() -> Vec<PathBuf> {
     roots
 }
 
-pub(crate) fn pi_config_dir() -> PathBuf {
+pub(super) fn pi_config_dir() -> PathBuf {
     pi_config_dir_from(
         std::env::var("PI_CODING_AGENT_DIR").ok().as_deref(),
         std::env::var("HOME").ok().as_deref().map(Path::new),
@@ -202,7 +202,7 @@ pub(super) fn pi_config_dir_from(configured: Option<&str>, home: Option<&Path>) 
 /// `prices`. Any excess of `totalTokens` over the itemized parts is folded into
 /// output so sparse records still contribute their full reported total. Lines
 /// without a `"usage"` keyword are skipped before deserialization.
-pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
+pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let mut state: PiSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
     let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
@@ -348,7 +348,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = parse_pi_spend(&path, None, &prices()).entries;
+        let entries = parse(&path, None, &prices()).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
         assert_eq!(entries[0].input, 100);
@@ -375,7 +375,7 @@ mod tests {
             writeln!(f, "{line}").unwrap();
         }
 
-        let entries = parse_pi_spend(&path, None, &prices()).entries;
+        let entries = parse(&path, None, &prices()).entries;
 
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].model.as_deref(), Some("response-model"));
@@ -397,7 +397,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = parse_pi_spend(&path, None, &prices()).entries;
+        let entries = parse(&path, None, &prices()).entries;
 
         assert_eq!(
             entries[0].tool_calls,
@@ -423,7 +423,7 @@ mod tests {
         )
         .unwrap();
 
-        let first = parse_pi_spend(&path, None, &prices());
+        let first = parse(&path, None, &prices());
         assert_eq!(first.entries.len(), 1);
         assert_eq!(first.origin.as_deref(), Some(cwd.as_path()));
 
@@ -437,7 +437,7 @@ mod tests {
         )
         .unwrap();
 
-        let second = parse_pi_spend(&path, Some(&first.cursor), &prices());
+        let second = parse(&path, Some(&first.cursor), &prices());
         assert_eq!(second.entries.len(), 1);
         assert!((second.entries[0].cost_usd - 0.84).abs() < 1e-9);
         assert_eq!(second.origin.as_deref(), Some(cwd.as_path()));
@@ -460,7 +460,7 @@ mod tests {
             writeln!(f, "{line}").unwrap();
         }
 
-        assert!(parse_pi_spend(&path, None, &prices()).entries.is_empty());
+        assert!(parse(&path, None, &prices()).entries.is_empty());
     }
 
     #[test]
@@ -476,7 +476,7 @@ mod tests {
             writeln!(f, "{line}").unwrap();
         }
 
-        let entries = parse_pi_spend(&path, None, &prices()).entries;
+        let entries = parse(&path, None, &prices()).entries;
         assert_eq!(entries.len(), 3);
         assert_eq!(
             (
@@ -507,7 +507,7 @@ mod tests {
             writeln!(f, "{line}").unwrap();
         }
 
-        let parsed = parse_pi_spend(&path, None, &prices());
+        let parsed = parse(&path, None, &prices());
 
         assert_eq!(parsed.entries.len(), 3);
         assert_eq!(
@@ -537,7 +537,7 @@ mod tests {
         )
         .unwrap();
 
-        let parsed = parse_pi_spend(&path, None, &prices());
+        let parsed = parse(&path, None, &prices());
         assert_eq!(parsed.entries.len(), 1);
         let entry = &parsed.entries[0];
         // missing = 200 - (100 + 20 + 30) = 50 → output = 20 + 50 = 70.
