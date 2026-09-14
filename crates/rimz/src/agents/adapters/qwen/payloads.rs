@@ -80,6 +80,7 @@ pub(super) enum QwenStopError {
     InvalidRequest,
     ServerError,
     MaxOutputTokens,
+    LoopDetected,
     #[default]
     #[serde(other)]
     Unknown,
