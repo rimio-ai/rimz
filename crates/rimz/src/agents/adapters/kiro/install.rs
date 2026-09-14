@@ -53,11 +53,11 @@ pub(super) fn hooks_path() -> Result<PathBuf> {
     )
 }
 
-pub(super) fn home() -> Option<PathBuf> {
-    resolve_home(
-        std::env::var_os("KIRO_HOME").as_deref(),
-        std::env::var_os("HOME").as_deref(),
-    )
+/// The `.kiro` directory the v3 engine reads sessions and global hooks from.
+/// The engine resolves it from the OS home and never reads `KIRO_HOME`, which
+/// moves only the launcher's settings (verified on Kiro CLI 2.21.4).
+pub(super) fn engine_home(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    resolve_home(None, login_env.get("HOME").map(OsStr::new))
 }
 
 pub(super) fn resolve_home(kiro_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
