@@ -145,6 +145,38 @@ fn stop_hook_reads_turn_error_from_the_transcript_path() {
 }
 
 #[test]
+fn statusline_push_keeps_a_model_limit_turn_paused() {
+    // Every statusline push re-derives the marker from the tail, so the tail
+    // must read Claude's structured `error` as `StopFailure` does or it
+    // overwrites the hook's pause with a failure.
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            "{\"type\":\"assistant\",\"isApiErrorMessage\":true,\"error\":\"rate_limit\",",
+            "\"apiErrorStatus\":429,\"timestamp\":\"2026-09-13T08:00:00.000Z\",",
+            "\"message\":{\"content\":[{\"type\":\"text\",\"text\":",
+            "\"You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.\"}]}}\n",
+            "{\"type\":\"system\",\"subtype\":\"turn_duration\"}\n",
+        ),
+    )
+    .unwrap();
+
+    let error = ClaudeAdapter
+        .observe_context(
+            "claude",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": transcript.to_str().unwrap(),
+            }),
+        )
+        .and_then(|observation| observation.context.turn_error)
+        .expect("the dead turn is detected");
+    assert_eq!(error.class, TurnErrorClass::PausedRateLimit);
+}
+
+#[test]
 fn turn_interrupted_reads_the_tail_from_the_payload_path() {
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("session.jsonl");
@@ -196,6 +228,34 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
 
     assert_eq!(marker("rate_limit").class, TurnErrorClass::PausedRateLimit);
     assert_eq!(marker("overloaded").class, TurnErrorClass::PausedOverloaded);
+
+    // Claude tags spend caps `rate_limit` too, and a model-scoped cap names no
+    // pause phrase: the shared classifier files both as the tail does.
+    let rate_limited = |text: &str| {
+        hook_output(
+            &ClaudeAdapter,
+            "StopFailure",
+            &json!({
+                "session_id": "sess-1",
+                "error": "rate_limit",
+                "last_assistant_message": text
+            }),
+        )
+        .turn_error()
+        .cloned()
+        .expect("marker")
+        .class
+    };
+    assert_eq!(
+        rate_limited("You've hit your monthly spend limit."),
+        TurnErrorClass::PausedSpendLimit
+    );
+    assert_eq!(
+        rate_limited(
+            "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+        ),
+        TurnErrorClass::PausedRateLimit
+    );
 
     let transient = hook_output(
         &ClaudeAdapter,

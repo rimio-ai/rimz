@@ -169,6 +169,36 @@ fn named_quota_limit_marker_becomes_actionable_after_its_reset() {
 }
 
 #[test]
+fn model_scoped_limit_marker_stays_paused_past_its_window_reset() {
+    // A Claude Fable cap arrives as a rate-limit marker whose only spent
+    // window is model-scoped; scoped windows never make the park actionable.
+    let label = "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.";
+    for resets_in in [3_600, -60] {
+        let fable = RateLimitWindow {
+            scope: Some(crate::agents::RateLimitWindowScope {
+                id: "fable".to_owned(),
+                label: "Fable".to_owned(),
+            }),
+            ..window(100, resets_in)
+        };
+        let session = agent("claude", "fable-capped", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(60)
+            .paused_turn_error(10, label);
+        let snapshot = room_with_agent_panes_and_capacities(
+            vec![session],
+            provider_capacity("claude", vec![fable]),
+        );
+        assert_eq!(
+            row(&snapshot, "fable-capped").status(),
+            Some(AgentStatus::Paused),
+            "reset in {resets_in}"
+        );
+    }
+}
+
+#[test]
 fn legacy_session_limit_marker_parks_while_budget_is_spent() {
     let session = agent("claude", "session-limited", AgentStatus::Running, 0)
         .worktree("/repo/main")

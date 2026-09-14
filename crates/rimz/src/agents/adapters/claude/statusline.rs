@@ -153,6 +153,28 @@ pub(crate) fn cap_turn_error_label(text: &str) -> Option<String> {
     Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
 }
 
+/// Classify one Claude API-error turn from its structured fields and label.
+/// `StopFailure` and the transcript tail both carry Claude's `error` value, so
+/// both paths call this and cannot disagree whichever writes the marker last.
+/// A spend-limit label wins because Claude tags spend caps `rate_limit`/429 too;
+/// otherwise `rate_limit`/429 pauses on the rate window whatever the text says
+/// ("You've reached your Fable limit"), and `overloaded` pauses as transient.
+pub(super) fn classify_api_error(
+    error: Option<&str>,
+    status: Option<u64>,
+    label: Option<&str>,
+) -> TurnErrorClass {
+    let label_class = TurnErrorClass::classify_label(label);
+    if label_class == TurnErrorClass::PausedSpendLimit {
+        return label_class;
+    }
+    match (error.map(str::trim), status) {
+        (Some("rate_limit"), _) | (_, Some(429)) => TurnErrorClass::PausedRateLimit,
+        (Some("overloaded"), _) => TurnErrorClass::PausedOverloaded,
+        _ => label_class,
+    }
+}
+
 enum RestingTurnOutcome {
     Interrupted(Timestamp),
     Died(AgentTurnError),
@@ -164,11 +186,12 @@ enum TranscriptScope<'a> {
     Subagent(&'a str),
 }
 
-/// Detect a turn that died on a provider API error with no `Stop` hook to
-/// record it. Claude aborts such a turn by writing an `assistant` transcript
-/// entry flagged `isApiErrorMessage: true` (followed by a `system` /
-/// `turn_duration` record) and firing no hook, so the transcript tail is the
-/// only machine-readable death certificate.
+/// Detect a turn that died on a provider API error from the transcript tail.
+/// Claude aborts such a turn by writing an `assistant` entry flagged
+/// `isApiErrorMessage: true` (followed by a `system` / `turn_duration` record).
+/// Current Claude also fires `StopFailure`; the tail is the backstop for older
+/// builds and late-installed hooks, and every statusline push re-derives the
+/// marker from it, so both paths share [`classify_api_error`].
 ///
 /// Scanning the bounded tail newest-first, the first conversation-bearing
 /// entry — `type` of `assistant`/`user`, not a sidechain, carrying a parseable
@@ -248,7 +271,11 @@ fn detect_resting_turn_outcome(
         {
             let label = turn_error_label(&value);
             return Some(RestingTurnOutcome::Died(AgentTurnError {
-                class: TurnErrorClass::classify_label(label.as_deref()),
+                class: classify_api_error(
+                    value.get("error").and_then(Value::as_str),
+                    value.get("apiErrorStatus").and_then(Value::as_u64),
+                    label.as_deref(),
+                ),
                 at,
                 label,
             }));
@@ -783,6 +810,44 @@ mod tests {
                 .class,
             TurnErrorClass::Failed
         );
+    }
+
+    #[test]
+    fn api_error_structured_fields_classify_ahead_of_the_label() {
+        let entry = |fields: &str, text: &str| {
+            format!(
+                r#"{{"type":"assistant","isApiErrorMessage":true,{fields}"timestamp":"2026-09-13T08:00:00.000Z","message":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
+            )
+        };
+        let fable = "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.";
+        let rate_limit = r#""error":"rate_limit","apiErrorStatus":429,"#;
+        let error = detect_turn_error(&entry(rate_limit, fable)).expect("marker");
+        assert_eq!(error.label, cap_turn_error_label(fable));
+
+        for (fields, text, class) in [
+            (rate_limit, fable, TurnErrorClass::PausedRateLimit),
+            (
+                r#""apiErrorStatus":429,"#,
+                "Opus limit",
+                TurnErrorClass::PausedRateLimit,
+            ),
+            (
+                rate_limit,
+                "monthly spend limit",
+                TurnErrorClass::PausedSpendLimit,
+            ),
+            (
+                r#""error":"overloaded","#,
+                "Bad Request",
+                TurnErrorClass::PausedOverloaded,
+            ),
+        ] {
+            assert_eq!(
+                detect_turn_error(&entry(fields, text)).unwrap().class,
+                class,
+                "{text}"
+            );
+        }
     }
 
     #[test]
