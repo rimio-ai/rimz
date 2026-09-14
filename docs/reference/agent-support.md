@@ -142,7 +142,7 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Antigravity | `~/.gemini/antigravity-cli` | none | `~/.agents/skills` | refused |
 | Copilot | `~/.copilot` | `COPILOT_HOME` | `~/.agents/skills` | accepted |
 | Droid | `~/.factory` | none | `~/.agents/skills` | accepted |
-| Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR`, else `XDG_CONFIG_HOME/cursor` on Linux and BSD | `~/.agents/skills` | accepted |
+| Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR`, else `XDG_CONFIG_HOME/cursor` | `~/.agents/skills` | accepted |
 | Amp | `~/.config/amp` | `XDG_CONFIG_HOME` + `/amp` | `~/.agents/skills` | refused |
 | Kiro | `~/.kiro` | `KIRO_HOME` | `<home>/skills` | refused |
 | Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted |

@@ -362,7 +362,7 @@ Structured permission, question, and plan requests exist only in [ACP](#acp-serv
 
 ## Command status line
 
-`statusLine` in `~/.cursor/cli-config.json` runs a command that renders the status line. The docs mention the feature in the changelog only; the fields below come from the config schema (`../cursor-config/dist/schema.js`) and the runner (`./src/hooks/use-status-line.ts` in `1931.index.js`).
+`statusLine` in the global `cli-config.json` (see [Configuration files](#configuration-files)) runs a command that renders the status line. The docs mention the feature in the changelog only; the fields below come from the config schema (`../cursor-config/dist/schema.js`) and the runner (`./src/hooks/use-status-line.ts` in `1931.index.js`).
 
 ```json
 {
@@ -415,7 +415,8 @@ The CLI writes transcripts under `~/.cursor/projects/<project>/agent-transcripts
 | Transcript | Path under `agent-transcripts/` |
 | --- | --- |
 | Root conversation | `<conversation_id>/<conversation_id>.jsonl` |
-| Subagent, as written by the baseline's subagent transcript store | `<parent_conversation_id>/subagents/<subagent_id>.jsonl` |
+| Subagent state the parent conversation carries (`subagentStates`) | `<parent_conversation_id>/subagents/<subagent_id>.jsonl` |
+| Task subagent run by the CLI, through its own primary writer | `<subagent_id>/<subagent_id>.jsonl` |
 | Lookup fallbacks | `<id>/<id>.jsonl` for a subagent, then the legacy flat `<id>.jsonl`; `.txt` variants of each |
 
 Hooks expose the root path as `transcript_path` and `CURSOR_TRANSCRIPT_PATH`, and `subagentStop` exposes the child path as `agent_transcript_path`. Each is the first candidate that exists, or `null`.
@@ -432,7 +433,7 @@ The file also holds thinking and tool records. Assistant `text` blocks mix visib
 
 ### Chat store
 
-The CLI keeps each conversation in `~/.cursor/chats/<md5>/<session id>/`, where `<md5>` is the lowercase hex MD5 of the absolute, resolved workspace path (bundle: `./src/state/index.ts`). A directory holds `store.db` and a `meta.json` sidecar.
+The CLI keeps each conversation in `<config dir>/chats/<md5>/<session id>/`, where `<config dir>` is the directory that holds the global `cli-config.json` (see [Configuration files](#configuration-files)) and `<md5>` is the lowercase hex MD5 of the absolute, resolved workspace path (bundle: `./src/state/index.ts`). A directory holds `store.db` and a `meta.json` sidecar.
 
 `store.db` is SQLite in WAL mode with `PRAGMA user_version = 1` and a 5-second busy timeout (bundle: `../cursor-sdk-local-runtime/dist/run-store/sqlite-blob-store.js`):
 
@@ -467,7 +468,7 @@ The pending entry records neither the terminal UI's focus nor a partially select
 
 ### Child chats
 
-A subagent's chat directory sits in the same `chats/<md5>/` bucket, named by the child's `agentId`. Its `meta['0']` JSON adds `subagentInfo` with `parentAgentId`, `rootParentAgentId`, `toolCallId`, and `typeName` (bundle: `./src/subagent/cli-subagent-host-adapter.ts` in `7569.index.js`). Captured on 2026.07.09, a child directory had no `meta.json`, and the child's transcript ended with a `turn_ended` row once the child finished; the baseline's subagent transcript store writes that transcript under the parent's `subagents/` directory, as listed in [Transcripts](#transcripts).
+A subagent's chat directory sits in the same `chats/<md5>/` bucket, named by the child's `agentId`. Its `meta['0']` JSON adds `subagentInfo` with `parentAgentId`, `rootParentAgentId`, `toolCallId`, and `typeName` (bundle: `./src/subagent/cli-subagent-host-adapter.ts` in `7569.index.js`). Captured on 2026.07.09, a child directory had no `meta.json`, and the child's transcript ended with a `turn_ended` row once the child finished; the CLI host adapter gives the child its own primary transcript writer, so the transcript sits at `<subagent_id>/<subagent_id>.jsonl` (bundle: `./src/subagent/cli-subagent-host-adapter.ts`), as listed in [Transcripts](#transcripts).
 
 Background subagent files under `~/.cursor/subagents/` have no published format.
 
@@ -616,8 +617,10 @@ The team [Admin API](https://cursor.com/docs/account/teams/admin-api.md) returns
 | Global, macOS and Linux | `~/.cursor/cli-config.json` | all CLI settings |
 | Global, Windows | `%USERPROFILE%\.cursor\cli-config.json` | all CLI settings |
 | Global override | `$CURSOR_CONFIG_DIR/cli-config.json` | all CLI settings |
-| Global, Linux and BSD | `$XDG_CONFIG_HOME/cursor/cli-config.json` | all CLI settings |
+| Global, XDG override, every platform | `$XDG_CONFIG_HOME/cursor/cli-config.json` | all CLI settings |
 | Project | `<project>/.cursor/cli.json` | permissions only; ignored with the hidden `--disable-project-configs` |
+
+The global rows resolve in one order with no fallback: a non-blank `$CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor` when `XDG_CONFIG_HOME` is non-blank, else `~/.cursor` (bundle: `../cursor-config/dist/paths.js`). A missing file at the resolved path is created from defaults there; `~/.cursor/cli-config.json` is not consulted. User hooks (`~/.cursor/hooks.json`) and `projects/` transcripts stay under the home directory.
 
 The file is pure JSON with `version` `1`. Cursor repairs missing fields and moves a corrupted file aside as `.bad` ([configuration.md](https://cursor.com/docs/cli/reference/configuration.md)). The CLI rewrites the whole file from its schema through a temp file and rename, so keys outside the schema are dropped.
 
