@@ -233,6 +233,20 @@ if (globalThis[Symbol.for("rimz.pi.primary-session")]?.id !== "sess-subprocess" 
 }}
 subprocessHandlers.get("session_shutdown")({{ reason: "quit" }}, subprocessCtx);
 
+if (hasNativeSettled) {{
+  const {{ pi: dialogPi, handlers: dialogHandlers }} = makePi();
+  const dialogCtx = {{
+    sessionManager: {{ getSessionId: () => "sess-dialog", getCwd: () => "/repo" }},
+    hasUI: true,
+    mode: "interactive",
+    isIdle: () => false,
+  }};
+  rimz(dialogPi);
+  dialogHandlers.get("ui_prompt_start")({{ reason: "open", kind: "select" }}, dialogCtx);
+  dialogHandlers.get("agent_settled")({{}}, dialogCtx);
+  dialogHandlers.get("ui_prompt_end")({{ reason: "close", kind: "select" }}, dialogCtx);
+}}
+
 const readPayloads = async () => {{
   try {{
     const text = await fs.readFile({}, "utf8");
@@ -243,12 +257,15 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-const expectedPayloads = hasNativeSettled ? 23 : 22;
+const expectedPayloads = hasNativeSettled ? 25 : 22;
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= expectedPayloads) break;
   await new Promise((resolve) => setTimeout(resolve, 20));
 }}
+// Give a wrongly forwarded straggler time to land before asserting absence.
+await new Promise((resolve) => setTimeout(resolve, 200));
+payloads = await readPayloads();
 if (payloads.length < expectedPayloads) {{
   throw new Error(`expected ${{expectedPayloads}} forwarded payloads, got ${{payloads.length}}`);
 }}
@@ -264,6 +281,11 @@ if (uiStarts.length !== 1 || uiEnds.length !== 1 || uiStarts[0].ui_prompt_id !==
     uiStarts[0].ui_prompt_title !== "Allow deploy?" || uiStarts[0].has_ui !== true ||
     uiEnds[0].ui_prompt_id !== "ui_prompt:1") {{
   throw new Error(`idle, rpc, or questionnaire dialogs leaked, or the in-turn dialog lost its key: ${{JSON.stringify({{ uiStarts, uiEnds }})}}`);
+}}
+const dialogPayloads = payloads.filter((payload) => payload.session_id === "sess-dialog")
+  .map((payload) => payload.hook_event_name).sort().join("|");
+if (hasNativeSettled && dialogPayloads !== "agent_settled|ui_prompt_start") {{
+  throw new Error(`a dialog closed after the settle reopened the turn: ${{dialogPayloads}}`);
 }}
 if (byEvent.tool_execution_end?.tool_call_id !== "sibling-call") {{
   throw new Error(`tool_execution_end lost correlation: ${{JSON.stringify(byEvent.tool_execution_end)}}`);

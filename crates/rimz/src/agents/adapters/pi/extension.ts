@@ -383,6 +383,9 @@ export default function rimz(pi) {
     const id = sessionId(ctx);
     const verdict = verdictBySession.get(id) ?? {};
     openQuestionnaires.clear();
+    // The settle already ended the wait; a dialog closed after it must not
+    // reopen the turn as out-of-turn tool activity.
+    uiPromptBySession.delete(id);
     feed("agent_settled", ctx, verdict);
     feedChildStop(ctx, verdict);
     verdictBySession.delete(id);
