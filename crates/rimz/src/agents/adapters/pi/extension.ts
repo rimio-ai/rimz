@@ -30,6 +30,19 @@ const versionAtLeast = (version, floor) => {
 const hasAgentSettled = versionAtLeast(PI_VERSION, [0, 80, 4]);
 const PARENT_SESSION_ENV = "RIMZ_PI_PARENT_SESSION";
 const PRIMARY_SESSION = Symbol.for("rimz.pi.primary-session");
+const LAUNCH_REMINDERS_ENV = "RIMZ_LAUNCH_REMINDERS";
+const LAUNCH_REMINDERS = Symbol.for("rimz.launch-reminders");
+
+// RimZ launch reminders ride the launch env. The first instance in a process
+// claims them off `process.env`, so tool subprocesses and child Pi processes
+// never inherit a root's reminders.
+const claimLaunchReminders = () => {
+  if (!(LAUNCH_REMINDERS in globalThis)) {
+    globalThis[LAUNCH_REMINDERS] = process.env[LAUNCH_REMINDERS_ENV] || undefined;
+    delete process.env[LAUNCH_REMINDERS_ENV];
+  }
+  return globalThis[LAUNCH_REMINDERS];
+};
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const roundMaybe = (value) =>
@@ -86,6 +99,7 @@ const windowFromHeaders = (headers, prefix, defaultMins, capturedAt) => {
 };
 
 export default function rimz(pi) {
+  const launchReminders = claimLaunchReminders();
   const usageBySession = new Map();
   const costBySession = new Map();
   const verdictBySession = new Map();
@@ -351,6 +365,12 @@ export default function rimz(pi) {
       feedChildStart(ctx);
     }
     feed("before_agent_start", ctx, { prompt: ev?.prompt });
+    // Pi rebuilds the base prompt every turn and chains extension results, so
+    // appending here adds to APPEND_SYSTEM.md instead of replacing it. Only the
+    // primary session carries them; in-process children stay unreminded.
+    if (isPrimary && launchReminders && typeof ev?.systemPrompt === "string") {
+      return { systemPrompt: `${ev.systemPrompt}\n\n${launchReminders}` };
+    }
   });
   pi.on("agent_end", (ev, ctx) => {
     // The prompt's last assistant message carries the turn verdict and usage.

@@ -344,7 +344,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
         assert!(reminder.contains("<system_reminder>"));
         assert_eq!(
             plan.reminder_channel.is_some(),
-            matches!(kind, "claude" | "qwen")
+            matches!(kind, "claude" | "qwen" | "pi")
         );
         if kind == "amp" {
             continue;

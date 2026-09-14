@@ -531,7 +531,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         let channel = crate::agents::find_definition(kind)
             .and_then(|adapter| adapter.append_system_text_channel())
             .expect("system text matcher");
-        let matcher = crate::agents::PresetArgMatcher::from(&channel);
+        let matcher = channel.arg_matcher().expect("argv channel");
         let occurrences = matcher.occurrences(&process.provider_argv);
         assert_eq!(
             occurrences.len(),
@@ -571,8 +571,10 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             let channel = crate::agents::find_definition(kind)
                 .and_then(|adapter| adapter.append_system_text_channel())
                 .expect("system text channel");
-            let occurrences =
-                crate::agents::PresetArgMatcher::from(&channel).occurrences(&process.provider_argv);
+            let occurrences = channel
+                .arg_matcher()
+                .expect("argv channel")
+                .occurrences(&process.provider_argv);
             assert_eq!(occurrences.len(), 1);
             let text = parse_toml_string_or_raw(&occurrences[0].value);
             assert_eq!(text.matches("<system_reminder>").count(), 1);
@@ -616,7 +618,9 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 let channel = crate::agents::find_definition(kind)
                     .and_then(|adapter| adapter.append_system_text_channel())
                     .expect("system text channel");
-                let occurrences = crate::agents::PresetArgMatcher::from(&channel)
+                let occurrences = channel
+                    .arg_matcher()
+                    .expect("argv channel")
                     .occurrences(&process.provider_argv);
                 assert_eq!(occurrences.len(), 1);
                 let text = parse_toml_string_or_raw(&occurrences[0].value);
@@ -670,42 +674,52 @@ fn process_compiler_omits_disabled_model_when_nothing_else_applies() {
 }
 
 #[test]
-fn process_compiler_omits_team_context_for_unsupported_adapter() {
+fn process_compiler_carries_reminders_in_extension_env_off_argv() {
     let project = tempfile::tempdir().expect("project");
     let team = team();
-    let invocation = team_request("pi");
-    let context = crate::harness::launch_context::team_launch_context(
-        &invocation.identity.params,
-        &invocation.action,
-        &team,
-        project.path(),
-    )
-    .expect("team context");
-    let reminder = wrap(&crate::harness::launch_context::reminder(&context, None));
-    let process = compile_agent_process_with_extra_env(
-        project.path(),
-        &invocation,
-        project.path(),
-        &BTreeMap::new(),
-        &LaunchReminders {
+    for kind in ["pi", "opencode"] {
+        let invocation = team_request(kind);
+        let reminders = LaunchReminders {
             team: Some(team.clone()),
             sandbox: true,
             ..LaunchReminders::default()
-        },
-    )
-    .expect("pi process");
-    assert!(
-        process
-            .provider_argv
-            .iter()
-            .all(|arg| !arg.contains(&reminder))
-    );
-    assert!(
-        process
-            .provider_argv
-            .iter()
-            .all(|arg| !arg.contains("bubblewrap sandbox"))
-    );
+        };
+        let process = compile_agent_process_with_extra_env(
+            project.path(),
+            &invocation,
+            project.path(),
+            &BTreeMap::new(),
+            &reminders,
+        )
+        .expect("process");
+        let reminder =
+            crate::harness::launch_reminders::render(&invocation, &reminders, project.path())
+                .expect("team reminder");
+        assert!(reminder.contains("bubblewrap sandbox"), "{kind}");
+        assert_eq!(process.env[EXTENSION_SYSTEM_TEXT_ENV], reminder, "{kind}");
+        assert!(
+            process
+                .provider_argv
+                .iter()
+                .all(|arg| !arg.contains("system_reminder")),
+            "{kind}: {:?}",
+            process.provider_argv
+        );
+
+        let bare = compile_agent_process_with_extra_env(
+            project.path(),
+            &invocation,
+            project.path(),
+            &BTreeMap::new(),
+            &LaunchReminders {
+                model: false,
+                ..LaunchReminders::default()
+            },
+        )
+        .expect("process without reminders");
+        assert_eq!(bare.reminder, None, "{kind}");
+        assert_eq!(bare.env[EXTENSION_SYSTEM_TEXT_ENV], "", "{kind}");
+    }
 }
 
 #[test]

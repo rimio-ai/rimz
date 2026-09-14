@@ -465,9 +465,9 @@ mod tests {
         );
 
         let pi = agent_cells(&matrix, "pi");
-        assert_eq!(count(&pi, MatrixCellState::Ok), 12);
+        assert_eq!(count(&pi, MatrixCellState::Ok), 13);
         assert_eq!(count(&pi, MatrixCellState::Partial), 1);
-        assert_eq!(count(&pi, MatrixCellState::Absent), 5);
+        assert_eq!(count(&pi, MatrixCellState::Absent), 4);
         // Pi's `agent_settled` marks final idle, while the stall window
         // reconstructs the missing idle-timeout nudge — partial, like Codex,
         // not absent. Subagents are wired: the rimz extension bridges pi's
@@ -483,7 +483,7 @@ mod tests {
         );
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Absent),
-            ["perm", "plan", "remind", "bg", "remote"]
+            ["perm", "plan", "bg", "remote"]
         );
 
         let cursor = agent_cells(&matrix, "cursor");

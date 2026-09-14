@@ -168,8 +168,8 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     subagents: ConcernCoverage::Wired {
         via: "child pi sessions self-identify through RimZ process-lineage markers and feed lifecycle keyed by their own session id",
     },
-    launch_reminders: ConcernCoverage::Unsupported {
-        reason: "--append-system-prompt suppresses the user's discovered APPEND_SYSTEM.md",
+    launch_reminders: ConcernCoverage::Wired {
+        via: "extension before_agent_start systemPrompt",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
@@ -344,9 +344,12 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
     }
 }
 
-// TODO(launch-reminders): carry additive text through the extension; Pi's
-// `--append-system-prompt` would suppress the user's discovered APPEND_SYSTEM.md.
 impl crate::agents::capabilities::LaunchCapability for PiAdapter {
+    // Not `--append-system-prompt`: it replaces the user's discovered APPEND_SYSTEM.md.
+    fn append_system_text_channel(&self) -> Option<crate::agents::capabilities::SystemTextChannel> {
+        Some(crate::agents::capabilities::SystemTextChannel::ExtensionEnv)
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["PI_CODING_AGENT_DIR"]
     }

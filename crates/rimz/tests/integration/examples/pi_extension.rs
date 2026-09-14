@@ -127,9 +127,18 @@ const childCtx = {{
   getContextUsage: () => ({{ percent: 5, contextWindow: 1000, tokens: 50 }}),
   model: {{ id: "gpt-5-mini" }},
 }};
+const launchReminders = "<system_reminder>\nroom rules\n</system_reminder>";
+process.env.RIMZ_LAUNCH_REMINDERS = launchReminders;
 rimz(pi);
 rimz(childPi);
+if ("RIMZ_LAUNCH_REMINDERS" in process.env) {{
+  throw new Error("launch reminders stayed in the inheritable environment");
+}}
 handlers.get("session_start")({{ reason: "launch" }}, ctx);
+const rootStart = await handlers.get("before_agent_start")({{ prompt: "go", systemPrompt: "base" }}, ctx);
+if (rootStart?.systemPrompt !== `base\n\n${{launchReminders}}`) {{
+  throw new Error(`primary system prompt lost the launch reminders: ${{JSON.stringify(rootStart)}}`);
+}}
 
 const busyUi = {{ ...ctx, hasUI: true, mode: "interactive", isIdle: () => false }};
 handlers.get("ui_prompt_start")({{ reason: "open", kind: "confirm", title: " Allow deploy? " }}, busyUi);
@@ -200,6 +209,10 @@ if (globalThis[Symbol.for("rimz.pi.primary-session")]?.id !== "sess-2" ||
   throw new Error("primary markers did not follow the rotated session");
 }}
 childHandlers.get("session_start")({{ reason: "in-process-child" }}, childCtx);
+const childStart = await childHandlers.get("before_agent_start")({{ prompt: "review", systemPrompt: "base" }}, childCtx);
+if (childStart !== undefined) {{
+  throw new Error(`in-process child inherited launch reminders: ${{JSON.stringify(childStart)}}`);
+}}
 childHandlers.get("session_info_changed")({{ name: "reviewer: fix the parser" }}, childCtx);
 childHandlers.get("session_info_changed")({{ name: "reviewer: fix the parser" }}, childCtx);
 childHandlers.get("agent_end")({{
@@ -257,7 +270,7 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-const expectedPayloads = hasNativeSettled ? 25 : 22;
+const expectedPayloads = hasNativeSettled ? 27 : 24;
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= expectedPayloads) break;

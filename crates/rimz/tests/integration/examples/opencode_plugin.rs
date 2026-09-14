@@ -49,6 +49,8 @@ import fs from "node:fs/promises";
 
 process.env.RIMZ_BIN = {};
 process.env.RIMZ_CAPTURE = {};
+const launchReminders = "<system_reminder>\nroom rules\n</system_reminder>";
+process.env.RIMZ_LAUNCH_REMINDERS = launchReminders;
 
 const {{ RimzPlugin }} = await import({});
 let sessionReads = 0;
@@ -172,8 +174,24 @@ const assertTokens = (payload, expected) => {{
   }}
 }};
 
+if ("RIMZ_LAUNCH_REMINDERS" in process.env) {{
+  throw new Error("launch reminders stayed in the inheritable environment");
+}}
+const transformSystem = async (sessionID) => {{
+  const output = {{ system: ["base"] }};
+  await plugin["experimental.chat.system.transform"]({{ sessionID, model: {{}} }}, output);
+  return output.system;
+}};
+
 await createRoot();
 const root = (await waitForPayloads(1))[0];
+const rootSystem = await transformSystem("ses-1");
+if (rootSystem.length !== 2 || rootSystem[1] !== launchReminders) {{
+  throw new Error(`root system prompt lost the launch reminders: ${{JSON.stringify(rootSystem)}}`);
+}}
+if ((await transformSystem(undefined)).length !== 1) {{
+  throw new Error("a sessionless request received launch reminders");
+}}
 if (
   root.hook_event_name !== "session_created" ||
   root.session_name !== undefined ||
@@ -264,6 +282,9 @@ assertTokens(second, {{
 
 await createChild();
 const created = (await waitForPayloads(7))[6];
+if ((await transformSystem("ses-child")).length !== 1) {{
+  throw new Error("a child session received launch reminders");
+}}
 if (
   created.hook_event_name !== "SubagentStart" ||
   created.session_id !== "ses-child" ||

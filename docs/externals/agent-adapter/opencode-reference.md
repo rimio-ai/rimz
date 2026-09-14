@@ -95,7 +95,7 @@ The rest of the hook catalog, indexed:
 | `command.execute.before` | rewrite the parts a slash command sends |
 | `shell.env` | add environment variables to shell tool children |
 | `experimental.chat.messages.transform` | rewrite the message history sent to the model |
-| `experimental.chat.system.transform` | rewrite system prompt lines |
+| `experimental.chat.system.transform` | rewrite system prompt lines; input `{ sessionID?, model }`, output `{ system: string[] }`. Fires for every LLM request, including small-model title generation; agent generation omits `sessionID` (1.18.30 binary, `LLMRequestPrep.prepare`) |
 | `experimental.provider.small_model` | choose a provider's small model when config `small_model` is unset (`opencode/src/provider/provider.ts`, `getSmallModel`) |
 | `experimental.compaction.autocontinue` | decide whether a session continues after compaction |
 | `experimental.text.complete` | rewrite a completed text part |
