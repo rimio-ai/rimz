@@ -5,7 +5,7 @@ RimZ is a single binary for macOS and Linux. Pick one host install path: the [in
 ## Prerequisites
 
 - **macOS or Linux.**
-- **A terminal multiplexer** — Zellij 0.44 or newer, or tmux 3.5 or newer. One is enough; both are first-class. Distribution packages are often too old; [get a current Zellij or tmux](#get-a-current-zellij-or-tmux) has install recipes for current builds.
+- **A terminal multiplexer** — Zellij 0.44.2 or newer, or tmux 3.5 or newer. One is enough; both are first-class. Distribution packages are often too old; [get a current Zellij or tmux](#get-a-current-zellij-or-tmux) has install recipes for current builds.
 - **The agent CLIs you plan to run on a host install** — Claude Code, Codex, Pi, OpenCode, Droid, Kiro CLI, or Grok Build, installed per their own docs. RimZ drives the stock CLIs; the Docker image preinstalls Claude Code, Codex, Pi, and OpenCode.
 - **Git** — agent worktrees and the sidebar's git status use it.
 
@@ -225,7 +225,7 @@ Run `rimz uninstall --all` from outside a RimZ room. It removes installed hooks,
 
 ### `rimz doctor` flags the multiplexer as unsupported
 
-RimZ refuses to start against a multiplexer too old to carry the room options it sets: tmux below 3.5, or Zellij below 0.44. Check the installed version, then [install a current build](#get-a-current-zellij-or-tmux).
+RimZ refuses to start against a multiplexer too old to carry the room options it sets: tmux below 3.5, or Zellij below 0.44.2. Check the installed version, then [install a current build](#get-a-current-zellij-or-tmux).
 
 ```sh
 tmux -V
