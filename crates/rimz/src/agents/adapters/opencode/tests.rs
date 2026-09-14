@@ -53,7 +53,7 @@ fn opencode_activity_filter_and_launch_commands_build() {
         Some(vec![
             "opencode".to_owned(),
             "--pure".to_owned(),
-            "--".to_owned(),
+            "--prompt".to_owned(),
             "review this".to_owned(),
         ])
     );

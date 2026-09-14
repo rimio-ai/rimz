@@ -813,6 +813,13 @@ fn process_compiler_locks_down_opencode_subagent_environment() {
     let process = compile_agent_process(project.path(), &invocation, project.path())
         .expect("subagent process");
 
+    // OpenCode's TUI drops arguments after `--`; the task must ride `--prompt`.
+    assert!(
+        process
+            .provider_argv
+            .ends_with(&["--prompt".to_owned(), "inspect".to_owned()])
+    );
+    assert!(!process.provider_argv.iter().any(|arg| arg == "--"));
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&process.env["OPENCODE_PERMISSION"])
             .expect("permission JSON"),

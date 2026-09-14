@@ -95,7 +95,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
     launch: super::LaunchSpec {
         program: Some("opencode"),
         fixed_args: &[],
-        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        prompt: super::PromptStyle::Flag("--prompt"),
         resume: Some(super::SessionCommand {
             before_id: &["opencode", "--session"],
             after_id: &[],

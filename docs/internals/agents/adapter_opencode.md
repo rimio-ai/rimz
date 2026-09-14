@@ -44,6 +44,8 @@ OpenCode follows the latest root conversation inside one live pane. `/new` hands
 
 **Binary detection.** OpenCode's installer drops the `opencode` binary in `~/.opencode/bin` and appends that dir to `PATH` through a shell rc, so a non-login environment often runs without it on `PATH`. RimZ's detection (`rimz doctor`/`rimz setup` and the install offer) searches the descriptor's `extra_bin_dirs` — `~/.opencode/bin` — after `PATH` through [`locate_binary`](../../../crates/rimz/src/agents/mod.rs), so an installed OpenCode reads as found (`found at …`) rather than missing.
 
+**Initial prompt.** A fresh or supervised launch passes its prompt as `opencode --prompt <text>`, which the TUI submits once the session and model are ready. The TUI never reads arguments after `--`, so a positional prompt there would start an idle pane with the task dropped.
+
 **Resume.** `opencode --session <session_id>` restores a recorded session; the launching pane sets cwd and the plugin re-emits lifecycle events from the resumed server.
 
 OpenCode has no launch flag or config key for additive system text, so RimZ cannot append catalog or team launch reminders until its plugin carries them.
