@@ -1,81 +1,98 @@
 # Qwen Code protocol reference
 
-This is the single home for the **Qwen Code upstream protocol surface** relevant to RimZ: lifecycle hooks and their decision channel, live process/session identity, dual-output observation and control, statusline enrichment, session JSONL, authentication, subagents, resume and fork behavior, permission modes, and headless execution. It mirrors Qwen's published documentation and the open-source `QwenLM/qwen-code` wire types, with source links pinned for implementation work.
+This page mirrors the Qwen Code surfaces an adapter binds to: session identity and resume, command hooks and their decision channel, the statusline payload, session JSONL, subagents, interactive dual output, headless runs, authentication, and the CLI. It records what upstream ships; how RimZ maps these surfaces onto its own types is in [adapter_qwen.md](../../internals/agents/adapter_qwen.md).
 
-Coverage is **depth on viable adapter inputs, breadth as an index**. The hook, statusline, dual-output, runtime-sidecar, and transcript shapes are detailed enough to implement typed parsers. ACP and daemon mode are indexed so an implementer can choose them deliberately rather than confusing them with observation of a stock interactive pane.
+## Baseline and sources
 
-## Refresh target and upstream sources
-
-This mirror was refreshed against Qwen Code **0.19.10** at source commit [`095bd160918086a3a33192133e7923635f08f973`](https://github.com/QwenLM/qwen-code/tree/095bd160918086a3a33192133e7923635f08f973). Re-fetch the documentation and compare the linked types before implementation because Qwen Code is actively developing hooks, session persistence, subagents, dual output, and daemon mode.
+This page mirrors Qwen Code **0.23.3**, tag [`v0.23.3`](https://github.com/QwenLM/qwen-code/tree/v0.23.3) (commit `b695664b8df06d06c625db3e30b97045d82092c7`), released 2026-09-10 and published as npm `@qwen-code/qwen-code` `latest`. Docs and source were read on 2026-09-13. Source citations are paths under `packages/` at that tag. The Alibaba quota request is pinned separately to a CodexBar commit, named in its row below.
 
 | Surface | Source |
 | --- | --- |
-| Project, installation, feature overview | <https://github.com/QwenLM/qwen-code> |
-| Hooks, events, payloads, outputs, execution | <https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/> |
-| Hook wire types | [`packages/core/src/hooks/types.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/types.ts) |
-| Hook runner, registry, and trust | [`hookRunner.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/hookRunner.ts), [`hookRegistry.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/hookRegistry.ts), [`trustedHooks.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/trustedHooks.ts) |
-| Configuration layers, environment, settings | <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/> |
+| Project and installation | <https://github.com/QwenLM/qwen-code> |
+| Hooks: events, payloads, outputs, execution | <https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/> |
+| Hook wire types | [`core/src/hooks/types.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/hooks/types.ts) |
+| Hook runner, planner, event builders, trust | [`hookRunner.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/hooks/hookRunner.ts), [`hookPlanner.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/hooks/hookPlanner.ts), [`hookEventHandler.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/hooks/hookEventHandler.ts), [`trustedHooks.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/hooks/trustedHooks.ts) |
+| Settings layers and environment | <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/> |
 | Authentication and providers | <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/>, <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/> |
-| Experimental Alibaba Coding Plan API-key quota request | [`AlibabaCodingPlanUsageFetcher.swift`](https://github.com/steipete/CodexBar/blob/c61e01e774c449b06324a1cc260af7c77cf17d47/Sources/CodexBarCore/Providers/Alibaba/AlibabaCodingPlanUsageFetcher.swift) inspected at CodexBar commit [`c61e01e774c449b06324a1cc260af7c77cf17d47`](https://github.com/steipete/CodexBar/tree/c61e01e774c449b06324a1cc260af7c77cf17d47) |
-| Session commands and machine-readable listing | <https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/> |
-| Session JSONL writer and types | [`chatRecordingService.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/services/chatRecordingService.ts) |
-| Session loader and active-branch reconstruction | [`sessionService.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/services/sessionService.ts) |
-| Usage output normalization | [`tokenEstimation.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/services/tokenEstimation.ts) |
-| Runtime PID/session sidecar | [`runtimeStatus.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/utils/runtimeStatus.ts) |
+| Alibaba Coding Plan API-key quota request (third party) | [`AlibabaCodingPlanUsageFetcher.swift`](https://github.com/steipete/CodexBar/blob/c61e01e774c449b06324a1cc260af7c77cf17d47/Sources/CodexBarCore/Providers/Alibaba/AlibabaCodingPlanUsageFetcher.swift) at CodexBar commit [`c61e01e`](https://github.com/steipete/CodexBar/tree/c61e01e774c449b06324a1cc260af7c77cf17d47) |
+| Session commands | <https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/>, [`cli/src/commands/sessions/`](https://github.com/QwenLM/qwen-code/tree/v0.23.3/packages/cli/src/commands/sessions) |
+| Live session registry | [`core/src/services/session-registry.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/services/session-registry.ts) |
+| Runtime PID/session sidecar | [`core/src/utils/runtimeStatus.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/utils/runtimeStatus.ts) |
+| Session JSONL writer and loader | [`chatRecordingService.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/services/chatRecordingService.ts), [`sessionService.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/services/sessionService.ts) |
+| Usage normalization | [`core/src/services/tokenEstimation.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/services/tokenEstimation.ts) |
+| Subagent transcripts and metadata | [`core/src/agents/agent-transcript.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/agents/agent-transcript.ts), <https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/> |
 | Statusline JSON | <https://qwenlm.github.io/qwen-code-docs/en/users/features/status-line/> |
-| Interactive dual-output protocol | <https://qwenlm.github.io/qwen-code-docs/en/users/features/dual-output/> |
-| Dual-output implementation and protocol version | [`DualOutputBridge.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/cli/src/dualOutput/DualOutputBridge.ts) |
-| Structured message types | [`packages/cli/src/nonInteractive/types.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/cli/src/nonInteractive/types.ts) |
-| Headless mode and exits | <https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/> |
-| CLI option definitions | [`packages/cli/src/config/config.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/cli/src/config/config.ts) |
-| System-prompt file environment | [`packages/core/src/core/prompts.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/core/prompts.ts#L115-L152) |
-| Permission modes | <https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/> |
-| Subagents | <https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/> |
-| ACP daemon/server mode | <https://qwenlm.github.io/qwen-code-docs/en/users/qwen-serve/> |
+| Interactive dual output | <https://qwenlm.github.io/qwen-code-docs/en/users/features/dual-output/>, [`DualOutputBridge.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/cli/src/dualOutput/DualOutputBridge.ts) |
+| Structured message types | [`cli/src/nonInteractive/types.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/cli/src/nonInteractive/types.ts) |
+| Headless mode, budgets, exit codes | <https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/>, [`core/src/utils/errors.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/utils/errors.ts) |
+| CLI options | [`cli/src/config/config.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/cli/src/config/config.ts), [`cli/src/config/top-level-options.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/cli/src/config/top-level-options.ts) |
+| System-prompt file override | [`core/src/core/prompts.ts`](https://github.com/QwenLM/qwen-code/blob/v0.23.3/packages/core/src/core/prompts.ts) (`isSystemMdActive`, `getCoreSystemPrompt`) |
+| Approval modes | <https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/> |
+| ACP daemon mode | <https://qwenlm.github.io/qwen-code-docs/en/users/qwen-serve/> |
 
-## Recommended adapter shape
+## Surfaces at a glance
 
-Use **command hooks** as lifecycle truth. They carry session identity and transcript path on every event, bracket turns and compaction, report subagents and failures, and expose synchronous permission decisions while preserving the stock interactive TUI.
+Qwen Code exposes several overlapping observation surfaces, and they differ in liveness and durability. Qwen Code began as a fork of Gemini CLI v0.8.2 and has developed independently since v0.1: parts of the codebase keep Gemini naming (the transcript's Google `Content` shape, for example), but its event names, transcript schema, auth, and model limits are its own.
 
-Use the **runtime sidecar** to bind a live pane process to its session before or independently of hook delivery. Use the **statusline command** for live model, context, token, and file-change enrichment. Use **session JSONL** for durable context and historical token/spend reconstruction.
-
-Treat **dual output** as an optional structured pane sidecar, not the first lifecycle dependency. It gives real-time assistant/tool messages, typed permission requests, and a reverse prompt/permission channel, but a bad path, disconnected consumer, or full FIFO disables itself while the TUI continues. Hooks and the durable store remain correctness; dual output improves latency and can support native answers later.
-
-| RimZ need | Primary surface | Backstop / note |
+| Surface | Carries | Durability |
 | --- | --- | --- |
-| Session identity and registration | `SessionStart.session_id` | `<session>.runtime.json` binds PID to session directly |
-| Turn start and prompt | `UserPromptSubmit.prompt` | dual-output `user` event |
-| Clean / failed completion | `Stop` / `StopFailure` | completed assistant envelope and transcript tail |
-| Tool work and acting phase | `PostToolUse` | dual-output tool use/result |
-| Permission wait | `PermissionRequest` | dual-output `control_request`; notification is weaker evidence |
-| User question / plan approval | `PreToolUse` tool classification | live-verify canonical tool ids |
-| Compaction | `PreCompact` + `PostCompact` | `SessionStart(source = compact)` is extra close evidence |
-| Subagents | `SubagentStart` + `SubagentStop` | child transcript path on stop |
-| Model and context | command statusline | newest assistant transcript record |
-| Session tokens/spend | session JSONL `usageMetadata` | statusline metrics are live cumulative enrichment |
-| Auth/account | merged settings plus credential-source presence | no stable auth-status or provider-quota command |
-| Supervised run | `-p --output-format stream-json` | preserve native exit code |
-| Native resume/fork | `--continue`, `--resume`, `--fork-session` | direct |
+| [Command hooks](#hooks) | session id and transcript path on every event, turn and tool boundaries, permission decisions, subagent and compaction brackets | synchronous per event; nothing persisted |
+| [Runtime sidecar](#runtime-pidsession-sidecar) | PID to session binding, work dir, version | file kept after exit and crash |
+| [Live session registry](#live-session-registry) | running sessions with liveness checks | record removed on exit |
+| [Statusline JSON](#statusline-json) | model, context window and occupancy, cumulative per-model tokens, file-change totals | live only, debounced |
+| [Session JSONL](#session-transcript-jsonl) | full conversation tree, per-response usage and context window, system records | append-only file |
+| [Dual output](#interactive-dual-output) | real-time `stream-json` events and a reverse prompt and permission channel beside the TUI | best effort; disables itself on error |
+| [Headless runs](#headless-runs) | one-shot `text`, `json`, or `stream-json` output with a terminal result and typed exit codes | process lifetime |
 
-Qwen Code was originally based on Gemini CLI v0.8.2 but has developed independently since Qwen Code v0.1. Do not reuse the legacy Gemini CLI event names, transcript schema, auth assumptions, or model-limit table merely because portions of the codebase retain Gemini naming.
+## Sessions
 
-## Session identity, resume, fork, and process binding
+### Resume, fork, and session commands
 
-`qwen --continue` resumes the newest session for the current project. `qwen --resume <session-id>` resumes a specific session; bare `--resume` opens the interactive picker. `qwen --resume <id> --fork-session` and `qwen --continue --fork-session` copy the active conversation into a new session identity while leaving the source intact.
+A session is one `sessionId` with one JSONL file. The CLI and slash commands below create, continue, or branch it.
 
-`--session-id <id>` assigns the identity for a run; version-gate it before RimZ relies on caller-assigned IDs. `/clear` ends the current identity and starts another. `/branch` forks the current conversation. `/rewind` changes the active history branch and can restore files; it is not a new session. `/compress` and `/compress-fast` compact history without changing the logical session.
+| Command | Effect on session identity |
+| --- | --- |
+| `qwen --continue` (`-c`) | resumes the newest session for the current project |
+| `qwen --resume <id>` (`-r`) | resumes that session; bare `--resume` opens the picker |
+| `--fork-session` | with `--resume` or `--continue`, copies the active conversation into a new session id and leaves the source intact |
+| `--session-id <id>` | assigns the id for this run |
+| `/clear` | ends the current id and starts another |
+| `/branch` | forks the current conversation into a new id |
+| `/rewind` | moves the active history branch and can restore files; same id |
+| `/compress` (alias `/summarize`), `/compress-fast` | compact history; same id |
+| `/delete` | deletes a selected session and fires [`SessionDelete`](#event-catalog) |
 
-`qwen sessions list --json [--limit N]` writes one JSON object per line with `sessionId`, `startTime`, `mtime`, `prompt`, `gitBranch`, `customTitle`, `titleSource`, `filePath`, and `cwd`. stderr carries the pagination hint.
+`general.chatRecording` (default on, CLI `--chat-recording`) controls whether sessions are written at all. With recording off, `--continue` and `--resume` do not work.
+
+### Listing sessions
+
+`qwen sessions list --json [--limit N]` writes one JSON object per line for recorded sessions, 20 by default. Each object carries `sessionId`, `startTime`, `mtime`, `prompt`, `gitBranch`, `customTitle`, `titleSource`, `filePath`, and `cwd`; absent optional values are `null`. The pagination hint goes to stderr (`cli/src/commands/sessions/list.ts`, `toJsonItem`).
+
+### Live session registry
+
+`qwen sessions ps --json` lists the running sessions, one registry record per line with `ipcToken` removed (`cli/src/commands/sessions/ps.ts`). Each top-level session writes `${QWEN_HOME:-~/.qwen}/sessions/<pid>.json` at startup and unlinks it on exit; a process hosting several sessions (the `qwen --acp` child a daemon spawns) writes `<pid>-<8 hex>.json` per session (`core/src/services/session-registry.ts`).
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion` | record schema version |
+| `pid`, `procStart`, `pidNs` | process id, start-time token against PID reuse, PID-namespace id (`null` where unavailable) |
+| `sessionId`, `cwd`, `name` | session id, working directory, short display label |
+| `startedAt` | epoch milliseconds |
+| `qwenVersion` | CLI version or `null` |
+| `kind` | `tui`, `headless`, `serve`, or `external`; absent on records from writers that predate the field (the TUI) |
+| `ipcPath` | peer-messaging socket, when the session has one |
+
+A reader treats a record as live only when its PID runs with a matching start token in the reader's PID namespace and boot; failing records are swept during enumeration. The registry is scoped to one `QWEN_HOME`. `qwen sessions controllers` manages the controller tokens that may drive sessions.
 
 ### Runtime PID/session sidecar
 
-Every interactive session atomically writes:
+Every interactive session atomically writes a sidecar that binds its PID to its session:
 
 ```text
 <runtime-base>/projects/<sanitized-cwd>/chats/<session-id>.runtime.json
 ```
 
-`<runtime-base>` is `QWEN_RUNTIME_DIR` when set, then the configured runtime output directory, then `QWEN_HOME`/`~/.qwen`. The schema is versioned independently:
+`<runtime-base>` resolves as `QWEN_RUNTIME_DIR`, then the configured runtime output directory, then `QWEN_HOME` or `~/.qwen`. The keys are snake_case to match kimi-cli's `runtime.json`, and the schema is versioned on its own:
 
 ```json
 {
@@ -85,38 +102,89 @@ Every interactive session atomically writes:
   "work_dir": "/absolute/project/path",
   "hostname": "host",
   "started_at": 1783700000.125,
-  "qwen_version": "0.19.10"
+  "qwen_version": "0.23.3"
 }
 ```
 
-`started_at` is epoch seconds with sub-second precision and `qwen_version` may be `null`. A session or cwd/worktree transition refreshes the applicable sidecar.
+`started_at` is epoch seconds with sub-second precision, and `qwen_version` may be `null`. A session change or a cwd or worktree transition rewrites the applicable sidecar.
 
-The file intentionally remains after clean exit and crash. Verify that `pid` is alive and belongs to the pane's expected descendant process, then require `work_dir` and session location to agree with the workspace; PID reuse can otherwise select a stale sidecar. Unknown schema versions and malformed fields fail soft. Hooks still establish durable registration, while the sidecar makes pane association explicit without scraping argv or terminal text.
+The file stays after clean exit and after a crash, so its presence says nothing about liveness (`core/src/services/session-registry.ts` states this as the reason the registry exists). A consumer checks that `pid` is alive and is the expected process, and that `work_dir` and the file's location agree with the workspace, because PID reuse can otherwise select a stale sidecar.
 
 ## Hooks
 
-A command hook runs at a lifecycle point, receives one JSON object on **stdin**, and returns a decision object on **stdout**. Logs go to stderr. Hooks live under `hooks.<EventName>[]` in `settings.json`:
+A command hook runs at a lifecycle point, receives one JSON object on stdin, and returns its decision on stdout; logs go to stderr. `qwen hooks` (or `/hooks` interactively) manages them.
+
+### Configuration
+
+Hooks live under `hooks.<EventName>[]` in `settings.json`. Each entry is a `HookDefinition` with an optional `matcher`, optional `sequential`, and a `hooks` array:
 
 ```json
 {
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "rimz hooks qwen" }] }],
-    "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "rimz hooks qwen" }] }]
+    "PreToolUse": [
+      {
+        "matcher": "ask_user_question|exit_plan_mode",
+        "hooks": [{ "type": "command", "command": "my-hook", "timeout": 10000 }]
+      }
+    ]
   }
 }
 ```
 
-Each event entry accepts `matcher`, `sequential`, and `hooks`. Hooks run in parallel by default; `sequential: true` gives ordered execution. A command accepts `command`, optional `name`, `description`, `timeout` in milliseconds (default 60,000), `env`, `shell` (`bash` or `powershell`), `statusMessage`, and `async`.
+Hooks in one entry run in parallel by default; `sequential: true` runs them in order and lets each modify the input for the next.
 
-HTTP and prompt hooks are executable surfaces but RimZ should install only a local command. HTTP hooks POST the same JSON and support URL/environment allowlists and SSRF checks. Prompt hooks spend a model call to produce `{ "ok": boolean, "reason"?, "additionalContext"? }`. Function hooks are session-internal rather than a public settings API.
+| Command hook field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `"command"` | required |
+| `command` | string | required; run through `shell` |
+| `name`, `description` | string | logging labels; `name:command` is the hook's trust key |
+| `timeout` | number | milliseconds, default 60,000 (`hookRunner.ts`, `DEFAULT_HOOK_TIMEOUT`) |
+| `env` | object | extra environment |
+| `shell` | `"bash"` or `"powershell"` | shell selection |
+| `statusMessage` | string | shown while the hook runs |
+| `async` | boolean | runs in the background; cannot return decision control |
 
-`disableAllHooks: true`, `--safe-mode`, and safe/bare startup paths disable configured hooks. Project hooks require a trusted workspace; Qwen also records trusted project hook identifiers in `~/.qwen/trusted_hooks.json`. User, project, extension, and session hooks may all fire. Preserve unrelated entries, hash every executable field RimZ adds, and preflight the effective merged configuration.
+The other hook types share the event and input contract:
+
+| Type | Behaviour | Distinct fields |
+| --- | --- | --- |
+| `http` | POSTs the input JSON; URL allowlist (`security.allowedHttpHookUrls`), DNS validation, private-range blocking unless `security.allowPrivateNetworkHooks` is set from user or system scope, cloud metadata always blocked, redirects disabled | `url`, `headers`, `allowedEnvVars`, `timeout` in seconds (default 600), `once`, `if` |
+| `prompt` | sends the input to a model and expects `{ "ok": boolean, "reason"?, "additionalContext"? }` | `prompt` (with `$ARGUMENTS`), `model`, `timeout` in seconds (default 30) |
+| `function` | trusted in-process callback registered by session code; not a settings surface | `callback`, `errorMessage` |
+
+On timeout or cancellation a command hook's whole process tree is killed: a POSIX process group gets SIGTERM then SIGKILL, and Windows uses `taskkill` (`hookRunner.ts`).
+
+### Disabling and trust
+
+Top-level `disableAllHooks: true`, `--safe-mode` (or `QWEN_CODE_SAFE_MODE=true`), and `--bare` startup disable configured hooks. Hooks come from system, user, project, extension, and session sources (`HooksConfigSource`), and all sources fire. Project hooks require a trusted workspace, and Qwen records trusted project hook keys (`name:command`) per project path in `~/.qwen/trusted_hooks.json` (`trustedHooks.ts`).
+
+### Matchers
+
+`matcher` is a regular expression; an empty string or `*` matches everything. Each event matches against one target, and events without a target always fire (`hookPlanner.ts`, `getHookMatcherTarget`).
+
+| Events | Matcher target |
+| --- | --- |
+| `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied` | runtime tool id (`write_file`, `run_shell_command`, ...); display names such as `WriteFile` are accepted as aliases |
+| `SubagentStart`, `SubagentStop` | agent type |
+| `PreCompact`, `PostCompact` | trigger |
+| `SessionStart`, `SessionEnd` | source or reason |
+| `StopFailure` | error type |
+| `Notification` | notification type |
+| `InstructionsLoaded` | file path |
+| `UserPromptExpansion` | command name |
+| `UserPromptSubmit`, `Stop`, `MessageDisplay`, `PostToolBatch`, `SessionDelete`, `TodoCreated`, `TodoCompleted` | none |
+
+The runtime tool ids live in `core/src/tools/tool-names.ts` (`ToolNames`): for example `edit`, `write_file`, `notebook_edit`, `run_shell_command`, `agent`, `ask_user_question`, and `exit_plan_mode`. The hooks docs give examples rather than a versioned catalog, so that file is the reference.
 
 ### Common input
+
+Every event carries the `HookInput` base (`types.ts`):
 
 ```json
 {
   "session_id": "string",
+  "source_type": "optional: integration that created the session",
+  "source_id": "optional",
   "transcript_path": "/absolute/path/to/session.jsonl",
   "cwd": "/current/working/directory",
   "hook_event_name": "SessionStart",
@@ -124,9 +192,11 @@ HTTP and prompt hooks are executable surfaces but RimZ should install only a loc
 }
 ```
 
-Subagent contexts additionally carry `agent_id` and `agent_type` where applicable. Parse `session_id` as required, retain the hook-provided absolute transcript path, and tolerate unknown fields. `permission_mode` is `default | plan | auto_edit | auto | yolo`; CLI spelling uses `auto-edit`, while hook JSON uses `auto_edit`.
+Inside a subagent, events also carry `agent_id` and `agent_type`. Upstream documents hook input as forward-extensible: new optional fields can appear on existing events, and consumers ignore unknown keys. `permission_mode` values are `default`, `plan`, `auto_edit`, `auto`, and `yolo`; the CLI spells the third `auto-edit`.
 
-### Output and exit semantics
+### Output and exit codes
+
+Hook output is one JSON object with common fields, a top-level decision, and event-specific control:
 
 ```json
 {
@@ -141,52 +211,64 @@ Subagent contexts additionally carry `agent_id` and `agent_type` where applicabl
 }
 ```
 
-Exit **0** parses stdout as JSON. Exit **2** is blocking: stdout is ignored and stderr becomes model feedback. Other nonzero exits are non-blocking and stderr appears only in debug mode. `StopFailure` ignores all outputs and exits. `PostCompact` output is logging-only. Async command hooks cannot control an operation that already continued.
+| Exit code | Behaviour |
+| --- | --- |
+| `0` | success; stdout is parsed as JSON |
+| `2` | blocking error; stdout is ignored and stderr becomes feedback to the model |
+| other | non-blocking error; stderr shows only in debug mode and execution continues |
 
-The neutral RimZ path writes no logs to stdout and returns empty JSON or empty stdout with exit 0 after live verification. Golden-test the exact neutral bytes against the target release.
+`StopFailure`, `MessageDisplay`, and `SessionDelete` are fire-and-forget: output and exit codes are ignored, and their command hooks run in a child that survives Qwen's exit (`hookRunner.ts`, `survivesParentExit`). `PostCompact` output has no control effect. An async hook's result reaches the next turn through `systemMessage` or `additionalContext`.
 
-### Event catalog and implementation fields
+### Event catalog
 
-| Event | Event-specific input | Decision / adapter use |
+| Event | Event-specific input | Control |
 | --- | --- | --- |
-| `SessionStart` | `permission_mode`, `source` (`startup|resume|clear|compact|branch`), `model`, optional `agent_type` | register; carry model and transcript |
-| `UserPromptSubmit` | `prompt` | turn start; may block/add context |
-| `UserPromptExpansion` | `command_name`, `command_args`, expanded `prompt` | index; may block/add context |
-| `PreToolUse` | permission, tool name/input, `tool_use_id`, optional provider `tool_call_id` | wait classification; allow/deny/ask/update input |
-| `PostToolUse` | same identity/input plus `tool_response` | completed work and edit phase |
-| `PostToolUseFailure` | tool identity/input, `error`, optional `is_interrupt` | work/error enrichment; turn may continue |
-| `PostToolBatch` | `permission_mode`, typed `tool_calls[]` | index; batch context/control |
-| `PermissionRequest` | permission, tool name/input, optional suggestions | synchronous human wait or automatic decision |
-| `PermissionDenied` | tool identity/input, `reason` (`classifier_blocked|classifier_unavailable`) | completed auto denial, not a wait |
-| `Stop` | active flag, last assistant text, optional context, `background_tasks[]`, `crons[]` | clean turn end; detect background park |
-| `MessageDisplay` | stable `message_id`, cumulative `displayed_text`, `is_final` | fire-and-forget display observation before `Stop` |
-| `StopFailure` | typed `error`, optional details and last text | failed/paused evidence; fire-and-forget |
-| `SubagentStart` | permission, `agent_id`, `agent_type` | child start |
-| `SubagentStop` | start fields plus active flag, transcript, last text, tasks/crons | child stop; output can block |
-| `PreCompact` | `trigger` (`manual|auto`), `custom_instructions` | compaction opener |
-| `PostCompact` | `trigger`, `compact_summary` | compaction close; output cannot control |
-| `SessionEnd` | `reason` (`clear|logout|prompt_input_exit|bypass_permissions_disabled|other`) | ended; liveness backstop |
-| `Notification` | message/title/type (`permission_prompt|idle_prompt|auth_success|elicitation_dialog`) | attention enrichment; elicitation is not implemented |
-| `InstructionsLoaded` | file, memory type, load reason, optional include-parent paths | index only |
-| `TodoCreated` / `TodoCompleted` | todo data and `phase` (`validation|postWrite`) | validation may block; post-write cannot undo |
+| `SessionStart` | `permission_mode`, `source` (`startup`, `resume`, `clear`, `compact`, `branch`), `model`, optional `agent_type` (`Bash`, `Explorer`, `Plan`, `Custom`) | `additionalContext` |
+| `SessionEnd` | `reason` (`clear`, `logout`, `prompt_input_exit`, `bypass_permissions_disabled`, `other`) | none |
+| `SessionDelete` | `deleted_session_id` | fire-and-forget |
+| `UserPromptSubmit` | `prompt`, optional `submitted_prompt` (the text as submitted) | block, `additionalContext` |
+| `UserPromptExpansion` | `command_name`, `command_args`, expanded `prompt` | block, `additionalContext` (escaped, 10,000 characters max) |
+| `InstructionsLoaded` | `file_path`, `memory_type` (`user`, `project`, `local`, `extension`), `load_reason` (`session_start`, `include`, `refresh`), optional `trigger_file_path`, `parent_file_path` | none |
+| `PreToolUse` | `permission_mode`, `tool_name`, `tool_input`, `tool_use_id`, optional provider `tool_call_id` | allow, deny, ask, `updatedInput` |
+| `PermissionRequest` | `permission_mode`, `tool_name`, `tool_input`, optional `permission_suggestions` (`{ type, tool? }[]`) | allow or deny with updates |
+| `PermissionDenied` | `tool_name`, `tool_input`, `tool_use_id`, optional `tool_call_id`, `reason` (`classifier_blocked`, `classifier_unavailable`) | none; fires only when `auto` mode's classifier denies a call |
+| `PostToolUse` | `permission_mode`, `tool_name`, `tool_input`, `tool_response`, `tool_use_id`, optional `tool_call_id` | block, `additionalContext`, `artifacts` |
+| `PostToolUseFailure` | `permission_mode`, `tool_use_id`, optional `tool_call_id`, `tool_name`, `tool_input`, `error`, optional `is_interrupt` | `additionalContext`, `artifacts` |
+| `PostToolBatch` | `permission_mode`, `tool_calls[]` (`tool_name`, `tool_input`, `tool_use_id`, optional `tool_call_id`, `status` `success`/`error`/`cancelled`, optional `tool_response`) | block or stop the batch, `additionalContext` |
+| `MessageDisplay` | `message_id`, cumulative `displayed_text`, `is_final` | fire-and-forget |
+| `Stop` | `stop_hook_active`, `last_assistant_message`, `background_tasks[]`, `crons[]`, optional `context_usage`, `context_limit`, `input_tokens` | block with `reason` |
+| `StopFailure` | `error` (`rate_limit`, `authentication_failed`, `billing_error`, `invalid_request`, `server_error`, `max_output_tokens`, `loop_detected`, `unknown`), optional `error_details`, `last_assistant_message` | fire-and-forget |
+| `SubagentStart` | `permission_mode`, `agent_id`, `agent_type` | `additionalContext` |
+| `SubagentStop` | `permission_mode`, `stop_hook_active`, `agent_id`, `agent_type`, `agent_transcript_path`, `last_assistant_message`, `background_tasks[]`, `crons[]` | block with `reason` |
+| `PreCompact` | `trigger` (`manual`, `auto`), `custom_instructions` | `additionalContext` |
+| `PostCompact` | `trigger`, `compact_summary` | none |
+| `Notification` | `message`, optional `title`, `notification_type` (`permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`) | none |
+| `TodoCreated` | `todo_id`, `todo_content`, `todo_status`, `all_todos[]` (`id`, `content`, `status`, optional `blockedBy`), `phase` (`validation`, `postWrite`) | block in `validation` only |
+| `TodoCompleted` | `todo_id`, `todo_content`, `previous_status`, `all_todos[]`, `phase` | block in `validation` only |
 
-`Stop` context fields are optional: `context_usage` is a ratio and may exceed 1, `context_limit` is tokens, and `input_tokens` is the provider-normalized prompt count. The assistant JSONL write rides Qwen's serialized async recording queue, while `Stop` does not await a recorder flush; a hook can therefore observe the direct prompt count before the just-finished assistant record reaches disk. Correlate the latest transcript record by exact `promptTokenCount` before using its model, window, total, or category split. Background tasks carry `id`, `status`, `agent_type`, `started_at`, and optional `description`. `StopFailure.error` is `rate_limit | authentication_failed | billing_error | invalid_request | server_error | max_output_tokens | unknown`.
+`StopFailure` fires instead of `Stop` when an API error or loop detection ends the turn. `MessageDisplay` fires at most every 200 ms while a reply streams and always once with `is_final: true`.
 
-The key decisions are:
+**Stop context and transcript timing.** `context_usage` is a ratio that may exceed 1, `context_limit` is in tokens, and `input_tokens` is the provider-normalized prompt count. `Stop` does not await the transcript writer, so a hook can run before the just-finished assistant record reaches disk; the transcript record whose `promptTokenCount` equals `input_tokens` is the one that belongs to the turn. A background task entry carries `id`, `status`, `agent_type`, `started_at`, and optional `description`; a cron entry carries `id`, `schedule`, `prompt`, `recurring`, `enabled`, and optional `next_run` and `last_run`.
+
+### Decision shapes
+
+`PreToolUse` decides through `hookSpecificOutput`; a top-level `decision` of `allow`/`approve`, `deny`/`block`, or `ask` is the fallback (`PreToolUseHookOutput`):
 
 ```json
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "allow | deny | ask",
-    "permissionDecisionReason": "required explanation",
+    "permissionDecisionReason": "explanation",
     "updatedInput": {},
     "additionalContext": "optional"
   }
 }
 ```
 
-`ask` opens the native confirmation. In headless runs and background subagents, it falls back to deny.
+`ask` opens the native confirmation, which shows a diff for edit-class tools. In headless runs and background subagents, where nothing can prompt, `ask` falls back to `deny`.
+
+`PermissionRequest` answers the dialog itself:
 
 ```json
 {
@@ -195,42 +277,24 @@ The key decisions are:
     "decision": {
       "behavior": "allow | deny",
       "updatedInput": {},
-      "updatedPermissions": [],
-      "message": "optional",
+      "updatedPermissions": [{ "type": "string", "tool": "optional" }],
+      "message": "optional deny message",
       "interrupt": false
     }
   }
 }
 ```
 
-`Stop` and `SubagentStop` block through top-level `decision: "block"` plus `reason`. A RimZ observation returns neutral output and lets the native UI own the decision.
-
-### Native-event mapping for a first adapter
-
-| Qwen observation | RimZ signal/enrichment | Notes |
-| --- | --- | --- |
-| `SessionStart` | `registered` | eager; carry model/transcript |
-| `UserPromptSubmit` | `turn_started` | authoritative prompt boundary |
-| ordinary `PostToolUse` | `tool_used { edits: false }` | proves work and clears waiting |
-| structured editor `PostToolUse` | `tool_used { edits: true }` | live-verify canonical ids |
-| `PermissionRequest` | `awaiting_input` | classify question/plan/permission by tool |
-| question/plan `PreToolUse` | typed `awaiting_input` | needed if its dialog lacks PermissionRequest |
-| `Stop` | clean `turn_ended` | preserve background park when tasks remain |
-| `StopFailure` | errored `turn_ended` plus interruption | typed error refines retry/pause projection |
-| subagent bracket | child start/stop | parent id is absent; correlate through root context/transcript |
-| compact bracket | compacting/ended | trigger controls automatic/manual close |
-| `SessionEnd` | ended | pane/process liveness still reaps |
-
-Do not classify `PermissionDenied` as waiting. Use only structurally known file-edit tools for `edits: true`; shell remains work without typed edit proof. Live-capture the built-in tool ids, especially question and plan-exit tools, because the hooks reference gives examples rather than a versioned canonical catalog.
+`Stop` and `SubagentStop` block with top-level `decision: "block"` plus `reason`, which becomes feedback for another turn. Empty stdout with exit 0 is a neutral answer for every event.
 
 ## Statusline JSON
 
-Command mode at `ui.statusLine` runs a shell command, writes one JSON object to stdin, and renders up to two stdout lines. RimZ can wrap the user's command and forward stdin/stdout unchanged. The timeout is five seconds; event-driven updates are debounced 300 ms, and `refreshInterval` adds a timer with a one-second minimum.
+Command mode at `ui.statusLine` runs a shell command, writes one JSON object to its stdin, and renders up to two lines of its stdout. The command times out after five seconds, event-driven updates are debounced by 300 ms, and `refreshInterval` adds a timer with a one-second minimum.
 
 ```json
 {
   "session_id": "UUID",
-  "version": "0.19.10",
+  "version": "0.23.3",
   "model": { "display_name": "[DeepSeek] deepseek-v4-pro" },
   "context_window": {
     "context_window_size": 1000000,
@@ -262,17 +326,94 @@ Command mode at `ui.statusLine` runs a shell command, writes one JSON object to 
 }
 ```
 
-`git`, `worktree`, and `vim` are absent when inactive. `current_usage` is the latest API call's whole prompt/context occupancy and is the numerator behind the live percentage; it is a scalar gauge, not uncached fresh input. `metrics.models` is keyed by every model used, so routing or `/model` changes can produce multiple entries.
+`git`, `worktree`, and `vim` are absent when inactive. `current_usage` is the latest API call's whole prompt occupancy and the numerator of `used_percentage`; it is a scalar gauge that includes cached input. `context_window_size` is the window Qwen selected for the model, so a consumer needs no provider limit table. `metrics.models` is keyed by every model the session used, so routing or `/model` changes produce several entries, and its token counters are cumulative.
 
-Registry model names can carry a provider label such as `[DeepSeek] deepseek-v4-pro`. Qwen's preset renderer removes a leading `/^\[[^\]]*\]\s*/` decoration before showing the model. Consumers of command-mode JSON receive the decorated label and apply the same stripping rule before their own canonical model formatting.
+Registry model names can carry a provider label such as `[DeepSeek] deepseek-v4-pro`. Qwen's own preset renderer strips a leading `/^\[[^\]]*\]\s*/` before display; command-mode JSON delivers the decorated label.
 
-Statusline is the preferred live enrichment channel because it supplies the upstream-selected context window instead of requiring a Qwen/provider limit table. Treat every field as optional and token categories as extensible. Hash the complete executable configuration, preserve the prior command, and keep wrapper diagnostics off stdout.
+Preset statusline mode has no command and no stdin payload.
 
-Preset statusline mode has no command or stdin surface. Leave it untouched and rely on transcript enrichment, or present a visible conversion workflow; never silently replace the user's preset.
+## Session transcript JSONL
+
+With chat recording on, Qwen appends one self-contained JSON record per line to:
+
+```text
+<runtime-base>/projects/<sanitized-cwd>/chats/<session-id>.jsonl
+```
+
+`<runtime-base>` resolves as for the [runtime sidecar](#runtime-pidsession-sidecar). Hook input carries the live file as `transcript_path`, and `qwen sessions list --json` returns historical paths as `filePath`.
+
+### Record fields
+
+| Field | Meaning (`ChatRecord` in `chatRecordingService.ts`) |
+| --- | --- |
+| `uuid`, `parentUuid` | record id and parent in the active conversation tree; `parentUuid` is `null` at the root |
+| `sessionId`, `timestamp` | session id and ISO 8601 time |
+| `type` | `user`, `assistant`, `tool_result`, or `system` |
+| `subtype` | system record kind (see below) |
+| `cwd`, `version`, `gitBranch` | working directory, CLI version, branch when available |
+| `message` | Google `Content`: `role` (`user` or `model`) plus `parts` with `text`, `functionCall`, `functionResponse`, and thought parts |
+| `usageMetadata`, `model`, `contextWindowSize` | assistant usage, model id, and the context window used for that response |
+| `toolCallResult` | extensible UI recovery metadata for a tool call |
+| `systemPayload` | payload for system records |
+| `agentId`, `agentName`, `agentColor`, `isSidechain` | set on records a subagent produced |
+| `agentRunId`, `agentRound` | writer execution and round within it, for subagent records |
+| `externalInputKind` | `message` or `notification` for injected external input |
+| `forkedFrom` | `{ sessionId, messageUuid }` on every record `/branch` copied |
+| `daemonPromptId`, `provenance`, `goalContext` | daemon admission id, source classification, and Goal turn ownership |
+
+### Usage
+
+Assistant records carry normalized `usageMetadata`: `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`, and `toolUsePromptTokenCount`. `promptTokenCount` includes cached prompt tokens, and `toolUsePromptTokenCount` is already inside it. Qwen's resume normalization requires prompt accounting, derives output as saturating `totalTokenCount - promptTokenCount` when a total exists, and otherwise uses candidates alone when candidates exceed thoughts and candidates plus thoughts when they do not (`tokenEstimation.ts`). `cachedContentTokenCount` does not separate explicit from implicit cache hits.
+
+Qwen routes to OpenAI-compatible, OpenAI Responses, Anthropic, Gemini, Vertex AI, and local providers, so a model id alone does not identify the biller.
+
+### Active branch and system records
+
+`uuid` and `parentUuid` form a tree, and the active conversation is the chain behind the latest active tail; physical line order is not conversation order. `/rewind` appends a `system/rewind` record (`systemPayload.truncatedCount`) and re-roots later parent links, leaving abandoned descendants in the file. A fork copies records to a new `sessionId`, rebuilds parents by write order, and sets `forkedFrom`.
+
+`system/chat_compression` stores `systemPayload.info` and `systemPayload.compressedHistory`, the exact `Content[]` the model sees after compression; it changes resume history without removing UI-visible records. `system/custom_title` stores `customTitle` and an optional `titleSource` (absent means manual). `system/parent_session` stores `parentSessionId`.
+
+The full `subtype` union at 0.23.3 is `chat_compression`, `slash_command`, `ui_telemetry`, `at_command`, `attribution_snapshot`, `notification`, `cron`, `mid_turn_user_message`, `custom_title`, `parent_session`, `session_source`, `session_model`, `rewind`, `agent_bootstrap`, `agent_launch_prompt`, `agent_retry`, `agent_session_ready`, `file_history_snapshot`, `user_text_elements`, `session_artifact_event`, `session_artifact_snapshot`, `session_sources_snapshot`, `branch_checkpoint`, `goal_state`, `goal_runtime`, `realtime_message`, and `turn_result`. `session_source` stores `{ sourceType, sourceId? }`, the same attribution hooks expose as `source_type` and `source_id`; `session_model` stores `{ modelId, authType, baseUrl?, isRuntime? }`; `turn_result` stores a turn's `promptId`, `state` (`completed`, `cancelled`, `error`), and timing.
+
+Writes go through a serialized queue flushed on orderly teardown, so a hook can precede the newest append. A session that changes cwd moves its sidecar and transcript with it.
+
+### Subagent transcripts and metadata
+
+A subagent writes its own files under the project directory, beside `chats/` (`agent-transcript.ts`):
+
+```text
+<runtime-base>/projects/<sanitized-cwd>/subagents/<session-id>/agent-<agent-id>.jsonl
+<runtime-base>/projects/<sanitized-cwd>/subagents/<session-id>/agent-<agent-id>.meta.json
+```
+
+Path components replace every character outside `[A-Za-z0-9_-]` with `_`. The `.jsonl` file holds `ChatRecord`-shaped records, and a transient `.jsonl.stream` file holds live text while the writer is open. The `.meta.json` sidecar (`AgentMeta`) is written for background and foreground launches:
+
+| Field | Meaning |
+| --- | --- |
+| `agentId`, `agentType`, `description`, `subagentName` | child identity, type, task description, and config name |
+| `parentSessionId`, `parentAgentId`, `toolUseId` | launching session, launching subagent for nested forks (`null` at top level), and the parent's tool call |
+| `createdAt`, `lastUpdatedAt`, `status` | ISO 8601 times; `running`, `completed`, `failed`, `cancelled`, or `paused` |
+| `model`, `persistedCliFlags` | concrete model id; launch flags (`approvalMode`, `bare`, `safeMode`, `sandbox`, `screenReader`, `model`, `authType`) |
+| `depth`, `isBackgrounded`, `isolation`, `resolvedApprovalMode`, `executionAllowedTools` | nesting depth, async launch, `worktree` isolation, approval mode, and fork tool restriction |
+| `stats`, `recentActivities`, `lastError`, `resumeCount` | terminal summary, capped recent tool activity, last error, resume attempts |
+
+## Subagents
+
+Qwen has two subagent kinds. A named subagent starts with a fresh context and returns its result inline. A fork (`subagent_type: "fork"`) inherits the parent's conversation, system prompt, and tool declarations, runs detached, and does not feed its result back automatically. A fork cannot fork again, runs in the parent's cwd, and is isolated from sibling forks' directives.
+
+| Fork option | Meaning |
+| --- | --- |
+| `fork_turns` | inherit only a bounded window of recent user turns |
+| `fork_tools` | allowlist of canonical tool names or MCP server patterns (`mcp__github`); calls outside it are rejected before approval; an empty array denies all |
+| `fork_profile` | a saved restriction in `.qwen/fork-profiles/<name>.md`; not combinable with `fork_tools` |
+
+Definitions live in project `.qwen/agents/`, user `~/.qwen/agents/`, and extensions, as Markdown with YAML frontmatter. The frontmatter can set the model, `approvalMode` (`default`, `plan`, `auto-edit`, `yolo`, or `bubble`), `tools`, `disallowedTools`, MCP servers, and hooks. Per-agent hooks are executable configuration. Upstream documents a v1 limitation: they register at session scope, so when two subagents with different per-agent hooks run concurrently, each one's hooks fire for the other's events.
+
+`--max-subagent-depth` (default 5, maximum 100; setting `model.maxSubagentDepth`) bounds nesting. `SubagentStart` and `SubagentStop` carry the child's `agent_id` and `agent_type` and the root `session_id`, but no parent agent id; the [metadata sidecar](#subagent-transcripts-and-metadata) carries `parentSessionId`, `parentAgentId`, and `toolUseId`.
 
 ## Interactive dual output
 
-`qwen --json-file <path> --input-file <path>` leaves the TUI on stdio 0/1/2 while writing JSONL to a separate file/FIFO and polling a regular input file for commands. `--json-fd N` works for a plain child spawn, but PTY hosts generally cannot pass fd 3+, so tmux/Zellij panes require `--json-file`.
+`qwen --json-file <path> --input-file <path>` keeps the TUI on stdio while writing `stream-json` events to a separate file or FIFO and polling a regular file for commands. `--json-fd N` writes to an inherited descriptor, which suits a plain child spawn; a PTY host such as tmux or Zellij cannot pass descriptors above 2, so panes use `--json-file`.
 
 The first event is a capability handshake:
 
@@ -285,14 +426,14 @@ The first event is a capability handshake:
   "data": {
     "session_id": "session UUID",
     "cwd": "/work/project",
-    "protocol_version": 1,
-    "version": "0.19.10",
+    "protocol_version": 2,
+    "version": "0.23.3",
     "supported_events": ["system", "user", "assistant", "stream_event", "result", "control_request", "control_response"]
   }
 }
 ```
 
-Feature-detect `protocol_version` and `supported_events`; older versions may omit them. The channel shares the headless `stream-json` schema and always includes partial messages:
+`protocol_version` is 2 from 0.21.11: version 2 bounds textual `tool_result.content` to 65,536 UTF-8 bytes after serialization and replaces longer values with head and tail previews (`DualOutputBridge.ts`, `DUAL_OUTPUT_PROTOCOL_VERSION`). Releases that predate the handshake fields omit `protocol_version` and `supported_events`, so a consumer feature-detects both. The channel shares the headless `stream-json` schema and always includes partial messages:
 
 ```jsonc
 { "type": "user", "session_id": "...", "message": { "role": "user", "content": [] }, "parent_tool_use_id": null }
@@ -301,9 +442,9 @@ Feature-detect `protocol_version` and `supported_events`; older versions may omi
 { "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "...", "content": "...", "is_error": false }] }, "parent_tool_use_id": null }
 ```
 
-Assistant content blocks are `text`, `thinking`, or `tool_use`. Current messages contain one block category, so one model turn may emit multiple completed assistant envelopes as the category changes. `parent_tool_use_id` identifies subagent output when non-null. Do not treat every assistant envelope as the root turn's `Stop`; hooks own that boundary.
+Assistant content blocks are `text`, `thinking`, or `tool_use`. One message holds one block category, so a single model turn can emit several completed assistant envelopes. A non-null `parent_tool_use_id` marks subagent output.
 
-Permission control is explicit:
+Permission prompts arrive as control requests; `permission_suggestions` is `null` or an array such as `[{ "type": "allow", "label": "Allow Command", ... }]`:
 
 ```json
 {
@@ -320,96 +461,29 @@ Permission control is explicit:
 }
 ```
 
-The input file accepts:
+The input file accepts two commands:
 
 ```jsonc
 { "type": "submit", "text": "follow-up prompt" }
 { "type": "confirmation_response", "request_id": "request UUID", "allowed": true }
 ```
 
-Submits queue until idle. Confirmations dispatch immediately; the first native or external answer wins, and late answers drop. A `control_response` reports success or error. This supports future boolean permission answers, while typed question/plan answers still require native dialog integration unless the protocol grows another control request.
+Submits queue until the session is idle. Confirmations dispatch immediately: the first native or external answer wins, later answers drop, and a `control_response` reports success or error. The protocol has no control request for typed question or plan answers.
 
-`--input-file` must be a regular file because Qwen polls size every 500 ms; output may be a file or FIFO. Use per-session paths in a mode-0700 directory. A bad target, EPIPE, adapter exception, or more than 1 MiB buffered disables the bridge without stopping Qwen. Clean shutdown emits `system/session_end`; a closed stream without it is abnormal but does not prove the TUI died. Dual output is latency/control enrichment, never lifecycle truth.
+`--input-file` must be a regular file, because Qwen polls it with `fs.watchFile` every 500 ms; the output target may be a file or FIFO. A bad target, EPIPE, adapter exception, or more than 1 MiB buffered disables the bridge while Qwen keeps running. Clean shutdown emits `system/session_end`; a stream that closes without it ended abnormally, which does not by itself mean the TUI died.
 
-## Session transcript JSONL
+## Headless runs
 
-With `general.chatRecording` enabled (default), Qwen writes:
+`qwen <query>` runs one headless turn: the positional prompt defaults to one-shot, and `-i/--prompt-interactive <prompt>` runs a prompt then stays interactive. `-p/--prompt` also runs headless and appends its text to stdin input; the CLI marks it deprecated in favour of the positional prompt (`top-level-options.ts`), while the headless docs still use it. `-p` cannot combine with a positional prompt or with `-i`.
 
-```text
-<runtime-base>/projects/<sanitized-cwd>/chats/<session-id>.jsonl
-```
+| Option | Meaning |
+| --- | --- |
+| `--output-format text\|json\|stream-json` (`-o`) | `json` buffers an array of messages; `stream-json` writes JSONL |
+| `--include-partial-messages` | adds `stream_event` deltas to `stream-json` |
+| `--input-format text\|stream-json` | stdin format |
+| `--json-schema <json\|@path>` | registers a synthetic `structured_output` tool the final answer must satisfy; the session ends on the first valid call |
 
-Disabling recording also disables resume. Use the hook's `transcript_path` for the live file and `qwen sessions list --json` for historical discovery. Every append-only record is self-contained:
-
-```jsonc
-{
-  "uuid": "record UUID",
-  "parentUuid": "previous active record UUID or null",
-  "sessionId": "session UUID",
-  "timestamp": "ISO 8601",
-  "type": "user | assistant | tool_result | system",
-  "subtype": "optional typed event subtype",
-  "cwd": "/project/root",
-  "version": "0.19.10",
-  "gitBranch": "main",
-  "message": { "role": "user | model", "parts": [] },
-  "usageMetadata": {},
-  "model": "provider model id",
-  "contextWindowSize": 131072,
-  "toolCallResult": {},
-  "systemPayload": {},
-  "agentId": "optional child id",
-  "agentName": "optional child name",
-  "agentColor": "optional UI hint",
-  "isSidechain": true,
-  "externalInputKind": "message | notification",
-  "forkedFrom": { "sessionId": "source session", "messageUuid": "source record" }
-}
-```
-
-`message` is the Google `Content` shape Qwen uses internally: `role` plus `parts`, including `text`, `functionCall`, `functionResponse`, and thoughts. `toolCallResult` is extensible UI recovery metadata. Parse both structurally and tolerate unknown keys.
-
-Assistant records carry `model`, optional `contextWindowSize`, and normalized `usageMetadata`: `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`, and `toolUsePromptTokenCount`. Use the newest active assistant's `totalTokenCount` as current request size and its `contextWindowSize` as divisor. Fall back to statusline rather than hard-coding a provider limit.
-
-For historical usage, sum each active assistant once. `promptTokenCount` includes cached prompt tokens; price uncached input as saturating prompt minus cached and cached separately. Qwen's resume normalization requires prompt accounting, prefers saturating `totalTokenCount - promptTokenCount` for output, and falls back to candidates alone when candidates exceed thoughts or candidates plus thoughts otherwise. `toolUsePromptTokenCount` is already part of the reported prompt and does not add to a derived total. Qwen supports OpenAI-compatible, Anthropic, Gemini, Vertex, Qwen, and local providers, so model alone is insufficient to infer billing. Retain provider identity where available and leave dollars unknown when metering is not established.
-
-### Active-branch and special-record semantics
-
-`uuid`/`parentUuid` form the active conversation tree. Rewind appends `system/rewind` and re-roots subsequent parent links; abandoned descendants remain. Reconstruct the chain selected by the latest active tail rather than summing physical lines. Fork copies records to a new `sessionId`, rebuilds parents by write order, and adds `forkedFrom` metadata.
-
-`system/chat_compression` stores `systemPayload.info` plus `systemPayload.compressedHistory`, the exact `Content[]` sent after compression. It changes resume history without erasing UI-visible records. Other current subtypes include `slash_command`, `ui_telemetry`, `at_command`, `attribution_snapshot`, `notification`, `cron`, `mid_turn_user_message`, `custom_title`, `parent_session`, `rewind`, `agent_bootstrap`, `agent_launch_prompt`, `file_history_snapshot`, `session_artifact_event`, and `session_artifact_snapshot`. Preserve unknown subtypes and exclude them from token totals unless they carry documented usage.
-
-Writes are queued and flushed on orderly teardown. A hook can precede the newest transcript append, so lifecycle ingestion uses hook fields directly and transcript tailing stays enrichment. The sidecar and transcript can move when a session changes cwd; follow the newest hook/status path rather than pinning launch cwd.
-
-## Subagents
-
-Qwen exposes dedicated start/stop hooks, separate contexts, and child transcript paths. Declare `Capabilities.subagents` after a live fixture proves root/child delivery and parent association.
-
-Named subagents start with isolated context and return inline. Fork subagents inherit the parent's conversation/system/tool prefix, run detached, and do not automatically feed results back. Fork children cannot recursively fork and currently share the parent's cwd.
-
-Definitions live in project `.qwen/agents/`, user `~/.qwen/agents/`, and extensions. Markdown/YAML frontmatter can select model, approval mode, tools, disallowed tools, MCP servers, and hooks. Per-agent hooks are executable and belong in the trust hash. Current upstream warns they are session-registered but not scoped at firing time: concurrent agents' hooks can fire for one another.
-
-`SubagentStart` supplies the child ID/type but no parent ID. `SubagentStop` adds its transcript. Live-verify whether root event context is sufficient, and inspect transcript `agentId`/`isSidechain` plus `parent_session` records for durable correlation. Never merge child/root merely because they share a session or cwd.
-
-## Authentication, account, quota, and spend
-
-Qwen is multi-provider. `security.auth.selectedType` selects the SDK protocol, `model.name` selects the model, `model.baseUrl` disambiguates duplicate model ids, `modelProviders` defines provider membership, exact endpoints, and credential environment keys, and the top-level `providerProtocol` map routes custom provider ids through a built-in protocol. Built-in types include `openai`, `anthropic`, `gemini`, `vertex-ai`, and discontinued `qwen-oauth`. Resolve these fields together because `selectedType = "openai"` alone does not identify the biller.
-
-Credential resolution is provider-specific. CLI `--openai-api-key` wins for OpenAI-compatible providers; for a passive settings probe, inspect process environment, `${QWEN_HOME:-~/.qwen}/.env`, then settings `env`. Common variables are `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`/`QWEN_MODEL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GOOGLE_API_KEY`, and `GOOGLE_MODEL`. Alibaba Coding Plan normally uses `BAILIAN_CODING_PLAN_API_KEY`, while manual provider entries may declare another `envKey`, with `https://coding-intl.dashscope.aliyuncs.com/v1` or `https://coding.dashscope.aliyuncs.com/v1`. Treat only an effective provider record with one of those exact endpoints and its declared key as Alibaba; a stray environment value, protocol name, or model label is insufficient.
-
-The removed `qwen auth status` prints a migration notice; `/doctor` is interactive. A first account probe reads only non-secret merged selection metadata and tests credential-source **presence**, never prints or persists key values. Report provider/model when determinable and fail soft for ADC, custom endpoints, and external secret managers.
-
-Qwen OAuth's browser-login free tier was discontinued on 2026-04-15 and is no longer selectable. Legacy `~/.qwen/oauth_creds.json` may exist but is not a basis for new support.
-
-Qwen publishes no stable native machine-readable remaining-quota API or CLI command. RimZ's Alibaba balance is an experimental provider-specific surface derived from the inspected CodexBar API-key request rather than a Qwen contract: it posts to the selected region's fixed Alibaba console `/data/api.json` host and normalizes an explicitly active instance's 5-hour, 7-day, and 30-day quotas. Keep International and China credentials region-isolated. RimZ may bind a fresh managed launch to the exact official endpoint and credential fingerprint that produced a cached reading, but Qwen supplies no session-bound provider identity for resume, fork, `--wait`, or mid-run recovery. Use neither browser-console cookies, arbitrary endpoint overrides, redirects, nor fallback replay against the other region.
-
-Local token insight is direct from statusline, headless results, and transcript. Provider-billed dollars need provider billing facts and remain unknown for subscription/quota plans, local models, unknown custom endpoints, and unclear billing categories; RimZ may still price a known model through its shared table as an explicitly local operational estimate for display and soft budget policy.
-
-## Headless and supervised runs
-
-`qwen -p <prompt>` runs one headless turn. Stdin is prepended and `-p` appended. A positional query defaults to one-shot; `-i/--prompt-interactive` runs a prompt then stays interactive. RimZ passes `-p` explicitly for supervised runs and launches bare `qwen` for panes.
-
-`--output-format json` buffers an array of messages. `stream-json` writes JSONL; add `--include-partial-messages` for deltas. The final result is:
+The terminal `result` message (`CLIResultMessage` in `nonInteractive/types.ts`):
 
 ```jsonc
 {
@@ -429,59 +503,93 @@ Local token insight is direct from statusline, headless results, and transcript.
 }
 ```
 
-Error results carry an `error` object instead of result text. Preserve unknown fields. Documented exits include 0 success, 1 general/API failure, 42 invalid input, 53 maximum turns, 55 budget exceeded, and 130 SIGINT. Require a successful terminal result and process exit, preserving the process code as script verdict.
+Error results carry an optional `error` object (`type`, `message`) instead of `result`. `modelUsage` and `stats` are optional, and the type admits extra keys. `stream-json` also carries `goal_state` events for the Goal continuation feature.
 
-`--max-session-turns`, `--max-wall-time`, and `--max-tool-calls` bound headless work. Tool budget counts root dispatches but not subagent inner tools; terminal `structured_output` is exempt. `QWEN_CODE_UNATTENDED_RETRY=1` retries 429/529 indefinitely with capped backoff and stderr heartbeats; pair it with wall time. `--yolo` does not enable sandboxing.
+Exit codes come from the `FatalError` subclasses in `core/src/utils/errors.ts`:
 
-## CLI and environment surface
-
-| Surface | Meaning for RimZ |
+| Code | Cause |
 | --- | --- |
-| `qwen --version` | version probe |
-| `qwen` | stock interactive pane |
-| `qwen -i <prompt>` | prompt then interactive |
-| `qwen -p <prompt>` | supervised run |
-| `--continue` / `--resume <id>` | native resume |
-| `--fork-session` | fork resumed history |
-| `--session-id <id>` | caller-selected identity; version-gate |
-| `--model <id>` | startup model override |
-| `--system-prompt <text>` / `--append-system-prompt <text>` | direct prompt override/append; these accept text rather than file paths |
-| `QWEN_SYSTEM_MD=<path>` | replace the base prompt verbatim from a file; a missing enabled file is a hard error |
-| `--approval-mode <plan|default|auto-edit|auto|yolo>` | permission mapping |
-| `--yolo` | full auto-approval |
-| `--allowed-tools` / `--exclude-tools` | confirmation bypass / tool removal |
-| `--sandbox` / `QWEN_SANDBOX=1` | sandbox, separate from approval |
-| `--include-directories` / `--add-dir` | extra workspace roots |
-| `--worktree [slug|PR]` | upstream worktree, distinct from RimZ's |
-| `--json-file`, `--input-file` | interactive structured channels |
-| `--output-format <text|json|stream-json>` | supervised output |
+| 0 | success |
+| 1 | general or API failure |
+| 41 | authentication (`FatalAuthenticationError`) |
+| 42 | invalid input (`FatalInputError`) |
+| 44 | sandbox (`FatalSandboxError`) |
+| 52 | configuration (`FatalConfigError`) |
+| 53 | turn limit (`FatalTurnLimitedError`) |
+| 54 | tool execution (`FatalToolExecutionError`) |
+| 55 | run budget exceeded (`FatalBudgetExceededError`) |
+| 130 | cancellation, SIGINT (`FatalCancellationError`) |
+
+Three flags bound unattended work; each is unlimited (`-1`) by default. `--max-session-turns` exits 53. `--max-wall-time` takes seconds or a duration (`30s`, `5m`, `1.5h`; minimum 1 s) and exits 55. `--max-tool-calls` counts root tool dispatches, success or failure, excluding subagent inner tools and `structured_output`, caps at 1,000,000, and exits 55. `QWEN_CODE_UNATTENDED_RETRY=1` retries 429 and 529 responses indefinitely with capped backoff and stderr heartbeats. `--yolo` does not enable the sandbox.
+
+## Authentication, providers, and quota
+
+Qwen is multi-provider, and the effective provider comes from several settings together:
+
+| Setting | Role |
+| --- | --- |
+| `security.auth.selectedType` | SDK protocol: `openai`, `openai-responses`, `anthropic`, `gemini`, `vertex-ai`, or the discontinued `qwen-oauth` (also CLI `--auth-type`) |
+| `model.name` | selected model id |
+| `model.baseUrl` | disambiguates duplicate model ids |
+| `modelProviders` | provider id to `ModelConfig[]` (`id`, optional `envKey`, `name`, `description`, `baseUrl`, `generationConfig`); built-in ids must be auth types |
+| `providerProtocol` | top-level map routing a custom provider id through a built-in protocol |
+
+`selectedType: "openai"` alone therefore does not identify who bills the call.
+
+Credentials resolve per provider. CLI `--openai-api-key` and `--openai-base-url` win for OpenAI-compatible providers. Otherwise the runtime reads `process.env[envKey]`, where environment values come from the process, `${QWEN_HOME:-~/.qwen}/.env`, and settings `env`; a model entry without `envKey` falls back to its auth type's default key, such as `OPENAI_API_KEY`. Common variables are `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `QWEN_MODEL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GOOGLE_API_KEY`, and `GOOGLE_MODEL`. Credentials are never persisted in settings.
+
+Alibaba sells two plans through OpenAI-compatible provider entries. A provider-specific key takes effect only when a provider entry declares it as `envKey`:
+
+| Plan | Key | Endpoints |
+| --- | --- | --- |
+| Coding Plan | `BAILIAN_CODING_PLAN_API_KEY` | China `https://coding.dashscope.aliyuncs.com/v1`, international `https://coding-intl.dashscope.aliyuncs.com/v1` |
+| Token Plan | `BAILIAN_TOKEN_PLAN_API_KEY` | China `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`, Singapore `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` |
+
+`qwen auth` is removed: it prints a notice that points interactive users at `/auth`, headless users at provider environment variables, and auth status at `/doctor` (`cli/src/commands/auth.ts`). Qwen OAuth's free tier was discontinued on 2026-04-15, and the auth docs state it is not a selectable `/auth` entry; the removal notice still tells OAuth users to use `/auth`. A legacy `~/.qwen/oauth_creds.json` may remain.
+
+Qwen publishes no machine-readable remaining-quota API or command. The only inspected quota wire is third party: CodexBar's `AlibabaCodingPlanUsageFetcher.swift` posts a Coding Plan API key to the region's fixed Alibaba console `/data/api.json` host and reads an active instance's 5-hour, 7-day, and 30-day quotas. It is not a Qwen contract. Provider-billed dollars need provider billing facts that neither Qwen nor its transcript supplies.
+
+## CLI and environment reference
+
+| Flag or variable | Meaning |
+| --- | --- |
+| `qwen --version` (`-v`) | version |
+| `qwen [query..]` | interactive TUI without a query; one-shot headless with one |
+| `-i, --prompt-interactive <prompt>` | run a prompt, then stay interactive |
+| `-p, --prompt <prompt>` | headless; deprecated |
+| `-c, --continue` / `-r, --resume [id]` / `--fork-session` / `--session-id <id>` | [session identity](#resume-fork-and-session-commands) |
+| `-m, --model <id>` | startup model |
+| `--fallback-model <id>` | up to three fallbacks for 429, 503, and 529 capacity errors |
+| `--auth-type <type>` | `openai`, `openai-responses`, `anthropic`, `qwen-oauth`, `gemini`, `vertex-ai` |
+| `--system-prompt <text>` / `--append-system-prompt <text>` | replace or append the main system prompt for this run; both take text |
+| `--output-style <name>` | output style for this run |
+| `--approval-mode <mode>` | `plan`, `default`, `auto-edit`, `auto` (LLM classifier approves safe actions), `yolo` |
+| `-y, --yolo` | approve all tools |
+| `--allowed-tools` / `--exclude-tools` / `--core-tools` | skip confirmation / remove tools / core tool set |
+| `--disabled-slash-commands` | hide slash commands; merges `slashCommands.disabled` and `QWEN_DISABLED_SLASH_COMMANDS` |
+| `-s, --sandbox` / `QWEN_SANDBOX=1` | sandbox, independent of approval mode |
+| `--include-directories`, `--add-dir` | extra workspace roots |
+| `--worktree [slug\|#PR\|URL]` | start inside `<repoRoot>/.qwen/worktrees/<slug>/` |
+| `--json-fd`, `--json-file`, `--input-file` | [dual output](#interactive-dual-output) |
+| `-o, --output-format`, `--input-format`, `--include-partial-messages`, `--json-schema` | [headless output](#headless-runs) |
+| `--max-session-turns`, `--max-wall-time`, `--max-tool-calls` | [run budgets](#headless-runs) |
+| `--max-subagent-depth <n>` | subagent nesting limit |
+| `--chat-recording` | toggle session recording |
+| `--bare` | skip implicit startup discovery; honour only explicit CLI inputs |
+| `--safe-mode` / `QWEN_CODE_SAFE_MODE=true` | disable context files, hooks, extensions, skills, and MCP servers |
+| `--channel <name>` | caller identity: `VSCode`, `ACP`, `SDK`, `CI`, `desktop`, `daemon` |
+| `--acp` | ACP over stdio |
+| `QWEN_SYSTEM_MD` | replace the base system prompt verbatim from a file; `1` or `true` selects `.qwen/system.md`, `0` or `false` disables; a missing file is a hard error; output style and `QWEN_SYSTEM_IDENTITY_MD` are ignored while it applies |
 | `QWEN_HOME` / `QWEN_RUNTIME_DIR` | config root / runtime root |
-| `QWEN_CODE_SAFE_MODE=true` | disable customizations |
+| `QWEN_CODE_SUPPRESS_YOLO_WARNING=1` | silence the `--yolo` startup warning |
 | `NO_COLOR` | suppress ANSI where supported |
 
-Map RimZ suffixes as plan → `plan`, ask → `default`, auto → `auto-edit`, and yolo → `yolo`. Qwen's classifier-driven `auto` is distinct; expose it only through explicit launch args until RimZ defines cross-provider semantics.
+Configuration layers apply in this order, later winning: defaults, system defaults, user settings, project settings, system settings, environment and `.env`, then CLI flags. `QWEN_CODE_SYSTEM_DEFAULTS_PATH` and `QWEN_CODE_SYSTEM_SETTINGS_PATH` relocate the two system layers.
 
-Configuration precedence is defaults, system defaults, user settings, project settings, overriding system settings, environment/`.env`, then CLI. Preserve all layers and account for `QWEN_CODE_SYSTEM_DEFAULTS_PATH`, `QWEN_CODE_SYSTEM_SETTINGS_PATH`, `QWEN_HOME`, and `QWEN_RUNTIME_DIR`.
+## ACP and daemon mode
 
-## ACP and daemon mode index
+`qwen --acp` speaks ACP over stdio. `qwen serve` hosts shared sessions over HTTP and SSE as an experimental daemon that owns ACP children: it binds `127.0.0.1:4170` by default, is tokenless on loopback unless `--require-auth`, generates a bearer token for a non-loopback bind when neither `--token` nor `QWEN_SERVER_TOKEN` supplies one, caps live sessions (`--max-sessions`, default 32), and serves a Web Shell unless `--no-web`. Both give a dedicated client structured prompts, permissions, session lifecycle, model changes, and replay. Neither observes a separately launched TUI pane.
 
-`qwen --acp` starts ACP over stdio. `qwen serve` hosts shared sessions over HTTP/SSE and owns ACP children. They provide structured prompts, permissions, session lifecycle, model changes, and replay to dedicated clients.
+## Upstream scope
 
-They do not observe an independent stock TUI pane. Adoption changes RimZ into a protocol host and adds daemon auth, reconnect, and ownership concerns. Keep them out of the first adapter; revisit for a programmatic runner or remote control after pane-first support is stable.
-
-## Implementation checklist and live verification gaps
-
-1. Add a typed `qwen` descriptor with eager hooks, native resume/fork, and subagents; use the runtime sidecar for PID/session binding.
-2. Install one neutral command hook for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, and `SessionEnd`.
-3. Preserve unrelated hooks, preflight disable/safe/bare/trust/configuration layers, and hash full executable hook/statusline definitions.
-4. Parse around required session identity, retain unknowns, reserve stdout, and add golden fixtures for permissions, question, plan, background park, API error, compaction, clear, branch, and children.
-5. Wrap command statusline without changing rendered stdout; leave preset intact and parse multi-model metrics as a map.
-6. Fold JSONL by active parent chain, honor rewind/compression, retain unknown system subtypes, and exclude abandoned branches/child sidechains from root totals.
-7. Use transcript context size plus newest total tokens for durable context and statusline for live context; never assume one limit across providers.
-8. Drive `-p --output-format stream-json`, preserve exits, and test stdin ordering, resume/fork, budgets, denials, and partial messages.
-9. Keep dual output optional: isolate paths, feature-detect v1, tolerate disablement, and add boolean answers only after security/race coverage.
-10. Resolve provider/model/endpoint/credential-source presence without secrets; keep Alibaba's experimental fixed-host quota scoped to its selected region and omit quota where no inspected provider-specific surface exists.
-11. Live-capture canonical edit/question/plan tool ids; verify every native dialog, Esc cancellation, shell activity, background parking, and failure coverage.
-12. Verify subagent parent correlation, named/fork/background hook delivery, failure verdicts, transcript paths, depth, and parent tasks before enabling all capabilities.
-13. Verify sidecars across clear, branch, fork, worktree, cwd change, crash, PID reuse, and runtime-root overrides; require process liveness.
-14. Compare the target release's `HookEventName`, `ChatRecord`, dual-output protocol, CLI options, and statusline payload. The published hook event table trails the source enum in places, so source-backed compatibility fixtures are required.
+The surfaces above cover what Qwen Code ships at 0.23.3. Several exist that a pane observer need not adopt: dual output's reverse channel, the live session registry's peer-messaging socket, ACP and `qwen serve`, `goal_state` stream events and records, and delegation of a subagent turn to an external ACP agent. Which of these RimZ reads, and the gaps it records, are in [adapter_qwen.md](../../internals/agents/adapter_qwen.md#known-gaps).
