@@ -11,7 +11,8 @@ use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::oauth_http_get;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 
-const USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
+const MAINLAND_USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
+const GLOBAL_USAGE_URL: &str = "https://api.kimi.ai/coding/v1/usages";
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -50,44 +51,37 @@ pub(super) fn probe() -> crate::agents::AccountUsageProbe {
         credentials_stamp: credentials_stamp(),
         ..Default::default()
     };
-    let result = refuse_managed_base_override().and_then(|()| {
+    let result = official_usage_url().and_then(|url| {
         let token = load_token(&super::account::credentials_path())?;
-        fetch_with(USAGE_URL, &token)
+        fetch_with(url, &token)
     });
     crate::agents::credits::map_account_usage_probe(result, identity, "kimi")
 }
 
-fn refuse_managed_base_override() -> Result<(), Error> {
-    let base = std::env::var("KIMI_CODE_BASE_URL")
+/// The managed base resolves like Kimi Code's own: `$KIMI_CODE_BASE_URL`, then the
+/// provider's configured base, then the mainland default. Only an official region
+/// base receives the managed bearer, so a custom endpoint never sees the token.
+fn official_usage_url() -> Result<&'static str, Error> {
+    let configured = std::env::var("KIMI_CODE_BASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(configured_managed_base);
-    if base.is_some_and(|base| !official_managed_base(&base)) {
-        return Err(Error::Unavailable);
+        .or_else(|| {
+            super::account::managed_provider()?
+                .base_url
+                .filter(|value| !value.trim().is_empty())
+        });
+    match configured {
+        None => Ok(MAINLAND_USAGE_URL),
+        Some(base) => official_usage_url_for(&base).ok_or(Error::Unavailable),
     }
-    Ok(())
 }
 
-fn official_managed_base(base: &str) -> bool {
-    matches!(
-        base.trim().trim_end_matches('/'),
-        "https://api.kimi.com/coding/v1" | USAGE_URL
-    )
-}
-
-fn configured_managed_base() -> Option<String> {
-    let path = super::install::config_path().ok()?;
-    let text = std::fs::read_to_string(path).ok()?;
-    let root: toml::Table = toml::from_str(&text).ok()?;
-    root.get("providers")
-        .and_then(toml::Value::as_table)?
-        .get("managed:kimi-code")?
-        .as_table()?
-        .get("base_url")?
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+fn official_usage_url_for(base: &str) -> Option<&'static str> {
+    match base.trim().trim_end_matches('/') {
+        "https://api.kimi.com/coding/v1" => Some(MAINLAND_USAGE_URL),
+        "https://api.kimi.ai/coding/v1" => Some(GLOBAL_USAGE_URL),
+        _ => None,
+    }
 }
 
 fn credentials_stamp() -> Option<u64> {
@@ -378,9 +372,19 @@ mod tests {
 
     #[test]
     fn managed_oauth_host_and_headers_are_fixed() {
-        assert!(official_managed_base("https://api.kimi.com/coding/v1/"));
-        assert!(official_managed_base(USAGE_URL));
-        assert!(!official_managed_base("https://proxy.invalid/coding/v1"));
+        assert_eq!(
+            official_usage_url_for("https://api.kimi.com/coding/v1/"),
+            Some(MAINLAND_USAGE_URL)
+        );
+        assert_eq!(
+            official_usage_url_for("https://api.kimi.ai/coding/v1"),
+            Some(GLOBAL_USAGE_URL)
+        );
+        assert_eq!(official_usage_url_for(MAINLAND_USAGE_URL), None);
+        assert_eq!(
+            official_usage_url_for("https://proxy.invalid/coding/v1"),
+            None
+        );
         let headers = usage_headers("sentinel-secret");
         assert_eq!(headers[0], ("Accept", "application/json".to_owned()));
         assert_eq!(
