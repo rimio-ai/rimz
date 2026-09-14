@@ -215,6 +215,48 @@ fn rollup_parse_cache_hits_on_same_identity_and_misses_when_republish_changes_id
 }
 
 #[test]
+fn carryover_parse_is_shared_per_identity_and_corruption_errors_until_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("agents.carryover.json");
+    let carryover_with = |id: &str| EventCarryover {
+        agents: vec![agent("claude", id, AgentStatus::Idle, 1_000)],
+        ..EventCarryover::default()
+    };
+    write_carryover(&path, &carryover_with("aaaa")).unwrap();
+    let first = fold_carryover(&path).unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &fold_carryover(&path).unwrap()),
+        "an unchanged file identity serves the shared parse"
+    );
+    assert!(
+        first.agents[0].kind_ordinal.is_some(),
+        "the shared parse is fold-ready: identities backfilled"
+    );
+
+    // Atomic replacement with identical bytes still changes the inode.
+    write_carryover(&path, &carryover_with("aaaa")).unwrap();
+    assert!(
+        !Arc::ptr_eq(&first, &fold_carryover(&path).unwrap()),
+        "a replaced file re-parses"
+    );
+
+    let corrupt = dir.path().join("corrupt.tmp");
+    std::fs::write(&corrupt, b"{\"agents\": [").unwrap();
+    std::fs::rename(&corrupt, &path).unwrap();
+    for attempt in 0..2 {
+        assert!(
+            matches!(fold_carryover(&path), Err(SnapshotErr::Json { .. })),
+            "corruption surfaces on fold {attempt}, never a cached default"
+        );
+    }
+    write_carryover(&path, &carryover_with("bbbb")).unwrap();
+    assert_eq!(fold_carryover(&path).unwrap().agents[0].agent_id, "bbbb");
+
+    std::fs::remove_file(&path).unwrap();
+    assert!(fold_carryover(&path).unwrap().agents.is_empty());
+}
+
+#[test]
 fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -256,7 +298,7 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
 
     let (held_extent, held, _) = cursor.fold(&paths).unwrap();
     assert_eq!(held_extent, first_extent);
-    assert_eq!(sorted_value(held.clone()), sorted_value(first));
+    assert_eq!(sorted_value(held.to_vec()), sorted_value(first.to_vec()));
     assert!(
         held.iter().all(|a| a.agent_id != "ghost"),
         "an unchanged log serves the in-memory base, not the disk base"

@@ -1,6 +1,7 @@
 //! Stable card identity allocation across launches, lifecycle observations,
 //! incremental folds, and log rotation.
 
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -21,11 +22,6 @@ pub(crate) struct AgentIdentityState {
 }
 
 impl AgentIdentityState {
-    pub(crate) fn with_ordinals_reset(mut self) -> Self {
-        self.next_ordinal.clear();
-        self
-    }
-
     pub(crate) fn without_consumed_launches(mut self) -> Self {
         self.consumed_launches.clear();
         self
@@ -36,11 +32,20 @@ pub(crate) fn backfill_agent_identities(
     agents: &mut [AgentState],
     state: AgentIdentityState,
 ) -> AgentIdentityState {
-    let mut map: BTreeMap<(AgentKind, AgentSessionId), AgentState> = agents
+    // Rows are indexed, never cloned: the last row for a key is its lookup
+    // target, and an assigned row becomes the target for its key's later rows.
+    let mut index_by_key: BTreeMap<(AgentKind, AgentSessionId), usize> = agents
         .iter()
-        .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent.clone()))
+        .enumerate()
+        .map(|(index, agent)| ((agent.kind.clone(), agent.agent_id.clone()), index))
         .collect();
-    let mut allocator = CardIdentityAllocator::from_map_and_state(&map, state);
+    let mut allocator = CardIdentityAllocator::from_map_and_state(
+        &index_by_key
+            .iter()
+            .map(|(key, &index)| (key.clone(), &agents[index]))
+            .collect(),
+        state,
+    );
     let mut order: Vec<_> = agents
         .iter()
         .enumerate()
@@ -52,12 +57,13 @@ pub(crate) fn backfill_agent_identities(
         if has_card_identity(&agents[index]) {
             continue;
         }
-        let key = (kind.clone(), agent_id.clone());
-        let identity = allocator.assign_existing(&kind, &agent_id, map.get(&key));
+        let key = (kind, agent_id);
+        let prior = index_by_key.get(&key).map(|&prior| &agents[prior]);
+        let identity = allocator.assign_existing(&key.0, &key.1, prior);
         agents[index].name_explicit = identity.name_explicit;
         agents[index].name = Some(identity.name);
         agents[index].kind_ordinal = Some(identity.kind_ordinal);
-        map.insert(key, agents[index].clone());
+        index_by_key.insert(key, index);
     }
     allocator.state()
 }
@@ -82,8 +88,8 @@ pub(super) struct CardIdentityAllocator {
 }
 
 impl CardIdentityAllocator {
-    pub(super) fn from_map_and_state(
-        map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    pub(super) fn from_map_and_state<Row: Borrow<AgentState>>(
+        map: &BTreeMap<(AgentKind, AgentSessionId), Row>,
         state: AgentIdentityState,
     ) -> Self {
         let mut allocator = Self {
@@ -94,9 +100,10 @@ impl CardIdentityAllocator {
         };
         allocator.names.retain(|_, owner| {
             map.get(owner)
-                .is_some_and(|state| !state.is_provider_subagent())
+                .is_some_and(|state| !state.borrow().is_provider_subagent())
         });
         for ((kind, agent_id), state) in map {
+            let state = state.borrow();
             if !state.is_provider_subagent()
                 && let Some(name) = state.name.as_deref().filter(|name| valid_agent_name(name))
             {

@@ -64,7 +64,7 @@ pub(super) fn refresh_cohort_spend_for(
     let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let groups = compute_cohort_effort(
         &snapshot.worktree_groups,
-        &agents,
+        &agents.to_vec(),
         runtime,
         snapshot.now,
         active_grace_secs,

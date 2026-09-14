@@ -1,7 +1,8 @@
 //! One thread's last parse of a JSON cache file, keyed by path plus byte
 //! identity `(mtime, len)` — the shared core behind every single-slot
 //! stat-gated parse cache (`rollup.json`, `latest.json`, the published
-//! `snapshot.json`).
+//! `snapshot.json`, and, under the full [`StampedPath`] identity,
+//! `agents.carryover.json`).
 //! [`FileStamp`] and [`StampedPath`] expose the same cheap identity outside a
 //! parse cache, extended with the device/inode pair on Unix so atomic
 //! replacements remain distinguishable at equal byte length and timestamp.
@@ -17,7 +18,9 @@
 //! fold resumes from the cached extent, the freshness stamp is checked on
 //! the live log — so a stale serve costs a larger fold or a re-read, never
 //! a wrong result. A new caller must preserve that property: cache the
-//! parse, never a verdict.
+//! parse, never a verdict. The one exception is a file only ever replaced by
+//! atomic rename, keyed by the full stamp: the temp file is a distinct inode
+//! while the old one is still linked, so no replacement can alias.
 //!
 //! Callers hold one per thread (`thread_local!`), so the slot needs no lock
 //! and is never shared across threads.

@@ -116,7 +116,7 @@ proptest::proptest! {
             "fold(seed, delta) == fold(empty, all)"
         );
         prop_assert_eq!(
-            sorted_value(cursor_merged),
+            sorted_value(cursor_merged.to_vec()),
             sorted_value(cold),
             "the warm in-memory cursor fold equals the cold fold"
         );

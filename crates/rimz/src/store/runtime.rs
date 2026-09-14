@@ -43,54 +43,56 @@ pub fn audit_projection(
 
 impl RuntimeProjection {
     pub fn from_parts(agents: Vec<AgentState>, scope: RuntimeScope) -> Self {
-        let ended = agents
-            .iter()
-            .filter_map(|agent| {
-                agent
-                    .ended_at
-                    .map(|_| (agent.kind.clone(), agent.agent_id.clone()))
-            })
-            .collect();
         match scope {
             RuntimeScope::Audit => Self {
-                ended,
+                ended: ended_keys(&agents),
                 expelled: BTreeSet::new(),
                 agents,
             },
-            RuntimeScope::Runtime => {
-                let visible_parents = agents
-                    .iter()
-                    .filter(|agent| {
-                        agent.parent_agent_id.is_none() && agent_is_runtime_visible(agent)
-                    })
-                    .collect::<Vec<_>>();
-                let visible = agents
-                    .iter()
-                    .map(|agent| {
-                        agent_is_runtime_visible(agent)
-                            || (agent.is_launched_child()
-                                && visible_parents.iter().any(|parent| agent.parent_is(parent)))
-                    })
-                    .collect::<Vec<_>>();
-                let mut expelled = BTreeSet::new();
-                let agents = agents
-                    .into_iter()
-                    .zip(visible)
-                    .filter_map(|(agent, visible)| {
-                        if !visible && agent.ended_at.is_none() {
-                            expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
-                        }
-                        visible.then_some(agent)
-                    })
-                    .collect();
-                Self {
-                    ended,
-                    expelled,
-                    agents,
-                }
-            }
+            RuntimeScope::Runtime => Self::runtime_from_refs(&agents),
         }
     }
+
+    /// The runtime-scoped projection over borrowed rows, cloning only the
+    /// rows it keeps — a long-lived reader's rollup stays shared.
+    pub fn runtime_from_refs<'a>(agents: impl IntoIterator<Item = &'a AgentState>) -> Self {
+        let agents = agents.into_iter().collect::<Vec<_>>();
+        let visible_parents = agents
+            .iter()
+            .filter(|agent| agent.parent_agent_id.is_none() && agent_is_runtime_visible(agent))
+            .collect::<Vec<_>>();
+        let mut expelled = BTreeSet::new();
+        let kept = agents
+            .iter()
+            .filter_map(|agent| {
+                let visible = agent_is_runtime_visible(agent)
+                    || (agent.is_launched_child()
+                        && visible_parents.iter().any(|parent| agent.parent_is(parent)));
+                if !visible && agent.ended_at.is_none() {
+                    expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
+                }
+                visible.then(|| (*agent).clone())
+            })
+            .collect();
+        Self {
+            ended: ended_keys(agents.iter().copied()),
+            expelled,
+            agents: kept,
+        }
+    }
+}
+
+fn ended_keys<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState>,
+) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    agents
+        .into_iter()
+        .filter_map(|agent| {
+            agent
+                .ended_at
+                .map(|_| (agent.kind.clone(), agent.agent_id.clone()))
+        })
+        .collect()
 }
 
 /// Runtime visibility for an agent. Liveness suppresses; it never gates an

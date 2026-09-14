@@ -12,7 +12,7 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
         live.worktree_branch = Some("feature".into());
 
         let merged =
-            merge_agent_rollups(std::slice::from_ref(&carried), std::slice::from_ref(&live));
+            AgentRollup::layered(fold_ready(vec![carried]), std::slice::from_ref(&live)).to_vec();
         assert_eq!(merged.len(), 1, "{label}");
         assert_eq!(merged[0].status, AgentStatus::Running, "{label}");
         assert_eq!(
@@ -24,11 +24,29 @@ fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
 
     let only_in_carryover = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
     let only_live = agent("codex", "agent-2", AgentStatus::Running, 2_000);
-    let merged = merge_agent_rollups(
-        std::slice::from_ref(&only_in_carryover),
+    let merged = AgentRollup::layered(
+        fold_ready(vec![only_in_carryover]),
         std::slice::from_ref(&only_live),
     );
     assert_eq!(merged.len(), 2);
+
+    let mut newer_carried = agent("claude", "agent-1", AgentStatus::Idle, 2_000);
+    newer_carried.worktree_branch = Some("main".into());
+    let older_live = agent("claude", "agent-1", AgentStatus::Running, 1_000);
+    let merged = AgentRollup::layered(
+        fold_ready(vec![newer_carried]),
+        std::slice::from_ref(&older_live),
+    )
+    .to_vec();
+    assert_eq!(merged.len(), 1, "a newer carried observation keeps its row");
+    assert_eq!(merged[0].status, AgentStatus::Idle);
+}
+
+fn fold_ready(agents: Vec<AgentState>) -> Arc<FoldCarryover> {
+    Arc::new(FoldCarryover::from_raw(EventCarryover {
+        agents,
+        ..EventCarryover::default()
+    }))
 }
 
 #[test]
@@ -159,10 +177,7 @@ fn sticky_rebirth_unstamps_carryover_before_a_later_delta_hydrates_it() {
     let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
     carried.pane = Some(pane("%7", "claude", "/repo"));
     carried.kind_ordinal = Some(7);
-    let carryover = EventCarryover {
-        agents: vec![carried],
-        ..EventCarryover::default()
-    };
+    let carryover = fold_ready(vec![carried]);
 
     let rebirth_events = vec![EventEnvelope::session_rebirth(workspace.clone(), "session")];
     let rebirth_events = decode_events(&rebirth_events);
@@ -204,9 +219,12 @@ fn sticky_rebirth_unstamps_carryover_before_a_later_delta_hydrates_it() {
     ];
     let cold_events = decode_events(&cold_events);
     let cold = fold_delta(FoldDeltaSeed::default(), carryover, &cold_events, epoch());
-    assert_eq!(sorted_value(warm.merged.clone()), sorted_value(cold.merged));
+    assert_eq!(
+        sorted_value(warm.merged.to_vec()),
+        sorted_value(cold.merged.to_vec())
+    );
     assert!(
-        warm.merged[0].pane.is_none(),
+        warm.merged.to_vec()[0].pane.is_none(),
         "an earlier rebirth must retire the carried pane before hydration"
     );
 }

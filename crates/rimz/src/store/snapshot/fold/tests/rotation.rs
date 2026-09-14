@@ -57,7 +57,7 @@ fn cursor_reloads_across_a_rotation() {
     assert_eq!(extent.generation, 1, "the reloaded base carries the bump");
     assert_eq!(extent.offset, cold_cache.extent.offset);
     assert_eq!(
-        sorted_value(merged),
+        sorted_value(merged.to_vec()),
         sorted_value(cold),
         "the post-rotation cursor fold equals the cold fold"
     );
