@@ -113,7 +113,7 @@ impl LinkStatsFile {
         }
     }
 
-    pub fn version_ok(&self) -> bool {
+    pub(crate) fn version_ok(&self) -> bool {
         self.v == LINK_SCHEMA_VERSION
     }
 }
@@ -311,7 +311,7 @@ impl SessionLinkState {
 }
 
 /// Overall tier is the worst of RTT and probe-miss rate.
-pub fn link_tier(rtt_ms: Option<u32>, miss_pct: u16) -> LinkTier {
+pub(crate) fn link_tier(rtt_ms: Option<u32>, miss_pct: u16) -> LinkTier {
     let rtt = match rtt_ms {
         Some(ms) if ms > 400 => LinkTier::Bad,
         Some(ms) if ms > 150 => LinkTier::Degraded,
@@ -335,7 +335,7 @@ pub fn link_tier(rtt_ms: Option<u32>, miss_pct: u16) -> LinkTier {
 /// loss over `0..=30%` — so a healthy fresh link reads green (`0.0`) and a bad
 /// one red (`1.0`). `None` only while the RTT is still warming (no sample yet),
 /// where the renderer paints its neutral resting tone.
-pub fn link_badge_heat(rtt_ms: Option<u32>, miss_pct: u16) -> Option<f32> {
+pub(crate) fn link_badge_heat(rtt_ms: Option<u32>, miss_pct: u16) -> Option<f32> {
     let rtt = rtt_ms?;
     let latency = axis_badge_heat(rtt, 100, 400);
     let loss = axis_badge_heat(u32::from(miss_pct), 0, 30);
