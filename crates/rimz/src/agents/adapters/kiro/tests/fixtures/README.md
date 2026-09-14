@@ -6,7 +6,7 @@ The UI reported a root session identity shaped as `sess_<uuid>`. Kiro CLI's stoc
 
 `stock_shell_2_21_4/` is a Kiro CLI 2.21.4 capture of the same launch: two turns, the second approving one `execute_bash` call. It preserves the `fetch_cloud_config` tool call written before `turn_start`, the `pending_interaction` and `interaction_resolved` pair, the tool call recorded as `completed` rather than `approved`, and `in_progress` metadata status.
 
-The attempted hook files produced no command invocation or stdin payload. Pulled store evidence therefore supports transcript and live display without claiming executable hook coverage or structured Ask/Answer routing.
+Kiro CLI 2.12.1 ran none of the attempted hook files. On 2.21.4 the same captures fired workspace and global hooks, and the hook samples in the adapter catalog follow those payloads, with the session id redacted. No hook reports a pending approval or question, so the store remains the evidence for waiting cards.
 
 The paired UUID-only JSON and JSONL samples came from an ACP-hosted non-interactive session whose metadata says `session_created_reason: "subagent"`. They demonstrate a distinct session class and do not define the stock interactive adapter contract.
 

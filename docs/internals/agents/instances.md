@@ -23,7 +23,7 @@ A multiplexer sometimes reports only a shared runtime basename such as `node` fo
 
 ## Before a session binds
 
-A wired instance with no bound session renders as an idle `○ <kind>` row, so a just-launched agent reads as itself instead of a bare process ([`idle_agent_row`](../../../crates/rimz/src/store/snapshot/panes/lazy.rs)). Claude shows it at the login screen and in the moment before `SessionStart` stamps the pane. Codex and OpenCode show it before their first real session exists. Kiro stays identity-less until its provider-owned local store yields a safe binding, and Antigravity binds on its first invocation hook or an exact local-session match.
+A wired instance with no bound session renders as an idle `○ <kind>` row, so a just-launched agent reads as itself instead of a bare process ([`idle_agent_row`](../../../crates/rimz/src/store/snapshot/panes/lazy.rs)). Claude shows it at the login screen and in the moment before `SessionStart` stamps the pane. Codex and OpenCode show it before their first real session exists. Kiro stays identity-less until its first-prompt hook or its provider-owned local store yields a safe binding, and Antigravity binds on its first invocation hook or an exact local-session match.
 
 The synthesized row needs an active observation path. Installed hooks activate hook capabilities, and a declared provider-store observation path activates session capabilities; an integration with neither stays a [process row](../sidebar/sidebar.md#process-rows).
 

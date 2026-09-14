@@ -108,10 +108,11 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 ### Kiro
 
-- Kiro's documented hooks did not run under verification, so RimZ reads the lifecycle from Kiro's local session store.
+- Turns and tool calls arrive through the global hook file `rimz hooks install kiro` manages, which needs Kiro CLI 2.13.0 or later.
+- Kiro's local session store still supplies the card before the first prompt, pending approvals, context, and history.
+- A cancelled or errored turn fires no hook: the card settles from the store, and a supervised `-p` run on that turn ends at its `--timeout`.
 - A pending tool approval raises Waiting; `rimz asks` and `rimz answer` do not see it.
 - Context is a percentage only.
-- `rimz hooks install kiro` and supervised `-p` runs are unsupported, and [`rimz agents compact`](./cli/agents.md#compact) refuses Kiro because it has no native turn-start hook.
 
 ### Kimi
 
@@ -245,7 +246,7 @@ The wiring matrix is the mechanism under the six capabilities: eighteen integrat
 | Droid | ✓ | ✗ | ✗ | ◐ | ✗ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ◐ | ✗ | ✓ | ◐ | ✗ | ✗ |
-| Kiro | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Kiro | ✓ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
@@ -290,7 +291,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ transcript `AskUser` | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ◐ local pending `AskQuestion` or plan proposal | `subagentStart` | `subagentStop` | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
-| Kiro | ◐ local store | ◐ `turn_start` | ◐ `turn_end` | ◐ tool records | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
+| Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ `SubagentStart` + child session files | ◐ `SubagentStop` + child session files | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `Notification` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |

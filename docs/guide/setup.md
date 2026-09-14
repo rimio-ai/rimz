@@ -81,7 +81,7 @@ Grok installs one passive global JSON file at `${GROK_HOME:-~/.grok}/hooks/rimz.
 
 Newly-born rooms also give direct Copilot launches a private metadata-only OTel file under that workspace's runtime directory, with message-content capture disabled. A room that was already alive when RimZ gained this support keeps its original environment; rebirth it after install or upgrade before expecting a plain `copilot` typed in the work shell to show model and token composition.
 
-Kiro CLI 2.12.1 v3 does not execute its documented standalone hook configs, so RimZ leaves Kiro out of hook installation. Its validated stock local session store supplies transcript and live display without a setup step.
+Kiro installs one global file at `~/.kiro/hooks/rimz.json`, marked `_rimz_managed`, which Kiro CLI 2.13.0 and later run in every workspace. Install refuses an older Kiro CLI, and it takes over the unmarked hook file that earlier RimZ builds wrote. Kiro reads sessions and global hooks from `~/.kiro` even when `KIRO_HOME` is set.
 
 ## True color
 
