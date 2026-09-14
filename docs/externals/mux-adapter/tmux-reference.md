@@ -1,297 +1,502 @@
 # tmux upstream reference
 
-> The RimZ-side contracts live in [multiplexers.md](../../internals/multiplexers.md) — the `MuxBackend` seam, the managed sidebar pane, the control-mode presence watch, and the room options. This doc mirrors the upstream surface itself.
+> RimZ's side of the seam (the `MuxBackend` trait, the managed server endpoint, the sidebar hook, the presence watch, the room options RimZ writes, and the version floor it enforces) lives in [multiplexers.md → tmux backend](../../internals/multiplexers.md#tmux-backend). This page mirrors the upstream surface only.
 
-This is the single home for the **tmux upstream surface** RimZ binds to — the client/server and socket model, the command verbs the backend adapter drives, the format language, hooks, options, the session environment, and the control-mode protocol. It is a hand-maintained mirror of the tmux(1) man page cross-checked against the installed binary and live probes on a scratch `-S` server, captured at **tmux 3.7b** (2026-07; upstream latest is **3.7b**, 2026-07-01). Where the man page and the wire disagree, the wire wins and the disagreement is flagged.
+This page mirrors the tmux surface RimZ binds to: the client and server model, the command verbs the backend adapter runs, the format language, hooks, options, the session environment, and the control-mode protocol. The baseline is **tmux 3.7c**, tag [`3.7c`](https://github.com/tmux/tmux/releases/tag/3.7c) at commit `e476c1230b95`, published as a GitHub release on 2026-08-17 (the tag commit is dated 2026-07-23); the man page, `CHANGES`, and source were read on 2026-09-14. Source paths below are relative to the repository root at that tag, and the installed `tmux -V` on the capture host prints `tmux 3.7c`. Where the man page and the source disagree, the page follows the source and flags the disagreement at the claim.
 
-Coverage is **depth on what RimZ wires, breadth as an index**: the commands `TmuxBackend` runs, the format variables `list-panes`/`list-clients` read, the room options, the `after-new-window` hook, and the control-mode notifications `PresenceWatch` filters are documented in full; the rest of each catalog is listed so a contributor wiring a new surface knows it exists.
+Coverage is depth on what the backend wires and breadth as an index: the commands the adapter runs, the format variables it reads, the options and hooks it sets, and the control-mode lines it parses get full shapes; the rest of each catalog is listed so a contributor wiring something new knows it exists.
 
 ## Upstream sources
 
-Re-fetch these to refresh this mirror. The man page is the canonical reference (tmux ships no other); the wiki's Control Mode page lags it, and the notification wire shapes are source-level.
+tmux ships no documentation beyond the man page, so `tmux.1` is the reference; the wiki lags it, and control-mode wire shapes are defined only in source.
 
 | Surface | Source |
 | --- | --- |
-| Release baseline | <https://github.com/tmux/tmux/releases/tag/3.7b> |
-| Man page (captured / master) | <https://github.com/tmux/tmux/blob/3.7b/tmux.1>, <https://man.openbsd.org/tmux.1>, <https://github.com/tmux/tmux/blob/master/tmux.1> |
-| Changelog (version floors) | <https://raw.githubusercontent.com/tmux/tmux/master/CHANGES> |
-| Control mode wiki | <https://github.com/tmux/tmux/wiki/Control-Mode> |
-| Formats wiki | <https://github.com/tmux/tmux/wiki/Formats> |
-| Notification wire shapes | `control.c`, `control-notify.c`, `cmd-queue.c`, `client.c` in <https://github.com/tmux/tmux> |
-| Installed binary | `man tmux`, `tmux -V`, `display-message -a`/`-v` probes on a `tmux -S <tempdir>` scratch server |
+| Release baseline | <https://github.com/tmux/tmux/releases/tag/3.7c> |
+| Man page | <https://github.com/tmux/tmux/blob/3.7c/tmux.1>, <https://man.openbsd.org/tmux.1> |
+| Changelog | <https://github.com/tmux/tmux/blob/3.7c/CHANGES> |
+| Command synopses and flags | `cmd-*.c` (`.args` and `.usage` in each `cmd_entry`) |
+| Option scopes, choices, defaults | `options-table.c` |
+| Format variables and modifiers | `format.c` |
+| Control-mode wire shapes | `control.c`, `control-notify.c`, `cmd-queue.c` (`cmdq_guard`), `client.c` (`client_exit_message`) |
+| Layout strings | `layout-custom.c` (`layout_dump`, `layout_append`, `layout_parse`) |
+| Wiki | <https://github.com/tmux/tmux/wiki/Control-Mode>, <https://github.com/tmux/tmux/wiki/Formats> |
 
 ## Server model and invocation
 
-One server process per socket owns every session, window, and pane; clients are separate processes that talk to it over the socket, attach to render, and detach without disturbing it. The server starts on the first command that needs it and exits when no sessions remain (`exit-empty on`, the default).
+One server process per socket owns every session, window, and pane. Clients are separate processes that talk to the server over the socket; they attach to render and detach without disturbing it. The server starts on the first command that needs one and exits when no sessions remain (`exit-empty`, default `on`).
 
-- **Sockets.** The default socket is `<$TMUX_TMPDIR or /tmp>/tmux-<uid>/default`. `-L <name>` picks a different socket name in that directory; `-S <path>` a full path (ignores `-L`, created umask 177). SIGUSR1 makes the server re-create a deleted socket. One `-S` tempdir socket is one private server — the integration-test isolation seam (`TmuxBackend::with_socket`).
-- **`$TMUX`.** `<socket-path>,<server-pid>,<session-index>` — the shape is stable but the man page documents it only as "some internal information"; field 1 is the control socket (`control_socket_from_env`). `$TMUX_PANE` carries the pane's `%id`. A client started with `$TMUX` set refuses attach-shaped commands ("sessions should be nested with care"); drop the variable from the child env for a deliberate nested or control-mode attach.
-- **The client's terminal is stdin.** An attach-shaped command opens its terminal from stdin rather than `/dev/tty`: with stdin piped or null it fails `open terminal failed: not a terminal`, exit 1 (probed 3.5a). Commands that never attach are unaffected — a subprocess wrapper with stdin nulled can never accidentally attach; it errors instead.
-- **Version probe.** `tmux -V` prints `tmux 3.7b` — point releases carry a letter suffix on the same minor. OpenBSD's base tmux prints `tmux openbsd-X.Y` instead (it versions with the OS), which a numeric parser rejects — `rimz doctor` renders the raw string in that case.
-- **Command sequences.** One client argv carries several commands joined by standalone `;` tokens (`tmux set -t s mouse on ';' set -t s history-limit 100000`) — one fork, one server round-trip. Semantics (probed 3.5a): a parse error anywhere — an unknown verb — fails the whole sequence before *anything* runs; a runtime failure (a bad target) stops execution at the failing command with **earlier commands applied**, exit 1, stderr naming the failure.
-- **No-server errors.** Any command without a live server exits 1: stderr `no server running on <path>` when the socket exists but its server died, `error connecting to <path> (No such file or directory)` when it was never created. Both read as "no sessions" — distinct from Zellij's exit-0-empty contract.
-- Flags index: `-f <config>` config file, `-N` never autostart a server, `-D` foreground server (turns off `exit-empty`), `-C`/`-CC` control mode, `-T <features>` client terminal features, `-u` force UTF-8, `-v` file logging (SIGUSR2 toggles it server-side).
+- **Sockets.** The default socket is `<$TMUX_TMPDIR or /tmp>/tmux-<uid>/default`. `-L <name>` picks another name in that directory, and `-S <path>` gives a full path and overrides `-L`. A non-default socket is created under umask 177, owner read and write only (`server.c`, `server_create_socket`). SIGUSR1 makes the server re-create a deleted socket. A `-S` path in a private directory is a private server.
+- **`$TMUX`.** Panes receive `TMUX=<socket-path>,<server-pid>,<session-id>`, where the third field is the numeric session id without its `$` (`environ.c`, `environ_for_session`). The man page documents the value only as internal information. A client started with `$TMUX` set refuses attach-shaped commands with `sessions should be nested with care, unset $TMUX to force`; clear the variable in the child environment for a deliberate nested or control-mode attach. `$TMUX_PANE` carries the pane's `%id`.
+- **The client's terminal is stdin.** An attach-shaped command opens its terminal from stdin, not `/dev/tty`. With stdin piped or null it fails `open terminal failed: not a terminal`, exit 1 (probed on 3.5a). Commands that never attach are unaffected, so a subprocess wrapper that nulls stdin cannot attach by accident.
+- **Version string.** `tmux -V` prints `tmux 3.7c`; point releases add a letter to the same minor. OpenBSD's base tmux prints `tmux openbsd-X.Y`, which a numeric parser rejects.
+- **Command sequences.** One client argv carries several commands separated by standalone `;` tokens (`tmux set -t s mouse on ';' set -t s history-limit 100000`): one fork, one server round trip. A parse error anywhere, such as an unknown command, fails the whole sequence before anything runs. A runtime failure, such as a bad target, stops at the failing command with earlier commands applied, exit 1, and stderr naming the failure (probed on 3.5a; the man page states only the runtime half).
+- **No server.** Any command with no live server exits 1. stderr is `no server running on <path>` when the socket file exists but its server died, and `error connecting to <path> (No such file or directory)` when the socket was never created.
+
+Global flags that matter to a wrapper:
+
+| Flag | Effect |
+| --- | --- |
+| `-S <path>` / `-L <name>` | socket path / socket name |
+| `-f <file>` | configuration file |
+| `-N` | never start a server |
+| `-D` | run the server in the foreground (disables `exit-empty`) |
+| `-C` / `-CC` | control mode ([control mode](#control-mode)) |
+| `-T <features>` | client terminal features |
+| `-u` | mark the client UTF-8 ([output sanitization](#output-sanitization)) |
+| `-v` | log to files; SIGUSR2 toggles server logging |
 
 ### Targets and ids
 
-Most commands take `-t` (and sometimes `-s`). Resolution order, per kind:
+Most commands take `-t` (and some `-s`). Each target kind resolves in order:
 
-- **target-session** — `$id`, exact name, name prefix, fnmatch pattern; a leading `=` forces exact-only. Multiple matches error.
-- **target-window** — `session:window` where window is a special token (`{start}`/`^`, `{end}`/`$`, `{last}`/`!`, `{next}`/`+`, `{previous}`/`-`, offsets like `+2`), an index, an `@id`, an exact name, a name prefix, or an fnmatch pattern.
-- **target-pane** — `session:window.pane` with pane index or `%id`, plus positional tokens (`{top-left}`, `{up-of}`, …); a bare `%id` is absolute and needs no qualifier. `{mouse}` and `{marked}` name the last-event and marked panes.
+| Kind | Forms |
+| --- | --- |
+| target-session | `$id`, exact name, name prefix, fnmatch pattern; a leading `=` forces exact match; several matches are an error |
+| target-window | `session:window`, where window is `{start}`/`^`, `{end}`/`$`, `{last}`/`!`, `{next}`/`+`, `{previous}`/`-`, `{current}`/`@`, an offset like `+2`, an index, an `@id`, an exact name, a name prefix, or an fnmatch pattern |
+| target-pane | `session:window.pane`, where pane is an index, a `%id`, `{active}`/`@`, or a position token (`{top-left}`, `{up-of}`, …); a bare `%id` is absolute; `{mouse}` and `{marked}` name the last mouse-event pane and the marked pane |
 
-Sessions, windows, and panes carry server-unique ids — `$N`, `@N`, `%N` — unchanged for the object's life. They are allocated from monotonic per-server counters and are **not reused after close** (probed: kill `%1`, the next split is `%2`); name-shaped targets carry colon/period ambiguity that ids never do, so scripting prefers `-P -F '#{pane_id}'` over labels. tmux 3.7a permits empty names and names containing `:` or `.`, but those characters retain their target-grammar meaning and strengthen the case for id-shaped scripting.
+Sessions, windows, and panes carry server-unique ids, `$N`, `@N`, and `%N`, fixed for the object's life. They come from monotonic per-server counters and are not reused after close (probed: kill `%1`, and the next split is `%2`); they restart from zero only when a new server starts. Names permit `:` and `.` and may be empty (only `#(` is forbidden, 3.7a), but those characters keep their target-grammar meaning, so scripts target ids and ask for them with `-P -F '#{pane_id}'`.
 
 ## Releases and version floors
 
 | Release | Date | | Release | Date |
 | --- | --- | --- | --- | --- |
-| 3.2 | 2021-04-13 | | 3.5 | 2024-09-27 |
-| 3.2a | 2021-06-10 | | 3.5a | 2024-10-05 |
-| 3.3 | 2022-06-01 | | 3.6 | 2025-11-26 |
-| 3.3a | 2022-06-09 | | 3.6a | 2025-12-05 |
-| 3.4 | 2024-02-13 | | 3.6b | 2026-05-20 |
-| 3.7 | 2026-06-26 | | 3.7a / 3.7b | 2026-07-01 |
+| 3.2 | 2021-04-13 | | 3.6 | 2025-11-26 |
+| 3.2a | 2021-06-10 | | 3.6a | 2025-12-05 |
+| 3.3 | 2022-06-01 | | 3.6b | 2026-05-20 |
+| 3.3a | 2022-06-09 | | 3.7 | 2026-06-26 |
+| 3.4 | 2024-02-13 | | 3.7a | 2026-07-01 |
+| 3.5 | 2024-09-27 | | 3.7b | 2026-07-01 |
+| 3.5a | 2024-10-05 | | 3.7c | 2026-08-17 |
 
-Floors for the surfaces RimZ uses (from CHANGES):
+Dates are GitHub release publication dates. The floors below cover the surfaces this page documents in depth; each is from `CHANGES` unless marked.
 
 | Surface | Landed |
 | --- | --- |
 | `split-window` / `new-window` `-e VAR=val` | 3.0 |
-| `set-option -p` pane-scoped options | 3.1 |
-| `new-session -e` | 3.2 |
+| pane options (`set-option -p`, `show-options -p`) | 3.0 |
+| `after-<command>` hooks as array options | 3.0 |
+| `new-session -e`, `new-window -S` | 3.2 |
 | `display-popup` | 3.2 (`-s`/`-S`/`-b`/`-T`/`-e`/`-B` 3.3; `-k` 3.6) |
-| `extended-keys` option | 3.2 (`always` value 3.2a; mode-2 revamp 3.5) |
-| `extended-keys-format` option | **3.5** |
-| Bracketed paste stays byte-preserving while `extended-keys` is on | **3.6** |
-| `allow-passthrough` option | **3.3**, default `off` (`all` value 3.4; the escape is not option-gated before 3.3) |
-| Kitty graphics passthrough for dashboard pets | **3.6** plus `allow-passthrough=on/all` and a kitty-capable outer terminal |
-| `escape-time` default 10ms (was 500ms) | 3.5 |
-| `command-error` hook | 3.5 |
+| `extended-keys` | 3.2 (`always` 3.2a; revamped to mode 2 in 3.5) |
 | `client-active`, `window-resized` hooks | 3.2 |
-| `after-<command>` hooks (incl. `after-new-window`) | 3.0 (array-option hooks) |
-| control mode: pause mode, `%extended-output`, subscriptions (`refresh-client -B`), `-f` flag spelling | 3.2 (`no-output` existed since 3.0 as `refresh-client -F`) |
-| `refresh-client -r` (control client answers OSC 10/11 pane reports) | 3.5 |
-| `new-window -S` (select-if-exists by name) | 3.2 |
-| `new-pane` floating panes and `pane_floating_flag` | 3.7 |
-| `history-limit` changes update existing panes | 3.7 |
-| `pane_start_time` format variable | **does not exist in any release** ([formats](#the-variables-rimz-reads)) |
+| control mode: pause mode, `%extended-output`, `refresh-client -B` subscriptions, `-f` flag spelling | 3.2 (`no-output` since 3.0 as `refresh-client -F`) |
+| client flags on `attach-session -f` (`ignore-size`, `read-only`, …) | 3.2 |
+| `allow-passthrough` | 3.3, default `off` (`all` 3.4) |
+| `extended-keys-format` | 3.5 |
+| `escape-time` default 10 ms (was 500 ms) | 3.5 |
+| `command-error` hook, `refresh-client -r` | 3.5 |
+| `main-horizontal-mirrored`, `main-vertical-mirrored` layouts | 3.5 |
+| `capture-pane -M`, `run-shell -E`, `display-message -C` | 3.6 |
+| `new-pane` floating panes, `pane_floating_flag` | 3.7 |
+| `-O` sort and `-r` reverse on `list-panes`, `list-windows`, `list-sessions`, `list-clients` | 3.7 |
+| `paste-buffer -S` (and `vis(3)` sanitization by default) | 3.7 |
+| `{current}` / `{active}` target tokens | 3.7 |
+| `history-limit` changes apply to existing panes | 3.7 |
+| `pane_start_time` format variable | does not exist in any release ([formats](#the-variables-rimz-reads)) |
 
-**The floor is option-driven:** `MIN_TMUX_VERSION` is 3.5.0 because the room options RimZ applies across supported hosts include `allow-passthrough` (3.3) and `extended-keys-format` (3.5), and a batched option sequence fails at the first option the server does not know — the command surface alone would need only 3.2. tmux 3.5.x carries the rich-key options but re-encodes bracketed-paste control bytes as extended-key sequences while they are active; 3.6 removes that paste cost. The optional pet pixel tier gates itself higher at tmux 3.6 because it relies on kitty graphics passthrough plus Unicode-placeholder repaint behavior. A future option below the floor either moves the constant again or gates itself (`set-option -q` silences unknown-option errors without branching on `tmux -V`).
+Behaviour changes inside 3.5 through 3.7c that alter what a caller observes:
 
-Behaviour changes inside the supported range: through 3.7, client input `ESC[27u` with the modifier omitted is not recognized as Escape and reaches panes raw, while `ESC[27;1u` and the xterm form are translated; 3.7 applies `history-limit` changes to existing panes, makes `new-session -A -c` apply the requested working directory, tightens read-only checks around client switching and detaching, and fixes several control-mode exit paths; 3.6 keeps paste bytes uninterpreted while extended keys are active; 3.5 cut `escape-time`'s default 500→10ms and revamped extended-keys (always requests mode 2 upstream, new internal key representation; 3.5a adjusts BSpace/Shift encoding); 3.5 ran `#()`/`run-shell`/`if-shell`/popups under `default-shell`, and 3.5a reverted all but popups to `/bin/sh`; 3.3 made `command-prompt`/`confirm-before` block by default (`-b` restores async); 3.2 moved window/pane hooks off session scope ([hooks](#hooks)), renamed `refresh-client -F` to `-f`, and made `window_flags` escape `#` (`window_raw_flags` is the raw form).
+| Release | Change |
+| --- | --- |
+| 3.7c | `split-window ''` (a single empty command) creates an empty pane again, as it did before 3.7 (`cmd-split-window.c`); `new-window -n ''` keeps an empty name instead of deriving one (`spawn.c`); `new-pane` unzooms the window before creating a floating pane; `detach-on-destroy previous`/`next` pick sessions in name order and never the session being destroyed (`server-fn.c`); `message-format` uses `message-style` again |
+| 3.7b | the end of a synchronized update (`sync` terminal feature) triggers a redraw, which 3.7 and 3.7a could skip |
+| 3.7a | names may be empty and contain `#[`, `:`, and `.` |
+| 3.7 | `history-limit` changes update existing panes; `new-session -A -c` applies the working directory on the attach path; read-only checks tighten on `attach-session`, `detach-client`, and `switch-client`; `paste-buffer` passes buffers through `vis(3)` unless `-S`; pane titles and window and session names are sanitized of C0 and invisible characters; default `update-environment` gains `WAYLAND_DISPLAY` and `XDG_*` variables; `refresh-client -l` loses its forward-to-pane argument in favour of the `get-clipboard` option; several control-mode exit hangs are fixed |
+| 3.6 | bracketed paste stays byte-preserving while `extended-keys` is on (observed on the wire; `CHANGES` has no entry); `capture-pane` preserves tabs |
+| 3.5a | `#()`, `run-shell`, and `if-shell` return to `/bin/sh`; popups keep `default-shell`; BSpace and Shift encodings under extended keys are corrected |
+| 3.5 | `escape-time` default drops from 500 to 10 ms; extended keys always request mode 2 and use a new internal key representation |
 
-Post-floor additions, forward-looking and none load-bearing for RimZ: 3.6 adds pane scrollbars (`pane-scrollbars*` options), dark/light theme reporting (DEC mode 2031) with `client-light-theme`/`client-dark-theme` hooks, `capture-pane -M`, `display-popup -k`, N-ary `&&`/`||` plus `!` in formats, `buffer_full` and `sixel_support` variables, a `no-detach-on-destroy` client flag, `default-client-command`, and `input-buffer-size`. 3.7 adds early floating panes through `new-pane`, `pane_floating_flag`, `focus-follows-mouse`, copy-mode line numbers, `pane_pipe_pid`, OSC 9;4 progress state, list-command sorting, and `remain-on-exit key`; 3.7b repairs redraw at the end of a synchronized update, directly relevant to RimZ's `*:sync` terminal feature.
+Through 3.7c, client input `ESC[27u` (CSI-u Escape with the modifier omitted) is not recognized as Escape and reaches panes raw, while `ESC[27;1u` and the xterm form are translated. Earlier boundaries a contributor may meet: 3.3 made `command-prompt` and `confirm-before` block by default (`-b` restores async), and 3.2 moved window and pane hooks off session scope ([hooks](#hooks)), renamed `refresh-client -F` to `-f`, and made `window_flags` escape `#` (`window_raw_flags` is the raw form).
+
+### Unreleased in 3.8-rc
+
+tmux 3.8-rc (prerelease, 2026-09-09) is not the baseline, but its `CHANGES FROM 3.7c TO 3.8` section changes surfaces this page covers in depth. Read at <https://github.com/tmux/tmux/blob/master/CHANGES> on 2026-09-14:
+
+- The `active-pane` client flag is removed.
+- Layout strings move to a JSON subset that includes floating panes. The old format is still accepted, and control clients receive old layouts unless they set a new `new-layouts` client flag.
+- Control mode queues notifications so none is sent inside `%begin`/`%end`, and bounds buffered command replies for a client that stops reading.
+- The `mouse` option defaults to `on`.
+- `new-window`, `respawn-pane`, and `respawn-window` gain `-E` (empty pane); `kill-pane -a`, `kill-window -a`, and `kill-session -a` gain `-f` filters; `set-hook` gains `-B` format monitors, `-T`, and `-E`, with many new hooks.
 
 ## Command surface
 
-`shell-command` arguments to `new-session`, `new-window`, `split-window`, `respawn-window`, and `respawn-pane` may be **multiple argv tokens, executed directly without `sh -c`** — no quoting layer; the single-argument form goes through `/bin/sh -c`.
+A `shell-command` argument to `new-session`, `new-window`, `split-window`, `respawn-window`, or `respawn-pane` may be several argv tokens, which tmux executes directly without `sh -c`. A single token goes through `/bin/sh -c`.
+
+Generated usage strings (`tmux list-commands`, error output) omit some accepted flags. At 3.7c, `split-window` omits `-E` and `-m`, `new-pane` omits `-E`, `-L`, and `-m`, and `list-clients` omits `-r`; the `.args` strings in each `cmd-*.c` are authoritative. Synopses below follow `.args`.
 
 ### Sessions and clients
 
-**`new-session [-AdDEPX] [-c start-dir] [-e VAR=val]… [-f flags] [-F fmt] [-n window-name] [-s name] [-t group] [-x cols] [-y rows] [cmd…]`**
+**`new-session [-AdDEPX] [-c start-dir] [-e VAR=val]… [-f flags] [-F format] [-n window-name] [-s name] [-t group] [-x cols] [-y rows] [shell-command…]`**
 
-- `-d` births detached; the initial size comes from `default-size` (80×24) unless `-x`/`-y` give one, and giving `-x`/`-y` **also sets the session's `default-size` option** (probed). `-x -`/`-y -` use the current client's size.
-- `-e` seeds the session environment at birth, repeatable — the first window's panes already inherit it (the identity-pin channel).
-- `-P [-F fmt]` prints the created session (`#{session_name}:` by default).
-- **`-A` attaches instead when the name exists — and on that path plain `-d` is ignored.** `-d` is the create-path flag; the attach path honors only `-D` (≙ attach `-d`, detach others) and `-X` (≙ attach `-x`), so `new-session -A -d` against a live session genuinely attaches and blocks, or fails `open terminal failed: not a terminal` (exit 1) without a terminal on stdin (probed 3.5a). `-A` on a live session also ignores `-e`/`-x`/`-y` (probed) — re-assert env with `set-environment` after; `-c` starts applying to the attach path in 3.7. The no-attach ensure idiom is `has-session -t = || new-session -d`.
-- `-t group` joins a session group (shared window set); `-E` skips `update-environment`.
+| Flag | Effect |
+| --- | --- |
+| `-d` | create detached; size comes from `default-size` (80x24) unless `-x`/`-y` are given |
+| `-x` / `-y` | initial size; also sets the new session's `default-size` option (`cmd-new-session.c`); `-` uses the current client's size |
+| `-e VAR=val` | seed the session environment, repeatable; the first window's panes already inherit it |
+| `-c` | start directory |
+| `-P [-F]` | print the created session (`#{session_name}:` by default) |
+| `-A` | attach instead when the session exists (see below) |
+| `-t group` | join a session group (shared window set) |
+| `-E` | skip `update-environment` |
 
-**`attach-session [-dErx] [-c dir] [-f flags] [-t session]`** — `-d` detaches other clients, `-x` detach-and-SIGHUP them, `-E` skips `update-environment`, `-r` is read-only (alias for `-f read-only,ignore-size`). Client flags (`-f`, comma-separated; a leading `!` clears a flag on an already-attached client): `active-pane` (client-private active pane), `ignore-size` (excluded from size negotiation), `no-detach-on-destroy` (3.6; switch to another session rather than detach when possible), and the control-mode trio `no-output`, `pause-after=secs`, `wait-exit` ([control mode](#control-mode)). A read-only client's keys are limited to detach/switch bindings; commands arriving on its stdin follow command-specific checks rather than one blanket rejection ([client flags](#client-flags-and-flow-control)).
+`-A` on an existing session takes the attach path, and that path ignores `-d`: it honours only `-D` (like `attach -d`), `-X` (like `attach -x`), and since 3.7 `-c`. So `new-session -A -d` against a live session attaches and blocks, or with no terminal on stdin fails `open terminal failed: not a terminal`, exit 1 (probed on 3.5a). The attach path also ignores `-e`, `-x`, and `-y` (probed). Creating a session that exists without `-A` fails `duplicate session: <name>`, exit 1. The no-attach ensure idiom is `has-session -t =<name> || new-session -d -s <name>`, or `new-session -d` with `duplicate session` treated as success.
 
-**`detach-client [-aP] [-E cmd] [-s session] [-t client]`** — `-s` detaches every client on the session (RimZ's `detach`); `-P` SIGHUPs the client's parent; `-E` exec-replaces the client process.
+**`attach-session [-dErx] [-c dir] [-f flags] [-t session]`** (alias `attach`). `-d` detaches other clients, `-x` detaches them and sends SIGHUP, `-E` skips `update-environment`, and `-r` is read-only (the same as `-f read-only,ignore-size`). `-f` takes a comma-separated flag list, and a leading `!` clears a flag on an attached client:
 
-**`kill-session [-aCg] [-t session]`** — an absent target exits 1 with `can't find session: <name>` (alongside the two no-server shapes, the goal state of an idempotent kill). `-a` kills every *other* session; `-g` kills every session in the target's group (3.7). **`kill-server`** tears down the server, all sessions, all clients.
+| Client flag | Effect |
+| --- | --- |
+| `read-only` | keys limited to detach and switch bindings; commands follow per-command checks ([read-only](#read-only-clients)) |
+| `ignore-size` | excluded from window size negotiation |
+| `active-pane` | the client keeps its own active pane (removed in 3.8-rc) |
+| `no-detach-on-destroy` | switch to another session instead of detaching when the session is destroyed (3.6) |
+| `no-output` | control mode: no pane output |
+| `pause-after=<secs>` | control mode: pause panes that fall behind |
+| `wait-exit` | control mode: wait for an empty line after `%exit` |
 
-**`list-sessions [-F fmt] [-f filter]`** · **`list-clients [-F fmt] [-f filter] [-t session]`** — one line per session / attached client; `-f` keeps rows whose format evaluates non-zero. In a `list-clients` row the pane/window variables resolve against the client's attached session, so `#{pane_id}` is the active pane of that session's current window — per-client divergence exists only under the `active-pane` client flag.
+**`detach-client [-aP] [-E shell-command] [-s session] [-t client]`**. `-s` detaches every client on the session, `-a` every client but the target, `-P` sends SIGHUP to the client's parent, and `-E` replaces the client process with a command.
 
-Index: `has-session -t` (pure exit code), `rename-session`, `lock-client`/`lock-session`, `server-access [-adlrw] user` (socket ACL, 3.3), `list-commands` (machine-readable command syntax), `refresh-client` ([control mode](#client-flags-and-flow-control)).
+**`kill-session [-aCg] [-t session]`**. An absent target exits 1 with `can't find session: <name>`. `-a` kills every other session, `-g` every session in the target's group (3.7), and `-C` clears alerts in the session's windows instead of killing anything. **`kill-server`** ends the server, every session, and every client.
+
+**`has-session [-t session]`** reports through its exit code alone and never starts a server.
+
+**`list-sessions [-r] [-F format] [-f filter] [-O order]`** and **`list-clients [-r] [-F format] [-f filter] [-O order] [-t session]`** print one line per session or attached client. `-f` keeps rows whose filter format is true, `-O` sorts, and `-r` reverses (3.7). In a `list-clients` row, pane and window variables resolve against the client's current session, so `#{pane_id}` is the active pane of that session's current window.
+
+Index: `rename-session`, `switch-client`, `lock-client`/`lock-session`, `server-access [-adlrw] user` (socket access list, 3.3), `list-commands` (command syntax), `refresh-client` ([control mode](#client-flags-and-flow-control)).
 
 ### Windows and panes
 
-**`new-window [-abdkPS] [-c dir] [-e VAR=val]… [-F fmt] [-n name] [-t window] [cmd…]`** — `-d` keeps the current window current; `-P -F '#{window_id} #{pane_id}'` prints the ids for follow-up targeting; `-n` names the window **and disables `automatic-rename` for it**, making the name a stable idempotency key (RimZ's resume/daemon windows probe `list-windows -F '#{window_name}'`); `-S` selects an existing window of that name instead of erroring (3.2); `-a`/`-b` insert after/before an index, shifting others; `-k` replaces an existing target. The window closes when its command exits unless `remain-on-exit` holds the corpse.
+**`new-window [-abdkPS] [-c dir] [-e VAR=val]… [-F format] [-n name] [-t window] [shell-command…]`**
 
-**`split-window [-bdeEfhIklPvZ] [-c dir] [-e VAR=val]… [-F fmt] [-l size] [-m message] [-p percentage] [-R inactive-style] [-s style] [-S active-style] [-t pane] [cmd…]`** — `-h` splits left-right, `-v` top-bottom (default); `-b` puts the new pane before (left of / above) the target — the sidebar-on-the-left shape; `-l <n>` fixes columns/lines, `-l <n>%` a percentage (`-p` is shorthand); `-f` spans the full window edge; `-d` leaves focus alone; `-P [-F]` prints the new pane (ask for `#{pane_id}` explicitly — the default format is index-shaped); `-E` or an empty command `''` births a command-less pane writable via `display-message -I`; `-k` holds the pane after its command exits and waits for a key, while `-m` also sets its held message. The 3.7b generated usage omits accepted `-E`. Splits mount fine on a detached session — no client required (the asymmetry with Zellij's detached-mount drop).
+| Flag | Effect |
+| --- | --- |
+| `-d` | do not make the new window current |
+| `-a` / `-b` | insert after / before the target index, shifting later windows |
+| `-P [-F]` | print the new window; `-F '#{window_id} #{pane_id}'` returns both ids |
+| `-n` | name the window and turn off `automatic-rename` for it (`spawn.c`), so the name stays fixed |
+| `-S` | select an existing window with that name instead of failing (3.2) |
+| `-k` | replace the window at the target index |
 
-**`new-pane [-bdeEfhIkLlPvZ] [-c dir] [-e VAR=val]… [-F fmt] [-l size] [-m message] [-p percentage] [-R inactive-style] [-s style] [-S active-style] [-t pane] [-x width] [-y height] [-X x] [-Y y] [cmd…]`** — the 3.7 floating-pane command. It shares `split-window`'s implementation and options but creates a floating pane by default; `-L` requests an ordinary tiled pane. The 3.7b generated usage omits accepted `-E` and `-L`. Floating panes sit above the tiled layout and behave like panes rather than modal popups, but the first release moves and resizes them only with the mouse and cannot swap them, convert them to tiled panes, or restore them through custom layouts. `pane_floating_flag` identifies one in formats. RimZ continues to use `split-window`, so floating panes are user-owned topology rather than a backend prerequisite.
+The window closes when its command exits unless `remain-on-exit` keeps the pane.
 
-**`select-pane [-DdeLlMmRUZ] [-T title] [-t pane]`** — activates the pane *within its window only*: **it does not switch the session's current window** (probed 3.5a). A cross-window jump is `select-window -t @win ';' select-pane -t %pane`; only `switch-client` crosses sessions. `-e`/`-d` enable/disable input to the pane; `-T` sets the pane title; `-m`/`-M` set/clear the marked pane (the `{marked}` target); `-L/-R/-U/-D` move directionally.
+**`split-window [-bdeEfhIklPvZ] [-c dir] [-e VAR=val]… [-F format] [-l size] [-m message] [-p percentage] [-R inactive-style] [-s style] [-S active-style] [-t pane] [shell-command…]`**
 
-**`select-window [-lnpT] [-t window]`** — accepts `@id` targets; `-l`/`-n`/`-p` are last/next/previous.
+| Flag | Effect |
+| --- | --- |
+| `-h` / `-v` | left and right / top and bottom (default) |
+| `-b` | put the new pane before the target (left of or above it) |
+| `-l <n>` / `-l <n>%` | size in cells / percentage (`-p` is the older percentage form) |
+| `-f` | span the full window height or width |
+| `-d` | leave the active pane unchanged |
+| `-P [-F]` | print the new pane; the default format is index-shaped, so ask for `#{pane_id}` |
+| `-E`, or a single empty command `''` | create an empty pane with no command; `display-message -I` writes into it |
+| `-I` | create an empty pane and forward stdin into it |
+| `-k` / `-m` | keep the pane after its command exits until a key is pressed / with that message |
+| `-Z` | keep the window zoomed |
 
-**`swap-window [-d] [-s src] [-t dst]`** — exchanges two windows' positions; succeeds into an occupied slot (probed) and `-d` keeps the current window current — the reorder primitive behind `lead_window`. `move-window [-abrdk]` relocates instead; `-r` renumbers a whole session.
+A split works on a detached session with no client attached.
 
-**`kill-pane [-a] [-t pane]`** — kills the pane and its process; the last pane's death closes the window. `-a` kills every *other* pane. `kill-window [-a]` likewise.
+**`new-pane [-bdeEfhIkLlPvZ] [-c dir] [-e VAR=val]… [-F format] [-l size] [-m message] [-p percentage] [-R inactive-style] [-s style] [-S active-style] [-t pane] [-x width] [-y height] [-X x] [-Y y] [shell-command…]`** creates a floating pane (3.7). It shares `split-window`'s implementation (`cmd-split-window.c`); `-x`/`-y` size the pane, `-X`/`-Y` place it, and `-L` makes an ordinary tiled pane instead. Floating panes sit above the tiled layout and behave as panes, not modal popups. In 3.7c they move and resize only with the mouse, and cannot be swapped, converted to tiled panes, or restored from a custom layout (`CHANGES FROM 3.6b TO 3.7`). `pane_floating_flag` marks one in formats, and layout strings list them separately ([layout strings](#layout-strings)).
 
-**`list-panes [-asr] [-F fmt] [-f filter] [-O order] [-t target]`** — default one window; `-s` a whole session; `-a` every pane on the server (target ignored); `-r` reverses the order and `-O` sorts by a format (3.7). One line per pane; tmux sanitizes non-printable format output such as tabs on modern versions, so parsed multi-variable formats use printable separators and sanitize free-form fields that may contain the chosen separator ([formats](#formats)).
+**`respawn-pane [-k] [-c dir] [-e VAR=val]… [-t pane] [shell-command…]`** restarts a pane's command in place, keeping its `%id` and geometry. Without `-k` it fails on a pane whose command is still running; `-k` kills the running command first. With no command it reruns the pane's start command. `respawn-window` is the window-level form.
 
-**`capture-pane [-aCeFHJLMNpPqT] [-b buffer] [-E end] [-S start] [-t pane]`** — `-p` writes stdout (else into a paste buffer); `-S`/`-E` bound lines where 0 is the top of the visible screen, negatives reach into history, and `-` means history start / visible end; `-e` includes SGR colour/attribute escapes; `-C` octal-escapes non-printables; `-J` joins wrapped lines and preserves trailing spaces; `-N` preserves trailing spaces only; `-a` reads the alternate screen (`-q` to tolerate its absence); `-M` captures the active mode screen, such as copy mode (3.6); `-T` stops at the last used cell. The 3.7 diagnostics add `-L` line numbers, `-F` per-line flags, and `-H` hyperlinks only.
+**`select-pane [-DdeLlMmRUZ] [-T title] [-t pane]`** makes a pane active within its window only; it does not change the session's current window (probed on 3.5a, and `cmd-select-pane.c` writes no current window). A cross-window jump is `select-window -t @win ';' select-pane -t %pane`, and only `switch-client` crosses sessions. `-L`/`-R`/`-U`/`-D` move by direction, `-l` goes to the last pane, `-e`/`-d` enable or disable input, `-T` sets the title, and `-m`/`-M` set or clear the marked pane.
 
-**`send-keys [-FHKlMRX] [-c client] [-N count] [-t pane] key…`** — each argument is first looked up as a key name (`C-c`, `M-a`, `Enter`, `Escape`, `F1`, `NPage`…); an argument that is not a key name is sent as its characters. `-l` disables lookup entirely (literal UTF-8) — prefer it for typing text; `--` guards leading-dash arguments (probed); `-H` sends hex bytes; `-N` repeats; `-R` resets terminal state; `-X` drives copy mode.
+**`select-window [-lnpT] [-t window]`** accepts `@id` targets; `-l`, `-n`, and `-p` pick the last, next, and previous window, and `-T` acts like `last-window` when the target is already current.
 
-**`paste-buffer [-dprS] [-s separator] [-b buffer-name] [-t target-pane]`** — inserts one tmux paste buffer into a pane. By default tmux replaces every LF in the buffer with CR; `-s` selects another separator and `-r` disables replacement (equivalent to an LF separator). Since 3.7, tmux also sanitizes control characters through `vis(3)`; `-S` disables that sanitization and is unavailable on earlier releases (`cmd-paste-buffer.c`, `CHANGES FROM 3.6b TO 3.7`). With `-p`, tmux adds bracketed-paste control codes when the application requested bracketed paste mode. The default LF-to-CR conversion is the upstream model for RimZ's `paste_text` line-ending rule.
+**`swap-window [-d] [-s src] [-t dst]`** exchanges two windows' positions, including into an occupied index, and `-d` keeps the current window current. `move-window [-abdkr]` relocates a window instead, and `-r` renumbers a session's windows.
 
-**`display-message [-aCIlNpv] [-c client] [-d delay] [-F format] [-t pane] [message]`** — `-p` prints the expanded format to stdout: the universal "evaluate a format against this target" probe (the `window_width` read rides it; a `@window` target resolves to that window's active pane). `-a` dumps every format variable with its current value — the catalog probe; `-v` traces the expansion step by step — how a missing variable is caught; `-C` keeps the pane updating while an on-screen message is displayed (3.6). At 3.7b the binary and `cmd-display-message.c` expose `-F` as the format when the positional message is absent, while the man-page synopsis still omits it.
+**`rename-window [-t window] new-name`** sets the name and turns off that window's `automatic-rename` (`cmd-rename-window.c`). Setting `automatic-rename` on again derives the name from the active pane.
 
-**`display-popup [-BCEkN] [-b border-lines] [-c client] [-d dir] [-e VAR=val] [-h h] [-w w] [-x x] [-y y] [-s style] [-S border-style] [-T title] [-t pane] [cmd…]`** — a transient overlay running a command (3.2); `-E` closes on exit, `-EE` only on success, `-C` closes any open popup, and `-k` lets any key dismiss it after the command exits (3.6); sizes and positions accept `%`. Popups run under `default-shell` (3.5a). The surface the trust-gated popup integration will compile to.
+**`kill-pane [-a] [-t pane]`** kills a pane and its process, and the last pane's death closes its window. `-a` kills every other pane. `kill-window [-a]` works the same way on windows.
 
-**`pipe-pane [-IOo] [-t pane] [cmd]`** — streams the pane's output (`-O`, default) and/or input (`-I`) through a shell command; no argument closes the current pipe; `-o` opens only if none exists (toggle shape). Capture-pane snapshots; pipe-pane streams.
+**`list-panes [-asr] [-F format] [-f filter] [-O order] [-t target]`** lists one window's panes by default, a session's with `-s`, and the server's with `-a` (the target is ignored). `-O` sorts and `-r` reverses (3.7). **`list-windows [-ar] [-F format] [-f filter] [-O order] [-t session]`** is the window-level form.
 
-**`run-shell [-bCE] [-c dir] [-d delay] [-t pane] [cmd [arg…]]`** — runs a shell command (`/bin/sh -c`) or with `-C` a tmux command, formats expanded first; blocks the command queue until done unless `-b`; `-E` redirects stderr to stdout (3.6), and 3.7 exposes following arguments as `#{1}`, `#{2}`, and so on. **`wait-for [-L|-S|-U] channel`** — bare form blocks the *client* until another client fires `wait-for -S` on the channel; `-L`/`-U` lock/unlock. The two synchronization verbs scripts get.
+Index: `break-pane`, `join-pane`, `move-pane`, `swap-pane`, `rotate-window`, `link-window`/`unlink-window`, `last-pane`/`last-window`, `next-window`/`previous-window`, `display-panes`, copy mode and its `send-keys -X` commands, and the `choose-tree`/`choose-client`/`choose-buffer` modes.
 
-**`rename-window [-t window] new-name`** — changes the label and disables that window's `automatic-rename`, just like naming it with `new-window -n`; re-enabling the option lets tmux derive the label from the active pane again.
+### Layout and sizing
 
-Index: `respawn-pane`/`respawn-window [-k] [-c] [-e]` (restart in place — the `remain-on-exit` partner), `resize-pane [-DLRUZTM] [-x -y]` (`-Z` zoom toggle), `resize-window`, `break-pane`, `join-pane`, `move-pane`, `rotate-window`, `link-window`/`unlink-window`, `select-layout` + the five preset layouts, copy mode and its `send-keys -X` command set, the `choose-tree`/`choose-client`/`choose-buffer` interactive modes, and paste buffers (`set-buffer`, `load-buffer`, `save-buffer`, `paste-buffer`, `show-buffer`, `delete-buffer`).
+**`resize-pane [-DLMRTUZ] [-x width] [-y height] [-t pane] [adjustment]`** sets a pane's size. `-x`/`-y` take an absolute size in cells or a percentage of the window; `-L`/`-R`/`-U`/`-D` move the border by `adjustment` cells (default 1). `-Z` toggles the window's zoom on the target pane (`window_zoomed_flag`), `-M` starts a mouse resize, and `-T` trims lines below the cursor that are in history.
+
+**`resize-window [-aADLRU] [-x width] [-y height] [-t window] [adjustment]`** sets a window's size and, as a side effect, sets that window's `window-size` option to `manual` (`cmd-resize-window.c`). Unset the option (`set-option -wu -t @win window-size`) to return the window to client-driven sizing. `-a` and `-A` size the window to the smallest or largest session containing it.
+
+**`select-layout [-Enop] [-t pane] [layout-name]`** applies a preset or a layout string. The seven presets are `even-horizontal`, `even-vertical`, `main-horizontal`, `main-horizontal-mirrored`, `main-vertical`, `main-vertical-mirrored`, and `tiled` (`layout-set.c`). A layout string is the format `window_layout` prints ([layout strings](#layout-strings)); tmux rejects one whose checksum is wrong, whose cells cannot fit the window's panes, or that carries a floating-pane suffix (`layout-custom.c`, `layout_parse`). `-E` spreads the target pane and its neighbours evenly, `-n`/`-p` step through presets, and `-o` restores the previous layout.
+
+Sizing options that interact with these commands: `window-size` (`largest`, `smallest`, `manual`, `latest`; default `latest`), `aggressive-resize`, `default-size`, and the `ignore-size` client flag.
+
+### Pane I/O
+
+**`capture-pane [-aCeFHJLMNpPqT] [-b buffer] [-E end] [-S start] [-t pane]`**
+
+| Flag | Effect |
+| --- | --- |
+| `-p` | write to stdout (otherwise into a paste buffer) |
+| `-S` / `-E` | first / last line: 0 is the top visible line, negatives reach into history, `-` means history start / visible end; the default is the visible screen |
+| `-e` | include SGR escape sequences for text attributes and colours |
+| `-C` | escape non-printable characters as octal `\xxx` |
+| `-J` | join wrapped lines and keep trailing spaces (implies `-T`) |
+| `-N` | keep trailing spaces |
+| `-T` | stop at the last used cell of each line |
+| `-a` / `-q` | capture the alternate screen / tolerate its absence |
+| `-M` | capture the active mode's screen, such as copy mode (3.6) |
+| `-P` | capture only the start of an incomplete escape sequence |
+| `-L` / `-F` | prefix each line with its number / its flags (`-` none, `D` unused, `O` output, `P` prompt, `X` extended cells, `H` hyperlinks) |
+| `-H` | capture only the hyperlinks in the selected lines |
+
+The man page synopsis omits `-T`; the flag is accepted (`cmd-capture-pane.c`).
+
+**`send-keys [-FHKlMRX] [-c client] [-N count] [-t pane] key…`** looks each argument up as a key name (`C-c`, `M-a`, `Enter`, `Escape`, `F1`, `NPage`, `User0`…) and sends an argument that is not a key name as its characters. `-l` disables lookup and sends every argument as literal UTF-8; `--` protects arguments that start with `-` (probed); `-H` sends hex bytes; `-N` repeats; `-R` resets the terminal state; `-X` sends a copy-mode command.
+
+**`load-buffer [-w] [-b buffer] [-t client] path`** reads a file into a named paste buffer, and a `path` of `-` reads stdin (`file.c`, `file_read`). `-w` also sends the buffer to the client's clipboard. **`delete-buffer [-b buffer]`** removes one buffer.
+
+**`paste-buffer [-dprS] [-s separator] [-b buffer] [-t pane]`** inserts a paste buffer into a pane:
+
+| Flag | Effect |
+| --- | --- |
+| (default) | replace each LF with CR |
+| `-s <sep>` / `-r` | use another separator / no replacement (LF stays LF) |
+| `-S` | skip the `vis(3)` control-character sanitization that 3.7 applies by default (`cmd-paste-buffer.c`); tmux before 3.7 rejects `-S` |
+| `-p` | add bracketed-paste markers when the application requested bracketed paste mode |
+| `-d` | delete the buffer after pasting |
+
+**`display-message [-aCIlNpv] [-c client] [-d delay] [-F format] [-t pane] [message]`**. `-p` prints the expanded format to stdout, which makes it the general way to evaluate a format against a target; a window target resolves to that window's active pane. `-a` lists every format variable with its value, `-v` logs each expansion step (how a missing variable is found), `-I` forwards stdin into an empty pane, and `-C` keeps the pane updating while a message shows (3.6). `-F` supplies the format when no positional message is given; `cmd-display-message.c` accepts it while the man page synopsis omits it.
+
+**`pipe-pane [-IOo] [-t pane] [shell-command]`** streams a pane's output (`-O`, the default) or input (`-I`) through a shell command. With no command it closes the pipe, and `-o` opens one only when none is open. `pane_pipe_pid` holds the pipe process id (3.7).
+
+### Key bindings and scripting
+
+**`bind-key [-nr] [-N note] [-T key-table] key [command [argument…]]`** binds a key to a tmux command in a key table. `-n` is `-T root`, so the binding fires without the prefix from any pane on the server; key tables are server-global. `-r` makes the key repeatable. A key named `UserN` is the sequence defined at index N of the `user-keys` option (`key-string.c`).
+
+**`run-shell [-bCE] [-c dir] [-d delay] [-t pane] [shell-command [argument…]]`** runs a command through `/bin/sh -c`, or a tmux command with `-C`, after expanding formats. It blocks the command queue until done unless `-b`. `-E` sends stderr to the output as well (3.6), and arguments after the command expand as `#{1}`, `#{2}`, and so on (3.7).
+
+**`if-shell [-bF] [-t pane] condition command [command]`** runs the first command when a shell condition exits 0, otherwise the second. With `-F` the condition is a format, true when it expands to something other than empty or `0`, and no shell runs. The branches are tmux command strings, parsed when the condition resolves.
+
+**`wait-for [-L|-S|-U] channel`** blocks the client until another client runs `wait-for -S` on the channel; `-L` and `-U` lock and unlock it.
+
+**`display-popup [-BCEkN] [-b border-lines] [-c client] [-d dir] [-e VAR=val] [-h height] [-w width] [-x x] [-y y] [-s style] [-S border-style] [-T title] [-t pane] [shell-command…]`** shows a modal overlay running a command (3.2). `-E` closes it when the command exits, `-EE` only on success, `-C` closes an open popup, and `-k` lets any key close it after the command exits (3.6). Sizes and positions accept `%`. Popups run under `default-shell`.
 
 ### Option, hook, and environment commands
 
-**`set-option [-aFgopqsuUw] [-t target] option value`** — the scope flag picks the table: `-s` server, none session, `-w` window (`set-window-option` is the same thing), `-p` pane; `-g` addresses the global table of that scope. For built-in options tmux infers the table from the option name when the flag is omitted (assuming `-w` for pane options) — explicit flags only matter for user options (`@name`) and for forcing pane-over-window scope. A local option shadows its global; `-u` unsets the local and reveals the global (`-U` also clears every pane in the window for pane options). `-q` silences unknown-option errors — the forward-compat tool for version-gated options; `-a` appends (styles get a comma inserted); `-o` sets only if unset; `-F` expands formats in the value.
+**`set-option [-aFgopqsuUw] [-t target] option [value]`** (alias `set`). The scope flag picks the option table: `-s` server, none session, `-w` window (`set-window-option` is the same), `-p` pane. `-g` addresses the global table of that scope. For built-in options tmux infers the table from the name, so scope flags matter for user options (`@name`) and to force pane over window scope. A local value shadows the global one.
 
-**`show-options [-AgHpqsvw] [-t target] [option]`** — `-v` value only (`show-options -gv base-index` is the global-default read); `-A` includes options inherited from a parent scope; `-H` includes hooks.
+| Flag | Effect |
+| --- | --- |
+| `-u` | unset the local value, revealing the global |
+| `-U` | for a pane option, also unset it in every pane of the window |
+| `-q` | suppress unknown-option and ambiguous-option errors |
+| `-o` | set only when not already set |
+| `-a` | append (styles get a comma) |
+| `-F` | expand formats in the value |
 
-**`set-environment [-Fhgru] [-t session] name [value]`** / **`show-environment [-hgs] [-t session] [name]`** — name and value are **separate argv tokens**; a single `NAME=value` argument errors `variable name contains =` (probed; only the `-e` birth flags use `=`). `-r` marks remove-on-spawn, `-h` hides (formats-only), `-g` targets the global table, `-s` formats output as shell exports.
+**`show-options [-AgHpqsvw] [-t target] [option]`**. `-v` prints the value alone (`show-options -gv base-index`), `-A` includes inherited values, `-H` includes hooks, and `-q` suppresses errors for unset options.
 
-**`set-hook [-agpRuw] [-t target] hook command`** / **`show-hooks`** — hooks are array options in the same scope tables; `-R` fires one immediately.
+**`set-environment [-Fghru] [-t session] name [value]`** and **`show-environment [-ghs] [-t session] [name]`**. Name and value are separate argv tokens; a single `NAME=value` argument fails `variable name contains =` (probed). `-g` targets the global environment, `-r` marks a variable for removal from new panes, `-u` unsets it, `-h` hides it from panes, and `show-environment -s` prints shell `export` lines.
+
+**`set-hook [-agpRuw] [-t target] hook [command]`** and **`show-hooks`** set and show hooks, which are array options in the same scope tables ([hooks](#hooks)). `-R` runs a hook immediately.
 
 ## Formats
 
-The format language is tmux's read surface: every `-F` flag, filter, hook command, and `#()` goes through it. **An unknown or inapplicable variable expands to the empty string, never an error** — a multi-variable `-F` row with a printable separator degrades by emptying columns rather than shifting them, and a misspelled variable is silent (the `pane_start_time` lesson below). `display-message -p` evaluates, `-a` dumps the catalog, `-v` traces.
+Formats are tmux's read surface: every `-F`, filter, hook command, and `#()` expands through them. An unknown variable expands to the empty string without an error, so a misspelled variable is silent and a multi-column `-F` row with a printable separator gets an empty column instead of shifted ones. `display-message -p` evaluates a format, `-a` lists variables, and `-v` traces the expansion.
 
 ### Language
 
-`#{variable}` with aliases `#S` session_name, `#W` window_name, `#I` window_index, `#D` pane_id, `#P` pane_index, `#T` pane_title, `#F` window_flags, `#H`/`#h` host; `##` is a literal `#`. Modifiers prefix inside the braces and compose:
+`#{name}` expands a variable or an option value (`#{automatic-rename}`, `#{@user_option}`). Short aliases are `#S` session_name, `#W` window_name, `#I` window_index, `#D` pane_id, `#P` pane_index, `#T` pane_title, `#F` window_flags, and `#H`/`#h` host; `##` is a literal `#`. Modifiers go inside the braces before a colon, and several combine with `;` (`#{T;=10:status-left}`).
 
-- `#{?cond,yes,no}` conditional (nestable; `,`/`}` escape as `#,`/`#}`); since 3.6 it accepts repeated condition/value pairs, an optional final default, and an empty implicit default · `#{==:a,b}` and `!=` `<` `>` `<=` `>=` string compare · `#{&&:a,b,…}`/`#{||:a,b,…}` boolean, `#{!:a}` negation, and `#{!!:a}` canonical boolean (N-ary and negation since 3.6).
-- `m:` fnmatch match, `m/r:` regex, `/i` ignore-case · `C:` search pane *content*, yielding a line number.
-- `e|<op>[|f][|digits]:` arithmetic (`+ - * / m %`, comparisons; `f` floats) · `a:` ASCII char · `c:` colour → RGB hex.
-- `t:` epoch → time string (`t/f/<strftime>` custom, `t/p` abbreviated past) · `b:`/`d:` basename/dirname · `q:` shell-quote (`q/h` escapes `#`).
-- `E:` expand the result again, `T:` likewise plus strftime — how option values holding formats get evaluated.
-- `S:`/`W:`/`P:`/`L:` loop the format over sessions/windows/panes/clients (windows/panes take a second variant for the current/active one); `/i`, `/n`, `/t`, and `/r` sort by index/name/activity or reverse where applicable, and `loop_last_flag` marks the last row (3.6) · `N/w:`/`N/s:` does a window/session of this name exist.
-- `s/pat/rep/:` substitute (extended regex, any delimiter, `i` flag) · `=N:` truncate (negative from the end, `=/N/…:` adds a marker) · `pN:` pad · `n:` length · `w:` display width · `l:` literal (no expansion) · `R:value,count` repeat (3.6).
-- `#(cmd)` inserts the last line of a shell command's output — cached, refreshed at most once a second, never blocks (a placeholder until the first completion); `/bin/sh` with the global environment.
+| Modifier | Meaning |
+| --- | --- |
+| `#{?cond,yes,no}` | conditional; since 3.6 repeated condition and value pairs, an optional final default, and an empty implicit default; escape `,` and `}` as `#,` and `#}` |
+| `==`, `!=`, `<`, `>`, `<=`, `>=` | string comparison: `#{==:a,b}` |
+| `&&`, `\|\|`, `!`, `!!` | boolean and, or (N-ary since 3.6), not, and canonical boolean |
+| `m:`, `m/r:`, `m/i:` | fnmatch match, regular expression match, ignore case |
+| `C:` | search pane content, yielding a line number |
+| `e\|op\|f\|digits:` | arithmetic (`+ - * / m %` and comparisons; `f` for floating point) |
+| `a:`, `c:` | ASCII character from a number; colour to RGB hex |
+| `t:`, `t/f/<fmt>:`, `t/p:` | epoch to time string; custom strftime; abbreviated past time |
+| `b:`, `d:` | basename, dirname |
+| `q:`, `q/h:`, `q/a:` | escape for `sh(1)`; also escape `#`; escape as tmux command arguments |
+| `E:`, `T:` | expand the result again; also expand strftime sequences |
+| `S:`, `W:`, `P:`, `L:` | loop over sessions, windows, panes, clients; a second format applies to the current item; `/i`, `/n`, `/t`, `/r` sort by index, name, activity, or reverse (3.6); `loop_last_flag` marks the last item, and `W:` sets `next_window_*`/`prev_window_*` (3.7) |
+| `N/w:`, `N/s:` | whether a window or session with this name exists |
+| `s/pat/rep/:` | regex substitution (any delimiter, `i` flag) |
+| `=N:`, `=/N/marker:` | truncate to N columns (negative from the end), with a marker |
+| `pN:`, `n:`, `w:` | pad; length; display width |
+| `l:` | literal, no expansion |
+| `R:value,count` | repeat (3.6) |
+| `#(command)` | last line of a shell command's output; cached, refreshed at most once a second, never blocks (empty until the first run completes); runs `/bin/sh` with the global environment |
 
 ### The variables RimZ reads
 
-| Variable | Replaced with | Notes |
+| Variable | Value | Notes |
 | --- | --- | --- |
-| `session_name` | `#S` | mutable via `rename-session` |
+| `session_name` | session name (`#S`) | changes with `rename-session` |
 | `session_id` | `$N` | server-unique |
-| `window_id` | `@N` | the `view_id` grouping key; server-unique, monotonic |
-| `window_name` | window label | sticky once `-n`-named or explicitly renamed (per-window `automatic-rename` off) — the resume/daemon idempotency key |
-| `window_index` | position | `renumber-windows` rewrites it; ids never move |
-| `window_width` / `window_height` | cells | the sidebar sizing read |
-| `pane_id` | `%N` | `#D`; server-unique, monotonic; exported as `$TMUX_PANE` |
-| `pane_active` | 1 if the window's active pane | one per window — N windows report N active panes (the per-view focus mark) |
-| `pane_floating_flag` | 1 if the pane floats above the tiled layout | 3.7+; absent releases expand it empty, which RimZ reads as false |
-| `pane_current_command` | live foreground process name | the process name, not its argv |
-| `pane_current_path` | live cwd | |
-| `pane_pid` | PID of the pane's **first** process | the spawned shell/command — never the live foreground child |
-| `pane_title` | OSC 0/2 title | app-writable (`allow-set-title`); the sidebar identifies itself through it |
-| `pane_start_command` / `pane_start_path` | spawn command / cwd | what the pane was born running |
-| `pane_dead` / `pane_dead_status` / `pane_dead_signal` / `pane_dead_time` | remain-on-exit corpse facts | |
-| `client_tty` / `client_session` / `client_name` / `client_control_mode` / `client_flags` | per-client facts | the `list-clients` row context |
-| `socket_path` / `pid` / `start_time` / `version` | server facts | `start_time` is the **server's** start, not a pane's |
+| `window_id` | `@N` | server-unique, monotonic |
+| `window_name` | window name | fixed once named by `new-window -n` or `rename-window` (per-window `automatic-rename` off) |
+| `window_index` | position | `renumber-windows` rewrites it; ids never change |
+| `window_width` / `window_height` | cells | |
+| `window_zoomed_flag` | 1 if a pane is zoomed | |
+| `window_layout` | layout string | [layout strings](#layout-strings) |
+| `pane_id` | `%N` (`#D`) | server-unique, monotonic; exported as `$TMUX_PANE` |
+| `pane_index` | position in the window | changes as panes close |
+| `pane_active` | 1 if the window's active pane | one per window, so N windows report N active panes |
+| `pane_floating_flag` | 1 if the pane floats above the tiled layout | 3.7; earlier releases expand it empty |
+| `pane_left` / `pane_top` / `pane_width` / `pane_height` | geometry in cells | relative to the window |
+| `pane_at_left` / `pane_at_top` / `pane_at_bottom` / `pane_at_right` | 1 if the pane touches that window edge | |
+| `pane_current_command` | foreground process name | the name, not its argv |
+| `pane_current_path` | foreground process working directory | |
+| `pane_pid` | PID of the pane's first process | the spawned shell or command, never the foreground child |
+| `pane_title` | title set by OSC 0/2 or `select-pane -T` | writable by applications while `allow-set-title` is on; sanitized of C0 and invisible characters (3.7) |
+| `pane_start_command` / `pane_start_path` | command and directory the pane was created with | empty for a pane created with no command while `default-command` is empty (the default), that is a pane running `default-shell` (`spawn.c`) |
+| `pane_dead` / `pane_dead_status` / `pane_dead_signal` / `pane_dead_time` | exit facts for a pane kept by `remain-on-exit` | |
+| `client_name` / `client_tty` / `client_pid` / `client_session` | client identity | |
+| `client_width` / `client_height` | client terminal size | |
+| `client_activity` | last activity time, epoch seconds | |
+| `client_flags` | comma-separated client flags (`attached`, `focused`, `control-mode`, `ignore-size`, `read-only`, …) | |
+| `client_control_mode` | 1 for a control client | |
+| `client_termname` | client terminal name (`$TERM`) | |
+| `socket_path` / `pid` / `start_time` / `version` | server facts | `start_time` is the server's start |
 
-**There is no `pane_start_time`.** No release from 3.2 through 3.7b defines a per-pane process-start-time variable — `display-message -v` reports `format 'pane_start_time' not found` and the column expands empty (probed 3.5a and 3.7b; absent from 3.7b `format.c`). The nearest live facts are `pane_pid` (first process) and the monotonic never-reused `%id` itself, which already rules out stale-id collisions within one server's lifetime; RimZ derives `pane_process_start` from `pane_pid` via `/proc` ([multiplexers.md → pane metadata](../../internals/multiplexers.md#pane-metadata)).
+**There is no `pane_start_time`.** No release through 3.7c defines a per-pane start-time variable: `format.c` has no such name, and `display-message -v` logs `format 'pane_start_time' not found` while the column expands empty (probed on 3.5a and 3.7b). The nearest facts are `pane_pid` and the never-reused `%id` itself; a process start time comes from the operating system for `pane_pid`.
 
-Catalog breadth (200+ variables at 3.7b): `buffer_*` (including `buffer_full`), `client_*` (geometry, flags, tty, uid, `client_theme`), `command_*`, copy-mode state (`copy_cursor_*`, `selection_*`, `search_*`, `scroll_position`), `cursor_*`, `history_*` (`history_size`, `history_limit`, `history_bytes`), `hook_*` (firing context), `mouse_*`, `pane_*` (geometry, edges, flags, modes, `pane_floating_flag`, `pane_pipe_pid`, `pane_pb_state`/`pane_pb_progress`), `session_*` (counts, times, groups, `session_attached`, alert flags), `window_*` (geometry, flags, counts, `window_zoomed_flag`, `window_layout`), `loop_last_flag`, `sixel_support`, and the server singletons. Full table: man FORMATS.
+### Output sanitization
+
+Command output to a client that is not marked UTF-8 is sanitized: every byte outside printable ASCII, tab included, becomes `_`, and each UTF-8 character becomes one `_` per display column (`server-client.c`, `server_client_print`; `utf8.c`, `utf8_sanitize`). A client is UTF-8 when it runs with `-u`, when `$TMUX` is set, or when the first non-empty of `LC_ALL`, `LC_CTYPE`, and `LANG` contains `UTF-8` or `UTF8` (`tmux.c`, `main`). A parser that must work under any locale uses printable separators and substitutes the separator out of free-form fields (`#{s/,/_/g:pane_title}`).
+
+### Catalog
+
+The man page's FORMATS table lists over 200 variables at 3.7c, in these families: `buffer_*` (including `buffer_full`), `client_*` (geometry, flags, tty, uid, `client_theme`), `command_*`, copy mode (`copy_cursor_*`, `selection_*`, `search_*`, `scroll_position`), `cursor_*`, `history_*` (`history_size`, `history_limit`, `history_bytes`), `hook_*`, `mouse_*`, `pane_*` (geometry, edges, flags, modes, `pane_pipe_pid`, `pane_pb_state`/`pane_pb_progress` for OSC 9;4 progress, 3.7), `session_*` (counts, times, groups, `session_attached`, alerts), `window_*` (geometry, flags, counts, `window_layout`), `next_window_*`/`prev_window_*`, `loop_last_flag`, `sixel_support`, and the server variables.
 
 ## Hooks
 
-Commands run on triggers, stored as **array options** — they scope and stack exactly like options (global or per-session/window/pane; `set-hook -g name[i] cmd`; members run in index order; setting without an index resets the array to one member). The hook's command string is parsed by tmux, not a shell — quote the inner command accordingly (the `after-new-window` split carries its serve argv single-quoted inside the hook string).
+Hooks run tmux commands on triggers. They are array options stored in the same scope tables as options, global or per session, window, or pane: `set-hook -g name[i] command` sets one member, members run in index order, and setting a hook without an index clears the array and sets member 0. A hook's command is parsed by tmux, not by a shell, so a shell command inside it needs its own quoting layer.
 
-- **Every command has an implicit after-hook** — `after-<command-name>` fires when the command completes, except when the command itself ran from a hook. This is the tab-template parity mechanism: a session-scoped `after-new-window` re-runs the sidebar split in every window opened later, and because the hook runs `split-window` (not `new-window`) it cannot recurse.
-- **Control-mode notifications double as hooks** under the same names without `%` or arguments — `window-add` is `set-hook`-able — except `%exit`.
-- Named hooks beyond the notifications: `alert-activity`/`alert-bell`/`alert-silence` (the `monitor-*` options), `client-active` (3.2), `client-attached`/`client-detached`/`client-focus-in`/`client-focus-out`/`client-resized`/`client-session-changed`, `command-error` (3.5), `pane-died` (remain-on-exit corpse) / `pane-exited` / `pane-focus-in`/`pane-focus-out` (need `focus-events on`) / `pane-set-clipboard`, `session-created`/`session-closed`/`session-renamed`, `window-linked`/`window-renamed`/`window-resized` (3.2, fires after `client-resized`)/`window-unlinked`.
-- Scope gotcha since 3.2: window-shaped hooks (`window-layout-changed`, `window-linked`, `window-pane-changed`, `window-renamed`, `window-unlinked`) live in the **window** table and pane-shaped hooks (`pane-died`, `pane-exited`, `pane-focus-in/out`, `pane-mode-changed`, `pane-set-clipboard`) in the **pane** table — a session-scoped set silently misses them; `-g` reaches everything.
-- The firing context rides the `hook_*` variables (`hook`, `hook_pane`, `hook_window`, `hook_session`, …) inside the hook's command.
+**After hooks.** A command that has an `after-<command>` hook fires it when the command completes, except when the command itself ran from a hook, so a hook that runs `split-window` cannot trigger `after-new-window`. The man page says "most" commands have one; at 3.7c the after hooks are `after-bind-key`, `after-capture-pane`, `after-copy-mode`, `after-display-message`, `after-display-panes`, `after-kill-pane`, `after-list-buffers`, `after-list-clients`, `after-list-keys`, `after-list-panes`, `after-list-sessions`, `after-list-windows`, `after-load-buffer`, `after-lock-server`, `after-new-session`, `after-new-window`, `after-paste-buffer`, `after-pipe-pane`, `after-queue`, `after-refresh-client`, `after-rename-session`, `after-rename-window`, `after-resize-pane`, `after-resize-window`, `after-save-buffer`, `after-select-layout`, `after-select-pane`, `after-select-window`, `after-send-keys`, `after-set-buffer`, `after-set-environment`, `after-set-hook`, `after-set-option`, `after-show-environment`, `after-show-messages`, `after-show-options`, `after-split-window`, and `after-unbind-key` (`options-table.c`).
+
+**Named hooks.** The table column is the option scope from `options-table.c` (`OPTIONS_TABLE_HOOK`, `OPTIONS_TABLE_WINDOW_HOOK`, `OPTIONS_TABLE_PANE_HOOK`); after hooks are session hooks. Since 3.2, window hooks live in the window table and pane hooks in the window or pane table, so a window or pane hook set on a session never fires; `set-hook -g` reaches every global table.
+
+| Hook | Fires when | Table |
+| --- | --- | --- |
+| `alert-activity` / `alert-bell` / `alert-silence` | a window alert fires (`monitor-*` options) | session |
+| `client-active` | a client becomes the latest active client of its session (3.2) | session |
+| `client-attached` / `client-detached` | a client attaches / detaches | session |
+| `client-focus-in` / `client-focus-out` | a client's terminal gains / loses focus | session |
+| `client-light-theme` / `client-dark-theme` | a client's terminal reports a theme change (3.6) | session |
+| `client-resized` | a client is resized | session |
+| `client-session-changed` | a client switches session | session |
+| `command-error` | a command fails (3.5) | session |
+| `session-created` / `session-closed` / `session-renamed` | session lifecycle | session |
+| `session-window-changed` | a session's current window changes | session |
+| `window-linked` / `window-unlinked` | a window is linked into / unlinked from a session | session |
+| `window-renamed` | a window is renamed | window |
+| `window-layout-changed` | a window's layout changes | window |
+| `window-pane-changed` | a window's active pane changes | window |
+| `window-resized` | a window is resized, after `client-resized` (3.2) | window |
+| `pane-died` | a pane's command exits and `remain-on-exit` keeps it | window, pane |
+| `pane-exited` | a pane's command exits and the pane closes | window, pane |
+| `pane-focus-in` / `pane-focus-out` | a pane gains / loses focus (requires `focus-events on`) | window, pane |
+| `pane-mode-changed` | a pane enters or leaves a mode | window, pane |
+| `pane-set-clipboard` | an application sets the clipboard via OSC 52 | window, pane |
+| `pane-title-changed` | a pane's title changes | window, pane |
+
+Control-mode notifications double as hooks under the same names without `%` or arguments, except `%exit`. Inside a hook command, the `hook_*` variables (`hook`, `hook_client`, `hook_session`, `hook_window`, `hook_pane`, and their `_name` forms) describe the firing context.
 
 ## Options
 
-Four scope tables — server, session, window, pane — each in a global and a local flavour; local shadows global. The room options RimZ applies at `ensure_session`, batched into one client call ([multiplexers.md → tmux backend](../../internals/multiplexers.md#tmux-backend)); RimZ's value in bold:
+Options live in four scope tables, server, session, window, and pane, each with a global and a local layer; a local value shadows the global. The table covers the options the backend writes, with scope, choices, and default read from `options-table.c` at 3.7c. The values RimZ writes are in [configuration → multiplexer room options](../../guide/configuration.md#multiplexer-room-options) and [multiplexers.md → room options](../../internals/multiplexers.md#room-options).
 
-| Option | Scope | Values | Why it matters |
-| --- | --- | --- | --- |
-| `focus-events` | server | **on** \| off | requests focus reporting from the terminal and forwards FocusIn/Out to apps; enables the `pane-focus-*` hooks; clients should re-attach after flipping |
-| `set-clipboard` | server | **on** \| external \| off | `on` both accepts OSC 52 from apps (into a tmux buffer) and forwards to the outer terminal (needs terminfo `Ms`); `external` forwards only, ignoring app sets |
-| `extended-keys` | server | tmux accepts on/off/always; RimZ writes **on** by default | modifyOtherKeys: `on` honours app requests for mode 1/2; on tmux 3.5.x it contaminates bracketed paste, and 3.6 fixes that cost |
-| `extended-keys-format` | server | **csi-u** \| xterm | `C-S-a` → `^[[65;6u` (csi-u) vs `^[[27;6;65~` (xterm); **3.5+** |
-| `terminal-features[240]` | server | **`*:sync`** | tells tmux the outer terminal honours synchronized output, so bracketed frame writes forward as atomic redraws for pixel pets and full-screen TUIs; the fixed index makes repeated writes idempotent, and RimZ purges exact `*:sync`/`*:extkeys` entries leaked by its former append path plus an exact `*:hyperlinks` entry inherited from user config while preserving unrelated entries |
-| `terminal-features[241]` | server | **`*:extkeys`** when extended keys are enabled; unset otherwise | requests extended keys from the outer terminal so modified keys, including Shift+Enter and Alt+Enter, arrive as CSI-u; the fixed index makes repeated writes idempotent, and disabling extended keys clears RimZ's entry |
-| `terminal-features[242]` | server | **`*:hyperlinks`** | tells tmux the outer terminal renders OSC 8 hyperlinks so links emitted by the sidebar and pane applications stay clickable |
-| `user-keys[240]` | server | **`ESC[27u`** when extended keys are enabled | names the modifier-less CSI-u Escape sequence so RimZ can bind `User240` to `send-keys Escape`; CLI arguments carry a literal ESC byte, while config files expand `\e` |
-| `escape-time` | server | ms, **10** | ESC-disambiguation delay; matches the upstream default since 3.5 (500 before) |
-| `mouse` | session | **on** \| off | mouse events become bindable keys; click focuses panes |
-| `history-limit` | session | lines, **100000** | scrollback cap; through 3.6 it applies only to panes created after the set, while 3.7 also updates existing panes (the 3.7b option-table help still says new panes only, but CHANGES, `options.c`, and a live format probe agree on the retroactive behavior) |
-| `renumber-windows` | session | **on** \| off | closing a window renumbers indexes (respects `base-index`); `@id`s never move |
-| `set-titles` | session | **on** \| off | writes an outer-terminal title for attached clients whose terminal capabilities include title set/restore; RimZ enables it so the tab title stays room-controlled |
-| `set-titles-string` | session | format string, **`#S \| #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}}`** | payload used by `set-titles`; a RimZ pane identity wins, otherwise the live process short name does; the shell-writable `#T` pane title is excluded |
-| `@rimz_title` | pane | short identity when the pane caller supplies one | pane user option consumed by `set-titles-string`; applications cannot rewrite it through OSC title sequences |
-| `allow-passthrough` | pane (set at window scope) | off \| **on** \| all | the `\ePtmux;…\e\\` passthrough escape; **3.3+, default off**; `on` works only while the pane is visible, `all` always (3.4); the pet pixel tier also requires tmux 3.6+ and a kitty-capable attached client termname (`#{client_termname}`) unless `[theme.pets] glyphs = "pixel"` explicitly opts past that allowlist |
-| `aggressive-resize` | window | **on** \| off | size to the smallest/largest session currently *viewing* the window rather than merely linked to it |
-| `pane-border-status` | window | **off** \| top \| bottom | a per-pane border text line (`pane-border-format`) |
-| `pane-border-format` | window | format string | text rendered in the `pane-border-status` row; when RimZ owns `pane-border-status`, it drives this to blank the sidebar segment |
-| `pane-border-lines` | window | **simple** \| single \| double \| heavy \| number \| spaces | border glyph set; `simple` is plain ASCII; `spaces` arrives in 3.6 |
+| Option | Scope | Values | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `focus-events` | server | on, off | off | request focus reporting from the terminal and pass focus events to applications; enables `pane-focus-*` hooks; clients re-attach to pick up a change |
+| `set-clipboard` | server | on, external, off | external | `on` accepts OSC 52 from applications into a buffer and forwards it to the terminal; `external` only forwards; forwarding needs the terminal's `Ms` capability or the `clipboard` feature |
+| `get-clipboard` | server | off, buffer, request, both | buffer | how an application's clipboard read is answered (3.7); `CHANGES` says the default is off, `options-table.c` sets `buffer` |
+| `extended-keys` | server | on, off, always | off | `on` honours application requests for modifyOtherKeys mode 1 or 2; `always` sends extended keys unrequested |
+| `extended-keys-format` | server | csi-u, xterm | xterm | encoding of extended keys: `C-S-a` is `^[[65;6u` (csi-u) or `^[[27;6;65~` (xterm) (3.5) |
+| `terminal-features[]` | server | `<terminal-pattern>:<feature>:…` | `xterm*:clipboard:ccolour:cstyle:focus:title`, `screen*:title`, `rxvt*:ignorefkeys` | features tmux assumes for outer terminals whose `TERM` matches, when detection cannot find them; features include `256`, `RGB`, `clipboard`, `extkeys`, `focus`, `hyperlinks`, `mouse`, `osc7`, `sixel`, `sync` (synchronized output), `title`, `usstyle` |
+| `user-keys[]` | server | escape sequences | empty | each index N names a key `UserN` that `bind-key` can bind; a config file expands `\e`, an argv value needs the literal byte |
+| `escape-time` | server | milliseconds | 10 | how long tmux waits after ESC to tell a key from an escape sequence (500 before 3.5); extended while a partial paste end or forwarded request is pending (3.7) |
+| `mouse` | session | on, off | off | mouse events become bindable keys; clicks select panes |
+| `history-limit` | session | lines | 2000 | scrollback per pane; since 3.7 a change also trims existing panes (the option's help text still says new panes only, while `CHANGES`, `options.c`, and a live probe agree on the new behaviour) |
+| `renumber-windows` | session | on, off | off | renumber windows when one closes, from `base-index` |
+| `set-titles` | session | on, off | off | set the outer terminal's title for attached clients whose terminal can set titles |
+| `set-titles-string` | session | format | `#S:#I:#W - "#T" #{session_alerts}` | the title `set-titles` writes |
+| `allow-passthrough` | window, pane | off, on, all | off | honour the `\ePtmux;…\e\\` passthrough escape; `on` only while the pane is visible, `all` always (3.3; `all` 3.4) |
+| `aggressive-resize` | window | on, off | off | size a window to the clients currently viewing it, not every client whose session contains it |
+| `window-size` | window | largest, smallest, manual, latest | latest | how a window's size follows its clients; `resize-window` sets `manual` |
+| `automatic-rename` | window | on, off | on | derive the window name from the active pane's command |
+| `pane-border-status` | window | off, top, bottom | off | draw a text row on each pane border |
+| `pane-border-format` | window, pane | format | active-pane marker and `#{pane_index} "#{pane_title}"` | the text in that row |
+| `pane-border-lines` | window | single, double, heavy, simple, number, spaces | single | border characters; `simple` is plain ASCII; `spaces` 3.6 |
+| `default-size` | session | `WxH` | 80x24 | size of a detached session's windows; `new-session -x`/`-y` set it |
 
-Neighbours a contributor will reach for: `default-size XxY` (detached birth geometry — **implicitly set by `new-session -x/-y`**, probed), `base-index` (first window index, conventionally global), `window-size largest|smallest|manual|latest`, `remain-on-exit [on|off|failed|key]` + `remain-on-exit-format` (`key` is 3.7), `detach-on-destroy [on|off|no-detached|previous|next]`, `destroy-unattached [off|on|keep-last|keep-group]`, `exit-empty`/`exit-unattached` (server lifetime), `allow-rename` (apps renaming windows via escape, default off), `allow-set-title` (apps writing `pane_title`, default on), `automatic-rename[-format]`, `focus-follows-mouse` (session, 3.7), `update-environment[]`, `default-terminal` + `terminal-features[]` (the modern per-terminal capability switchboard: `256`, `RGB`, `clipboard`, `extkeys`, `focus`, `hyperlinks`, `mouse`, `osc7`, `sixel`, `sync`, `title`, `usstyle`, …), `default-command`/`default-shell`, `popup-style`/`popup-border-style`/`popup-border-lines` (3.3), `synchronize-panes`, `monitor-activity`/`monitor-bell`/`monitor-silence`, and the post-floor options `pane-scrollbars*`, `tiled-layout-max-columns`, `codepoint-widths[]`, `variation-selector-always-wide`, `copy-mode-position-*`, `copy-mode-selection-style`, `copy-mode-line-number-*`, `initial-repeat-time`, `input-buffer-size`, `default-client-command`, `tree-mode-preview-*`, and `message-format`.
+**User options.** A name starting with `@` is a user option: any scope, any string value, readable in formats as `#{@name}`, and not writable by applications through escape sequences. Scope flags on `set-option` matter for user options because tmux cannot infer their table.
+
+Other options a contributor will reach for: `base-index` (first window index), `remain-on-exit` (`on`, `off`, `failed`, `key`; `key` 3.7) with `remain-on-exit-format`, `detach-on-destroy` (`off`, `on`, `no-detached`, `previous`, `next`), `destroy-unattached` (`off`, `on`, `keep-last`, `keep-group`), `exit-empty`/`exit-unattached` (server lifetime), `allow-rename` (applications rename windows by escape, default off), `allow-set-title` (applications set `pane_title`, default on), `automatic-rename-format`, `focus-follows-mouse` (session, 3.7), `update-environment[]` ([environment](#global-and-session-environment)), `default-terminal` (default `screen` unless the build sets another), `default-command`/`default-shell`, `popup-style`/`popup-border-style`/`popup-border-lines` (3.3), `synchronize-panes`, `monitor-activity`/`monitor-bell`/`monitor-silence`, and the 3.6 and 3.7 additions `pane-scrollbars`, `pane-scrollbars-position`, `pane-scrollbars-style`, `tiled-layout-max-columns`, `codepoint-widths[]`, `variation-selector-always-wide`, `copy-mode-position-*`, `copy-mode-selection-style`, `copy-mode-line-numbers` with its styles, `initial-repeat-time`, `input-buffer-size`, `default-client-command`, `tree-mode-preview-*`, and `message-format`.
 
 ## Global and session environment
 
-The server copies its spawn environment into the **global environment**; each session keeps a **session environment**. A new pane's process receives global merged with session (session wins), plus `TMUX`, `TMUX_PANE`, and `TERM` from `default-terminal`. The merge happens **at pane creation** — environment edits never reach live processes.
+The server copies the environment it starts with into the **global environment**, and each session keeps a **session environment**. A new pane's process receives the global environment merged with the session environment (session wins), plus `TMUX`, `TMUX_PANE`, and `TERM` from `default-terminal`. The merge happens when the pane is created, so environment changes never reach running processes.
 
-- `new-session -e` / `new-window -e` / `split-window -e` / `respawn-* -e` seed variables at birth, so even the first window inherits them.
-- `set-environment -t <session> NAME VALUE` reaches only panes created afterwards — the idempotent re-assert for sessions born before a variable existed.
-- `update-environment[]` (session option, fnmatch patterns allowed) copies the listed variables from the **attaching client** into the session env on `new-session` and every attach — variables absent on the client are marked for removal (`-r` semantics). The default list covers `DISPLAY`, the `SSH_*` set, `TERM_PROGRAM`, … — an attach from a new SSH connection silently rewrites them for future panes; `-E` on attach/new-session skips the mechanism.
-- `-h` hidden variables live in the tables but are never exported — formats-only state.
+- `new-session -e`, `new-window -e`, `split-window -e`, and `respawn-pane -e`/`respawn-window -e` set variables at creation, so even a session's first window sees them.
+- `set-environment -t <session> NAME VALUE` reaches only panes created afterwards.
+- `update-environment[]` (session option, fnmatch patterns allowed) copies the listed variables from the attaching client into the session environment on `new-session` and on every attach; a variable the client lacks is marked for removal. The default list is `DISPLAY KRB5CCNAME MSYSTEM SSH_ASKPASS SSH_AUTH_SOCK SSH_AGENT_PID SSH_CONNECTION WAYLAND_DISPLAY WINDOWID XAUTHORITY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE` (`options-table.c`), so an attach from a new SSH connection rewrites the `SSH_*` values for later panes. `-E` on `attach-session` or `new-session` skips the copy.
+- A variable set with `-h` is hidden: it stays in the table for formats and is never exported to panes.
 
 ## Control mode
 
-`tmux -C` turns a client into a line-oriented protocol endpoint: commands go in on stdin, replies and asynchronous notifications come out on stdout. `-CC` additionally puts the tty in raw mode and brackets the stream with a `\eP1000p` DCS preamble and a closing `\e\\` (the iTerm2 integration shape); plain `-C` emits no terminal markers. [`PresenceWatch`](../../../crates/rimz/src/mux/tmux/presence.rs) holds `tmux -C attach-session -f ignore-size,no-output -t <session>`, writes one `refresh-client -B` subscription command, and reads notifications.
+`tmux -C` makes a client a line protocol endpoint: commands go in on stdin, and command replies and asynchronous notifications come out on stdout. `-CC` also puts the terminal in raw mode and wraps the stream in a `\eP1000p` DCS opening and a closing `\e\\` (the iTerm2 integration shape); plain `-C` writes no terminal markers. A typical observer attaches with `tmux -C attach-session -f ignore-size,no-output -t <session>`.
 
 ### Protocol shape
 
-- Each stdin line is a command (or `;`-sequence); each produces exactly one reply block: `%begin <time> <number> <flags>`, the output lines, then `%end` (success) or `%error` (failure) carrying **identical arguments**. `time` is epoch seconds; `number` increments per command — pair replies on it; `flags` is documented "currently not used" (the wire always says `1`).
-- **A notification never appears inside a reply block** — the load-bearing guarantee: any `%`-line outside `%begin…%end` is an async event, and a reply block can be buffered atomically.
-- **An empty stdin line detaches the client.** The `wait-exit` flag turns this into the drain handshake — after `%exit` the client waits for an empty line before exiting. Closing stdin tears the client down: the no-leak guarantee the presence watch leans on.
-- An unparseable command still produces a block: `%begin` / `parse error: …` / `%error`.
-- Control clients are sizeless and excluded from size negotiation until `refresh-client -C WxH` (or `@win:WxH`) gives them a size.
-- The final line is `%exit [reason]`, emitted by the client itself; reasons: `detached (from session <name>)`, `detached and SIGHUP …`, `lost tty`, `terminated`, `too far behind`, `exited` (server had no sessions), `server exited`, `server exited unexpectedly`.
+- **Reply blocks.** Each stdin line is a command or `;` sequence, and each produces one reply block: `%begin <time> <number> <flags>`, the output lines, then `%end` on success or `%error` on failure with the same three arguments. `time` is epoch seconds, `number` identifies the command, and `flags` is 1 when the command came from this control client and 0 otherwise (`cmd-queue.c`, `cmdq_guard`). The man page documents `flags` as unused.
+- **Notifications never appear inside a reply block.** Any `%` line outside `%begin`…`%end` is a notification, so a reader can buffer a reply block whole. (3.8-rc adds queuing to enforce this under more paths; see [unreleased](#unreleased-in-38-rc).)
+- **An unparseable command still gets a block:** `%begin`, `parse error: …`, `%error`.
+- **An empty stdin line detaches the client.** With the `wait-exit` flag, the client waits for an empty line after `%exit` before it exits. Closing stdin also ends the client.
+- **Size.** Control clients have no size and take no part in size negotiation until `refresh-client -C WxH` (or `-C @win:WxH` per window) gives them one.
+- **Exit.** The last line is `%exit [reason]`, written by the client. Reasons are `detached`, `detached (from session <name>)`, `detached and SIGHUP`, `detached and SIGHUP (from session <name>)`, `lost tty`, `terminated`, `too far behind`, `exited` (the server had no sessions), `server exited`, and `server exited unexpectedly` (`client.c`, `client_exit_message`; `control.c`).
 
-### Notification catalog (3.7b source and wire shapes)
+### Notification catalog
 
-✓ marks what `PresenceWatch` forwards as a typed presence line or fallback nudge; everything else it reads and drops.
+Wire shapes are from `control-notify.c` and `control.c` at 3.7c. How the backend classifies each line is in [state.md → what triggers a mux-derived event](../../internals/sidebar/state.md#what-triggers-a-mux-derived-event).
 
-| Notification | Wire shape | Fired when | ✓ |
-| --- | --- | --- | :---: |
-| `%window-add` | `%window-add @id` | a window was linked into the client's session | ✓ |
-| `%window-close` | `%window-close @id` | a linked window closed | ✓ |
-| `%unlinked-window-add` / `-close` / `-renamed` | `… @id [name]` | the same events for windows **not** in the client's session — linked vs unlinked is judged per client against its own attached session | ✓ (add/close) |
-| `%layout-change` | `%layout-change @id <layout> <visible-layout> <raw-flags>` | a split opened/closed/resized in a window; old releases sent two fields — accept ≥ 2 | ✓ |
-| `%sessions-changed` | bare | a session was created or destroyed | ✓ |
-| `%window-renamed` | `@id name` | | |
-| `%window-pane-changed` | `@id %id` | a window's active pane changed; forwarded as a realtime `FocusChanged` overlay for the window's new active pane | ✓ |
-| `%session-changed` | `$id name` | this client switched session | |
-| `%session-renamed` | **wire: `$id name`** — the man documents the name only; parse id-then-name | | |
-| `%session-window-changed` | `$id @id` | a session's current window changed; forwarded as a `FocusChanged` overlay for the switched-to window's active pane | ✓ |
-| `%client-session-changed` | `<client> $id name` | another client switched session | |
-| `%client-detached` | `<client>` | (3.2) | |
-| `%output` | `%output %id <value>` | pane output; bytes < 0x20 and `\` escape as octal `\nnn`, bytes ≥ 0x80 pass raw — the escaping is byte-wise, so a line may split a UTF-8 sequence | suppressed |
-| `%extended-output` | `%extended-output %id <age-ms> … : <value>` | replaces `%output` under `pause-after`; ignore anything between the age and the lone `:` | suppressed |
-| `%pause` / `%continue` | `%id` | pause-mode flow control | |
-| `%subscription-changed` | `name $id @id <win-idx> %id … : value` — window subs put `-` in the pane slot, session subs in window/index/pane | a `refresh-client -B` format changed; coalesced to ≤ 1/s | ✓ |
-| `%pane-mode-changed` | `%id` | copy-mode enter/leave | filtered |
-| `%paste-buffer-changed` / `%paste-buffer-deleted` | `name` | (deleted: 3.4) | |
-| `%config-error` | `<error>` | config-file load errors (3.4) | |
-| `%message` | `<text>` | `display-message` aimed at this client | |
-| `%exit` | `[reason]` | last line before client exit | EOF |
+| Notification | Wire shape | Sent when |
+| --- | --- | --- |
+| `%window-add` | `%window-add @id` | a window is linked into the client's session |
+| `%window-close` | `%window-close @id` | a window in the client's session closes |
+| `%window-renamed` | `%window-renamed @id name` | a window in the client's session is renamed |
+| `%unlinked-window-add` / `-close` / `-renamed` | `%unlinked-window-… @id [name]` | the same events for a window not in the client's session, judged per client |
+| `%layout-change` | `%layout-change @id <layout> <visible-layout> <raw-flags>` | a window's layout changes (split, close, resize); older releases sent fewer fields, so parse at least the id and the layout |
+| `%window-pane-changed` | `%window-pane-changed @id %id` | a window's active pane changes |
+| `%session-window-changed` | `%session-window-changed $id @id` | a session's current window changes |
+| `%session-changed` | `%session-changed $id name` | this client switches session |
+| `%client-session-changed` | `%client-session-changed <client> $id name` | another client switches session |
+| `%session-renamed` | `%session-renamed $id name` | a session is renamed; the man page documents the name alone, so parse the id first |
+| `%sessions-changed` | `%sessions-changed` | a session is created or destroyed |
+| `%client-detached` | `%client-detached <client>` | a client detaches (3.2) |
+| `%pane-mode-changed` | `%pane-mode-changed %id` | a pane enters or leaves a mode such as copy mode |
+| `%output` | `%output %id <value>` | pane output; bytes below 0x20 and `\` are escaped as octal `\nnn`, other bytes pass raw, so a line can split a UTF-8 sequence |
+| `%extended-output` | `%extended-output %id <age-ms> … : <value>` | pane output under `pause-after`; ignore fields between the age and the lone `:` |
+| `%pause` / `%continue` | `%pause %id` / `%continue %id` | pause-mode flow control |
+| `%subscription-changed` | `%subscription-changed name $id @id <window-index> %id … : value` | a `refresh-client -B` format's value changed; window subscriptions put `-` in the pane field, session subscriptions in the window, index, and pane fields; checked at most once a second |
+| `%paste-buffer-changed` / `%paste-buffer-deleted` | `%paste-buffer-… name` | a paste buffer changes / is deleted (3.4) |
+| `%config-error` | `%config-error <error>` | a configuration file error (3.4) |
+| `%message` | `%message <text>` | `display-message` without `-p` targets this client |
+| `%exit` | `%exit [reason]` | the client is about to exit |
 
-**Layout strings** (`%layout-change`, `window_layout`, `select-layout`): a 4-hex-digit checksum, a comma, then a cell tree — each cell `WxH,X,Y` followed by `,<pane-number>` for a leaf (the bare number is the pane's `%id` digits), `{…}` for left-right children, or `[…]` for top-bottom children, children comma-separated. Example: `b25d,208x60,0,0{104x60,0,0,1,103x60,105,0,2}`.
+### Layout strings
+
+A layout string, as in `%layout-change`, `window_layout`, and `select-layout`, is a four-hex-digit checksum, a comma, then a cell tree. Each cell is `WxH,X,Y`, followed by `,<pane>` for a leaf, where `<pane>` is the pane's `%id` number, or by `{…}` for left-to-right children or `[…]` for top-to-bottom children, separated by commas (`layout-custom.c`, `layout_append`). Example: `b25d,208x60,0,0{104x60,0,0,1,103x60,105,0,2}`.
+
+Since 3.7, a window with floating panes appends them after the tiled tree inside angle brackets, one leaf cell each: `<WxH,X,Y,<pane>,WxH,X,Y,<pane>>`. The checksum covers the whole string (`layout_dump`). tmux's own parser does not read the suffix: `layout_parse` builds the tiled tree and fails `invalid layout` on anything after it, so `select-layout` rejects the string `window_layout` prints for a window with a floating pane, and a client parser that stops at the tiled tree fails the same way. `CHANGES FROM 3.6b TO 3.7` lists restoring custom layouts with floating panes as not yet available. 3.8-rc replaces this format with a JSON subset for clients that opt in ([unreleased](#unreleased-in-38-rc)).
 
 ### Client flags and flow control
 
-- `no-output` suppresses pane output entirely — both `%output` and `%extended-output` — the topology-only diet.
-- Without `pause-after`, a reader that stops draining is force-exited once any buffered output ages past **five minutes** (`CONTROL_MAXIMUM_AGE 300000` ms), exit message `too far behind` — even a `no-output` client should keep reading promptly.
-- `pause-after=secs` switches output to `%extended-output` and, past the threshold, pauses the pane (`%pause`) instead of disconnecting the client. `refresh-client -A %id:state` drives it per pane: `continue` resumes (`%continue`), `pause` pauses now, `off` stops the pane's output for this client — when every client turns a pane off, tmux stops reading the pane's pty entirely (backpressure onto the application).
-- `refresh-client -B name:what:format` subscribes to a format: `what` is empty (the attached session), a `%id`, `%*` (all panes in the session), an `@id`, or `@*`; changes arrive as `%subscription-changed` at most once a second; `-B name` alone unsubscribes. `PresenceWatch` subscribes over `%*` to receive pane id, window id, foreground command, active state, pane title, and the 3.7 floating flag without polling `list-panes`. Its layout reconciliation preserves subscribed floating panes because `window_layout` contains tiled leaves only, then nudges the authoritative pane poll because the layout notification cannot prove floating-pane deletion.
-- `refresh-client -f flags` rewrites the flag set on a live client; `-r %id:<report>` lets a control client answer OSC 10/11-style pane queries (3.5); `-l` requests the outer terminal's clipboard into a paste buffer.
-- **`read-only` is not a general command sandbox.** The man's key restriction does not reject every command received on a control client's stdin, so a read-only control client can still reach mutation surfaces. Individual commands add their own checks: 3.7 tightens `attach-session`, `detach-client`, and `switch-client`, and `send-keys` rejects a read-only target client unless it is driving copy mode with `-X`. The presence watch attaches writable with `ignore-size` so tmux 3.7 `send-keys` can resolve a writable client when the watch is the only attached client in a headless session; its safety property is the stdin allowlist, which writes only `refresh-client -B`.
+- `no-output` suppresses pane output entirely, both `%output` and `%extended-output`.
+- Without `pause-after`, tmux disconnects a client whose buffered output ages past five minutes (`CONTROL_MAXIMUM_AGE 300000` ms in `control.c`), with exit reason `too far behind`. A `no-output` client still receives notifications and should keep reading.
+- `pause-after=<secs>` switches output to `%extended-output` and pauses a pane (`%pause`) whose output falls that far behind, instead of disconnecting. `refresh-client -A %id:<state>` controls one pane: `continue` resumes it (`%continue`), `pause` pauses it now, `off` stops its output to this client, and `on` turns output back on. When every client has turned a pane off, tmux stops reading that pane's pty, which applies backpressure to the application.
+- `refresh-client -B name:what:format` subscribes to a format. `what` is empty for the attached session, a `%id`, `%*` for every pane in the session, an `@id`, or `@*` for every window. Changes arrive as `%subscription-changed`, checked at most once a second, and `-B name` alone unsubscribes.
+- `refresh-client -f <flags>` changes flags on a live client, `-r %id:<report>` lets a control client answer OSC 10 and 11 colour queries for a pane (3.5), and `-l` requests the terminal clipboard into a paste buffer.
+
+### Read-only clients
+
+The `read-only` flag is not a command sandbox. It limits key bindings, and each command adds its own checks for commands sent by a read-only client: 3.7 restricts `attach-session`, `detach-client`, and `switch-client` so a read-only user can only detach their own client, and `send-keys` refuses a read-only target client unless it sends a copy-mode command with `-X`. Other commands on a read-only control client's stdin can still change server state, so a watcher that must not mutate anything restricts what it writes to stdin.

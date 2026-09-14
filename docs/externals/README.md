@@ -37,4 +37,4 @@ The provider-neutral contracts every adapter page feeds are [model.md](../intern
 | Page | Upstream | Refreshed against | RimZ mapping |
 | --- | --- | --- | --- |
 | [zellij-reference.md](./mux-adapter/zellij-reference.md) | Zellij: the wasm plugin API, CLI control surface, configuration, layout KDL, terminal graphics, and session serialization | 0.45.1 (tag `v0.45.1`, 2026-08-28) | [multiplexers.md](../internals/multiplexers.md), and [web.md](../internals/web.md) for browser access |
-| [tmux-reference.md](./mux-adapter/tmux-reference.md) | tmux: the client/server and socket model, command verbs, format language, hooks, options, session environment, and control mode | 3.7b | [multiplexers.md](../internals/multiplexers.md) |
+| [tmux-reference.md](./mux-adapter/tmux-reference.md) | tmux: the client/server and socket model, command verbs, format language, hooks, options, session environment, and control mode | 3.7c | [multiplexers.md](../internals/multiplexers.md) |
