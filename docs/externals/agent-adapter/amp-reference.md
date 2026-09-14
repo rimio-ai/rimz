@@ -1,107 +1,130 @@
 # Amp CLI protocol reference
 
-> RimZ's landed mapping is [adapter_amp.md](../../internals/agents/adapter_amp.md). This document records the upstream surface behind it; the agent-agnostic lifecycle and enrichment contracts are [model.md](../../internals/agents/model.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md).
+> RimZ's mapping of this surface is [adapter_amp.md](../../internals/agents/adapter_amp.md). The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account and spend contract is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Amp CLI upstream protocol surface** relevant to RimZ: the Plugin API lifecycle and decision seam, thread identity and state, transcript access, tool classification, execute-mode JSONL, permissions, configuration and trust, authentication and usage, remote control, runners, and launch modes. It is the implementation research and drift-check record; current RimZ support claims live in [adapter_amp.md](../../internals/agents/adapter_amp.md) and [agent-support.md](../../reference/agent-support.md).
+This page records the upstream Amp CLI surfaces a RimZ adapter binds to: the Plugin API and its events, thread state, transcripts, tools, permissions, compaction, modes, subagents, execute mode and stream JSON, remote control and runners, authentication and usage, and settings. It covers the current Amp architecture only (the one Amp's May 2026 launch posts called "Neo"): the dial modes are `low`, `medium`, `high`, and `ultra`, and pre-rebuild hooks, local thread schemas, and `--take-me-back` are out of scope.
 
-Refresh baseline: Amp CLI [`@ampcode/cli` 0.0.1783946745-g8c4c0a](https://www.npmjs.com/package/@ampcode/cli/v/0.0.1783946745-g8c4c0a), released **2026-07-13**, and the rolling official Amp manual and generated `@ampcode/plugin` type reference available on **2026-07-13**. The exact CLI reports `0.0.1783946745-g8c4c0a (released 2026-07-13T12:45:45.000Z)`, and `amp plugins show-docs` from that binary is the type-reference baseline used here.
-
-This reference supports **the current post-rebuild Amp architecture only**. Amp calls that architecture “Neo” in its May 2026 launch material, then dropped the name when it became the only current architecture. Do not carry forward pre-rebuild hooks, local thread schemas, toolbox behavior, `--take-me-back`, or the old `smart` / `deep` / `rush` / `large` mode contract. The current modes are `low`, `medium`, `high`, and `ultra`; old mode names exist only as deprecated compatibility inputs or separately installable classic plugins.
-
-Amp deliberately evolves without a backwards-compatibility commitment, and its public manual is rolling rather than versioned. Refresh the npm version, `amp version`, `amp --help`, `amp plugins show-docs`, and the web manual together before implementation.
+Refresh baseline: `@ampcode/cli` [0.0.1789344113-g6e4515](https://www.npmjs.com/package/@ampcode/cli/v/0.0.1789344113-g6e4515), the npm `latest` dist-tag and the version pinned by the Homebrew formula in [ampcode/homebrew-tap](https://github.com/ampcode/homebrew-tap/blob/main/Formula/ampcode.rb), released 2026-09-14T00:01:53Z. Amp ships rolling builds and publishes no source or release tags, so the baseline is the newest published build. The docs at <https://ampcode.com/docs> are unversioned; they, the release news, and the installed baseline binary were read 2026-09-13. Plugin API types on this page are quoted from `amp plugins show-docs` of the baseline build, whose header carries `sitemap-lastmod: /docs/plugin-api 2026-09-01`. Where the docs and the binary disagree, the page follows the binary and flags the disagreement at the claim.
 
 ## Upstream sources
 
 | Surface | Source |
 | --- | --- |
-| Owner's manual: current modes, CLI, plugins, settings, remote control, pricing | <https://ampcode.com/manual> |
-| Generated Plugin API types and examples | <https://ampcode.com/manual/plugin-api> |
-| Stream JSON and legacy permission schemas | <https://ampcode.com/manual/appendix> · <https://ampcode.com/manual/appendix/legacy-permissions-rules.txt> |
-| TypeScript SDK and generated type reference | <https://ampcode.com/manual/sdk> · <https://ampcode.com/manual/sdk/typescript> |
-| Python SDK reference | <https://ampcode.com/manual/sdk/python> |
-| Current mode migration | <https://ampcode.com/news/the-dial> |
-| Current architecture, compaction, queuing, permissions | <https://ampcode.com/news/neo> · <https://ampcode.com/news/drop-the-neo> |
-| Remote control, multi-thread UI, and runner mode | <https://ampcode.com/news/agents-everywhere> · <https://ampcode.com/news/agents-anywhere> |
-| Binary/package distribution | <https://ampcode.com/news/npm-package-changes> · <https://www.npmjs.com/package/@ampcode/cli> |
-| Credentials, service boundaries, storage, and retention | <https://ampcode.com/security> |
+| Docs index | <https://ampcode.com/docs> (the older `/manual` paths redirect here) |
+| CLI, install, and update | <https://ampcode.com/docs/cli> |
+| Execute mode | <https://ampcode.com/docs/cli/execute-mode> |
+| Stream JSON schema | <https://ampcode.com/docs/cli/streaming-json> |
+| Settings and environment | <https://ampcode.com/docs/cli/settings> |
+| Runners and remote control | <https://ampcode.com/docs/cli/runners> · <https://ampcode.com/docs/cli/remote-control> |
+| Plugins guide | <https://ampcode.com/docs/customize/plugins> |
+| Plugin API type reference | <https://ampcode.com/docs/plugin-api> |
+| Tools and permissions | <https://ampcode.com/docs/tools#permissions> · <https://ampcode.com/notes/permissions> (permission rules) |
+| Modes and subagents | <https://ampcode.com/docs/models-and-subagents> · <https://ampcode.com/news/the-dial> · <https://ampcode.com/news/build-your-own-dial> |
+| Thread commands | <https://ampcode.com/docs/threads> |
+| Pricing and usage | <https://ampcode.com/docs/pricing> · <https://ampcode.com/news/explain-usage> |
+| SDKs | <https://ampcode.com/docs/sdk> |
+| Credentials and storage | <https://ampcode.com/security> |
+| Architecture and TUI changes | <https://ampcode.com/news/neo> · <https://ampcode.com/news/drop-the-neo> · <https://ampcode.com/news/so-long-tui-sidebar> |
+| Distribution | <https://www.npmjs.com/package/@ampcode/cli> · <https://ampcode.com/news/npm-package-changes> |
 
-The installed executable is an authoritative companion to the rolling pages:
+The installed binary answers for its own build. These commands are read-only:
 
-```sh
-amp version
-amp --help
-amp plugins --help
-amp plugins show-docs
-amp plugins show-agent-options --json
-amp tools list
+| Command | Emits |
+| --- | --- |
+| `amp version` | build token and release timestamp |
+| `amp --help` | every command, global flags, environment variables, and a settings reference |
+| `amp plugins show-docs` | the `@ampcode/plugin` declarations this build understands |
+| `amp plugins show-agent-options --json` | `models[]` (`id`, `provider`, `contextWindow`, `maxOutputTokens`, `capabilities.efforts`) and `builtinToolNames[]` |
+| `amp tools list` | active tools, including MCP tools |
+
+On the baseline build, `amp <command> --help` prints that command's help, but a nested `amp <command> <subcommand> --help` (for example `amp threads usage --help`) prints the top-level help instead.
+
+## Version and distribution
+
+`amp version` prints the build token, then a parenthesized release annotation:
+
+```text
+0.0.1789344113-g6e4515 (released 2026-09-14T00:01:53.000Z, 3h ago)
 ```
 
-`amp plugins show-docs` emits the `@ampcode/plugin` declarations understood by that exact binary. Prefer it over cached web text whenever the two disagree.
+The number after `0.0.` is the release time in Unix seconds. The relative age (`3h ago`) is part of the annotation.
 
-The pinned `amp --version` shape is `0.0.1783946745-g8c4c0a (released 2026-07-13T12:45:45.000Z)`. RimZ validates the leading numeric plus `-g<hex>` build token and normalizes this example to `0.0.1783946745-g8c4c0a`; release annotation and other prose stay outside the version field.
+Amp installs through the shell installer (`curl -fsSL https://ampcode.com/install.sh | bash`), the Homebrew formula `ampcode/tap/ampcode`, or the npm package `@ampcode/cli`, which Amp supports but does not recommend ([npm-package-changes](https://ampcode.com/news/npm-package-changes)). The CLI checks for and installs new builds in the background ([docs/cli](https://ampcode.com/docs/cli)).
 
-The executable and launch kind are both `amp`. Official installation paths are the direct shell/PowerShell installer, Homebrew (`ampcode/tap/ampcode`), and the `@ampcode/cli` npm package; npm is supported but not recommended. `amp update` refreshes direct installs, while `amp.updates.mode` controls automatic checking. Because this adapter targets only the latest architecture, preflight should reject a different version with the exact supported-version fix instead of guessing across Amp's intentionally moving surface.
+| Update control | Behaviour |
+| --- | --- |
+| `amp update` (alias `up`) | installs the latest release; `--target-version <version>` installs a specific one |
+| `amp update --porcelain` | prints `updated <version>` or `no update needed` to stdout |
+| `amp.updates.mode` | `auto` runs the update, `warn` shows a notification, `disabled` turns checking off |
+| `AMP_SKIP_UPDATE_CHECK=1` | skips the update check |
 
-## Recommended adapter shape
+## Surface index
 
-Use a RimZ-authored **system plugin** at `~/.config/amp/plugins/rimz.ts` as the interactive lifecycle seam. The plugin runs with the stock Amp TUI, receives stable `T-…` thread IDs on every event, can observe thread state, and preserves Amp's native terminal and web surfaces.
+Amp has no command-hook protocol, statusline feed, or interactive stdio RPC: neither the docs nor the baseline `amp --help` describe one. An in-process plugin is the interactive integration seam, and execute mode with stream JSON is the scripted one.
 
-Use `agent.start`, `tool.result`, and `agent.end` as durable lifecycle truth. Use `session.start` to register a thread and subscribe to its state. Use `tool.result`, rather than `tool.call`, for ordinary proof-of-work so an observation-only RimZ plugin does not enter Amp's decision path.
-
-Use `PluginThread.state` as synchronous state enrichment for `awaiting-approval` and `error`. A RimZ-owned approval mode can additionally register `tool.call`, await RimZ's per-request answer socket, and return Amp's decision object. Keep that path opt-in: `tool.call` is a request event with no neutral return, multiple plugin handler order is unspecified, and the public contract does not define how competing decisions compose.
-
-Use `PluginThread.messages({ full: true, … })` as the documented transcript read API and lifecycle-safe authority. Amp publishes no stable local transcript path or file schema for the current architecture. The private rewritten cache described below may enrich history and display best-effort, but its failure never synthesizes lifecycle or replaces the plugin's final-answer authority. Treat `amp threads export` and `amp threads raw` output as opaque until their schemas are officially documented or captured and version-gated from the exact supported binary.
-
-Use `amp -x --stream-json --plugin-ready-timeout` for supervised runs. Streaming JSON is the only documented CLI transport that carries thread identity, cwd, mode/effort, tool calls, per-response token usage, terminal result, and subagent correlation. The plugin-ready wait is required because execute mode may otherwise start before `agent.start` / `agent.end` handlers are ready.
-
-Amp publishes no command-hook protocol, statusline transport, OpenTelemetry schema, ACP server, or interactive stdio RPC in the current CLI. Do not adapt a similarly named surface from another agent or from pre-rebuild Amp.
-
-The candidate transport matrix is:
-
-| RimZ concern | Primary upstream surface | Gap / backstop |
+| Concern | Upstream surface | What it lacks |
 | --- | --- | --- |
-| session identity | plugin event `thread.id` (`T-${string}`) | `session.start` also fires when an existing thread is opened or switched to |
-| turn start/end | `agent.start` / `agent.end` | execute mode can skip them without `--plugin-ready-timeout` |
-| proof of work | `tool.result` | `tool.call` is the blocking policy seam, not a neutral observation seam |
-| reasoning → acting | `filesModifiedByToolCall(tool.result)` | helper covers known edit/create/apply-patch and in-place `sed`; tolerate new tools |
-| permission wait | `PluginThread.state == "awaiting-approval"` | no ask details or answer handle in the state value |
-| RimZ-owned permission decision | opt-in `tool.call` handler + per-request socket | multi-plugin decision composition and failure policy are undocumented |
-| plan approval / user question | none | a plugin may add its own UI/tool, but stock Amp exposes no dedicated event |
-| compaction | none | transcript reads expose post-compaction context, but no lifecycle event or percentage |
-| subagents | execute JSONL `parent_tool_use_id` | interactive plugin events expose no parent/child relation for built-in subagents |
-| model / mode / effort | `thread.agent()`; execute `system.init` mode/effort | built-in agent definitions expose mode, not the backing model; mode→model wiring changes |
-| context usage | execute assistant `usage` and `max_tokens` | plugin transcript messages omit usage; no interactive context percentage API |
-| live cost | none | `amp threads usage` is a human CLI; no documented machine schema |
-| transcript | `PluginThread.messages()` | no documented local transcript file |
-| message queue / steer | `appendUserMessage(..., { steer })` | RimZ's pane-first message contract still selects pane send for ordinary human text |
-| session end | none | pane/process liveness must reap; `session.start` explicitly has no matching end event |
-| auth identity | `PluginSystem.user`; `amp usage` | plugin identity exists only while Amp is running; usage output is human text |
-| account balance / spend | `amp usage`; `amp threads usage <id>` | no documented JSON; Enterprise analytics API is a separate gated surface |
-| remote control | built-in web control and runner mode | one CLI process can host several foreground/background threads |
+| thread identity | plugin event `thread.id` (`T-${string}`); stream JSON `session_id` | none |
+| turn start and end | [`agent.start`](#agentstart) and [`agent.end`](#agentend) | execute mode skips them unless plugins are ready ([readiness](#runtime-and-execute-mode-readiness)) |
+| tool activity | [`tool.result`](#toolresult) | none |
+| file edits | `amp.helpers.filesModifiedByToolCall` | covers edit, create, `apply_patch`, and in-place `sed` only |
+| tool decision | [`tool.call`](#toolcall) | handler timeout, cancellation, and multi-plugin composition are undocumented |
+| permission wait | [`ThreadState`](#thread-state-and-control) `awaiting-approval` | no tool, arguments, question, or resolver |
+| plan approval, user question | none | no event or state |
+| compaction | none | no event, percentage, or summary marker ([compaction](#compaction-and-context)) |
+| subagents | `PluginThread.parentThreadID()`; stream JSON `parent_tool_use_id` | no subagent start or stop event ([subagents](#subagents-and-concurrent-threads)) |
+| mode, model, effort | `thread.agent()`; stream JSON `agent_mode` | a built-in agent definition carries the mode only |
+| context usage | stream JSON assistant `usage` | no interactive API; plugin messages carry no usage |
+| cost | `amp usage`, `amp threads usage` | human text only |
+| transcript | [`PluginThread.messages()`](#transcript) | no documented local file |
+| steering | `appendUserMessage(..., { steer: true })`; stream JSON input `steer` | none |
+| session end | none | `session.start` has no matching end event |
+| identity | `PluginSystem.user` | available only inside a running plugin |
+| remote control | cross-client access, runners, orbs ([remote control](#remote-control-runners-and-executors)) | plugin executor kind is `local`, `remote`, or `unknown` only |
 
-## Plugin discovery and runtime
+## Plugins
 
-Amp plugins are TypeScript files executed with Bun. A plugin default-exports a function receiving `PluginAPI`; that function runs once when the plugin loads. Plugins are long-lived processes and may serve multiple threads concurrently, so keep all per-thread state keyed by `ThreadID` and make handler code concurrency-safe.
+### Discovery
 
-Discovery locations:
+Amp plugins are TypeScript or JavaScript programs executed with Bun. A plugin is a single `.ts` or `.js` file, or a directory whose entry is `index.ts` or `index.js` (`index.ts` wins when both exist) ([plugins guide](https://ampcode.com/docs/customize/plugins)).
 
-| Scope | Location | RimZ implication |
+| Scope | Location | Precedence on a name clash |
 | --- | --- | --- |
-| project | `.amp/plugins/*.ts` | repository executable surface; project trust must cover it |
-| system | `~/.config/amp/plugins/*.ts` | preferred RimZ-owned install location |
-| global workspace | centrally configured by Amp workspace | limited experimental release; administrator-controlled executable surface |
+| project | `.amp/plugins/` | 1 |
+| system | `$XDG_CONFIG_HOME/amp/plugins/`, default `~/.config/amp/plugins/` (Windows `%USERPROFILE%\.config\amp\plugins\`) | 2 |
+| personal | User Settings on ampcode.com | 3 |
+| workspace | Workspace Settings, pushed by workspace admins and loaded for every member | 4 |
 
-Install one bounded system file such as `~/.config/amp/plugins/rimz.ts`. Make install, diff, upgrade, and uninstall idempotent by path. Amp's command palette actions `plugins: reload` and `plugins: list` reload and inspect plugins; the CLI also exposes `amp plugins add/remove/update/list`, but a RimZ-owned local file gives the hook installer an auditable artifact without depending on a remote plugin URL.
+The plugins guide and `amp plugins --help` name all four scopes. The `show-docs` header of the baseline build lists only project, system, and "Global plugins (limited experimental release)".
 
-Plugins apply to interactive `amp` sessions and `amp --execute`. Plugin UI mirrors between TUI and web surfaces. The API provides `ctx.logger` / `amp.logger`; use those for diagnostics and reserve any RimZ helper stdout for the helper's structured response.
+| Command | Effect |
+| --- | --- |
+| `amp plugins add <url>` | installs a single-file plugin from a URL; `--target workspace` installs it into `.amp/plugins/` |
+| `amp plugins remove` (alias `rm`) | removes an installed plugin; in the baseline help, absent from the docs |
+| `amp plugins update [<name>]` | updates installed plugins or one imported shared plugin |
+| `amp plugins list` (alias `ls`) | lists loaded plugins of all four scopes |
+| `amp plugins import` | imports a shared personal plugin into a plugin repository checkout |
+| `amp plugins repositories` (alias `repos`) | lists Personal Plugins and Workspace Plugins repositories; `amp clone` checks one out |
+| `amp plugins show-agent-options` | models and built-in tool names for plugin agents |
+| `amp plugins exec` | executes a plugin with a given event |
+| `amp plugins show-docs` | the plugin API declarations of this build |
+| palette `plugins: reload` | reloads plugins; the guide also names `amp plugins reload`, which the baseline help does not list |
 
-The public API says handler order is undefined when multiple plugins listen to the same event. It does not document request-result merge precedence, handler timeout, or exception/fail-open behavior. Capture all three before shipping a `tool.call` decision handler. Observation handlers should avoid changing results: `tool.result` may return `undefined`, `agent.start` may return `{}`, and `agent.end` may return nothing.
+### Runtime and execute-mode readiness
 
-Execute mode starts as soon as its turn is ready, which may beat plugin startup. `--plugin-ready-timeout` waits until plugins are ready or the bound expires; a bare flag uses 10 seconds, an explicit value may be at most 300 seconds, and `0` disables the wait. RimZ supervised launches should always pass a nonzero value and treat expiry as a failed precondition rather than silently accepting missing lifecycle events.
+A plugin default-exports a function that receives `PluginAPI`; the function runs once when the plugin loads. Plugins are long-lived processes that may serve several threads concurrently, so per-thread state must be keyed by `ThreadID`. An optional `export const description` must be a static string literal of at most 300 characters.
 
-## Plugin lifecycle events
+`amp.on(event, handler)` registers a handler and returns a `Subscription`. The type `PluginHandlerResult` splits events in two: `session.start` is fire-and-forget and returns `void`, while `tool.call`, `tool.result`, `agent.start`, and `agent.end` are request events whose handlers return a result (the `tool.result` and `agent.end` result types admit `void`). When several plugins listen to one event, handler order is undefined.
 
-The complete current event catalog is five events:
+`amp.onDispose(callback)` runs cleanup when the plugin is unloaded, reloaded, or the host shuts down gracefully. All of a plugin's dispose callbacks share a budget of about 3 seconds, after which the process is terminated; they do not run when the plugin crashes or is killed with SIGKILL.
+
+Logging goes through `amp.logger.log` or `ctx.logger.log`; handler log messages are appended to the handler's trace span events.
+
+Execute mode can start its turn before plugins finish loading, which skips `agent.start` and `agent.end`. `--plugin-ready-timeout [seconds]` makes execute mode wait for plugin readiness first. The wait is off unless the flag is set; a bare flag waits 10 seconds, the maximum is 300, and `0` disables it.
+
+### Events
+
+The event catalog is five events:
 
 ```text
 session.start
@@ -110,11 +133,11 @@ session.start
        └─ agent.end
 ```
 
-There is no `session.end`, compaction, model-change, effort-change, notification, subagent-start, or subagent-stop event.
+There is no `session.end`, compaction, model-change, notification, or subagent event. Every handler receives a context with `logger`, `$` (shell runner), `ui`, `ai`, `system`, an optional trace `span`, and `thread: PluginThread`.
 
-### `session.start`
+#### `session.start`
 
-Fires when Amp starts a thread session: the first message in a new thread, or opening/switching to an existing thread. Multiple threads can remain active concurrently in one CLI.
+Fires when Amp starts a thread session: the first message in a new thread, or opening or switching to an existing thread.
 
 ```ts
 interface SessionStartEvent {
@@ -122,11 +145,9 @@ interface SessionStartEvent {
 }
 ```
 
-Use it to emit `registered`, bind the thread ID, subscribe to `ctx.thread.state`, and read the thread's agent definition. Do not interpret it as a new conversation or a fresh turn.
+#### `agent.start`
 
-### `agent.start`
-
-Fires when a user prompt starts a turn.
+Fires when the user submits a prompt, initial or reply.
 
 ```ts
 interface AgentStartEvent {
@@ -140,13 +161,11 @@ interface AgentStartResult {
 }
 ```
 
-`id` is the user-message ID. Current thread-actor threads use stable string IDs; the union retains numeric IDs for legacy TUI threads. A handler may append context to the user message, optionally visible in the UI. A RimZ observation handler returns no added message.
+`id` is the user message ID: a stable string in current thread-actor threads, a number in legacy TUI threads. A returned `message` is appended after the user's content and shown in the UI only when `display` is true. Calling `ctx.thread.cancel()` during `agent.start` prevents the turn from starting.
 
-Map this event to `turn_started`, with `message` as prompt/task and `thread.id` as `agent_id`.
+#### `tool.call`
 
-### `tool.call`
-
-Fires before execution and requires a decision result from every registered handler.
+Fires before a tool executes. The handler returns the decision.
 
 ```ts
 interface ToolCallEvent {
@@ -164,13 +183,19 @@ type ToolCallResult =
   | { action: 'error'; message: string }
 ```
 
-`allow` runs the original input. `reject-and-continue` blocks this call and returns the message to the agent. `modify` replaces the input. `synthesize` bypasses execution and supplies a result. `error` stops the thread worker and displays an ephemeral error.
+| `action` | Effect |
+| --- | --- |
+| `allow` | runs the tool with its original input |
+| `reject-and-continue` | blocks this call and returns `message` to the agent, which continues |
+| `modify` | runs the tool with `input` in place of the original |
+| `synthesize` | skips execution and returns `result` as the tool output |
+| `error` | stops the thread worker and shows an ephemeral error |
 
-Amp publishes no deadline for an async handler and no documented cancellation signal in `PluginEventContext`. Verify indefinite waits, process exit, and UI cancellation against the supported binary before using this event as RimZ's blocking bridge.
+The event context carries no cancellation signal, and the API documents no deadline for an async handler.
 
-### `tool.result`
+#### `tool.result`
 
-Fires after execution and before the result is sent back to the model.
+Fires after a tool executes and before its result goes back to the model.
 
 ```ts
 interface ToolResultEvent {
@@ -191,11 +216,11 @@ type ToolResultResult =
   | void
 ```
 
-Return nothing to preserve the native result. Map every root-thread result to proof-of-work; mark editing only when `filesModifiedByToolCall(event)` returns one or more file URIs. Tool failure is activity evidence, not a completed-turn verdict; `agent.end.status` owns that verdict.
+Returning `undefined` keeps the native result; returning an object replaces it.
 
-### `agent.end`
+#### `agent.end`
 
-Fires when Amp finishes the turn started by the paired user message.
+Fires when the agent finishes handling the prompt that started the turn.
 
 ```ts
 interface AgentEndEvent {
@@ -209,48 +234,57 @@ interface AgentEndEvent {
 type AgentEndResult = { action: 'continue'; userMessage: string } | void
 ```
 
-`messages` contains all messages since `agent.start`, including the starting user message. `done` maps to a clean `turn_ended`; `error` and `cancelled` map to errored completion unless a later implementation captures a distinct provider-park marker. Returning `continue` appends a user message and starts another turn, so the RimZ observation path returns nothing.
+`message` and `id` identify the prompt that started the turn. `messages` holds every message since `agent.start`, including that prompt, in the [transcript schema](#transcript). Returning `continue` sends `userMessage` and starts another turn.
 
-## Thread state and control
+### Thread state and control
 
-Every plugin event context carries `thread: PluginThread`. The stable state vocabulary is:
+`ThreadState` is the agent activity state of one thread:
 
-```ts
-type ThreadState = 'idle' | 'running' | 'awaiting-approval' | 'error'
-```
+| State | Upstream meaning |
+| --- | --- |
+| `idle` | the agent is not working; the last turn, if any, has finished |
+| `running` | inference or tool execution in progress |
+| `awaiting-approval` | blocked waiting for a tool approval |
+| `error` | the thread has an active error |
 
-| State | Upstream meaning | RimZ use |
-| --- | --- | --- |
-| `idle` | no work in flight; last turn finished | enrichment only; `agent.end` is the durable boundary |
-| `running` | inference or tool execution in progress | heartbeat / missed-start reconciliation |
-| `awaiting-approval` | blocked on a tool approval | `awaiting_input { permission }`, without prompt detail |
-| `error` | active thread error | failure enrichment / missed-end reconciliation |
-
-`PluginThread` exposes:
+Each event context's `thread` is a `PluginThread`:
 
 ```ts
 interface PluginThread {
   id: `T-${string}`
   agent(): Promise<Agent>
+  parentThreadID(): Promise<ThreadID | null>
   readonly title: Observable<string | null> & { get(): Promise<string | null> }
   readonly state: Observable<ThreadState> & { get(): Promise<ThreadState> }
   waitForResponse(options?: { timeoutMs?: number }): Promise<ThreadAssistantMessage>
   cancel(): Promise<void>
+  setVisibility(visibility: 'private' | 'workspace'): Promise<void>
+  setMultiplayer(options: { ttlSeconds: number | null }): Promise<void>
   messages(options?: ThreadMessagesOptions): Promise<ThreadMessage[]>
   append(messages: UserMessage[]): Promise<void>
   appendUserMessage(message: UserMessage, options?: { steer?: boolean }): Promise<void>
 }
+
+interface UserMessage {
+  type: 'user-message'
+  content: string
+}
 ```
 
-`waitForResponse` waits until the thread has been running or awaiting approval and returns to idle, then returns the last assistant message. It rejects on `error` or timeout; the default timeout is ten minutes. `cancel()` stops the current turn. `appendUserMessage(..., { steer: true })` marks a busy-thread message as steering so Amp prefers it at the next interruption point.
+| Member | Behaviour |
+| --- | --- |
+| `parentThreadID()` | the direct parent recorded when the thread was created with a `parentThreadID`, or `null`; becomes `null` if the parent is deleted; supported only for the plugin's current thread |
+| `waitForResponse` | waits until the thread has been `running` or `awaiting-approval` and returns to `idle`, then resolves with the last assistant message; rejects on `error` or timeout (default 10 minutes) |
+| `cancel()` | stops the current turn |
+| `setVisibility` | makes the thread private or workspace-visible; private disables multiplayer; the user must own the thread |
+| `setMultiplayer` | enables multiplayer for 5 minutes to 7 days, or disables it with `null`; requires an orb thread that is already shared |
+| `appendUserMessage(..., { steer: true })` | when the thread is busy, queues the message as steering, preferred when the thread next dequeues work |
 
-`amp.activeThread` is an observable plus a synchronous `.current` snapshot containing `{ id }` or `null`. It identifies the thread focused in the UI; background thread events continue to arrive. Compare each event's ID to `activeThread.current` before treating it as the pane-visible agent.
+`amp.activeThread` is an observable of the thread the user is focused on in the UI, with a synchronous `.current` snapshot of `{ id }` or `null`. Events for background threads still arrive, and the type docs direct plugins to compare `event.thread.id` with `amp.activeThread.current` to tell the focused thread from a background one. `amp.threads.get(threadID)` returns a `PluginThread` for any thread ID.
 
-The API can address any known thread through `amp.threads.get(threadID)`. This can support explicit remote steering or cancellation, but ordinary `rimz message` continues to use the pane send path to preserve RimZ's cross-backend interaction contract.
+### Transcript
 
-## Transcript schema
-
-`PluginThread.messages()` is the stable plugin-facing transcript read API. Defaults are `{ from: "end", limit: 10 }`; `limit` is clamped to 20, so page with `offset`. `roles` may filter to `user` / `assistant`.
+`PluginThread.messages()` reads a thread in a stable plugin-facing schema.
 
 ```ts
 interface ThreadMessagesOptions {
@@ -262,9 +296,13 @@ interface ThreadMessagesOptions {
 }
 ```
 
-By default, a compacted thread returns what the next inference sees: the latest compaction summary represented as a user message, followed by messages after the compaction cut point. `{ full: true }` returns the entire transcript including compacted-away messages.
-
-The message union is:
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `full` | `false` | `false` reads what the next inference turn sees: after a compaction, the latest compaction summary (as a user message) and the messages from the cut point on; `true` reads the whole transcript, compacted-away messages included |
+| `from` | `'end'` | end of the thread to count from |
+| `offset` | `0` | messages to skip from `from` |
+| `limit` | `10` | clamped to 20; page with `offset` |
+| `roles` | all | filter to `user` and/or `assistant` |
 
 ```ts
 type ThreadMessage = ThreadUserMessage | ThreadAssistantMessage | ThreadInfoMessage
@@ -293,158 +331,295 @@ interface ThreadInfoMessage {
   id: number | string
   content: Array<{ type: 'text'; text: string }>
 }
+
+type PluginToolResult =
+  | string
+  | Array<
+      | { type: 'text'; text: string }
+      | { type: 'image'; mimeType: string; data: string }
+      | { type: 'image'; mimeType: string; url: string }
+    >
 ```
 
-Do not render `thinking` as ordinary assistant text. Correlate tool blocks by assistant `tool_use.id` ↔ user `tool_result.toolUseID`. The Plugin API also provides `toolCallsInMessages(messages)` to return completed call/result pairs.
+A `tool_use.id` in an assistant message pairs with a `tool_result.toolUseID` in a later user message; `amp.helpers.toolCallsInMessages(messages)` returns the completed pairs. The message types carry no timestamp, model, token usage, cost, or compaction marker, and Amp documents no local transcript file.
 
-These message types carry no timestamp, model, token usage, cost, parent-thread ID, transcript path, or explicit compaction marker. Amp's security reference says the client keeps local thread history and the server syncs/stores threads, but it publishes no current local on-disk schema. Build correctness against `PluginThread.messages()`; confine any discovered-cache use to tolerant, best-effort enrichment.
+### Tools and helpers
 
-## Private local cache (unsupported upstream surface)
+Tool names vary with mode, plugins, MCP servers, and build. `amp tools list` prints the tools active for the current settings, and `amp plugins show-agent-options --json` prints the built-in names offered to plugin agents. On the baseline build `builtinToolNames` is:
 
-Amp currently rewrites one JSON object per thread under `${AMP_DATA_DIR:-~/.local/share/amp}/threads/T-*.json`. This is an implementation detail, not part of the Plugin API or manual. The schema evidence for this section is ccusage's Amp adapter at commit [`ba99c0d09b6db9fd64a6187751e8b88a019f991a`](https://github.com/ryoppippi/ccusage/tree/ba99c0d09b6db9fd64a6187751e8b88a019f991a/rust/crates/ccusage/src/adapter/amp) plus captured current and legacy objects encoded as RimZ fixtures.
-
-The root carries `id`, `messages`, and optionally `usageLedger.events`. Message IDs and ledger references occur as strings or numbers. Visible message `content` occurs as a string in captured caches and as the public block array described above; only user/assistant text is conversation content. Current assistant records carry `usage.model`, `usage.timestamp`, `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`, and sometimes `totalTokens`. Legacy ledger events carry `id`, `timestamp`, `model`, `toMessageId`, and `tokens.{input,output,total}`; correlating `toMessageId` to assistant `messageId` recovers cache creation/read counts from the message usage object.
-
-Treat the file as a rewritten object. Parse it whole, skip malformed child rows, and reject malformed root JSON or a missing/mismatched root ID. Prefer ledger usage only when at least one ledger row is usable, otherwise fall back to current assistant usage. A total-only record preserves the total approximately as output so token history remains visible. A valid empty thread authoritatively replaces prior cached entries; an unreadable, torn, malformed, or mismatched rewrite preserves the previous good fold. `$AMP_DATA_DIR` is Amp's single live data root for session binding even though ccusage additionally accepts comma-separated archive roots for its fleet reports.
-
-## Tool classification
-
-Tool names are dynamic across modes, plugins, MCP servers, and releases. Discover the exact runtime list with `amp tools list` and the broader built-in plugin-agent list with `amp plugins show-agent-options --json`. The refresh binary exposed `apply_patch`, `shell_command`, and `shell_command_status` in its current mode, while the broader built-in catalog also included `create_file`, `edit_file`, `Task`, `Read`, `oracle`, and others.
-
-Prefer Amp's helpers over a hard-coded edit list:
-
-```ts
-amp.helpers.shellCommandFromToolCall(event)  // { command, dir? } | null
-amp.helpers.filesModifiedByToolCall(event)  // URI[] | null
-amp.helpers.filePathFromURI(uri)             // local path
-amp.helpers.toolCallsInMessages(messages)    // paired calls/results
+```text
+apply_patch create_file create_thread edit_file find_thread finder get_thread_status
+librarian list_agent_modes oracle painter Read read_mcp_resource read_thread
+read_web_page send_thread_message shell_command shell_command_kill
+shell_command_status skill Task view_media wait_for_threads web_search
 ```
 
-`filesModifiedByToolCall` officially covers edit/create/apply-patch tools and in-place `sed` shell commands. Its positive result is RimZ's file-edit proof. Treat every other completed tool as work proof. Keep unknown tool names valid; plugin and MCP names expand the vocabulary at runtime.
+MCP tools are named `mcp__<server>__<tool>`. Plugin tools register under their bare names and also match `plugin__<pluginName>__<toolName>` in agent tool lists.
 
-## Permissions and blocking asks
+| Helper | Returns |
+| --- | --- |
+| `amp.helpers.shellCommandFromToolCall(call)` | `{ command, dir? }` for a `Bash` or `shell_command` call, else `null` |
+| `amp.helpers.filesModifiedByToolCall(callOrResult)` | file URIs modified by an edit, create, or `apply_patch` tool or an in-place `sed` command, else `null` |
+| `amp.helpers.filePathFromURI(uri)` | local filesystem path |
+| `amp.helpers.toolCallsInMessages(messages)` | `{ call, result }` pairs of completed calls |
+| `amp.helpers.isPluginUINotAvailableError(error)` | whether an error means no plugin UI is available |
 
-Current Amp runs tools without approval by default. The old `--dangerously-allow-all` behavior is now the default, and the latest CLI no longer advertises that flag. If settings contain `amp.permissions`, `amp.guardedFiles.allowlist`, or `amp.dangerouslyAllowAll: false`, Amp activates its bundled legacy-permissions plugin; Amp recommends custom Plugin API policy for new integrations.
+### Rest of the Plugin API
 
-The Plugin API's `tool.call` + `ctx.ui.confirm/input/select` is the current native policy seam. While a native confirmation is open, `PluginThread.state` can report `awaiting-approval`. The state does not carry tool name, arguments, question text, options, or a resolver; a RimZ adapter that only observes another plugin's dialog can surface waiting but cannot implement `rimz answer` for it.
+The members below are outside the lifecycle path. Their full declarations are in `amp plugins show-docs`.
 
-A RimZ-owned decision bridge can hold its `tool.call` handler, send `{ thread.id, toolUseID, tool, input }` to a per-request RimZ socket, and return `allow` or `reject-and-continue` after the answer. This gives `rimz answer` a real resolver without taking over Amp's transcript. Verify handler cancellation and multi-plugin composition first, and make this bridge opt-in rather than silently adding prompts to Amp's default posture.
+| Member | Purpose |
+| --- | --- |
+| `amp.registerTool(definition)` | adds a tool the agent can call; `execute` returns `PluginToolResult` |
+| `amp.registerCommand(id, options, handler)` | adds a command palette action with enabled, disabled, or hidden availability |
+| `amp.registerSkill({ path })` | registers a skill directory of a directory plugin as `<plugin-name>:<skill-name>` |
+| `ctx.ui.notify`, `input`, `confirm`, `select` | dialogs; `confirm` also takes editable `fields`, `select` takes `allowOther` |
+| `amp.ai.generate`, `amp.ai.ask` | thread-billed text, structured object, or yes/no classification |
+| `amp.attachments.upload` | uploads image bytes (at most 4.9 MB decoded, 8000 px per side) and returns a URL |
+| `amp.configuration` | observable settings with `get`, `update`, and `delete` against workspace or global targets |
+| `amp.system` | `open(url)`, `workspaceRoot`, `ampURL`, `user`, `executor` ([identity](#authentication-account-and-usage)) |
+| `amp.$` | tagged-template shell runner resolving `{ exitCode, stdout, stderr }` |
+| `amp.createAgent(config)`, `amp.getBuiltinAgent(mode)` | agent handles that create threads or run one-shot turns ([modes](#models-modes-and-effort)) |
+| `amp.registerAgentMode(definition)` | adds a plugin mode to mode pickers; needs a matching `// @amp-agent-mode` comment |
+| `amp.createWebhook(options)` | durable at-least-once webhook for a plugin in an Amp-managed orb |
+| `amp.experimental` | unstable APIs, `createStatusItem`, and compatibility aliases |
+| `defineAgent`, `defineTool` | static config for declarative agent directories (`agent.ts`, `tools/<name>.ts`) |
 
-Amp exposes no native plan-approval event and no built-in general user-question event. Plugins can add a custom question tool using `ctx.ui.input/select`, but installing such a tool changes the agent's available tool set and does not expose an external resolver. Declare plan approval and user-question answering unsupported until Amp publishes a native event or RimZ deliberately owns and documents a custom tool.
+## Private local thread cache
 
-The legacy permission rule format remains relevant for users who already opted in. First match wins; actions are `allow`, `reject`, `ask`, or `delegate`; `context` may restrict a rule to `thread` or `subagent`. `delegate` runs an external program with tool arguments as JSON on stdin and exports `AMP_THREAD_ID`, `AGENT_TOOL_NAME`, and `AGENT=amp`; exit `0` allows, `1` asks in Amp's UI, and `>=2` rejects with stderr surfaced to the model. This is a useful compatibility seam but not the recommended new RimZ transport because it covers only calls matched by legacy rules and hands `ask` back to Amp's UI.
+Amp has at some builds written one JSON object per thread under `${AMP_DATA_DIR:-~/.local/share/amp}/threads/T-*.json`. The file is an implementation detail outside the Plugin API and the docs. The schema evidence is ccusage's Amp adapter at commit [`ba99c0d`](https://github.com/ryoppippi/ccusage/tree/ba99c0d09b6db9fd64a6187751e8b88a019f991a/rust/crates/ccusage/src/adapter/amp) and objects captured into RimZ's adapter fixtures; `AMP_DATA_DIR` is anchored there only.
+
+Whether the baseline build writes this file is unverified. On the host that ran the baseline binary, `~/.local/share/amp/` held `device-id.json`, `history.jsonl`, `secrets.json`, and `session.json` and no `threads/` directory, while `amp threads list` showed two threads.
+
+The file is rewritten whole on each update. Its root carries `id`, `messages`, and optionally `usageLedger.events`.
+
+| Path | Shape |
+| --- | --- |
+| `id` | the `T-…` thread ID |
+| `messages[].id` / `messageId` | string or number |
+| `messages[].content` | a string, or the block array of the [transcript schema](#transcript) |
+| `messages[].usage` (assistant, current objects) | `model`, `timestamp`, `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`, sometimes `totalTokens` |
+| `usageLedger.events[]` (legacy objects) | `id`, `timestamp`, `model`, `toMessageId`, `tokens.{input,output,total}` |
+
+A legacy ledger event's `toMessageId` references an assistant message's `messageId`, whose `usage` holds the cache creation and cache read counts the ledger omits. RimZ's parsing rules for this file are in [adapter_amp.md](../../internals/agents/adapter_amp.md#context-and-transcript).
+
+## Permissions
+
+Amp runs tools without asking for approval by default. The docs direct users to a plugin for control over tool use ([tools](https://ampcode.com/docs/tools#permissions)): a `tool.call` handler decides, and `ctx.ui.confirm`, `input`, or `select` asks the user. While a tool approval is open, the thread state is `awaiting-approval`; the state carries no tool name, arguments, question, options, or resolver.
+
+Amp has no native plan-approval event and no built-in user-question event. A plugin can register its own question tool with `amp.registerTool` and `ctx.ui`, which adds that tool to the agent's tool set.
+
+The baseline binary ships permission rules, which the current docs do not describe. `amp --help` lists the settings `amp.permissions` ("Permission rules for tool calls"), `amp.guardedFiles.allowlist`, and `amp.dangerouslyAllowAll` ("Disable all command confirmation prompts"), and the command `amp permissions` with `list`, `test`, `edit`, and `add`. The rules as published at [notes/permissions](https://ampcode.com/notes/permissions):
+
+| Aspect | Behaviour |
+| --- | --- |
+| storage | the `amp.permissions` settings key |
+| matching | Amp checks the rules in order before every tool call and applies the first match |
+| actions | `allow`, `reject`, `ask`, `delegate` |
+| `delegate` | runs a helper program with the tool parameters as JSON on stdin; `AGENT_TOOL_NAME` names the tool |
+| delegate exit code | `0` allows, `1` asks the user, `2` rejects with stderr shown to the model |
+
+`amp.mcpPermissions` allows or blocks MCP servers by pattern ([settings](https://ampcode.com/docs/cli/settings)); the baseline help does not list it.
 
 ## Compaction and context
 
-Current Amp automatically compacts a thread at 90% of its context window, summarizes the current context, starts a fresh window with that summary, and continues. The current Plugin API has no pre/post compaction event, percentage, token counter, or explicit summary marker.
+Amp compacts a thread automatically when its estimated input tokens cross a threshold: a configured percentage of the context window, 90% by default. A custom plugin agent can set an absolute `compactionThresholdTokens` instead. A system model writes the summary ([models and subagents](https://ampcode.com/docs/models-and-subagents)).
 
-`messages()` exposes the effect after the fact: the default view begins at the latest compaction summary, while `{ full: true }` includes discarded context. The summary is represented as a normal user message in the public plugin schema, so content inspection cannot safely open or close RimZ's compaction bracket.
-
-The supported upstream surface leaves interactive context usage and compaction lifecycle unavailable. RimZ can partially enrich interactive tokens from the private cache at turn boundaries and on a producer tick, but the cache has no stable context-window divisor. Execute mode carries per-response token composition and `max_tokens`, but that transport applies only to RimZ-supervised runs and should not be projected onto unrelated interactive threads.
+No plugin event marks compaction, and no API reports a context percentage or token count for an interactive thread. `messages()` shows the effect afterwards: the default view starts at the latest summary, which is an ordinary user message, and `{ full: true }` includes the discarded context. Per-response token counts exist only in [stream JSON](#supervised-runs-and-stream-json), and each model's `contextWindow` is listed by `amp plugins show-agent-options --json`.
 
 ## Models, modes, and effort
 
-The current built-in dial is `low`, `medium`, `high`, and `ultra`. The modes express capability/cost tiers, and Amp changes their backing models as models improve. Do not hard-code today's mode→model table as adapter protocol.
+The dial has four built-in modes: `low`, `medium`, `high`, and `ultra`. Each mode combines a model, reasoning effort, system prompt, tools, and Oracle, and Amp changes the backing models over time. Settings → Mode Dial lets a user or workspace admin pick the model and effort behind each mode's main agent, Oracle, and subagents, and put plugin agents on the dial; personal choices take precedence over the workspace dial ([build-your-own-dial](https://ampcode.com/news/build-your-own-dial), 2026-09-10). `Ctrl+S` switches modes in the CLI.
 
-`thread.agent()` returns an `Agent` whose definition is either:
+| Flag | Values |
+| --- | --- |
+| `-m, --mode <value>` | `low`, `medium`, `high`, `ultra`, or a plugin mode by key or label, case-insensitive; controls the model, system prompt, and tool selection |
+| `--features <value>` | `fast` (faster serving at a premium) or `pro` (GPT-5.6 Pro, OpenAI API only) |
+| `--fast` | alias for `--features fast` |
+
+The baseline `amp --help` lists no `--effort` flag, and no docs page read for this baseline documents one. Whether the CLI accepts `--effort` is unverified.
+
+The modes `smart`, `deep`, and `rush` are deprecated. Existing threads in them keep working; new threads spawned from them start in the replacement mode: `rush` becomes `low`, `smart` and `deep` become `medium`.
+
+`thread.agent()` returns an `Agent` whose `definition` is one of two shapes:
 
 ```ts
-type AgentDefinition =
-  | { kind: 'builtin-agent'; mode: 'low' | 'medium' | 'high' | 'ultra' | 'smart' | 'deep' | 'rush'; reasoningEffort?: AgentReasoningEffort }
-  | { kind: 'agent-definition'; name?: string; model: `${provider}/${string}`; instructions: string; tools?: AgentToolSelection; reasoningEffort?: AgentReasoningEffort; display?: { label: string; color?: string } }
-
+type BuiltinAgentMode = 'low' | 'medium' | 'high' | 'ultra' | 'smart' | 'deep' | 'rush'
 type AgentReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+interface BuiltinAgentDefinition {
+  readonly kind: 'builtin-agent'
+  mode: BuiltinAgentMode
+}
+
+interface CustomAgentDefinition extends CreateAgentConfig {
+  readonly kind: 'agent-definition'
+  model: `${string}/${string}`
+  instructions: string
+}
+
+interface CreateAgentConfig {
+  name?: string
+  extends?: BuiltinAgentMode
+  model?: `${string}/${string}`
+  instructions?: string
+  tools?: AgentToolSelection
+  reasoningEffort?: AgentReasoningEffort
+  oracle?: { model?: `${string}/${string}`; effort?: AgentReasoningEffort }
+  subagents?: { model?: `${string}/${string}`; effort?: AgentReasoningEffort }
+  compactionThresholdTokens?: number
+  features?: readonly ('fast' | 'pro' | string)[]
+  display?: { label: string; color?: string }
+}
 ```
 
-For a built-in agent, record the stable mode and optional effort; the definition does not expose the backing model. For a custom plugin agent, record its explicit model and effort. Execute stream `system.init` separately carries `agent_mode?` and `reasoning_effort?`.
-
-The current CLI exposes `-m/--mode` and `--effort`. On the refresh binary the two surfaces disagree: `amp --help` advertises `-m, --mode (low, medium, high)`, while `amp plugins show-docs` still types `BuiltinAgentMode = 'low' | 'medium' | 'high' | 'ultra' | 'smart' | 'deep' | 'rush'`. Treat the plugin type as the wider truth and the help line as a lagging summary; RimZ profile launch passes a configured mode verbatim rather than validating it against the narrower help set, and passes a mode only when the user configured one. Suggested permission posture mapping is: `auto` and `yolo` use Amp's upstream default; `ask` requires the explicit RimZ/plugin approval policy; `plan` has no native flag and requires prompt-level “do not edit” guidance rather than pretending Amp has a plan state.
+A built-in definition names the mode and carries no model or reasoning effort. A custom definition carries its resolved `model` (filled from the extended mode when `extends` is set and `model` is omitted) and any `reasoningEffort` it declares. The efforts a model accepts are in `capabilities.efforts` of `amp plugins show-agent-options --json`. Stream JSON `system/init` carries `agent_mode` and no effort field.
 
 ## Subagents and concurrent threads
 
-Amp may spawn built-in subagents for complex work. Each has its own context window and tools; the main agent receives the final summary. Amp's interactive Plugin API publishes no subagent start/stop event, child ID, parent ID, or parent-tool-use ID.
+Amp delegates work to built-in subagents: Search, Oracle, Librarian, and Read Thread. Each works in its own context, cannot be guided mid-task, and returns only a final summary to the main agent ([models and subagents](https://ampcode.com/docs/models-and-subagents)). The Plugin API has no subagent start or stop event.
 
-Custom plugin agents can create a thread with `parentThreadID`, and one-shot `Agent.run(...)` returns the created `threadID`, but that identifies only subagents created through the plugin itself. Do not infer the same relation for Amp's built-in `Task`, oracle, or librarian behavior.
+`PluginThread.parentThreadID()` returns the parent of a thread created with a `parentThreadID`, for the plugin's current thread only. Plugin agents create such threads through `Agent.createThread({ parentThreadID })` or `Agent.run(message, { parentThreadID })`, which resolves with `{ threadID, text }`. Whether built-in subagent work runs in a thread with a recorded parent, and whether it fires plugin events, is undocumented.
 
-Execute stream JSON provides the missing supervised-run correlation: subagent messages set `parent_tool_use_id` to the parent `Task` call ID, root messages use `null`, and the final `result` waits for every subagent to finish. The correlation is a tool-use ID rather than a child thread ID, so it can support nested progress rendering but not a durable RimZ child session without another identity source.
+Agents can also coordinate persistent child threads through the tools `create_thread` (with a per-call `agent_mode`), `list_agent_modes`, `get_thread_status`, `send_thread_message`, and `wait_for_threads`; `Task` instead runs a scoped subagent without a per-call mode.
 
-One Amp CLI can keep several threads running concurrently and switch the focused thread without changing panes. Background and remotely created threads may produce plugin events while another thread is visible. The first adapter should either render only `amp.activeThread.current` as pane-bound and treat background threads as enrichment, or extend RimZ's instance/session binding deliberately; letting every thread compete for one pane would violate pane primacy.
+In stream JSON, assistant and user messages carry `parent_tool_use_id`, which is `null` when the message has no parent tool use. The current docs do not say which tool use a subagent's messages point at.
+
+One Amp process can host several threads: `amp.activeThread` names the focused thread while events for background threads keep arriving, and `amp.remoteThreadCreation.enabled` opens remotely created threads in a running TUI. Amp removed the TUI sidebar for switching between threads on 2026-08-27 ([so-long-tui-sidebar](https://ampcode.com/news/so-long-tui-sidebar)); the post does not say how the TUI changes focus afterwards.
 
 ## Supervised runs and stream JSON
 
-`amp -x <prompt>` runs one non-interactive turn, prints the last assistant text, and exits. Redirecting stdout enables execute mode automatically. Execute mode consumes paid credits rather than Amp Free usage. The latest CLI archives new execute-mode threads by default and offers `--no-archive-after-execute` to retain them.
-
-Use:
+`amp -x, --execute [message]` runs one turn without the TUI. The prompt comes from the argument or stdin, only the last assistant message is printed, and Amp exits. Redirecting stdout turns execute mode on. Execute mode archives a new thread when it finishes; `--no-archive-after-execute` leaves it unarchived (the flag applies to `amp review` too).
 
 ```sh
 amp --execute "prompt" --stream-json --plugin-ready-timeout 30
 amp threads continue <T-id> --execute "follow-up" --stream-json --plugin-ready-timeout 30
 ```
 
-The JSONL sequence is `system/init`, user and assistant messages, then one terminal `result`. Every object carries `session_id`, which is the Amp thread ID.
+| Flag | Effect |
+| --- | --- |
+| `--stream-json` | with `--execute`, prints Claude Code-compatible stream JSON instead of plain text |
+| `--stream-json-thinking` | adds `thinking` and `redacted_thinking` blocks; implies `--stream-json`; not Claude Code-compatible |
+| `--stream-json-input` | reads JSON Lines user messages from stdin; requires `--execute` and `--stream-json` |
+| `--plugin-ready-timeout [seconds]` | waits for plugins before the turn ([readiness](#runtime-and-execute-mode-readiness)) |
+| `--no-archive-after-execute` | leaves the new thread unarchived |
+| `--title <title>` | sets the new thread's title before the agent starts |
+| `-l, --label <label>` | labels the created or continued thread; repeatable |
+| `-ox, --orb-execute` | runs the prompt in an orb on Amp's servers ([executors](#remote-control-runners-and-executors)) |
 
-```ts
-type Init = {
-  type: 'system'
-  subtype: 'init'
-  cwd: string
-  session_id: string
-  tools: string[]
-  mcp_servers: Array<{ name: string; status: 'connected' | 'connecting' | 'connection-failed' | 'disabled' }>
-  agent_mode?: string
-  reasoning_effort?: string
-}
-```
-
-Assistant messages contain `text` and `tool_use` blocks, plus `thinking` / `redacted_thinking` only with `--stream-json-thinking`. They carry `stop_reason: "end_turn" | "tool_use" | "max_tokens" | null` and optional usage:
+Each line of `--stream-json` output is one message, and every message carries `session_id`, the Amp thread ID ([streaming-json](https://ampcode.com/docs/cli/streaming-json)):
 
 ```ts
 type Usage = {
   input_tokens: number
-  max_tokens: number
   cache_creation_input_tokens?: number
   cache_read_input_tokens?: number
+  cache_creation?: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number }
   output_tokens: number
-  service_tier?: string
+  max_tokens?: number
+  service_tier?: 'standard' | 'enterprise'
+}
+
+type StreamJSONMessage =
+  | {
+      type: 'system'
+      subtype: 'init'
+      cwd: string
+      session_id: string
+      tools: string[]
+      mcp_servers: {
+        name: string
+        status: 'awaiting-approval' | 'authenticating' | 'connecting' | 'reconnecting' | 'connected' | 'denied' | 'failed' | 'blocked-by-registry'
+      }[]
+      agent_mode?: string
+    }
+  | {
+      type: 'assistant'
+      message: {
+        type: 'message'
+        role: 'assistant'
+        content: Array<
+          | { type: 'text'; text: string }
+          | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+          | { type: 'thinking'; thinking: string }
+          | { type: 'redacted_thinking'; data: string }
+        >
+        stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | 'pause_turn' | 'refusal' | null
+        usage?: Usage
+      }
+      parent_tool_use_id: string | null
+      session_id: string
+    }
+  | {
+      type: 'user'
+      message: {
+        role: 'user'
+        content: Array<
+          | { type: 'text'; text: string }
+          | { type: 'tool_result'; tool_use_id: string; content: string; is_error: boolean }
+        >
+      }
+      parent_tool_use_id: string | null
+      session_id: string
+    }
+  | { type: 'result'; subtype: 'success'; duration_ms: number; duration_api_ms?: number; is_error: false; num_turns: number; result: string; session_id: string; usage?: Usage; permission_denials?: string[] }
+  | { type: 'result'; subtype: 'error_during_execution' | 'error_max_turns'; duration_ms: number; duration_api_ms?: number; is_error: true; num_turns: number; error: string; session_id: string; usage?: Usage; permission_denials?: string[] }
+  | { type: 'system'; subtype: 'error_max_turns' | 'error_during_execution'; error: string; session_id: string }
+```
+
+`usage` on an assistant message counts that one response. The schema has no dollar cost, model ID, or transcript path, and the docs state no process exit codes.
+
+`--stream-json-input` reads messages of this shape until stdin closes:
+
+```ts
+type StreamJSONInputMessage = {
+  type: 'user'
+  steer?: boolean
+  message: {
+    role: 'user'
+    content: Array<
+      | { type: 'text'; text: string }
+      | {
+          type: 'image'
+          source_path?: string
+          source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'; data: string }
+        }
+    >
+  }
 }
 ```
 
-The token composition is per assistant response. Context numerator is `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`; `output_tokens` is generated output and should not be double-counted into an input-side context gauge. `max_tokens` is the published divisor available to this transport.
+`steer: true` delivers the message at the agent's next pause point. Amp exits only after the assistant is done and stdin has closed. In the TUI, a message the user sends while the agent works is delivered at the next opportunity during the turn; built-in actions such as Ship and Review queue until the turn ends ([steer-dont-queue](https://ampcode.com/news/steer-dont-queue)).
 
-Terminal results:
+## Remote control, runners, and executors
 
-```ts
-type Result =
-  | { type: 'result'; subtype: 'success'; duration_ms: number; is_error: false; num_turns: number; result: string; session_id: string; usage?: Usage; permission_denials?: string[] }
-  | { type: 'result'; subtype: 'error_during_execution' | 'error_max_turns'; duration_ms: number; is_error: true; num_turns: number; error: string; session_id: string; usage?: Usage; permission_denials?: string[] }
-```
+Cross-client access lets a user continue a running CLI thread from ampcode.com on desktop or mobile ([remote control](https://ampcode.com/docs/cli/remote-control)). Workspace admins turn it off in Member Settings, which also stops members starting threads on their runners from outside the CLI. "Require Passkey Authentication for Web & App Interaction" adds passkey verification, per user or enforced by Enterprise admins.
 
-The public schema does not promise a dollar cost, model ID, transcript path, or process exit-code mapping. Derive the supervised result from the terminal object and separately capture the exact CLI exit behavior before making it RimZ's scripting contract.
+| Control | Behaviour |
+| --- | --- |
+| `--remote-control-terminal` / `--no-remote-control-terminal` | allows or denies terminal access from ampcode.com; the flag overrides the environment |
+| `AMP_REMOTE_CONTROL_TERMINAL` | `1` enables, `0` disables when no flag is given; terminal access is off by default |
+| `amp.remoteThreadCreation.enabled` | default `false`; lets ampcode.com create threads that open in the interactive TUI on this machine, in the directory where it started; palette command `amp: enable remote creation of threads` |
+| `amp --no-tui` | runner mode: waits for and runs remotely created threads for the current directory without a TUI |
+| `--runner-id <id>` | stable runner ID; must be a valid hostname; case-insensitive, casing preserved ([runners](https://ampcode.com/docs/cli/runners)) |
+| `--executor <local \| orb \| runner:<id>>` | where a new thread runs: this client, an Amp-managed orb, or a live runner |
+| `-ox, --orb-execute`, `--orb-size`, `--project` | execute in an orb, with an orb size and an Amp project other than the one inferred from Git remotes |
 
-`--stream-json-input` reads JSONL user messages until stdin closes and requires execute + stream JSON. Input supports text and base64 image blocks. `{ steer: true }` marks a message for the next interruption point. Amp exits only after stdin is closed and the agent is done, so RimZ must close the writer deliberately on cancellation and timeout.
+Plugin code sees only `amp.system.executor.kind`, one of `local`, `remote`, or `unknown`; it carries no runner ID, pane, PID, or cwd. `executor.keepAlive()` holds an orb awake and rejects outside an orb. Plugin agents choose an executor per thread with `executor: 'local' | 'orb' | { type: 'runner'; id }`.
 
-## Remote control and runners
+## Authentication, account, and usage
 
-Amp threads sync with ampcode.com and can be continued, queued, steered, or cancelled from the web UI. Remote control is built in for a running CLI thread; individual users and workspace administrators can require recent passkey authentication.
+`amp login` signs in interactively and `amp logout` removes the stored API key. Non-interactive use reads `AMP_API_KEY`, which must be an access token from Settings starting with `sgamp_`; the CLI rejects the short-lived session token `amp login` stores, which expires within an hour ([execute mode](https://ampcode.com/docs/cli/execute-mode)). `AMP_URL` selects the Amp service, `https://ampcode.com/` by default.
 
-`amp.remoteThreadCreation.enabled` (default `false`) lets ampcode.com create new threads in a running client's working directory. Every enabled client accepts new remote threads. This setting is command-executing product behavior and belongs in RimZ's trust hash if RimZ ever manages it.
-
-`amp --no-tui` starts runner mode: a headless client that waits for remote threads. Multiple runners may run on one machine when started in different directories, and Amp identifies each by host plus working directory. Plugin executor metadata reports only `local | remote | unknown`; it does not expose the runner ID, pane, PID, or cwd per thread.
-
-RimZ should not claim Amp remote-control readiness merely because the user is authenticated. A future badge must distinguish a normal running CLI thread, `remoteThreadCreation.enabled`, and a live `--no-tui` runner.
-
-## Authentication, account, and spend
-
-Interactive `amp login` writes credentials; `amp logout` removes the stored API key. Non-interactive use accepts `AMP_API_KEY`. `AMP_URL` selects a custom Amp service URL and is persisted during login when present, though the environment continues to take precedence.
-
-The official credential location is `~/.local/share/amp/secrets.json` on Linux/macOS and `%USERPROFILE%\.local\share\amp\secrets.json` on Windows. Treat it as secret material: use presence/permissions only for preflight, never log or parse token values. The Plugin API's safer live identity surface is:
+Stored credentials live in `~/.local/share/amp/secrets.json`, or `%USERPROFILE%\.local\share\amp\secrets.json` on Windows ([security](https://ampcode.com/security)). A running plugin reads identity from `amp.system`:
 
 ```ts
 interface PluginSystem {
+  open(url: string | URL): Promise<void>
   readonly workspaceRoot: URI | null
   readonly ampURL: URL
   readonly user: User | null
-  readonly executor: { kind: 'local' | 'remote' | 'unknown' }
+  readonly executor: { readonly kind: 'local' | 'remote' | 'unknown'; keepAlive(): Promise<Subscription> }
 }
 
 interface User {
@@ -457,68 +632,78 @@ interface User {
 }
 ```
 
-`user == null` is the machine-readable live unauthenticated signal. Do not persist email or names in RimZ state when the opaque ID and workspace identity suffice.
+`user` is `null` when Amp is not authenticated. `workspaceRoot` is stable for the plugin process; plugins reload when the workspace changes.
 
-`amp usage` prints the signed-in identity and current individual/workspace credit balance. `amp threads usage <T-id>` prints detailed per-thread cost when available. Verified on the refresh binary: neither `amp usage --help` nor `amp threads usage --help` exposes a `--json` flag or any machine-schema option, so an authoritative account probe must either parse explicitly version-gated human output or remain unsupported. (`amp tools list --json` does exist, so the absence on the spend commands is a deliberate gap, not a blanket policy.) `PluginThread.messages` and plugin events carry no costs. The private cache carries model/token records that support estimated spend, but those estimates do not reconcile credits or workspace billing.
-
-Amp is pay-as-you-go rather than a subscription plan: individual and non-enterprise workspace usage is passed through at provider cost, credits are pooled for a workspace, and Enterprise has different pricing and optional entitlements. Model providers vary by Amp mode, so count Amp as the provider/account while retaining model IDs only where upstream exposes them.
-
-## Configuration and trust
-
-Amp reads JSON or JSONC user settings from `~/.config/amp/settings.{json,jsonc}` and the nearest workspace `.amp/settings.{json,jsonc}` found upward to the repository root (or cwd outside Git). `--settings-file` replaces the user-settings location. Workspace settings override user settings; user keymap entries are the documented exception and override workspace keymaps. Enterprise managed settings enforce policy from `/etc/ampcode/managed-settings.json` on Linux, `/Library/Application Support/ampcode/managed-settings.json` on macOS, or `%ProgramData%\ampcode\managed-settings.json` on Windows.
-
-Relevant executable/security settings are:
-
-| Setting | Adapter relevance |
+| Command | Output |
 | --- | --- |
-| `amp.permissions` / `amp.guardedFiles.allowlist` / `amp.dangerouslyAllowAll` | activates legacy tool-policy plugin |
-| `amp.remoteThreadCreation.enabled` | accepts cloud-created work in this local cwd |
-| `amp.mcpServers` | local commands or remote endpoints exposed as tools |
-| `amp.mcpPermissions` | allow/reject policy for MCP server startup |
-| `amp.tools.disable` | changes observable tool vocabulary |
-| `amp.defaultVisibility` | changes server-side thread sharing |
-| `amp.thread.autoArchiveOnQuit` | archives current/background CLI threads on quit |
-| `amp.updates.mode` | auto/warn/disabled binary updates; `AMP_SKIP_UPDATE_CHECK=1` overrides |
+| `amp usage` | current usage and credit balance, as human text; `--details` adds credit, token, and thread usage, and `--start` and `--end` take ISO 8601 bounds |
+| `amp threads usage <T-id>` | usage for one thread; `--details` adds detail ([explain-usage](https://ampcode.com/news/explain-usage), 2026-08-21) |
+| `amp threads export <T-id>` | the thread as JSON, undocumented schema |
+| `amp threads raw <T-id>` | raw actor thread data as JSON; in the baseline help only |
+| `amp threads markdown <T-id>` | the thread as Markdown |
+| `amp top --stream-jsonl` | a JSON line whenever the live thread list changes; schema marked experimental |
 
-Project `.amp/plugins/*.ts`, workspace MCP commands, permission delegates, plugin install URLs, and settings that enable remote execution are command-executing trust surfaces. Include them in the effective trust hash and test each field. Amp separately asks for approval before starting workspace MCP servers; global settings and `--mcp-config` servers bypass that project approval.
+No usage command documents a JSON output mode, and the baseline `amp usage --help` lists none. Plugin events and messages carry no cost.
 
-Environment relevant to launch/preflight: `AMP_API_KEY`, `AMP_URL`, `AMP_SETTINGS_FILE`, `AMP_LOG_LEVEL`, `AMP_LOG_FILE`, `AMP_FORCE_BEL`, `AMP_SKIP_UPDATE_CHECK`, `HTTP_PROXY`, `HTTPS_PROXY`, and `NODE_EXTRA_CA_CERTS`.
+Amp bills in tiers with included monthly usage (Hobby is free, Individual is $20 a month), and a user who exhausts the included usage adds paid credits ([pricing](https://ampcode.com/docs/pricing)). For non-enterprise accounts Amp deducts actual model cost from credits without markup, workspace members share paid workspace credits, and purchased credits expire twelve months after purchase. Enterprise uses pooled credits and custom pricing.
 
-## Mapping feasibility
+## Settings and environment
 
-The first adapter can land a useful honest subset:
+Amp reads JSON or JSONC settings; every key has the `amp.` prefix ([settings](https://ampcode.com/docs/cli/settings)).
 
-| Concern | Coverage available from current upstream |
+| Layer | Location |
 | --- | --- |
-| turn lifecycle | wired: `agent.start` / `agent.end` |
-| permission waiting | partial: `ThreadState`; full only for a RimZ-owned `tool.call` policy |
-| plan approval | unsupported: no native event/state |
-| user question | unsupported: no native event/state |
-| external answer | partial: possible only when RimZ owns the `tool.call` waiter |
-| tool activity / acting phase | wired: `tool.result` + `filesModifiedByToolCall` |
-| compaction | unsupported: automatic but no event |
-| built-in subagents | partial in supervised JSONL; unsupported in interactive plugin lifecycle |
-| background parking | partial: multiple thread states exist, but no parent turn parking signal |
-| session end | unsupported: reap from pane/process liveness |
-| idle notification | partial: state transitions and native notifications setting, no notification event |
-| context usage | partial from the private cache; no stable context-window divisor |
-| realtime cost | partial estimated pricing from private-cache tokens |
-| rich transcript | wired through paginated `PluginThread.messages`; best-effort offline history from the private cache |
-| hook install | wired: one system plugin file |
-| account identity | wired live through `PluginSystem.user` |
-| account balance/spend | balance is human CLI only; spend is a partial private-cache estimate |
-| remote control | native product surface; readiness requires live-process detection |
+| managed (Enterprise) | `/etc/ampcode/managed-settings.json` (Linux), `/Library/Application Support/ampcode/managed-settings.json` (macOS), `%ProgramData%\ampcode\managed-settings.json` (Windows) |
+| workspace | nearest `.amp/settings.json` or `.amp/settings.jsonc` found searching upward from the cwd |
+| user | `~/.config/amp/settings.json` or `.jsonc`; `--settings-file <path>` or `AMP_SETTINGS_FILE` replaces the path |
 
-Before implementation, capture these unresolved contracts against the exact supported binary and convert each into a fixture or explicit unsupported declaration:
+Managed settings enforce policy, and workspace settings override user settings. User `amp.keymap` entries are the exception and override workspace entries. The managed-only `amp.admin.compatibilityDate` (`YYYY-MM-DD`) selects which backward-compatibility migrations apply.
 
-1. Whether a long-running `tool.call` handler may wait indefinitely, how Amp cancels it, and what happens when the plugin process exits.
-2. How multiple plugins' `tool.call` results compose, including allow vs reject vs modify and handler exceptions.
-3. Whether `ThreadState.awaiting-approval` brackets custom `ctx.ui.confirm` and legacy-permission dialogs identically, and the exact transition order relative to `tool.call`.
-4. Whether built-in subagent work fires plugin events under the parent thread ID, a hidden child ID, or only as the parent `Task` call/result.
-5. How plugin process identity can be joined to the correct RimZ pane when two Amp CLIs run in the same cwd; no documented payload field carries PID or pane identity.
-6. Exact CLI exit codes for successful, errored, cancelled, permission-denied, timed-out, and plugin-readiness-failed execute runs.
-7. The versioned output shapes, if RimZ chooses to use `amp usage`, `amp threads usage`, `amp threads export`, or `amp threads raw`. *(Partly settled on the refresh binary: `amp usage` and `amp threads usage` expose no `--json`; their output stays human text.)*
-8. Whether `ultra` is accepted by `--mode` at runtime even when the help line lists only `low, medium, high`. *(Partly settled: the help line is narrow, but `amp plugins show-docs` still types `ultra` in `BuiltinAgentMode`. Runtime acceptance on a live account is still unverified.)*
-9. Whether `amp -x` auto-archiving (default) leaves a thread that `amp threads continue <T-id>` can still resume, or whether RimZ must pass `--no-archive-after-execute` to keep supervised-run sessions resumable. The `amp review` code-review agent mode shares the same archive-after-run posture.
+| Setting | Effect |
+| --- | --- |
+| `amp.permissions`, `amp.guardedFiles.allowlist`, `amp.dangerouslyAllowAll` | [permission rules](#permissions) |
+| `amp.mcpServers` | MCP servers, as local commands or remote URLs, exposed as tools |
+| `amp.mcpPermissions` | allow or block MCP servers by pattern |
+| `amp.tools.disable`, `amp.tools.enable` | remove tools, or allow only matching tool patterns |
+| `amp.experimental.modes` | enable experimental agent modes by name |
+| `amp.remoteThreadCreation.enabled` | [remote thread creation](#remote-control-runners-and-executors) |
+| `amp.defaultVisibility` | default thread visibility per repository origin |
+| `amp.thread.autoArchiveOnQuit` | archive open CLI threads on quit; default `false` |
+| `amp.showCosts` | show costs while working; default `true` |
+| `amp.notifications.enabled`, `amp.notifications.system.enabled` | completion alerts and system notifications |
+| `amp.skills.path`, `amp.skills.disableClaudeCodeSkills` | extra skill directories; ignore `.claude` skill directories |
+| `amp.git.commit.ampThread.enabled`, `amp.git.commit.coauthor.enabled` | `Amp-Thread` trailer and co-author trailer in commits |
+| `amp.proxy`, `amp.network.timeout` | proxy URL and request timeout in seconds for the Amp server |
+| `amp.updates.mode` | [update checking](#version-and-distribution) |
 
-The primary architectural risk is Amp's one-client/many-thread model. Solve pane binding first: lifecycle normalization is straightforward once each event is assigned to the correct visible or background instance.
+Several surfaces execute commands on the user's machine: project plugins in `.amp/plugins/`, `amp.mcpServers` commands, a `delegate` rule's helper program, and plugin install URLs. Amp asks for approval before starting a workspace MCP server (`amp mcp approve <name>`, with `amp mcp doctor` for status); servers from user settings or `--mcp-config` skip that approval.
+
+| Variable | Effect |
+| --- | --- |
+| `AMP_API_KEY` | [access token](#authentication-account-and-usage) |
+| `AMP_URL` | Amp service URL |
+| `AMP_SETTINGS_FILE` | user settings path |
+| `AMP_LOG_LEVEL`, `AMP_LOG_FILE` | log level and log file; the file defaults to `~/.cache/amp/logs/cli.log` |
+| `AMP_REMOTE_CONTROL_TERMINAL` | [terminal access](#remote-control-runners-and-executors) |
+| `AMP_FORCE_BEL` | notifications use the terminal bell |
+| `AMP_SKIP_UPDATE_CHECK` | `1` skips the update check |
+| `AMP_DISABLE_AMP_THREAD_TRAILER`, `AMP_DISABLE_AMP_COAUTHOR_TRAILER` | suppress the commit trailers |
+| `NO_ANIMATION` | `1` disables terminal animations |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS` | corporate proxy and CA certificates |
+| `AMP_DATA_DIR` | data root of the [private thread cache](#private-local-thread-cache); anchored by ccusage only |
+
+## Undocumented behaviour
+
+Neither the docs nor the baseline binary settle these. Each needs a capture against a pinned build before code depends on it.
+
+1. How long a `tool.call` handler may wait, how Amp cancels it, and what happens when the plugin process exits mid-call.
+2. How `tool.call` results from several plugins compose, and what a handler exception does.
+3. Whether `awaiting-approval` brackets a plugin's `ctx.ui.confirm` and a permission rule's `ask` the same way, and its order relative to `tool.call`.
+4. Whether built-in subagent work fires plugin events, and under which thread ID.
+5. Which process runs a system plugin, and so whether a plugin's PID identifies the Amp CLI; no payload carries a PID or pane.
+6. Execute-mode exit codes for success, error, cancellation, permission denial, and plugin-readiness expiry.
+7. The schemas of `amp usage`, `amp threads usage`, `amp threads export`, and `amp threads raw` output.
+8. Whether the CLI accepts `--effort`.
+9. Whether `amp threads continue` resumes a thread that execute mode archived.
+10. How the TUI changes the focused thread since the sidebar's removal, and whether a focus change still fires `session.start`.
+11. Whether the baseline build still writes the [private thread cache](#private-local-thread-cache).
