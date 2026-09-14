@@ -1,94 +1,42 @@
 # Codex protocol reference
 
-> The mapping onto RimZ's internal types lives beside this doc: [adapter_codex.md](../../internals/agents/adapter_codex.md) maps the hooks, rollout transcript, app-server, account, and spend surfaces onto RimZ's internal types; the agent-agnostic model is [model.md](../../internals/agents/model.md) and the account/spend model is [providers.md](../../internals/agents/providers.md).
+This page mirrors the upstream surfaces of OpenAI's Codex CLI that RimZ binds to: hook events and their decision schema, project directory trust, launch flags and config overrides, the TUI input and notification channels, the app-server JSON-RPC API and its daemon, rollout and session-index files, and the ChatGPT auth file and usage endpoints. It records what upstream ships. How RimZ maps each surface onto its own types, and which events and methods it wires, is in [adapter_codex.md](../../internals/agents/adapter_codex.md); the provider-neutral model is [model.md](../../internals/agents/model.md), and accounts and spend are [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Codex upstream protocol surface** RimZ binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, the auth file, and the local-OAuth usage endpoint. It is a hand-maintained mirror of OpenAI's published docs, the open-source `codex-rs` types, and the credential-file surfaces Codex itself uses, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/adapters/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/adapters/codex/app_server.rs) client are the only code that reads this surface.
+## Baseline and sources
 
-Refresh baseline: Codex CLI **0.150.1** and the OpenAI Codex docs/source available on **2026-08-27**. Generated app-server details below come from `codex app-server generate-json-schema` on that release; the method index also calls out newer `main`-branch additions where stated.
-
-Coverage is **depth on what RimZ wires, breadth as an index**: the events, app-server methods, and rollout fields the code actually parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
-
-## Upstream sources
-
-Re-fetch these pages — and, for the app-server, re-run the schema generators — to refresh this mirror.
+The page describes Codex CLI **0.154.0** (tag `rust-v0.154.0`, commit `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`, released 2026-09-09), read on 2026-09-13. That is the GitHub latest release and the npm `@openai/codex` `latest` dist-tag. A source reference written as `path:line` is relative to `codex-rs/` at that tag. Generated app-server shapes come from `codex app-server generate-json-schema` run on the 0.154.0 binary, and live rollout samples come from the same build. A fact that exists only on `main` is marked unreleased with its pull request.
 
 | Surface | Source |
 | --- | --- |
-| Hooks reference (events, payloads, decision schema, trust) | <https://learn.chatgpt.com/docs/hooks> |
-| Version-pinned hook event enum and runtime dispatch | <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/protocol.rs>, <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/core/src/hook_runtime.rs> |
-| Hook executor (cwd/env semantics) | <https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/command_runner.rs> |
-| Project directory trust: screen predicate, key lookup, git main root (read from `main` at `459a79e`, 2026-09-05, which supplies the line numbers in that section) | <https://github.com/openai/codex/blob/459a79eb85400af759e9220c7bafb4429ae07516/codex-rs/tui/src/lib.rs>, <https://github.com/openai/codex/blob/459a79eb85400af759e9220c7bafb4429ae07516/codex-rs/config/src/loader/mod.rs>, <https://github.com/openai/codex/blob/459a79eb85400af759e9220c7bafb4429ae07516/codex-rs/git-utils/src/trust.rs> |
-| Config reference (`notify`, credential store, `[tui]` notifications) | <https://learn.chatgpt.com/docs/config-file/config-reference> |
-| Advanced config (`notify` payload) | <https://learn.chatgpt.com/docs/config-file/config-advanced> |
-| CLI reference (`resume`, `fork`, `login status`) | <https://learn.chatgpt.com/docs/developer-commands?surface=cli> |
-| CLI `-c` override parser | <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/utils/cli/src/config_override.rs> |
-| Native auto-compaction config type, model ceiling, and override parser (verified 2026-09-10 with Codex CLI 0.154.0) | <https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/config_toml.rs>, <https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/openai_models.rs>, <https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/utils/cli/src/config_override.rs> |
-| App-server API (protocol, methods, notifications) | <https://learn.chatgpt.com/docs/app-server> |
-| App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
-| App-server daemon lifecycle + PID backend | <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/README.md>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/lib.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/backend/pid.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/update_loop.rs> |
-| App-server control socket WebSocket transport | <https://github.com/openai/codex/pull/21843> |
-| Automatic session titles + session index | <https://github.com/openai/codex/pull/40492>, <https://github.com/openai/codex/blob/main/codex-rs/rollout/src/session_index.rs> |
-| TUI paste-burst heuristic | <https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs>, <https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/chat_composer.rs> |
-| Rollout/session JSONL policy, filenames, compression + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/policy.rs>, <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/rollout_file_name.rs>, <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/compression.rs> |
-| OAuth usage endpoint | Codex credential-file traffic; no public schema page |
+| Hooks: events, payloads, output, trust, limits | <https://learn.chatgpt.com/docs/hooks>; [`hooks/src/schema.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/hooks/src/schema.rs), [`hooks/src/engine/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/hooks/src/engine), generated schemas in [`hooks/schema/generated/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/hooks/schema/generated) |
+| Hook event enum and runtime dispatch | [`protocol/src/protocol.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/protocol.rs) `HookEventName`, [`core/src/hook_runtime.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/hook_runtime.rs) |
+| Hook tool names | [`core/src/tools/hook_names.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/tools/hook_names.rs) |
+| Project directory trust | [`tui/src/lib.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/lib.rs), [`config/src/loader/mod.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/mod.rs), [`git-utils/src/trust.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/git-utils/src/trust.rs) |
+| Config keys (`notify`, `[tui]`, credential store, `projects`, compaction) | <https://learn.chatgpt.com/docs/config-file/config-reference>, <https://learn.chatgpt.com/docs/config-file/config-advanced>; [`config/src/config_toml.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/config_toml.rs), [`config/src/types.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/types.rs) |
+| CLI commands and `-c` parser | <https://learn.chatgpt.com/docs/developer-commands?surface=cli>; `codex <command> --help`; [`utils/cli/src/config_override.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/utils/cli/src/config_override.rs), [`cli/src/login.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/cli/src/login.rs) |
+| Auto-compaction ceiling | [`protocol/src/openai_models.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/openai_models.rs), [`protocol/src/config_types.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/config_types.rs) |
+| TUI paste burst, plan prompt, questionnaire | [`tui/src/bottom_pane/paste_burst.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/bottom_pane/paste_burst.rs), [`tui/src/chatwidget/plan_implementation.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/chatwidget/plan_implementation.rs), [`tui/src/bottom_pane/request_user_input/mod.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/bottom_pane/request_user_input/mod.rs) |
+| App-server protocol | <https://learn.chatgpt.com/docs/app-server>; [`app-server/README.md`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/app-server/README.md), [`app-server-protocol/src/protocol/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/app-server-protocol/src/protocol) |
+| App-server daemon and updater | [`app-server-daemon/README.md`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/app-server-daemon/README.md), [`app-server-daemon/src/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/app-server-daemon/src) (`lib.rs`, `backend/pid.rs`, `update_loop.rs`, `managed_install.rs`) |
+| Rollout files, persistence policy, compression, session index | [`rollout/src/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/rollout/src) (`recorder.rs`, `policy.rs`, `rollout_file_name.rs`, `compression.rs`, `session_index.rs`), [`protocol/src/protocol.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/protocol.rs), [`protocol/src/items.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/items.rs) |
+| `auth.json` | [`login/src/auth/storage.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/login/src/auth/storage.rs) |
+| ChatGPT usage and reset-credit endpoints | [`backend-client/src/client/rate_limit_resets.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/backend-client/src/client/rate_limit_resets.rs), [`backend-client/src/types.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/backend-client/src/types.rs), [`codex-backend-openapi-models/src/models/`](https://github.com/openai/codex/tree/rust-v0.154.0/codex-rs/codex-backend-openapi-models/src/models) |
+| Release notes | <https://github.com/openai/codex/releases> |
 
-The app-server protocol has no published version string; the canonical, version-exact schema is generated from the Codex binary itself:
+The app-server protocol publishes no version string. The binary generates its exact schema; `--experimental` adds the methods and fields gated as experimental:
 
 ```bash
-codex app-server generate-ts --out DIR           # TypeScript bindings
-codex app-server generate-json-schema --out DIR  # JSON Schema bundle
+codex app-server generate-ts --out DIR
+codex app-server generate-json-schema --out DIR [--experimental]
 ```
-
-## TUI paste-burst handling
-
-Codex treats a run of plain characters arriving at most 8 ms apart as a suspected paste burst (`PASTE_BURST_CHAR_INTERVAL`). A release build flushes the buffered burst after 8 ms of inactivity on non-Windows systems and 60 ms on Windows (`PASTE_BURST_ACTIVE_IDLE_TIMEOUT`), while Enter received during the burst or within the following 120 ms (`PASTE_ENTER_SUPPRESS_WINDOW`) is appended as a literal newline instead of submitting. A bracketed paste clears the burst state through the explicit paste handler. RimZ's raw-typed command path therefore needs a temporal gap before its separate submit keystroke; the bracketed-paste prompt path does not.
-
-## Session resume and fork
-
-`codex resume <id>` reopens a session in place. `codex fork <id>` copies its conversation into a provider-assigned new session id and leaves the source session untouched; the interactive `fork` subcommand accepts no initial prompt, so RimZ opens the fork idle in the source worktree.
-
-## CLI config overrides
-
-Each `-c key=value` or `--config key=value` occurrence overrides the corresponding loaded configuration key for that launch. Codex parses the value as TOML and falls back to a raw string when TOML parsing fails, so callers that need exact string round trips should emit a TOML-quoted value. `developer_instructions` produces developer-role instruction text separate from the user message; it does not have the replacement-file semantics of `model_instructions_file`. A CLI value overrides the same key from `~/.codex/config.toml`.
-
-`model_auto_compact_token_limit` is a top-level [`ConfigToml` field of type `Option<i64>`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/config_toml.rs): an absolute occupied-token threshold, not a percentage. The [model calculation](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/openai_models.rs) defaults to 90% of the model context window and clamps larger configured limits to that ceiling. Zero or negative values compact immediately rather than failing validation; RimZ's profile field rejects them.
-
-The launch override is `-c model_auto_compact_token_limit=200000` (or `--config`), not a dedicated threshold flag or environment variable. The [override parser](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/utils/cli/src/config_override.rs) requires a TOML integer for this typed key, so `200k` cannot be passed through unchanged. The key may be saved at the top level of Codex's `config.toml`, but is not valid under Codex's `[profiles.X]`; RimZ profiles instead render it as a launch-scoped `-c` override.
-
-## Project directory trust
-
-Codex asks "Do you trust the contents of this directory?" on startup whenever the resolved project carries no trust level: `should_show_trust_screen` is exactly `config.active_project.trust_level.is_none()` (`tui/src/lib.rs:1963`). A recorded `untrusted` is a decision and suppresses the screen; only an absent entry shows it. The screen precedes the first prompt, so an unattended launch in an undecided directory stops there and never starts a turn.
-
-Decisions live in `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default), keyed by absolute path. Lookup runs over the merged configuration, so a managed layer can supply the same keys:
-
-```toml
-[projects."/home/user/src/app"]
-trust_level = "trusted"   # or "untrusted"
-```
-
-`decision_for_dir` (`config/src/loader/mod.rs:1062`) takes the first key that carries a level, in this order:
-
-1. the session cwd;
-2. the nearest ancestor holding a `project_root_markers` entry, default `[".git"]`, where a `.git` directory counts only if it holds `HEAD` (`config/src/project_root_markers.rs:5`, `config/src/loader/mod.rs:1548`);
-3. the main repository root from `resolve_root_git_project_for_trust` (`git-utils/src/trust.rs:13`), which reads a linked worktree's `.git` file, follows `gitdir` into `worktrees/<name>`, and returns the checkout owning the canonical `commondir`. A worktree of a trusted repository is therefore trusted through that main root.
-
-Each candidate is looked up as its normalized canonical path and as written, so a symlinked directory and its target share one decision; Windows folds ASCII case and other platforms compare exactly (`config/src/loader/mod.rs:1448`, `:1470`).
-
-Answering "Yes, continue" writes `trust_level = "trusted"` for the trust target, which is the main git root when there is one and the cwd otherwise (`tui/src/onboarding/onboarding_screen.rs:168`, `tui/src/config_update.rs:62`).
-
-The same decision gates project-local `.codex/config.toml` layers ("project-local config, hooks, and exec policies"), while a user-level `$CODEX_HOME/config.toml` hook, which is what RimZ installs, runs regardless of it. `codex exec --skip-git-repo-check` covers a separate not-a-git-repository refusal (`exec/src/lib.rs:909`), and the approval and sandbox flags RimZ passes at launch leave trust untouched: no CLI flag skips the trust screen. A `config.toml` Codex cannot parse exits at startup instead of prompting (`tui/src/lib.rs:1955`).
-
-RimZ's own read of this surface, and the supervised-launch preflight it feeds, are in [adapter_codex.md → Directory trust preflight](../../internals/agents/adapter_codex.md#directory-trust-preflight).
 
 ## Hooks
 
-Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default) as `[[hooks.Event]]` tables. RimZ's [`CodexAdapter`](../../../crates/rimz/src/agents/adapters/codex/mod.rs) `CODEX_HOOKS` catalog is the source of truth for the wired set; the native-event → RimZ status mapping is the [adapter_codex.md → Hooks and lifecycle](../../internals/agents/adapter_codex.md#hooks-and-lifecycle).
-
-**Execution.** Matching groups from every active hook source run, and multiple matching handlers for one event start concurrently. A hook command runs with the **session cwd** as working directory. Codex 0.149 and newer clear the child's live environment, replay the environment snapshot captured when the session hook runtime was created, apply the handler's `env` overlay, then scrub non-inheritable credential variables. Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent is the daemon, not the pane; RimZ therefore treats the parent PID as daemon-owned and recovers pane identity from the in-pane process ([adapter.md → Hooks resolve the room they live in](../../internals/agents/adapter.md#hooks-resolve-the-room-they-live-in)).
+A Codex hook is a handler Codex runs at a lifecycle point. A command handler receives a JSON payload on stdin and answers on stdout. The event set, payloads, and output rules follow Claude Code's hook shape with the differences recorded below; never reuse a Claude decision without checking this section.
 
 ### Config shape
 
-Codex discovers `hooks.json` and inline `[hooks]` tables beside active user and trusted-project config layers; plugin and managed layers can add their own hooks. Sources merge rather than replace one another. RimZ writes one user-level inline representation in `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default), and hooks are enabled by default (`[features].hooks = false` disables them; `codex_hooks` is a deprecated alias).
+Hooks are declared as `[[hooks.<Event>]]` groups in a `config.toml`, or in a `hooks.json` beside it. Codex discovers both beside the user config (`$CODEX_HOME/config.toml`, default `~/.codex/config.toml`), beside each trusted project's `.codex/` layer, and in plugin and managed layers. Sources merge; a layer holding both `hooks.json` and TOML hooks gets a startup warning. Hooks are enabled by default: `[features].hooks = false` disables them, and `codex_hooks` is a deprecated alias for that feature (`features/src/lib.rs:1166`, `features/src/legacy.rs:49`).
 
 ```toml
 [[hooks.PreToolUse]]
@@ -97,105 +45,215 @@ matcher = "^Bash$"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = '/usr/bin/python3 "path/to/script.py"'
-command_windows = 'py -3 C:\path\script.py'
+commandWindows = 'py -3 C:\path\script.py'
 timeout = 30
 statusMessage = "Checking Bash command"
 ```
 
-`matcher` is a regex over the tool name (or source/reason for lifecycle events). Default `timeout` is **600** seconds, except `SessionEnd` and `Interrupt`, which default to one second and clamp configured values to at most three seconds.
+| Field | Meaning |
+| --- | --- |
+| `matcher` (group) | Regex over the tool name, or over the source or trigger for lifecycle events. `UserPromptSubmit`, `Stop`, and `Interrupt` ignore it (`hooks/src/events/common.rs:112`). |
+| `type` | `command` and `mcp_tool` run. `prompt` and `agent` parse and are skipped with a warning (`hooks/src/engine/discovery.rs:635`, `:645`). `mcp_tool` is unsupported on `SessionEnd`. Handler fields are in `HookHandlerConfig` (`config/src/hook_config.rs:163`). |
+| `command`, `commandWindows` | Shell command; the Windows variant (alias `command_windows`) replaces it on Windows. |
+| `server`, `tool`, `input` | The MCP server, tool, and TOML-representable input of an `mcp_tool` handler. |
+| `timeout` | Seconds. Default 600. `SessionEnd` and `Interrupt` default to 1 and clamp to 1 through 3 (`discovery.rs:740` to `:763`). |
+| `async` | A command with `async = true` runs in the background and cannot apply control effects. At most eight background hooks run per session; the rest queue (`MAX_CONCURRENT_ASYNC_HOOKS`, `hooks/src/engine/command_runner.rs:45`). `async` on `SessionEnd` runs synchronously with a warning. |
+| `statusMessage` | Text the TUI shows while the hook runs. |
+| `additionalContextLimit` | Approximate token threshold for spilling a command hook's `additionalContext` to disk; unset means 2,500 and `0` disables spilling. Overflow is saved under `<temp_dir>/hook_outputs/<session_id>/` and the model sees a head and tail preview ([hooks docs, "Large hook output"](https://learn.chatgpt.com/docs/hooks)). |
 
-`type = "command"` and `type = "mcp_tool"` run in 0.150.1. A command with `async = true` runs in the background and cannot apply control effects; MCP-tool handlers are synchronous. `prompt` and `agent` handlers are still parsed and skipped. `UserPromptSubmit`, `Stop`, and `Interrupt` ignore `matcher`; the installed RimZ groups omit it for those events.
+Managed hooks come from `requirements.toml` `[hooks]` (`managed_dir`, `windows_managed_dir`); `allow_managed_hooks_only` makes Codex ignore every other source.
+
+### Execution
+
+Codex starts all matching handlers for one event concurrently (`hooks/src/engine/dispatcher.rs:125`), with the session cwd as working directory. `build_command` (`command_runner.rs:390` to `:426`) clears the child environment, replays the environment snapshot `Hooks::new` captured from the Codex process (`hooks/src/registry.rs:79`), applies the source's environment overlay, and then scrubs non-inheritable credential variables. Only plugin hooks have an overlay (`PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`); a handler has no `env` field.
+
+A plain TUI launch runs its session inside the shared per-user app-server daemon ([App-server daemon](#app-server-daemon)), so a hook child's parent process is the daemon, and the environment snapshot is the daemon's.
 
 ### Trust state
 
-Codex requires the user to review and trust each non-managed hook definition before it runs, records trust against the definition's hash, and **silently skips** a new or changed hook until it is trusted — `/hooks` inside Codex is the management UI (`--dangerously-bypass-hook-trust` bypasses for one invocation). Trust lands in the user config as `[hooks.state]` entries keyed `"<config-path>:<event_token>:<i>:<j>"`, the event token in lower_snake:
+Codex runs a non-managed hook only after the user trusts its current definition. Trust is recorded per handler as a hash, so a new or changed handler is skipped until the user reviews it in `/hooks`; the TUI raises a startup review listing hooks that need it (`tui/src/startup_hooks_review.rs`), and the engine never runs them in the meantime. `--dangerously-bypass-hook-trust` runs enabled hooks without trust for one invocation. Managed hooks, and the bundled cleanup-plugin hooks Codex treats as built-ins, need no trust (`discovery.rs:713` to `:735`).
+
+State lives in the user config as `[hooks.state]` entries, `{ enabled, trusted_hash }`, keyed `"<key_source>:<event_label>:<group>:<handler>"` (`hooks/src/lib.rs:113`, `config/src/hook_config.rs:28`). For a config-file hook `key_source` is the config path; for a plugin hook it is `"<plugin_id>:<relative_path>"`. The event label is the event name in lower snake case, and the hash carries a `sha256:` prefix (`config/src/fingerprint.rs:61`):
 
 ```toml
 [hooks.state."/home/user/.codex/config.toml:permission_request:0:0"]
 trusted_hash = "sha256:…"
 ```
 
-A fresh `rimz hooks install` — or any change to the installed command — is therefore a wired-but-dead channel until the user trusts it inside Codex. RimZ detects the gap presence-only (`untrusted_hook_events_at` matches installed events against the state keys by token; the hash algorithm stays Codex's), and `rimz start`/`rimz doctor` surface the fix ([adapter_codex.md → Hooks and lifecycle](../../internals/agents/adapter_codex.md#hooks-and-lifecycle)). `Interrupt` is the forward-compatible exception to preflight gating: Codex before 0.150 silently ignores that unknown installed key and can never write its trust state, while RimZ still settles the turn from the durable rollout fallback. Doctor continues to report the missing trust as an advisory for versions that do expose the event.
-
 ### Common input
 
-Turn-scoped and ordinary lifecycle hooks receive this common envelope:
+Every command hook except `SessionEnd` receives this envelope (`hooks/src/schema.rs`):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `session_id` | string | The root thread id; also the rollout UUID. |
+| `transcript_path` | string or null | Rollout path. |
+| `cwd` | string | Session cwd. |
+| `hook_event_name` | string | Event name. |
+| `model` | string | Active model slug. |
+| `permission_mode` | string | `default`, `acceptEdits`, `plan`, `dontAsk`, or `bypassPermissions` (`schema.rs:843`). Absent on `PreCompact` and `PostCompact`. |
+| `turn_id` | string | Turn-scoped events only; absent on `SessionStart`. |
+| `agent_id`, `agent_type` | string, optional | Present on `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, and `PostCompact` when the hook fires inside a child thread. The hooks docs omit them on these events; the schema carries them. |
+
+A child observation carries an `agent_id` distinct from the root `session_id`. Hooks carry no child nickname, task path, token usage, or assignment prompt; those are in the child's [rollout header](#rollout-records).
+
+### Events
+
+Codex 0.154.0 has twelve hook events (`HookEventName`, `protocol/src/protocol.rs:1576`) and no `Notification` or dedicated plan-approval event.
+
+| Event | Fires | Event-specific input |
+| --- | --- | --- |
+| `SessionStart` | a root session starts, resumes, clears, or compacts; dispatched at the start of the next turn (`run_pending_session_start_hooks`, `core/src/hook_runtime.rs:124`) | `source`: `startup`, `resume`, `clear`, or `compact` |
+| `UserPromptSubmit` | the user submits a prompt | `turn_id`, `prompt` |
+| `SubagentStart` | a spawned child thread starts | `turn_id`, `agent_id`, `agent_type`, `permission_mode` |
+| `PreToolUse` | before a hooked tool call ([tool names](#tool-names)) | `turn_id`, `tool_name`, `tool_use_id`, `tool_input` |
+| `PermissionRequest` | an approval is needed (shell escalation, network) | `turn_id`, `tool_name`, `tool_input` (with optional `description`) |
+| `PostToolUse` | after a hooked tool produces output | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`, `tool_response` |
+| `SubagentStop` | a child thread stops | `turn_id`, `agent_id`, `agent_type`, `agent_transcript_path`, `stop_hook_active`, `last_assistant_message` |
+| `Stop` | a turn completes | `turn_id`, `stop_hook_active`, `last_assistant_message` |
+| `Interrupt` | a root turn is interrupted (`TurnAbortReason::Interrupted` only) | `turn_id`, plus common `model` and `permission_mode` |
+| `PreCompact` | before compaction | `turn_id`, `trigger` (`manual` or `auto`) |
+| `PostCompact` | after compaction | `turn_id`, `trigger` |
+| `SessionEnd` | the root session runtime shuts down | `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `reason` (always `other`); no `model`, `permission_mode`, or `turn_id` |
+
+`Interrupt` and `SessionEnd` fire only for root threads, each after Codex flushes the rollout (`hook_runtime.rs:455` to `:526`). `Interrupt` fires before the `turn_aborted` record is emitted (`core/src/tasks/mod.rs:807`, `:965`). `SessionEnd` runs from the shutdown handler, which the app-server also reaches when it unloads an idle thread (`unload_thread_without_subscribers`, `app-server/src/request_processors/thread_lifecycle.rs:422`), so the event does not prove the interactive session ended. Codex 0.152.0 added executor-plugin `Interrupt` hooks (#41432); they run async and leave the command-hook payload unchanged.
+
+Compaction runs in place: Codex writes a `compacted` record into the same rollout, keeps the session id, and queues `SessionStart` with `source = "compact"` for the next turn (`core/src/session/mod.rs:3831` to `:3847`). Local 0.154.0 rollouts confirm it: sessions with several compactions keep one file and a parentless header.
+
+### Tool names
+
+Hook `tool_name` values are canonical names, distinct from the function names a rollout records (`core/src/tools/hook_names.rs`):
+
+| Hook `tool_name` | Covers | Matcher aliases |
+| --- | --- | --- |
+| `Bash` | simple and unified-exec shell commands, including the final `write_stdin` poll that completes a unified exec | none |
+| `apply_patch` | file edits | `Edit`, `Write` |
+| `spawn_agent` | child thread spawn | `Agent` |
+| `mcp__<server>__<tool>` | MCP tool calls | none |
+| `request_user_input` | a blocking questionnaire ([questions](#questions-and-plan-approval)) | none |
+| `request_user_input_async` | a non-blocking question set; returns `{"accepted":true}` at once | none |
+| `update_plan` | the todo-plan tool; non-blocking | none |
+
+Hooks are a partial interception boundary: web search and other unhooked tool paths bypass them. `update_plan` is off by default since 0.152.0; `[tools.update_plan] enabled = true` turns it on (`core/src/config/mod.rs:2659`). `request_user_input_async` is registered only for root threads whose model catalog entry advertises it (0.153.0).
+
+For function tools without a dedicated hook contract, `tool_response` is the tool's text output as a JSON **string** (`core/src/tools/registry.rs:95` to `:125`). `request_user_input` is such a tool, so its `tool_response` is a string holding `{"answers":{…}}`, which a consumer must parse a second time.
+
+### Hook output
+
+Every output type is parsed with `deny_unknown_fields` (`hooks/src/engine/output_parser.rs`): an unrecognized field marks the hook run failed. The universal fields are `continue`, `stopReason`, `systemMessage`, and `suppressOutput`; `hookSpecificOutput` carries event-specific fields.
+
+| Event | Accepted | Rejected (hook fails) |
+| --- | --- | --- |
+| `PreToolUse` | `hookSpecificOutput.permissionDecision` `allow` with `updatedInput`, or `deny` with `permissionDecisionReason`; `hookSpecificOutput.additionalContext`; legacy `decision: "block"` with `reason`; `systemMessage` | `ask`; `allow` without `updatedInput`; `updatedInput` without `allow`; `deny` without a reason; `decision: "approve"`; `continue: false`; `stopReason`; `suppressOutput` |
+| `PermissionRequest` | `hookSpecificOutput.decision` `{ behavior: "allow" \| "deny", message }`; a deny without `message` gets "PermissionRequest hook denied approval"; `systemMessage` | `updatedInput`, `updatedPermissions`, `interrupt: true`, `continue: false`, `stopReason`, `suppressOutput` |
+| `PostToolUse` | `decision: "block"` with `reason`; `additionalContext`; `continue: false` stops and sends feedback; `systemMessage`, `stopReason` | `updatedMCPToolOutput`, `suppressOutput`, `reason` without `decision` |
+| `UserPromptSubmit` | `decision: "block"` with `reason`; `additionalContext`; plain stdout becomes context | |
+| `SessionStart`, `SubagentStart` | `additionalContext`; plain stdout becomes context; `continue: false` stops only on `SessionStart`; `suppressOutput` is ignored on `SessionStart` | |
+| `Stop`, `SubagentStop` | universal fields; `decision: "block"` with `reason` | `additionalContext` |
+| `PreCompact`, `PostCompact` | universal fields; `suppressOutput` ignored | `additionalContext` |
+| `Interrupt` | `systemMessage` only, shown as a warning; non-JSON stdout or a non-zero exit is a failure | everything else |
+| `SessionEnd` | output ignored | |
+
+The decision shapes a permission or pre-tool hook returns:
 
 ```json
-{
-  "session_id": "string",
-  "transcript_path": "string | null",
-  "cwd": "string",
-  "hook_event_name": "string",
-  "model": "string",
-  "permission_mode": "default | acceptEdits | plan | dontAsk | bypassPermissions",
-  "turn_id": "string — turn-scoped events only"
-}
-```
-
-`SessionEnd` is the exception: it carries only `session_id`, `transcript_path`, `cwd`, `hook_event_name`, and `reason`. RimZ parses around `permission_mode` without consuming it — the upstream still sends it on the other hooks; the agent model derives the turn phase from tool events instead.
-
-Codex 0.144.4 also stamps optional `agent_id` and `agent_type` on `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, and `PostCompact` when the hook fires inside a child thread. A usable child observation has a non-empty `agent_id` distinct from the root `session_id`. Hooks expose neither the V2 generated nickname nor the canonical task path, and they carry no child token usage or assignment prompt; those are rollout/app-server data.
-
-### Events and per-event input
-
-| Event | Fires | Event-specific input | Wired |
-| --- | --- | --- | :---: |
-| `SessionStart` | session starts / resumes / clears / compacts | `source` (`startup`\|`resume`\|`clear`\|`compact`; `compact` is triggerless close evidence in RimZ) | ✓ |
-| `UserPromptSubmit` | user submits a prompt | `turn_id`, `prompt` | ✓ |
-| `SubagentStart` | a subagent launches | `turn_id`, `agent_id`, `agent_type`, `permission_mode` | ✓ |
-| `PreToolUse` | before `exec_command` / `apply_patch` / MCP tools and the question pseudo-tool | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`; `tool_name = "request_user_input"` is a user question; `update_plan` is non-blocking and is not a plan-approval gate | ✓ |
-| `PermissionRequest` | approval needed (shell escalation, network) | `turn_id`, `tool_name`, `tool_input`, `tool_input.description?` | ✓ |
-| `PostToolUse` | after tool output is produced | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`, `tool_response`; `request_user_input` returns its id-keyed answers map | ✓ |
-| `SubagentStop` | a subagent stops | `turn_id`, `agent_id`, `agent_type`, `agent_transcript_path`, `stop_hook_active`, `last_assistant_message` | ✓ |
-| `Stop` | turn completes | `turn_id`, `stop_hook_active`, `last_assistant_message` | ✓ |
-| `Interrupt` | root turn is interrupted, after the rollout is flushed | `turn_id`; common `model` and `permission_mode` fields | ✓ |
-| `PreCompact` | before conversation compaction | `turn_id`, `trigger` (`manual`\|`auto`) | ✓ |
-| `PostCompact` | after compaction | `turn_id`, `trigger` | ✓ |
-| `SessionEnd` | root session runtime shuts down, including idle app-server unload | `reason` (currently always `other`); no `model`, `permission_mode`, or `turn_id` | — |
-
-Codex 0.150.1 has **no `Notification` or dedicated plan-approval hook**. `Interrupt` and `SessionEnd` are root-only. RimZ installs `Interrupt` because it is direct turn-settle evidence, but deliberately leaves `SessionEnd` unwired: app-server idle unload runs the same shutdown path, so that event does not prove the pane or interactive session ended. The client-side plan gate is derived from the rollout after the ordinary `Stop` hook; its wire shape is in [Plan mode, approval, and questions](#plan-mode-approval-and-questions). Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed. Codex 0.145 and newer deliver that compact start under a successor session id whose rollout `forked_from_id` names the predecessor; RimZ stamps the link as `compacted_from` and promotes the continuation on the same pane and CLI process.
-
-Hook tool names are not the same vocabulary as rollout function-call names. The current hook contract reports canonical `Bash`, `apply_patch`, and `mcp__server__tool` names; `apply_patch` matcher aliases include `Edit` and `Write`. In 0.150.1 both simple and unified-exec command launches emit `PreToolUse` as `Bash`, and unified-exec completion (including a final `write_stdin` poll) emits the matching `PostToolUse`. Hook interception remains partial: web search and other non-hooked paths are not a complete enforcement boundary. Current rollouts can still record `exec_command`, `apply_patch`, `update_plan`, and `request_user_input`, with older or compatibility traces mentioning `shell` / `local_shell`. RimZ reads the payload's actual `tool_name`, treats `request_user_input` as the only blocking `PreToolUse` question tool, and treats `update_plan` as ordinary non-blocking progress state.
-
-**Observed registration quirks:** on Codex 0.144.1, opening a plain TUI reached the idle prompt without firing `SessionStart`; the hook rode the first submitted prompt immediately before `UserPromptSubmit`, and `/clear` provided no reliable `SessionStart(source = "clear")` observation despite that documented source value. Codex 0.144.5 now fires `SessionStart` on `/new` / conversation switch before the first `UserPromptSubmit`. Codex 0.145 changes `/compact` from an in-session continuation to a successor id: `SessionStart(source = "compact")` carries the successor while its rollout header carries `forked_from_id = <predecessor>`. RimZ still reads rollout `session_meta.payload.forked_from_id` for lineage: absent means a fresh `/clear` / `/new` root, present means a fork, and the compact hook distinguishes the compact successor from `/side` and `/btw` forks. RimZ's handling is in the [adapter_codex.md → Session registration](../../internals/agents/adapter_codex.md#session-registration-and-launch-quirks); re-verify these observations against an installed release on each refresh.
-
-### Decision and output schema
-
-RimZ emits Codex-native decisions for `PermissionRequest` and the blocking `PreToolUse` tools it owns:
-
-```json
-{ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "allow|deny", "message": "string" } } }
+{ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "allow", "message": "string" } } }
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": { "command": "string" } } }
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "string" } }
 ```
 
-> **Divergence — never reuse Claude's shape.** A Codex `PermissionRequest` decision carries only `decision.behavior` and `message`. Emitting `updatedInput`, `updatedPermissions`, or `interrupt` corrupts it — those belong to *other* Codex hook types such as `PreToolUse`, not to a permission answer.
+A `PermissionRequest` answer carries only `decision.behavior` and `decision.message`. Claude Code's `updatedInput`, `updatedPermissions`, and `interrupt` fail it.
 
-For reference, Codex's common-control and block shapes:
+Exit codes: exit 0 with JSON applies the output, and exit 0 with empty stdout continues. Exit 2 with non-empty stderr blocks, using stderr as the reason, on `PreToolUse`, `PermissionRequest`, `PostToolUse`, `UserPromptSubmit`, `Stop`, and `SubagentStop`; exit 2 with empty stderr, or on the compact events and `Interrupt`, is a failure.
 
-```json
-// SessionStart / PreCompact / PostCompact / UserPromptSubmit / SubagentStop / Stop — common controls
-{ "continue": true, "stopReason": "string", "systemMessage": "string", "suppressOutput": false, "hookSpecificOutput": { "additionalContext": "string" } }
+## Project directory trust
 
-// PostToolUse / Stop / SubagentStop — block
-{ "decision": "block", "reason": "string" }
+Codex shows "Do you trust the contents of this directory?" at TUI startup whenever the resolved project has no trust level: `should_show_trust_screen` is `config.active_project.trust_level.is_none()` (`tui/src/lib.rs:2055`). A recorded `untrusted` is a decision and suppresses the screen. The screen comes before the first prompt, so an unattended launch in an undecided directory stops there and never starts a turn.
 
-// Interrupt — warning text only
-{ "systemMessage": "string" }
+Decisions live in the merged configuration, keyed by absolute path; the user writes them to `$CODEX_HOME/config.toml`, and a managed layer can supply the same keys:
+
+```toml
+[projects."/home/user/src/app"]
+trust_level = "trusted"   # or "untrusted"
 ```
 
-**Exit codes.** Exit `0` with JSON processes the output; exit `0` with no output continues; exit `2` is a blocking failure (stderr read as the reason/message). The neutral path RimZ takes is empty stdout, exit 0. Exact bytes are the inline goldens in [`codex/mod.rs`](../../../crates/rimz/src/agents/adapters/codex/mod.rs).
+`decision_for_dir` (`config/src/loader/mod.rs:1062`) takes the first candidate that carries a level, in this order:
 
-## `notify` channel
+1. The session cwd.
+2. The nearest ancestor holding a `project_root_markers` entry (default `[".git"]`); a `.git` directory counts only if it holds `HEAD` (`find_project_root`, `loader/mod.rs:1548`).
+3. The main repository root from `resolve_root_git_project_for_trust` (`git-utils/src/trust.rs:13`). For a linked worktree it reads the `.git` file, follows `gitdir` into `worktrees/<name>`, and returns the checkout owning the canonical `commondir`, so a worktree of a trusted repository is trusted through its main root.
 
-Independent of hooks, Codex can invoke an external program on supported events. RimZ uses **hooks, not `notify`** — this is recorded for reference. The `notify` key must live in the user-level `~/.codex/config.toml` (a project-local `notify` is ignored with a startup warning).
+Each candidate is looked up as its normalized canonical path and as written, so a symlinked directory and its target share one decision. Windows folds ASCII case; other platforms compare exactly (`loader/mod.rs:1450`, `:1463`).
+
+Answering "Yes, continue" writes `trust_level = "trusted"` for the trust target: the main git root when there is one, the cwd otherwise (`tui/src/onboarding/onboarding_screen.rs:172`, `tui/src/config_update.rs:62`).
+
+| Related behaviour | Upstream |
+| --- | --- |
+| What trust gates | Project-scoped `.codex/` layers: project-local config, hooks, and rules ([config reference](https://learn.chatgpt.com/docs/config-file/config-reference), `projects.<path>.trust_level`). User-level `$CODEX_HOME/config.toml` hooks run regardless. |
+| Skipping the screen | No CLI flag skips it. Approval and sandbox flags leave trust untouched. |
+| `codex exec --skip-git-repo-check` | Covers the separate not-a-git-repository refusal, which `--dangerously-bypass-approvals-and-sandbox` also bypasses (`exec/src/lib.rs:964` to `:969`). |
+| Unparseable `config.toml` | The TUI exits at startup instead of prompting (`tui/src/lib.rs:2034` to `:2049`). |
+| Helpers before trust | Since 0.154.0 (#42324) startup resolves helper executables from trusted system directories instead of `PATH`, and `codex doctor` inspects executables without running them. |
+
+## Launch and config overrides
+
+### Launch prompt, resume, and fork
+
+| Command | Behaviour |
+| --- | --- |
+| `codex [OPTIONS] [PROMPT]` | Starts the interactive TUI, submitting `PROMPT` as the first message when given. The CLI parses arguments with clap (`cli/src/main.rs`), so everything after `--` is positional: `codex -- "<prompt>"` passes a prompt even when it begins with `-`. |
+| `codex resume [SESSION_ID] [PROMPT]` | Reopens a session in place. `SESSION_ID` is a UUID or a session name (a parseable UUID wins); `--last` picks the most recent. |
+| `codex fork [SESSION_ID] [PROMPT]` | Copies the conversation into a new session id and leaves the source untouched; `--last` forks the most recent. |
+| `codex exec resume`, `codex exec fork` | Non-interactive equivalents. |
+
+Both interactive commands accept an optional initial `PROMPT` in 0.154.0 (`codex resume --help`, `codex fork --help`). A fork's rollout header names its source in `forked_from_id`. Codex 0.154.0 also adds experimental `--worktree` and `/worktree` for new or forked sessions.
+
+### CLI config overrides
+
+Each `-c key=value` or `--config key=value` overrides one loaded configuration key for that launch, and wins over the same key in `~/.codex/config.toml`. A dotted key reaches nested tables. Codex parses the value as TOML and falls back to the raw string when TOML parsing fails (`utils/cli/src/config_override.rs`), so a caller that needs an exact string round trip emits a TOML-quoted value. `--enable <FEATURE>` and `--disable <FEATURE>` are shorthand for `-c features.<name>=true|false`.
+
+| Key | Type and behaviour |
+| --- | --- |
+| `developer_instructions` | String, added as a developer-role message separate from the user prompt (`config_toml.rs:235`). |
+| `model_instructions_file` | Path; replaces the built-in instructions (`config_toml.rs:253`). |
+| `model_reasoning_effort` | Reasoning effort for the session model. |
+| `model_auto_compact_token_limit` | `Option<i64>`, an absolute token threshold (`config_toml.rs:168`). The effective limit is `min(configured, 90% of the model context window)`, and 90% is the default when unset (`openai_models.rs:515`). Compaction triggers at `>=` the limit (`core/src/session/context_window.rs:105`), so zero or a negative value compacts at once. |
+| `model_auto_compact_token_limit_scope` | `total` (default) counts all active context; `body_after_prefix` counts growth after the carried compaction prefix and compares against the configured value unclamped (`config_toml.rs:172`, `config_types.rs:49`). |
+
+`model_auto_compact_token_limit` is a top-level key only: it is not a field of `[profiles.<name>]` (`config/src/profile_toml.rs`), and it has no dedicated flag or environment variable. The override parser requires a TOML integer for it, so `-c model_auto_compact_token_limit=200000` works and `200k` does not.
+
+### Login status
+
+`codex login status` prints one line to **stderr** and exits 0 when credentials are present (`cli/src/login.rs:443` to `:500`). It reports the login kind, never the plan or a token. Workload identity is checked first.
+
+| Output line | Login kind |
+| --- | --- |
+| `Logged in using ChatGPT` | ChatGPT OAuth |
+| `Logged in using an API key - <masked>` | OpenAI API key |
+| `Logged in using Amazon Bedrock API key` | Bedrock API key |
+| `Logged in using Amazon Bedrock AWS access keys` | Bedrock AWS credentials |
+| `Logged in using access token` | access token |
+| `Logged in using personal access token` | personal access token |
+| `Logged in using workload identity` | workload identity |
+| `Not logged in` | none |
+
+## TUI input and notifications
+
+### Paste burst
+
+The composer treats plain characters arriving at most 8 ms apart as a suspected paste once at least 3 arrive (`paste_burst.rs:159`, `:163`). It flushes the buffered burst after 8 ms of inactivity, or 60 ms on Windows (`:167` to `:170`), and appends Enter received during the burst or within the following 120 ms as a literal newline instead of submitting (`PASTE_ENTER_SUPPRESS_WINDOW`, `:160`). A bracketed paste clears the burst state through `clear_after_explicit_paste` (`:458`). A client typing raw keystrokes therefore needs a gap of more than 120 ms before a separate Enter; a bracketed paste does not.
+
+`tui.disable_paste_burst = true` turns the heuristic off (`config/src/types.rs:753`, default false). Since 0.153.0 that is the key's home; the top-level `disable_paste_burst` still works as a fallback.
+
+### `notify`
+
+`notify` runs an external program when a turn completes, independent of hooks. It must be set in the user-level config; a project-local `notify` is ignored with a startup warning (`PROJECT_LOCAL_CONFIG_DENYLIST`, `config/src/loader/mod.rs:74` to `:87`).
 
 ```toml
 notify = ["python3", "/path/to/notify.py"]
 ```
 
-The program receives a single JSON argument:
+The program receives one JSON document as its last argument (`hooks/src/legacy_notify.rs:16`). `agent-turn-complete` is the only type:
 
 ```json
 {
@@ -203,240 +261,276 @@ The program receives a single JSON argument:
   "thread-id": "string",
   "turn-id": "string",
   "cwd": "string",
-  "input-messages": ["string — user messages preceding the turn"],
+  "client": "string (optional)",
+  "input-messages": ["user messages preceding the turn"],
   "last-assistant-message": "string"
 }
 ```
 
-The external `notify` program currently receives only `agent-turn-complete`. `approval-requested` belongs to the separate in-terminal notification filter:
+In-terminal notifications are a separate `[tui]` setting (`config/src/types.rs:633` to `:671`), and approval prompts appear only there:
 
-```toml
-[tui]
-notifications = true            # bool, or an array of event types to restrict to
-notification_method = "auto"    # auto | osc9 | bel
-notification_condition = "unfocused"  # unfocused | always
-```
+| Key | Values |
+| --- | --- |
+| `tui.notifications` | `true`, `false`, or an array of event types such as `agent-turn-complete` and `approval-requested` |
+| `tui.notification_method` | `auto`, `osc9`, or `bel` |
+| `tui.notification_condition` | `unfocused` or `always` |
 
 ## App-server API
 
-Codex has no statusline, so RimZ reads its rich context out of band from the **app-server**: a bidirectional JSON-RPC 2.0 service (the `"jsonrpc":"2.0"` header is omitted on the wire), streamed as JSONL over stdio by default. Transports: `stdio://` (default), experimental unsupported `ws://IP:PORT`, `unix://[PATH]`, or `off`. Start with `codex app-server` (or `--listen …`). The unix-domain control socket speaks standard WebSocket HTTP upgrade over that UDS, then carries the same JSON-RPC payloads as text frames. The server bounds ingress queues and returns retryable JSON-RPC error `-32001` when overloaded. A client must send one `initialize` request per connection, then an `initialized` notification, before any other method.
+`codex app-server` is a bidirectional JSON-RPC 2.0 service with the `"jsonrpc":"2.0"` member omitted on the wire. It exposes thread, turn, account, config, and filesystem operations and streams notifications; the TUI itself runs on it. The protocol has three primitives: an **item** (one input or output unit with a `started`, optional `delta`, `completed` lifecycle), a **turn** (the items from one unit of agent work), and a **thread** (the durable session).
 
-### Daemon lifecycle and stale-process recovery
+### Transport and handshake
 
-`codex remote-control start` enables remote control and starts the persistent per-user app-server from `$CODEX_HOME/packages/standalone/current/codex`; `stop` requests its shutdown. The PID backend records `{ "pid", "processStartTime" }` in `$CODEX_HOME/app-server-daemon/app-server.pid` and `app-server-updater.pid`, where `processStartTime` is the trimmed `ps -p PID -o lstart=` value used as the PID-reuse guard. The updater process runs the exact `codex app-server daemon pid-update-loop` argv, and a remote-enabled child runs `codex app-server --remote-control --listen unix://`.
+`--listen <URL>` selects the transport (`codex app-server --help`):
 
-The updater waits five minutes before its first pass and one hour between later passes. Each pass runs the standalone installer and compares the updater's executable identity with the managed target. When they differ, it restarts a running app-server from the managed target and then replaces its own process image with that binary. `codex remote-control stop` stops only the app-server, and `start` preserves a live updater; that pair therefore does not repair updater skew. `codex app-server daemon bootstrap --remote-control` serializes the transition under the provider lifecycle lock, restarts the app-server, stops the existing updater, and starts a new updater from the managed target.
+| URL | Transport |
+| --- | --- |
+| `stdio://` | JSONL over stdin and stdout (default; `--stdio` is the same) |
+| `unix://`, `unix://PATH` | WebSocket HTTP upgrade over a Unix domain socket, then JSON-RPC text frames. Bare `unix://` is `$CODEX_HOME/app-server-control/app-server-control.sock` (`app-server-transport/src/transport/mod.rs:55`). |
+| `ws://IP:PORT` | WebSocket over TCP; experimental |
+| `off` | no listener |
 
-The 0.144.4 PID backend considered a recorded process active when `kill(pid, 0)` succeeded and its `ps` start time still matched. A zombie therefore remained active: `start` waited ten seconds for the absent control socket, while `stop` signalled the zombie, waited a 60-second grace period, attempted `SIGKILL`, and reached its 70-second timeout because signals cannot settle a dead child that its parent has not reaped. The 0.145 prerelease line added a non-blocking `waitpid` while stopping an app-server child started by a previous updater; 0.150.1 retains that native reaping path. RimZ keeps its narrowly proven repair for older releases: the socket is absent; both structured PID records still match; the app-server is the updater's sole zombie child; both processes belong to the current user; and the updater executable and argv resolve inside the managed standalone install. It sends `SIGTERM` to that updater, waits up to two seconds for both identities to disappear, then retries the Codex control command once. Every ambiguous observation preserves the native Codex failure.
-
-The protocol is organized around three primitives: an **Item** (atomic input/output unit with a `started` → optional `delta` → `completed` lifecycle), a **Turn** (the items from one unit of agent work), and a **Thread** (the durable session container).
-
-### Methods RimZ uses
-
-The [`codex::app_server`](../../../crates/rimz/src/agents/adapters/codex/app_server.rs) client speaks only **read-only, non-interfering** methods — it never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
-
-**`thread/loaded/list`** → the thread ids the app-server currently holds in memory; the daemon-mode liveness signal RimZ reaps ghost sessions against ([sidebar.md → Presence model](../../internals/sidebar/sidebar.md#presence-model)).
+A client sends one `initialize` request per connection, then an `initialized` notification, before any other method. The `initialize` result carries `userAgent` (which embeds the Codex version), `codexHome`, `platformFamily`, and `platformOs`.
 
 ```jsonc
-// result — v2/ThreadLoadedListResponse.json from `codex app-server generate-json-schema`
-{ "data": ["string", …], "nextCursor": "string | null" }
-```
-
-The reaper queries the per-user daemon **specifically** (never a cold-spawn, whose empty set would mass-reap), sends `{}` as params, follows `nextCursor`, and trusts only a recognized id-list shape: a response with no id field is treated as unknown, not zero, so a wire-shape drift keeps every session. RimZ still accepts the older `threadIds`, `threads`, `loadedThreadIds`, `ids`, and bare-array shapes for compatibility. The set is loaded-in-memory, not attached-pane, so it is a liveness improvement, not a perfect pane signal.
-
-**`initialize`** → handshake; the response `userAgent` carries the Codex version.
-
-```jsonc
-// request
-{ "method": "initialize", "params": { "clientInfo": { "name": "rimz", "version": "x.y.z" } } }
-// then, as a notification:
+{ "method": "initialize", "params": { "clientInfo": { "name": "my-client", "version": "x.y.z" } } }
 { "method": "initialized", "params": {} }
 ```
 
-**`account/rateLimits/read`** → the included-usage windows, plan tier, optional paid-credit state, and optional rate-limit reset credits.
+Ingress queues are bounded. When one is full the server rejects the request with retryable JSON-RPC error `-32001` on stdio, WebSocket, and Unix-socket connections (`enqueue_incoming_message`, `transport/mod.rs:205` to `:250`); the docs describe this for WebSocket mode only.
+
+### Read methods
+
+These are the read-only methods whose shapes RimZ depends on, from the 0.154.0 generated schema. None of them subscribes to a thread; `thread/resume` and `turn/start` join and own a thread.
+
+**`thread/loaded/list`** returns the thread ids the app-server holds in memory. Params are `{ cursor?, limit? }`.
 
 ```jsonc
-// result — RateLimitsResponse { rateLimits: RateLimitSnapshot }
+// v2/ThreadLoadedListResponse
+{ "data": ["thread-id", …], "nextCursor": "string | null" }
+```
+
+A thread stays loaded until it has had no subscriber for `thread_unload_delay_secs`, default 60, where 0 unloads at once (`config_toml.rs:322`, `core/src/config/mod.rs:3829`; configurable since 0.154.0, a fixed 30 minutes before). An idle daemon's list is therefore a loaded-in-memory set, not a set of attached terminals, and a freshly spawned app-server returns an empty list.
+
+**`account/rateLimits/read`** returns included-usage windows, plan, credits, and reset credits for a ChatGPT login. Fields are camelCase.
+
+```jsonc
+// v2/GetAccountRateLimitsResponse
 {
-  "rateLimits": {
-    "primary":   { "usedPercent": 0-100, "resetsAt": <epoch s>, "windowDurationMins": 300 },   // ~5h
-    "secondary": { "usedPercent": 0-100, "resetsAt": <epoch s>, "windowDurationMins": 10080 }, // ~7d
-    "planType": "plus | pro | team | …",
-    "credits": {
-      "hasCredits": true | false,          // optional, mapped
-      "unlimited": true | false,           // optional, mapped
-      "overageLimitReached": true | false, // optional, mapped
-      "balance": <USD number or string>    // optional, mapped
-    } // optional, tolerated here or at the result root
+  "rateLimits": {                         // required; the single-bucket view
+    "limitId": "codex",                   // string | null
+    "limitName": null,                    // string | null
+    "primary":   { "usedPercent": 19, "windowDurationMins": 300,   "resetsAt": 1789290347 }, // or null
+    "secondary": { "usedPercent": 4,  "windowDurationMins": 10080, "resetsAt": 1789805400 }, // or null
+    "planType": "plus",                   // PlanType | null
+    "credits": { "hasCredits": true, "unlimited": false, "balance": "12.50" },           // or null
+    "rateLimitReachedType": null,         // RateLimitReachedType | null
+    "individualLimit": null,              // { limit, used, remainingPercent, resetsAt } | null
+    "spendControlReached": null,          // boolean | null
+    "normalModelSlug": null               // string | null
   },
-  "credits": {
-    "hasCredits": true | false,
-    "unlimited": true | false,
-    "overageLimitReached": true | false,
-    "balance": <USD number or string>
-  }, // optional
-  "rateLimitsByLimitId": { "codex": { "primary": {}, "secondary": {} } }, // optional multi-bucket view
-  "rateLimitResetCredits": {
+  "rateLimitsByLimitId": { "codex": { … } },  // object | null; RateLimitSnapshot per metered limit id
+  "rateLimitResetCredits": {                  // object | null
     "availableCount": 2,
-    "credits": [
-      { "id": "opaque", "status": "available", "expiresAt": <epoch s>, "grantedAt": <epoch s>, "resetType": "codexRateLimits" }
+    "credits": [                              // array | null; null means only the count is known
+      { "id": "opaque", "status": "available", "resetType": "codexRateLimits",
+        "grantedAt": 1789000000, "expiresAt": 1789600000, "title": null, "description": null }
     ]
-  } // optional; credits may be null when only the count is known
+  },
+  "ordinaryUsageAllowed": true,  // boolean | null; null means unavailable
+  "accountId": "string | null",
+  "rateLimitUpsell": {}          // optional backend banner; nested keys stay snake_case
 }
 ```
 
-Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and reported window lengths render from `windowDurationMins`. Codex declares one product-level exception: when an authoritative response reports another window but omits the 5-hour duration, RimZ keeps the 5-hour slot visible as an unlimited `∞` bar. `rateLimits` remains the backward-compatible single-bucket view; `rateLimitsByLimitId` carries newer multi-bucket data. The optional `credits` object is mapped by the shared Codex credit rule: `overageLimitReached: true` means exhausted in older payloads, `unlimited: true` means usable with unknown remaining balance, numeric/string `balance` means remaining USD, and `hasCredits: false` means disabled. The 0.150.1 generated schema requires `hasCredits` and `unlimited` in `CreditsSnapshot` and carries nullable `balance`; RimZ tolerates the older fields and unknown shapes without dropping valid windows. `rateLimitResetCredits.availableCount` maps to the authoritative dashboard count; every valid `expiresAt` among `available` detail rows is retained, and the earliest remains the summary expiry.
+| Type | Values |
+| --- | --- |
+| `RateLimitWindow` | `usedPercent` (int, required), `windowDurationMins` (int or null), `resetsAt` (epoch seconds or null) |
+| `CreditsSnapshot` | `hasCredits` (required), `unlimited` (required), `balance` (string or null) |
+| `PlanType` | `free`, `go`, `plus`, `pro`, `prolite`, `team`, `self_serve_business_prolite`, `self_serve_business_usage_based`, `business`, `ent26`, `enterprise_cbp_automation`, `enterprise_cbp_usage_based`, `enterprise`, `edu`, `edu_plus`, `edu_pro`, `unknown` |
+| `RateLimitReachedType` | `rate_limit_reached`, `workspace_owner_credits_depleted`, `workspace_member_credits_depleted`, `workspace_owner_usage_limit_reached`, `workspace_member_usage_limit_reached` |
+| `RateLimitResetCredit.status` | `available`, `redeeming`, `redeemed`, `unknown` |
+| `RateLimitResetCredit.resetType` | `codexRateLimits`, `unknown` |
 
-**`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but RimZ does not map it to row effort because it is a catalog default/recommendation, not the current session's live value.
+`CreditsSnapshot` has no `overageLimitReached` field at 0.150.1 or 0.154.0 (no `overage` string exists under `codex-rs` at either tag), and the 0.154.0 response has no root-level `credits` object. `accountId`, `ordinaryUsageAllowed`, `rateLimitUpsell`, and `normalModelSlug` are new since 0.150.1. `account/rateLimitResetCredit/consume` takes `{ idempotencyKey, creditId? }` and returns `{ outcome }` with `reset`, `nothingToReset`, `noCredit`, or `alreadyRedeemed`.
 
-```jsonc
-// result.data[] (RawModel)
-{ "id": "string", "model": "string", "displayName": "string", "defaultReasoningEffort": "string?" }
-```
+**`model/list`** with `{ "includeHidden": true }` returns the model catalog in `data[]`. Each `Model` carries `id`, `model`, `displayName`, `description`, `hidden`, `isDefault`, `defaultReasoningEffort`, `supportedReasoningEfforts`, service tiers, input modalities, and upgrade metadata. `defaultReasoningEffort` is the catalog default, not a session's live effort.
 
-**`thread/read`** (`{ "threadId": "<session_id>", "includeTurns": false }`) and **`thread/list`** → stored thread metadata for the card description.
-
-```jsonc
-// thread/read result (wrapped shape; direct thread objects are also tolerated)
-{ "thread": { "id": "thr_123", "preview": "Create a TUI", "name": "TUI prototype" } }
-
-// thread/list result.data[]
-{ "id": "thr_123", "preview": "Create a TUI", "name": "TUI prototype", "updatedAt": 1730831111 }
-```
-
-RimZ reads `thread/read` by the hook `session_id`, then uses `thread/list` as the documented list-summary fallback to fill missing thread metadata, matching by `id` or `sessionId`. `name` maps to `AgentContext.session_name` and wins the Codex card's description line; `preview` maps to `AgentContext.session_preview` as the fallback when no name exists.
-
-**The token-usage gap.** The app-server does **not** expose token / context-window usage read-only — it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. So Codex's context gauge is sourced from the rollout transcript below, not the app-server.
-
-### Method index (the rest)
-
-A non-exhaustive map of the broader surface, for future wiring. Generate the exact, version-pinned schema with `codex app-server generate-json-schema`.
-
-- **Thread**: `thread/start`, `thread/resume`, `thread/fork`, `thread/archive`, `thread/name/set`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/rollback`, `thread/inject_items`, `thread/metadata/update`; 0.150.1 also includes experimental paginated `thread/turns/list` and `thread/items/list`.
-- **Turn**: `turn/start`, `turn/steer`, `turn/interrupt`; `review/start`.
-- **Account / auth**: `account/read`, `account/login/{start,cancel}`, `account/logout`, `account/rateLimits/read`, `account/usage/read`, `account/rateLimitResetCredit/consume`.
-- **Tools / exec / fs**: `command/exec` (+ `write`/`resize`/`terminate`), `process/{spawn,writeStdin,resizePty,kill}`, `fs/{readFile,writeFile,createDirectory,getMetadata,readDirectory,remove,copy,watch,unwatch}`, `mcpServer/*`.
-- **Config / features**: `config/read`, `config/value/write`, `config/batchWrite`, `configRequirements/read`, `model/list`, `experimentalFeature/list`, `skills/list`, `hooks/list`, `app/list`, `plugin/*`.
-- **Server-initiated notifications**: `thread/started`, `thread/status/changed`, `thread/tokenUsage/updated`, `turn/{started,completed,diff/updated,plan/updated}`, `item/{started,completed}` and `item/*/delta` streams, `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `account/{updated,rateLimits/updated,login/completed}`.
-- **Item types** (`ThreadItem` union): `userMessage`, `agentMessage`, `plan`, `reasoning`, `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `collabToolCall`, `webSearch`, `imageView`, `enteredReviewMode`, `exitedReviewMode`, `contextCompaction`.
-
-### Connection ladder
-
-Client connection preference (broker → daemon → cold-spawn) and the refresh trigger are in [adapter_codex.md → Context and transcript](../../internals/agents/adapter_codex.md#context-and-transcript).
-
-## Session index JSONL
-
-Codex CLI 0.150.0 and newer stores automatic session titles in `$CODEX_HOME/session_index.jsonl` (default `~/.codex/session_index.jsonl`). The `id` is the rollout session UUID carried as the hook `session_id`. The file is append-only: its provisional row is the whitespace-normalized first prompt truncated to at most 36 characters, followed seconds later by a generated short title when title generation succeeds. Some sessions retain only the provisional row, so RimZ suppresses prompt-prefix names at display. The newest valid row for an `id` remains authoritative, and malformed rows do not invalidate other entries.
-
-```json
-{ "id": "01900000-0000-7000-8000-000000000000", "thread_name": "TUI prototype", "updated_at": "2026-07-10T12:34:56.123456789Z" }
-```
-
-RimZ reads this durable index during the inline local-context pass, including `PostToolUse`, so a generated title reaches the card during the same turn without waiting for the throttled app-server enrichment. The app-server `name` remains a converging second source for the same `AgentContext.session_name` field.
-
-## Rollout transcript JSONL
-
-Codex writes a session rollout at `~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread_id>[_<rollout_id>].jsonl` and moves archived rollouts into the flat sibling `~/.codex/archived_sessions/` directory. The optional rollout id appears when a reverted thread keeps its stable thread id but writes a new rollout; filename fallback selects the newest matching timestamp and UUIDv7 rollout id. The format is defined by the open-source `codex-rs` types (no standalone published schema; the path tree and event shapes are the **official source**, linked above).
-
-Codex 0.150's non-ephemeral TUI sessions default to **Paginated** history. In Legacy mode, visible text is persisted as `event_msg` / `user_message` and `agent_message`; in Paginated mode those legacy message records are omitted and the same visible turns are persisted as `event_msg` / `item_completed` `UserMessage` and `AgentMessage` items. `response_item` records persist independently in both modes, so they are transport/history records rather than a second visible-message source. Plan, sleep, and completed subagent-activity items are policy exceptions that can persist in both modes. Rollout events feed RimZ's context gauge, supervised-run streaming, plan approval, and the local turn-settle markers:
+**`thread/read`** with `{ "threadId": "<id>", "includeTurns": false }` returns `{ "thread": Thread }`. **`thread/list`** returns `{ data: Thread[], nextCursor, backwardsCursor }` and filters on `archived`, `cwd`, `searchTerm`, `sourceKinds`, `sortKey`, and more. A `Thread` always carries `id`, `sessionId`, `preview`, `cwd`, `cliVersion`, `createdAt`, `updatedAt`, `ephemeral`, `modelProvider`, `projectId`, `source`, `status`, and `turns`, and optionally `name`, `model`, `reasoningEffort`, `forkedFromId`, `parentThreadId`, `agentNickname`, `agentRole`, `threadSource`, `historyMode`, `path`, and `gitInfo`. `name` is the thread title ([session index](#session-index)); `preview` is derived from the first user message. `includeTurns: true` is deprecated for paginated threads in favour of `thread/turns/list` and `thread/items/list`.
 
 ```jsonc
-// V2 session metadata; forked_from_id appears on user-created forks
+{ "thread": { "id": "01a09a03-fd61-7eb3-9f97-0b24ec37cde7", "sessionId": "01a09a03-fd61-7eb3-9f97-0b24ec37cde7",
+              "preview": "Trace the isolation override", "name": "Trace isolation override flow", "updatedAt": 1789290354, … } }
+```
+
+Token and context-window usage has no read method. It arrives only as the `thread/tokenUsage/updated` notification to a subscribed client; `account/usage/read` is an account-level activity summary, not per-thread context.
+
+### Method index
+
+The 0.154.0 stable schema, grouped. `--experimental` adds the methods listed last.
+
+| Group | Methods |
+| --- | --- |
+| Thread | `thread/start`, `thread/resume`, `thread/fork`, `thread/read`, `thread/list`, `thread/loaded/list`, `thread/unsubscribe`, `thread/archive`, `thread/unarchive`, `thread/delete`, `thread/name/set`, `thread/metadata/update`, `thread/goal/{set,get,clear}`, `thread/compact/start`, `thread/revert`, `thread/rollback` (deprecated; removed on `main` by #44915, unreleased), `thread/inject_items`, `thread/shellCommand`, `thread/turns/list`, `thread/items/list` (both stable since 0.154.0), `thread/approveGuardianDeniedAction`, `thread/section/move`, `threadSection/{create,list,update,delete}` |
+| Turn and review | `turn/start`, `turn/steer`, `turn/interrupt`, `review/start` |
+| Account | `account/read`, `account/login/{start,cancel}`, `account/logout`, `account/rateLimits/read`, `account/rateLimitResetCredit/consume`, `account/usage/read`, `account/workspaceMessages/read`, `account/sendAddCreditsNudgeEmail` |
+| Exec and filesystem | `command/exec`, `command/exec/{write,resize,terminate}`, `fs/{readFile,writeFile,createDirectory,getMetadata,readDirectory,remove,copy,watch,unwatch}`, `fuzzyFileSearch` |
+| Config, models, features | `config/read`, `config/value/write`, `config/batchWrite`, `config/mcpServer/reload`, `configRequirements/read`, `model/list`, `modelProvider/capabilities/read`, `permissionProfile/list`, `experimentalFeature/list`, `experimentalFeature/enablement/set` |
+| Skills, hooks, plugins, apps, MCP | `skills/list`, `skills/config/write`, `skills/extraRoots/set`, `hooks/list`, `plugin/{list,read,install,installed,uninstall,reconcile}`, `plugin/skill/read`, `plugin/share/{list,save,delete,checkout,updateTargets}`, `marketplace/{add,remove,upgrade}`, `app/{list,read,installed}`, `mcpServerStatus/list`, `mcpServer/oauth/login`, `mcpServer/resource/read`, `mcpServer/tool/call` |
+| Other | `externalAgentConfig/{detect,import}`, `externalAgentConfig/import/{readHistories,recordHistory}`, `feedback/upload`, `windowsSandbox/{readiness,setupStart}` |
+| Experimental only | `process/{spawn,writeStdin,resizePty,kill}`, `thread/queue/*`, `thread/realtime/*`, `thread/search`, `thread/timeline/list`, `thread/settings/update`, `turn/settings/update`, `thread/backgroundTerminals/*`, `thread/memoryMode/set`, `remoteControl/*`, `project/*`, `environment/*`, `collaborationMode/list`, `userVerification/*`, `account/bedrock/{discover,setup}`, `server/diagnostics`, `memory/reset` |
+
+Server requests to the client: `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval`, `item/tool/requestUserInput`, `item/tool/call`, `mcpServer/elicitation/request`, `account/chatgptAuthTokens/refresh`, `attestation/generate`, and the legacy `execCommandApproval` and `applyPatchApproval`.
+
+Notifications include `thread/{started,status/changed,tokenUsage/updated,name/updated,compacted,archived,unarchived,deleted,closed,goal/updated,goal/cleared,settings/updated,queue/changed}`, `turn/{started,completed,diff/updated,plan/updated}`, `item/{started,completed}` with the `item/agentMessage/delta`, `item/reasoning/*`, `item/commandExecution/outputDelta`, and `item/fileChange/*` streams, `hook/{started,completed}`, `account/{updated,rateLimits/updated,login/completed}`, `model/rerouted`, `remoteControl/status/changed`, `error`, and `warning`. The generated `ServerNotification.json` is the full list.
+
+`ThreadItem` types: `userMessage`, `hookPrompt`, `agentMessage`, `functionCallOutput`, `plan`, `reasoning`, `commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`, `collabAgentToolCall`, `subAgentActivity`, `webSearch`, `imageView`, `sleep`, `imageGeneration`, `enteredReviewMode`, `exitedReviewMode`, `contextCompaction`.
+
+`TurnError.codexErrorInfo` is one of `contextWindowExceeded`, `sessionBudgetExceeded`, `usageLimitExceeded`, `rateLimitExceeded`, `serverOverloaded`, `cyberPolicy`, `misalignmentPolicyViolation`, `internalServerError`, `unauthorized`, `badRequest`, `threadRollbackFailed`, `sandboxError`, `other`, or an object variant `httpConnectionFailed`, `responseStreamConnectionFailed`, or `responseStreamDisconnected`, each with an optional `httpStatusCode`. The [rollout spelling](#rollout-records) is snake case.
+
+### App-server daemon
+
+`codex remote-control start` enables remote control and starts the persistent per-user app-server; `codex remote-control stop` stops it, and `pair` prints a pairing code. `codex app-server daemon` exposes `start`, `restart`, `stop`, `bootstrap`, `enable-remote-control`, `disable-remote-control`, and `version`. Windows uses the same backend and file names since 0.154.0.
+
+| Item | Upstream |
+| --- | --- |
+| Managed binary | `$CODEX_HOME/packages/standalone/current/bin/codex`, falling back to the legacy `current/codex` (`managed_install.rs:19`; the `bin/` layout is from #42318). The 0.154.0 installer keeps `current/codex` as a symlink to `bin/codex`. |
+| PID records | `$CODEX_HOME/app-server-daemon/app-server.pid` and `app-server-updater.pid`, each `{ "pid", "processStartTime" }` (`lib.rs:35`, `backend/pid.rs:38`). `processStartTime` is the `lstart` value from `ps -p PID -o stat= -o lstart=` and guards against pid reuse (`pid.rs:645`). |
+| Other state | `daemon.lock` (lifecycle lock), `settings.json`, and per-process `.stderr.log` files in the same directory. |
+| App-server argv | `codex app-server --remote-control --listen unix://`, or `codex app-server --listen unix://` without remote control (`pid.rs:340` to `:344`). |
+| Updater argv | `codex app-server daemon pid-update-loop` |
+| Shutdown | A request to `ws://localhost/daemon/shutdown` over the control socket (#43308). |
+
+The updater waits five minutes before its first pass and one hour between passes (`update_loop.rs:34`, `:36`). Each pass runs the standalone installer and compares its own executable with the managed binary; when they differ it restarts a running app-server from the managed binary and then replaces its own process image with it.
+
+`stop` stops only the app-server (`lib.rs:435`), and `start` never touches the updater (`lib.rs:313`), so a stop and start pair leaves an updater running an old binary. `codex app-server daemon bootstrap --remote-control` takes `daemon.lock` (`lib.rs:516`), restarts the app-server, stops any live updater, and starts a new one from the managed binary (`bootstrap_locked`, `lib.rs:616` to `:641`).
+
+A zombie app-server counts as inactive and is reaped with a non-blocking `waitpid` (`pid.rs:183`, `:508` to `:516`; #43504). Up to 0.144.4 the PID backend treated a recorded process as active when `kill(pid, 0)` succeeded and its start time matched, so a zombie child of the updater looked alive: `start` waited ten seconds for an absent control socket, and `stop` signalled the zombie through a 60-second grace period and failed at its 70-second timeout. RimZ's recovery for those releases is in [adapter_codex.md → Remote control](../../internals/agents/adapter_codex.md#remote-control).
+
+## Session files
+
+### Rollout files
+
+Codex writes one rollout per thread at `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread_id>[_<rollout_id>].jsonl` (`precompute_new_rollout_path`, `rollout/src/recorder.rs:1635`; `rollout_file_name.rs:62`). The optional rollout id appears when a reverted thread keeps its thread id but starts a new file; the newest timestamp and UUIDv7 rollout id win. Archiving moves a rollout into the flat `$CODEX_HOME/archived_sessions/` (`recorder.rs:1457`). Readers accept `.jsonl` and zstd-compressed `.jsonl.zst` (`compression.rs:41`); writing compressed files is behind the `local_thread_store_compression` feature, which is under development and off by default (`features/src/lib.rs:1112`).
+
+Each line is `{ "timestamp", "ordinal", "type", "payload" }`, where `type` is `session_meta`, `turn_context`, `event_msg`, `response_item`, `compacted`, or one of the newer item kinds. Which `event_msg` records persist depends on the thread's history mode (`should_persist_event_msg`, `rollout/src/policy.rs`):
+
+| Record | Legacy | Paginated |
+| --- | --- | --- |
+| `item_completed` with a turn item | `Plan`, `Sleep`, `FunctionCallOutput`, and completed `SubAgentActivity` items only | every turn item, including `UserMessage` and `AgentMessage` |
+| `user_message`, `agent_message`, `agent_reasoning`, review, patch, MCP, web-search, image, and context-compacted end events | persisted | omitted |
+| `token_count`, `task_started`, `task_complete`, `turn_aborted`, `thread_goal_updated`, `thread_rolled_back`, thread settings | persisted | persisted |
+| `error`, `stream_error`, `warning`, exec begin and delta events, approval requests | never persisted | never persisted |
+| `response_item` | persisted | persisted |
+
+Non-ephemeral TUI sessions use Paginated history (`tui/src/app_server_session.rs:2038`), and the header records it as `history_mode`. `codex migrate-rollouts` converts legacy sessions. `response_item` rows are model transport, including developer and system messages, and are not a second copy of the visible transcript.
+
+### Rollout records
+
+The header is the first line. `SessionMeta` (`protocol.rs:3040`) carries `id`, `session_id`, `timestamp`, `cwd`, `originator`, `cli_version`, `source`, `model_provider`, `history_mode`, `context_window`, git metadata, and these lineage fields:
+
+| Field | Meaning |
+| --- | --- |
+| `forked_from_id` | Source thread of a user fork (`/fork`, `/side`, `/btw`, `codex fork`); absent on a fresh root such as `/new` or `/clear`. |
+| `forked_from_ordinal_exclusive` | Ordinal in the source where the copy stops; new since 0.150.1. |
+| `thread_source` | `user`, `subagent`, `guardian_review`, `memory_consolidation`, or a feature string (`protocol.rs:2760`). `subagent` identifies a child; `forked_from_id` alone does not. |
+| `parent_thread_id` | Immediate parent of a child. |
+| `agent_nickname`, `agent_path`, `agent_role` | Child display name, root-relative task path such as `/root/research/explore_hooks`, and role; `agent_role` also accepts `agent_type`. |
+| `multi_agent_version` | `disabled`, `v1`, or `v2`. |
+| `source.subagent.thread_spawn` | Older structured child source `{ parent_thread_id, depth, agent_path, agent_nickname, agent_role }` (`protocol.rs:2828`), still found in copied headers. |
+
+```jsonc
 { "type": "session_meta", "payload": {
-    "id": "<session_id>", "cwd": "/repo", "thread_source": "user" | "subagent",
-    "forked_from_id": "<fork_parent>", "parent_thread_id": "<immediate_parent>",
+    "id": "<thread_id>", "cwd": "/repo", "cli_version": "0.154.0", "history_mode": "paginated",
+    "thread_source": "subagent", "parent_thread_id": "<parent>", "forked_from_id": "<fork_source>",
     "agent_nickname": "Atlas", "agent_path": "/root/research/explore_hooks",
     "agent_role": "explorer", "multi_agent_version": "v2" } }
-
-// older structured child source, still observed in copied rollout headers
-{ "type": "session_meta", "payload": { "id": "<child_id>",
-    "source": { "subagent": { "thread_spawn": {
-      "parent_thread_id": "<immediate_parent>", "depth": 2,
-      "agent_path": "/root/research/explore_hooks",
-      "agent_nickname": "Atlas", "agent_role": "explorer" } } } } }
-
-// token usage
-{ "type": "event_msg", "payload": { "type": "token_count",
-    "info": { "model_context_window": <u64>,
-              "last_token_usage": { "input_tokens": <u64>, "cached_input_tokens": <u64>,
-                                    "output_tokens": <u64>, "total_tokens": <u64> } } } }
-
-// model and reasoning effort
-{ "type": "turn_context", "payload": { "model": "gpt-5.5-codex", "effort": "xhigh" } }
-
-// Legacy visible assistant message
-{ "type": "event_msg", "payload": { "type": "agent_message", "message": "..." } }
-
-// Paginated visible user message; non-text inputs are skipped
-{ "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
-    "item": { "type": "UserMessage", "content": [
-      { "type": "text", "text": "prompt", "text_elements": [] },
-      { "type": "image", "image_url": "data:..." }
-    ] } } }
-
-// Paginated visible assistant message; the content tag is capitalized upstream
-{ "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
-    "item": { "type": "AgentMessage", "content": [
-      { "type": "Text", "text": "assistant update" }
-    ] } } }
-
-// Persisted in both history modes; developer/system transport is not visible transcript text
-{ "type": "response_item", "payload": { "type": "message", "role": "developer",
-    "content": [{ "type": "input_text", "text": "hidden instruction" }] } }
-
-// provider turn error — accepted variants, classified through the app-server TurnError vocabulary
-{ "timestamp": "2026-06-11T07:18:00.000Z",
-  "type": "event_msg",
-  "payload": { "type": "turn_error" | "stream_error" | "error",
-               "message": "You've hit your usage limit",
-               "codexErrorInfo": "usageLimitExceeded" | "serverOverloaded" | "internalServerError" | "..." } }
-{ "timestamp": "2026-06-11T07:18:00.000Z",
-  "type": "event_msg",
-  "payload": { "type": "task_complete",
-               "error": { "message": "API Error: Server Error",
-                          "codexErrorInfo": "internalServerError" } } }
-
-// observed rollout spelling; `other` is a catch-all, not a terminal verdict
-{ "timestamp": "2026-07-25T09:24:51.105Z",
-  "type": "event_msg",
-  "payload": { "type": "task_complete",
-               "error": { "message": "unexpected status 503 Service Unavailable: Service Unavailable, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: a20a1d2aca20f069-DFW, auth error: 503, auth error code: biscuit_baker_service_me_circuit_open",
-                          "codex_error_info": "other" } } }
-
-// clean task completion; observed resting successes carry last_agent_message text
-{ "timestamp": "2026-06-14T05:59:49.268Z",
-  "type": "event_msg",
-  "payload": { "type": "task_complete",
-               "last_agent_message": "patch is correct" } }
-
-// interrupted turn; observed on Esc and on /clear of a running turn, with no Stop hook
-{ "timestamp": "2026-07-07T14:12:00.000Z",
-  "type": "event_msg",
-  "payload": { "type": "turn_aborted",
-               "reason": "interrupted",
-               "turn_id": "turn-1",
-               "completed_at": "2026-07-07T14:12:00.000Z" } }
 ```
 
-Codex carries the window directly (`model_context_window`); RimZ derives occupancy from the bounded `last_token_usage` reading. For a child this value is current context/request usage, not lifetime spend. `session_meta.payload.forked_from_id` carries fork lineage for `/side` / `/btw` / `/fork`; a parentless head is a fresh root such as `/clear` / `/new`. `thread_source = "subagent"` or the structured `source.subagent.thread_spawn` object positively identifies a child; `forked_from_id` alone still identifies user forks and is not child proof. The direct V2 fields supply nickname, root-relative task path, role, immediate parent, and version, with the structured spawn fields as tolerant fallbacks. Fork and subagent rollouts copy the parent's historical token-count records into a single timestamp second before appending their own work, so spend readers retain that cumulative prefix as a baseline and suppress it as billable usage. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `cache_write_input_tokens` is the `◍` cache-write figure, `input_tokens − cached_input_tokens − cache_write_input_tokens` is the `↘` fresh input (`input_tokens` includes both cache slices), and `output_tokens` is the `↗`. Codex 0.145 introduced `cache_write_input_tokens`, sourced from Responses `input_tokens_details.cache_write_tokens`; older rollouts omit it, automatic cache population reports `0`, and explicit prompt caching can report a nonzero write that renders as `◍`. Legacy `agent_message.message` and paginated `AgentMessage.content[].text` are the main-thread assistant text RimZ emits as `rimz agents <spec> -p --stream` / `rimz agents wait --stream` progress; `response_item` rows are ignored for visible streaming. Error records use the app-server `TurnError` vocabulary generated by `codex app-server generate-json-schema --out DIR`, while observed rollout files write the field as `codex_error_info` and multiword values in snake_case. RimZ accepts both spellings: usage-limit kinds pause for a rate limit, server-overload and internal-server-error kinds pause for the backoff class, and other known variants fail the row. The rollout value `other` is an upstream catch-all that can accompany a real transient failure, including the observed 503 record above, so it and unrecognized kinds defer to label classification. Label fallback maps "spend limit" to the spend-limit paused class; "usage limit", "session limit", "rate limit", "quota", "too many requests", and HTTP 429 map to the rate-limit paused class; "at capacity", "high demand", and HTTP 5xx map to the overload backoff class. Observed Codex 0.142.x serving-capacity failures render `⚠ Selected model is at capacity. Please try a different model.` in the TUI only; observed usage-limit failures render `■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage … try again at 6:35 AM.` in the TUI only. Both shapes leave the rollout resting on `event_msg` / `task_complete` with `last_agent_message: null`, no `error` field, no `Stop` hook, and no app-server `thread/read` error field; upstream issue threads include openai/codex #22277, #19579, #28507, and #29760. RimZ matches limit keywords without relying on their ornament, but requires the observed `⚠` banner for transient server/transport text so ordinary agent output cannot impersonate a provider warning. Observed interrupted turns render `event_msg` / `turn_aborted` with `reason: "interrupted"` on Esc and `/clear` of a running turn; Codex 0.150.1 flushes the rollout before firing its root-only `Interrupt` hook, while RimZ retains the resting-record fallback for older versions and lets a later live record clear it. The field → internal mapping, date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root), and self-clear rule are in [adapter_codex.md → Context and transcript](../../internals/agents/adapter_codex.md#context-and-transcript).
+A fork or child rollout begins with a copy of the parent's history, including its `token_count` records, before its own work.
 
-Upstream can transparently read compressed `.jsonl.zst` rollouts. Writing them is guarded by the `local_thread_store_compression` feature, which is `UnderDevelopment` and default-off in 0.150.1; RimZ therefore keeps `.jsonl` as its supported discovery and spend surface until compression becomes a shipped default.
-
-### Plan mode, approval, and questions
-
-Plan-mode shapes were verified against local Codex 0.144.3 rollouts and the installed TUI on 2026-07-13. A plan turn identifies its collaboration mode in `turn_context.payload.collaboration_mode.mode = "plan"` and `task_started.payload.collaboration_mode_kind = "plan"`; hook payloads report `permission_mode = "plan"`. The authoritative approval evidence is the completed item and same-turn clean completion:
+Turn and usage records, as a 0.154.0 build writes them:
 
 ```jsonc
-{ "timestamp": "2026-07-13T10:00:01Z", "type": "event_msg",
-  "payload": { "type": "item_completed", "turn_id": "turn-1",
-    "item": { "type": "Plan", "id": "turn-1-plan", "text": "# Plan\n\n..." } } }
-{ "timestamp": "2026-07-13T10:00:03Z", "type": "event_msg",
-  "payload": { "type": "task_complete", "turn_id": "turn-1", "last_agent_message": "Codex says:" } }
+// model and effort for the turn; collaboration_mode.mode is "plan" or "default"
+{ "type": "turn_context", "payload": { "model": "gpt-5.5-codex", "effort": "xhigh", "collaboration_mode": { "mode": "default" }, … } }
+
+{ "type": "event_msg", "payload": { "type": "task_started", "turn_id": "01a09a03-fdd7-…", "started_at": 1789290347,
+    "model_context_window": 372400, "collaboration_mode_kind": "default" } }
+
+{ "type": "event_msg", "payload": { "type": "token_count",
+    "info": { "model_context_window": 372400,
+              "last_token_usage":  { "input_tokens": 10152, "cached_input_tokens": 0, "cache_write_input_tokens": 0,
+                                     "output_tokens": 481, "reasoning_output_tokens": 41, "total_tokens": 10633 },
+              "total_token_usage": { … } },
+    "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 19.0, "window_minutes": 10080, "resets_at": … }, … } } }
 ```
 
-The parallel assistant response item wraps the body in `<proposed_plan>…</proposed_plan>`, while `task_complete.last_agent_message` excludes it. The TUI draws “Implement this plan?” only after the turn, with “Yes, implement this plan”, “Yes, clear context and implement”, and “No, stay in Plan mode”; the first row switches to Default mode and submits `Implement the plan.`. This selector is client-side and emits no dedicated hook or `notify` event ([openai/codex#19921](https://github.com/openai/codex/issues/19921)); the version-pinned implementation strings and actions live in [`plan_implementation.rs`](https://github.com/openai/codex/blob/78ad6e6bfd1d3b6a209acd3ef82172a96b25179c/codex-rs/tui/src/chatwidget/plan_implementation.rs). RimZ therefore derives the ask from the rollout at the ordinary `Stop` boundary.
+`TokenUsage` (`protocol.rs:2216`): `input_tokens` includes both cache slices, `output_tokens` includes `reasoning_output_tokens`, and `cache_write_input_tokens` defaults to 0 when absent (older rollouts omit it). `last_token_usage` is the most recent request; `total_token_usage` is cumulative for the rollout, including any copied parent prefix.
 
-Plan clarifications and default-mode questionnaires use the same `request_user_input` tool. Verified hook input and output:
+Visible messages in Paginated mode:
+
+```jsonc
+// user message; content is UserInput, snake-tagged: text, image, local_image, audio, local_audio, skill, mention
+{ "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
+    "item": { "type": "UserMessage", "content": [ { "type": "text", "text": "prompt", "text_elements": [] } ] } } }
+
+// assistant message; the content tag is capitalized; the item may also carry phase, memory_citation, delivery, questions
+{ "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
+    "item": { "type": "AgentMessage", "content": [ { "type": "Text", "text": "assistant update" } ] } } }
+```
+
+Legacy mode writes the same text as `{ "type": "user_message", "message": … }` and `{ "type": "agent_message", "message": … }` event payloads.
+
+Turn endings (`TurnCompleteEvent`, `protocol.rs:2141`, serialized as `task_complete` with alias `turn_complete`; `TurnAbortedEvent`, `protocol.rs:4154`). Timestamps inside the payload are epoch seconds:
+
+```jsonc
+// clean completion
+{ "type": "event_msg", "payload": { "type": "task_complete", "turn_id": "…", "last_agent_message": "patch is correct",
+    "started_at": 1789290347, "completed_at": 1789290628, "duration_ms": 280548 } }
+
+// failed turn; the only persisted error record
+{ "type": "event_msg", "payload": { "type": "task_complete", "turn_id": "…", "last_agent_message": null,
+    "error": { "message": "This content was flagged for possible cybersecurity risk. …", "codex_error_info": "cyber_policy" } } }
+
+// interrupted turn
+{ "type": "event_msg", "payload": { "type": "turn_aborted", "turn_id": "…", "reason": "interrupted",
+    "started_at": 1789043828, "completed_at": 1789043832, "duration_ms": 4223 } }
+```
+
+| Field | Values |
+| --- | --- |
+| `turn_aborted.reason` | `interrupted`, `replaced`, `review_ended`, `budget_limited`; Esc and `/clear` during a turn were observed writing `interrupted` on 0.144.x |
+| `task_complete.error` | `ErrorEvent { message, codex_error_info }` (`protocol.rs:2063`) |
+| `codex_error_info` | snake case (`protocol.rs:1851`): `context_window_exceeded`, `session_budget_exceeded`, `usage_limit_exceeded`, `rate_limit_exceeded`, `server_overloaded`, `cyber_policy`, `misalignment_policy_violation`, `http_connection_failed`, `response_stream_connection_failed`, `internal_server_error`, `unauthorized`, `bad_request`, `sandbox_error`, `response_stream_disconnected`, `response_too_many_failed_attempts`, `active_turn_not_steerable`, `thread_rollback_failed`, `other` |
+
+`other` is a catch-all and can accompany a transient failure such as an HTTP 503. There is no `turn_error` record, and `error` and `stream_error` events are never persisted.
+
+Some provider failures leave no error in the rollout. Observed on 0.142.x, a serving-capacity failure (TUI: `⚠ Selected model is at capacity. Please try a different model.`) and a usage-limit failure (TUI: `■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage … try again at 6:35 AM.`) both end in a `task_complete` with `last_agent_message: null` and no `error`, with no `Stop` hook and no error on the app-server thread; see openai/codex #22277, #19579, #28507, and #29760. This has not been re-observed on 0.154.0.
+
+### Session index
+
+`$CODEX_HOME/session_index.jsonl` maps a thread id to its title (`rollout/src/session_index.rs:25`). The TUI generates a title of at most 36 characters after the first turn (`THREAD_TITLE_MAX_CHARS`, `tui/src/app/thread_title.rs:25`) and appends one row with it (`append_thread_name`, `session_index.rs:33`). Renames append further rows, and the newest valid row for an `id` wins; deleting a thread rewrites the file without its rows (`remove_thread_name_entries`, `session_index.rs:74`). Since 0.154.0 (#42749) the TUI writes only the generated title; earlier builds first appended a provisional row made from the whitespace-normalized first prompt.
+
+```json
+{ "id": "01a09a03-fd61-7eb3-9f97-0b24ec37cde7", "thread_name": "Trace isolation override flow", "updated_at": "2026-09-13T09:05:54.102581041Z" }
+```
+
+The same title is the app-server `Thread.name`.
+
+### Questions and plan approval
+
+A Plan-mode turn records `turn_context.payload.collaboration_mode.mode = "plan"` and `task_started.payload.collaboration_mode_kind = "plan"`, and its hooks report `permission_mode = "plan"`. The plan itself is a completed `Plan` item followed by a clean completion of the same turn:
+
+```jsonc
+{ "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "turn-1",
+    "item": { "type": "Plan", "id": "turn-1-plan", "text": "# Plan\n\n..." } } }
+{ "type": "event_msg", "payload": { "type": "task_complete", "turn_id": "turn-1", "last_agent_message": "Codex says:" } }
+```
+
+The model's response wraps the plan in `<proposed_plan>…</proposed_plan>`, which `last_agent_message` excludes. After the turn the TUI asks "Implement this plan?" with three rows (`tui/src/chatwidget/plan_implementation.rs:9` to `:13`): "Yes, implement this plan" switches to Default mode and submits `Implement the plan.`; "Yes, clear context and implement" starts a fresh thread seeded with the plan; "No, stay in Plan mode" continues planning. The prompt is client-side and emits no hook or `notify` event ([openai/codex#19921](https://github.com/openai/codex/issues/19921)), so the ordinary `Stop` hook and the rollout are the only signals.
+
+Plan clarifications and default-mode questionnaires use the blocking `request_user_input` tool:
 
 ```jsonc
 // PreToolUse.tool_input
@@ -448,80 +542,79 @@ Plan clarifications and default-mode questionnaires use the same `request_user_i
     ] }
 ] }
 
-// PostToolUse.tool_response
-{ "answers": { "path": { "answers": ["Blue"] } } }
+// PostToolUse.tool_response: a JSON string
+"{\"answers\":{\"path\":{\"answers\":[\"Blue\"]}}}"
 ```
 
-The questionnaire starts each option list on its first row; Down moves selection and Enter commits, advances, and submits on the final question. The current UI also supports notes/custom text, while RimZ tolerantly parses `multi_select` and `multiSelect` if a producer supplies either spelling. The version-pinned interaction state machine lives in [`request_user_input/mod.rs`](https://github.com/openai/codex/blob/78ad6e6bfd1d3b6a209acd3ef82172a96b25179c/codex-rs/tui/src/bottom_pane/request_user_input/mod.rs).
+The questionnaire (`tui/src/bottom_pane/request_user_input/mod.rs`) opens with the first option of each question selected. Down moves the selection, and the submit key (Enter by default, remappable in the keymap) commits the answer, advances to the next question, and submits after the last. Each question also accepts notes and free-form text.
 
-## Auth file
+`request_user_input_async` (0.153.0) is the non-blocking variant: its input is `{ "questions": [ { "title", "options"?: [string] } ] }`, it returns `{"accepted":true}` at once, and the questions appear as an `AgentMessage` item with `delivery: "async"` and `questions` that the user answers inline while the turn continues (`core/src/tools/handlers/request_user_input_async.rs`).
 
-Codex stores credentials according to `cli_auth_credentials_store = "file" | "keyring" | "auto"`. With file storage, [`account.rs`](../../../crates/rimz/src/agents/adapters/codex/account.rs) reads `~/.codex/auth.json` directly for the logged-in-but-idle probe:
+## Auth and usage endpoints
 
-| Shape | Meaning |
+### `auth.json`
+
+`cli_auth_credentials_store` selects where Codex keeps credentials: `file` (default), `keyring`, `auto`, or `ephemeral`, which keeps them in memory for the current process (`config/src/types.rs:109`). With `file`, credentials are in `$CODEX_HOME/auth.json` (`login/src/auth/storage.rs:41`):
+
+| Key | Meaning |
 | --- | --- |
-| `OPENAI_API_KEY` present, non-empty | API-key login → **unmetered** by subscription windows; the provider dashboard uses transcript-derived API spend plus any display ceiling |
-| `tokens.access_token` present | ChatGPT login → **metered** (plan tier filled by live app-server context or the OAuth usage response) |
-| `tokens.account_id` present, non-empty | explicit ChatGPT account identity copied to `AgentAccount.account_id`, the `ChatGPT-Account-Id` request header, and OAuth cache ownership |
+| `OPENAI_API_KEY` | API-key login when non-empty. |
+| `tokens.access_token` | ChatGPT OAuth access token; the bearer token for the usage endpoints below. |
+| `tokens.account_id` | ChatGPT account id, sent as the `ChatGPT-Account-Id` header. |
 
-When no auth file exists, RimZ runs `codex login status` so keyring-backed logins still appear with the correct metered/unmetered posture. The command prints one line per auth mode: `Logged in using ChatGPT` (metered by subscription windows); `Logged in using an API key - <masked>`, `Logged in using Amazon Bedrock API key`, and `Logged in using Amazon Bedrock AWS access keys` (token/AWS-billed, so unmetered); `Logged in using access token`, `Logged in using personal access token`, and `Logged in using workload identity` (logged in, metering unknown); or `Not logged in`. It reports login kind but no plan tier or token, so the plan rides the app-server (`account/rateLimits/read` `planType`) and direct OAuth usage remains available only when Codex exposes a file token. The semantics are in [adapter_codex.md → Account and balance](../../internals/agents/adapter_codex.md#account-and-balance).
+With keyring or ephemeral storage there is no file; `codex login status` still reports the login kind.
 
-[`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`; the same trimmed explicit field identifies the idle `AgentAccount` and the successful usage observation, so a stale preflight read cannot assign fetched facts to the wrong cache owner. RimZ does not decode JWT claims for identity.
+### Responses rate-limit headers
 
-The app-server `account/rateLimits/read` `planType` is persisted with realtime credits even when plan is the only account field returned. A non-empty app-server plan replaces the cached OAuth plan; an absent app-server plan preserves it, so keyring-backed and idle sessions retain their last provider-authoritative label.
+Codex also reads rate-limit state from response headers on model requests (`codex-api/src/rate_limits.rs`). For a limit id `L` (default `codex`, underscores written as hyphens) the headers are:
 
-The default usage URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. RimZ refuses a base whose host is neither `chatgpt.com` nor loopback before reading credentials, and the probe reports the base as untrusted. The parsed usage response shape:
+| Header | Value |
+| --- | --- |
+| `x-L-primary-used-percent`, `x-L-secondary-used-percent` | window usage, float |
+| `x-L-primary-window-minutes`, `x-L-secondary-window-minutes` | window length in minutes |
+| `x-L-primary-reset-at`, `x-L-secondary-reset-at` | reset time, epoch seconds |
+| `x-L-limit-name` | display name of a non-default limit |
+| `x-codex-credits-has-credits`, `x-codex-credits-unlimited`, `x-codex-credits-balance` | credit state |
+| `x-codex-rate-limit-reached-type` | a `RateLimitReachedType` value |
+| `x-codex-promo-message` | backend promotional text |
 
-```jsonc
-{
-  "user_id": "user_…",     // present, ignored
-  "account_id": "acct_…",  // present, ignored; local tokens.account_id keys account switches
-  "email": "person@example.com", // present, ignored
-  "plan_type": "plus | pro | team | …", // mapped as the idle/switched-account plan label fallback
-  "rate_limit": {
-    "primary_window": {
-      "used_percent": 0-100,           // mapped
-      "reset_at": <epoch s>,           // mapped
-      "limit_window_seconds": 18000,   // mapped to duration_mins
-      "reset_after_seconds": 123       // present, ignored
-    },
-    "secondary_window": {
-      "used_percent": 0-100,           // mapped
-      "reset_at": <epoch s>,           // mapped
-      "limit_window_seconds": 604800,  // mapped to duration_mins
-      "reset_after_seconds": 123       // present, ignored
-    }
-  },
-  "credits": {
-    "has_credits": true | false,            // mapped
-    "unlimited": true | false,              // mapped
-    "overage_limit_reached": true | false,  // mapped
-    "balance": <USD number, string, or null>, // mapped when numeric/string
-    "approx_local_messages": null,          // present, ignored
-    "approx_cloud_messages": null           // present, ignored
-  },
-  "spend_control": {},                 // present, ignored
-  "rate_limit_reset_credits": null     // present, ignored
-}
-```
+Every `x-*-primary-used-percent` header names one limit id, so `parse_all_rate_limits` returns one snapshot per limit present. The same state reaches rollouts as `token_count.rate_limits` and app-server clients as `account/rateLimits/updated`. The public docs do not describe these headers.
 
-Each window's `limit_window_seconds` maps to `duration_mins`; primary/secondary order is not semantic. Codex credits map in this order: `overage_limit_reached: true` → exhausted `ExtraCredits::Known { remaining_usd: 0 }`, `unlimited: true` → usable `ExtraCredits::Known` with unknown remaining balance, numeric/string `balance` → `ExtraCredits::Known { remaining_usd }`, `has_credits: false` → `ExtraCredits::Disabled`, and omitted/unknown fields → no extra-credit reading.
+### ChatGPT usage endpoints
 
-Rate-limit reset credits use the same OAuth token and optional `ChatGPT-Account-Id` header, fetched from `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`; with a non-`/backend-api` base the path is `/api/codex/rate-limit-reset-credits`. The parsed response shape:
+Codex's backend client reads account usage over HTTPS with the OAuth bearer token and, when known, the `ChatGPT-Account-Id` header. The base URL is `chatgpt_base_url` from config, default `https://chatgpt.com/backend-api/` (`core/src/config/mod.rs:4283`), with trailing slashes trimmed. A `https://chatgpt.com` or `https://chat.openai.com` base without `/backend-api` gets it appended, and the path style follows from whether the base contains `/backend-api` (`PathStyle::from_base_url`, `backend-client/src/client.rs:126`, `:184` to `:196`):
+
+| Call | Base contains `/backend-api` | Other bases |
+| --- | --- | --- |
+| Usage, `GET` | `/wham/usage` | `/api/codex/usage` |
+| Reset credits, `GET` | `/wham/rate-limit-reset-credits` | `/api/codex/rate-limit-reset-credits` |
+| Consume a reset credit, `POST` | `/wham/rate-limit-reset-credits/consume` | `/api/codex/rate-limit-reset-credits/consume` |
+
+The usage response is snake case (`RateLimitStatusPayload` and `RateLimitStatusWithResetCredits`):
 
 ```jsonc
 {
-  "available_count": 2, // mapped to ResetCredits.count when present
-  "credits": [
-    {
-      "status": "available",             // only available credits affect the count and expiry
-      "expires_at": "2026-07-06T12:00:00Z", // retained in expiries; earliest also becomes soonest_expiry
-      "title": "Rate Limit Reset"        // present, ignored
-    }
-  ]
+  "plan_type": "plus",                    // required; guest, free, go, plus, pro, prolite, free_workspace, team, business, education, edu, enterprise, k12, quorum, … unknown
+  "rate_limit": {                         // optional
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window":   { "used_percent": 19, "limit_window_seconds": 18000,  "reset_after_seconds": 123, "reset_at": 1789290347 },
+    "secondary_window": { "used_percent": 4,  "limit_window_seconds": 604800, "reset_after_seconds": 456, "reset_at": 1789805400 }
+  },
+  "credits": {                            // optional
+    "has_credits": true, "unlimited": false, "balance": "12.50",
+    "approx_local_messages": null, "approx_cloud_messages": null
+  },
+  "spend_control": { "reached": false, "individual_limit": { "limit": "…", "used": "…", "remaining_percent": 80, "reset_at": 1789805400 } }, // optional
+  "additional_rate_limits": [ { "metered_feature": "…", "limit_name": "…", "rate_limit": { … }, "normal_model_slug": "…" } ],      // optional
+  "rate_limit_reached_type": { "type": "rate_limit_reached" }, // optional
+  "rate_limit_reset_credits": { "available_count": 2 },        // optional
+  "account_id": "…",                                           // optional
+  "user_id": "…",                                              // optional
+  "rate_limit_upsell": {}                                      // optional
 }
 ```
 
-The usage response's `rate_limit_reset_credits` field remains ignored; the dedicated endpoint is the per-credit source and rides the standard OAuth usage cadence. Available detail expiries that fail RFC 3339 parsing are excluded without changing `available_count`; valid expiries sort ascending and equal timestamps remain distinct credits. A reset-credit fetch failure leaves the prior dashboard value in place when the primary usage fetch succeeds.
+Windows carry `limit_window_seconds`; primary and secondary order carries no meaning beyond position. Codex converts this payload into the app-server `account/rateLimits/read` shape: the main bucket gets `limitId: "codex"`, each additional limit becomes a further bucket, and `rate_limit.allowed` becomes `ordinaryUsageAllowed`.
 
-RimZ consumes a credit with `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume`, or `/api/codex/rate-limit-reset-credits/consume` for a non-`/backend-api` base, using the same OAuth and account headers as the GET. The request is `{"redeem_request_id":"<uuid-v7>","credit_id":"<optional id>"}`; the response carries `code` (`reset`, `nothing_to_reset`, `no_credit`, or `already_redeemed`) and `windows_reset`. Unknown codes remain a non-success outcome for forward compatibility. `nothing_to_reset` leaves the credit available.
+The reset-credit list is `{ "available_count", "credits": [ { "id", "reset_type", "status", "granted_at", "expires_at"?, "title"?, "description"? } ] }`, with the timestamps as strings (`RateLimitResetCreditDetails`, `types.rs:34`). The consume request is `{ "redeem_request_id": "<id>", "credit_id": "<optional id>" }`, and the response is `{ "code", "windows_reset" }` with `code` one of `reset`, `nothing_to_reset`, `no_credit`, or `already_redeemed` (`types.rs:106` to `:116`). `nothing_to_reset` leaves the credit available.
