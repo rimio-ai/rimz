@@ -698,9 +698,12 @@ fn mana_tick_endpoints_and_live_reading_span_the_full_width() {
     let theme = Theme::fixed(false);
     let zones = BudgetBarConfig::default();
     for (width, readings) in [
-        (1, [(0, 0), (40, 0), (60, 0), (100, 0)]),
-        (10, [(0, 0), (40, 4), (60, 6), (100, 9)]),
-        (35, [(0, 0), (40, 14), (60, 21), (100, 34)]),
+        (1, [(0, 0), (1, 0), (40, 0), (60, 0), (99, 0), (100, 0)]),
+        (10, [(0, 0), (1, 1), (40, 4), (60, 6), (99, 8), (100, 9)]),
+        (
+            35,
+            [(0, 0), (1, 1), (40, 14), (60, 21), (99, 33), (100, 34)],
+        ),
     ] {
         for (remaining_pct, cell) in readings {
             let spans = mana_bar_spans(&theme, 61, width, &zones, &[ManaTick { remaining_pct }]);
