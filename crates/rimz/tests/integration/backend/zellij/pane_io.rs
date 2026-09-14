@@ -574,6 +574,51 @@ fn semantic_answer_keys_reach_a_live_pane() {
     );
     assert_eq!(bytes, b"\x1b\x1b[Z");
 }
+
+/// An authoritative read with no workspace, so no presence cache to merge,
+/// still reports a pane's live command and cwd from Zellij's own listing.
+#[test]
+fn authoritative_list_panes_reports_live_command_and_cwd_without_a_cache() {
+    require_zellij!();
+
+    let room = LiveZellijSession::new("nativecmd");
+    let _client = AttachedClient::create_and_attach(&room, 80, 24);
+    let backend = ZellijBackend::with_runtime_dir(room.path());
+    wait_for_pane_count(room.path(), room.name(), 1);
+    let cwd = TempDir::new().expect("pane cwd");
+    spawn_sleep_pane(room.path(), room.name(), cwd.path());
+
+    let expected_cwd = cwd.path().canonicalize().expect("canonical pane cwd");
+    let listing = poll_until(
+        SPAWN_TIMEOUT,
+        || {
+            backend
+                .list_panes(PaneListOptions {
+                    session_name: Some(room.name().to_owned()),
+                    consistency: PaneReadConsistency::RequireAuthoritative,
+                    ..Default::default()
+                })
+                .map_err(|err| err.to_string())
+        },
+        |listing| {
+            listing
+                .panes
+                .iter()
+                .any(|pane| pane.command.as_deref() == Some("sleep 600"))
+        },
+        "authoritative listing reports the sleep pane's live command",
+    );
+    let pane = listing
+        .panes
+        .iter()
+        .find(|pane| pane.command.as_deref() == Some("sleep 600"))
+        .expect("sleep pane");
+    assert_eq!(
+        pane.cwd.as_deref().map(std::path::Path::new),
+        Some(expected_cwd.as_path()),
+        "{listing:?}",
+    );
+}
 /// `client_view` reads each client's focused pane from `list-clients`.
 /// A background session with no client focuses nothing; an attached client
 /// focuses its terminal pane. Drives the hook-ingestion pane-recovery probe.

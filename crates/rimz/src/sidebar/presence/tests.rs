@@ -427,28 +427,6 @@ fn settled_switch_classifies_against_the_accepted_topology() {
 }
 
 #[test]
-fn launch_chrome_is_agents_launch_not_agents_subcommand() {
-    assert!(command_is_launch_chrome(
-        "rimz agents claude,codex --worktree=quality-pass"
-    ));
-    assert!(command_is_launch_chrome(
-        "/home/me/.cargo/bin/rimz agents claude --worktree"
-    ));
-    for command in [
-        "cargo build",
-        "rimz agents exec codex",
-        "rimz agents wait swift-otter",
-        "rimz agents list",
-        "rimz agents ls",
-        "rimz agents show swift-otter",
-        "rimz agents focus swift-otter",
-        "rimz agents stop swift-otter",
-    ] {
-        assert!(!command_is_launch_chrome(command), "{command}");
-    }
-}
-
-#[test]
 fn one_snapshot_can_open_multiple_card_panes() {
     let current_writer = writer(1, 100);
     let mut existing = topology(1, Some(current_writer.clone()));

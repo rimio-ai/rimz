@@ -978,7 +978,7 @@ dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/zellij.log"
 case " $* " in
   *" action list-panes --all --json "*)
-    printf '[{"id":7,"is_plugin":true,"tab_position":0,"tab_name":"work","title":"plugin"},{"id":7,"is_plugin":false,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","pane_columns":40,"pane_x":0,"title":"rimz-sidebar","terminal_command":"rimz"}]\n'
+    printf '[{"id":7,"is_plugin":true,"tab_position":0,"tab_name":"work","title":"plugin"},{"id":7,"is_plugin":false,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh","pane_command":"cargo test","pane_cwd":"/native"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","pane_columns":40,"pane_x":0,"title":"rimz-sidebar","terminal_command":"rimz"},{"id":10,"is_plugin":false,"tab_position":0,"tab_name":"work","title":"zsh","pane_command":"rimz agents claude --worktree=x","pane_cwd":""}]\n'
     exit 0 ;;
 esac
 exit 1
@@ -993,7 +993,7 @@ exit 1
             Duration::from_secs(1),
         )
         .expect("authoritative listing");
-    assert_eq!(listing.panes.len(), 3, "cache-only pane stays absent");
+    assert_eq!(listing.panes.len(), 4, "cache-only pane stays absent");
     let plugin = listing
         .panes
         .iter()
@@ -1008,11 +1008,24 @@ exit 1
         .find(|pane| !pane.is_plugin && pane.id == 7)
         .expect("active");
     assert_eq!((active.pane_columns, active.pane_x), (Some(100), Some(0)));
-    assert_eq!(active.pane_command.as_deref(), Some("vim"));
-    assert_eq!(active.pane_pid, Some(707));
     assert_eq!(
-        active.pane_cwd.as_deref(),
-        Some(room.project_root.path().to_string_lossy().as_ref())
+        (active.pane_command.as_deref(), active.pane_cwd.as_deref()),
+        (Some("cargo test"), Some("/native")),
+        "Zellij's live command and cwd outrank the cached copy",
+    );
+    assert_eq!(active.pane_pid, Some(707));
+    let launcher = listing
+        .panes
+        .iter()
+        .find(|pane| pane.id == 10)
+        .expect("launcher");
+    assert_eq!(
+        (
+            launcher.pane_command.as_deref(),
+            launcher.pane_cwd.as_deref()
+        ),
+        (None, None),
+        "launch chrome and empty fields read as absent",
     );
     let background = listing
         .panes
