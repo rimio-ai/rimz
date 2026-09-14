@@ -1,97 +1,267 @@
 # Message CLI
 
-`rimz message` routes text to a running agent through the same path a keystroke takes: it types into the agent's own pane, exactly as if you typed there, and records the message durably so delivery is auditable and reversible. `rimz msg` is a visible alias for the whole command, including its subcommands. The default parks text for the next safe turn boundary, sending immediately only when the agent is already open to receive; `--steer` interrupts the live pane now; `--schedule` sets the earliest delivery time before the usual `--on` gate opens. A parked message is a `queued` record you can inspect, edit, or cancel before it lands. Addresses, park-vs-steer, channels, and agent-to-agent chat as a concept are the [messaging guide](../../guide/messaging.md).
+`rimz message` types text into a running agent's pane and keeps a durable record of every send, so you can inspect, edit, force, or cancel it until it lands. `rimz msg` is a visible alias for the command and all its subcommands. By default a message parks until the agent's current turn ends; `--steer` interrupts the turn now, and `--schedule` holds the message until a time. The [messaging guide](../../guide/messaging.md) teaches the workflow, and [message internals](../../internals/harness/messaging.md) explain the delivery engine.
 
 ```sh
-rimz message @swift-otter "Add focused tests for the parser."                   # park or send now if open
+rimz message @swift-otter "Add focused tests for the parser."        # park, or deliver now if the agent is free
+rimz message --steer @claude "Inspect the failing test now."          # interrupt the live turn
 rimz message --on any @codex#cli-docs "If the run failed, capture the error first."
-rimz message --schedule 60m @claude "Run the smoke test after lunch."
-rimz message --schedule 14:30 --on any @planner "Restart the review."
+rimz message --schedule 14:30 @planner "Restart the review."
 rimz message @coder --after @planner "Read plan.md when the planner finishes."
 rimz message @codex --when '@codex idle 58m' "Keep the prompt cache warm."
-rimz message --steer @claude "Inspect the failing test now."
 rimz message @coder --wait "did the migration land? one line"
 rimz message @all --wait --json "status? one line"
-rimz message --steer @codex --no-enter "Use the docs branch only."              # paste, don't submit
-rimz message --steer @planner --create "Draft the new endpoint."                # launch if missing
-rimz message @all "When you reach a boundary, summarize what changed."
 git diff main | rimz message @reviewer --stdin "Review this change."
-rimz message                                                                  # inbox for the current lane
-rimz message list --json
-rimz message list --channel cli-docs --status queued
-rimz message show msg_01k…                                                    # status alias kept
+rimz message                                                          # inbox for the current lane
+rimz message show msg_01k…
 rimz message edit msg_01k… --text "Use the cache key from config."
-rimz message edit msg_01k… --no-schedule                                      # clear an earliest-delivery floor
-rimz message steer msg_01k…                                                   # force a queued record now
-rimz message requeue msg_01k… --text "Retry with this narrower ask."
+rimz message steer msg_01k…
 rimz message cancel msg_01k… msg_01k…
-rimz message clear                                                            # clear open messages in the current lane
 rimz message clear @claude-2#cli-docs
 ```
 
-The message is one bare quoted argument, so no `--` separates ordinary prose from flags. A message that starts with `-` still uses clap's universal terminator (`--`) before the text. A wait duration uses the attached form `--wait=<duration>`; bare `--wait` has no value and can precede the message.
+## Send a message
 
-Address the target with the [agent-address grammar](./agents.md#addressing-agents). A fan-out tags each delivery with the addressed handle, and an unmatched address prints the live-agent list. Human-authored `@all` reaches every in-channel agent. Agent-authored `@all` reaches every peer but excludes the caller even with `--no-from`; it reports `no other agents in the current channel` when none remain. Use the caller's exact handle for an intentional self-message. Explicit selector fan-outs such as `--all @codex` are unchanged.
+A send takes one target and the text: `rimz message <TARGET> "<TEXT>"`. Flags may come before, between, or after them. Pass the text as one quoted argument; a text that starts with `-` goes after clap's `--` terminator.
 
-## Send modes
+The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_01k…` suggests `rimz message show msg_01k…`, and any other word lists the subcommands. An address that matches no agent prints the error followed by the live agents, and exits 1.
 
-`--steer` delivers fresh text to live panes immediately, writes a durable prompt record, and prints `sent to @handle (msg_...)`; smart compaction adds a durable command record and `compacted @handle` before the prompt line. An agent Waiting on a native ask still reserves input unless `--force` is passed, and a missing receiver or pane is a hard error. Broadcasts summarize sent and skipped agents with handles and message ids, so one blocked agent never stops the rest.
+The text comes from one of three sources:
 
-The default mode uses the same live path when the addressed agent can receive now: a live pane exists, the `--on` gate is open, no pending ask reserves input unless `--force`, and no older ready message owns that card's FIFO head. A live send prints `delivered to @handle (msg_...)`. Otherwise it parks a `queued` prompt record until `--on done` (idle or success) or `--on any` (idle, success, or failed) opens. When the target's status caused the park, the confirmation names it and the command that promotes that exact record: `queued for @handle (msg_...) — @handle is running; send now: rimz message steer msg_...`. A native pane prompt instead points to `rimz message steer msg_... --force`. Schedule, condition, and FIFO parks keep the plain `queued for @handle (msg_...)` confirmation. A status-aware receipt comes from the lifecycle rollup and does not prove the pane is still live; `message show` names a missing pane or any other full delivery blocker.
+| Source | How it is read |
+| --- | --- |
+| Inline argument | Trimmed. `\n` becomes a soft newline in the agent's composer and `\\` a literal backslash; every other backslash is kept, so `\d+` and `C:\tmp` arrive unchanged. |
+| `--file <PATH>` | Sent as written, with no escape processing; only the trailing newline is dropped. Conflicts with inline text and `--stdin`. An empty file is refused. |
+| `--stdin` | Read to EOF and sent verbatim. With inline text too, the inline text comes first and stdin follows inside `<stdin>` and `</stdin>` lines. Conflicts with `--file`. |
 
-`--schedule <DUR|HH:MM>` always parks and sets a `not_before` time floor; examples include `90s`, `60m`, `2h`, `1d`, and configured-timezone 24-hour times such as `14:30`. A scheduled message becomes eligible only after that floor, then the normal gate and pending-ask checks still apply.
+Piped stdin without `--stdin` is ignored, with a warning on stderr.
 
-`--after <ADDR>` holds delivery until exactly one referenced agent reaches the message's `--on` gate with no schedule-ready undelivered work. Repeat it to require several agents. Queue upstream work first: an already idle, quiescent reference is stamped satisfied at enqueue and remains satisfied. Unmet conditions step out of the receiver FIFO, and `message steer <id>` bypasses them. A referenced failure waits under `--on done` and releases under `--on any`; a missing referenced card keeps waiting. `--after` conflicts with `--steer` and `--wait`, requires an existing recipient instead of `--create`, rejects fan-out references and the message recipient itself, and composes with `--schedule`, recipient fan-out, and `--force`.
+## When a message lands
 
-`--when '@handle <status> <duration>'` holds delivery until exactly one existing lifecycle-bound agent stays continuously in `running`, `waiting`, `idle`, `success`, or `failed` for the duration. Durations use `s`, `m`, `h`, or `d`. Repeat it for an all-of set; it composes with `--schedule`, `--after`, recipient fan-out, and self-reference. It conflicts with `--steer`, `--wait`, and `--create`, rejects broadcast watched addresses and `paused`, and archives the whole record with an expiry reason if an unmet watched session ends. A met condition latches durably across later status changes.
+Every send writes a `queued` record first. The mode decides when RimZ types it into the pane:
 
-A bare `@<kind>`, `@<profile>`, or `@all` in `--steer` mode also reaches an agent you just started in a fresh pane, before its first turn, because the live-pane side addresses the pane it types into. Parked records key on the bound session or launch placeholder card, so FIFO survives registration.
+| Mode | Flag | Behaviour |
+| --- | --- | --- |
+| Park | default | Delivers now if the agent can take it, otherwise waits for the next turn boundary that `--on` allows. |
+| Steer | `--steer` | Types into the live pane now, interrupting the turn. It waits for any RimZ write already in progress to that pane. With no live pane yet, it parks the record. Conflicts with `--on`, `--schedule`, `--after`, and `--when`. |
+| Schedule | `--schedule <DUR\|HH:MM>` | Always parks, and the record cannot deliver before that time. After it comes due, the park rules still apply. |
 
-## Delivery flags
+`--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar elder wakes due messages.
 
-The flags worth knowing tune delivery (run `rimz message --help` for the full surface):
+A parked message delivers once all of these hold, checked in this order:
 
-- `--steer` interrupts the live pane now and conflicts with `--schedule` and `--on`, because it has no later boundary.
-- `--schedule <DUR|HH:MM>` sets the earliest delivery time for parked records; the room must be open so the sidebar elder can spawn the scheduled-wake helper when the stamp comes due.
-- `--after <ADDR>` waits for another agent to finish its ready queued work; repeat it to wait for all named agents.
-- `--when '@handle <status> <duration>'` waits for one agent's continuous raw-status dwell; repeat it to wait for all conditions.
-- `--on done|any` chooses which turn-boundary statuses release parked records; `done` is the default.
-- `--no-enter` pastes the text without submitting; otherwise the text rides as a bracketed paste and Enter lands as a discrete keystroke, so a `\n` in the text stays a soft composer newline and a multi-line prompt lands multi-line (write `\\` for a literal backslash).
-- `--file <PATH>` reads the prompt from a file and sends it byte-for-byte: real newlines stay soft breaks and backslashes stay literal, so code and regex paste unchanged. It conflicts with inline text and `--stdin`.
-- `--stdin` reads stdin verbatim to EOF. With inline text, RimZ puts that instruction first and wraps the stdin content in `<stdin>` tags; it conflicts with `--file`.
-- `--channel <NAME>` scopes the target to a named channel; inline `#NAME` is the address form. `--worktree <NAME>` scopes to a worktree name or path.
-- `--create` launches a missing agent from a kind or profile address with the text as its first prompt; inline `#NAME` or `--channel NAME` registers a named channel, while `--worktree NAME` creates or reuses Git backing.
-- `--force` sends over a pending native ask; without it the ask keeps the next input reserved.
-- `--smart-compact <PCT|TOKENS>` sends a tracked compact command first when the agent's context window has reached the threshold (a percentage like `70%` or an occupied-token count like `120000` or `180k`), then sends the prompt one message interval later so it lands against a fresh window. Unset, [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) supplies the threshold. [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction) rides commands whose adapter accepts guidance; other adapters receive the bare command. A window below the threshold sends untouched.
-- `--no-from` sends the bytes exactly, without attribution. By default delivery starts with `Type: AGENT_MESSAGE`, `From: @sender`, and `Content:` for an agent caller — either RimZ-launched or a provider RimZ observed running without the launch environment — `Type: SUBAGENT_REPORT`, `From: @rimz`, and `Content:` for the status-only digest sent once the current fleet of an agent's launched subagents settles, `Type: WAIT`, `From: @rimz`, and `Content:` for a [`rimz wait`](./wait.md) or loop `--wait` delivery, or `Type: USER_MESSAGE`, `From: @user`, and `Content:` for a human caller. An agent handle gains `#channel` when it crosses channels. `rimz transcript` hides the subagent digest from human rendering; `rimz transcript --json` includes it.
-- `--wait[=DURATION]` sends or parks one prompt per resolved target and joins their reply turns. One text reply stays bare; fan-out replies are labeled and stream in completion order while failures write forensics to stderr without stopping the other legs. Full replies follow the shared [agent-prose rendering rule](../cli.md#agent-prose). The gathered exit is 0 only when every leg completes, otherwise the first non-completed leg's exit code in target order; the total delivery-plus-turn deadline classifies unfinished legs as `timed_out` and exits 124. Each target needs an existing lifecycle-bound card with installed and trusted hooks. A human's bare `--wait` has no deadline; an agent caller's bare wait defaults to one hour, and `--wait=<duration>` overrides either behavior. Mutual agent reply waits are refused or aborted with the blocking handle and message named while parked text stays queued for the next boundary. `Waiting` and `Paused` keep blocking; `--steer --wait` treats the remainder of each live turn as the reply. It conflicts with `--create`, `--schedule`, and `--no-enter`.
-- `--json` with `--wait` buffers one map keyed by canonical agent handle for both single and fan-out waits. Each value carries `status`, `reply` (string or `null`), and `message_id`; delivery failure, a stopped agent, or skipped Waiting input adds `error`.
-- `--any` with `--wait` returns on the first terminal reply leg regardless of success or failure, emits only that winner, and exits with its status. The other messages stay in flight and are not canceled.
+1. Its `--schedule` time has passed, and every `--after` and `--when` condition is met.
+2. It is the oldest ready message for that agent. Messages to one agent deliver oldest first; scheduled and condition-held messages step out of line until they are ready.
+3. The agent is not compacting its context, and its status opens the `--on` gate: `idle`, `success`, or `sleeping` for `done` (the default), plus `failed` for `any`.
+4. No open prompt in the agent's pane reserves its input, unless the message has `--force`.
+5. A live pane can receive the text.
 
-## The message record
+Parking needs the agent's hooks installed and trusted, because turn-end hooks trigger delivery; a send that would park for a kind without them is refused. `rimz message show <id>` names the first unmet condition.
 
-Every send is a durable record, which is what makes delivery inspectable and reversible: target, channel, receiver card, and sender attribution are record identity, so you retarget by canceling and resending. `message edit <id>` changes only delivery fields on a `queued` record: text, `--on`, schedule or `--no-schedule`, `--force` or `--no-force`, `--enter` or `--no-enter`, and smart-compaction settings.
+### Receipts
 
-Message statuses are `queued`, `claimed`, `sent`, `delivered`, `timed_out`, `errored`, `canceled`, `abandoned`, and `archived`. `sent` means RimZ wrote the bytes to the pane; `delivered` means the agent acknowledged a prompt through `TurnStarted` or a command through `Compacting`; `archived` means the receiver or channel context ended.
+The send prints one line per target:
 
-The `message.sent` audit event records message id, receiver, pane, force flag, sender, body, and text length; message content stays in the message record. Terminal records keep their text in `messages/history.jsonl`.
+| Output | Meaning |
+| --- | --- |
+| `delivered to @coder (msg_…)` | Park mode found the agent free and typed the text. |
+| `sent to @coder (msg_…)` | `--steer` typed the text. |
+| `queued for @coder (msg_…) — @coder is running; send now: rimz message steer msg_…` | Parked because of the agent's status. |
+| `queued for @coder (msg_…) — @coder is waiting on input in its pane; answer it or force: rimz message steer msg_… --force` | Parked behind an open prompt. |
+| `queued for @coder (msg_…)` | Parked for a schedule, a condition, an older message, or a missing pane. |
+| `compacted @coder` | Printed before the delivery line when `--smart-compact` fired. |
+| `compacting @coder; queued msg_… (delivers when compaction completes)` | The compact command landed; the prompt follows once compaction ends. Steer prints `queued for @coder (msg_…; waiting for compaction)`. |
+
+A status in a receipt comes from the agent's last recorded state and does not prove its pane is still live. A steer that reaches several agents prints one summary instead: `sent 2 agent(s): @claude (msg_…), @codex (msg_…); queued: …; compacted: …; waiting in pane: …`, with empty parts left out. A single `--steer` to an agent with an open prompt fails with `@coder (msg_…) is waiting on your input in its pane; answer it or pass --force`.
+
+## Conditions
+
+`--after` and `--when` hold a parked message until something happens to another agent. Both are repeatable, and every condition must be met. They combine with each other, `--schedule`, `--force`, and a fan-out recipient. Both conflict with `--steer`, `--wait`, and `--create`. `rimz message steer <id>` delivers past unmet conditions.
+
+**`--after <ADDR>`** waits until that agent has finished its ready queued work: its status opens the message's `--on` gate and it has no undelivered message that is due. A failed turn keeps it waiting under `--on done` and releases it under `--on any`.
+
+| Rule | Behaviour |
+| --- | --- |
+| Target | Exactly one existing agent with lifecycle state. A fan-out address, or the message's own recipient, is refused. |
+| Already satisfied | An agent that is idle with no ready work meets the condition at send time, and it stays met. Queue the upstream work before the message that waits on it. |
+| Missing agent | A referenced agent that is gone keeps the message waiting. |
+
+**`--when '<ADDR> <STATUS> <DURATION>'`** waits until one agent has stayed in a status continuously for the duration, for example `--when '@coder running 2h'`.
+
+| Rule | Behaviour |
+| --- | --- |
+| Target | Exactly one existing agent with lifecycle state. A broadcast is refused; the recipient itself is allowed, which makes keep-warm messages work. |
+| Status | `running`, `waiting`, `idle`, `success`, or `failed`. These are raw statuses: a completed turn reads `success`, and `paused` is rejected. |
+| Duration | `s`, `m`, `h`, or `d`; zero is rejected. |
+| Once met | The condition stays met, even if the watched agent changes status before the recipient takes the message. |
+| Watched agent ends | While the condition is unmet, the message is archived with the reason. |
+
+## Targets and fan-out
+
+An address that matches several agents is an error that lists the handles, unless the send opts into fan-out:
+
+| Form | Reaches |
+| --- | --- |
+| `@all` | Every agent in the channel. Sent by an agent, it skips the sender (even with `--no-from`), and with no other agent it fails with `no other agents in the current channel`. Address the sender's exact handle to message itself. |
+| `--all @codex` | Every agent the address matches, the sender included. |
+
+Each fan-out delivery starts with the typed selector, such as `@all, ` or `@codex, `, so every recipient reads a group message. Deliveries go out one after another, and an agent that cannot take the message now does not stop the rest.
+
+| Flag | Effect |
+| --- | --- |
+| `--channel <NAME>` | Match only agents in that named channel. Same as an inline `#NAME`. Conflicts with `--worktree`. |
+| `--worktree <NAME>` | Match only agents in that worktree, by name or path. Conflicts with `--channel`. |
+| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt, in the addressed channel. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, and `--wait`. |
+
+## Delivery options
+
+| Flag | Effect |
+| --- | --- |
+| `--on done\|any` | Which turn outcomes release a parked message. Default `done`. |
+| `--force` | Deliver even while an open prompt in the agent's pane reserves its input. |
+| `--no-enter` | Type the text and leave it unsubmitted in the composer. |
+| `--smart-compact <PCT\|TOKENS>` | When the agent's context is at least this full, send its compact command first and the message after compaction. Takes a percentage (`70%`, at most 100) or an occupied-token count (`120000`, `180k`, `1m`). A context below the threshold sends the message alone. Unset, [`[harness] smart_compact`](../../guide/configuration.md#smart-compaction) applies, and `[harness] compact_instruction` rides agents whose compact command accepts guidance. |
+| `--no-from` | Send the text with no message header. |
+
+## The message header
+
+Unless `--no-from` is set, every delivery starts with a three-line header before the text:
+
+```text
+Type: AGENT_MESSAGE
+From: @planner
+Content:
+Read plan.md when the planner finishes.
+```
+
+| `Type` | Sent for | `From` |
+| --- | --- | --- |
+| `USER_MESSAGE` | A send from a user shell | `@user` |
+| `AGENT_MESSAGE` | A send from an agent, whether RimZ launched it or only saw it running | The sender's handle, with `#channel` when the message crosses channels |
+| `SUBAGENT_REPORT` | The status digest sent once all of an agent's [subagents](./subagents.md) settle | `@rimz` |
+| `WAIT` | A [`rimz wait`](./wait.md) delivery, or a loop `--wait` delivery not triggered by a signal | `@rimz` |
+| `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery | `@rimz` |
+| `STAGE` | A [team stage](./teams.md) opening | `@rimz` |
+
+`rimz transcript` hides `@rimz` deliveries from its human view; `rimz transcript --json` keeps them.
+
+## Wait for replies
+
+`--wait` sends or parks one message per target, waits for each reply turn to finish, and prints the replies. It takes an optional total deadline in the attached form `--wait=<DURATION>` (`s`, `m`, or `h`), covering delivery plus the turn. Bare `--wait` takes no value, so it can sit before the text. A user shell's bare wait has no deadline; an agent's bare wait stops after one hour.
+
+| Flag | Effect |
+| --- | --- |
+| `--json` | Print one map keyed by agent handle after the join settles. Requires `--wait`. |
+| `--any` | Return when the first reply turn ends, successful or not, and print only that reply. The other messages stay in flight. Requires `--wait`. |
+
+Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting` or `paused` is still in progress, so a script that needs a bound passes a deadline. With `--steer --wait`, the rest of the interrupted turn is the reply.
+
+Each `--json` value carries `status`, `reply` (a string or `null`), and `message_id`, plus `error` when delivery failed, the agent stopped, or the wait aborted:
+
+```json
+{"@coder":{"status":"completed","reply":"landed","message_id":"msg_…"}}
+```
+
+The exit code is the first non-completed target's run status, in target order:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Every reply turn completed. |
+| `1` | A turn failed, or the wait could not run. |
+| `123` | Verification failed. |
+| `124` | The deadline passed. Unfinished targets read `timed_out`, and `--json` still prints the map. |
+| `125` | A budget cap stopped the turn. |
+| `130` | Canceled. |
+
+A wait is refused before sending when a target has no lifecycle state, is not running, or lacks installed and trusted hooks. It is also refused with `--create`, `--schedule`, or `--no-enter`. A wait that would deadlock, because the target is waiting on the caller's own reply, is refused or aborted with the blocking handle and message named; any parked text stays queued. A single target holding an open prompt fails with the `waiting on your input` error.
+
+## Message statuses
+
+| Status | Meaning |
+| --- | --- |
+| `queued` | Waiting to deliver. Open: editable, steerable, cancelable. |
+| `claimed` | A delivery is writing it right now. Open, but edit and steer refuse it. |
+| `sent` | RimZ typed it into the pane; the agent has not acknowledged it yet. |
+| `delivered` | The agent acknowledged it: a turn started with the prompt, or compaction started for a command. |
+| `timed_out` | The agent never acknowledged it. A command is never resent, because repeating `/compact` can discard context. |
+| `errored` | Delivery could not happen, for example the address matched no agent. |
+| `canceled` | `message cancel` or `message clear` stopped it. |
+| `abandoned` | Delivery attempts failed repeatedly before anything reached the pane. |
+| `archived` | The recipient, its channel, or a watched `--when` agent ended first. |
+
+The last six are final. A final record keeps its text in `messages/history.jsonl`, which holds the most recent final records, so `show` can display it and `requeue` can send it again.
 
 ## Inbox and queue verbs
 
-Bare `rimz message` renders the inbox for the current lane; in the main checkout, where there is no stamped lane, it shows only lane-less messages.
+### List messages
 
-`message list` shows only the conversation by default: your sends and attributed agent sends. `--system` also includes waits, signals, subagent digests, nudges, compaction commands, and `--no-from` text. This flag is independent of lane, status, and target filters: `--all` alone still shows only conversation records; `--all --system` includes system traffic too.
+Bare `rimz message` is `rimz message list` for the current lane. In the main checkout, which has no lane, it shows messages without a channel.
 
-`message list` hides archived records unless `--all` or `--status archived` asks for them, sorts newest first, and caps at 200 rows (`--limit N`, `--limit 0` for all). An empty result renders as a faint scope-aware `no messages` line; non-empty human output is a dense two-line digest: `sender → receiver  status  age  msg_id`, then an indented one-line snippet clipped to the terminal width after `$HOME` path segments collapse to `~`. Handles omit `#channel` when the row already sits inside that scoped lane, and terminal rows read their preserved text from `messages/history.jsonl` (older event-only rows show the terminal reason as the snippet). `--all` widens the view to every lane, groups rows under one `#channel` or `(main)` header per lane ordered by latest activity, and keeps messages newest-first inside each group; `--channel <NAME>` selects one lane, `--status <STATUS>` filters exactly, and `--json` emits projected rows including attempts and the enqueue-time receiver `address`, not full durable records.
+| Flag | Effect |
+| --- | --- |
+| `[TARGET]` | Only messages to that agent. |
+| `--all` | Every lane, including archived messages. |
+| `--channel <NAME>` | One lane. |
+| `--status <STATUS>` | Exactly one status. Also accepts `pending`, `cancelled`, and `removed`. Selecting `archived` shows archived messages. |
+| `--system` | Include system traffic: waits, signals, subagent digests, stage notices, compaction commands, and `--no-from` text. |
+| `--limit <N>` | At most N rows, newest first. Default 200; `0` shows all. |
+| `--json` | Emit the rows as a JSON array. |
 
-When system records are hidden, human output ends with `... N system messages hidden (--system shows them)`, even if no conversation rows remain. The count reflects the selected lane, status, and target before the row limit; no hint is shown when the count is zero. `--json` follows the same conversation-only default and emits only the filtered rows, without a hidden count; use `--system --json` to include system traffic. Inspection and mutation commands still reach system records, and `message clear` cancels every open record in scope, including hidden system messages.
+The list shows conversation by default: sends from you and from agents. Archived messages are hidden unless `--all` or `--status archived` asks for them. Each row is two lines, the header then the text clipped to the terminal width with `$HOME` shown as `~`:
 
-`message show <id>` (`status` alias) prints the full record text using the shared [agent-prose rendering rule](../cli.md#agent-prose), a `message.*` event timeline, and, for open records, a delivery check that names the first blocker: schedule floor, referenced agent, FIFO head, receiver presence, gate, pending ask, or live pane, followed by a steer or edit hint when a command can clear the blocker.
+```text
+you → @coder  queued  3m ago  msg_01k…
+  Read plan.md when the planner finishes. · after @planner
+```
 
-`message steer <id>` takes an existing queued record and sends it now, skipping its schedule floor, FIFO position, and turn-boundary gate; an agent Waiting on a native ask still reserves input unless `--force` is passed, and a missing receiver or pane stays a hard error.
+The sender reads `you` for a user shell, the handle for an agent, `@rimz` for RimZ notices, and `rimz` for `--no-from` text. A handle drops `#channel` when the list is already scoped to that channel. A final message whose text was not retained shows its terminal reason instead. With `--all`, rows group under a `#channel` or `(main)` header, lanes with the newest message first.
 
-`message requeue <id>` creates a new queued record from a terminal record whose text is still in `messages/history.jsonl`; it preserves receiver identity and delivery settings unless edit flags override them, and re-arms every `--after` and `--when` condition.
+Trailing lines report what the view left out:
 
-`message cancel` accepts one or more ids and keeps processing after misses, then exits non-zero if any id was not open. The `remove` alias stays available. A canceled record keeps its text in `messages/history.jsonl`, so `message show` can inspect it and `message requeue` can revive it. `message clear` with a target cancels that agent's open messages; without a target it cancels open messages in the scoped lane from `--channel`, `--worktree`, or the ambient room channel, and prints the ids it canceled.
+| Line | When |
+| --- | --- |
+| `... N older messages hidden (--limit 0 for all)` | The limit cut rows. |
+| `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
+| `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in the main lane` outside a lane, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
-Parked delivery needs installed and trusted hooks, because turn-end hooks trigger delivery of parked records; scheduled wakeups need an open room so an elder keeps time. A delivery armed on a delay, a signal, or a watched command rather than typed now is [`rimz wait`](./wait.md), which rides this same path and records the same message ids. The record layout, gates, and delivery walk are in [messaging.md](../../internals/harness/messaging.md).
+`--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `enter`, `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. When set, a row adds `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, and `compacted_context_tokens`.
+
+### Show one message
+
+`rimz message show <id>` (alias `status`) prints the record's fields, its full text by the [agent-prose rule](../cli.md#agent-prose), and its event timeline. For an open message it adds a `DELIVERY CHECK` with one row each for `schedule`, `after`, `when`, `fifo`, `agent`, `gate`, `ask`, and `pane`, a verdict naming the first blocker, and the command that clears it when there is one:
+
+```text
+DELIVERY CHECK
+  …
+  waiting: @coder is running; gate 'done' opens at next turn end
+  force now: rimz message steer msg_01k…
+```
+
+A scheduled message suggests `rimz message edit <id> --no-schedule` as well, and an open prompt suggests `steer <id> --force`. `--json` prints `{"message": <row>, "timeline": [{"method", "at", "attempts", "reason"}], "delivery": {"check", "verdict"}}`, with `delivery` present only for open messages. Every sender class is reachable, including system messages the list hides.
+
+### Change a queued message
+
+| Command | Accepts | Prints |
+| --- | --- | --- |
+| `message edit <id>` | A `queued` message | `edited msg_… (<fields>)` |
+| `message steer <id> [--force]` | A `queued` message | `sent to @coder (msg_…)` |
+| `message requeue <id>` | A final message whose text was retained | `queued for @coder (<new id>)  (from <old id>)` |
+| `message cancel <id>...` (alias `remove`) | Open messages | `canceled msg_…` or `msg_… cannot be canceled`, per id |
+| `message clear [TARGET]` | Every open message for one agent, or in a lane | `canceled N message(s) for @coder: msg_…, …` |
+
+`edit` changes only how a message delivers. The recipient, channel, and sender are fixed, so retarget by canceling and sending again. `edit` and `requeue` take the same flags, and `edit` with none is refused:
+
+| Flag | Changes |
+| --- | --- |
+| `--text <TEXT>`, `--file <PATH>` | The text. The two conflict. |
+| `--on done\|any` | The gate. |
+| `--schedule <DUR\|HH:MM>`, `--no-schedule` | Set or clear the earliest delivery time. |
+| `--force`, `--no-force` | Whether an open prompt blocks delivery. |
+| `--enter`, `--no-enter` | Whether the text is submitted. |
+| `--smart-compact <PCT\|TOKENS>`, `--no-smart-compact` | Set or clear the compaction threshold. |
+
+`steer` delivers now, past the schedule, conditions, queue order, and gate. An open prompt still blocks it without `--force`, and a missing agent or pane fails with the reason. A `claimed` message is refused with `delivery in progress; retry in a moment`, and a final one points to `requeue`.
+
+`requeue` writes a new queued message with a new id. It keeps the recipient and delivery settings unless flags override them, and re-arms every `--after` and `--when` condition. A message that is still queued is refused with a pointer to `edit` or `steer`, and a `sent` one must settle first.
+
+`cancel` processes every id, then exits 1 if any was not open. `clear` with a target cancels that agent's open messages. Without one, it cancels open messages in the lane from `--channel`, `--worktree`, or the current channel, and fails when there is none. Both reach system messages the list hides, and canceled records keep their text for `requeue`.

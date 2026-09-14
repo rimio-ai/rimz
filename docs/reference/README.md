@@ -17,7 +17,7 @@ These pages answer a specific question about the shipped product: what a command
 | [subagents.md](./cli/subagents.md) | `rimz subagents`: launching supervised children from an agent, fanout, the fleet report, waits, list and stop, profiles, and pane placement. |
 | [teams.md](./cli/teams.md) | `rimz teams`: listing, inspecting, launching, resuming, and driving named teams, stage flips, and installing team bundles. |
 | [asks.md](./cli/asks.md) | `rimz asks` and `rimz answer`: reading the prompt that blocks an agent and answering it in the agent's native UI. |
-| [message.md](./cli/message.md) | `rimz message`: parking text for the next turn boundary, steering a live turn, scheduling, reply waits, and the inbox verbs. |
+| [message.md](./cli/message.md) | `rimz message`: parking text for the next turn boundary, steering a live turn, scheduling and cross-agent conditions, fan-out, the message header, reply waits, statuses, and the inbox verbs. |
 | [wait.md](./cli/wait.md) | `rimz wait`: a self-only wakeup after a delay, a process exit, or a watched command. |
 | [transcript.md](./cli/transcript.md) | `rimz transcript`: rendering a channel or one agent from RimZ's durable transcript log. |
 | [pane.md](./cli/pane.md) | `rimz pane`: listing, capturing, sending to, and focusing panes. |
