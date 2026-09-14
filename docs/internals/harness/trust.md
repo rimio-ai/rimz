@@ -77,7 +77,7 @@ A trusted project task still needs its own arming: trust approves the config con
 5. launch-plan env: the materialized system-prompt env and the account-home override
 6. launch identity from `exec_identity_env`: `RIMZ_AGENT_KIND`, `RIMZ_AGENT_ID`, `RIMZ_RUN_ID`, `RIMZ_AGENT_NAME`, and the env-backed launch parameters (`RIMZ_AGENT_ROLE`, `RIMZ_TEAM`, `RIMZ_LAUNCH_GROUP`, `RIMZ_LAUNCH_ORDINAL`, `RIMZ_CHANNEL`, `RIMZ_AGENT_PROFILE`, `RIMZ_AGENT_MODEL`, `RIMZ_AGENT_EFFORT`, `RIMZ_AGENT_BUDGET`)
 7. subagent lockdown env, for supervised children (`AgentDefinition::lockdown_subagent_env`)
-8. `RIMZ_LAUNCH_REMINDERS`, the rendered launch reminders (empty when none) for adapters whose extension carries them (`SystemTextChannel::ExtensionEnv`)
+8. `RIMZ_LAUNCH_REMINDERS` (`ENV_LAUNCH_REMINDERS`), the rendered launch reminders (empty when none) for adapters whose extension carries them (`SystemTextChannel::ExtensionEnv`)
 9. sandbox pins, on sandbox launches only ([sandbox.md](../sandbox.md#environment-pins) owns the key list)
 
 Layers 4 and above beat the project env, so a trusted config can tune an agent's launch but cannot override the adapter's launch contract, the account binding, or RimZ identity.
