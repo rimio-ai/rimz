@@ -24,7 +24,7 @@ pub(super) fn resolve_session_file(session_id: &str, prior_path: Option<&Path>) 
     resolve_session_file_under(&data_root(), session_id)
 }
 
-fn resolve_session_file_under(root: &Path, session_id: &str) -> Option<PathBuf> {
+pub(super) fn resolve_session_file_under(root: &Path, session_id: &str) -> Option<PathBuf> {
     let session_id = session_id.trim();
     if !valid_session_id(session_id)
         || Path::new(session_id).components().count() != 1
@@ -37,10 +37,6 @@ fn resolve_session_file_under(root: &Path, session_id: &str) -> Option<PathBuf> 
     }
     let path = root.join("threads").join(format!("{session_id}.json"));
     path.is_file().then_some(path)
-}
-
-pub(super) fn resolve_session_file_at(root: &Path, session_id: &str) -> Option<PathBuf> {
-    resolve_session_file_under(root, session_id)
 }
 
 fn valid_session_id(session_id: &str) -> bool {

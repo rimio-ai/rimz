@@ -4,13 +4,13 @@
 //! observation-only TypeScript plugin that forwards the active thread's native
 //! lifecycle events without entering Amp's tool-decision path.
 
-pub(crate) mod account;
-pub(crate) mod payloads;
+mod account;
+mod payloads;
 mod spend;
 mod thread;
 mod transcript;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -264,7 +264,7 @@ const AMP_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
 );
 
 #[derive(Clone, Debug, Default)]
-pub struct AmpAdapter;
+pub(in crate::agents) struct AmpAdapter;
 
 impl crate::agents::capabilities::CoreCapability for AmpAdapter {
     fn spec(&self) -> &'static AgentSpec {
@@ -537,7 +537,7 @@ fn stamp_transcript_path(
     session_id: &str,
     data_root: &Path,
 ) {
-    observation.transcript_path = spend::resolve_session_file_at(data_root, session_id)
+    observation.transcript_path = spend::resolve_session_file_under(data_root, session_id)
         .map(|path| path.to_string_lossy().into_owned());
 }
 

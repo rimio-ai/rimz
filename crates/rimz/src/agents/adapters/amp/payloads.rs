@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 #[derive(Debug, Default, Deserialize)]
-pub(crate) struct AmpHookPayload {
+pub(super) struct AmpHookPayload {
     pub session_id: Option<String>,
     pub prompt: Option<String>,
     pub files_modified: Option<bool>,
@@ -14,7 +14,7 @@ pub(crate) struct AmpHookPayload {
     pub last_assistant_message: Option<String>,
 }
 
-pub(crate) fn parse_payload(payload: &Value) -> AmpHookPayload {
+pub(super) fn parse_payload(payload: &Value) -> AmpHookPayload {
     serde_json::from_value(payload.clone()).unwrap_or_default()
 }
 
