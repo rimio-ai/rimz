@@ -583,6 +583,7 @@ mod tests {
             pane_id: None,
             pane_stamp: None,
             parent_agent_id: None,
+            background_shells: None,
         };
         EventEnvelope::agent_lifecycle(
             workspace.clone(),

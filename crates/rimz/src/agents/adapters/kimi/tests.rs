@@ -470,6 +470,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
                 "session-1",
             ),
         ),
+        background_shells: None,
     }
     "###);
 

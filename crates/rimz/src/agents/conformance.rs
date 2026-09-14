@@ -1061,6 +1061,11 @@ fn assert_coverage_honest(
             );
         }
         IntegrationConcern::BackgroundParking => {}
+        IntegrationConcern::BackgroundShells => assert_eq!(
+            wired,
+            reports_background_shells(adapter, samples),
+            "{kind} BackgroundShells coverage must match background-shell reports in its corpus"
+        ),
         IntegrationConcern::SessionEnd => assert_eq!(
             wired,
             samples
@@ -1376,6 +1381,16 @@ fn observes_compaction(adapter: &AgentDefinition, samples: &[ClassificationSampl
                         LifecycleSignal::Compacting | LifecycleSignal::CompactionEnded { .. }
                     )
                 })
+    })
+}
+
+fn reports_background_shells(adapter: &AgentDefinition, samples: &[ClassificationSample]) -> bool {
+    samples.iter().any(|sample| {
+        adapter
+            .decode_hook(sample.event_name, &sample.payload)
+            .expect("corpus payload decodes")
+            .lifecycle()
+            .is_some_and(|obs| obs.background_shells.is_some())
     })
 }
 

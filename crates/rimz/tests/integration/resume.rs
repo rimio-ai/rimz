@@ -54,6 +54,7 @@ fn registered(
         pane_id: Some(PaneId::from_parts(MuxName::Zellij, pane_raw)),
         pane_stamp: None,
         parent_agent_id: None,
+        background_shells: None,
     }
 }
 

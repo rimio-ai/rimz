@@ -346,6 +346,7 @@ pub mod fleet {
             pane_id: None,
             pane_stamp: None,
             parent_agent_id: None,
+            background_shells: None,
         }
     }
 

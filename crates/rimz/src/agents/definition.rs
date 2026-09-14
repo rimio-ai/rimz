@@ -660,6 +660,7 @@ integration_concerns! {
     Subagents => "sub",
     LaunchReminders => "remind",
     BackgroundParking => "bg",
+    BackgroundShells => "bgsh",
     SessionEnd => "end",
     IdleNotification => "idle",
     ContextUsage => "usage",
@@ -760,6 +761,8 @@ pub struct CoverageAnnotations {
     /// `append_system_text_channel`.
     pub launch_reminders: ConcernCoverage,
     pub background_parking: ConcernCoverage,
+    /// Background shells listed on the card while they run.
+    pub background_shells: ConcernCoverage,
     pub session_end: ConcernCoverage,
     pub idle_notification: ConcernCoverage,
     pub context_usage: ConcernCoverage,
@@ -783,6 +786,7 @@ impl CoverageAnnotations {
             IntegrationConcern::Subagents => self.subagents,
             IntegrationConcern::LaunchReminders => self.launch_reminders,
             IntegrationConcern::BackgroundParking => self.background_parking,
+            IntegrationConcern::BackgroundShells => self.background_shells,
             IntegrationConcern::SessionEnd => self.session_end,
             IntegrationConcern::IdleNotification => self.idle_notification,
             IntegrationConcern::ContextUsage => self.context_usage,

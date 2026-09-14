@@ -266,8 +266,22 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
         serde_json::from_str::<AgentStatus>("\"sleeping\"").unwrap(),
         AgentStatus::Sleeping
     );
+    let mut parked = test_agent(AgentStatus::Success, 1_000);
+    parked
+        .background_shells
+        .push(crate::agents::BackgroundShell {
+            id: "b1".into(),
+            command: Some("cargo test".into()),
+            description: None,
+            started_at: now,
+        });
+    let decoded: AgentState =
+        serde_json::from_value(serde_json::to_value(&parked).unwrap()).unwrap();
+    assert_eq!(decoded.background_shells, parked.background_shells);
+    assert_eq!(decoded.effective_status(), AgentStatus::Success);
     let empty = serde_json::to_value(test_agent(AgentStatus::Success, 1_000)).unwrap();
     assert!(empty.get("pending_waits").is_none());
+    assert!(empty.get("background_shells").is_none());
     assert!(
         serde_json::from_value::<AgentState>(empty)
             .unwrap()

@@ -652,6 +652,7 @@ fn carried_base(
         state.usage = prior.usage.clone();
         state.compaction_count = prior.compaction_count;
         state.tool_calls = prior.tool_calls.clone();
+        state.background_shells = prior.background_shells.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
         state.compacted_awaiting_prompt = prior.compacted_awaiting_prompt;
         state.registered_at = prior.registered_at.or(Some(event_ts));
@@ -717,6 +718,10 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     fold_launch_params(&mut state, &input.observation.launch);
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
+    let ends_session_shells = matches!(
+        &input.signal,
+        lifecycle::LifecycleSignal::Ended | lifecycle::LifecycleSignal::Registered
+    );
     let mut lifecycle = lifecycle_projection(
         input.prior,
         input.event.timestamp,
@@ -811,6 +816,14 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.compaction_count = lifecycle.compaction_count;
     state.compacted_awaiting_prompt = lifecycle.compacted_awaiting_prompt;
     state.tool_calls = lifecycle.tool_calls;
+    // A shell never outlives its session: an end or a fresh registration
+    // drops the list before this event's own report lands.
+    if ends_session_shells {
+        state.background_shells.clear();
+    }
+    if let Some(report) = &input.observation.background_shells {
+        report.apply(&mut state.background_shells);
+    }
     state
 }
 

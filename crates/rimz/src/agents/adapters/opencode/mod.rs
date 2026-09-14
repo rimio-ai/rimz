@@ -149,6 +149,9 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
     },
+    background_shells: ConcernCoverage::Unsupported {
+        reason: "background shells are not mapped",
+    },
     session_end: ConcernCoverage::Wired {
         via: "session_ended (session.deleted + dispose sweep)",
     },

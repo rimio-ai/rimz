@@ -55,6 +55,36 @@ pub(crate) const CONTROL_TAG_PREFIXES: &[&str] = &[
     "<skill name=",
 ];
 
+const TASK_NOTIFICATION_OPEN: &str = "<task-notification>";
+const TASK_NOTIFICATION_CLOSE: &str = "</task-notification>";
+
+/// The ids of background tasks a `<task-notification>` prompt reports as no
+/// longer running. One prompt may carry several notification blocks; a block
+/// without a task id or status is skipped. Empty for any other prompt.
+pub(crate) fn finished_task_notification_ids(prompt: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = prompt.trim_start();
+    while let Some(after_open) = rest.strip_prefix(TASK_NOTIFICATION_OPEN) {
+        let (block, tail) = after_open
+            .split_once(TASK_NOTIFICATION_CLOSE)
+            .unwrap_or((after_open, ""));
+        if let (Some(id), Some(status)) = (tag_text(block, "task-id"), tag_text(block, "status"))
+            && status != "running"
+        {
+            ids.push(id.to_owned());
+        }
+        rest = tail.trim_start();
+    }
+    ids
+}
+
+/// The trimmed, non-empty text of the first `<tag>…</tag>` in `body`.
+fn tag_text<'a>(body: &'a str, tag: &str) -> Option<&'a str> {
+    let (_, after_open) = body.split_once(&format!("<{tag}>"))?;
+    let (text, _) = after_open.split_once(&format!("</{tag}>"))?;
+    Some(text.trim()).filter(|text| !text.is_empty())
+}
+
 /// The envelope an agent harness wraps a real user turn in. Unlike
 /// [`CONTROL_TAG_PREFIXES`], this tag carries *user-authored* text, so the
 /// envelope is peeled and the payload kept rather than rejected.
@@ -122,6 +152,41 @@ mod tests {
         );
         assert_eq!(sanitize_user_prompt(None), None);
         assert_eq!(sanitize_user_prompt(Some("   ")), None);
+    }
+
+    #[test]
+    fn task_notification_prompts_yield_their_finished_task_ids() {
+        let block = |id: &str, status: &str| {
+            format!(
+                "<task-notification>\n<task-id>{id}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n\
+                 <output-file>/tmp/{id}.output</output-file>\n<status>{status}</status>\n\
+                 <summary>Background command finished</summary>\n</task-notification>"
+            )
+        };
+        assert_eq!(
+            finished_task_notification_ids(&block("b1", "completed")),
+            vec!["b1".to_owned()]
+        );
+        assert_eq!(
+            finished_task_notification_ids(&format!(
+                "{}\n{}\n{}",
+                block("b1", "failed"),
+                block("b2", "running"),
+                block("b3", "killed")
+            )),
+            vec!["b1".to_owned(), "b3".to_owned()]
+        );
+        for prompt in [
+            "<task-notification><status>completed</status></task-notification>",
+            "<task-notification><task-id>b1</task-id>",
+            "please check <task-notification><task-id>b1</task-id><status>completed</status>",
+            "",
+        ] {
+            assert!(
+                finished_task_notification_ids(prompt).is_empty(),
+                "{prompt}"
+            );
+        }
     }
 
     #[test]

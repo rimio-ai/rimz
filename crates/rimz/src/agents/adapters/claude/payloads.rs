@@ -65,6 +65,7 @@ pub struct ClaudePreToolUse {
 #[serde(default)]
 pub struct ClaudePostToolUse {
     pub tool_name: Option<String>,
+    pub tool_input: Option<Value>,
     pub tool_response: Option<Value>,
 }
 
@@ -73,10 +74,11 @@ pub struct ClaudePostToolUse {
 pub struct ClaudeStop {
     #[serde(flatten)]
     pub common: ClaudeCommon,
-    /// In-flight background tasks (Claude Code v2.1.145+). An empty vec or
-    /// absent field means a genuine turn end; any in-flight entry means the
-    /// main thread has parked and will reawaken.
-    pub background_tasks: Vec<BackgroundTask>,
+    /// In-flight background tasks (Claude Code v2.1.145+). An empty or
+    /// absent list means a genuine turn end; any in-flight entry means the
+    /// main thread has parked and will reawaken. Absent on older builds, which
+    /// report no task list at all.
+    pub background_tasks: Option<Vec<BackgroundTask>>,
     /// Session-scoped scheduled wakeups (Claude Code v2.1.145+). Any entry
     /// means this Stop is a park: Claude submits its prompt when due.
     pub session_crons: Vec<SessionCron>,
@@ -190,7 +192,7 @@ mod tests {
         );
 
         let sparse = parse_stop(&json!({}));
-        assert!(sparse.background_tasks.is_empty());
+        assert!(sparse.background_tasks.is_none());
         assert!(sparse.session_crons.is_empty());
         assert_eq!(sparse.common.common.session_id, None);
 
@@ -204,12 +206,10 @@ mod tests {
             ],
             "effort": {"level": "high"}
         }));
-        assert_eq!(stop.background_tasks.len(), 2);
+        let tasks = stop.background_tasks.as_deref().unwrap_or_default();
+        assert_eq!(tasks.len(), 2);
         assert_eq!(stop.session_crons.len(), 1);
-        assert_eq!(
-            stop.background_tasks[0].description.as_deref(),
-            Some("linting")
-        );
+        assert_eq!(tasks[0].description.as_deref(), Some("linting"));
         assert_eq!(
             stop.common.effort.and_then(|e| e.level).as_deref(),
             Some("high")

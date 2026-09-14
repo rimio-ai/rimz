@@ -154,6 +154,9 @@ const QWEN_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_parking: ConcernCoverage::Wired {
         via: "Stop.background_tasks/crons",
     },
+    background_shells: ConcernCoverage::Unsupported {
+        reason: "Stop.background_tasks carries shells, but they are not mapped yet",
+    },
     session_end: ConcernCoverage::Wired { via: "SessionEnd" },
     idle_notification: ConcernCoverage::Wired {
         via: "Notification audit hook",
@@ -723,15 +726,12 @@ fn lifecycle_signal(
 }
 
 fn has_pending_work(tasks: &[BackgroundTask], crons: &[payloads::QwenCron]) -> bool {
-    tasks.iter().any(|task| {
-        task.status
-            .as_deref()
-            .is_none_or(|status| !matches!(status, "completed" | "failed"))
-    }) || crons.iter().any(|cron| {
-        cron.status
-            .as_deref()
-            .is_none_or(|status| !matches!(status, "completed" | "failed"))
-    })
+    tasks.iter().any(BackgroundTask::is_pending)
+        || crons.iter().any(|cron| {
+            cron.status
+                .as_deref()
+                .is_none_or(|status| !matches!(status, "completed" | "failed"))
+        })
 }
 
 fn observation_identity(

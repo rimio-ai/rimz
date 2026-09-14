@@ -174,6 +174,7 @@ fn raw_launch_with_description(
     )
 }
 
+mod background_shells;
 mod capability;
 mod compaction;
 mod pane_binding;

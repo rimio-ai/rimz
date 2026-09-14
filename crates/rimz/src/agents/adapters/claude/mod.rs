@@ -62,9 +62,10 @@ use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_has_context_observation, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
-    AgentHookClass, AgentLifecycleObservation, AgentTurnError, HookOutput, HookRouting, Result,
-    RootIdentity, SessionOrigin, SpawnedSubagent, SubagentIdentity, SubagentObservation,
-    SubagentSpawnInput, TranscriptMessage, non_empty_trimmed, optional_payload_string,
+    AgentHookClass, AgentLifecycleObservation, AgentTurnError, BackgroundShell,
+    BackgroundShellReport, HookOutput, HookRouting, Result, RootIdentity, SessionOrigin,
+    SpawnedSubagent, SubagentIdentity, SubagentObservation, SubagentSpawnInput, TranscriptMessage,
+    finished_task_notification_ids, non_empty_trimmed, optional_payload_string,
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
     stop_payload_errored,
 };
@@ -184,6 +185,9 @@ const CLAUDE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     background_parking: ConcernCoverage::Wired {
         via: "Stop.background_tasks/session_crons",
+    },
+    background_shells: ConcernCoverage::Wired {
+        via: "PostToolUse Bash backgroundTaskId + Stop.background_tasks[type=shell] + task-notification prompt",
     },
     session_end: ConcernCoverage::Wired { via: "SessionEnd" },
     idle_notification: ConcernCoverage::Wired {
@@ -436,6 +440,17 @@ impl crate::agents::capabilities::CoreCapability for ClaudeAdapter {
                 serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
                 AgentHookClass::AwaitingUser,
                 Some(AskKind::Question),
+            ),
+            ClassificationSample::new(
+                "PostToolUse",
+                serde_json::json!({
+                    "session_id": "sess-1",
+                    "tool_name": "Bash",
+                    "tool_input": { "command": "cargo test", "run_in_background": true },
+                    "tool_response": { "backgroundTaskId": "b1" },
+                }),
+                AgentHookClass::Lifecycle,
+                None,
             ),
         ]);
         super::AdapterConformance {
@@ -965,7 +980,10 @@ fn map_claude_lifecycle_signal(
         "Stop" => Some(LifecycleSignal::TurnEnded {
             errored: stop_payload_errored(payload),
             parked_on_background: parts.stop.as_ref().is_some_and(|stop| {
-                has_pending_background(&stop.background_tasks, &stop.session_crons)
+                has_pending_background(
+                    stop.background_tasks.as_deref().unwrap_or_default(),
+                    &stop.session_crons,
+                )
             }),
             turn_id: None,
         }),
@@ -1128,6 +1146,11 @@ fn build_claude_observation(
     let context_window = extended_context_window(model.as_deref());
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+    // Shells belong to the root session: a subagent's hooks target its child
+    // row, and the parent's `Stop` lists every shell the session runs.
+    if parent_agent_id.is_none() {
+        observation.background_shells = claude_background_shells(parts, Timestamp::now());
+    }
     observation.parent_agent_id = parent_agent_id;
     observation.task = claude_task(payload, parts.subagent_common());
     observation.prompt =
@@ -1203,15 +1226,60 @@ fn claude_effort(payload: &Value, parts: &ClaudeLifecycleParts) -> Option<String
         .or_else(|| optional_payload_string(payload, &["thinking_level"]))
 }
 
+/// What a root hook proves about the session's background shells: a Bash
+/// launch that returned a `backgroundTaskId` (explicit `run_in_background` or
+/// an auto-backgrounded timeout), a `Stop` task list, or a task-notification
+/// prompt for tasks that stopped running.
+fn claude_background_shells(
+    parts: &ClaudeLifecycleParts,
+    now: Timestamp,
+) -> Option<BackgroundShellReport> {
+    if let Some(post) = &parts.post_tool_use {
+        if post.tool_name.as_deref() != Some("Bash") {
+            return None;
+        }
+        let id = post
+            .tool_response
+            .as_ref()?
+            .get("backgroundTaskId")?
+            .as_str()
+            .filter(|id| !id.is_empty())?;
+        let input_text = |key: &str| {
+            post.tool_input
+                .as_ref()
+                .and_then(|input| input.get(key))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        };
+        return Some(BackgroundShellReport::Started {
+            shell: BackgroundShell {
+                id: id.to_owned(),
+                command: input_text("command"),
+                description: input_text("description"),
+                started_at: now,
+            },
+        });
+    }
+    if let Some(stop) = &parts.stop {
+        let shells = stop
+            .background_tasks
+            .as_deref()?
+            .iter()
+            .filter(|task| task.is_pending())
+            .filter_map(|task| task.as_shell(now))
+            .collect();
+        return Some(BackgroundShellReport::Snapshot { shells });
+    }
+    let prompt = parts.user_prompt.as_ref()?.prompt.as_deref()?;
+    let ids = finished_task_notification_ids(prompt);
+    (!ids.is_empty()).then_some(BackgroundShellReport::Finished { ids })
+}
+
 /// Claude v2.1.145+ parks on nonterminal background tasks or any scheduled wakeup.
 ///
 /// Older builds omit both arrays and genuinely end the turn.
 fn has_pending_background(tasks: &[BackgroundTask], crons: &[payloads::SessionCron]) -> bool {
-    tasks.iter().any(|task| {
-        task.status
-            .as_deref()
-            .is_none_or(|status| !matches!(status, "completed" | "failed"))
-    }) || !crons.is_empty()
+    tasks.iter().any(BackgroundTask::is_pending) || !crons.is_empty()
 }
 
 /// Context-window usage derived from a Claude transcript tail. Carries the

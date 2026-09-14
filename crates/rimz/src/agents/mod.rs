@@ -9,6 +9,7 @@
 pub mod account;
 mod adapters;
 pub mod attribution;
+mod background_shell;
 pub mod capabilities;
 #[cfg(test)]
 pub(crate) mod conformance;
@@ -65,6 +66,7 @@ pub use account::{
     AccountUsageIdentity, ManagedLaunchState, PendingRefill, ProviderAccountBinding,
     ProviderCapacity, RateLimitCacheEntry, RateLimitsCache,
 };
+pub use background_shell::{BackgroundShell, BackgroundShellReport};
 pub use capabilities::ManualSkill;
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage,
@@ -109,8 +111,8 @@ pub use observation::{
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub(crate) use payload::{
-    CONTROL_TAG_PREFIXES, non_empty_trimmed, optional_payload_string, sanitize_user_prompt,
-    stop_payload_errored,
+    CONTROL_TAG_PREFIXES, finished_task_notification_ids, non_empty_trimmed,
+    optional_payload_string, sanitize_user_prompt, stop_payload_errored,
 };
 pub use pricing::{PriceBook, Pricing, TokenSplit};
 pub use registry::{

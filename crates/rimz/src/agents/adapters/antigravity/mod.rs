@@ -248,6 +248,9 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_parking: ConcernCoverage::Wired {
         via: "Stop.fullyIdle parks a clean foreground stop while background work remains",
     },
+    background_shells: ConcernCoverage::Unsupported {
+        reason: "background shells are not mapped",
+    },
     session_end: ConcernCoverage::Partial {
         via: "pane liveness + rollup reaper",
         gap: "Antigravity publishes no session-end event",

@@ -38,6 +38,7 @@ pub(super) struct AgentReportEntry {
     pub me: bool,
     pub status: AgentStatus,
     pub pending_waits: Vec<rimz::agents::state::PendingWait>,
+    pub background_shells: Vec<rimz::agents::BackgroundShell>,
     pub phase: TurnPhase,
     pub turn_error: Option<TurnErrorReport>,
     pub ask: Option<AskReport>,
@@ -301,6 +302,7 @@ pub(super) fn build_entry(
         me: me == Some(&agent.agent_id),
         status,
         pending_waits: agent.pending_waits.clone(),
+        background_shells: agent.background_shells.clone(),
         phase,
         turn_error,
         ask: agent

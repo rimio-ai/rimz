@@ -279,6 +279,9 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
     },
+    background_shells: ConcernCoverage::Unsupported {
+        reason: "shells run through code_mode exec/wait tools that fire no PreToolUse/PostToolUse, and Stop carries no task list",
+    },
     session_end: ConcernCoverage::Partial {
         via: "pane liveness + rollup reaper",
         gap: "SessionEnd hook left unwired (fires on idle unload); cleared on a snapshot tick, not at session exit",
