@@ -23,7 +23,7 @@ These pages answer a specific question about the shipped product: what a command
 | [pane.md](./cli/pane.md) | `rimz pane`: pane targets, listing, capturing, sending text and keys, focus, zoom, split, detach, and per-pane bandwidth. |
 | [events.md](./cli/events.md) | `rimz events`: following lifecycle and signal lines as JSON Lines, both line schemas and signal sources, emitting signals, and the reserved families. |
 | [accounts.md](./cli/accounts.md) | `rimz accounts`: declaring named provider accounts as separate provider homes. |
-| [stats.md](./cli/stats.md) | `rimz stats`: account-global token and dollar history, windows, and breakdowns. |
+| [stats.md](./cli/stats.md) | `rimz stats`: the machine-wide token and dollar panel, cache freshness, the held dashboard, JSON fields, and the assist timeline. |
 | [budget.md](./cli/budget.md) | `rimz agents budget` and `rimz budget`: inspecting and changing one agent's dollar cap and the room and provider-account daily caps. |
 | [providers.md](./cli/providers.md) | `rimz providers`: login status, rate-limit windows, credits, spend, and daily-cap state, with freshness and JSON fields. |
 | [channel.md](./cli/channel.md) | `rimz channel`: durable named lanes without a Git checkout. |
