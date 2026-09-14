@@ -197,4 +197,4 @@ sweep — would remove 1 · 18 MB · 2 kept
 
 A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` under its row. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster cannot be read, `sweep` removes nothing and exits 1.
 
-[`rimz gc`](./maintenance.md#update-reload-reset-gc-and-uninstall) runs the same sweep as one area of its report.
+[`rimz gc`](./maintenance.md#sweep-stale-state) runs the same sweep as one area of its report.

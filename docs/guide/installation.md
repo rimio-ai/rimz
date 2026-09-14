@@ -219,7 +219,7 @@ For the development build, use `cargo xtask install-system --dev`. To work on Ri
 
 ## Uninstall
 
-Run `rimz uninstall --all` from outside a RimZ room. It removes installed hooks, live rooms, runtime state, durable stores, per-machine config, and the installed binary; project-local `.rimz/` dirs and RimZ-owned worktrees stay in place for manual review. If you installed through Homebrew, also run `brew uninstall rimz`. Flags for partial removal are in the [maintenance reference](../reference/cli/maintenance.md#update-reload-reset-gc-and-uninstall).
+Run `rimz uninstall --all` from outside a RimZ room. It removes installed hooks, live rooms, runtime state, durable stores, per-machine config, and the installed binary; project-local `.rimz/` dirs and RimZ-owned worktrees stay in place for manual review. If you installed through Homebrew, also run `brew uninstall rimz`. Flags for partial removal are in the [maintenance reference](../reference/cli/maintenance.md#uninstall-rimz).
 
 ## Troubleshooting
 

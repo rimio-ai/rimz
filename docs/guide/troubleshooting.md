@@ -276,7 +276,7 @@ A plain reset keeps the prior-agent carryover for history but still starts the r
 ```sh
 rimz gc --dry-run          # preview reclaimable state, remove nothing
 rimz gc                    # sweep runtime state older than 24h (the default cutoff)
-rimz gc --older-than 7d    # widen the cutoff
+rimz gc --older-than 168h  # widen the cutoff to a week (units stop at h)
 ```
 
 ```
@@ -310,7 +310,7 @@ Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `
 rimz uninstall            # hooks, rooms, runtime state, binaries; keeps stores and config
 ```
 
-`--state`, `--config`, and `--all` widen the removal to durable stores and per-machine config; the exact scope of each flag is in the [maintenance reference](../reference/cli/maintenance.md#update-reload-reset-gc-and-uninstall). Project-local `.rimz/` directories and RimZ-owned worktrees stay in place, because they can hold project config and unlanded work.
+`--state`, `--config`, and `--all` widen the removal to durable stores and per-machine config; the exact scope of each flag is in the [maintenance reference](../reference/cli/maintenance.md#uninstall-rimz). Project-local `.rimz/` directories and RimZ-owned worktrees stay in place, because they can hold project config and unlanded work.
 
 ## Filing an issue
 
@@ -327,4 +327,4 @@ rimz doctor --json --output rimz-doctor.json    # full environment report as JSO
 - [Set up your machine](./setup.md) for the first-pass configuration these fixes assume.
 - [Security and trust](./security.md) for the trust model and the presence grant behind two of the fixes above.
 - [Remote](./remote.md) for reconnect behavior and link health.
-- [CLI reference: maintenance](../reference/cli/maintenance.md) for every flag on `doctor`, `reset`, `gc`, `reload`, and `uninstall`.
+- [CLI reference: maintenance](../reference/cli/maintenance.md) for every flag on `reset`, `gc`, `reload`, `sidebar repair`, and `uninstall`.

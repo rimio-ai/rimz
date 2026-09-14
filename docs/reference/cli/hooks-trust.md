@@ -88,7 +88,7 @@ $ rimz hooks uninstall claude
 ✓ claude  removed 13 hooks → ~/.claude/settings.json
 ```
 
-A named agent with no RimZ hooks prints `codex — no RimZ-managed hooks found`. With no `AGENT` and nothing installed anywhere, uninstall prints `No RimZ-managed hooks are installed; nothing to uninstall.` [`rimz uninstall`](./maintenance.md#update-reload-reset-gc-and-uninstall) runs the same removal as part of removing RimZ.
+A named agent with no RimZ hooks prints `codex — no RimZ-managed hooks found`. With no `AGENT` and nothing installed anywhere, uninstall prints `No RimZ-managed hooks are installed; nothing to uninstall.` [`rimz uninstall`](./maintenance.md#uninstall-rimz) runs the same removal as part of removing RimZ.
 
 ### Failures
 
