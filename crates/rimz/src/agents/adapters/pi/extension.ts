@@ -97,6 +97,7 @@ export default function rimz(pi) {
   let isPrimary = false;
   let childParentId;
   let childStopFed = false;
+  let childFedLabel;
   let latestWindows = [];
 
   const recordUsage = (id, usage) => {
@@ -260,14 +261,17 @@ export default function rimz(pi) {
     typeof value === "string" && value.trim() ? value.trim() : undefined;
   const label = (...candidates) => candidates.map(text).find(Boolean)?.slice(0, 80);
 
+  // pi-subagents before 0.65 ran children as subprocesses carrying
+  // PI_SUBAGENT_CHILD_AGENT; later releases name the child session instead.
   const childLabel = (ctx) =>
     label(nameBySession.get(sessionId(ctx)), process.env.PI_SUBAGENT_CHILD_AGENT);
   const feedChildStart = (ctx) => {
     const id = sessionId(ctx);
     if (!childParentId || !id) return;
+    childFedLabel = childLabel(ctx);
     feedSubagent("subagent_started", childParentId, ctx?.sessionManager?.getCwd?.() ?? ctx?.cwd, {
       subagent_id: id,
-      subagent_label: childLabel(ctx),
+      subagent_label: childFedLabel,
       subagent_source: "pi-session",
     });
   };
@@ -403,12 +407,16 @@ export default function rimz(pi) {
   );
   pi.on("session_info_changed", (ev, ctx) => {
     const id = sessionId(ctx);
-    const name = ev?.session_info?.name ?? ev?.sessionInfo?.name ?? ev?.name;
     if (id) {
-      if (typeof name === "string" && name.length > 0) nameBySession.set(id, name);
+      if (typeof ev?.name === "string" && ev.name.length > 0) nameBySession.set(id, ev.name);
       else nameBySession.delete(id);
     }
     feed("session_info_changed", ctx, {});
+    // Subagent extensions name a child after its row already started; carry
+    // the new label onto that row.
+    if (childParentId && !childStopFed && childLabel(ctx) !== childFedLabel) {
+      feedChildStart(ctx);
+    }
   });
   pi.on("tool_execution_end", (ev, ctx) => {
     openQuestionnaires.delete(ev?.toolCallId);

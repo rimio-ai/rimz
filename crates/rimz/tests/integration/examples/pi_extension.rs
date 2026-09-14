@@ -28,8 +28,10 @@ fn extension_tracks_settled_boundary_spend_and_child_lineage() {
 /// Drive the embedded extension through Node as if `PI_VERSION` were
 /// `pi_version`, asserting the turn verdict rides `boundary_event` (carrying the
 /// accumulated cost and the `turn_end` token split), `absent_event` is never
-/// forwarded, shutdown clears the running cost, and child factories report
-/// their own session identity through the process-lineage markers.
+/// forwarded, shutdown clears the running cost, only in-turn extension dialogs
+/// outside a questionnaire are forwarded, and child factories report their own
+/// session identity (relabelled when the child session is renamed) through the
+/// process-lineage markers.
 #[cfg(unix)]
 fn run_extension_harness(pi_version: &str, boundary_event: &str, absent_event: &str) {
     use std::os::unix::fs::PermissionsExt as _;
@@ -129,11 +131,20 @@ rimz(pi);
 rimz(childPi);
 handlers.get("session_start")({{ reason: "launch" }}, ctx);
 
-await handlers.get("tool_call")({{
+const busyUi = {{ ...ctx, hasUI: true, mode: "interactive", isIdle: () => false }};
+handlers.get("ui_prompt_start")({{ reason: "open", kind: "confirm", title: " Allow deploy? " }}, busyUi);
+handlers.get("ui_prompt_end")({{ reason: "close", kind: "confirm" }}, busyUi);
+const idleUi = {{ ...busyUi, isIdle: () => true }};
+handlers.get("ui_prompt_start")({{ reason: "open", kind: "select" }}, idleUi);
+handlers.get("ui_prompt_end")({{ reason: "close", kind: "select" }}, idleUi);
+handlers.get("ui_prompt_start")({{ reason: "open", kind: "select" }}, {{ ...busyUi, mode: "rpc" }});
+const askCall = handlers.get("tool_call")({{
   toolCallId: "ask-call",
   toolName: "ask_user_question",
   input: {{ questions: [{{ question: "Ship?" }}] }},
 }}, {{ ...ctx, hasUI: true }});
+handlers.get("ui_prompt_start")({{ reason: "open", kind: "custom" }}, busyUi);
+await askCall;
 handlers.get("tool_execution_end")({{
   toolCallId: "sibling-call",
   toolName: "bash",
@@ -189,6 +200,8 @@ if (globalThis[Symbol.for("rimz.pi.primary-session")]?.id !== "sess-2" ||
   throw new Error("primary markers did not follow the rotated session");
 }}
 childHandlers.get("session_start")({{ reason: "in-process-child" }}, childCtx);
+childHandlers.get("session_info_changed")({{ name: "reviewer: fix the parser" }}, childCtx);
+childHandlers.get("session_info_changed")({{ name: "reviewer: fix the parser" }}, childCtx);
 childHandlers.get("agent_end")({{
   messages: [{{
     role: "assistant",
@@ -230,7 +243,7 @@ const readPayloads = async () => {{
 }};
 
 let payloads = [];
-const expectedPayloads = hasNativeSettled ? 18 : 17;
+const expectedPayloads = hasNativeSettled ? 23 : 22;
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
   if (payloads.length >= expectedPayloads) break;
@@ -244,6 +257,13 @@ const rootPayloads = payloads.filter((payload) =>
 const byEvent = Object.fromEntries(rootPayloads.map((payload) => [payload.hook_event_name, payload]));
 if (byEvent.tool_call?.tool_call_id !== "ask-call") {{
   throw new Error(`tool_call lost correlation: ${{JSON.stringify(byEvent.tool_call)}}`);
+}}
+const uiStarts = rootPayloads.filter((payload) => payload.hook_event_name === "ui_prompt_start");
+const uiEnds = rootPayloads.filter((payload) => payload.hook_event_name === "ui_prompt_end");
+if (uiStarts.length !== 1 || uiEnds.length !== 1 || uiStarts[0].ui_prompt_id !== "ui_prompt:1" ||
+    uiStarts[0].ui_prompt_title !== "Allow deploy?" || uiStarts[0].has_ui !== true ||
+    uiEnds[0].ui_prompt_id !== "ui_prompt:1") {{
+  throw new Error(`idle, rpc, or questionnaire dialogs leaked, or the in-turn dialog lost its key: ${{JSON.stringify({{ uiStarts, uiEnds }})}}`);
 }}
 if (byEvent.tool_execution_end?.tool_call_id !== "sibling-call") {{
   throw new Error(`tool_execution_end lost correlation: ${{JSON.stringify(byEvent.tool_execution_end)}}`);
@@ -266,7 +286,7 @@ if ("total_cost_usd" in byEvent.session_shutdown) {{
 }}
 const childStarts = payloads.filter((payload) => payload.hook_event_name === "subagent_started");
 const childStops = payloads.filter((payload) => payload.hook_event_name === "subagent_stopped");
-if (childStarts.length !== 2 || childStops.length !== 2) {{
+if (childStarts.length !== 3 || childStops.length !== 2) {{
   throw new Error(`primary sessions self-reported or a child feed was lost: ${{JSON.stringify({{ childStarts, childStops }})}}`);
 }}
 for (const child of [...childStarts, ...childStops]) {{
@@ -275,12 +295,13 @@ for (const child of [...childStarts, ...childStops]) {{
     throw new Error(`child payload is not lean: ${{JSON.stringify(child)}}`);
   }}
 }}
-const inProcessStart = childStarts.find((child) => child.subagent_id === "sess-child");
+const inProcessStarts = childStarts.filter((child) => child.subagent_id === "sess-child");
+const inProcessLabels = inProcessStarts.map((child) => child.subagent_label).sort().join("|");
 const inProcessStop = childStops.find((child) => child.subagent_id === "sess-child");
-if (inProcessStart?.session_id !== "sess-2" ||
-    inProcessStart.subagent_label !== "general-purpose#abc123" ||
+if (inProcessStarts.some((child) => child.session_id !== "sess-2") ||
+    inProcessLabels !== "general-purpose#abc123|reviewer: fix the parser" ||
     inProcessStop?.errored !== true) {{
-  throw new Error(`in-process child self-identification was ${{JSON.stringify({{ inProcessStart, inProcessStop }})}}`);
+  throw new Error(`in-process child self-identification was ${{JSON.stringify({{ inProcessStarts, inProcessStop }})}}`);
 }}
 const subprocessStart = childStarts.find((child) => child.subagent_id === "sess-subprocess");
 const subprocessStop = childStops.find((child) => child.subagent_id === "sess-subprocess");
