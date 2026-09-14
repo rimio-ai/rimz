@@ -17,26 +17,23 @@ pub enum SystemTextChannel {
     TextFlag { flags: Vec<String> },
     /// A repeatable config override: `<flag> <key>=<TOML-quoted text>`.
     ConfigKey { flags: Vec<String>, key: String },
-    /// RimZ's installed in-process extension reads the text from
-    /// [`EXTENSION_SYSTEM_TEXT_ENV`] and injects it; nothing rides argv.
+    /// RimZ's installed in-process extension reads the text from the
+    /// `RIMZ_LAUNCH_REMINDERS` launch env and injects it; nothing rides argv.
     ExtensionEnv,
 }
 
-/// Launch env carrying launch reminders to a RimZ-authored extension. Always
-/// exported, empty when there is no reminder, so a parent's value never leaks
-/// into a child launch.
-pub const EXTENSION_SYSTEM_TEXT_ENV: &str = "RIMZ_LAUNCH_REMINDERS";
+/// The argv shape a channel occupies; the extension channel has none.
+impl TryFrom<&SystemTextChannel> for PresetArgMatcher {
+    type Error = ();
 
-impl SystemTextChannel {
-    /// The argv shape the channel occupies, absent for the extension channel.
-    pub fn arg_matcher(&self) -> Option<PresetArgMatcher> {
-        match self {
-            Self::TextFlag { flags } => Some(PresetArgMatcher::TextFlag(flags.clone())),
-            Self::ConfigKey { flags, key } => Some(PresetArgMatcher::ConfigKey {
+    fn try_from(channel: &SystemTextChannel) -> std::result::Result<Self, ()> {
+        match channel {
+            SystemTextChannel::TextFlag { flags } => Ok(Self::TextFlag(flags.clone())),
+            SystemTextChannel::ConfigKey { flags, key } => Ok(Self::ConfigKey {
                 flags: flags.clone(),
                 key: key.clone(),
             }),
-            Self::ExtensionEnv => None,
+            SystemTextChannel::ExtensionEnv => Err(()),
         }
     }
 }

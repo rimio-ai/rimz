@@ -531,7 +531,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         let channel = crate::agents::find_definition(kind)
             .and_then(|adapter| adapter.append_system_text_channel())
             .expect("system text matcher");
-        let matcher = channel.arg_matcher().expect("argv channel");
+        let matcher = crate::agents::PresetArgMatcher::try_from(&channel).expect("argv channel");
         let occurrences = matcher.occurrences(&process.provider_argv);
         assert_eq!(
             occurrences.len(),
@@ -571,8 +571,7 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             let channel = crate::agents::find_definition(kind)
                 .and_then(|adapter| adapter.append_system_text_channel())
                 .expect("system text channel");
-            let occurrences = channel
-                .arg_matcher()
+            let occurrences = crate::agents::PresetArgMatcher::try_from(&channel)
                 .expect("argv channel")
                 .occurrences(&process.provider_argv);
             assert_eq!(occurrences.len(), 1);
@@ -618,8 +617,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 let channel = crate::agents::find_definition(kind)
                     .and_then(|adapter| adapter.append_system_text_channel())
                     .expect("system text channel");
-                let occurrences = channel
-                    .arg_matcher()
+                let occurrences = crate::agents::PresetArgMatcher::try_from(&channel)
                     .expect("argv channel")
                     .occurrences(&process.provider_argv);
                 assert_eq!(occurrences.len(), 1);
@@ -696,7 +694,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
             crate::harness::launch_reminders::render(&invocation, &reminders, project.path())
                 .expect("team reminder");
         assert!(reminder.contains("bubblewrap sandbox"), "{kind}");
-        assert_eq!(process.env[EXTENSION_SYSTEM_TEXT_ENV], reminder, "{kind}");
+        assert_eq!(process.env[ENV_LAUNCH_REMINDERS], reminder, "{kind}");
         assert!(
             process
                 .provider_argv
@@ -718,7 +716,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
         )
         .expect("process without reminders");
         assert_eq!(bare.reminder, None, "{kind}");
-        assert_eq!(bare.env[EXTENSION_SYSTEM_TEXT_ENV], "", "{kind}");
+        assert_eq!(bare.env[ENV_LAUNCH_REMINDERS], "", "{kind}");
     }
 }
 

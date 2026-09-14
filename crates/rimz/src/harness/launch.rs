@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::capabilities::{EXTENSION_SYSTEM_TEXT_ENV, SystemTextChannel};
+use crate::agents::capabilities::SystemTextChannel;
 use crate::disk::paths::RuntimePaths;
 use crate::harness::launch_reminders::LaunchReminders;
 use crate::harness::prompt_compose::{TEXT_PROMPT_LIMIT, prompt_artifact_path};
@@ -29,6 +29,10 @@ const ENV_PROBE_POLL: Duration = Duration::from_millis(25);
 static ENV_PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
+/// Launch reminders for an adapter whose RimZ extension injects them
+/// (`SystemTextChannel::ExtensionEnv`). Always exported, empty when there is no
+/// reminder, so a parent's value never leaks into a child launch.
+const ENV_LAUNCH_REMINDERS: &str = "RIMZ_LAUNCH_REMINDERS";
 /// Stable RimZ launch identity. The provider may replace the provisional
 /// session key after startup, so launch ancestry resolves this value through
 /// the durable `AgentState::launch_id` stamp.
@@ -679,7 +683,9 @@ fn compile_agent_process_with_extra_env(
     }
     let reminder = crate::harness::launch_reminders::render(request, reminders, cwd);
     let channel = adapter.append_system_text_channel();
-    if let Some(matcher) = channel.as_ref().and_then(SystemTextChannel::arg_matcher)
+    if let Some(matcher) = channel
+        .as_ref()
+        .and_then(|channel| crate::agents::PresetArgMatcher::try_from(channel).ok())
         && let Some(text) = &reminder
     {
         merge_appended_system_text(action.extra_args_mut(), &matcher, text);
@@ -697,7 +703,7 @@ fn compile_agent_process_with_extra_env(
     let mut env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
     if channel == Some(SystemTextChannel::ExtensionEnv) {
         env.insert(
-            EXTENSION_SYSTEM_TEXT_ENV.to_owned(),
+            ENV_LAUNCH_REMINDERS.to_owned(),
             reminder.clone().unwrap_or_default(),
         );
     }
