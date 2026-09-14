@@ -43,7 +43,6 @@ fn turn_started_records_only_unsupervised_user_inputs() {
         workspace_id(),
         &agent_state,
         "human prompt".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     );
     let agent_message = human

@@ -530,7 +530,6 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
         env.workspace_id.clone(),
         agent,
         "stuck".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     stuck.agent_name = Some("coder".to_owned());
@@ -545,7 +544,6 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
         env.workspace_id.clone(),
         agent,
         "failed".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     failed.status = MessageStatus::Errored;
@@ -563,7 +561,6 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
         env.workspace_id.clone(),
         agent,
         "delivered".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     delivered.status = MessageStatus::Delivered;

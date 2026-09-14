@@ -471,11 +471,11 @@ impl MessageRecord {
             && self.gate != DeliveryGate::Resume
     }
 
+    /// A record addressed to a live agent card, submitted with Enter.
     pub fn new(
         workspace_id: WorkspaceId,
         agent: &AgentState,
         text: String,
-        enter: bool,
         gate: DeliveryGate,
     ) -> Self {
         Self::new_for_card(
@@ -484,7 +484,7 @@ impl MessageRecord {
             agent.agent_id.clone(),
             agent.name.clone(),
             text,
-            enter,
+            true,
             gate,
         )
     }

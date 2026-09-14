@@ -597,7 +597,6 @@ fn only_interactive_human_delivery_waives_a_budget() {
         crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/budget")),
         &state,
         "continue".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     message.status = MessageStatus::Delivered;

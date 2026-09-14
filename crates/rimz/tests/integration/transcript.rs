@@ -585,7 +585,6 @@ fn signal_delivery_is_acknowledged_and_hidden_from_rendered_transcript() {
         env.workspace_id.clone(),
         recipient,
         "CI failed; inspect the build log.".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_sender(MessageSender::Harness {

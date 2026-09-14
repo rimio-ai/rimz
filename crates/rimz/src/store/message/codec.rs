@@ -203,14 +203,12 @@ mod tests {
             WorkspaceId::from_project_root(dir.path()),
             &agent,
             "first".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         let second = MessageRecord::new(
             WorkspaceId::from_project_root(dir.path()),
             &agent,
             "second".to_owned(),
-            true,
             DeliveryGate::Done,
         );
 
@@ -249,7 +247,6 @@ mod tests {
             WorkspaceId::from_project_root(dir.path()),
             &agent,
             "delivered body".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         message.status = MessageStatus::Delivered;
@@ -269,7 +266,6 @@ mod tests {
             WorkspaceId::from_project_root(dir.path()),
             &agent,
             "first".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         first.message_id = fixed_message_id(2);
@@ -295,7 +291,6 @@ mod tests {
                 WorkspaceId::from_project_root(dir.path()),
                 &agent,
                 "x".repeat(2048),
-                true,
                 DeliveryGate::Done,
             );
             message.message_id = fixed_message_id(index as u64);
@@ -323,7 +318,6 @@ mod tests {
             WorkspaceId::from_project_root(dir.path()),
             &agent(),
             "x".repeat(2048),
-            true,
             DeliveryGate::Done,
         );
         let mut value = serde_json::to_value(message).unwrap();
@@ -365,7 +359,6 @@ mod tests {
             WorkspaceId::from_project_root(dir.path()),
             &agent,
             "queued".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         write_queue(&messages_dir, std::slice::from_ref(&message)).unwrap();

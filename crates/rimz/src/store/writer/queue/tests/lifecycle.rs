@@ -178,7 +178,6 @@ fn orphan_gc_keeps_provisional_message_when_registered_card_name_is_live() {
         q.workspace_id.clone(),
         &provisional,
         "next".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     q.queue_message(&message, "session").unwrap();

@@ -59,7 +59,6 @@ fn queued_cancel_message(h: &crate::common::Harness) -> rimz::store::message::Me
         h.workspace_id.clone(),
         &projection.agents[0],
         "cancel despite broken audit".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     );
     h.store.queue_message(&message, "rimz-test").expect("queue");

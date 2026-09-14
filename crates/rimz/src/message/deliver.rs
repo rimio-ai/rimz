@@ -143,7 +143,7 @@ fn synthetic_record(
     gate: DeliveryGate,
     pane_id: Option<&PaneId>,
 ) -> MessageRecord {
-    let record = MessageRecord::new(workspace_id, agent, text, true, gate)
+    let record = MessageRecord::new(workspace_id, agent, text, gate)
         .with_channel(agent.channel())
         .with_sender(MessageSender::System);
     match pane_id {
@@ -1364,13 +1364,8 @@ mod tests {
     }
 
     fn message(agent: &AgentState, id: u64, text: &str) -> MessageRecord {
-        let mut message = MessageRecord::new(
-            workspace_id(),
-            agent,
-            text.to_owned(),
-            true,
-            DeliveryGate::Done,
-        );
+        let mut message =
+            MessageRecord::new(workspace_id(), agent, text.to_owned(), DeliveryGate::Done);
         message.message_id = message_id(id);
         message
     }

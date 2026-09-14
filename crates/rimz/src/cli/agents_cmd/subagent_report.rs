@@ -173,7 +173,6 @@ fn report_fleet_with_kind(
         workspace.workspace_id.clone(),
         parent,
         compose_digest(&digest_rows),
-        true,
         DeliveryGate::Done,
     )
     .with_channel(parent.channel())

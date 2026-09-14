@@ -646,7 +646,6 @@ fn unknown_harness_notice_header_and_ack_agree() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
         &recipient,
         "ship it".to_owned(),
-        true,
         crate::store::message::DeliveryGate::Done,
     )
     .with_sender(sender);

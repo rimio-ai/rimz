@@ -686,7 +686,6 @@ fn rotate_event_log_writes_carryover_before_archiving_active_log() {
         workspace_id.clone(),
         &agent_state("claude", "sess-resume", Some("lucid-atlas")),
         "continue".to_owned(),
-        true,
         DeliveryGate::Resume,
     );
     message.status = MessageStatus::Delivered;

@@ -91,7 +91,6 @@ fn wake_in_flight_keeps_a_rested_agent_sleeping() {
             workspace.clone(),
             &agent,
             "wake".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         message.sender = sender;
@@ -267,7 +266,6 @@ fn parked_reply_reanchors_when_delivery_starts() {
         workspace_id.clone(),
         &agent,
         "queued request".to_owned(),
-        true,
         DeliveryGate::Any,
     );
     message.message_id = leg.message_id.clone();
@@ -408,7 +406,6 @@ fn terminal_message_poll_reads_only_appended_bytes_after_base() {
         workspace_id.clone(),
         &agent,
         "old".to_owned(),
-        true,
         DeliveryGate::Any,
     );
     old.status = MessageStatus::Delivered;
@@ -426,13 +423,7 @@ fn terminal_message_poll_reads_only_appended_bytes_after_base() {
     );
     assert_eq!(event_log::testkit::bytes_read() - before, 0);
 
-    let mut message = MessageRecord::new(
-        workspace_id,
-        &agent,
-        "new".to_owned(),
-        true,
-        DeliveryGate::Any,
-    );
+    let mut message = MessageRecord::new(workspace_id, &agent, "new".to_owned(), DeliveryGate::Any);
     message.status = MessageStatus::Delivered;
     event_log::append(
         &paths.events_log,
@@ -616,7 +607,6 @@ fn wait_message(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-wait-guard")),
         receiver,
         "reply".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_sender(MessageSender::Agent {

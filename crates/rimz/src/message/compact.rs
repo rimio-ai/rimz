@@ -89,7 +89,6 @@ pub fn send_compact(
         workspace.workspace_id.clone(),
         request.agent,
         request.command,
-        true,
         DeliveryGate::Done,
     )
     .with_channel(request.agent.channel())
@@ -181,9 +180,8 @@ mod tests {
             Err(CompactErr::Repeated { .. })
         ));
         agent.compacted_awaiting_prompt = None;
-        let command =
-            MessageRecord::new(id, &agent, "/compact".to_owned(), true, DeliveryGate::Done)
-                .with_body(MessageBody::Command);
+        let command = MessageRecord::new(id, &agent, "/compact".to_owned(), DeliveryGate::Done)
+            .with_body(MessageBody::Command);
         store.queue_message(&command, "session").unwrap();
         assert!(
             matches!(refuse_repeat(&store, &agent, now), Err(CompactErr::Pending { message_id, .. }) if message_id == command.message_id)
