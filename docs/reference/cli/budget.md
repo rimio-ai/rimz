@@ -87,7 +87,7 @@ While a room or account cap has no headroom, automation does not launch:
 
 | Launch | Outcome |
 | --- | --- |
-| `rimz agents <SPEC> -p`, `rimz subagents <PROFILE>` | Refused with the cap's reason and exit `125`, before that attempt's run record or agent pane exists. |
+| `rimz agents <SPEC> -p`, `rimz subagents <PROFILE>`, `rimz subagents fanout` | Refused with the cap's reason and exit `125`, before that attempt's run record or agent pane exists. |
 | A scheduled loop fire | Recorded as `budget skipped`, with no strike. |
 | An interactive launch | Allowed. |
 
