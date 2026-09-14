@@ -1,81 +1,129 @@
 # Agent plugins
 
-Agent plugins let an external agent CLI join RimZ without compiling provider-specific Rust into RimZ. A plugin bundle declares identity, branding, launch behavior, emitted events, transcript discovery, and optional pull probes; an agent-side shim translates its native protocol into one canonical JSON envelope.
+An agent plugin connects an agent CLI that RimZ has no built-in adapter for. It is a bundle directory with three parts: a manifest that declares the agent's identity, launch flags, and what it reports; a shim the agent's own hooks call, which translates native events into RimZ's canonical JSON envelope; and optional probe executables RimZ runs to read spend, account, and version.
 
-> **Early surface, not ready for public use.** The bundle format, the canonical wire, and the probe contracts are under active development and change without notice. Treat this as experimental: prototype against it and send feedback, but do not depend on it in production. A stable third-party integration ships as a [built-in adapter](../internals/agents/model.md) today.
+> **Early surface, not ready for public use.** The bundle format, the canonical envelope, and the probe contracts are under active development and change without notice. Prototype against them and send feedback, but do not depend on them in production.
 
-Plugins are machine configuration and may execute the launch and probe commands they declare. Install only bundles you trust. Project configuration does not register plugins, so plugin commands stay outside the project trust hash.
+A plugin is machine configuration: RimZ runs the launch, resume, and probe commands its manifest declares. Install only bundles you trust. Project configuration cannot register a plugin, so plugin commands sit outside [project trust](./cli/hooks-trust.md#project-trust).
 
 ## Register a bundle
 
-Create a valid skeleton under `$XDG_CONFIG_HOME/rimz/agents.d/<kind>/`:
+`rimz agents register <kind>` creates a working skeleton under `$XDG_CONFIG_HOME/rimz/agents.d/<kind>/` (`~/.config/rimz/agents.d/<kind>/` by default):
 
-```sh
-rimz agents register mybot
-$EDITOR "${XDG_CONFIG_HOME:-$HOME/.config}/rimz/agents.d/mybot/agent.toml"
-rimz agents register --check
-rimz doctor
+```console
+$ rimz agents register mybot
+registered `mybot` at /home/me/.config/rimz/agents.d/mybot
+edit agent.toml and README.md, then run `rimz agents register --check`
 ```
 
-`rimz agents register` creates `agent.toml`, `README.md`, `shim.sh`, and stub probe executables. RimZ loads every `agents.d/*/agent.toml` once per process. A malformed manifest is skipped on read-only and hook paths; `rimz start` refuses before room side effects and names the manifest and fix.
+| File | Starts as |
+| --- | --- |
+| `agent.toml` | A valid manifest that emits only `session_start`, with the launch flags, `[transcripts]`, and `[probes]` commented out. |
+| `README.md` | The setup document `rimz doctor` points at. Write the agent's hook installation steps here. |
+| `shim.sh` | The forwarding shim from [Shim contract](#shim-contract), executable. |
+| `probes/spend` | A stub spend probe that returns no entries, executable. |
+| `probes/account` | A stub account probe that reports logged out, executable. |
 
-The complete runnable [ScriptBot example](../../examples/agent-plugin/README.md) supplies a fake agent, canonical shim, priced spend probe, account probe, and fixture transcript.
+The scaffold's `[probes]` entries are commented out, so the stub probes do nothing until you uncomment them; until then `rimz agents check` prints `probes: none declared`.
 
-## Validate a plugin
+`register` refuses a kind that breaks the [kind rules](#top-level-keys), a built-in kind such as `claude`, a kind a valid bundle already uses, and a directory that already exists.
 
-Use `rimz agents check <kind>` as the authoring loop after each manifest, shim, or probe change:
+`rimz agents register --check` validates every bundle under `agents.d` and creates nothing. It prints `N agent plugin(s) valid`, or exits 1 listing each invalid manifest with its path and error.
+
+The complete [ScriptBot example](../../examples/agent-plugin/README.md) adds a fake agent, a shim, a priced spend probe, an account probe, and a fixture transcript.
+
+## Check a plugin
+
+`rimz agents check <kind>` is the authoring loop: run it after each change to the manifest, shim, or probes.
 
 ```sh
 rimz agents check mybot
 rimz agents check mybot --spend-file ~/.mybot/sessions/sess-123.jsonl
-rimz agents check mybot --replay ./canonical-envelopes.jsonl
+rimz agents check mybot --replay ./events.jsonl
 ```
 
-The command validates the named manifest and prints its derived coverage and lifecycle summary. It checks every declared probe for presence and executable permission, then runs the account and version probes; the spend probe runs only with `--spend-file` because its canonical request needs a real transcript path.
+| Flag | Effect |
+| --- | --- |
+| `--spend-file <PATH>` | Runs the spend probe on this transcript. Without it, the spend probe is reported `skipped`. |
+| `--replay <JSONL>` | Parses each line as one envelope and steps it through RimZ's agent state machine, without touching any room. |
 
-`--replay` reads one canonical envelope per JSONL line, runs the same diagnostic parser, hook classifier, lifecycle observer, and pure state machine as ingestion, and prints each event's signal and resulting state plus the final agent states. A malformed envelope exits non-zero with its line and exact parse reason. An event absent from `emits` remains valid but prints a warning, matching live ingestion's permissive behavior.
+The report names the manifest, counts the [coverage](#coverage-and-doctor) the manifest derives, and runs each declared probe. The account and version probes always run. This run used the manifest from [Manifest](#manifest); the stderr warning lines for undeclared events are left out:
 
-## Bundle anatomy
+```console
+$ rimz agents check mybot --spend-file sess.jsonl --replay events.jsonl
+plugin `mybot`
+manifest: valid (/home/me/.config/rimz/agents.d/mybot/agent.toml)
+coverage: 5 wired, 1 partial, 12 unsupported
+lifecycle: 4 native, 1 derived, 6 absent
+probes:
+  spend: ok (present, executable; ./probes/spend) — 0 entries
+  account: ok (present, executable; ./probes/account) — canonical account response
+  version: ok (present, executable; mybot --version) — mybot 1.4.2
+replay: events.jsonl
+LINE  EVENT           SIGNAL          STATE              RESULT
+1     session_start   registered      idle               ok
+2     turn_start      turn_started    running/reasoning  ok
+3     tool_use        tool_used       running/acting     ok
+4     awaiting_input  awaiting_input  waiting            warning: event `awaiting_input` is absent from manifest emits
+5     turn_end        rejected        unchanged          error: invalid canonical envelope: invalid type: string "yes", expected a boolean
+6     turn_end        turn_ended      success            ok
+7     future_event    unknown         unchanged          warning: event `future_event` is absent from manifest emits
+8     turn_start      rejected        unchanged          error: lifecycle observation has no agent identity
+final AgentState:
+  sess-123: status=success, phase=idle, compacting=false
+error: agent plugin check failed
+```
+
+Each probe line is `ok`, `skipped`, or `failed`, followed by whether the executable exists and has its executable bit, the command, and a detail: the entry count, the version string, or the failure reason.
+
+A replay row's `SIGNAL` is the lifecycle signal the envelope produced, `rejected` when RimZ would drop it, or `unknown` for an event name outside [the vocabulary](#events). `STATE` is the agent's state after the row. A row is rejected for invalid JSON, a missing `hook_event_name`, a field of the wrong type, a `protocol` other than 1, a missing `session_id`, or an `agent_id` that fails [subagent identity](#subagent-identity). An event missing from `emits` is accepted with a warning, as live ingestion accepts it.
+
+Replay differs from a live room in two places. A live room drops the rejected envelopes without an error. And a live room records no waiting state for `awaiting_input` when the manifest sets `native-ask-ui = false`, while replay still shows `waiting` ([capabilities](#capabilities)).
+
+`check` exits 1 when any declared probe is missing, is not executable, or fails, when any replay row is rejected, or when the `--spend-file` or `--replay` file cannot be read. `check --spend-file` also fails a spend entry whose timestamp is not RFC 3339, which a live room skips. `check` refuses a built-in kind, a kind with no bundle, and an invalid manifest, printing the manifest error.
+
+## Bundle layout
 
 ```text
-agents.d/mybot/
-├── agent.toml
-├── README.md
-├── shim.sh
+~/.config/rimz/agents.d/mybot/
+├── agent.toml        manifest
+├── README.md         setup-doc: how to install the agent's hooks
+├── shim.sh           called by the agent's hooks
 └── probes/
     ├── spend
     └── account
 ```
 
-Hook installation is self-managed because RimZ has no native configuration writer for an unknown agent. `setup-doc` points `rimz doctor` at the bundle's installation instructions. The shim owns native-to-canonical translation and invokes `rimz hooks feed --source <kind>` with one envelope on stdin. Hook stdout stays empty: RimZ expresses no decision for a plugin ask, and the agent's own UI owns the answer.
+RimZ reads every `agents.d/*/agent.toml` once per process. The directory name must equal the manifest's `kind`.
+
+RimZ installs no hooks for a plugin: `rimz hooks install` has no installer for an unknown agent, so wiring the agent's native hooks to the shim is the bundle's job, documented in its `setup-doc`.
 
 ## Manifest
 
-The protocol-1 schema is:
+A manifest using every field that has an effect:
 
 ```toml
 protocol = 1
 kind = "mybot"
 display-name = "MyBot"
 process-names = ["mybot", "node"]
-emits = ["session_start", "turn_start", "turn_end", "context"]
+emits = ["session_start", "turn_start", "turn_end", "tool_use", "context"]
 setup-doc = "README.md"
 
 [brand]
-emblem = "[mb]"                 # optional; defaults to the shared fallback
-color = 141                     # terminal 256-color index
+emblem = "[mb]"
+color = 141
 color-rgb = [175, 135, 255]
 
 [capabilities]
-native-ask-ui = true            # awaiting_input leaves a prompt in the agent UI
+native-ask-ui = true
 subagents = false
-background-tasks = false
 registers-lazily = false
 context-usage = true
 
 [tools]
 mutating = ["write", "shell"]
-editing = ["write"]             # must be a subset of mutating
+editing = ["write"]
 
 [launch]
 bin = "mybot"
@@ -94,7 +142,7 @@ plan = ["--plan"]
 
 [transcripts]
 globs = ["~/.mybot/sessions/*.jsonl"]
-thread-key = "per-file"         # or session-dir
+thread-key = "per-file"
 
 [probes]
 spend = ["./probes/spend"]
@@ -102,65 +150,139 @@ account = ["./probes/account"]
 version = ["mybot", "--version"]
 ```
 
-Plugin `compact-command` values are sent bare; the manifest cannot currently declare support for a trailing compaction instruction.
+Keys are kebab-case. RimZ ignores keys it does not recognise in every table, so a misspelled key such as `native_ask_ui` has no effect and raises no error; `rimz agents check` shows the coverage the manifest actually derives.
 
-`kind` matches `[a-z0-9-]+`, starts and ends with a letter or digit, matches its directory name, and does not collide with a built-in or another plugin. `session_start` is required because it establishes the session row. Optional tables tolerate unknown keys for forward compatibility; protocol version, identity, event names, tool subsets, probe commands, and resume placeholders validate strictly.
+### Top-level keys
 
-Relative probe executables and relative transcript globs resolve from the bundle directory. A launch or resume executable containing a path separator also resolves from the bundle directory; bare executable names use `PATH`. `model-flag` and `effort-flag` receive their configured values. `system-prompt-file-flag` declares a replacement mechanism: RimZ passes the resolved absolute `system-prompt-file` path directly. It must be a file-path flag, not a text flag or an append-only flag. Launch presets fail when a configured `model`, `effort`, or system-prompt field has no declared rendering, so launch intent is not silently discarded.
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `protocol` | yes | Must be `1`. |
+| `kind` | yes | The agent's name in `rimz agents <kind>`, profiles, and addresses. Lowercase letters, digits, and `-`, starting and ending with a letter or digit. Must equal the bundle directory name and differ from every built-in kind and every other plugin. |
+| `display-name` | yes | Name shown in the sidebar and reports. Must not be empty. |
+| `process-names` | yes | Process names RimZ matches to find the agent running in a pane. At least one, no duplicates. |
+| `emits` | yes | The canonical events the shim sends, from [Events](#events). Must include `session_start`, which creates the session. No duplicates or unknown names. |
+| `setup-doc` | yes | Path to the hook installation guide, relative to the bundle. The file must exist. |
 
-`emits` is the shim's conformance declaration. RimZ derives the coverage and lifecycle matrices from it plus declared probes and capabilities. The feed still processes a valid canonical event omitted from `emits` and warns, because the live event is authoritative; update `emits` so coverage remains truthful.
+### `[brand]`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `emblem` | the shared fallback emblem | Short text shown as the agent's emblem. |
+| `color` | `141` | Terminal 256-color index. |
+| `color-rgb` | `[175, 135, 255]` | Truecolor value. |
+
+### `[capabilities]`
+
+Every key defaults to `false`.
+
+| Key | Meaning |
+| --- | --- |
+| `native-ask-ui` | The agent shows its own permission, plan, and question prompts. RimZ records `awaiting_input` as a waiting agent only when this is `true`; when `false`, those events change nothing. |
+| `subagents` | The agent runs child agents. The subagent coverage claim needs this plus `subagent_start` and `subagent_end` in `emits`. |
+| `registers-lazily` | The agent can be running before its first `session_start` arrives, so RimZ binds a late session to its pane by working directory. |
+| `context-usage` | Claims a context gauge in coverage. Emitting `context` claims it too. |
+| `background-tasks` | Accepted and has no effect. |
+
+### `[tools]`
+
+| Key | Meaning |
+| --- | --- |
+| `mutating` | `tool_name` values that change files or state. A `tool_use` naming one, with `is_error` false, counts as a mutation. |
+| `editing` | `tool_name` values that edit files. Each must also appear in `mutating`. |
+
+### `[launch]`
+
+Without `[launch]`, RimZ has no command to start the agent. With it, `rimz agents mybot "fix the parser"` runs `bin`, then `args`, then the mode, model, effort, and prompt-file flags and any profile `args`, then `--` and the prompt.
+
+| Key | Meaning |
+| --- | --- |
+| `bin` | Executable. Must not be empty. |
+| `args` | Arguments always passed after `bin`. |
+| `model-flag` | Flag that takes the `model` value, as in `--model mybot-pro`. |
+| `effort-flag` | Flag that takes the `effort` value. |
+| `system-prompt-file-flag` | Flag that takes the path of the composed system prompt file and replaces the agent's system prompt. Declare it only for a flag that reads a file and replaces the whole prompt. |
+| `resume` | Full argv to resume a session. Must contain `{session_id}`, which RimZ replaces with the session id. |
+| `compact-command` | Text RimZ sends into the pane to compact the agent (`rimz agents compact` and smart compaction). Must not be empty. RimZ sends it bare: `rimz agents compact` refuses an instruction for a plugin, and refuses the plugin entirely unless `emits` includes `turn_start`. |
+
+A launch that sets `model`, `effort`, or `system-prompt-file` fails before any pane opens when the matching flag is not declared. A launch that sets `auto-compact` always fails for a plugin, since the manifest has no field for it ([auto-compaction window](./agent-support.md#auto-compaction-window)).
+
+`[launch.permission-args]` holds the arguments each permission mode (`ask`, `auto`, `yolo`, `plan`) appends. Each defaults to no arguments, so the agent keeps its own default. Modes are described in [permission modes](./agent-support.md#permission-modes).
+
+### `[transcripts]`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `globs` | none | Transcript file patterns. `~/` expands to `$HOME`, an absolute pattern stands as written, and a relative pattern resolves from the bundle directory. |
+| `thread-key` | `per-file` | `per-file` counts each transcript file as one session; `session-dir` counts each directory as one. |
+
+Spend history needs both `[transcripts]` and a spend probe: RimZ sends each matching file to the probe.
+
+### `[probes]`
+
+Each probe is an argv array: `spend`, `account`, and `version`. See [Probe contracts](#probe-contracts).
+
+### Paths
+
+An executable in `bin`, `resume`, or a probe resolves the same way. An absolute path is used as written, a path containing `/` (such as `./probes/spend`) resolves from the bundle directory, and a bare name (such as `mybot`) is looked up on `PATH`.
 
 ## Canonical event envelope
 
-Every envelope is one JSON object with `protocol: 1`, `hook_event_name`, and a root `session_id`. All other fields are optional. A subagent event uses the parent's id as `session_id` and the distinct child's id as `agent_id`; missing, equal, or blank ids quarantine that child event.
+The shim sends one JSON object per event. Three fields are required:
 
-Shared enrichment fields may ride every event:
+| Field | Meaning |
+| --- | --- |
+| `protocol` | `1`. Any other value is dropped. |
+| `hook_event_name` | One of the [events](#events). |
+| `session_id` | The root session's id. An event without one updates no session. |
 
-```json
-{
-  "protocol": 1,
-  "hook_event_name": "turn_start",
-  "session_id": "sess-123",
-  "cwd": "/work/project",
-  "model": "mybot-pro",
-  "effort": "high",
-  "context_pct": 42,
-  "context_window": 200000,
-  "total_tokens": 84000,
-  "input_tokens": 1200,
-  "output_tokens": 300,
-  "cache_read_input_tokens": 40000,
-  "cache_write_input_tokens": 2000,
-  "total_cost_usd": 1.25,
-  "rate_limits": { "windows": [] },
-  "transcript_path": "/home/me/.mybot/sessions/sess-123.jsonl",
-  "prompt": "repair the parser"
-}
-```
+### Subagent identity
 
-The event vocabulary maps directly onto RimZ lifecycle signals:
+A child agent's events carry the parent's id in `session_id` and the child's own id in `agent_id`. A `subagent_start` or `subagent_end` whose `agent_id` is missing, blank, or equal to `session_id` is dropped. Any other event whose `agent_id` differs from its `session_id` is treated as the child's and dropped, so it never advances the parent.
+
+### Shared fields
+
+Any event may carry these optional fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `agent_id` | string | Child id, see [Subagent identity](#subagent-identity). |
+| `cwd` | string | Working directory; RimZ uses it to match the agent to a worktree. |
+| `model` | string | Model in use. |
+| `effort` | string | Effort level in use. |
+| `context_pct` | integer | Percent of the context window used; values above 100 read as 100. |
+| `context_window` | integer | Context window size in tokens. |
+| `total_tokens` | integer | Tokens in context. |
+| `input_tokens`, `output_tokens` | integer | Token counts for the latest turn. |
+| `cache_read_input_tokens`, `cache_write_input_tokens` | integer | Cache token counts. |
+| `transcript_path` | string | The session's transcript file. |
+| `total_cost_usd` | number | Session cost in US dollars. Read from `context` events only. |
+| `rate_limits` | object | `{"windows": [...]}` in the [window shape](#account). Read from `context` events only. |
+
+### Events
 
 | Event | Event fields | Effect |
 | --- | --- | --- |
-| `session_start` | none | Register the root session. |
-| `turn_start` | `prompt?` | Start a turn and retain the sanitized prompt as its description. |
-| `turn_end` | `errored?`, `error_message?`, `last_assistant_message?` | Finish or fail the turn and complete supervised output. |
-| `tool_use` | `tool_name?`, `is_error?` | Record tool activity; manifest tool tables classify mutation and file editing. |
-| `awaiting_input` | `ask: permission | plan_approval | question`, `question?` | Mark an agent with native ask UI as waiting. |
-| `compaction_start` | none | Open the compaction head. |
-| `compaction_end` | `trigger?: auto | manual` | Close compaction and resume or rest according to the trigger. |
-| `subagent_start` | child `agent_id` | Register a child linked to the parent `session_id`. |
-| `subagent_end` | child `agent_id`, `errored?` | Resolve the child as success or failure. |
-| `session_end` | none | End the session, hide its card, and retain its durable row for explicit resume. |
-| `context` | shared fields plus normalized context fields | Merge rich display-only context without a lifecycle transition. |
+| `session_start` | none | Registers the session. |
+| `turn_start` | `prompt?` | Starts a turn; `prompt` becomes the turn's task. |
+| `turn_end` | `errored?`, `error_message?`, `last_assistant_message?` | Ends the turn, as failed when `errored` is `true`. `last_assistant_message` becomes a supervised run's output. |
+| `tool_use` | `tool_name?`, `is_error?` | Records tool activity, classified by [`[tools]`](#tools). |
+| `awaiting_input` | `ask` (`permission`, `plan_approval`, or `question`), `question?` | Marks the agent waiting, when `native-ask-ui = true`. |
+| `compaction_start` | none | Marks the agent compacting. |
+| `compaction_end` | `trigger?` (`auto` or `manual`) | Ends compaction. |
+| `subagent_start` | child `agent_id` | Registers a child under the parent `session_id`. |
+| `subagent_end` | child `agent_id`, `errored?` | Ends the child as succeeded or failed. |
+| `session_end` | none | Ends the session and hides its card; the session stays available to resume. |
+| `context` | shared fields, plus the context fields below | Updates the card's context, cost, and rate limits without changing state. |
 
-`context` also accepts the optional fields in the serialized [`AgentContext`](../../crates/rimz/src/agents/context.rs) shape, including `session_name`, `session_preview`, `model_id`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. RimZ stamps `source` and `observed_at`; the shim omits them. Top-level `model`, token split, gauge, cost, and rate-limit fields normalize into the same shape.
+A `context` event also accepts the optional fields of RimZ's [`AgentContext`](../../crates/rimz/src/agents/context.rs) record, including `session_name`, `session_preview`, `model_id`, `effort`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. The top-level `model`, token, `context_pct`, `total_cost_usd`, and `rate_limits` fields fill the same record when its own fields are absent. RimZ sets `source` and `observed_at` itself.
 
-Unknown event names and event payloads from a different protocol version are dropped at debug level. A known event with malformed typed fields is also dropped. This keeps a newer shim forward-compatible while preventing malformed input from mutating a row. `rimz agents check --replay` exposes those otherwise-quiet parser decisions while leaving ingestion behavior unchanged.
+### Dropped envelopes
+
+RimZ drops an envelope without an error, changing nothing, when a field has the wrong type (such as `"errored": "yes"`), `awaiting_input` has no valid `ask`, `protocol` is not 1, or `hook_event_name` differs from the shim's `--event`. An event name outside the vocabulary is also ignored. An event that is valid but missing from `emits` is processed, and RimZ logs a warning once per event; add it to `emits` so coverage stays accurate. `rimz agents check --replay` shows each of these decisions.
 
 ## Shim contract
 
-The smallest shim forwards an already-canonical payload:
+The agent's hook calls the shim with the event name as its argument and the envelope on stdin. The scaffold's shim forwards an envelope that is already canonical:
 
 ```sh
 #!/bin/sh
@@ -169,21 +291,30 @@ event=${1:?canonical event name}
 exec rimz hooks feed --source mybot --event "$event"
 ```
 
-The agent integration calls the shim with a JSON envelope on stdin. Native ask handling remains inside the agent. RimZ returns success with empty stdout for every plugin event, meaning no opinion; define and test what an empty response means in the native hook system before setting `native-ask-ui = true`.
+`--source` is the plugin's `kind`. `--event` is optional; without it, RimZ reads the event from `hook_event_name`, and when both are given they must match.
+
+`rimz hooks feed` prints nothing on stdout for a plugin event, and a dropped envelope still exits 0. Stdin that is not JSON exits 1. RimZ never answers a prompt on the agent's behalf: the user answers in the agent's own UI. Before setting `native-ask-ui = true`, confirm that an empty, successful hook response leaves the agent's prompt in place.
 
 ## Probe contracts
 
-Probes run as best-effort enrichment with the bundle directory as their working directory. RimZ pipes stdin, stdout, and stderr, limits stdout to 1 MiB, and kills a probe that exceeds three seconds. A missing executable, nonzero exit, timeout, oversized output, or invalid JSON omits the enrichment and writes a warning to stderr; it never invalidates durable lifecycle state.
+Probes are optional enrichment. RimZ runs each one in the bundle directory, with stdin, stdout, and stderr piped:
+
+| Limit | Value |
+| --- | --- |
+| Time | Killed after 3 seconds. |
+| stdout | At most 1 MiB. |
+| stderr | The first 16 KiB, quoted in the warning when the probe exits nonzero. |
+| Failure | A missing executable, nonzero exit, timeout, oversized output, or invalid JSON drops that reading and logs a warning. Session state is never affected. |
 
 ### Spend
 
-RimZ sends one request per discovered transcript file:
+RimZ sends one JSON line per transcript file matched by [`[transcripts]`](#transcripts):
 
 ```json
 {"file":"/home/me/.mybot/sessions/sess-123.jsonl","cursor":{"line":18}}
 ```
 
-The first request carries `cursor: null`. Return entries after that opaque cursor and a replacement cursor:
+`cursor` is `null` on the first request for a file, and afterwards whatever the probe last returned. Return the entries after that cursor and a new cursor:
 
 ```json
 {
@@ -204,40 +335,80 @@ The first request carries `cursor: null`. Return entries after that opaque curso
 }
 ```
 
-The cursor is arbitrary JSON and round-trips unchanged. Timestamps use RFC 3339. Plugin entries are already priced: RimZ uses `cost_usd` verbatim and does not apply its built-in price book. Token components remain useful when cost is absent or zero because `rimz stats` still reports token composition.
+| Field | Meaning |
+| --- | --- |
+| `entries[].timestamp` | Required, RFC 3339. An entry with an unparseable timestamp is skipped. |
+| `entries[].cost_usd` | Cost in US dollars, used as given; RimZ applies no price table. Missing counts as 0. |
+| `entries[].thread_id`, `model`, `input_tokens`, `output_tokens`, `cache_read`, `cache_write` | Optional. Token counts still appear in `rimz stats` when cost is 0. |
+| `cursor` | Any JSON value; RimZ returns it unchanged on the next request. |
+| `origin` | Optional working directory the transcript belongs to. |
 
 ### Account
 
-The account probe receives an empty stdin stream and returns either a login or an authoritative logout:
+The account probe gets empty stdin and prints one JSON object:
 
 ```json
 {"plan":"pro","account_id":"account-123","rate_limit_windows":[{"used_percentage":42,"duration_mins":300,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"}]}
 ```
 
-A provider-defined quota can use a stable scope instead of a duration:
+| Field | Meaning |
+| --- | --- |
+| `plan` | Plan name shown on the provider label. |
+| `account_id` | Identity label for the account. |
+| `rate_limit_windows` | Usage windows for the provider dashboard. |
+| `logged_out` | `true` reports the user logged out. A response with none of `plan`, `account_id`, and `rate_limit_windows` counts as logged out too. |
+
+Each window uses the fields listed in [`rimz providers` window fields](./cli/providers.md#json-output): `used_percentage` (an integer from 0 to 100), `resets_at`, and either `duration_mins` for a time window or `scope` for a named quota. A `scope` needs both `id` and `label`. Set `source` to `"authoritative"` when the reading comes from the provider's usage API; without it the reading counts as best-effort. A window of the wrong shape, such as a fractional `used_percentage`, invalidates the whole response. A `context` event from a live session may send the same windows in `rate_limits`.
+
+A named quota with no fixed length carries a `scope` with a stable `id` and a short `label` (three cells fit the dashboard slot) and no `duration_mins`:
 
 ```json
-{"plan":"business","account_id":"account-123","rate_limit_windows":[{"scope":{"id":"build_minutes","label":"bld"},"used_percentage":42,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"},{"scope":{"id":"deployments","label":"dep"},"used_percentage":7,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"}]}
+{"plan":"business","account_id":"account-123","rate_limit_windows":[{"scope":{"id":"build_minutes","label":"bld"},"used_percentage":42,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"}]}
 ```
+
+Without `duration_mins`, the dashboard shows the reset time but no refill, burn pace, or not-started state. A window with both `scope` and `duration_mins` is a sub-cap: it draws as a tick on the unscoped window of the same duration, and not at all when that window is absent. The [provider dashboard](../interface/sidebar.md#zone-3--the-provider-dashboard) shows how bars and ticks read.
 
 ```json
 {"logged_out":true}
 ```
 
-`plan` feeds the provider label. `account_id` is the plugin's provider identity label. Optional `rate_limit_windows` use the normalized `RateLimitWindow` shape and feed the shared account-usage cache; canonical `context` events may also push the same windows while a session is live. A scoped window's non-empty `scope.id` is its stable fusion/cache identity and its `scope.label` is a compact presentation label clipped safely to the three-cell provider-bar slot when it has its own row. Omit `duration_mins` when the provider exposes no trustworthy duration: the reset may display, but rolling refill, burn pace, surplus, and not-started detection remain disabled. Existing duration-only responses retain their current identity and labels unchanged.
-
-A scoped window carrying `duration_mins` is a sub-cap: it folds onto an unscoped window of the same duration as a tick rather than taking a row, and remains hidden when that parent is absent. `used_percentage` remains on the sub-cap's own 0–100 axis, and the tick's position and tone both use `100 - used_percentage` across the full bar width. For example, `scope: {"id":"model:fable","label":"Fable"}`, `duration_mins: 10080`, and `used_percentage: 58` place the tick at 42% remaining on its own axis. The zero-based tick cell is `min(filled_cells(remaining, width), width - 1)` with nearest-cell rounding, so 0% remaining lands at the leftmost cell and 100% at the rightmost. It can replace fill or empty track and remains visible on exhausted or forced-exhausted real bars when sub-cap usage is known; unknown parent rows and lifted unlimited rows have no tick. The parent label and countdown remain unchanged. Scoped readings never refill through display projection, even when they carry a parent duration: an elapsed reset leaves usage unknown until the provider reports it again, and an unknown sub-cap reading draws no tick.
-
 ### Version
 
-The version probe receives an empty stdin stream. Its first non-empty stdout line becomes the provider version.
+The version probe gets empty stdin. Its first non-empty stdout line is the agent version.
 
-## Coverage, doctor, and failure behavior
+## Coverage and doctor
 
-`rimz coverage` includes every valid plugin after the built-ins. Native rows come from `emits`; context and ask claims also require the matching capability; spend comes from the declared probe; hook installation and remote control remain explicitly unsupported.
+`rimz coverage` lists every valid plugin after the built-in agents, with claims derived from the manifest. Run `rimz agents check` for the counts; the [agent support](./agent-support.md) page defines what each claim means.
 
-`rimz doctor` shows each manifest, its validation result, the setup document, and whether every declared probe exists and is executable. `rimz start` treats a malformed configured plugin as a failed precondition. Hook feed treats that same broken bundle as unavailable and exits neutrally, keeping the agent's critical hook path open while the doctor and start error retain the fix.
+| Claim | Wired when |
+| --- | --- |
+| Turn lifecycle | `emits` has `session_start`, `turn_start`, and `turn_end` |
+| Permission, plan approval, question | `emits` has `awaiting_input` and `native-ask-ui = true` |
+| Compaction | `emits` has `compaction_start` and `compaction_end` |
+| Subagents | `subagents = true` and `emits` has `subagent_start` and `subagent_end` |
+| Session end | `emits` has `session_end` |
+| Context usage | `context-usage = true`, or `emits` has `context` |
+| Realtime cost, rich context | `emits` has `context` |
+| Account spend | a spend probe is declared |
+| Idle notification | always partial, derived from `turn_end` |
+| Answering prompts, hook install, remote control, tool statistics, launch reminders, background parking | never |
 
-Protocol version 1 is stable. Additive optional fields and new events require a future-compatible reader; a semantic change to an existing field or event requires a new integer protocol version.
+`rimz doctor` prints an `AGENT PLUGINS` section when any bundle exists, one row per manifest:
 
-The protocol is the canonical envelope vocabulary delivered to RimZ. `rimz hooks feed` is the version-1 delivery mechanism, not part of the vocabulary: the envelopes contain no exec-specific assumptions, so a future resident receiver can accept the same objects over a socket without changing their fields or event semantics.
+| Status | Detail |
+| --- | --- |
+| `valid` | The setup document's path. |
+| `valid; probe unavailable` | `check <probes>`, naming each declared probe that is missing or not executable. |
+| `invalid` | The manifest error. |
+
+An invalid bundle anywhere under `agents.d` is a failed precondition for a room: `rimz start` refuses before creating anything, lists every manifest error, and names `rimz agents register --check`. Elsewhere the broken kind is absent. `rimz hooks feed --source <kind>` for it exits 0 with no output when stdin is JSON, so the agent's hooks keep working while you fix the manifest.
+
+## Protocol version
+
+`protocol = 1` in the manifest and `"protocol": 1` in each envelope name the only version RimZ reads. A manifest declaring another version is invalid, and an envelope carrying another version is dropped.
+
+## See also
+
+- [Agent control CLI: register a third-party kind](./cli/agents.md#register-a-third-party-kind): where `register` and `check` sit among the `rimz agents` verbs.
+- [Agent support](./agent-support.md): the capability and wiring matrices plugins appear in.
+- [Agent plugin internals](../internals/agents/plugin.md): how RimZ loads bundles, decodes envelopes, and runs probes.
