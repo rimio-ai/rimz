@@ -10,12 +10,16 @@
 
 use rimz::store::event_log::{self, testkit::bytes_read};
 use rimz::store::snapshot::RollupCursor;
-use rimz::testkit::fleet::{SESSION_NAME, registered_lifecycle, seed_fleet_store, synthetic_panes};
+use rimz::store::snapshot::fold_testkit::carryover_bytes_parsed;
+use rimz::testkit::fleet::{
+    SESSION_NAME, registered_lifecycle, seed_fleet_store, seed_history_carryover, synthetic_panes,
+};
 
 use crate::common::Harness;
 
 const HISTORY_EVENTS: usize = 3_000;
 const FLEET: usize = 30;
+const HISTORY_PROMPT_BYTES: usize = 1_000;
 
 #[test]
 fn delta_fold_is_o_new_bytes() {
@@ -246,4 +250,97 @@ fn auto_continue_tick(
         },
         &rimz::diag::DiagSink::disabled(),
     )
+}
+
+/// Rotation preserves history in `agents.carryover.json`, and a busy room's
+/// consumer folds against it on every wakeup. The contract: the carryover is
+/// parsed once per file identity, so a warm or unchanged fold parses zero
+/// carryover bytes however much history rotation kept, and an atomic
+/// replacement re-parses exactly once. The folds run on one dedicated thread,
+/// as a sidebar fetch worker does, so the seeding writer's own folds cannot
+/// warm the parse this test measures.
+#[test]
+fn warm_fold_parses_unchanged_carryover_zero_times() {
+    for history in [100, 800] {
+        let h = Harness::new();
+        let paths = h.store.paths().clone();
+        seed_history_carryover(&h.store, history, HISTORY_PROMPT_BYTES).expect("stage carryover");
+        seed_fleet_store(&paths, FLEET, HISTORY_EVENTS).expect("seed event");
+        std::thread::spawn(move || assert_carryover_parsed_once(&paths, history))
+            .join()
+            .expect("fold thread");
+    }
+}
+
+fn assert_carryover_parsed_once(paths: &rimz::StatePaths, history: usize) {
+    let carryover_len = file_len(&paths.agents_carryover);
+    let mut cursor = RollupCursor::new();
+
+    let parsed_before = carryover_bytes_parsed();
+    let (_, cold, _) = cursor.fold(paths).expect("cold fold");
+    assert_eq!(
+        carryover_bytes_parsed() - parsed_before,
+        carryover_len,
+        "a cold fold parses the carryover once"
+    );
+    assert_eq!(
+        cold.len(),
+        history + FLEET,
+        "history merges beneath the fleet"
+    );
+
+    let fold_after_append = |cursor: &mut RollupCursor, slot: usize| {
+        let log_len = file_len(&paths.events_log);
+        event_log::append(
+            &paths.events_log,
+            &registered_lifecycle(&paths.workspace_id, slot),
+        )
+        .expect("append one");
+        let appended = file_len(&paths.events_log) - log_len;
+        let (read_before, parsed_before) = (bytes_read(), carryover_bytes_parsed());
+        let (_, agents, _) = cursor.fold(paths).expect("warm fold");
+        assert_eq!(
+            bytes_read() - read_before,
+            appended,
+            "a warm fold reads the frame alone"
+        );
+        assert_eq!(agents.len(), history + FLEET);
+        carryover_bytes_parsed() - parsed_before
+    };
+
+    assert_eq!(
+        fold_after_append(&mut cursor, 0),
+        0,
+        "a warm fold parses none of the {carryover_len}-byte carryover ({history} rows)"
+    );
+
+    let (read_before, parsed_before) = (bytes_read(), carryover_bytes_parsed());
+    let (_, unchanged, _) = cursor.fold(paths).expect("unchanged fold");
+    assert_eq!(bytes_read() - read_before, 0);
+    assert_eq!(
+        carryover_bytes_parsed() - parsed_before,
+        0,
+        "an unchanged fold opens nothing"
+    );
+    assert_eq!(unchanged.len(), history + FLEET);
+
+    // Rotation and prune republish by atomic rename; identical bytes under a
+    // new inode still re-parse, exactly once.
+    let staged = paths.agents_carryover.with_extension("json.staged");
+    std::fs::copy(&paths.agents_carryover, &staged).expect("stage copy");
+    std::fs::rename(&staged, &paths.agents_carryover).expect("replace carryover");
+    assert_eq!(
+        fold_after_append(&mut cursor, 1),
+        carryover_len,
+        "a replaced carryover re-parses once"
+    );
+    assert_eq!(
+        fold_after_append(&mut cursor, 2),
+        0,
+        "then serves the new parse"
+    );
+}
+
+fn file_len(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).expect("file meta").len()
 }

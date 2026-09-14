@@ -358,6 +358,38 @@ fn serialized_lifecycle_event_folds_like_constructed_event() {
     );
 }
 
+/// A duplicated key reads its last row as prior, and each assigned row
+/// becomes the prior for that key's later rows: both copies land on the
+/// last row's name and share one ordinal.
+#[test]
+fn backfill_duplicate_keys_read_the_last_row_then_the_assigned_one() {
+    let first = agent("claude", "dup", AgentStatus::Idle, 1);
+    let mut last = agent("claude", "dup", AgentStatus::Idle, 2);
+    last.name = Some("otter".to_owned());
+    let mut rows = vec![first, last, agent("claude", "other", AgentStatus::Idle, 3)];
+
+    let state = backfill_agent_identities(&mut rows, AgentIdentityState::default());
+
+    let identities: Vec<_> = rows
+        .iter()
+        .map(|row| (row.agent_id.as_str(), row.name.as_deref(), row.kind_ordinal))
+        .collect();
+    assert_eq!(identities[0], ("dup", Some("otter"), Some(1)));
+    assert_eq!(identities[1], ("dup", Some("otter"), Some(1)));
+    assert_eq!(identities[2].2, Some(2));
+    assert_eq!(
+        state.names.get("otter"),
+        Some(&(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("dup")
+        ))
+    );
+    assert_eq!(
+        state.next_ordinal.get(&AgentKind::new_unchecked("claude")),
+        Some(&3)
+    );
+}
+
 #[test]
 fn assigns_and_carries_card_identity() {
     let events = vec![

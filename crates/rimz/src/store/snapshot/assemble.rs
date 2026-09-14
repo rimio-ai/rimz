@@ -15,7 +15,7 @@ use crate::disk::atomic::{self};
 use crate::disk::parse_cache::ParseCache;
 use crate::disk::paths::StatePaths;
 use crate::store::event_log::{self};
-use crate::store::runtime::{RuntimeProjection, RuntimeScope};
+use crate::store::runtime::RuntimeProjection;
 use crate::workspace::RootClass;
 use crate::workspace::record::{self, WorkspaceRecordErr};
 
@@ -31,7 +31,7 @@ use crate::workspace::record::{self, WorkspaceRecordErr};
 /// the fold base, so the reducer stays bounded.
 pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
-    let snapshot = assemble_snapshot(paths, rollup.extent, agents, resume_outcomes)?;
+    let snapshot = assemble_snapshot(paths, rollup.extent, &agents, resume_outcomes)?;
     // The fold base lands first: its extent always runs at or past
     // `latest.json`'s stamp, so a crash between the two leaves a stale view
     // that the next catch-up refreshes from the newer base. Both writes are
@@ -46,7 +46,7 @@ pub(crate) fn rebuild(paths: &StatePaths) -> Result<SidebarSnapshot> {
 /// the read-only twin of [`rebuild`], safe from a lock-free reader.
 pub(crate) fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
     let (rollup, agents, resume_outcomes) = catch_up_rollup(paths)?;
-    assemble_snapshot(paths, rollup.extent, agents, resume_outcomes)
+    assemble_snapshot(paths, rollup.extent, &agents, resume_outcomes)
 }
 
 /// Build the same projection for a long-lived reader, but with the
@@ -54,13 +54,13 @@ pub(crate) fn build_from(paths: &StatePaths) -> Result<SidebarSnapshot> {
 /// re-read from `rollup.json` per call — O(new log bytes) per delta.
 pub fn build_with_cursor(paths: &StatePaths, cursor: &mut RollupCursor) -> Result<SidebarSnapshot> {
     let (extent, agents, resume_outcomes) = cursor.fold(paths)?;
-    assemble_snapshot(paths, extent, agents, resume_outcomes)
+    assemble_snapshot(paths, extent, agents.iter(), resume_outcomes)
 }
 
-fn assemble_snapshot(
+fn assemble_snapshot<'a>(
     paths: &StatePaths,
     extent: event_log::LogExtent,
-    agents: Vec<AgentState>,
+    agents: impl IntoIterator<Item = &'a AgentState>,
     resume_outcomes: Vec<ResumeOutcome>,
 ) -> Result<SidebarSnapshot> {
     // The one clock read this projection makes: every window verdict below
@@ -73,7 +73,7 @@ fn assemble_snapshot(
         ended,
         expelled,
         agents,
-    } = RuntimeProjection::from_parts(agents, RuntimeScope::Runtime);
+    } = RuntimeProjection::runtime_from_refs(agents);
     let mut snapshot = SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
     snapshot.fenced_sessions = ended;
     snapshot.fenced_sessions.extend(expelled);
@@ -394,7 +394,7 @@ mod tests {
                 generation: 0,
                 offset: 0,
             },
-            vec![parent, child],
+            &[parent, child],
             Vec::new(),
         )
         .unwrap()

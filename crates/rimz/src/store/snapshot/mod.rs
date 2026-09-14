@@ -28,7 +28,7 @@ use crate::store::event_log::EventLogErr;
 pub(crate) use assemble::{build_from, rebuild};
 pub use assemble::{build_with_cursor, read_fresh_latest};
 pub use fold::testkit as fold_testkit;
-pub use fold::{ResumeOutcome, RollupCursor};
+pub use fold::{AgentRollup, ResumeOutcome, RollupCursor};
 pub(crate) use fold::{
     catch_up_rollup, prune_carryover, reseed_rollup_cache_for_rotation,
     stage_carryover_for_rotation,
