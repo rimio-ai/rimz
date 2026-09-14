@@ -316,6 +316,10 @@ pub(crate) fn presence_plugin_source_digest(root: &Path) -> Result<String> {
     let output = Command::new("git")
         .args(["ls-files"])
         .current_dir(&plugin_root)
+        // A git hook exports GIT_DIR, which pins the work tree to the cwd and
+        // makes ls-files list the whole repository instead of this crate.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
         .output()
         .with_context(|| format!("running `git ls-files` in {}", plugin_root.display()))?;
     if !output.status.success() {
