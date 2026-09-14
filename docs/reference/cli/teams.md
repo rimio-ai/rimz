@@ -1,158 +1,244 @@
 # Teams
 
-`rimz teams` discovers, inspects, installs, launches, resumes, and drives named teams.
+`rimz teams` lists, inspects, launches, resumes, and drives named teams, hands a team's board from stage to stage, and installs team bundles.
 
-A team is a configured set of role bindings and a layout.
-Each role keeps its own model, prompt, context window, and address while the team shares one lane.
-The definition may set `leader`, `layout`, `stages`, and `scratch-files` alongside its `roles`; each role may declare its own `signals` array of inline tables, `owns` stage names, and `flip-compact` threshold override. `stages` declares an optional ordered pipeline, such as `["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]`; names must be nonblank and unique, and an empty list means undeclared. `scratch-files` is a list of verbatim gitignore patterns for ephemeral team memory, registered on launch and resume.
-The [teams guide](../../guide/teams.md) explains how to design a team; this page owns the command forms.
+A team is a configured set of roles and a layout. Each role keeps its own model, prompt, and `@role` handle, and every member of one launch shares one lane; that group of live members is a cohort, addressed as `team#lane` (for example `forge#feat-rate-limits`). The [teams guide](../../guide/teams.md) explains how to design and run a team, and [configuration → teams](../../guide/configuration.md#teams) owns the definition fields (`roles`, `leader`, `layout`, `stages`, `scratch-files`, and each role's `owns`, `signals`, and `flip-compact`). This page owns the command forms.
+
+| Command | Does |
+| --- | --- |
+| `rimz teams`, `list`, `ls` | [List teams](#list-teams) and their live cohorts. |
+| `rimz teams show`, `inspect` | [Inspect one team](#inspect-one-team), or every team live in a lane. |
+| `rimz teams <team>`, `launch` | [Launch a team](#launch-a-team). |
+| `rimz teams resume` | [Resume a team](#resume-a-team)'s closed cohort. |
+| `rimz teams focus`, `stop`, `restart` | [Drive a live team](#drive-a-live-team). |
+| `rimz teams flip` | [Flip the board to the next stage](#flip-the-board-to-the-next-stage). |
+| `rimz teams install` | [Install a team bundle](#install-a-team-bundle). |
+
+`rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend. Per-agent shaping (model, effort, prompts, permission mode, name, pane placement, supervised runs) stays on [`rimz agents`](./agents.md), which also launches one role of a team as `rimz agents forge.reviewer`. Every form takes the [global flags](../cli.md#global-flags).
 
 ## List teams
 
 ```sh
 rimz teams
-rimz teams --json
-rimz teams list
 rimz teams ls --json
 ```
 
-The bare command and `list`/`ls` merge the effective team definitions with live team instances. The columns are `TEAM LANE STAGE PR STATUS`, with one row per live cohort; `PR` includes the projected PR number and CI indicator when available. A definition with no live cohort gets one row with `-` for lane, stage, and PR, and `ready` or a definition error for status. Definition errors remain visible on live rows; a cohort whose definition was removed keeps its live status with `not defined` appended. Resolved roles and models stay in `show`; effort is available in JSON.
+The bare command, `list`, and `ls` print one row per live cohort, and one row for each defined team with no live cohort:
 
-The effective catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/`, and a trusted repository overlay.
-An unreadable or invalid effective config fails at entry with the source error.
-Unknown fields print a warning, are ignored, and can be removed with `rimz setup`.
-`--json` emits the same catalogue as structured team records with definitions, resolved roles, validation, and live instances.
+| Column | Live cohort | No live cohort |
+| --- | --- | --- |
+| `TEAM` | Team name. | Team name. |
+| `LANE` | `#<lane>`. | `-` |
+| `STAGE` | The board stage, with ` (@owner)` when the board names one. | `-` |
+| `PR` | `#<number>` from the room's cached PR facts, followed by the CI glyph unless the PR is closed; `-` when nothing is cached. | `-` |
+| `STATUS` | The cohort [state](#cohort-state). | `ready` |
+
+A broken definition replaces `STATUS` with `broken: <error>` on every row of that team. A live cohort whose team is no longer defined keeps its state with ` · not defined` appended. Resolved roles and models appear in [`show`](#inspect-one-team).
+
+The catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/<name>/team.toml`, and the repository's `.rimz/config.toml` when the project is trusted. An unreadable or invalid config fails with the source error. Unknown fields print a warning and are otherwise ignored; `rimz setup` removes them. With no teams defined, the command prints `No teams defined.` and the install command; when only the built-in `peer` team exists, the table ends with the same install hint.
+
+`--json` prints an array of [team records](#json-report). `--json` works only on the list forms and `show`: `rimz teams forge --json` is refused with a pointer to `rimz teams show forge --json`.
 
 ## Inspect one team
 
-An instance's `state` follows member-status priority: `blocked` (any waiting or failed member), then `paused`, `working` (running), `sleeping`, `done` (success), and finally `idle`. Thus a resting member with an armed one-shot delivery keeps the cohort `sleeping` rather than `done`, unless a higher-priority member state wins. Standing subscriptions do not make members sleep. Any live member's pending one-shot wait withholds `team.idle`; cancellation is reevaluated on the caller's following lifecycle boundary, not immediately on row removal.
-
 ```sh
-rimz teams show forge
-rimz teams show forge#feat-rate-limits
-rimz teams show forge -w feat-rate-limits
-rimz teams show '#feat-rate-limits'
-rimz teams show -w feat-rate-limits
-rimz teams inspect forge
+rimz teams show forge                    # the definition and every live forge cohort
+rimz teams show forge#feat-rate-limits   # the definition and one cohort
+rimz teams show '#feat-rate-limits'      # every team live in that lane
 rimz teams show forge --json
 ```
 
-`show` and its `inspect` alias name the best-effort definition `source` and `layout`, with an `error` line only when the definition is broken. The roster matches the launch receipt: each row shows a role handle, provider kind, and raw model ID, with `<- leader` marking the leader. When configured, a muted `signals` line closes the roster, showing bindings such as `ci.failed → @coder`, including match filters in parentheses. Both inspection and launch clip this line to terminal width; JSON inspection retains every binding and filter.
-When a role has system-prompt files, the human report points to `--json`, whose `system_prompt_file` and `append_system_prompt_files` fields expose the complete resolved stack.
+`show` (alias `inspect`) takes one target:
 
-Each live cohort gets its own block headed by lane, cohort state, and advisory board stage with optional owner. The absolute worktree path appears once, with a branch suffix only when the branch differs from the checkout directory's name. The block also shows isolation, declared stages, cached PR/CI facts and URL, and matching memory files with paths relative to the worktree, line counts, and modification ages. The member table is `MEMBER STATUS ACTIVITY CTX COST AGE`; `AGE` measures time since last activity, not the last heartbeat. Undeclared stages and empty memory scans omit their lines. If members disagree on the worktree or branch, that value is unavailable rather than chosen from an arbitrary member.
+| Target | Reports |
+| --- | --- |
+| `<team>` | The definition and every live cohort of the team. The team must be defined: a removed team's live cohort shows only in the list and in lane-only forms. |
+| `<team>#<lane>`, or `<team> -w <lane>` | The definition, with live cohorts narrowed to the one whose lane is `<lane>` or whose members run in worktree `<lane>`. With no match it prints `no live instance in #<lane>` and exits 0. |
+| `'#<lane>'`, or `-w <lane>` alone | A full report for every team live in that lane, defined or not. With none it prints `no live team in #<lane>` and exits 0. |
 
-The `isolation` line reports the members' isolation: the `--isolation` override recorded at launch, else the current machine-wide `agents.isolation` setting. Members that disagree show the machine setting. Host isolation shows `host · tmp /tmp`. Sandbox isolation shows the room's state tmp directory, home-relative where possible, with `(as /tmp)` indicating where it is mounted inside the sandbox.
+Give the lane once: the fused form and `-w` together are refused. Quote `'#lane'` so the shell does not read it as a comment.
 
-The current stage comes from the first `Stage:` line in `<worktree>/blackboard.md`, for example `Stage: Plan (@planner)`. A terminal ` (@owner)` suffix supplies the owner; other parenthesized text stays part of the stage name. `flip` writes this advisory text from configured ownership; hand-edited boards still parse the same way. It is never inferred from member status and never proof of completion. The stages line includes implicit `Done` last and brackets the name matching the board stage exactly and case-sensitively; an unknown stage brackets nothing. A missing or unreadable board omits the header's stage suffix, even when a pipeline is declared.
+A report for a forge cohort in `#feat-x` looks like this:
 
-PR/CI comes from the sidebar-refreshed cache; `teams` and `show` do not contact the forge. Only available facts are shown, and `pr none` means nothing is projected, not that RimZ verified there is no PR. Before a room snapshot is published, live cohorts can still be inspected without projected PR or activity enrichment.
+```text
+forge
+  source: ~/.agents/teams/forge/team.toml
+  layout: planner,coder+reviewer
 
-Use `team#worktree` or a team name with `-w NAME` to narrow the live section by exact lane or member worktree; an ended or not-yet-live lane reports `no live instance in #lane` and still exits successfully. Use either the fused form or `-w`, not both. Without a team name, `show '#lane'` or `show -w lane` prints a full report for every team live in that lane. No matches prints `no live team in #lane` and exits successfully.
-The roster's `signals` line describes configured bindings even before launch. `Live signals` lists LANE, MEMBER, NAME, SIGNAL, and MATCH from materialized workspace rows whose team instance and pinned kind/session match that member. JSON exposes `roles[].signals` and `instances[].members[].role`/`signals`; an invalid definition stays visible with its error.
+  @planner   claude  fable        <- leader
+  @coder     codex   gpt-6-astra
+  @reviewer  claude  opus
+  signals   ci.failed → @coder
+  (prompt stack: rimz teams show forge --json)
 
-The report has no trailing launch, resume, reach, or focus command hints.
+#feat-x · working · Implement (@coder)
+  worktree:  /repo-worktrees/feat-x
+  isolation: host · tmp /tmp
+  stages:    Explore → Plan → [Implement] → Review → Submit → Reflect → Done
+  pr:        #412 · open · ci pending
+  memory:    blackboard.md   41 lines · 2m ago
+             plan-notes.md  120 lines · 18m ago
 
-`rimz teams --json` emits an array of team records; `rimz teams show <team> --json` emits one team record. Lane-only inspection (`show '#lane' --json` or `show -w lane --json`) emits an array, empty when no teams are live there. All forms retain the definition, resolved `roles`, validation, and `instances` array. `roles[]` keeps `profile`, `effort`, and `mode`, and `roles[].signals[]` keeps `prompt` and `match`, even though the human roster omits those launch details except match filters. Each instance retains `channel`, `state`, `status_counts`, and `members` and adds:
+  MEMBER     STATUS   ACTIVITY           CTX   COST  AGE
+  @planner   idle     -                  61%  $1.84  18m
+  @coder     running  editing ingest.rs  42%  $0.95   0s
+  @reviewer  idle     -                   8%  $0.12  31m
+
+Live signals
+  LANE     MEMBER  NAME                               SIGNAL     MATCH
+  #feat-x  @coder  team-forge-feat-x-coder-ci-failed  ci.failed  path=/repo-worktrees/feat-x
+```
+
+The definition block names `source` and `layout`, and adds an `error` line only when the definition is broken. The roster lists each role's handle, provider, and model (`-` when unset), marks the leader with `<- leader`, and ends with a `signals` line when roles declare [signal bindings](../../guide/configuration.md#team-signal-bindings), each shown as `signal (match filters) → @role` and clipped to the terminal width. When any role has system-prompt files, a pointer to `--json` follows, since the JSON carries the resolved prompt stack.
+
+Each live cohort gets its own block:
+
+| Line | Shows |
+| --- | --- |
+| Header | `#<lane> · <state>`, then ` · <stage>` when the board has one. |
+| `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
+| `isolation` | `host · tmp /tmp`, or `sandbox · tmp <room tmp dir> (as /tmp)`: the `--isolation` recorded at launch, else the machine's `agents.isolation`. Members that disagree show the machine setting. |
+| `stages` | The declared pipeline with the implicit `Done` last, bracketing the board stage when it matches a name exactly. Omitted when the team declares no `stages`. |
+| `pr` | Cached PR number, state (`open`, `merged`, `closed`), `ci passing`, `ci pending`, or `ci failing`, and URL, as far as known; `none` when nothing is cached. |
+| `memory` | Files matching the team's `scratch-files`, relative to the worktree, with line counts and modification ages. Omitted when none exist. |
+| Member table | `MEMBER STATUS ACTIVITY CTX COST AGE`. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `COST` is each role's lifetime spend in this worktree, and `AGE` is the time since the member's last activity. |
+
+`Live signals` lists the subscriptions RimZ armed for members from their role bindings, one row per subscription, and appears only when at least one is armed. The roster's `signals` line shows what is declared; this table shows what is armed now.
+
+The report ends there, with no launch, resume, or focus hints.
+
+### Cohort state
+
+A cohort's state is the first rule that matches its members' statuses:
+
+| State | When |
+| --- | --- |
+| `blocked` | Any member is `waiting` or `failed`. |
+| `paused` | Any member is `paused`. |
+| `working` | Any member is `running`. |
+| `sleeping` | Any member is `sleeping`: at rest with a one-shot wait or delivery armed. Standing subscriptions do not count. |
+| `done` | Any member's last turn succeeded (`success`). |
+| `idle` | Otherwise. |
+
+### Board stage
+
+The stage comes from the first line starting `Stage:` in `<worktree>/blackboard.md`, for example `Stage: Implement (@coder)`. Only a final ` (@owner)` splits off as the owner; other parenthesized text stays part of the stage name. A missing or unreadable board shows no stage, even when the team declares a pipeline. [`flip`](#flip-the-board-to-the-next-stage) writes this line, and a hand-edited board parses the same way. The stage is advisory: RimZ never infers it from member status, and it is not proof that work finished.
+
+PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` never contact the forge, so `pr none` means nothing is cached, not that no PR exists. Before the room publishes its first snapshot, live cohorts still appear without PR facts or activity.
+
+### JSON report
+
+`rimz teams --json` prints an array of team records, `show <team> --json` one record, and lane-only `show --json` an array (empty when no team is live there). Fields marked optional are omitted when unset; the rest are always present, with `null` where a value is unavailable.
 
 | Field | Meaning |
 | --- | --- |
-| `worktree`, `branch` | Absolute checkout path and branch, or `null` when unavailable or conflicting. |
-| `isolation` | `host` or `sandbox`: the members' recorded `--isolation` override, else the current machine setting. |
-| `tmp_dir` | `/tmp` for host isolation; the absolute room state tmp directory mounted at `/tmp` for sandbox isolation. |
-| `stages` | Ordered declared stage names; `[]` when undeclared or the definition is gone. |
-| `stage` | `{ "name": "Plan", "owner": "planner" }`, with the owner stored without `@`; `owner` can be `null`, and absent board stage is `null`. |
-| `pr` | `number`, `state`, `ci`, and `url`, each nullable; the whole value is `null` when no facts are projected. |
-| `memory` | An array of `{ "path": …, "lines": …, "modified_at": … }` records with absolute paths and UTC timestamps; unavailable modification times are `null`. |
+| `name`, `defined`, `valid` | Team name; whether a definition exists; whether it resolves and validates. |
+| `source`, `layout`, `leader`, `error` | Optional. Definition file (`built-in` for `peer`), layout spec, effective leader role, validation error. |
+| `roles[]` | `role`, `profile`, and `signals`, plus optional `kind`, `model`, `effort`, `mode`, `system_prompt_file`, and `append_system_prompt_files`. |
+| `roles[].signals[]` | Declared bindings: `signal`, `match` (an object), and `prompt` (nullable). |
+| `instances[]` | One record per live cohort, below. |
 
-Each member also exposes `phase`, nullable `activity`, and `last_activity_at` as a UTC timestamp alongside its handle, kind, status, context fill, and cost. The new optional values serialize as `null`, and arrays remain present even when empty.
+| Instance field | Meaning |
+| --- | --- |
+| `channel`, `state` | Lane name without `#`, and the [cohort state](#cohort-state). |
+| `status_counts` | Object mapping each member status to its count. |
+| `worktree`, `branch` | Absolute checkout path and branch; `null` when unavailable or when members disagree. |
+| `isolation`, `tmp_dir` | `host` or `sandbox`; `/tmp` for host, the absolute room tmp directory mounted at `/tmp` for sandbox. |
+| `stages` | Declared stage names in order; `[]` when undeclared or the team is no longer defined. |
+| `stage` | `{ "name": "Implement", "owner": "coder" }`, owner without `@` and nullable; `null` when the board has no stage. |
+| `pr` | `number`, `state` (`open`, `merged`, `closed`), `ci` (`passing`, `pending`, `failing`), and `url`, each nullable; `null` when nothing is cached. |
+| `memory[]` | `path` (absolute), `lines`, and `modified_at` (UTC timestamp or `null`). |
+| `members[]` | `role` (nullable), `handle`, `kind`, `status`, `phase`, `activity` (nullable), `last_activity_at` (UTC timestamp), `signals`, and optional `context_fill_pct` and `cost_usd`. |
+| `members[].signals[]` | Armed subscriptions: `name` (the loop task name), `selector`, and `matches`. These keys differ from the declared `roles[].signals[]`. |
 
 ## Launch a team
 
 ```sh
-rimz teams forge -w feat-rate-limits
-rimz teams forge#feat-rate-limits "add rate limiting"
 rimz teams forge -w feat-rate-limits "add rate limiting"
+rimz teams forge#feat-rate-limits "add rate limiting"
 rimz teams forge#feat-rate-limits --fresh
-rimz teams peer --channel triage
 rimz teams forge --from-pr 91 --bg
+rimz teams peer --channel triage
 rimz teams launch forge -w feat-rate-limits
 ```
 
-The bare-name form and `launch` verb accept a configured team name and send an optional trailing prompt to its configured leader.
-It uses the same launch and relaunch-reconciliation path as `rimz agents <team>`, including worktree creation, channel placement, pull-request checkout, and existing-cohort focus or recovery.
-When an agent launches a team, its members are top-level peers rather than children of the caller.
+`rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree) (a live cohort is focused; a closed one prompts to resume, start fresh, or remove). A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
 
-After opening new panes, a fresh launch prints `launched <team> in worktree #<channel>`, the absolute worktree `path`, and `board blackboard.md` relative to that path even if the board does not exist yet. Each member row shows its role handle, provider, and resolved model (`-` when unset), marking the effective leader with `<- leader`. Branch, declared stages, and command hints are omitted. An optional `prompt` line names its recipient and echoes the supplied prompt, before reminders, with whitespace collapsed, quotes escaped, and text clipped to terminal width. The receipt records launch inputs, not confirmation that a provider received or acted on the prompt.
+| Flag | Effect |
+| --- | --- |
+| `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on lane `#NAME`; bare `-w` generates a name. `team#NAME` is the same selection; give one or the other. Name rules and prompts are on [`rimz agents`](./agents.md#channel-worktree-and-placement). |
+| `--channel NAME` | Launch into the durable named lane `NAME` in the room root. Conflicts with `-w` and `team#worktree`. |
+| `--from-pr PR` | Create or reuse a worktree from a pull-request number or URL. |
+| `--description TEXT` | Seed the member cards' description until the agents name their sessions. |
+| `--resume` (alias `--continue`) | Resume the matching closed cohort instead of launching; the same as [`rimz teams resume`](#resume-a-team). |
+| `--fresh` | Start new sessions in an existing named worktree instead of resuming its closed cohort, keeping the checkout and its files. Needs `-w NAME` or `team#NAME`. |
+| `--budget AMOUNT[/day]` | Cap each member's spend for the session (`5`) or the local day (`20/day`). Each member is capped separately; there is no pooled team cap. See [`rimz budget`](./budget.md). |
+| `--isolation host\|sandbox` | Run every member under this isolation instead of the machine's `agents.isolation`, recorded per member. |
+| `--bg` | Keep focus where it is. |
+| `--new-tab` | Open the launch in a new tab or tmux window. |
 
-Inspect, message, or subscribe to the cohort with lane-qualified commands (shown here for `forge#feat-rate-limits`):
+`--resume` takes identity from the store, so it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--description`, `--budget`, and `--isolation`. `--fresh` conflicts with `--resume` and `--from-pr`. Launch flags without a team name are refused with `team launch options require a team name`.
+
+A launch that opens new panes prints a receipt:
+
+```text
+launched forge in worktree #feat-rate-limits
+  path      /repo-worktrees/feat-rate-limits
+  board     blackboard.md
+  prompt    → @planner  "add rate limiting"
+
+  @planner   claude  fable        <- leader
+  @coder     codex   gpt-6-astra
+  @reviewer  claude  opus
+  signals   ci.failed → @coder
+```
+
+The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. `path` is the absolute checkout, and `board` is `blackboard.md` relative to it, whether or not the file exists yet. The `prompt` line appears only when you gave one: whitespace collapsed, quotes escaped, clipped to the terminal width. Member rows show handle, provider, and model (`-` when unset), and a `signals` line closes them when roles declare bindings. The receipt has no command hints and no JSON form.
+
+The receipt records what was launched. Members start asynchronously and may not yet appear in `rimz teams show`, which is the source of live status. To be told when the cohort next goes idle instead of polling, arm a one-shot [signal subscription](./loop.md#signals):
 
 ```sh
-rimz teams show forge#feat-rate-limits
-rimz message @planner#feat-rate-limits '<text>'
 rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-rate-limits --once
 ```
 
-Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. The `loop add` command above arms a one-shot subscription on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the subscription was armed, that transition will not wait you. Inspect current state as well as arming the subscription; [signal delivery](./loop.md#signals) applies. Launch has no JSON receipt; `--json` is for list and inspection.
+It fires on the next transition to idle only. Signals never replay, so a cohort that was already idle when you armed it does not wake you; check `show` as well. Idle does not mean the task is done.
 
-For configured bindings, a `signals` line closes the receipt's member list, for example `signals   ci.failed → @coder`; this describes intent, not an already-armed row. Root members arm their bindings when their real sessions register, including resume, restart, and role re-add; children do not. End, loss, or stop retires the session's subscriptions, and missed signals are never replayed.
+### Signal bindings at launch
 
-A fresh launch on the root checkout refuses CI/PR bindings with no explicit `match.path` or `match.branch`, before creating panes or worktrees. Use `-w <worktree>`, launch from a linked worktree, or set an explicit match. The full ordered binding list enters project trust.
+A role's declared `signals` become live subscriptions when its member registers: at launch, resume, restart, and when the role is re-added. Subagents do not inherit them. Ending, losing, or stopping the session removes its subscriptions, and signals missed in between are not replayed. The binding list is part of project trust.
 
-Members report their live status asynchronously, so `rimz teams show team#worktree` remains the source of truth rather than the receipt.
-
-`rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
-`rimz agents` sets what an agent is — model, effort, prompts, permission posture, name, pane placement, supervised runs.
-
-The team surface carries these cohort-level controls:
-
-- `-w, --worktree [NAME]` creates or reuses a RimZ-owned worktree in the current Git repository; a bare `-w` chooses a fresh name. Spell the name without the channel's leading `#`, as `-w feat-rate-limits` for channel `#feat-rate-limits`: a quoted `-w '#feat-rate-limits'` is an invalid worktree name, and with shell comments enabled, an unquoted `#feat-rate-limits` is dropped as a comment, leaving a bare `-w` that generates a name. The fused `forge#feat-rate-limits` form remains valid; its `#` separates the team and worktree names. Cross-repository room launches use the same confirmation and `--root` rules as [`rimz agents`](./agents.md#channel-worktree-and-placement).
-- `--channel NAME` launches in a durable named lane instead of a worktree.
-- An existing user-owned linked worktree in the configured directory can also be entered with `-w NAME` after terminal confirmation (default no), without adoption, seeding, or automatic cleanup. It must belong to the launch repository; non-terminal launches refuse. See [`rimz agents`](./agents.md#channel-worktree-and-placement).
-- `--from-pr PR` creates or reuses a worktree from a pull-request number or URL.
-- `--description TEXT` seeds the member-card description until agents name their sessions.
-- `--resume` reopens a matching closed cohort instead of launching a fresh one.
-- `--fresh` launches new sessions into a named worktree instead of resuming or removing it, keeping the checkout and its files. It needs the worktree named, as `team#worktree` or `-w NAME`.
-- `--budget AMOUNT[/day]` caps each member separately; it is not a pooled team cap.
-- `--isolation host|sandbox` runs every member under that isolation instead of the machine's `agents.isolation`, recorded per member as for [`rimz agents`](./agents.md#shared-launch-params).
-- `--bg` leaves focus where it is.
-- `--new-tab` opens the launch in a new tab or window.
-
-Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--description`, `--budget`, and `--isolation`. `--fresh` answers the same reconciliation the other way, so it conflicts with `--resume` and `--from-pr`; the reconciliation it answers is described in [`rimz agents`](./agents.md#channel-worktree-and-placement).
-
-Per-agent model, prompt-file, permission, supervised-run, and pane-placement overrides stay on [`rimz agents`](./agents.md).
-Put stable role-specific choices in the team definition.
+A launch from the root checkout with no named worktree (`-w NAME` or `team#NAME`) and no `--from-pr` refuses any `ci.*` or `pr.*` binding that lacks `match.branch` or `match.path`, before it creates panes or worktrees, because RimZ watches CI only for worktree branches. Launch with `-w NAME`, launch from a linked worktree, or add an explicit match.
 
 ## Resume a team
 
 ```sh
 rimz teams resume forge
 rimz teams resume forge#feat-rate-limits
-rimz teams resume forge -w feat-rate-limits
 rimz teams resume forge -w --bg
 ```
 
-`resume` reopens the newest matching closed cohort with the same identity, directory, and lane from durable state.
-Current role profiles supply the launch configuration.
-`team#worktree` and `-w NAME` limit selection to one worktree, while bare `-w` uses the current worktree.
-Use either the fused form or `-w`, not both.
-`--bg` leaves focus where it is.
+`resume` reopens the newest closed cohort of the team, with the identity, directory, and lane recorded in the store and each role's launch settings from its current profile. `team#worktree` or `-w NAME` limits the match to that worktree. Bare `-w`, or no flag while you stand in a linked worktree, scopes to the current worktree; from the root checkout the newest match anywhere in the room wins. A matched member that is still live refuses the command. Matching rules are on [`rimz agents` → Resume a cohort](./agents.md#resume-a-cohort).
+
+`--bg` keeps focus where it is. `resume` prints one line per member, `resumed <kind>:<name> (<session id>)` or `started fresh <member>` for a member with nothing to resume, followed by `Check:`, `Reach:`, and `Wait:` command hints for the cohort.
 
 ## Drive a live team
 
 ```sh
 rimz teams focus forge
-rimz teams stop forge#feat-rate-limits
 rimz teams restart forge
+rimz teams stop forge#feat-rate-limits
 rimz teams stop forge -w feat-rate-limits
 ```
 
-`focus` jumps to the selected cohort member that needs attention, falling back to the configured leader and then the first member.
-`stop` closes every live member and reports one result per role.
-`restart` relaunches every live member in declared role order, resuming its provider session where supported.
+| Verb | Does | Prints |
+| --- | --- | --- |
+| `focus` | Jumps to the member that most needs attention, else the declared `leader`, else the first member. | Nothing on success. |
+| `stop` | Closes every live member, stopping each member's own subagents first. | `stopped @<handle>` per member it stopped, `error @<handle>: <reason>` per failure. |
+| `restart` | Relaunches every live member in declared role order, resuming each provider session where supported. | One restart line per member, `error @<handle>: <reason>` per failure. |
 
-When one team has live cohorts in several lanes, RimZ prefers the cohort in the current lane.
-From outside those lanes, select one with `team#worktree` or `-w NAME`; use either form, not both.
+`stop` and `restart` continue past a failed member and exit `1` when any member failed.
+
+Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#worktree` or `-w NAME` selects by lane or worktree name. With no live cohort, the error suggests `rimz teams resume <team>`.
 
 ## Flip the board to the next stage
 
@@ -163,28 +249,67 @@ rimz teams flip Review "implementation committed; report in implement-notes.md" 
 rimz teams flip Done "reflection recorded in reflect-notes.md; run complete"
 ```
 
-`rimz teams flip <STAGE> <NOTE> [--team NAME]` records progress and hands the board to the configured owner. Both positional arguments are required, including the note for `Done`; empty or whitespace-only notes are refused. The note records what is done or where the work stands, not an instruction to the receiver.
+`rimz teams flip <STAGE> <NOTE> [--team NAME]` sets the board's stage, records the note in its progress ledger, and wakes the stage's owner. `NOTE` is required for every stage, `Done` included, and must not be blank. Write it as where the work stands; it is not an instruction to the owner.
 
-Selection is worktree-based:
+### Which cohort a flip acts on
 
-1. RimZ uses `RIMZ_WORKTREE_PATH` when set, otherwise the Git toplevel of the current directory, with lexical path normalization.
-2. It selects the live cohort whose members record that worktree, limited by `--team` when supplied. No match reports the worktree; several teams reports their names so you can select one with `--team`. There is no worktree-selection flag: run the command in the intended worktree.
-3. A calling member of another cohort is refused. A caller outside the selected cohort acts as `@user`; a selected member acts as its role.
+`flip` has no worktree flag: run it inside the team's worktree.
 
-Declare ownership on roles, for example `owns = ["Explore", "Plan", "Reflect"]` on the planner and `owns = ["Implement"]` on the coder. Stage names match exactly and case-sensitively against `stages`, or against the owned names when `stages` is empty. Put qualifiers such as “delta round” in the note, not in the stage name. The command does not enforce pipeline order. It does refuse a member hand-off from an uncommitted worktree, below.
+1. The worktree is `RIMZ_WORKTREE_PATH` when set, else the Git toplevel of the current directory. Outside Git with no `RIMZ_WORKTREE_PATH`, the flip is refused.
+2. The cohort is the live one whose members all run in that worktree, limited to team `NAME` by `--team`. With none, the error names the worktree. With cohorts of several teams, it lists them for `--team`. With several cohorts of one team, it asks you to stop the extras with `rimz teams stop <team> -w <lane>`.
+3. A caller in the selected cohort flips as its role. A caller outside any cohort flips as `@user`. An agent in a different cohort is refused.
 
-A member leaving a stage its role owns for a stage it does not own, `Done` included, needs a clean worktree: when `git status --porcelain --untracked-files=all` lists any path under the worktree, the flip is refused before the board is touched and names the paths. The root `blackboard.md` never counts; other memory files count unless the team's `scratch-files` covers them, since launch git-excludes only those patterns. A worktree outside Git has nothing to check. User flips, same-stage re-fires, moves between self-owned stages, and flips of another role's stage are exempt, so a human can still force a hand-off.
+A project team that is not trusted is refused, as for any command that reads an untrusted project config.
 
-The first flip creates `<worktree>/blackboard.md` if absent. Under a per-worktree lock, RimZ atomically replaces its first column-zero `Stage:` line with `Stage: <stage> (@owner)`. If the line is missing, it inserts it after a leading `# ` heading line, otherwise at the top. It appends the note to `## Progress`, creating the section if absent; existing `## Progress log` sections remain accepted. Other board text stays intact, and the leader writes the other sections. The ledger uses the configured local time zone:
+### Stage rules
+
+Stages come from the team definition ([configuration → teams](../../guide/configuration.md#teams)). `STAGE` must match a declared stage exactly and case-sensitively: a name in `stages`, or in the roles' `owns` lists when `stages` is empty. It must have an owning role. `Done` is always accepted, is implicit and last, and cannot be declared or owned. Put qualifiers such as "delta round" in the note. The command does not enforce pipeline order, and flipping out of `Done` reopens the work.
+
+A member handing off needs a clean worktree. A hand-off is a member leaving a stage its role owns for one it does not own, `Done` included. When `git status --untracked-files=all` lists any path under the worktree, the flip is refused before the board changes and names the paths. The root `blackboard.md` never counts, and ignored files (including the patterns the team's `scratch-files` registers) never appear; other memory files count. User flips, same-stage re-fires, moves between stages the member owns, and flips made while another role owns the current stage skip the check, so a human can always force a hand-off.
+
+### What a flip writes
+
+The first flip creates `<worktree>/blackboard.md` when absent. Each flip, under a per-worktree lock:
+
+1. Replaces the first line starting `Stage:` with `Stage: <stage> (@<owner>)`, or `Stage: Done`. With no such line, it inserts one after a leading `# ` heading, else at the top.
+2. Appends a ledger line to the `## Progress` section (an existing `## Progress log` is used too), creating the section when absent. The time is in the configured local time zone, and a multiline note is joined onto one line.
+3. Appends a durable `team.stage` signal and fires its subscriptions.
+4. Delivers a `STAGE` notice to the owner, as described below.
+
+Other board text is left as it is; the leader writes the rest of the board.
 
 ```text
 - 2026-09-12 14:02 @planner: opened Explore — board opened; sweep aimed at rate-limit handling
 - 2026-09-12 14:20 @planner: Plan -> Implement — plan ready in plan-notes.md; three advisories carried in
 ```
 
-After the board write, RimZ appends a durable `team.stage` signal with source `team`, fires explicit subscriptions, and directly delivers to the owner without requiring a role signal binding. The payload carries string fields `team`, `instance` (`team#channel`), `from` (absent when opening a board), `to`, `owner` (omitted for `Done`), `by` (role name, `user`, or `rimz`), optional `note`, `board` (absolute path), and `at` (RFC 3339). Flip signals always include the required note; registration re-wakes have no note. `rimz transcript` renders each flip inside the lane's conversation ([transcript](./transcript.md)).
+To undo a mistaken flip, flip back to the intended stage; both entries stay in the ledger. A flip to the current stage repeats the ledger line, signal, and delivery. The board and ledger mechanics are in [team memory and stages](../../internals/harness/teams.md).
 
-Direct delivery uses `Type: STAGE` / `From: @rimz` with prose only, not payload JSON. These are the flip, same-stage re-fire, and registration re-wake bodies:
+### The receipt
+
+```text
+Flipped Plan -> Implement by @planner  (forge#feat-rate-limits · feat-rate-limits)
+  Explore → Plan → [Implement] → Review → Submit → Reflect → Done
+  note     plan ready in plan-notes.md; three advisories carried in
+  owner    @coder, woken at its next turn boundary
+  compact  queued for you: 204k tokens, over 180k
+```
+
+The header reads `Opened <stage>` on a board with no prior stage and names the flipper, the cohort, and the worktree directory. The pipeline line appears only when the team declares `stages`, and a multiline note prints on one line.
+
+| `owner` row | Meaning |
+| --- | --- |
+| `@<owner>, sent now` | The owner was at rest and received the notice immediately. |
+| `@<owner>, woken at its next turn boundary` | The notice is parked until the owner's turn ends. |
+| `@<owner>, not live; woken on resume` | No live member holds the role. The board and signal still land. |
+| `you, carry on` | You own the destination stage; no notice is sent. |
+| (omitted) | The stage is `Done`; no notice is sent. |
+
+The `compact` row appears only when [flip compaction](#flip-compaction) acted: `queued for you: <n>k tokens, over <threshold>k`, `sent`, or `skipped: <reason>`.
+
+### The owner's notice
+
+The owner receives a message with `Type: STAGE` and `From: @rimz`, delivered at its next `done` turn boundary; `flip` has no interrupt option. The body is prose:
 
 ```text
 @planner flipped the stage Plan -> Implement. Implement is yours: pick it up from blackboard.md.
@@ -192,45 +317,56 @@ Direct delivery uses `Type: STAGE` / `From: @rimz` with prose only, not payload 
 Note: plan ready in plan-notes.md; three advisories carried in
 ```
 
-```text
-@user re-opened Implement. It is still yours: pick it up from blackboard.md.
-
-Note: implementation paused after the first check
-```
-
-```text
-The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops.
-```
-
-If the leader opens a board at a stage another role owns, the first sentence instead starts `@planner opened the stage Explore. Explore is yours: pick it up from blackboard.md.` When the team declares a `leader` and the owner is another role, every one of these bodies ends with the seat's channel rule, so it is the freshest text of the turn rather than a launch-time reminder only:
+A board with no prior stage reads `@<by> opened the stage <stage>.`, and a same-stage flip reads `@<by> re-opened <stage>. It is still yours: pick it up from blackboard.md.` When the team declares a `leader` and the owner is another role, the body ends with that seat's channel rule:
 
 ```text
 Your report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text.
 ```
 
-Explicit signal subscriptions still receive the loop's signal body, independently of this direct notice.
-
-Delivery always parks at the owner's next done boundary; flip has no interrupt option. A flip to a stage the caller owns sends no message: carry on. An owner with no live member is not an error: the board and signal land, and the receipt says the owner will be woken on resume. When the current owner registers after resume, restart, single-member restart, or room rebirth, RimZ emits and delivers a re-wait with `from == to` and `by = "rimz"`, without editing the board or ledger.
-
-`Done` is implicit and always last in the pipeline display; declaring it in either `stages` or `owns` is refused. It writes `Stage: Done`, appends the required note, and emits the signal without delivering a message. Flipping out of `Done` is allowed: keep the board and flip to an owned stage for a follow-up run. Same-stage flips repeat the ledger entry, signal, and eligible delivery. To correct a mistaken flip, flip back to the intended stage; both actions stay in the ledger.
-
-The receipt names the flipper and cohort, brackets the current stage in the declared pipeline, and reports the note, owner delivery, and any compaction action. With no declared `stages`, it omits the pipeline strip. Multiline notes stay intact in the Stage notice and signal but collapse to one line on the board and receipt. For example:
+When the current stage's owner registers after resume, restart, a single-member restart, or room rebirth, RimZ re-wakes it without touching the board or ledger: a `team.stage` signal with `from` equal to `to` and `by` set to `rimz`, and this notice:
 
 ```text
-Flipped Plan -> Implement by @planner  (forge#teams-flip · teams-flip)
-  Explore → Plan → [Implement] → Review → Submit → Reflect → Done
-  note     plan ready in plan-notes.md; three advisories carried in
-  owner    @coder, woken at its next turn boundary
-  compact  queued for you: 204k tokens, over 180k
+The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops.
 ```
 
-A first flip says `Opened <stage>`. The owner row can also say `sent now`, `not live; woken on resume`, or `you, carry on`; it is omitted for `Done`. The compact row appears only for sent, queued, or skipped attempts, not when unconfigured, ineligible, or below threshold.
+Explicit `team.stage` subscriptions receive the loop's signal message independently of the notice. `rimz transcript` shows each flip in the lane's conversation ([transcript](./transcript.md)); re-wakes are not shown.
 
-No role declares `owns`? Add ownership before using `flip`. Uncommitted changes? Commit or discard the listed paths, then flip again. Unknown stage? Use an exact declared name; a declared but unowned stage needs an owner. Launch and flip reject blank stage names, surrounding whitespace or control characters, duplicate owners, explicit `Done`, or owned names missing from a nonempty `stages` list. Stage-owner role names must omit parentheses and control characters. A signal or delivery failure after the board write reports completed steps and exits nonzero; repeat `rimz teams flip <stage> "<progress note>"` to retry rather than undoing the board by hand.
+### The team.stage signal
 
-Set `[harness] flip_compact = "180k"` to compact a flipper's own context at its next turn boundary once it reaches that threshold; unset means off. A role's `flip-compact = "220k"` overrides the default, and `flip-compact = "off"` disables it for that role. Thresholds accept token counts or percentages such as `"70%"`. Compaction requires a cohort member leaving a stage its role owns for one another role owns; a non-live destination owner does not prevent compaction. Flips to `Done` never compact, because no stage follows. User flips, same-stage re-fires, moves between self-owned stages, and flips of another role's stage never compact. There is no first-leave exemption: every eligible flip checks current occupied context before pane availability. Below-threshold flips, including those with unknown occupancy, make no attempt and write no assist record.
+| Payload field | Value |
+| --- | --- |
+| `team` | Team name. |
+| `instance` | `team#lane`. |
+| `from` | Previous stage; absent when the flip opened the board. |
+| `to` | Destination stage. |
+| `owner` | Owner role; absent for `Done`. |
+| `by` | Flipping role name, `user`, or `rimz` for a re-wake. |
+| `note` | The flip's note; absent on a re-wake. |
+| `board` | Absolute path of `blackboard.md`. |
+| `at` | RFC 3339 time. |
 
-Compaction is best-effort enrichment: an unavailable pane or compact-command error appears as `skipped` without failing the flip. Attempts append a `flip compaction` assist record and appear in `rimz stats`. Launch refuses an effective threshold on adapters without a compact command; set `flip-compact = "off"` on that role or choose a supported adapter. This is separate from native `auto-compact`, smart compaction of a message target, and idle compaction.
+The signal's source is `team`, and `rimz events emit` cannot produce it.
+
+### Flip compaction
+
+A flip can compact the flipper's own context once it hands off. Set `[harness] flip_compact = "180k"` for a machine default, or `flip-compact` on a role to override it (`"off"` disables it for that role); both accept token counts or percentages such as `"70%"`, and unset means off. The fields are documented in [configuration → profiles](../../guide/configuration.md#profiles).
+
+Only a hand-off (the same predicate as the clean-worktree rule) to a stage another role owns is eligible; a flip to `Done` never compacts, because no member works after it. RimZ checks the member's occupied context against the threshold first; below it, or with occupancy unknown, nothing happens and nothing is recorded. At or above it, RimZ queues or sends the compact command for the flipper's next turn boundary. A missing pane or a compact-command error prints `skipped` and never fails the flip. Each attempt writes a `flip compaction` assist record shown in `rimz stats`. A launch refuses a team whose effective threshold falls on an adapter with no compact command; set `flip-compact = "off"` on that role.
+
+### When a flip fails
+
+| Error | Fix |
+| --- | --- |
+| ``team `<team>` has no stage owners`` | Add `owns` to the team's roles. |
+| ``unknown stage `<stage>`; choose one of [...] or Done`` | Use an exact declared name. |
+| ``stage `<stage>` has no owner`` | Add the stage to a role's `owns`. |
+| `worktree <path> has uncommitted changes: <paths>` | Commit or discard the listed paths, then flip again. |
+| `no matching live team cohort in worktree <path>` | Run from the team's worktree. |
+| `multiple live team cohorts in worktree <path>; select a team with --team <name>` | Add `--team`. |
+| `calling agent belongs to a different team cohort` | Flip from a member of the selected cohort, or from outside every cohort. |
+| ``completed <steps>; <error>; re-run `rimz teams flip <stage> "<progress note>"` to repeat the signal and delivery`` | The board changed but appending the signal or delivering the notice failed. Re-run the flip rather than editing the board by hand. |
+
+A failure to fire subscriptions after the signal is appended is logged and does not fail the flip. Launch and flip also reject invalid stage configuration (blank or padded names, control characters, duplicate owners, a declared or owned `Done`, owned names missing from a nonempty `stages`); the rules are in [configuration → teams](../../guide/configuration.md#teams).
 
 ## Install a team bundle
 
@@ -241,14 +377,16 @@ rimz teams install forge --force
 rimz teams install forge --ref main
 ```
 
-The bare form lists bundles under `examples/teams/` in the RimZ GitHub repository.
-The named form downloads every file in that bundle into `~/.agents/teams/<name>/`.
-The default Git ref is the release tag matching the running binary, `v<CARGO_PKG_VERSION>`, so the examples and command stay version-aligned.
-`--ref TAG|BRANCH` selects another tag or branch; development builds whose tag is unavailable report the `--ref main` recovery command.
+Bare `install` lists the bundles under `examples/teams/` in the RimZ GitHub repository as a `TEAM REF` table. `install <name>` downloads every file of that bundle into `~/.agents/teams/<name>/` and prints:
 
-An existing destination is preserved unless `--force` is present.
-Bundle files use durable temp-file-plus-rename writes.
-Network, API, validation, and filesystem failures stop the install with the failing URL or path and a recovery cue.
+```text
+installed forge at /home/you/.agents/teams/forge
+launch with: rimz teams forge -w <worktree>
+```
 
-Use `rimz teams` for configured-cohort placement, resume, spend caps, and lifecycle control.
-Use [`rimz agents`](./agents.md) for inline layouts, one role from a team, or per-agent launch shaping.
+| Flag | Effect |
+| --- | --- |
+| `--ref TAG\|BRANCH` | Fetch from this tag or branch. The default is the release tag of the running binary, `v<version>`, so the bundle matches the command. When that tag is missing (a development build), the error suggests `--ref main`. |
+| `--force` | Overwrite the bundle's files in an existing directory. Files the bundle does not ship stay. Requires a name. |
+
+Without `--force`, an existing destination is refused with `already exists; pass --force to replace its files`. A bundle holding a subdirectory is refused. Each file is written to a temporary file and renamed into place. Network, GitHub API, and filesystem failures stop the install and name the failing URL or path.
