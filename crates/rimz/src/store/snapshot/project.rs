@@ -805,6 +805,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.waiting_since = lifecycle.waiting_since;
     state.open_ask = lifecycle.open_ask;
     state.started_turn_id = lifecycle.started_turn_id;
+    state.superseded_turn_id = lifecycle.superseded_turn_id;
     state.interrupted_turn_id = lifecycle.interrupted_turn_id;
     state.compacting_since = lifecycle.compacting_since;
     state.compaction_count = lifecycle.compaction_count;
@@ -964,6 +965,7 @@ struct LifecycleProjection {
     waiting_since: Option<Timestamp>,
     open_ask: Option<crate::agents::OpenAsk>,
     started_turn_id: Option<String>,
+    superseded_turn_id: Option<String>,
     interrupted_turn_id: Option<String>,
 }
 
@@ -974,6 +976,11 @@ fn lifecycle_projection(
     prompt: Option<&str>,
 ) -> LifecycleProjection {
     let prev_state = prior.map(AgentState::lifecycle);
+    let turn_ids = lifecycle::PriorTurnIds {
+        started: prior.and_then(|p| p.started_turn_id.as_deref()),
+        superseded: prior.and_then(|p| p.superseded_turn_id.as_deref()),
+        interrupted: prior.and_then(|p| p.interrupted_turn_id.as_deref()),
+    };
     let Transition {
         next,
         compaction_closed,
@@ -984,10 +991,7 @@ fn lifecycle_projection(
         prior
             .and_then(|p| p.open_ask.as_ref())
             .and_then(|ask| ask.native_key.as_deref()),
-        lifecycle::PriorTurnIds {
-            started: prior.and_then(|p| p.started_turn_id.as_deref()),
-            interrupted: prior.and_then(|p| p.interrupted_turn_id.as_deref()),
-        },
+        turn_ids,
         &signal,
     );
     let compacting_since = if next.compacting {
@@ -1077,10 +1081,7 @@ fn lifecycle_projection(
         _ if next.status == AgentStatus::Waiting => prior.and_then(|p| p.open_ask.clone()),
         _ => None,
     };
-    let started_turn_id = match &signal {
-        lifecycle::LifecycleSignal::TurnStarted { turn_id } => turn_id.clone(),
-        _ => prior.and_then(|p| p.started_turn_id.clone()),
-    };
+    let (started_turn_id, superseded_turn_id) = lifecycle::turn_ids_after(turn_ids, &signal);
     let interrupted_turn_id = match &signal {
         lifecycle::LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
         lifecycle::LifecycleSignal::Registered => None,
@@ -1099,6 +1100,7 @@ fn lifecycle_projection(
         waiting_since,
         open_ask,
         started_turn_id,
+        superseded_turn_id,
         interrupted_turn_id,
     }
 }

@@ -373,8 +373,26 @@ pub struct Transition {
 pub struct PriorTurnIds<'a> {
     /// The most recent turn start's id; an id-less start clears it.
     pub started: Option<&'a str>,
+    /// The id `started` held before a start with another id replaced it.
+    pub superseded: Option<&'a str>,
     /// The most recently interrupted turn's id.
     pub interrupted: Option<&'a str>,
+}
+
+/// The `(started, superseded)` turn ids a record carries once `signal` folds
+/// onto one whose prior ids are `prior`. Only a turn start moves them, and a
+/// repeated start for the open turn keeps both.
+pub fn turn_ids_after(
+    prior: PriorTurnIds<'_>,
+    signal: &LifecycleSignal,
+) -> (Option<String>, Option<String>) {
+    let owned = |id: Option<&str>| id.map(str::to_owned);
+    match signal {
+        LifecycleSignal::TurnStarted { turn_id } if turn_id.as_deref() != prior.started => {
+            (turn_id.clone(), owned(prior.started.or(prior.superseded)))
+        }
+        _ => (owned(prior.started), owned(prior.superseded)),
+    }
 }
 
 /// Fold one [`LifecycleSignal`] onto the prior [`LifecycleState`]. Pure and
@@ -394,7 +412,7 @@ pub fn step(
     let ignored = if matches!(signal, LifecycleSignal::Lost) {
         Some("session lost (legacy replay marker)")
     } else {
-        stale_turn_report(signal, prior_status, turn_ids.started)
+        stale_turn_report(signal, prior_status, turn_ids)
     };
     if let Some(reason) = ignored {
         return Transition {
@@ -451,15 +469,16 @@ pub fn step(
 }
 
 /// Why a turn report must not touch the row, when it carries a provider turn id
-/// the row can correlate. A report for a turn other than the last started one
+/// the row can correlate. A report for the turn a later start superseded
 /// arrived late (Grok dispatches a canceled turn's report off its command loop,
 /// so it can land after the next prompt). A cancel for the started turn after
 /// that turn already reported its verdict cannot un-report it; a later verdict
 /// for the same turn still applies, since a continuation round reports again.
+/// A report with an id the row never saw applies: its start was missed.
 fn stale_turn_report(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
-    started_turn_id: Option<&str>,
+    turn_ids: PriorTurnIds<'_>,
 ) -> Option<&'static str> {
     let (LifecycleSignal::TurnEnded {
         turn_id: Some(report),
@@ -471,9 +490,9 @@ fn stale_turn_report(
     else {
         return None;
     };
-    let started = started_turn_id?;
-    if report != started {
-        return Some("turn report for a turn other than the one started last");
+    if turn_ids.started != Some(report.as_str()) {
+        return (turn_ids.superseded == Some(report.as_str()))
+            .then_some("turn report for a turn a later start superseded");
     }
     (matches!(signal, LifecycleSignal::TurnInterrupted { .. })
         && matches!(

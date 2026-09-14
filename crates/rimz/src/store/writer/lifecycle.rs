@@ -182,6 +182,7 @@ fn lifecycle_transition(
             .and_then(|ask| ask.native_key.as_deref()),
         lifecycle::PriorTurnIds {
             started: prior.and_then(|agent| agent.started_turn_id.as_deref()),
+            superseded: prior.and_then(|agent| agent.superseded_turn_id.as_deref()),
             interrupted: prior.and_then(|agent| agent.interrupted_turn_id.as_deref()),
         },
         &observation.signal,

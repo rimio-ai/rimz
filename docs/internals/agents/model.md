@@ -68,7 +68,7 @@ Each event is a partial update. `carried_base` clones the prior row, `assemble_a
 | counters | `tool_calls`, `compaction_count` | Incremented from durable events, so replay reproduces them. |
 | turn boundaries | `turn_started_at`, `user_turn_started_at` | Advanced by the signals in [the edge table](#edges); otherwise carried. |
 | open ask | `waiting_since`, `open_ask`, `interrupted_turn_id` | `waiting_since` and `open_ask` live only while the row is `waiting`. `interrupted_turn_id` is recorded by `turn_interrupted` and cleared by `registered` or a newly opened turn. |
-| turn identity | `started_turn_id` | Replaced by every `turn_started`, cleared by one that carries no provider turn id, otherwise carried. |
+| turn identity | `started_turn_id`, `superseded_turn_id` | A `turn_started` whose id differs from `started_turn_id` replaces it (an id-less start clears it) and moves the replaced id, when there is one, into `superseded_turn_id`. A repeated start for the same id and every other signal carry both. |
 | compaction | `compacting_since`, `compacted_awaiting_prompt` | `compacting_since` marks an open [compaction bracket](#the-compaction-bracket). `compacted_awaiting_prompt` is set by a sent compact command or a successful manual close, cleared only by `turn_started`, and consulted only for adapters with a native turn-start hook. |
 
 Five of these rules need their reason stated:
@@ -124,7 +124,7 @@ An `ended` mid-turn delivered nothing, so it takes the failed disposition of [`t
 
 ### Late turn reports
 
-An adapter whose provider names each turn attaches that id to `turn_started`, `turn_ended`, and `turn_interrupted`. A turn report whose id differs from the row's `started_turn_id` belongs to an earlier turn that reported late, and `step` ignores it, so the turn in progress keeps its status. A `turn_interrupted` for the started turn after that turn already resolved to `success` or `failed` is ignored too, because a cancel cannot undo a delivered verdict. A later `turn_ended` for the same turn still applies. When the report or the row has no id, the edges above apply unchanged. Grok is the adapter that sends ids ([adapter_grok.md](./adapter_grok.md#hooks-and-lifecycle)).
+An adapter whose provider names each turn attaches that id to `turn_started`, `turn_ended`, and `turn_interrupted`. A turn report whose id matches the row's `superseded_turn_id`, the turn the latest start replaced, reported late, and `step` ignores it, so the turn in progress keeps its status. A report with an id the row never recorded applies: its `turn_started` was lost, and dropping the report would leave that turn `running` until the next prompt. A `turn_interrupted` for the started turn after that turn already resolved to `success` or `failed` is ignored too, because a cancel cannot undo a delivered verdict. A later `turn_ended` for the same turn still applies. When the report or the row has no id, the edges above apply unchanged. Grok is the adapter that sends ids ([adapter_grok.md](./adapter_grok.md#hooks-and-lifecycle)).
 
 ### Turn endings and parked turns
 

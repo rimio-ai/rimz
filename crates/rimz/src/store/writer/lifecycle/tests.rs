@@ -213,6 +213,28 @@ fn late_turn_reports_leave_the_started_turn_on_ingest_and_replay() {
         store.snapshot().unwrap().agents[0].status,
         AgentStatus::Success
     );
+
+    // prompt-3's start never reached the store; its own report still settles it.
+    append(
+        "PostToolUse",
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            name: None,
+            native_key: None,
+            turn_id: None,
+        },
+    );
+    let unseen_turn = LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: turn_id("prompt-3"),
+    };
+    assert!(!dropped(&append("Stop", unseen_turn)));
+    assert_eq!(
+        store.snapshot().unwrap().agents[0].status,
+        AgentStatus::Success
+    );
 }
 
 #[test]
