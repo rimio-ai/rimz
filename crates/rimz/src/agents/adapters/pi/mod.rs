@@ -169,7 +169,7 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "child pi sessions self-identify through RimZ process-lineage markers and feed lifecycle keyed by their own session id",
     },
     launch_reminders: ConcernCoverage::Unsupported {
-        reason: "no additive system-text flag; --system-prompt replaces the whole prompt",
+        reason: "--append-system-prompt suppresses the user's discovered APPEND_SYSTEM.md",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
@@ -222,8 +222,9 @@ const PI_USER_COVERAGE: UserCoverage = UserCoverage {
     ask: CapabilityLevel::Full {
         note: "questionnaires and extension dialogs raise Waiting; questionnaire choices reach rimz asks",
     },
-    subagents: CapabilityLevel::Full {
-        note: "child pi sessions nest under the parent, with label, context, tokens, and cost",
+    subagents: CapabilityLevel::Partial {
+        shows: "child pi sessions nest under the parent, with label, context, tokens, and cost",
+        limit: "pi-subagents foreground children appear only when they load the rimz extension",
     },
 };
 
@@ -343,7 +344,8 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
     }
 }
 
-// TODO(launch-reminders): compose additive text into materialized --system-prompt text or the extension.
+// TODO(launch-reminders): carry additive text through the extension; Pi's
+// `--append-system-prompt` would suppress the user's discovered APPEND_SYSTEM.md.
 impl crate::agents::capabilities::LaunchCapability for PiAdapter {
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["PI_CODING_AGENT_DIR"]
