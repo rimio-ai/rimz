@@ -217,6 +217,45 @@ fn derive_lifecycle_events(
         );
     }
 
+    // A provider can raise a child's native prompt on the parent session. The
+    // child's completion of the keyed call is the answer edge, so it clears the
+    // parent's wait; any other child tool leaves a real parent ask open.
+    if let LifecycleSignal::ToolUsed {
+        native_key: Some(key),
+        ..
+    } = &intent.observation.signal
+        && let Some(parent_id) = intent.observation.parent_agent_id.as_ref()
+        && let Some(parent) = find_agent(agents, &intent.agent_kind, parent_id)
+        && parent.status == AgentStatus::Waiting
+        && parent
+            .open_ask
+            .as_ref()
+            .and_then(|ask| ask.native_key.as_ref())
+            == Some(key)
+    {
+        let observation = AgentLifecycleObservation::new(
+            Some(parent_id.clone()),
+            LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+                name: None,
+                native_key: Some(key.clone()),
+                turn_id: None,
+            },
+        );
+        let transition = lifecycle_transition(agents, &intent.agent_kind, &observation)
+            .expect("derived answer has parent identity");
+        push_derived(
+            workspace_id,
+            intent,
+            "SubagentAskAnswered",
+            observation,
+            Some(parent.status),
+            transition,
+            staged,
+        );
+    }
+
     if intent.observation.parent_agent_id.is_none()
         && matches!(
             intent.observation.signal,

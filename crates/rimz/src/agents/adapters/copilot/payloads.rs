@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::agents::transcript_fs::deserialize_optional_string_lossy;
 
@@ -21,6 +22,7 @@ pub(super) struct CopilotHookPayload {
     tool_name: Option<String>,
     #[serde(
         alias = "tool_args",
+        alias = "toolInput",
         alias = "tool_input",
         deserialize_with = "deserialize_optional_tool_args",
         default
@@ -80,6 +82,19 @@ impl CopilotHookPayload {
             }))
             .collect();
         NormalizedToolCalls { calls }
+    }
+}
+
+impl NormalizedToolCall<'_> {
+    /// Key one shell call across hooks that carry no call id. A 1.0.83
+    /// `permissionRequest` narrows `toolInput` to `{command}` while the same
+    /// call's `postToolUse.toolArgs` adds `description`, `initial_wait`, and
+    /// `mode`, so the key digests only the tool name and command text.
+    pub(super) fn command_key(&self) -> Option<String> {
+        let name = self.name.filter(|name| !name.is_empty())?;
+        let command = self.args?.get("command")?.as_str()?;
+        let digest = Sha256::digest(format!("{name}\0{command}").as_bytes());
+        Some(format!("{name}:{}", hex::encode(&digest[..8])))
     }
 }
 
