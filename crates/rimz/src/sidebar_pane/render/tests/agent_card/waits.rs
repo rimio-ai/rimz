@@ -1,9 +1,10 @@
 use super::*;
-use crate::agents::{PendingWait, PendingWaitTrigger};
-use crate::config::AnimationRole;
+use crate::agents::{BackgroundShell, PendingWait, PendingWaitTrigger};
+use crate::config::{AnimationRole, CardDensityMode};
 use crate::sidebar_pane::render::labels::{
     activity_age_style, elapsed_glyph, role_glyph, working_style,
 };
+use crate::sidebar_pane::render::sections::{CardExpansion, has_command_wait_entries};
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
@@ -472,4 +473,98 @@ fn long_wait_clocks_stay_muted_while_subagent_clocks_heat() {
         vec![activity_age_style(&theme, 7200).fg, theme.muted().fg]
     );
     assert_ne!(tones[0], tones[1]);
+}
+
+#[test]
+fn background_shells_follow_waits_and_join_the_count() {
+    let mut parent = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished work"),
+    );
+    parent.pending_waits.push(PendingWait {
+        name: "timer".to_owned(),
+        trigger: PendingWaitTrigger::Timer {
+            due: fixed_now() + Duration::from_secs(720),
+            delay: None,
+        },
+        armed_at: Some(fixed_now()),
+    });
+    parent.background_shells = vec![
+        BackgroundShell {
+            id: "b1".to_owned(),
+            command: Some("/usr/bin/cargo test --workspace".to_owned()),
+            description: Some("Run the test suite".to_owned()),
+            started_at: fixed_now() - Duration::from_secs(300),
+        },
+        BackgroundShell {
+            id: "b2".to_owned(),
+            command: None,
+            description: None,
+            started_at: fixed_now() - Duration::from_secs(60),
+        },
+    ];
+    let snapshot = snapshot_with(vec![parent]);
+    let theme = Theme::fixed(false);
+
+    let collapsed = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
+    assert!(collapsed.iter().any(|line| line.contains("⧖ waits (3)")));
+    assert!(!collapsed.iter().any(|line| line.contains("bg shell")));
+
+    let lines = group_lines(&snapshot, &theme, 0);
+    let rows = line_texts(&lines);
+    let timer = rows
+        .iter()
+        .position(|line| line.contains("◷ timer · in 12m"))
+        .unwrap();
+    let working = role_glyph(&theme, AnimationRole::Working, 0);
+    assert!(rows[timer + 1].contains(&format!("{working} bg shell cargo")));
+    assert!(rows[timer + 1].ends_with(&format!("{}  5m▐", elapsed_glyph(&theme, 300))));
+    assert!(rows[timer + 2].contains("      Run the test suite"));
+    assert!(rows[timer + 3].contains(&format!("{working} bg shell")));
+    assert!(rows[timer + 3].ends_with(&format!("{}  1m▐", elapsed_glyph(&theme, 60))));
+    assert_eq!(
+        rows.len(),
+        timer + 4,
+        "a shell without command or description has no detail line"
+    );
+    let lead = lines[timer + 1]
+        .spans
+        .iter()
+        .find(|span| span.content == working)
+        .unwrap();
+    assert_eq!(lead.style.fg, working_style(&theme, 0).fg);
+    assert!(lead.style.add_modifier.contains(Modifier::DIM));
+    assert!(has_command_wait_entries(
+        &snapshot.worktree_groups[0].rows[0],
+        CardDensityMode::Expanded,
+        CardExpansion::default(),
+    ));
+    assert_snapshot(
+        "background_shell_entries",
+        snapshot_to_screen(&snapshot, 54, 23),
+    );
+
+    let narrow = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 36));
+    assert!(
+        narrow
+            .iter()
+            .any(|line| line.trim_matches(['▌', '▐', ' ']) == "⧖ 3")
+    );
+
+    let mut shells_only = snapshot.clone();
+    shells_only.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .pending_waits
+        .clear();
+    let rows = line_texts(&group_lines(&shells_only, &theme, 0));
+    let stats = rows
+        .iter()
+        .position(|line| line.contains("⧖ waits (2)"))
+        .unwrap();
+    assert!(rows[stats + 1].contains("bg shell cargo"));
 }

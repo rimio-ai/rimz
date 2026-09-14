@@ -94,12 +94,13 @@ pub(in crate::sidebar_pane::render) fn has_command_wait_entries(
     };
     template(CardStage::of(row), agent.status, density, expanded)
         .contains(&CardSlot::DelegationEntries)
-        && agent.pending_waits.iter().any(|wait| {
-            matches!(
-                wait.trigger,
-                PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Pid { .. }
-            )
-        })
+        && (!agent.background_shells.is_empty()
+            || agent.pending_waits.iter().any(|wait| {
+                matches!(
+                    wait.trigger,
+                    PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Pid { .. }
+                )
+            }))
 }
 
 pub(super) fn row_lines(
@@ -181,6 +182,11 @@ pub(super) fn row_lines(
                             .into_iter()
                             .map(CardLine::from),
                     );
+                    inner.extend(
+                        waits::background_shell_entry_lines(ctx, &agent.background_shells)
+                            .into_iter()
+                            .map(CardLine::from),
+                    );
                     let hidden = agent
                         .sub_agents
                         .iter()
@@ -211,9 +217,10 @@ pub(super) fn row_lines(
 }
 
 /// The standing delegation line carries lifetime children, their known cost,
-/// and pending waits. Expansion only appends their entries.
+/// and pending waits with background shells. Expansion only appends their entries.
 fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
-    if agent.sub_agent_count == 0 && agent.pending_waits.is_empty() {
+    let wait_count = agent.pending_waits.len() + agent.background_shells.len();
+    if agent.sub_agent_count == 0 && wait_count == 0 {
         return None;
     }
     let theme = ctx.theme;
@@ -221,12 +228,12 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
     let (subagents_label, waits_label) = if ctx.tier == Tier::L2 {
         (
             format!(" subagents ({})", agent.sub_agent_count),
-            format!(" waits ({})", agent.pending_waits.len()),
+            format!(" waits ({wait_count})"),
         )
     } else {
         (
             format!(" {}", agent.sub_agent_count),
-            format!(" {}", agent.pending_waits.len()),
+            format!(" {wait_count}"),
         )
     };
     let mut left = vec![Span::raw("  ")];
@@ -242,7 +249,7 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
             Span::styled(subagents_label, theme.body()),
         ]);
     }
-    if !agent.pending_waits.is_empty() {
+    if wait_count > 0 {
         if agent.sub_agent_count > 0 {
             left.push(Span::styled(" · ", theme.muted()));
         }
