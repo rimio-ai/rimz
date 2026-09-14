@@ -606,6 +606,14 @@ fn classify_provider(protocol: &str, base_url: Option<&str>) -> Option<SelectedP
         "openai" if base_url.is_none_or(|url| exact_endpoint(url, "https://api.openai.com/v1")) => {
             Some(SelectedProvider::OpenAi)
         }
+        "openai-responses"
+            if base_url.is_none_or(|url| {
+                exact_endpoint(url, "https://api.openai.com")
+                    || exact_endpoint(url, "https://api.openai.com/v1")
+            }) =>
+        {
+            Some(SelectedProvider::OpenAi)
+        }
         "anthropic"
             if base_url.is_none_or(|url| {
                 exact_endpoint(url, "https://api.anthropic.com")
@@ -654,7 +662,7 @@ fn exact_endpoint(value: &str, expected: &str) -> bool {
 
 fn default_credential_key(provider: &str) -> Option<&'static str> {
     match provider {
-        "openai" => Some("OPENAI_API_KEY"),
+        "openai" | "openai-responses" => Some("OPENAI_API_KEY"),
         "anthropic" => Some("ANTHROPIC_API_KEY"),
         "gemini" => Some("GEMINI_API_KEY"),
         "vertex-ai" => None,
@@ -665,7 +673,7 @@ fn default_credential_key(provider: &str) -> Option<&'static str> {
 
 fn default_base_key(provider: &str) -> Option<&'static str> {
     match provider {
-        "openai" => Some("OPENAI_BASE_URL"),
+        "openai" | "openai-responses" => Some("OPENAI_BASE_URL"),
         "anthropic" => Some("ANTHROPIC_BASE_URL"),
         "gemini" => None,
         _ => None,
@@ -812,6 +820,27 @@ mod tests {
         };
         assert_eq!(selection.account().metered, Some(false));
         assert!(selection.scope().is_kind_wide());
+    }
+
+    #[test]
+    fn openai_responses_auth_is_direct_openai() {
+        for base_url in ["", "OPENAI_BASE_URL=https://api.openai.com/v1\n"] {
+            let state = resolve_fixture(
+                r#"{"security":{"auth":{"selectedType":"openai-responses"}}}"#,
+                Some(&format!("OPENAI_API_KEY=sentinel-secret\n{base_url}")),
+            );
+            let SelectionState::Found(selection) = state else {
+                panic!("expected selection for base {base_url:?}");
+            };
+            assert_eq!(selection.provider, SelectedProvider::OpenAi);
+        }
+        assert!(matches!(
+            resolve_fixture(
+                r#"{"security":{"auth":{"selectedType":"openai-responses"}}}"#,
+                Some("OPENAI_API_KEY=k\nOPENAI_BASE_URL=https://proxy.example/v1\n"),
+            ),
+            SelectionState::Unavailable
+        ));
     }
 
     #[test]
