@@ -1,83 +1,101 @@
 # Grok Build protocol reference
 
-> The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the landed mapping is [adapter_grok.md](../../internals/agents/adapter_grok.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md). This document remains the upstream protocol reference.
+> RimZ's mapping of this surface lives in [adapter_grok.md](../../internals/agents/adapter_grok.md): the lifecycle signals, transcript fold, context, account, and spend mapping, and the known gaps. The provider-neutral agent model is [model.md](../../internals/agents/model.md), and the account and spend model is [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the **Grok Build upstream protocol surface** RimZ can bind to: native lifecycle hooks, their JSON envelope and decision schema, durable session sidecars, structured headless output, Agent Client Protocol (ACP), authentication, and billing extensions. It mirrors the open-source Grok Build tree and its bundled user guide at the pinned revision below so a contributor can refresh it when upstream moves.
+This page mirrors the upstream surface of xAI's Grok Build CLI (`grok`) that a RimZ adapter binds to: native lifecycle hooks with their envelope, turn-end reports, and decision channel; the session directory and its durable files; structured headless output; the Agent Client Protocol (ACP) mode and its client-registered hooks; and the authentication store. It records what upstream ships. Coverage is depth on the stock-TUI surfaces the adapter reads (hooks, `summary.json`, `updates.jsonl`, `signals.json`, `events.jsonl`, `auth.json`) and breadth as an index for the rest.
 
-Coverage is **depth on the recommended stock-TUI seam, breadth as an index**. Native file hooks and the sidecars they identify preserve Grok's own terminal UI and carry the lifecycle RimZ needs. Headless JSON and ACP are documented as separate launch modes, not silently substituted for the user's TUI.
+## Baseline and sources
 
-## Upstream sources
-
-This mirror was refreshed from Grok Build `0.1.220-alpha.4` at commit [`c68e39f60462f28d9be5e683d9cbe2c57b1a5027`](https://github.com/xai-org/grok-build/tree/c68e39f60462f28d9be5e683d9cbe2c57b1a5027).
+The page describes Grok Build **1.0.30**, published 2026-09-11 and read on 2026-09-13. That is the npm `@xai-official/grok` `latest` dist-tag and the version the official installer's `stable` channel serves (`https://x.ai/cli/stable`). Upstream publishes no release tags and no commit for a release: the open-source mirror [`xai-org/grok-build`](https://github.com/xai-org/grok-build) receives periodic "Synced from monorepo" commits. Source claims are read at commit [`37949780c144e37df692e3d669051a21fec24f20`](https://github.com/xai-org/grok-build/tree/37949780c144e37df692e3d669051a21fec24f20) (2026-09-09), the newest sync before 1.0.30, and a source path below is relative to `crates/codegen/` at that commit. CLI flags and subcommands come from `grok --help` on an installed 1.0.30 binary. The mirror's `xai-grok-pager/npm/grok/package.json` still reads `0.1.220-alpha.4` and does not track releases.
 
 | Surface | Source |
 | --- | --- |
-| Product entry, binary names, and repository layout | [README](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/README.md) |
-| Authentication | [user guide: authentication](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md) |
-| Hooks, discovery, trust, compatibility, and command wire | [user guide: hooks](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md) |
-| Hook event types and payload fields | [hook event source](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-hooks/src/event.rs) |
-| Hook discovery and cross-source deduplication | [hook discovery source](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-hooks/src/discovery.rs) |
-| Hook dispatch and command/HTTP runners | [dispatcher](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-hooks/src/dispatcher.rs), [command runner](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-hooks/src/runner/command.rs), [HTTP runner](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-hooks/src/runner/http.rs) |
-| Hook fire sites and attention notifications | [turn lifecycle](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs), [tool calls](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs), [notification projection](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/acp_session_impl/hook_dispatch.rs) |
-| Compaction and subagent hook fire sites | [compaction](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/compaction.rs), [session updates](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/acp_session_impl/updates.rs) |
-| Sessions, resume, fork, rewind, and on-disk files | [user guide: sessions](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md), [session persistence](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/persistence.rs), [JSONL storage](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/storage/jsonl/mod.rs) |
-| Session context and activity signals | [signals source](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/signals.rs) |
-| Headless flags, output, spend, and exits | [user guide: headless mode](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md) |
-| ACP launch modes and extension catalog | [user guide: agent mode](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-pager/docs/user-guide/15-agent-mode.md) |
-| ACP client-registered hook wire | [client hook registration](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/extensions/hooks.rs), [client hook dispatch](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/session/acp_session/hooks.rs) |
-| Subagent behavior | [user guide: subagents](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-pager/docs/user-guide/16-subagents.md) |
-| Permissions and trust | [user guide: permissions](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md) |
-| Auth-store schema | [auth model source](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/auth/model.rs) |
-| ACP billing extension | [billing extension source](https://github.com/xai-org/grok-build/blob/c68e39f60462f28d9be5e683d9cbe2c57b1a5027/crates/codegen/xai-grok-shell/src/extensions/billing.rs) |
+| Authentication, credential precedence | [user guide: authentication](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md); `xai-grok-login/src/model.rs` `GrokAuth`, `AuthMode`; `xai-grok-login/src/storage.rs` `auth_json_path`; `xai-grok-shell/src/agent/config.rs` `resolve_credentials` |
+| Hooks: sources, trust, events, decisions, env, HTTP | [user guide: hooks](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md) |
+| Hook envelope, payloads, timeouts, discovery | `xai-grok-hooks/src/event.rs` `HookEventEnvelope`, `HookPayload`; `xai-grok-hooks/src/config.rs`; `xai-grok-hooks/src/discovery.rs` `registry_from_specs_deduped`; `xai-grok-shell/src/util/hooks.rs`; `xai-grok-config/src/loader.rs` `hook_config_layers_at` |
+| Hook runners | `xai-grok-hooks/src/runner/mod.rs`, `runner/command.rs` `find_unresolved_env_vars`, `runner/http.rs` |
+| Hook fire sites | `xai-grok-shell/src/session/acp_session_impl/` (`hook_dispatch.rs` `notification_hook_for_update`, `updates.rs`, `tool_calls.rs`, `turn.rs`, `stop_gate.rs`, `turn_end_hooks.rs`, `run_loop.rs` `fire_session_end_hooks`, `agent_ops.rs`); `xai-grok-shell/src/extensions/idle_prompt.rs` |
+| Claude tool-name aliases | `xai-grok-tools/src/types/claude_alias.rs` |
+| Headless flags, output formats, exit codes | [user guide: headless mode](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md); `xai-grok-shell/src/session/headless.rs` `stop_reason_wire`, `notification.rs` `project_result_usage` |
+| ACP mode, extension catalog, `_meta` options | [user guide: agent mode](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/15-agent-mode.md) |
+| ACP client-registered hooks | `xai-grok-shell/src/extensions/hooks.rs` `ClientHookGroup`, `ClientHookResponse`; `xai-grok-shell/src/session/acp_session/hooks.rs` |
+| ACP billing extension | `xai-grok-shell/src/extensions/billing.rs` |
+| Subagents | [user guide: subagents](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/16-subagents.md) |
+| Sessions, resume, rewind, `grok usage` | [user guide: sessions](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md); `xai-grok-shell/src/session/persistence.rs` `Summary`, `session_dir_in`; `session/storage/mod.rs` `SessionUpdateEnvelope`; `session/signals.rs`; `session/usage_file.rs` `SessionUsageFile` |
+| Session event log (`events.jsonl`) | `xai-grok-session-events/src/log.rs` `EventWriter`, `types.rs` `Event` |
+| Permissions and permission modes | [user guide: permissions](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/22-permissions-and-safety.md) |
+| Change history | the sync commit messages on [`main`](https://github.com/xai-org/grok-build/commits/main); npm [version times](https://registry.npmjs.org/@xai-official%2Fgrok) |
 
-## Recommended adapter shape
+## Surface map
 
-Use native file hooks for lifecycle, then enrich the rollup from the session directory named by `transcriptPath`. Keep pane-process liveness as the presence backstop. Use structured headless output only for RimZ-supervised `-p` runs, and use ACP only when RimZ explicitly launches and owns an ACP client session.
+Each signal a stock-TUI integration needs has one upstream carrier. The sections below give the full shapes.
 
-| RimZ need | Preferred Grok surface | Notes |
-| --- | --- | --- |
-| Strong session identity | `sessionId` on every hook | A UUID; stable across resume, compaction, rewind, and model changes |
-| Registration and termination | `SessionStart` / `SessionEnd` hooks | `SessionEnd` is process-session termination, not a turn end |
-| Turn bracket | `UserPromptSubmit` / `Stop` hooks | `StopFailure` precedes an error `Stop` |
-| Proof of work and edits | `PostToolUse` hook | Classify edits from typed tool names such as `search_replace` and `apply_patch` |
-| Awaiting-user attention | `Notification` hook | Structured notification type and message identify tool permission, plan approval, question, and diff review waits |
-| Compaction bracket | `PreCompact` / `PostCompact` hooks | `source` is `manual` or `auto` |
-| Child agents | `SubagentStart` / `SubagentStop` hooks | Use `subagentId` as child identity and the envelope `sessionId` as parent identity |
-| Model and effort | `summary.json` | `SessionStart.modelId` and `agentType` are currently omitted by the stock fire site |
-| Live context fill | last `_meta.totalTokens` in `updates.jsonl` | Divide by the active model context window; tolerate a torn trailing line |
-| Completed-turn counters | `signals.json` | A durable but turn-boundary snapshot, so it can lag live work |
-| Supervised result and spend | `--output-format streaming-json` | The terminal `end` or `error` record carries the final run projection |
-| Auth presence and owner | `auth.json` metadata | Redact `key` and `refresh_token`; hash secrets only when a stable account key needs them |
-| Billing windows | ACP `x.ai/billing` when RimZ owns ACP | The stock TUI exposes `/usage`, but no standalone documented machine-readable command |
-
-Native hooks observe attention but do not answer it. Keep structured native answers absent from the stock-TUI adapter until Grok exposes a tested responder seam; route human text through RimZ's pane send path. ACP reverse requests can carry typed answers only in the separately owned ACP mode.
+| Signal | Upstream surface |
+| --- | --- |
+| Session identity | `sessionId` on every hook envelope: a UUID, stable across resume, compaction, rewind, and model changes |
+| Session start and end | `SessionStart` and `SessionEnd` hooks |
+| Turn start | `UserPromptSubmit` hook |
+| Turn end | exactly one of `Stop`, `StopFailure`, or `StopCancelled`, with the `idle_prompt` notification as the backstop for turns that report none |
+| Tool activity | `PostToolUse` and `PostToolUseFailure` hooks |
+| Awaiting the user | `Notification` hook (`permission_prompt`, `elicitation_dialog`); `events.jsonl` `permission_requested` / `permission_resolved` records |
+| Compaction | `PreCompact` and `PostCompact` hooks |
+| Subagents | `SubagentStart` from the parent session; `SubagentStop` inside the child session |
+| Model, effort, title | `summary.json` |
+| Live context fill | the last `_meta.totalTokens` in `updates.jsonl` |
+| Completed-turn usage and cost | `turn_completed` records in `updates.jsonl`; `usage.json` via `grok usage` |
+| Supervised run result | `--output-format streaming-json` terminal `end` or `error` record |
+| Account identity | `auth.json` metadata |
+| Billing windows | ACP `x.ai/billing`, or the TUI's `/usage` |
 
 ## Executable and launch modes
 
-Official installations expose `grok`; a source build produces `xai-grok-pager`. `grok --version` is the capability probe.
+Official installs expose `grok`; a source build produces `xai-grok-pager`. `grok --version` prints `grok <version> (<build hash>)`, and `grok version --json` prints the same as JSON.
 
 | Mode | Invocation | Surface |
 | --- | --- | --- |
-| Interactive TUI | `grok [flags]` | Native terminal UI plus file hooks |
-| Headless | `grok -p <prompt> --output-format streaming-json` | NDJSON result stream plus the same in-process file hooks |
+| Interactive TUI | `grok [flags] [PROMPT]` | Native terminal UI plus file hooks |
+| Headless | `grok -p <prompt> --output-format streaming-json` | NDJSON result stream plus the same file hooks |
 | ACP stdio | `grok agent stdio` | JSON-RPC over stdio |
-| ACP WebSocket server | `grok agent serve --bind <addr> --secret <secret>` | JSON-RPC over a hosted WebSocket transport |
-| Headless over hosted ACP | `grok agent headless --grok-ws-url <url>` | Headless client connected to an ACP server |
+| ACP WebSocket server | `grok agent serve [--bind <addr>] [--secret <secret>]` | JSON-RPC over WebSocket; `--bind` defaults to `127.0.0.1:2419`, and the secret is generated when omitted (`GROK_AGENT_SECRET`) |
+| ACP over the relay | `grok agent headless --grok-ws-url <url>` | Headless agent connected through the Grok WebSocket relay |
+| Shared leader | `grok agent --leader`, `grok agent leader` | Several clients share one backend over `~/.grok/leader.sock` |
 
-`--model`, `--reasoning-effort` / `--effort`, `--permission-mode`, `--allow`, `--deny`, `--sandbox`, and `--cwd` apply to the interactive and headless surfaces. `--yolo` enables always-approve. Preserve the user's launch flags and cwd when RimZ wraps a TUI session.
+These flags apply to the interactive and headless surfaces (`grok --help`, 1.0.30):
 
-## Session identity, resume, and fork
+| Flag | Effect |
+| --- | --- |
+| `-p`, `--single <PROMPT>`; `--prompt-file <PATH>`; `--prompt-json <JSON>` | Select headless mode with a single-turn prompt |
+| `-m`, `--model <MODEL>` | Model ID |
+| `--reasoning-effort <EFFORT>` (alias `--effort`) | Reasoning effort |
+| `--permission-mode <MODE>` | `default`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, or `plan` |
+| `--always-approve` (aliases `--yolo`, `--dangerously-skip-permissions`) | Auto-approve tool calls; same as `--permission-mode bypassPermissions` |
+| `--allow <RULE>`, `--deny <RULE>` | Permission rules (compat aliases `--allowedTools`, `--disallowedTools`) |
+| `--tools`, `--disallowed-tools` | Built-in tool allow and remove lists |
+| `--sandbox <PROFILE>` | Sandbox profile (`GROK_SANDBOX`) |
+| `--cwd <CWD>` | Working directory |
+| `--max-turns <N>` | Maximum agent turns |
+| `--no-plan`, `--no-subagents`, `--disable-web-search` | Disable plan mode, subagent spawning, or web tools |
+| `-r`, `--resume [ID_OR_TITLE]`; `-c`, `--continue`; `--fork-session`; `-s`, `--session-id <UUID>` | Session selection (see [Sessions](#sessions)) |
+| `-w`, `--worktree [NAME]`, `--worktree-ref <REF>` | Run the session in a new git worktree |
+| `--output-format <FORMAT>` | `plain` (default), `json`, `streaming-json`, or `streaming-messages-json` |
+| `--trust` | Grant folder trust for the project (accepted by the parser; not listed in `--help`) |
 
-Grok sessions use UUID identifiers. New native IDs are UUIDv7; `--session-id <uuid>` accepts a caller-selected UUID only for creation and fails when the ID is invalid or already exists under the target session directory.
+Subcommands include `login`, `logout`, `sessions` (`list`, `search`, `delete`), `usage`, `export`, `inspect [--json]`, `models`, `mcp`, `plugin`, `update [--check] [--json]`, and `version`.
+
+## Sessions
+
+Grok session IDs are UUIDs; Grok mints UUIDv7. `--session-id <uuid>` selects the ID of a **new** session and fails when the value is not a UUID or the ID already exists under the target session directory. With `--resume` or `--continue` it is valid only together with `--fork-session`, where it names the fork.
 
 | Operation | TUI | Headless | Identity effect |
 | --- | --- | --- | --- |
-| New | normal launch or `/new` (`/clear` alias) | default `grok -p` or `--session-id <uuid>` | Creates a new session ID |
-| Resume | `/resume` or launch resume flow | `--resume <id>` | Reuses the existing session ID |
-| Continue latest | resume flow | `--continue` | Reuses the latest session for the current cwd |
-| Fork | `/fork [--worktree\|--no-worktree] [directive]` | `--resume <id> --fork-session` or `--continue --fork-session` | Creates a new ID and records `parent_session_id` |
-| Rewind | `/rewind` | no dedicated headless flag | Retains the ID, truncates the active conversational branch, and restores tracked files |
-| Compact | `/compact` or automatic threshold | automatic during a headless run | Retains the ID |
+| New | launch, or `/new` (`/clear` alias) | default `grok -p`, or `--session-id <uuid>` | New ID |
+| Resume | `/resume` | `--resume <id-or-title>`; bare `--resume` picks the most recent | Same ID |
+| Continue latest | resume flow | `--continue` | Same ID, most recent session for the cwd |
+| Fork | `/fork` | `--resume <id> --fork-session`, `--continue --fork-session` | New ID; `summary.json` records `parent_session_id` |
+| Rewind | `/rewind` (`/undo` alias) | none | Same ID; truncates conversation history and leaves files on disk as they are |
+| Compact | `/compact`, or the automatic threshold | automatic | Same ID |
+
+`--resume` matches a non-UUID value against session titles for the current directory, ignoring case; a UUID-shaped value always means an ID. Among duplicate titles a sole manually renamed match wins, and otherwise the resume fails as ambiguous (`grok --help`).
 
 The session directory is:
 
@@ -85,44 +103,49 @@ The session directory is:
 ${GROK_HOME:-~/.grok}/sessions/<URL-encoded-cwd>/<session-id>/
 ```
 
-`summary.json` makes the directory resumable. Important files include:
+When the encoded cwd exceeds 255 bytes, Grok names the group with a slug plus a hash and records the original path in a `.cwd` file inside it (user guide: sessions, "Storage Layout"). A subagent's child session gets its own directory in the same tree; only its metadata nests under the parent (`subagents/<id>/meta.json`).
 
 | File | Role |
 | --- | --- |
-| `summary.json` | Session identity, cwd, model, effort, title, timestamps, fork metadata, and agent name |
-| `updates.jsonl` | Durable ACP and xAI update stream; this is the path exported as `transcriptPath` |
-| `chat_history.jsonl` | Raw model-facing conversation history |
-| `signals.json` | Completed-turn session counters and context snapshot |
-| `plan.json` / `plan_mode.json` | Plan content and plan-mode lifecycle state |
-| `rewind_points.jsonl` | Rewind/checkpoint metadata |
-| `subagents/` | Child-session material |
+| `summary.json` (+ `summary.json.lock`) | Index entry: identity, cwd, model, effort, title, timestamps, fork lineage ([below](#summaryjson)) |
+| `updates.jsonl` | Authoritative ACP and xAI update stream that drives resume; the path hooks export as `transcriptPath` ([below](#updatesjsonl)) |
+| `chat_history.jsonl` | Raw model-facing conversation |
+| `events.jsonl` | Append-only session event log ([below](#eventsjsonl)) |
+| `signals.json` | Session counters and context snapshot ([below](#signalsjson)) |
+| `usage.json` | Persisted session and per-turn usage ([below](#usagejson-and-grok-usage)) |
+| `plan.json`, `plan_mode.json` | TODO list and plan-mode state |
+| `rewind_points.jsonl` | Rewind points |
+| `feedback.jsonl`, `btw_history.jsonl` | Ratings, and `/btw` side questions |
+| `system_prompt.txt`, `prompt_context.json`, `prompts/` | Rendered system prompt and its inputs |
+| `compaction_checkpoints/`, `goal/`, `workflows/` | Compaction, goal-loop, and workflow state |
+| `subagents/<id>/meta.json` | Child-session metadata |
 
 ## Native file hooks
 
-A native hook is a command or HTTPS endpoint Grok invokes at a lifecycle point. Command hooks receive one JSON object on stdin. Only `PreToolUse` consumes a blocking decision from stdout; passive-event stdout is ignored.
+A native hook is a command or HTTPS endpoint Grok calls at a lifecycle point with one JSON event. Four events read the hook's output: `PreToolUse` can deny or rewrite a tool call, `UserPromptSubmit` can block a prompt, `Stop` and `SubagentStop` can keep the agent working, and `PostToolUse` can send the model feedback or replace the tool output it sees. Every other event is passive and its stdout is ignored.
 
-### Discovery, order, and trust
+### Discovery and trust
 
-Grok merges all enabled sources rather than selecting one file:
+Grok merges every enabled source; none replaces another (`xai-grok-shell/src/util/hooks.rs`, `xai-grok-config/src/loader.rs` `hook_config_layers_at`):
 
-| Scope | Sources |
-| --- | --- |
-| Global | `~/.grok/hooks/*.json`, configured Claude-compatible global settings including `~/.claude/settings.json`, `~/.cursor/hooks.json`, and plugin hooks |
-| Project | `<workspace>/.grok/hooks/*.json`, project Claude-compatible settings, `<workspace>/.cursor/hooks.json`, and project plugin hooks |
+| Order | Source | Trust |
+| --- | --- | --- |
+| 1 | TOML config layers, highest authority first: `/etc/grok/requirements.toml`, `$GROK_HOME/requirements.toml`, `$GROK_HOME/config.toml`, `$GROK_HOME/managed_config.toml`, `/etc/grok/managed_config.toml` | Always |
+| 2 | `$GROK_HOME/hooks/*.json`, plus absolute paths listed in `$GROK_HOME/hooks-paths` | Always |
+| 3 | `~/.claude/settings.json` and `settings.local.json` (Claude compat) | Always |
+| 4 | `~/.cursor/hooks.json` (Cursor compat) | Always |
+| 5 | Project `.claude/settings.json` and `settings.local.json`, `<git-root>/.grok/hooks/*.json`, `.cursor/hooks.json` | Requires folder trust |
+| 6 | Plugin hooks, then agent-definition inline hooks, appended after deduplication | Per plugin |
 
-Global hooks run before project hooks. Directory entries are sorted lexicographically, earlier configured sources run first within a scope, and handlers run sequentially in registry order. The first explicit deny ends a blocking chain.
+`$GROK_HOME` defaults to `~/.grok`. `[compat.<vendor>] hooks = false` in `config.toml` turns off a compatibility source. Deduplication keys on `(event, command_raw, url_raw, matcher)` with the canonical event name, so alias spellings collapse; the first copy wins unless a later copy comes from a higher-authority config layer (`discovery.rs` `registry_from_specs_deduped`). The registry is a snapshot: a new session sees disk edits, and the TUI's Hooks tab reload (`r`) refreshes the running session.
 
-Grok deduplicates an identical `(event, command_raw, url_raw, matcher)` across sources and keeps the first occurrence, so a global definition wins over its project duplicate. The registry is a point-in-time snapshot; a new session sees disk edits, and the TUI's explicit reload refreshes the active session.
+Project hooks run only in a trusted folder. Trust lives in `~/.grok/trusted_folders.toml`, is granted with `/hooks-trust` or `--trust`, and covers the folder's MCP and LSP servers, hooks, project instructions, project skills, and project permission rules together, including subdirectories of the same repository; a nested git checkout is a separate workspace. `GROK_FOLDER_TRUST=0` or `[folder_trust] enabled = false` ungates all of them (user guide: hooks, "Hook Locations"; permissions).
 
-Project hook, MCP, and LSP execution is gated by folder trust stored in `~/.grok/trusted_folders.toml` and managed through `/hooks-trust` or `--trust`. Global hooks are trusted. Install a RimZ hook in the native, bounded `~/.grok/hooks/rimz.json` source rather than depending on a project grant.
-
-Grok scans Claude and Cursor hook files for compatibility. A RimZ adapter must distinguish its Grok envelope from any Claude or Cursor hook payload that reaches the same helper; shared filenames alone do not identify the provider.
-
-The trust hash covers every executable source Grok can load: native and compatibility hook commands/URLs, plugin hooks, MCP/LSP commands, permission configuration, and any other command-producing Grok config.
+Claude and Cursor hook files load unchanged. Cursor's camelCase events map onto Grok's (`beforeShellExecution`, `beforeMCPExecution`, and `beforeReadFile` to `PreToolUse`; `afterShellExecution`, `afterMCPExecution`, `afterFileEdit`, `afterAgentResponse`, and `afterAgentThought` to `PostToolUse`; `beforeSubmitPrompt` to `UserPromptSubmit`). A helper registered in several of these files receives Grok's envelope from each of them; the file it was registered in does not identify the caller.
 
 ### Configuration shape
 
-Each native JSON file carries a `hooks` object. An event maps to ordered matcher groups, and each group contains ordered handlers:
+A JSON hook file carries a `hooks` object. Each event maps to ordered matcher groups, and each group holds ordered handlers:
 
 ```json
 {
@@ -131,12 +154,7 @@ Each native JSON file carries a `hooks` object. An event maps to ordered matcher
       {
         "matcher": "Bash",
         "hooks": [
-          {
-            "type": "command",
-            "command": "bin/safety-check.sh",
-            "timeout": 10,
-            "env": { "POLICY": "strict" }
-          }
+          { "type": "command", "command": "bin/safety-check.sh", "timeout": 10, "env": { "POLICY": "strict" } }
         ]
       }
     ]
@@ -144,13 +162,37 @@ Each native JSON file carries a `hooks` object. An event maps to ordered matcher
 }
 ```
 
-`type` is `command` or `http`; HTTP handlers use `url` instead of `command`. `timeout` is seconds and defaults to 5. Relative command paths resolve from the hook source directory, while commands execute with the workspace root as cwd.
+The TOML layers use the same structure as `[[hooks.<Event>]]` tables with an inner `hooks` array.
 
-Matchers are regular expressions over the resolved tool name for `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, and `PermissionDenied`, and over `notificationType` for `Notification`. `SessionStart`, `SessionEnd`, `Stop`, and `UserPromptSubmit` reject matchers; other lifecycle events ignore them. MCP meta-dispatch resolves to `server__tool`, so match the qualified name.
+| Handler field | Meaning |
+| --- | --- |
+| `type` | `command` or `http` |
+| `command` | Executable path relative to the hook file, or an inline shell command |
+| `url` | HTTPS endpoint for `http` handlers |
+| `timeout` | Seconds; the default depends on the event ([Timeouts](#decisions-exit-codes-and-timeouts)) |
+| `env` | Extra environment for the handler; cannot override reserved variables |
 
-Claude-style aliases remain active alongside the original expression:
+Unrecognized event names are skipped, so a shared Claude or Cursor settings file still loads. `SubagentEnd` is accepted as an alias for `SubagentStop`.
 
-| Alias | Native tool |
+### Matchers and tool names
+
+A matcher is a regular expression over one field that depends on the event; an empty or omitted matcher matches everything (user guide: hooks, "Key Fields").
+
+| Event | Matcher tests |
+| --- | --- |
+| `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied` | Tool name |
+| `Notification` | `notificationType` |
+| `SubagentStart`, `SubagentStop` | Subagent type |
+| `SessionStart` | `source` |
+| `SessionEnd` | `reason` |
+| `PreCompact`, `PostCompact` | Trigger (`manual` or `auto`) |
+| `StopFailure` | `error` class |
+| `StopCancelled` | `reason` |
+| `Stop`, `UserPromptSubmit` | Nothing: a matcher is ignored with the warning `matcher on a {event} group is ignored (this event always fires)` |
+
+MCP calls dispatched through `use_tool` appear as the qualified `server__tool` name. Claude-style names in a matcher also match their Grok tools, and the original spelling stays active (`xai-grok-tools/src/types/claude_alias.rs`):
+
+| Alias | Grok tool |
 | --- | --- |
 | `Bash` | `run_terminal_command` |
 | `Read` | `read_file`, `hashline_read` |
@@ -161,191 +203,250 @@ Claude-style aliases remain active alongside the original expression:
 | `WebSearch` | `web_search` |
 | `Task` | `spawn_subagent` |
 
-The pinned tree's compatibility table maps `Bash` to `run_terminal_command`, while its standard Grok Build tool bundle exposes `run_terminal_cmd`. Hook dispatch sends the actual wire tool name. Match `Bash|run_terminal_cmd` when a hook must cover both profiles; do not assume the compatibility alias covers an unlisted native spelling.
+The user guide's shorter alias list (`Read` to `read_file`; `Edit`, `Write`, and `MultiEdit` to `search_replace`) omits the hashline tools and `write`; the source table above is what dispatch uses. Hook payloads carry the tool's actual wire name.
 
 ### Common input envelope
 
-All event names serialize in snake_case inside a camelCase envelope. Hook configuration keys use PascalCase, so one integration crosses three distinct naming conventions:
+Every event carries one camelCase envelope plus event-specific fields (`xai-grok-hooks/src/event.rs` `HookEventEnvelope`):
 
 ```json
 {
   "hookEventName": "pre_tool_use",
+  "hook_event_name": "PreToolUse",
   "sessionId": "019e0000-0000-7000-8000-000000000001",
   "cwd": "/workspace/project",
   "workspaceRoot": "/workspace/project",
-  "timestamp": "2026-07-16T12:00:00Z",
-  "transcriptPath": "/home/user/.grok/sessions/%2Fworkspace%2Fproject/019e.../updates.jsonl",
-  "clientIdentifier": "optional client label",
-  "promptId": "optional current prompt id",
+  "timestamp": "2026-09-13T12:00:00Z",
+  "transcriptPath": "/home/user/.grok/sessions/%2Fworkspace%2Fproject/019e0000-0000-7000-8000-000000000001/updates.jsonl",
+  "promptId": "prompt-1",
+  "permissionMode": "default",
   "toolName": "run_terminal_command",
   "toolUseId": "call-1",
   "toolInput": { "command": "cargo check" },
-  "toolInputTruncated": false,
-  "permissionMode": "default"
+  "toolInputTruncated": false
 }
 ```
 
-`transcriptPath`, `clientIdentifier`, and `promptId` are omitted when unavailable. The stock shell currently leaves `clientIdentifier` absent. Session hooks and compaction/subagent lifecycle can lack `promptId`; turn and tool hooks carry the active prompt ID. Current `permissionMode` labels are `plan`, `bypassPermissions`, `auto`, and `default`.
+| Field | Presence | Meaning |
+| --- | --- | --- |
+| `hookEventName` | always | Event name in snake_case (`pre_tool_use`, `stop_cancelled`) |
+| `sessionId` | always | Session UUID of the session that fired the event |
+| `cwd`, `workspaceRoot` | always | Working directory and workspace root |
+| `timestamp` | always | RFC 3339 text, stamped at dispatch rather than when the turn ended |
+| `transcriptPath` | optional | The session's `updates.jsonl`, present once that file exists |
+| `promptId` | optional | The turn the event belongs to; absent for session-scoped events such as `SessionStart`, the `idle_prompt` notification, and the session-end `Stop` |
+| `permissionMode` | optional | `default`, `auto`, `plan`, or `bypassPermissions`; the CLI's `acceptEdits` and `dontAsk` have no envelope label |
+| `clientIdentifier` | optional | Defined in the envelope; the stock shell leaves it unset |
 
-`transcriptPath` points to `updates.jsonl` only after that file exists. Treat it as an optional discovery hint and derive the same directory from `sessionId` plus cwd when necessary.
+Grok also adds snake_case aliases for Claude compatibility; the camelCase keys are authoritative: `hook_event_name` (PascalCase value such as `"Stop"`), `session_id`, `transcript_path`, `permission_mode`, `tool_name`, `tool_input`, `tool_use_id`, `tool_response` (a copy of `toolResult`), `duration_ms`, and `is_interrupt` (`acp_session/hooks.rs` `make_hook_envelope`). Hook configuration keys are PascalCase, so one integration meets three conventions.
 
-`toolInput` and `toolResult` are each capped at 128 KiB of serialized JSON. An oversized value becomes a truncated string and its paired `*Truncated` field is true.
+`toolInput` and `toolResult` are each capped at 128 KiB of serialized JSON; an oversized value arrives as a truncated string with its `*Truncated` flag true. Free-text fields are clipped in place with a `… [+N chars]` marker: `lastAssistantMessage` at 32,768 characters, `errorDetails` and `reasonDetails` at 1,000.
 
-The hook envelope's `timestamp` is RFC3339 text. Persisted `updates.jsonl` envelopes use numeric Unix seconds, while nested metadata clocks such as `agentTimestampMs` use Unix milliseconds; parse these as distinct wire types.
-
-### Event catalog and payloads
+### Event catalog
 
 | Event | Fires | Event-specific fields |
 | --- | --- | --- |
-| `SessionStart` | a new or resumed session starts | `source`, optional `modelId`, optional `agentType` |
-| `UserPromptSubmit` | the user prompt enters the turn | optional `prompt` |
-| `PreToolUse` | before tool execution; the only blocking hook | `toolName`, `toolUseId`, `toolInput`, `toolInputTruncated`, optional `permissionMode`, optional `subagentType` |
-| `PostToolUse` | after successful tool execution | pre-tool fields plus `toolResult`, `toolResultTruncated`, optional `durationMs`, `isBackgrounded` |
-| `PostToolUseFailure` | after tool execution errors | tool fields plus `error` |
-| `PermissionDenied` | the permission system has denied a tool | tool name, ID, input, and truncation flag |
-| `Notification` | a user-attention or agent-error notification is raised | `notificationType`, optional `message`, `title`, `level` |
-| `StopFailure` | a turn ends with an API/runtime error | `error` |
-| `Stop` | any turn finishes | `reason` |
-| `SubagentStart` | a child begins | `subagentId`, `subagentType`, optional `description` |
-| `SubagentStop` | a child finishes | start fields plus optional `exitCode`, `durationMs`; `SubagentEnd` is a configuration alias |
-| `PreCompact` | context compaction begins | `source` (`manual` or `auto`) |
-| `PostCompact` | context compaction succeeds | `source` (`manual` or `auto`) |
-| `SessionEnd` | the session actor terminates | `reason`, optional `turnCount`, optional `toolCallCount` |
+| `SessionStart` | A root session starts; never for a subagent's own session | `source`: `new` for an empty history, `load` otherwise |
+| `UserPromptSubmit` | A prompt enters the turn | `prompt`, `subagentType` inside a child |
+| `PreToolUse` | Before a tool runs | `toolName`, `toolUseId`, `toolInput`, `toolInputTruncated`, `subagentType` inside a child |
+| `PostToolUse` | A tool ran, including a built-in logical error such as a non-zero shell exit | pre-tool fields plus `toolResult`, `toolResultTruncated`, `durationMs`, `isBackgrounded` |
+| `PostToolUseFailure` | A tool failed to dispatch, or an MCP tool returned an error result | tool fields plus `error`, `durationMs`, `isInterrupt` |
+| `PermissionDenied` | The permission system denied a tool call | tool name, ID, input, truncation flag |
+| `Notification` | A user-attention or agent-error notification | `notificationType`, `message`, `level`; `title` is defined and left unset ([Notifications](#notifications)) |
+| `Stop` | A turn completed, or the session is tearing down | `reason`, `stopHookActive`, `lastAssistantMessage`, `backgroundTasks`, `sessionCrons` |
+| `StopFailure` | A turn ended on an API error; replaces `Stop` | `error`, `errorDetails`, `lastAssistantMessage`, `subagentType` |
+| `StopCancelled` | A turn ended without completing; replaces `Stop` | `reason`, `cancelledBy`, `cancelTrigger`, `reasonDetails`, `lastAssistantMessage`, `subagentType` |
+| `SubagentStart` | The parent spawns a child | `subagentId`, `subagentType`, `description` |
+| `SubagentStop` | A child's turn ends, inside the child | `phase` (`"gate"`), `subagentId`, `subagentType`, `stopHookActive`, `lastAssistantMessage` |
+| `PreCompact`, `PostCompact` | Compaction begins, or succeeds | `source`: `manual` or `auto` |
+| `SessionEnd` | The session actor terminates | `reason`: `channel_closed` or `shutdown`; `turnCount`, `toolCallCount`; `subagentType` for a child session |
 
-The current `SessionStart` fire site sends `source = "new"` for an empty history and `source = "load"` otherwise, with no `modelId` or `agentType`; read `summary.json.current_model_id` and `summary.json.agent_name` instead. Current normal turn-end reasons are `end_turn`, `cancelled`, and `error`. `MaxTurnsReached` folds into `cancelled`.
+The user guide lists `startup` and `resume` as example `SessionStart` matcher values, but the fire site sends only `new` and `load` (`acp_session_impl/agent_ops.rs`, `run_loop.rs`). `load` covers both resume and fork. `SessionStart` carries no `modelId` or `agentType`; `summary.json` holds the model and agent name.
 
-On actor shutdown Grok emits `SessionEnd(reason = "channel_closed" | "shutdown")` and then a same-reason `Stop`. Once `SessionEnd` tombstones the session, ignore that trailing turn marker for lifecycle state.
+### Turn-end reports
 
-`StopFailure` fires before `Stop(reason = "error")` and carries the error text. Preserve it as turn context, then close the turn on `Stop`.
+A turn that runs the model reports at most one of three events: `Stop` with `reason: "end_turn"` for a completion, `StopFailure` for an API error, or `StopCancelled` for any other non-completion (`turn_end_hooks.rs`, `turn_end.rs`). No `Stop` with `reason` `cancelled` or `error` is sent.
 
-### RimZ lifecycle mapping
-
-| Grok evidence | RimZ lifecycle evidence |
+| `StopFailure.error` | Cause |
 | --- | --- |
-| `SessionStart` | `Registered` with strong `sessionId` identity |
-| `UserPromptSubmit` | `TurnStarted` |
-| `PostToolUse` | `ToolUsed`; mark `edited = true` for typed edit tools, including `search_replace` and `apply_patch` |
-| `Notification(permission_prompt, "Tool permission requested")` | `AwaitingInput(Permission)` |
-| `Notification(permission_prompt, "Plan approval requested")` | `AwaitingInput(PlanApproval)` |
-| `Notification(elicitation_dialog, "User question requested")` | `AwaitingInput(Question)` |
-| `Notification(permission_prompt, "Diff review requested")` | `AwaitingInput(Permission)` |
-| `Notification(agent_error, …)` | error context; wait for `Stop` to close the turn |
-| `Stop(reason = "end_turn")` | clean `TurnEnded` |
-| `Stop(reason = "cancelled")` | `TurnInterrupted` |
-| `StopFailure` then `Stop(reason = "error")` | errored `TurnEnded` with the failure detail |
-| `PreCompact` / `PostCompact` | `Compacting` / `CompactionEnded` with `auto` derived from `source` |
-| `SubagentStart` / `SubagentStop` | `SubagentStarted` / `SubagentStopped` |
-| `SessionEnd` | `Ended` |
+| `rate_limit` | HTTP 429, and capacity errors 503 and 529 |
+| `authentication_failed` | HTTP 401 |
+| `invalid_request` | Other 4xx |
+| `server_error` | Other 5xx |
+| `max_output_tokens` | Output limit reached |
+| `unknown` | Anything the runtime cannot classify |
 
-`PermissionDenied` reports a completed denial and does not prove a pending prompt. The `Notification` event is the attention signal.
+| `StopCancelled.reason` | `cancelledBy` | Cause |
+| --- | --- | --- |
+| `user_interrupt` | `user` | Ctrl+C, a client stop button, or ACP `session/cancel` |
+| `permission_rejected` | `user` | The user declined a tool call |
+| `permission_cancelled` | `user` | The user dismissed the permission prompt |
+| `max_turns` | `runtime` | `--max-turns` reached |
+| `no_progress` | `runtime` | The agent bailed out after repeated no-op rounds |
+| `unknown` | `unknown` | Unclassified; treat any unrecognized value the same way |
 
-The subagent lifecycle envelope is emitted by the parent session actor: use `subagentId` as the child `agent_id` and the envelope's `sessionId` as `parent_agent_id`. Tool hooks running inside a child use the child's session ID and may carry `subagentType`. `SubagentStop.exitCode` is 0 for `completed`, 1 for `failed`, -1 for `cancelled`, and absent for an unknown status.
+`cancelTrigger` names the client gesture when one was given (the bundled pager sends `ctrl_c`, `mouse`, or `dashboard_stop`), clipped at 64 characters. For a declined tool call `reasonDetails` is `<tool>: <why>`.
 
-### Decisions and exit codes
+The reports have ordering and coverage limits a consumer must handle (user guide: hooks, "Stop Decision Control"):
 
-For `PreToolUse`, stdout accepts:
+- A cancelled turn's report is dispatched off the session command loop, so it can arrive after the next turn's `UserPromptSubmit`; correlate by `promptId`, not by arrival order or `timestamp`.
+- When a `Stop` gate blocks, `Stop` fires again for each continuation round with `stopHookActive: true`; a passive observer cannot tell a continuation fire from the final one. After 8 continuations Grok ends the turn without consulting hooks.
+- An interrupt while a `Stop` hook runs kills it, and the turn then reports `StopCancelled`, so one turn can show a `Stop` followed by `StopCancelled`.
+- Some turns report none of the three: bash-mode (`!`) and builtin slash commands that complete; cancel-and-send, rewind, or a queued prompt removed before it ran; a turn superseded while its report was being built; a turn whose stop hooks were all disabled, untrusted, or failed; and reports still queued at teardown.
+- An interrupted bash-mode command reports `StopCancelled(user_interrupt)` with no preceding `UserPromptSubmit`.
+- Inside a child session, `user_interrupt` does not fire `StopCancelled`; the child's own `max_turns`, `no_progress`, or declined permission does.
 
-```json
-{ "decision": "allow" }
-```
+The `idle_prompt` notification is the backstop for these gaps: it fires 60 seconds after a turn ends (any outcome), needs one completed turn, and a new turn cancels it.
 
-or:
+Session teardown runs in a fixed order (`run_loop.rs` `fire_session_end_hooks`, `stop_gate.rs`): `SessionEnd` dispatches first, then a `Stop` with the same `reason` (`channel_closed` or `shutdown`) and `stopHookActive: false` runs within a 5-second budget with any block ignored. The trailing `Stop` is skipped for subagent sessions. Teardown gives queued turn-end reports half a second, and each `SessionEnd` hook is bounded by `GROK_SESSION_END_HOOKS_TIMEOUT_MS` (default 1,500, maximum 60,000).
 
-```json
-{ "decision": "deny", "reason": "Unsafe command detected" }
-```
+`Stop.backgroundTasks` entries carry `id`, `type` (`shell`, `monitor`, or `subagent`), `status`, and `command`, `description`, or `agentType` by type; `sessionCrons` entries carry `id`, `schedule` (a human-readable interval), `recurring`, and `prompt`. Both arrays are empty when nothing is in flight.
 
-| Exit | Blocking result |
+### Subagent events
+
+`SubagentStart` and `SubagentStop` fire from different sessions (`acp_session_impl/updates.rs`, `stop_gate.rs` `build_stop_payload`):
+
+| Event | Fired by | Envelope `sessionId` | `subagentId` |
+| --- | --- | --- | --- |
+| `SubagentStart` | Parent session | Parent's | The child |
+| `SubagentStop` | Child session, as its stop gate | Child's | The child's own ID |
+
+The parent fires no hook when a child finishes, and `SubagentStop` carries no exit code or duration. A child session fires its own `UserPromptSubmit`, tool, `StopFailure`, `StopCancelled`, and `SessionEnd` events, each with `subagentType` set; the same events omit `subagentType` in a root session. An agent definition's `Stop` hooks are remapped to `SubagentStop`.
+
+### Notifications
+
+`Notification` carries `notificationType`, `message`, and `level` (`hook_dispatch.rs` `notification_hook_for_update`, `extensions/idle_prompt.rs`, `tools/notification_bridge.rs`). The `message` strings below are the literals at the source commit; the user guide calls them display text that can change between releases.
+
+| `notificationType` | `message` | Fires |
+| --- | --- | --- |
+| `permission_prompt` | `Tool permission requested` | A tool permission prompt is about to be shown to the user |
+| `permission_prompt` | `Plan approval requested` | Plan approval is requested |
+| `permission_prompt` | `Diff review requested` | Diff review is requested |
+| `elicitation_dialog` | `User question requested` | The agent asks the user a question |
+| `agent_error` | the error text (`level: "error"`) | An agent error is raised |
+| `idle_prompt` | `Waiting for your next prompt` | 60 s after a turn ends; `GROK_IDLE_NOTIFICATION_DELAY_MS` overrides the delay |
+| `task_complete` | `Background task completed: {task_id}` | A background task finishes |
+
+`Tool permission requested` fires only when a real prompt will be shown (`xai-grok-workspace/src/permission/manager/mod.rs`); a call that always-approve, auto mode, or a saved grant approves raises none. `PermissionDenied` reports a completed denial and does not indicate a pending prompt.
+
+### Decisions, exit codes, and timeouts
+
+The events that read output accept these stdout JSON shapes (`xai-grok-hooks/src/runner/mod.rs`; user guide: hooks):
+
+| Event | Output |
 | --- | --- |
-| `0` | Parse JSON when present; empty output allows |
-| `2` | Deny fallback |
-| other | Record a hook failure and allow |
+| `PreToolUse` | `{"decision": "allow" \| "deny" \| "ask" \| "defer", "reason": "…"}`, or `hookSpecificOutput.permissionDecision` with `permissionDecisionReason`, which wins when present; legacy `approve` and `block` are accepted. `hookSpecificOutput.updatedInput` rewrites the tool input; `hookSpecificOutput.additionalContext` adds a note for the model |
+| `UserPromptSubmit` | `{"decision": "block", "reason": "…"}` rejects the prompt |
+| `Stop`, `SubagentStop` | `{"decision": "block", "reason": "…"}` or `hookSpecificOutput.additionalContext` keeps the agent working; `{"continue": false, "stopReason": "…"}` forces the stop |
+| `PostToolUse` | `{"decision": "block", "reason": "…"}` and `hookSpecificOutput.additionalContext` reach the model beside the result; `hookSpecificOutput.updatedToolOutput` (or MCP-only `updatedMCPToolOutput`) replaces the model's copy of the result |
 
-A JSON decision overrides the process exit code. Timeouts, crashes, malformed output, and missing variables fail open. Passive hook stdout and exit-code decisions are observational only.
+An unknown `PreToolUse` decision token is a hook failure. `allow` means only "not blocked" and does not skip a permission prompt; `ask` forces the prompt; `defer` leaves the call to the normal permission flow.
 
-Command hooks receive these reserved variables: `GROK_HOOK_EVENT`, `GROK_HOOK_NAME`, `GROK_SESSION_ID`, `GROK_WORKSPACE_ROOT`, and the compatibility alias `CLAUDE_PROJECT_DIR`. Plugin hooks also receive `GROK_PLUGIN_ROOT` and `GROK_PLUGIN_DATA` plus compatibility aliases. Handler `env` values cannot override reserved variables.
+| Exit | Result |
+| --- | --- |
+| `0` | Parse stdout JSON when present; no output allows |
+| `2` | `PreToolUse`: deny, with the first stderr line as the reason when JSON gives none. `UserPromptSubmit`: block, with stderr as the message. `Stop`, `SubagentStop`: block, with the full stderr as feedback. `PostToolUse`: feed stderr to the model |
+| other | Record a failure and fail open; a `PreToolUse` `deny` in stdout JSON still applies, and a valid `Stop` decision JSON wins over the exit code |
 
-The pinned hook parser pre-expands plain `$VAR` and `${VAR}` references in command and URL fields from the handler `env` map and Grok's process environment while preserving unresolved references and shell modifier forms. Command strings that retain shell syntax run through a shell, but the runner first rejects unresolved plain references that are absent from its reserved variables, handler environment, process environment, and recognized local assignments. The hook fails before spawn with a message naming the required variables. HTTP hooks expand again before URL validation so plugin-injected variables can resolve; a still-unresolved reference fails URL validation. The command runner bounds captured stdout and stderr to 64 KiB each. Hook stdout remains the decision channel; diagnostics belong on stderr.
+Timeouts, crashes, malformed output, and unset required variables fail open. A hook that exits non-zero keeps its deny or block but loses `updatedInput`, `additionalContext`, and output replacements.
 
-HTTP hooks POST the same envelope as JSON. They require HTTPS, resolve and reject private, link-local, and cloud-metadata addresses, and permit loopback addresses. A 2xx empty response allows; valid JSON `allow` or `deny` decides regardless of status. Invalid JSON on 2xx and transport failures fail open, while an empty or malformed non-2xx response records a failure and also fails open at dispatch.
+| Events | Default `timeout` |
+| --- | --- |
+| `Stop`, `SubagentStop`, `PostToolUse` | 600 s |
+| `UserPromptSubmit` | 30 s |
+| All others, including `PreToolUse` | 5 s |
 
-## Durable session sidecars
+The defaults live in `xai-grok-hooks/src/config.rs`; a handler's `timeout` overrides them, and `SessionEnd` hooks are further bounded by `GROK_SESSION_END_HOOKS_TIMEOUT_MS`.
 
-Sidecars enrich lifecycle after the hook establishes `sessionId`. Read them best-effort and keep hooks plus process liveness authoritative for live status.
+### Command runner and environment
 
-### Locally observed Grok 0.2.103 compatibility
+A command containing a space, any of `|&;><$`, or a leading `~` runs through `sh -c`; other commands execute directly. The hook runs with the workspace root as its cwd, in its own process group, and captured stdout and stderr are each capped at 1 MiB with a ` [truncated]` suffix (`runner/command.rs`).
 
-Local verification against Grok 0.2.103 found the command preflight rejecting RimZ's former `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source grok` handler with `required env var(s) not set: ${PPID}`. `PPID` is a shell parameter rather than an exported process environment variable, so the preflight rejects the handler before a shell can supply it. RimZ therefore installs the variable-free `rimz hooks feed --source grok` command and recovers process ownership from the helper's bounded ancestor walk.
+| Variable | Set for |
+| --- | --- |
+| `GROK_HOOK_EVENT` | Every hook: the snake_case event name |
+| `GROK_HOOK_NAME` | Every hook: the configured hook name, plugin-prefixed for plugin hooks |
+| `GROK_SESSION_ID` | Every hook |
+| `GROK_WORKSPACE_ROOT` | Every hook |
+| `CLAUDE_PROJECT_DIR` | Every hook: alias for `GROK_WORKSPACE_ROOT` |
+| `GROK_PLUGIN_ROOT`, `GROK_PLUGIN_DATA` (plus Claude aliases) | Plugin hooks |
 
-The same version locally persisted permission brackets in a new `events.jsonl` sibling without a corresponding `Notification` hook execution. The observed records have these exact shapes:
+These names are reserved: an `env` entry for one is stripped at load with a warning.
 
-```json
-{"ts":"2026-07-18T04:21:38.748Z","type":"permission_requested","tool_name":"run_terminal_command"}
-{"ts":"2026-07-18T04:21:40.816Z","type":"permission_resolved","tool_name":"run_terminal_command","decision":"allow","wait_ms":2067}
-```
+`command` and `url` fields expand `$VAR` and `${VAR}`. Before spawning a shell command, the runner rejects any plain reference it cannot resolve from the reserved variables, the handler `env`, Grok's process environment, or a variable assigned or `read` inside the command itself. The hook then fails before spawn with `hook not executed: required env var(s) not set: {list}` (`runner/command.rs` `find_unresolved_env_vars`). References with a shell modifier such as `${VAR:-default}` are exempt. Shell parameters that are not exported variables, such as `$PPID`, are therefore rejected.
 
-This is a version-scoped local observation, not a claim about the pinned source revision. Request IDs are not established, and the shapes or semantics of question, plan, and phase records are not established. Treat this file only as optional status enrichment after `updates.jsonl` validates; keep `Notification` authoritative for lifecycle and open asks.
+### HTTP hooks
+
+An `http` handler POSTs the same envelope as JSON and reads a decision from the JSON response body. The URL must be HTTPS. The runner rejects private, link-local, and cloud-metadata addresses, including targets reached through a redirect, and permits loopback (`runner/http.rs`). Transport failures and invalid responses fail open.
+
+## Session files
+
+The files below are durable per-session state. `summary.json`, `signals.json`, and `usage.json` are replaced whole; `updates.jsonl` and `events.jsonl` are append-only, and a crash can leave a torn final line.
 
 ### `summary.json`
 
-`summary.json` is rewritten with a temp file plus rename under a stable sidecar lock. Parse the structured object and tolerate added fields.
+`summary.json` is the snake_case `Summary` struct (`persistence.rs`). A writer takes an fs2 lock on `summary.json.lock`, applies a read-modify-write, and publishes atomically with temp file, fsync, rename, and directory fsync (`summary_write.rs` `apply_patch_locked`).
 
-| Field | Use |
+| Field | Meaning |
 | --- | --- |
-| `info.id`, `info.cwd` | Session identity and original workspace cwd |
-| `current_model_id` | Live persisted model, including mid-session model switches |
-| `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, or `xhigh` when set |
-| `agent_name` | Active named agent/profile |
-| `created_at`, `updated_at`, `last_active_at` | Creation, metadata update, and content activity clocks |
-| `generated_title`, `title_is_manual`, `session_summary` | Display title metadata |
-| `parent_session_id`, `forked_at`, `session_kind` | Fork and child lineage |
-| `sandbox_profile` | Effective persisted sandbox profile |
-| `num_messages`, `num_chat_messages` | Persisted message counts |
-
-Use `current_model_id` rather than the optional hook `modelId`. Use the model catalog or configured model metadata to obtain the context-window denominator.
+| `info.id`, `info.cwd` | Session ID and working directory |
+| `current_model_id` | Current model, including mid-session switches |
+| `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`, when set |
+| `agent_name` | Agent definition active at the last save |
+| `created_at`, `updated_at`, `last_active_at` | Creation, metadata-update, and activity clocks |
+| `generated_title`, `title_is_manual`, `session_summary` | Title and summary; a manual `/rename` sets `title_is_manual` |
+| `last_turn_summary`, `last_recap` | Short summary of the latest turn, and a bounded recap preview |
+| `parent_session_id` | Source session of a fork or restore |
+| `sandbox_profile` | Effective sandbox profile |
+| `num_messages`, `num_chat_messages` | Update and chat-message counts |
 
 ### `updates.jsonl`
 
-Each line is a durable update envelope:
+Each line is one `SessionUpdateEnvelope` (`session/storage/mod.rs`):
 
 ```json
 {
-  "timestamp": 1784203200,
+  "timestamp": 1789300000,
   "method": "session/update",
   "params": {
-    "sessionId": "019e...",
+    "sessionId": "019e0000-0000-7000-8000-000000000001",
     "update": {
       "sessionUpdate": "agent_message_chunk",
       "content": { "type": "text", "text": "Done" }
     },
     "_meta": {
       "totalTokens": 42000,
-      "eventId": "019e...-42",
-      "agentTimestampMs": 1784203200123,
+      "eventId": "019e0000-0000-7000-8000-000000000001-42",
+      "agentTimestampMs": 1789300000123,
       "promptId": "prompt-1",
-      "streamStartMs": 1784203199000,
-      "turnStartMs": 1784203198500
+      "streamStartMs": 1789299999000,
+      "turnStartMs": 1789299998500
     }
   }
 }
 ```
 
-`method` is `session/update` for standard ACP updates and `_x.ai/session/update` for Grok extensions. Standard update variants include `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, and `plan`; the extension catalog is open-ended.
+| Field | Meaning |
+| --- | --- |
+| `timestamp` | Unix seconds (integer); nested `*Ms` clocks are Unix milliseconds |
+| `method` | `session/update` for standard ACP updates; `_x.ai/session/update` for Grok extensions |
+| `params.update.sessionUpdate` | Update variant: `user_message_chunk`, `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `plan`, and an open-ended extension set |
+| `_meta.totalTokens` | Estimated active-context size at that update; not cumulative usage |
+| `_meta.eventId`, `_meta.agentTimestampMs` | Monotonic event ID and agent clock |
+| `_meta.promptId`, `streamStartMs`, `turnStartMs`, `updateType`, `updateParams`, `chunkId`, `isReplay` | Conditional |
 
-Every current ordinary ACP update carries `_meta.totalTokens`, a monotonically allocated `eventId`, and `agentTimestampMs`. `promptId`, stream/turn clocks, update descriptors, and replay/chunk fields are conditional. Extension updates carry event IDs but do not necessarily carry `totalTokens`.
+Ordinary ACP updates carry `totalTokens`, `eventId`, and `agentTimestampMs`; extension updates carry an event ID but not necessarily `totalTokens`. `user_message_chunk` carries `_meta.promptIndex` on the update.
 
-For live context before a turn completes, scan backward for the last parseable `params._meta.totalTokens`; it is an estimated active-context scalar, not cumulative usage. A completed turn's `usage.inputTokens` is the categorized occupancy Grok 0.2.103 displays and takes precedence once present; `inputTokens - cachedReadTokens` and `cachedReadTokens` form the matching fresh/cache split, while output remains outside occupancy until the next turn. Bound the tail read, tolerate unknown update types, and ignore a torn final JSONL record after a crash. Rewind markers define the live branch, so transcript rendering must apply Grok's rewind semantics rather than concatenate every historic line.
+The extension update `rewind_marker` carries `target_prompt_index`. It rewinds the logical branch to that prompt boundary while the earlier lines stay in the file, so a reader that folds the stream must drop messages, token samples, and completed turns past that boundary before applying later lines.
 
-`user_message_chunk` carries `_meta.promptIndex` on the update. The extension record `rewind_marker` carries `target_prompt_index`; it rewinds the logical branch to that prompt boundary while retaining the physical JSONL bytes. A consumer must truncate its folded messages, token samples, and completed turns before applying later records.
-
-The durable exact-cost record is an `_x.ai/session/update` whose update has `sessionUpdate: "turn_completed"`:
+A completed turn writes an `_x.ai/session/update` whose update is `turn_completed` (`notification.rs`):
 
 ```json
 {
-  "timestamp": 1784203201,
+  "timestamp": 1789300001,
   "method": "_x.ai/session/update",
   "params": {
-    "sessionId": "019e...",
+    "sessionId": "019e0000-0000-7000-8000-000000000001",
     "update": {
       "sessionUpdate": "turn_completed",
       "prompt_id": "prompt-1",
@@ -354,6 +455,7 @@ The durable exact-cost record is an `_x.ai/session/update` whose update has `ses
       "usage": {
         "inputTokens": 51000,
         "cachedReadTokens": 41000,
+        "cacheCreationTokens": 0,
         "outputTokens": 1893,
         "reasoningTokens": 412,
         "totalTokens": 52893,
@@ -362,8 +464,9 @@ The durable exact-cost record is an `_x.ai/session/update` whose update has `ses
         "costUsdTicks": 126890500,
         "costIsPartial": false,
         "usageIsIncomplete": false,
+        "numTurns": 7,
         "modelUsage": {
-          "grok-build": {
+          "grok-4.5": {
             "inputTokens": 51000,
             "cachedReadTokens": 41000,
             "outputTokens": 1893,
@@ -378,119 +481,196 @@ The durable exact-cost record is an `_x.ai/session/update` whose update has `ses
 }
 ```
 
-`inputTokens` is the full input including `cachedReadTokens`; subtract the cache category for uncached input. `outputTokens` already includes reasoning. `costUsdTicks` uses 10,000,000,000 ticks per USD. Missing native cost is unknown rather than zero at the protocol layer; a consumer may label a token-priced fallback as an estimate. Negative, partial, or incomplete native cost remains rejected. Per-model rows may leave an aggregate residual, so sum trusted rows and reconcile only against the trusted aggregate.
+| Field | Meaning |
+| --- | --- |
+| `prompt_id`, `stop_reason` | Turn identity and stop reason |
+| `agent_result`, `error_kind`, `elapsed_ms` | Optional final text, error class, and wall time |
+| `usage.inputTokens` | Full prompt input, including `cachedReadTokens` |
+| `usage.cachedReadTokens`, `usage.cacheCreationTokens` | Cache-read and cache-creation input |
+| `usage.outputTokens` | Output, already including `reasoningTokens` |
+| `usage.costUsdTicks` | Optional cost at 10,000,000,000 ticks per USD |
+| `usage.costIsPartial`, `usage.usageIsIncomplete` | Some calls lacked cost, or subagent usage could not be fully applied |
+| `usage.modelUsage` | Per-model token and cost rows; rows can leave a residual against the aggregate |
+
+An absent `costUsdTicks` means unreported, not free.
+
+### `events.jsonl`
+
+`events.jsonl` is an append-only session event log written by `EventWriter` (`xai-grok-session-events/src/log.rs`, `types.rs` `Event`). Each line is `{"ts": "<RFC 3339 ms>", "type": "<event>", ...}` with snake_case fields. Its records include `turn_started` (with `session_id`, `turn_number`, `model_id`, and `schema_version`), `tool_completed`, and `turn_ended`. The permission pair brackets a prompt:
+
+```json
+{"ts":"2026-09-13T04:21:38.748Z","type":"permission_requested","tool_name":"run_terminal_command"}
+{"ts":"2026-09-13T04:21:40.816Z","type":"permission_resolved","tool_name":"run_terminal_command","decision":"allow","wait_ms":2067}
+```
+
+`decision` is `allow`, `deny`, `cancelled`, or `followup`. Neither record carries a request ID, so concurrent prompts for the same tool pair only by order.
 
 ### `signals.json`
 
-`signals.json` serializes `SessionSignals` in camelCase. Useful fields are:
+`signals.json` serializes `SessionSignals` in camelCase (`session/signals.rs`). It is written at turn boundaries and lags a running turn.
 
 | Field | Meaning |
 | --- | --- |
-| `turnCount`, `assistantMessageCount` | Completed bookkeeping counters |
+| `turnCount`, `assistantMessageCount` | Turn and message counters |
 | `errorCount`, `toolFailureCount`, `cancellationCount` | Error and interruption counters |
 | `compactionCount`, `totalTokensBeforeCompaction` | Compaction history |
-| `contextWindowUsage`, `contextTokensUsed`, `contextWindowTokens` | Context snapshot and denominator |
+| `contextTokensUsed`, `contextWindowTokens`, `contextWindowUsage` | Context snapshot and the model's context window |
 | `toolCallCount`, `toolsUsed` | Tool activity |
-| `modelsUsed`, `primaryModelId` | Model history and current primary model |
-| `sessionDurationSeconds` | Session duration at the last sync |
+| `modelsUsed`, `primaryModelId` | Model history |
+| `sessionDurationSeconds` | Session duration at the last write |
 
-The file is a completed-turn snapshot and can lag a running, failed, or cancelled turn. Prefer `updates.jsonl` for live context and hooks for live activity. The signals file carries no authoritative spend or billing amount.
+The file carries no spend amount.
+
+### `usage.json` and `grok usage`
+
+`grok usage <session-id> [turn]` prints the persisted `SessionUsageFile` as JSON (`xai-grok-pager/src/usage_cmd.rs`, `session/usage_file.rs`). The user guide recommends it over reading session files.
+
+| Field | Meaning |
+| --- | --- |
+| `sessionId`, `updatedAt` | Session and last write |
+| `session` | Whole-conversation totals, including history inherited by resume or fork |
+| `turns[]` | One row per recorded turn; with `[turn]`, only that row |
+
+`session` and each turn row carry `inputTokens`, `outputTokens`, `cachedReadTokens`, `cacheCreationTokens`, `reasoningTokens`, `totalTokens`, `modelCalls`, and optional `costUsdTicks`, `costIsPartial`, `usageIsIncomplete`, `turnCount`, `primaryModelId`, and `modelUsage`; a turn row adds `turnNumber` and optional `endedAt`. Errors print `Session '{id}' not found.`, `No usage recorded for session '{id}'.`, or `Turn {n} not found in session '{id}'.`
 
 ## Headless structured output
 
-`-p`, `--prompt-json`, or `--prompt-file` selects headless mode. Use `--output-format streaming-json` for RimZ-supervised runs; it preserves incremental output and a structured terminal record.
+`-p`, `--prompt-file`, or `--prompt-json` selects headless mode, and the same file hooks run inside it. `--output-format` chooses the stream:
 
-The stream is NDJSON:
+| Format | Output |
+| --- | --- |
+| `plain` | Human text |
+| `json` | One object after the response: `text`, `stopReason`, `sessionId`, `requestId`, optional `thought`, and spend fields |
+| `streaming-json` | NDJSON, one `type`-tagged object per line, derived from ACP session updates |
+| `streaming-messages-json` | NDJSON in the Anthropic Messages API `stream-json` format (`system`/`init`, `assistant`, `user`, `result`); `--include-partial-messages` adds `stream_event` framing |
+
+A `streaming-json` run looks like this:
 
 ```json
-{"type":"text","data":"Fixed"}
 {"type":"thought","data":"Checking the tests"}
-{"type":"end","stopReason":"EndTurn","sessionId":"019e...","requestId":"req-1","num_turns":7,"usage":{"input_tokens":7210,"cache_read_input_tokens":41000,"output_tokens":1893,"reasoning_tokens":412,"total_tokens":50103},"modelUsage":{"grok-build":{"inputTokens":7210,"outputTokens":1893,"cacheReadInputTokens":41000,"modelCalls":7,"costUSD":0.01268905}},"total_cost_usd":0.01268905,"total_cost_usd_ticks":126890500}
+{"type":"tool_call","toolCallId":"call_1","title":"Read","kind":"read","status":"in_progress","toolName":"read_file","rawInput":{"path":"src/main.rs"},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"call_1","status":"completed","content":[],"rawOutput":{"lines":42},"locations":[]}
+{"type":"text","data":"Fixed"}
+{"type":"usage","messageId":"resp_1","stopReason":"end_turn","usage":{"input_tokens":812,"output_tokens":45,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"reasoning_tokens":0},"signature":"..."}
+{"type":"end","stopReason":"end_turn","sessionId":"019e0000-0000-7000-8000-000000000001","requestId":"req-1","num_turns":7,"usage":{"input_tokens":7210,"cache_read_input_tokens":41000,"cache_creation_input_tokens":0,"output_tokens":1893,"reasoning_tokens":412,"total_tokens":50103},"modelUsage":{"grok-4.5":{"inputTokens":7210,"outputTokens":1893,"cacheReadInputTokens":41000,"modelCalls":7,"costUSD":0.01268905}},"total_cost_usd":0.01268905,"total_cost_usd_ticks":126890500}
 ```
 
-| Type | Meaning |
+| `type` | Meaning |
 | --- | --- |
-| `text` | Assistant response chunk |
-| `thought` | Reasoning chunk |
-| `end` | Successful terminal record with session/result metadata and available spend |
-| `error` | Failure record with `message` and any frozen spend fields |
-| `max_turns_reached`, `auto_compact_*` | Current extension events; treat the catalog as non-exhaustive |
+| `text`, `thought` | Response and reasoning chunks (`data`) |
+| `tool_call`, `tool_call_update` | Tool start and progress, with ACP field names plus `toolName` |
+| `usage` | One per model response: `messageId`, the provider's verbatim `stopReason` (such as `tool_use`), `usage`, `signature` |
+| `plan`, `available_commands` | Current plan entries; tool and slash-command lists |
+| `end` | Always the last record on success: `stopReason`, `sessionId`, `requestId`, and spend fields |
+| `error` | Failure: `message`, plus spend fields when usage was recorded |
 
-`--output-format json` emits the terminal projection once; `plain` emits human text. The `end` object is the last successful streaming event.
+The catalog also includes `max_turns_reached` and `auto_compact_*` records and is non-exhaustive. `end.stopReason` is snake_case: `end_turn`, `max_tokens`, `max_turn_requests`, `refusal`, or `cancelled` (`headless.rs` `stop_reason_wire`).
 
-Usage fields follow these rules:
+Spend fields on `json`, `end`, and `error` follow one policy (`notification.rs` `project_result_usage`):
 
-- `usage.input_tokens` is uncached input; `cache_read_input_tokens` is cache-hit input; `total_tokens = input_tokens + cache_read_input_tokens + output_tokens`.
-- `reasoning_tokens` is a component of output accounting and does not add again to `total_tokens`.
-- `num_turns` counts main-agent model rounds recorded on the prompt ledger; subagent calls stay in `modelUsage.*.modelCalls`.
-- `modelUsage` groups tokens, calls, and complete cost by model.
-- `total_cost_usd_ticks` uses 10,000,000,000 ticks per USD and is the reconciliation-safe amount.
-- Complete cost fields are omitted when upstream did not report cost, when `cost_is_partial` is true, or when `usage_is_incomplete` makes the aggregate unsafe. Absence means unknown, not free.
-- A prompt that never reaches the model omits spend fields.
+- `usage.input_tokens` and `modelUsage.*.inputTokens` are uncached input; `cache_read_input_tokens` and `cache_creation_input_tokens` are the cache buckets. This differs from `updates.jsonl`, where `inputTokens` includes cache reads.
+- `total_tokens = input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens`; `reasoning_tokens` is part of output.
+- `usage` covers the prompt, including subagents that finished before turn end; compaction and other side-model calls are excluded.
+- `num_turns` counts main-agent model rounds; subagent calls count only in `modelUsage.*.modelCalls`.
+- `total_cost_usd` and `total_cost_usd_ticks` (10,000,000,000 ticks per USD) appear only for a complete cost. When `cost_is_partial` or `usage_is_incomplete` is true, every cost float is omitted, including `modelUsage.*.costUSD`.
+- A prompt that never reached the model omits the spend fields.
 
-Headless exits 0 on success, 1 on error, 130 on SIGINT, and 143 on SIGTERM. The same native hooks run inside headless mode, so use hooks for consistent lifecycle and the terminal stream for the supervised result.
+The user guide documents exit codes 0 on success, 1 on error, 130 on SIGINT, and 143 on SIGTERM. In source, errors, max turns, and a closed connection return to `main`, which prints `Error: {e:#}` and exits 1 (`xai-grok-pager-bin/src/main.rs`); the signal codes were not traced to a handler at the source commit.
 
 ## Agent Client Protocol
 
-ACP is the structured embedding mode. It uses JSON-RPC and the standard `initialize`, `session/new`, `session/prompt`, `session/update`, and `session/load` cycle. Grok extends it with methods under `x.ai/*` for session information, hooks, permissions, questions, plan approval, auth, billing, and other product features.
+ACP is the structured embedding mode: JSON-RPC 2.0 with the standard `initialize`, `session/new`, `session/load`, `session/prompt`, `session/update`, and `session/cancel` cycle. Grok also serves the standard `session/list`, `session/resume`, `session/close`, and `session/set_config_option` methods, and `session/new` and `session/load` responses carry a typed `configOptions` list with `model` and `reasoning_effort` (user guide: agent mode, "Session config options").
 
-ACP exposes the richest typed interaction surface, including permission reverse requests plus `x.ai/ask_user_question` and `x.ai/exit_plan_mode`. Use those only when RimZ launches and owns the ACP client; an ACP controller is a different product surface from observing the user's normal TUI.
+`session/new` accepts these `_meta` options:
+
+| Field | Effect |
+| --- | --- |
+| `rules` | Extra rules appended to the system prompt |
+| `systemPromptOverride` | Replacement system prompt |
+| `agentProfile` | Agent profile name or JSON object |
+| `yoloMode` | Always-approve for the session |
+| `autoMode` | Auto permission mode, superseded by `yoloMode` |
+| `x.ai/hooks` | Client-registered hooks ([below](#client-registered-hooks)) |
+
+Grok extension methods live under `x.ai/` and the set is non-exhaustive; a client discovers it from the `initialize` response.
+
+| Category | Methods |
+| --- | --- |
+| Interaction reverse requests | `x.ai/ask_user_question`, `x.ai/exit_plan_mode`, plus standard permission requests |
+| Hooks | `x.ai/hooks/run`, `x.ai/hooks/event` |
+| Session | `x.ai/session/fork`, `x.ai/session/state`, `x.ai/session/import`, `x.ai/session/resolve_local_for_worktree_resume` |
+| Conversation | `x.ai/prompt_history`, `x.ai/rewind/*`, `x.ai/compact_conversation`, `x.ai/btw` (side question that does not interrupt the turn) |
+| Account | `x.ai/auth/*`, `x.ai/auth/info`, `x.ai/billing` |
+| Workspace | `x.ai/fs/*`, `x.ai/git/*`, `x.ai/git/worktree/*`, `x.ai/search/*`, `x.ai/terminal/*` |
+| Notifications to the client | `x.ai/session/update`, `x.ai/session_notification` (diff review, retry state, auto-compact), `x.ai/fs_notify`, `x.ai/fs/index`, `x.ai/fs/index/delta`, `x.ai/search/fuzzy/status`, `x.ai/git/worktree/status` |
 
 ### Client-registered hooks
 
-An ACP client can register callbacks in `session/new` metadata:
+An ACP client registers callbacks in `session/new` metadata (`extensions/hooks.rs` `ClientHookGroup`):
 
 ```json
 {
   "_meta": {
     "x.ai/hooks": {
       "PreToolUse": [
-        {
-          "matcher": "Bash",
-          "hookCallbackIds": ["rimz-pre-tool"],
-          "timeout": 5
-        }
+        { "matcher": "Bash", "hookCallbackIds": ["policy-pre-tool"], "timeout": 5 }
       ],
       "Stop": [
-        { "hookCallbackIds": ["rimz-stop"] }
+        { "hookCallbackIds": ["turn-ended"] }
       ]
     }
   }
 }
 ```
 
-`PreToolUse` dispatches one awaited reverse request per matching callback through `x.ai/hooks/run`. Every other event sends fire-and-forget `x.ai/hooks/event` notifications. The payload is the native hook envelope plus `hookCallbackId`.
+`PreToolUse`, `Stop`, `SubagentStop`, and `PostToolUse` send one awaited `x.ai/hooks/run` request per unique matching callback; every other event, `UserPromptSubmit` included, sends a fire-and-forget `x.ai/hooks/event` notification. The params are the flattened hook envelope plus `hookCallbackId`. `initialize` advertises `_meta["x.ai/hooks"] = {"blockingEvents": ["PreToolUse", "Stop", "SubagentStop"], "decisions": ["deny", "block"], "stopSignals": ["continue", "stopReason", "additionalContext"]}`; `PostToolUse` gating is not yet advertised.
 
-The blocking response is:
+A blocking response looks like this:
 
 ```json
 { "decision": "deny", "systemMessage": "Policy blocked this call" }
 ```
 
-`decision` is `continue` or `deny`; unknown and malformed values fail open. Callback gates run concurrently. Each callback has its own timeout, defaults to 30 seconds, and is capped at 300 seconds. The first observed deny blocks the tool.
+| Response field | Meaning |
+| --- | --- |
+| `decision` | `continue` (default), `deny` (alias `block`), or `ask`; `ask`, unknown values, and malformed replies fail open |
+| `systemMessage` (alias `reason`) | Message shown with a deny or block |
+| `continue`, `stopReason` | Force a `Stop` gate to end the turn |
+| `additionalContext` | Note for the model |
 
-Client hooks supplement file hooks rather than replacing them. Reconnect metadata updates registrations only when `x.ai/hooks` is present; an empty object explicitly clears them.
+`timeout` is in seconds. Zero or a non-finite value falls back to the default of 30 seconds, or 600 seconds for `Stop`, `SubagentStop`, and `PostToolUse`, and values are capped at 600. Timeouts and transport errors fail open. Client hooks supplement file hooks. A reconnect updates registrations only when `x.ai/hooks` is present, and an empty object clears them.
 
-## Authentication and account surfaces
+## Authentication and billing
 
-`grok login` starts browser OAuth by default; `grok logout` clears the active login. Grok hot-reloads `~/.grok/auth.json`. `XAI_API_KEY` is the fallback only when no active session token is available, and per-model configured keys take precedence for their model.
+`grok login` signs in through xAI OAuth at `auth.x.ai` by default; `--device-auth` (alias `--device-code`) selects the device-code flow. `grok logout` clears cached credentials. Grok hot-reloads `auth.json`. Enterprise login uses an external auth-provider command (`auth_provider_command`) or OIDC (user guide: authentication).
 
-The auth store maps scopes to records. Relevant metadata includes `auth_mode`, `user_id`, `email`, `first_name`, `last_name`, profile/principal/team/organization fields, `expires_at`, and blocked-account state. Secret fields include `key` and `refresh_token`; never log, render, or persist them in RimZ state. Derive an opaque digest only when no stable non-secret account identifier exists.
+`auth.json` lives at `GROK_AUTH_PATH` when that is set and non-empty, otherwise `$GROK_HOME/auth.json`, and is written with mode `0600` (`xai-grok-login/src/storage.rs` `auth_json_path`). It is a map from scope to one `GrokAuth` record; a stored API key uses scope `xai::api_key` (`xai-grok-login/src/model.rs`).
 
-Known `auth_mode` values are `web_login`, `oidc`, `external`, and `api_key`. Enterprise login can use an external provider or OIDC; first-party OAuth remains the normal interactive flow.
+| Field | Meaning |
+| --- | --- |
+| `auth_mode` | `web_login` (alias `grok`), `oidc`, `external`, or `api_key` |
+| `create_time`, `expires_at` | Record creation and token expiry; a token without a server expiry gets a 30-day lifetime |
+| `user_id`, `email`, `first_name`, `last_name`, `profile_image_asset_id` | User identity |
+| `principal_type`, `principal_id` | Principal |
+| `team_id`, `team_name`, `team_role`, `organization_id`, `organization_name`, `organization_role` | Team and organization |
+| `user_blocked_reason`, `team_blocked_reasons` | Blocked-account state |
+| `coding_data_retention_opt_out`, `has_grok_code_access` | Account flags |
+| `oidc_issuer`, `oidc_client_id` | OIDC login origin |
+| `key`, `refresh_token` | Secrets |
 
-In ACP mode, `x.ai/auth/info` provides structured identity metadata to the connected client. `x.ai/billing` queries the authenticated Grok service and can return credit usage, current billing period, on-demand cap/usage, prepaid balance, unified-billing state, and subscription tier. Treat that extension as available to an owned ACP process, not as permission to extract a bearer token and reproduce Grok's private HTTP request.
+Credentials resolve per request in this order (`xai-grok-shell/src/agent/config.rs` `resolve_credentials`):
 
-The stock TUI presents `/usage`, but the pinned build documents no standalone machine-readable billing-status command. A TUI adapter therefore reports account presence/owner from redacted local metadata and leaves billing windows unavailable unless a supported owned-process surface supplies them.
+1. A per-model `api_key` or `env_key` under `[model.<name>]` in `config.toml`.
+2. A cached auth-provider token.
+3. The session token from `auth.json`, only when the model's base URL may receive it.
+4. `XAI_API_KEY`, or the legacy `GROK_CODE_XAI_API_KEY` (`xai-grok-login/src/auth_method.rs`).
 
-## Adapter safety notes
+API-key resolution is off under `disable_api_key_auth` or `GROK_DISABLE_API_KEY_AUTH`, and when `[auth] preferred_method = "oidc"`.
 
-- Parse every JSON surface structurally and tolerate unknown fields and event variants.
-- Key lifecycle by `sessionId`; key child lifecycle by `(parent sessionId, subagentId)`.
-- Preserve hook stdout for decisions and send diagnostics to stderr.
-- Install a native Grok hook with an idempotent merge and preserve every pre-existing Grok, Claude-compatible, Cursor-compatible, and plugin hook.
-- Include every Grok command-executing configuration surface in project trust and its stale diff.
-- Read `summary.json` and `signals.json` as replaceable snapshots and `updates.jsonl` as an append stream with a tolerable torn tail.
-- Keep pane-process liveness as the final presence check when hooks or sidecar reads lag.
-- Keep file hooks passive for RimZ lifecycle observation; a lifecycle helper emits no deny decision.
-- Redact prompt text, tool input/output, transcript content, hook `env`, URLs after environment expansion, and auth secrets from diagnostics.
+In ACP mode `x.ai/auth/info` returns identity metadata, and `x.ai/billing` queries the Grok service for credit usage percent, the current billing period, the on-demand cap and usage, prepaid balance, unified-billing state, and subscription tier (`extensions/billing.rs`). The TUI shows credit and billing on `/usage`. No CLI subcommand prints billing windows; `grok usage` covers token and cost totals only.
+
+## Upstream scope
+
+The GitHub mirror ships the harness and TUI source without release tags, so a source claim can be pinned only to the sync commit nearest a release, and the shipped binary can run slightly ahead of it. The installer's `alpha` channel serves builds ahead of `stable` (1.0.31 on 2026-09-13), and `grok update --alpha` or `--stable` switches channel.
+
+Surfaces on this page that a stock-TUI integration can reach but that are not needed to observe a session include the blocking hook decisions, the `streaming-messages-json` format, ACP reverse requests with typed answers, `x.ai/billing`, and `usage.json`. Which surfaces RimZ wires, and the gaps that follow, are in [adapter_grok.md → Known gaps](../../internals/agents/adapter_grok.md#known-gaps).
