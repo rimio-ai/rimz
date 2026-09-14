@@ -61,7 +61,7 @@ const TASK_NOTIFICATION_CLOSE: &str = "</task-notification>";
 /// The ids of background tasks a `<task-notification>` prompt reports as no
 /// longer running. One prompt may carry several notification blocks; a block
 /// without a task id or status is skipped. Empty for any other prompt.
-pub(crate) fn finished_task_notification_ids(prompt: &str) -> Vec<String> {
+pub(in crate::agents) fn finished_task_notification_ids(prompt: &str) -> Vec<String> {
     let mut ids = Vec::new();
     let mut rest = prompt.trim_start();
     while let Some(after_open) = rest.strip_prefix(TASK_NOTIFICATION_OPEN) {

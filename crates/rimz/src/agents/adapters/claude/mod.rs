@@ -65,10 +65,10 @@ use super::{
     AgentHookClass, AgentLifecycleObservation, AgentTurnError, BackgroundShell,
     BackgroundShellReport, HookOutput, HookRouting, Result, RootIdentity, SessionOrigin,
     SpawnedSubagent, SubagentIdentity, SubagentObservation, SubagentSpawnInput, TranscriptMessage,
-    finished_task_notification_ids, non_empty_trimmed, optional_payload_string,
-    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored,
+    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
+use crate::agents::payload::finished_task_notification_ids;
 use crate::agents::{TurnSettle, TurnSettleOutcome};
 use crate::transcript::AskQuestion;
 
