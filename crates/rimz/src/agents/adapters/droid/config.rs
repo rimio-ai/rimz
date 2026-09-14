@@ -53,8 +53,8 @@ struct CustomModel {
     display_name: Option<String>,
     #[serde(deserialize_with = "string_only")]
     model: Option<String>,
-    #[serde(rename = "provider", deserialize_with = "is_string")]
-    has_provider: bool,
+    #[serde(deserialize_with = "string_only")]
+    provider: Option<String>,
     #[serde(rename = "baseUrl", deserialize_with = "is_string")]
     has_base_url: bool,
     #[serde(rename = "bedrock", deserialize_with = "is_object")]
@@ -77,8 +77,8 @@ struct LegacyCustomModel {
     model_display_name: Option<String>,
     #[serde(deserialize_with = "string_only")]
     model: Option<String>,
-    #[serde(rename = "provider", deserialize_with = "is_string")]
-    has_provider: bool,
+    #[serde(deserialize_with = "string_only")]
+    provider: Option<String>,
     #[serde(rename = "base_url", deserialize_with = "is_string")]
     has_base_url: bool,
     #[serde(rename = "bedrock", deserialize_with = "is_object")]
@@ -96,6 +96,9 @@ struct LoadedModel {
     model: String,
     index: Option<u64>,
     max_context_limit: Option<u64>,
+    /// Droid throws on a provider outside its four wire protocols, which
+    /// rejects the whole list the entry came from.
+    provider_supported: bool,
 }
 
 struct CatalogEntry {
@@ -106,10 +109,15 @@ struct CatalogEntry {
     max_context_limit: Option<u64>,
 }
 
-impl CustomModel {
+trait Loadable {
+    fn load(self) -> Option<LoadedModel>;
+}
+
+impl Loadable for CustomModel {
     fn load(self) -> Option<LoadedModel> {
         let model = self.model?;
-        if !self.has_provider || !(self.has_base_url || self.has_bedrock) || self.placeholder_key {
+        let provider = self.provider?;
+        if !(self.has_base_url || self.has_bedrock) || self.placeholder_key {
             return None;
         }
         Some(LoadedModel {
@@ -118,14 +126,16 @@ impl CustomModel {
             model,
             index: self.index,
             max_context_limit: self.max_context_limit,
+            provider_supported: supported_provider(&provider),
         })
     }
 }
 
-impl LegacyCustomModel {
+impl Loadable for LegacyCustomModel {
     fn load(self) -> Option<LoadedModel> {
         let model = self.model?;
-        if !self.has_provider || !(self.has_base_url || self.has_bedrock) || self.placeholder_key {
+        let provider = self.provider?;
+        if !(self.has_base_url || self.has_bedrock) || self.placeholder_key {
             return None;
         }
         Some(LoadedModel {
@@ -137,6 +147,7 @@ impl LegacyCustomModel {
             model,
             index: None,
             max_context_limit: self.max_context_limit,
+            provider_supported: supported_provider(&provider),
         })
     }
 }
@@ -205,31 +216,20 @@ pub(super) fn resolve_custom_model_from_cwd(
 
 /// One settings folder's effective catalogue, named by its `settings.json`.
 fn folder_catalog(settings: &Path) -> Option<Vec<CatalogEntry>> {
-    let base = read_optional::<SettingsProjection>(settings)?;
-    let local =
-        read_optional::<SettingsProjection>(&settings.with_file_name("settings.local.json"))?;
-    let current = local
-        .and_then(|projection| projection.custom_models)
-        .or_else(|| base.and_then(|projection| projection.custom_models))
-        .unwrap_or_default();
-    let mut catalog = assign_ids(
-        current
-            .into_iter()
-            .filter_map(|entry| serde_json::from_value::<CustomModel>(entry).ok())
-            .filter_map(CustomModel::load),
-    );
+    let base = current_list(read_optional(settings)?)?;
+    let local = current_list(read_optional(
+        &settings.with_file_name("settings.local.json"),
+    )?)?;
+    let mut catalog = assign_ids(local.or(base).unwrap_or_default());
 
-    // Droid skips an unreadable legacy file rather than failing the folder.
+    // Droid skips an unreadable or rejected legacy file rather than failing
+    // the folder.
     let legacy = read_optional::<LegacyProjection>(&settings.with_file_name("config.json"))
         .flatten()
         .and_then(|projection| projection.custom_models)
+        .and_then(load_list::<LegacyCustomModel>)
         .unwrap_or_default();
-    let legacy = assign_ids(
-        legacy
-            .into_iter()
-            .filter_map(|entry| serde_json::from_value::<LegacyCustomModel>(entry).ok())
-            .filter_map(LegacyCustomModel::load),
-    );
+    let legacy = assign_ids(legacy);
     for entry in legacy {
         if !catalog
             .iter()
@@ -241,11 +241,44 @@ fn folder_catalog(settings: &Path) -> Option<Vec<CatalogEntry>> {
     Some(catalog)
 }
 
+/// A settings file's `customModels`, absent as `Some(None)`; `None` when Droid
+/// would reject the file.
+fn current_list(projection: Option<SettingsProjection>) -> Option<Option<Vec<LoadedModel>>> {
+    match projection.and_then(|projection| projection.custom_models) {
+        None => Some(None),
+        Some(entries) => load_list::<CustomModel>(entries).map(Some),
+    }
+}
+
+/// One file's entries after Droid's load filter, or `None` when an entry names
+/// a provider Droid rejects.
+fn load_list<T: serde::de::DeserializeOwned + Loadable>(
+    entries: Vec<Value>,
+) -> Option<Vec<LoadedModel>> {
+    let loaded = entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value::<T>(entry).ok())
+        .filter_map(Loadable::load)
+        .collect::<Vec<_>>();
+    loaded
+        .iter()
+        .all(|model| model.provider_supported)
+        .then_some(loaded)
+}
+
+fn supported_provider(provider: &str) -> bool {
+    matches!(
+        provider.to_lowercase().replace('_', "-").as_str(),
+        "anthropic" | "openai" | "generic-chat-completion-api" | "bedrock-converse"
+    )
+}
+
 /// Droid's generated id: `custom:<slug>-<n>`, where `n` counts earlier entries
 /// of the same file sharing the slug. A stored id wins.
-fn assign_ids(loaded: impl Iterator<Item = LoadedModel>) -> Vec<CatalogEntry> {
+fn assign_ids(loaded: Vec<LoadedModel>) -> Vec<CatalogEntry> {
     let mut ordinals = HashMap::<String, u64>::new();
     loaded
+        .into_iter()
         .enumerate()
         .map(|(position, model)| {
             let slug = slug(&model.name);
@@ -488,6 +521,15 @@ mod tests {
             "settings.local.json replaces its sibling's list"
         );
 
+        write(
+            &cwd.join(".factory/settings.json"),
+            r#"{"customModels":[{"displayName":"Typo","model":"typo","provider":"open-ai","baseUrl":"https://t.invalid"}]}"#,
+        );
+        assert!(
+            resolve_custom_model("custom:Same-0", &transcript, &user).is_none(),
+            "Droid rejects a settings file naming an unsupported provider"
+        );
+
         write(&cwd.join(".factory/settings.local.json"), "{ malformed");
         assert!(resolve_custom_model("custom:Same-0", &transcript, &user).is_none());
     }
@@ -522,6 +564,22 @@ mod tests {
         assert!(
             resolve_custom_model("custom:Shadowed-0", &transcript, &user).is_none(),
             "a legacy entry whose model the current catalogue holds is dropped"
+        );
+
+        write(
+            &user.with_file_name("config.json"),
+            r#"{"custom_models":[
+              {"model_display_name":"Legacy Model","model":"legacy-model","provider":"Bedrock_Converse","bedrock":{}},
+              {"model_display_name":"Typo","model":"typo","provider":"gemini","base_url":"https://l.invalid"}
+            ]}"#,
+        );
+        assert!(resolve_custom_model("custom:Legacy-Model-0", &transcript, &user).is_none());
+        assert_eq!(
+            resolve_custom_model("custom:Current-0", &transcript, &user)
+                .unwrap()
+                .model_id,
+            "current",
+            "a rejected legacy file is skipped without failing the folder"
         );
     }
 }
