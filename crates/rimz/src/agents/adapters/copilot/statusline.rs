@@ -4,6 +4,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::spend::ai_credit_usd;
 use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentSessionUsage, AgentTokenUsage, CostCoverage,
     clamp_pct,
@@ -29,6 +30,15 @@ pub(super) struct StatuslinePayload {
     context_window: Option<ContextWindow>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     cost: Option<Cost>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
+    ai_used: Option<AiUsed>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct AiUsed {
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
+    total_nano_aiu: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -128,7 +138,19 @@ impl StatuslinePayload {
         .then_some(context)
     }
 
+    /// Session dollars from Copilot's metered AI credits, else the price book.
     pub(super) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+        if let Some(total_cost_usd) = self
+            .ai_used
+            .as_ref()
+            .and_then(|ai_used| ai_credit_usd(ai_used.total_nano_aiu?))
+        {
+            return Some(AgentCost {
+                total_cost_usd: Some(total_cost_usd),
+                coverage: CostCoverage::Session,
+                ..AgentCost::default()
+            });
+        }
         let model = resolve_model(self.model.as_ref()?);
         let model = model.id.as_deref()?;
         let usage = self.context_window.as_ref()?.session_usage()?;
@@ -369,7 +391,13 @@ mod tests {
         let payload: Value =
             serde_json::from_str(include_str!("tests/fixtures/statusline-modern.json")).unwrap();
         let prices = PriceBook::fixture();
-        let estimated_cost = StatuslinePayload::parse(&payload)
+        let metered_cost = StatuslinePayload::parse(&payload)
+            .unwrap()
+            .cost(&prices)
+            .unwrap();
+        let mut unmetered = payload.clone();
+        unmetered["ai_used"]["total_nano_aiu"] = json!(0);
+        let estimated_cost = StatuslinePayload::parse(&unmetered)
             .unwrap()
             .cost(&prices)
             .unwrap();
@@ -407,6 +435,9 @@ mod tests {
             .session_cost(6_000, 205, 7_000, 69_000);
         assert_eq!(estimated_cost.total_cost_usd, Some(expected));
         assert_eq!(estimated_cost.coverage, CostCoverage::Session);
+        let metered = metered_cost.total_cost_usd.unwrap();
+        assert!((metered - 0.0142).abs() < 1e-12, "1.42 AI credits at $0.01");
+        assert_eq!(metered_cost.coverage, CostCoverage::Session);
     }
 
     #[test]
