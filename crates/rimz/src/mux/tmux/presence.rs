@@ -45,6 +45,7 @@ pub enum ControlLine {
     LayoutChange {
         window: String,
         window_width: u64,
+        /// Tiled panes only; floating panes arrive through the subscription.
         panes: Vec<TmuxLayoutPane>,
     },
     WindowPaneChanged {
@@ -277,7 +278,20 @@ fn layout_geometry(layout: &str) -> Option<LayoutGeometry> {
         panes: Vec::new(),
     };
     let window_width = parser.parse_cell()?;
-    (parser.pos == parser.input.len()).then_some((window_width, parser.panes))
+    // tmux 3.7 lists each floating pane twice: as a leaf of the root cell and
+    // again in a trailing `<leaf,...>` suffix. Only the suffix marks them, so
+    // drop its ids to report the tiled panes alone.
+    let tiled = parser.panes.len();
+    if parser.peek() == Some(b'<') {
+        parser.parse_floating_suffix()?;
+    }
+    if parser.pos != parser.input.len() {
+        return None;
+    }
+    let floating = parser.panes.split_off(tiled);
+    let mut panes = parser.panes;
+    panes.retain(|pane| !floating.iter().any(|float| float.id == pane.id));
+    Some((window_width, panes))
 }
 
 struct LayoutParser<'a> {
@@ -328,6 +342,18 @@ impl LayoutParser<'_> {
                     self.pos += 1;
                     return Some(());
                 }
+                _ => return None,
+            }
+        }
+    }
+
+    fn parse_floating_suffix(&mut self) -> Option<()> {
+        self.consume(b'<')?;
+        loop {
+            self.parse_cell()?;
+            match self.next()? {
+                b',' => {}
+                b'>' => return Some(()),
                 _ => return None,
             }
         }
@@ -456,6 +482,42 @@ mod tests {
 
         for (line, expected) in cases {
             assert_eq!(classify_control_line(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn control_line_drops_floating_panes_from_layout_change() {
+        let tiled = vec![
+            TmuxLayoutPane {
+                id: "%0".to_owned(),
+                x: 0,
+                width: 100,
+            },
+            TmuxLayoutPane {
+                id: "%1".to_owned(),
+                x: 101,
+                width: 99,
+            },
+        ];
+        // Captured from tmux 3.7c with two floating panes, `%2` and `%3`.
+        assert_eq!(
+            classify_control_line(
+                "%layout-change @0 0bcf,200x50,0,0{100x50,0,0,0,99x50,101,0,1,40x10,4,2,2,30x8,8,4,3}<30x8,8,4,3,40x10,4,2,2> \
+                 0bcf,200x50,0,0{100x50,0,0,0,99x50,101,0,1,40x10,4,2,2,30x8,8,4,3}<30x8,8,4,3,40x10,4,2,2> *"
+            ),
+            ControlLine::LayoutChange {
+                window: "@0".to_owned(),
+                window_width: 200,
+                panes: tiled,
+            }
+        );
+        for malformed in [
+            "aabb,200x50,0,0,0<",
+            "aabb,200x50,0,0,0<>",
+            "aabb,200x50,0,0,0<30x8,8,4,3",
+            "aabb,200x50,0,0,0<30x8,8,4,3>x",
+        ] {
+            assert_eq!(layout_geometry(malformed), None, "{malformed}");
         }
     }
 
