@@ -15,8 +15,62 @@ struct CredentialShape {
     expires_at: Option<f64>,
 }
 
+/// The `[providers."managed:kimi-code"]` entry `kimi login` writes to `config.toml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(super) struct ManagedProvider {
+    pub(super) base_url: Option<String>,
+    oauth: Option<OAuthRef>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct OAuthRef {
+    key: Option<String>,
+}
+
+impl ManagedProvider {
+    /// The token file name for this provider's OAuth key: `oauth/kimi-code` is the
+    /// default slot, and any other host and base pair (such as a kimi.ai login)
+    /// stores its token under `oauth/kimi-code-env-<hex>`.
+    fn credential_name(&self) -> &str {
+        self.oauth
+            .as_ref()
+            .and_then(|oauth| oauth.key.as_deref())
+            .map(|key| key.strip_prefix("oauth/").unwrap_or(key))
+            .filter(|name| {
+                !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+            .unwrap_or(DEFAULT_CREDENTIAL_NAME)
+    }
+}
+
+const DEFAULT_CREDENTIAL_NAME: &str = "kimi-code";
+
+pub(super) fn managed_provider() -> Option<ManagedProvider> {
+    managed_provider_at(&super::install::config_path().ok()?)
+}
+
+fn managed_provider_at(path: &Path) -> Option<ManagedProvider> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut root: toml::Table = toml::from_str(&text).ok()?;
+    root.remove("providers")?
+        .as_table_mut()?
+        .remove("managed:kimi-code")?
+        .try_into()
+        .ok()
+}
+
 pub(super) fn credentials_path() -> PathBuf {
-    super::wire::kimi_home().join("credentials/kimi-code.json")
+    credentials_path_under(&super::wire::kimi_home(), managed_provider().as_ref())
+}
+
+fn credentials_path_under(home: &Path, provider: Option<&ManagedProvider>) -> PathBuf {
+    let name = provider.map_or(DEFAULT_CREDENTIAL_NAME, ManagedProvider::credential_name);
+    home.join("credentials").join(format!("{name}.json"))
 }
 
 pub(super) fn probe() -> AccountProbe {
@@ -66,6 +120,46 @@ fn probe_at(path: &Path) -> AccountProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_slot_follows_the_managed_provider_oauth_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        std::fs::write(
+            &config,
+            r#"
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://api.kimi.ai/coding/v1"
+api_key = ""
+oauth = { storage = "file", key = "oauth/kimi-code-env-0123456789abcdef", oauth_host = "https://auth.kimi.ai" }
+"#,
+        )
+        .unwrap();
+        let provider = managed_provider_at(&config).unwrap();
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://api.kimi.ai/coding/v1")
+        );
+        assert_eq!(
+            credentials_path_under(dir.path(), Some(&provider)),
+            dir.path()
+                .join("credentials/kimi-code-env-0123456789abcdef.json")
+        );
+
+        let default_slot = dir.path().join("credentials/kimi-code.json");
+        assert_eq!(credentials_path_under(dir.path(), None), default_slot);
+        std::fs::write(
+            &config,
+            "[providers.\"managed:kimi-code\"]\noauth = { key = \"oauth/../../escape\" }\n",
+        )
+        .unwrap();
+        let escaping = managed_provider_at(&config).unwrap();
+        assert_eq!(
+            credentials_path_under(dir.path(), Some(&escaping)),
+            default_slot
+        );
+    }
 
     #[test]
     fn file_login_carries_credential_mtime() {
