@@ -84,14 +84,14 @@ The sidebar follows its attached view at the explicit `[theme.display].width_per
   <br/><sub>A finished card with the subagents it fanned out this turn; the idle agent below collapses to a single line.</sub>
 </p>
 
-Each agent is a small stacked card, four lines at rest, plus one shared line counting subagents and pending one-shot waits; either count appears alone when only one applies:
+Each agent is a small stacked card, four lines at rest, plus one shared line counting subagents and pending waits (one-shot waits and a Claude agent's background shells); either count appears alone when only one applies:
 
 ```
 ⢿ claude · Opus 4.8 · xhigh · 1m                $1.27    ← state · identity · cost
   store refactor                                         ← what it is working on
   ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context meter: how full the window is
   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m    ← tokens in the window · last activity
-  ⧉ subagents (2) · ⧖ waits (2)                 $0.42    ← lifetime child count and cost · pending one-shot waits
+  ⧉ subagents (2) · ⧖ waits (2)                 $0.42    ← lifetime child count and cost · pending waits and background shells
 ```
 
 - **The identity line.** The state glyph leads, animated while the agent works. Then the agent's handle (its team role, profile, or kind, so a team reads `planner` / `coder` / `reviewer`), the model, one reasoning-configuration token (effort or `thinking`), and the size of its context window. The session's dollar cost pins right and counts up live once the session has spent anything, including sessions it launched through `rimz subagents`.
@@ -104,7 +104,7 @@ To check delegated work without leaving your pane, click the subagents and waits
 
 How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, including the shared subagents and waits line, `expanded` shows subagent and wait entries everywhere. In compact mode, select the card first to expose the clickable count line. Narrow sidebars shorten the shared count line to `⧉ N · ⧖ M` so both counts and the cost fit.
 
-The **waits count** covers armed one-shot waits: timers, existing processes, watched shell commands, and one-shot signals. It shares the subagents line and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps. Selecting the card or opening its count line lists each wait beneath the subagent entries. Labels name the kind first: `timer 30m · in 12m`, `pid 16776`, `shell cargo`, or `signal pr.merged · 2h left`. Shell waits show the command on a second line; the others use one line. PID and shell waits show the same animated spinner as running work, even while the agent sleeps; timer and signal icons stay still.
+The **waits count** covers armed one-shot waits: timers, existing processes, watched shell commands, and one-shot signals. It shares the subagents line and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps. Selecting the card or opening its count line lists each wait beneath the subagent entries. Labels name the kind first: `timer 30m · in 12m`, `pid 16776`, `shell cargo`, or `signal pr.merged · 2h left`. Shell waits show the command on a second line; the others use one line. PID and shell waits show the same animated spinner as running work, even while the agent sleeps; timer and signal icons stay still. A Claude agent's background shells (commands it left running with `run_in_background`, or that Claude moved to the background) join the count and follow the waits as `bg shell cargo`, with elapsed time since RimZ first saw them and their description or command on a second line; each disappears when Claude reports it finished.
 
 ## Process rows
 
