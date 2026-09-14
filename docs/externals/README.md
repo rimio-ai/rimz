@@ -20,7 +20,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [antigravity-reference.md](./agent-adapter/antigravity-reference.md) | Antigravity CLI | 1.2.2 (tag `1.2.2`, 2026-09-12; transcript and subagent captures: 1.1.2) | [adapter_antigravity.md](../internals/agents/adapter_antigravity.md) |
 | [copilot-reference.md](./agent-adapter/copilot-reference.md) | GitHub Copilot CLI | 1.0.83 | [adapter_copilot.md](../internals/agents/adapter_copilot.md) |
 | [cursor-reference.md](./agent-adapter/cursor-reference.md) | Cursor CLI | 2026.09.10-fd3934a (2026-09-10) | [adapter_cursor.md](../internals/agents/adapter_cursor.md) |
-| [droid-reference.md](./agent-adapter/droid-reference.md) | Factory Droid CLI | 0.171.0 (exec sections: SDK 0.6.0) | [adapter_droid.md](../internals/agents/adapter_droid.md) |
+| [droid-reference.md](./agent-adapter/droid-reference.md) | Factory Droid CLI | 0.218.2 (JSON-RPC: `@factory/droid-sdk` 0.9.1) | [adapter_droid.md](../internals/agents/adapter_droid.md) |
 | [grok-reference.md](./agent-adapter/grok-reference.md) | Grok Build | 0.1.220-alpha.4 | [adapter_grok.md](../internals/agents/adapter_grok.md) |
 | [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 0.23.6 | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
 | [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.12.1 | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
