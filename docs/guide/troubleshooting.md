@@ -27,7 +27,7 @@ WORKSPACE
 MULTIPLEXER
   backend:        zellij
   version:        zellij 0.44.3
-  zellij floor:   ✓ OK (>= 0.44.0 required)
+  zellij floor:   ✓ OK (>= 0.44.2 required)
   log:            /tmp/zellij-1000/zellij-log/zellij.log
                   read last 256 KB of 3.3 MB · written by every zellij server running as uid 1000
   session health: ✓ ok
@@ -126,7 +126,7 @@ Reset is destructive and asks for confirmation before replacing the wedged room;
 
 ### Zellij or tmux is missing or too old
 
-RimZ needs Zellij 0.44+ or tmux 3.5+ on the machine, pixel-perfect pets add tmux 3.6+, and Zellij's kitty-graphics capability requires 0.45+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.0 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
+RimZ needs Zellij 0.44.2+ or tmux 3.5+ on the machine, pixel-perfect pets add tmux 3.6+, and Zellij's kitty-graphics capability requires 0.45+. The `MULTIPLEXER` section reports the detected backend and its version against the floor (`zellij floor: ✓ OK (>= 0.44.2 required)`, or `TOO OLD`). Install or upgrade the multiplexer if the row flags it. When both are installed and doctor resolved the one you did not want, pick a backend explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
 
 ### ttyd is missing, too old, or a browser room will not start
 

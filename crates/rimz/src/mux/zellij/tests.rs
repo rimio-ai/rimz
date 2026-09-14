@@ -1818,7 +1818,8 @@ fn zellij_options_respect_defaults_overrides_and_version_gates() {
     for (name, version, gated) in [
         ("unknown", None, false),
         ("0.43.9", Some((0, 43, 9)), false),
-        ("0.44.0", Some((0, 44, 0)), true),
+        ("0.44.1", Some((0, 44, 1)), false),
+        ("0.44.2", Some((0, 44, 2)), true),
         ("0.44.3", Some((0, 44, 3)), true),
     ] {
         let args = zellij_options_args(&mouse, version);

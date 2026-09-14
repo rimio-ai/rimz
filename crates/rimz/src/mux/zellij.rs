@@ -39,8 +39,10 @@ use crate::config::ZellijConfig;
 use crate::ids::PaneId;
 
 /// Minimum Zellij version RimZ supports overall and reports as the doctor
-/// floor.
-pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 44, 0);
+/// floor. Focus jumps (`action focus-pane-id`) and tab-targeted sidebar adds
+/// (`new-pane --tab-id`) first ship in 0.44.1, and the presence plugin's only
+/// foreground-command source, the `CommandChanged` event, first ships in 0.44.2.
+pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 44, 2);
 
 /// Zellij 0.45's non-focusing pane spawn preserves a background target
 /// without moving any attached client.

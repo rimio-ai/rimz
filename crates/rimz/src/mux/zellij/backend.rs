@@ -1100,9 +1100,8 @@ impl MuxBackend for ZellijBackend {
                 reason: err.to_string(),
             })?
             .action_target();
-        // Zellij 0.41+: `focus-pane-id <raw>`. The earlier `focus-pane-with-id`
-        // name was removed; the stub that referenced it never reached a
-        // running binary.
+        // `focus-pane-id <raw>` first ships in Zellij 0.44.1, one reason the
+        // floor sits above 0.44.0.
         let spec = match session {
             Some(session) => self.zellij_action(session).arg("focus-pane-id"),
             None => self.cmd().args(["action", "focus-pane-id"]),

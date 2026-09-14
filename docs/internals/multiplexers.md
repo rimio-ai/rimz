@@ -427,7 +427,7 @@ The renderer keeps its owner, TTL, client-ambiguity, and focus-intent guards, so
 
 These are the upstream quirks the backend works around. The upstream surfaces are in the [reference](../externals/mux-adapter/zellij-reference.md).
 
-- **Minimum version is 0.44.0** (`MIN_ZELLIJ_VERSION`), which `rimz doctor` reports as `meets_min_version`. Below it RimZ refuses the Zellij room and points at upgrading Zellij or using tmux. `stack-panes` and `advanced_mouse_actions` exist at the floor; `mouse_click_through` and `mouse_hover_effects` stay version-gated.
+- **Minimum version is 0.44.2** (`MIN_ZELLIJ_VERSION`), which `rimz doctor` reports as `meets_min_version`. Below it RimZ refuses the Zellij room and points at upgrading Zellij or using tmux. The floor is set by what the backend cannot work without: `action focus-pane-id` and `new-pane --tab-id` first ship in 0.44.1, so 0.44.0 can neither jump to a pane nor add a sidebar in place, and the `CommandChanged` event that feeds the plugin's foreground command first ships in 0.44.2. `stack-panes`, `advanced_mouse_actions`, `mouse_click_through`, and `mouse_hover_effects` exist at the floor; the two mouse flags stay gated on it, so an unparsed version omits them. `new-pane --no-focus` (0.45.0) is gated on its own version.
 - **Pane IDs are positional, not stable.** Zellij has no stable per-pane CLI handle and reuses ids as panes close and reopen. Pane stamps carry `pane_process_start` so reconciliation can refuse a stale match.
 - **`new-pane` answers before the pane mounts, and action stdout can cross clients.** The printed id is allocated before the screen thread mounts the pane, and a detached session can drop the mount entirely. Reconcile treats the id as a hint, discovers the mounted pane through plugin topology, and cleans up only a pane a fresh topology snapshot proves is a new `rimz-sidebar`.
 - **`new-pane` can mount into a nested row.** A stable-tab add inherits the tab's split tree, so the sidebar can report `x=0` with a work pane spanning beneath it. Every add verifies the full-height left column and can stack the work panes it displaced without replacing their processes.
@@ -538,7 +538,7 @@ RimZ seeds Zellij's `permissions.kdl` cache for its embedded plugin, so the firs
 
 The artifact path is canonicalized because Zellij keys the grant on the exact string. The security boundary is in [security.md](../guide/security.md#the-zellij-presence-plugin).
 
-A Zellij room requires Zellij 0.44 or newer and a loadable plugin. An older host, a missing artifact, or a denied permission fails the Zellij backend's precondition, and `rimz doctor` names the first failing fix plus tmux as the alternative.
+A Zellij room requires Zellij 0.44.2 or newer and a loadable plugin. An older host, a missing artifact, or a denied permission fails the Zellij backend's precondition, and `rimz doctor` names the first failing fix plus tmux as the alternative.
 
 ### Build identity and embedding
 
