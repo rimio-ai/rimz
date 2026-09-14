@@ -449,6 +449,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `me` | `true` on at most one entry: the caller. RimZ matches `TMUX_PANE` or `ZELLIJ_PANE_ID` to the pane binding first, then the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity. Outside an agent pane every entry is `false`. |
 | `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. |
 | `pending_waits` | Armed one-shot deliveries, each with its name, trigger, and optional arm timestamp. Timers come first by due time, then commands and signals; names break ties. |
+| `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
 | `model` | `id`, `effort`, and the rendered `label`. |
 | `context` | `fill_pct`, `used_tokens`, `window`, `severity`, `compactions` (completed), and `compacting` (in progress). |
 | `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |

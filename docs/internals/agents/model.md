@@ -65,6 +65,7 @@ Each event is a partial update. `carried_base` clones the prior row, `assemble_a
 | set-once | `first_prompt` | The first prompt that is neither blank nor a harness control turn, then stable. |
 | activity | `status`, `phase`, `last_activity`, `ended_at`, and a root's `task` | Replaced by every event. An event that omits `task` clears it, because an idle agent has no task. Every event except `ended` clears `ended_at`. |
 | carry-forward | `model`, `effort`, `usage` (`context_pct`, `context_window`, `total_tokens`), `prompt`, `description`, `recent_prompts`, `origin`, `compacted_from`, `budget` | Replaced when an event carries a value; a missing value never resets it. `recent_prompts` keeps the newest 16. |
+| background shells | `background_shells` | Carried forward, then extended, replaced, or trimmed by the event's `BackgroundShellReport`; a shell already listed keeps its first `started_at`. `ended` and `registered` clear it before the report applies. See [parked turns](#turn-endings-and-parked-turns). |
 | counters | `tool_calls`, `compaction_count` | Incremented from durable events, so replay reproduces them. |
 | turn boundaries | `turn_started_at`, `user_turn_started_at` | Advanced by the signals in [the edge table](#edges); otherwise carried. |
 | open ask | `waiting_since`, `open_ask`, `interrupted_turn_id` | `waiting_since` and `open_ask` live only while the row is `waiting`. `interrupted_turn_id` is recorded by `turn_interrupted` and cleared by `registered` or a newly opened turn. |
@@ -134,7 +135,7 @@ Claude wakes a parked parent by injecting the finished background task's notific
 
 A parked row is still `running`, so an `ended` fails it like any other running row.
 
-The park bit says only that something is pending. Which background shells run is a separate durable list, `background_shells`, folded from the adapter's `BackgroundShellReport` (a launch adds one, a task list replaces them, a finish notice drops some) and carried forward; `ended` and `registered` clear it. The list never moves status or phase, and the sidebar lists it in the card's waits section ([adapter_claude.md](./adapter_claude.md#background-shells)).
+The park bit says only that something is pending. Which background shells run is a separate durable list, `background_shells`, folded from the adapter's `BackgroundShellReport` under its [lifetime row](#the-rollup) (a launch adds one, a task list replaces them, a finish notice drops some). The list never moves status or phase, and the sidebar lists it in the card's waits section ([adapter_claude.md](./adapter_claude.md#background-shells)).
 
 ### Subagents
 
