@@ -34,7 +34,7 @@ Below 46 columns the card's waits count shortens to `⧖ N`, sharing its line wi
 
 Self waits are durable messages from `@rimz` with `Type: WAIT`, dispatched as steer: they interrupt a working agent rather than waiting for its next `done` boundary. Scheduled and signal [loop deliveries](./loop.md#signals) instead park at that boundary. Delivered waits are hidden from the rendered transcript and retained by [`rimz transcript --json`](./transcript.md).
 
-The body names the wait, its elapsed outcome and task name, and the combined output file's path, byte size, and line count. It never inlines command output; even an empty file is listed as `0 B, 0 lines`. A timer reads `waited 30m [<name>]`. A command check-in has this shape:
+The body names the wait, its elapsed outcome and task name, and the combined output file's path, byte size, and line count. It never inlines command output, and an empty output file is left out of the message. A timer reads `waited 30m [<name>]`. A command check-in has this shape:
 
 ```text
 waited on `cargo build`

@@ -100,6 +100,7 @@ fn verdict_line(
     if let Evidence::Signal(signal) = evidence
         && let Some(watch) = &signal.watch
         && let Some(path) = &watch.output_path
+        && watch.summary.bytes > 0
     {
         verdict.push_str(&format!(
             " · output ({}, {}): {}",

@@ -59,10 +59,8 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
                 }),
                 ..signal("wait.test", serde_json::json!({}))
             };
-            let path = if output_path.is_none() {
+            let path = if output_path.is_none() || output.is_empty() {
                 ""
-            } else if output.is_empty() {
-                " · output (0 B, 0 lines): /tmp/rimz-waits/wait-test.output"
             } else {
                 " · output (24 B, 2 lines): /tmp/rimz-waits/wait-test.output"
             };
@@ -117,7 +115,7 @@ fn watch_killed_by_signal_keeps_output_summary_path_and_note() {
 }
 
 #[test]
-fn watch_checkin_keeps_summary_path_and_next_actions() {
+fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
     for timeout in [None, Some("1s"), Some("12m")] {
         let task = TaskEntry {
             watch: Some("cargo test".to_owned()),
@@ -145,7 +143,7 @@ fn watch_checkin_keeps_summary_path_and_next_actions() {
             };
             let delay = timeout.unwrap_or("30m");
             let path = if output.is_empty() {
-                " · output (0 B, 0 lines): /tmp/rimz-waits/wait-test.output"
+                ""
             } else {
                 " · output (10 B, 1 line): /tmp/rimz-waits/wait-test.output"
             };

@@ -174,7 +174,7 @@ fn wait_rejects_watch_checkins_at_or_above_24_hours() {
 }
 
 #[test]
-fn wait_pid_checks_in_then_delivers_after_process_disappears_with_empty_summary() {
+fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
@@ -204,8 +204,7 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_with_empty_summary(
     );
     let checkin = wait_for_wait_messages(&env, 1);
     assert!(checkin[0].text.contains("still running after"));
-    assert!(checkin[0].text.contains("output (0 B, 0 lines):"));
-    assert!(!checkin[0].text.contains("(no output)"));
+    assert!(!checkin[0].text.contains("output ("), "{}", checkin[0].text);
     assert!(process.try_wait().unwrap().is_none());
     assert_eq!(wait_instances(&env).0.len(), 1);
     process.kill().unwrap();
@@ -216,8 +215,7 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_with_empty_summary(
         .find(|message| message.text.contains("exit 0 after"))
         .expect("process disappearance delivered");
     assert!(completed.text.contains(&pid));
-    assert!(completed.text.contains("output (0 B, 0 lines):"));
-    assert!(!completed.text.contains("(no output)"));
+    assert!(!completed.text.contains("output ("), "{}", completed.text);
     wait_for_no_wait_instances(&env);
 
     let receipt = wait_ok(&env, &["wait", "--pid", &pid]);
