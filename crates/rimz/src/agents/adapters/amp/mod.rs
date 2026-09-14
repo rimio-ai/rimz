@@ -128,6 +128,9 @@ const AMP_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking signal",
     },
+    background_shells: ConcernCoverage::Unsupported {
+        reason: "background shells are not mapped",
+    },
     session_end: ConcernCoverage::Partial {
         via: "pane liveness + rollup reaper",
         gap: "no session-end event",

@@ -500,6 +500,9 @@ fn derive_coverage(manifest: &PluginManifest, hook_reason: &'static str) -> Cove
         background_parking: ConcernCoverage::Unsupported {
             reason: "canonical protocol has no background-parking signal",
         },
+        background_shells: ConcernCoverage::Unsupported {
+            reason: "canonical protocol has no background-shell report",
+        },
         session_end: coverage(
             has("session_end"),
             "canonical session_end",
@@ -1209,7 +1212,7 @@ globs = ["history/**/*.jsonl"]
             }] += 1;
             totals
         });
-        assert_eq!(coverage, [10, 1, 7]);
+        assert_eq!(coverage, [10, 1, 8]);
         let lifecycle = spec
             .lifecycle_hooks
             .iter()

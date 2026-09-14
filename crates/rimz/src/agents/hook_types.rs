@@ -4,6 +4,7 @@
 //! parsing. All input structs use `#[serde(default)]` so sparse payloads
 //! (including `{}`) always deserialize cleanly.
 
+use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -11,8 +12,8 @@ use crate::ids::AgentSessionId;
 use crate::transcript::{AskAnswer, AskQuestion};
 
 use super::{
-    AgentHookClass, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
-    ContextObservation, LifecycleSignal,
+    AgentHookClass, AgentLifecycleObservation, AgentTurnError, AskKind, BackgroundShell,
+    ClassifiedHook, ContextObservation, LifecycleSignal,
 };
 
 /// Provider-neutral result of decoding one native hook payload.
@@ -634,16 +635,43 @@ pub struct HookEventCommon {
     pub session_id: Option<String>,
 }
 
-/// One entry in the `background_tasks` array on a Claude `Stop` payload
-/// (Claude Code v2.1.145+). An entry whose `status` is not `completed` or
-/// `failed` is considered in-flight, which keeps the turn alive.
+/// One entry in the `background_tasks` array on a Claude or Qwen `Stop`
+/// payload (Claude Code v2.1.145+). An entry whose `status` is not `completed`
+/// or `failed` is considered in-flight, which keeps the turn alive.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct BackgroundTask {
     pub id: Option<String>,
+    /// `shell`, `subagent`, `monitor`, ...; absent on older builds.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
     pub status: Option<String>,
     pub description: Option<String>,
     pub command: Option<String>,
+}
+
+impl BackgroundTask {
+    pub fn is_pending(&self) -> bool {
+        self.status
+            .as_deref()
+            .is_none_or(|status| !matches!(status, "completed" | "failed"))
+    }
+
+    /// The shell this task is, when it is one. A typeless entry from an older
+    /// build counts as a shell only when it carries a command.
+    pub fn as_shell(&self, started_at: Timestamp) -> Option<BackgroundShell> {
+        let is_shell = match self.kind.as_deref() {
+            Some(kind) => kind == "shell",
+            None => self.command.is_some(),
+        };
+        let id = self.id.as_deref().filter(|id| !id.is_empty())?;
+        is_shell.then(|| BackgroundShell {
+            id: id.to_owned(),
+            command: self.command.clone(),
+            description: self.description.clone(),
+            started_at,
+        })
+    }
 }
 
 #[cfg(test)]

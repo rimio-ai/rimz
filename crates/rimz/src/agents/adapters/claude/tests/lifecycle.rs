@@ -581,6 +581,119 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
 }
 
 #[test]
+fn background_shell_reports_follow_launch_stop_and_notification() {
+    fn shell_fields(shell: &BackgroundShell) -> (&str, Option<&str>, Option<&str>) {
+        (
+            shell.id.as_str(),
+            shell.command.as_deref(),
+            shell.description.as_deref(),
+        )
+    }
+    let report = |event: &str, payload: serde_json::Value| {
+        hook_observation(&ClaudeAdapter, event, &payload)
+            .unwrap_or_else(|| panic!("{event} should produce a lifecycle observation"))
+            .background_shells
+    };
+
+    let launch = |response: serde_json::Value| {
+        report(
+            "PostToolUse",
+            json!({
+                "session_id": "sess-1",
+                "tool_name": "Bash",
+                "tool_input": { "command": "cargo test", "description": "Run tests", "run_in_background": true },
+                "tool_response": response,
+            }),
+        )
+    };
+    let Some(BackgroundShellReport::Started { shell }) =
+        launch(json!({ "stdout": "", "backgroundTaskId": "b1" }))
+    else {
+        panic!("a Bash launch with a background task id starts a shell");
+    };
+    assert_eq!(
+        shell_fields(&shell),
+        ("b1", Some("cargo test"), Some("Run tests"))
+    );
+    assert_eq!(launch(json!({ "stdout": "ok" })), None);
+    assert_eq!(
+        report(
+            "PostToolUse",
+            json!({
+                "session_id": "sess-1",
+                "agent_id": "child-1",
+                "tool_name": "Bash",
+                "tool_response": { "backgroundTaskId": "b9" },
+            }),
+        ),
+        None,
+        "a subagent's launch targets its child row, which lists no shells"
+    );
+
+    let Some(BackgroundShellReport::Snapshot { shells }) = report(
+        "Stop",
+        json!({
+            "session_id": "sess-1",
+            "background_tasks": [
+                { "id": "b1", "type": "shell", "status": "running", "command": "cargo test", "description": "Run tests" },
+                { "id": "b2", "type": "shell", "status": "completed", "command": "ls" },
+                { "id": "a1", "type": "subagent", "status": "running", "description": "Explore" },
+                { "id": "b3", "status": "running", "command": "sleep 60" },
+                { "id": "m1", "status": "running", "description": "no command" },
+            ]
+        }),
+    ) else {
+        panic!("a Stop task list snapshots the shells");
+    };
+    assert_eq!(
+        shells.iter().map(shell_fields).collect::<Vec<_>>(),
+        vec![
+            ("b1", Some("cargo test"), Some("Run tests")),
+            ("b3", Some("sleep 60"), None),
+        ]
+    );
+    assert_eq!(
+        report(
+            "Stop",
+            json!({ "session_id": "sess-1", "background_tasks": [] })
+        ),
+        Some(BackgroundShellReport::Snapshot { shells: Vec::new() })
+    );
+    assert_eq!(
+        report("Stop", json!({ "session_id": "sess-1" })),
+        None,
+        "a build without the task list proves nothing about shells"
+    );
+
+    let notification = hook_observation(
+        &ClaudeAdapter,
+        "UserPromptSubmit",
+        &json!({
+            "session_id": "sess-1",
+            "prompt": "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>",
+        }),
+    )
+    .expect("a notification prompt is a lifecycle observation");
+    assert_eq!(
+        notification.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
+    assert_eq!(
+        notification.background_shells,
+        Some(BackgroundShellReport::Finished {
+            ids: vec!["b1".to_owned()]
+        })
+    );
+    assert_eq!(
+        report(
+            "UserPromptSubmit",
+            json!({ "session_id": "sess-1", "prompt": "<task-notification><task-id>b1</task-id>" }),
+        ),
+        None
+    );
+}
+
+#[test]
 fn root_registration_stamps_birth_account_key_only_on_registration() {
     for source in ["startup", "resume"] {
         let payload = json!({ "session_id": "sess-1", "source": source });

@@ -151,6 +151,9 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_parking: ConcernCoverage::Unsupported {
         reason: "no parked-on-background signal",
     },
+    background_shells: ConcernCoverage::Unsupported {
+        reason: "background shells are not mapped",
+    },
     session_end: ConcernCoverage::Wired { via: "sessionEnd" },
     idle_notification: ConcernCoverage::Partial {
         via: "agentStop + stall window",

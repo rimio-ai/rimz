@@ -16,6 +16,7 @@ use crate::agents::PermissionMode;
 use crate::ids::{AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwner};
 
+use super::background_shell::BackgroundShellReport;
 use super::lifecycle::LifecycleSignal;
 use super::optional_payload_string;
 
@@ -317,6 +318,10 @@ pub struct AgentLifecycleObservation {
     /// its parent row by `(kind, parent_agent_id)` for the whole child's life.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
+    /// What this hook proves about the session's background shells. Absent
+    /// leaves the folded list unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_shells: Option<BackgroundShellReport>,
 }
 
 impl AgentLifecycleObservation {
@@ -342,6 +347,7 @@ impl AgentLifecycleObservation {
             pane_id: None,
             pane_stamp: None,
             parent_agent_id: None,
+            background_shells: None,
         }
     }
 

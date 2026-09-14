@@ -15,6 +15,7 @@ expression: entry
   "me": true,
   "status": "running",
   "pending_waits": [],
+  "background_shells": [],
   "phase": "acting",
   "turn_error": null,
   "ask": null,

@@ -138,6 +138,9 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     background_parking: ConcernCoverage::Unsupported {
         reason: "stock Grok hooks expose no background parking lifecycle",
     },
+    background_shells: ConcernCoverage::Unsupported {
+        reason: "background shells are not mapped",
+    },
     session_end: ConcernCoverage::Wired { via: "SessionEnd" },
     idle_notification: ConcernCoverage::Partial {
         via: "Notification",

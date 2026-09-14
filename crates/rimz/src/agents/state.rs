@@ -13,6 +13,7 @@ use crate::agent_activity::ToolRepeat;
 use crate::ids::{AgentKind, AgentSessionId, AskId, LoginKey, LoginName};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
+use super::background_shell::BackgroundShell;
 use super::context::{
     AgentContext, AgentTokenUsage, AgentTurnError, TurnErrorClass, TurnSettleOutcome,
 };
@@ -725,6 +726,11 @@ pub struct AgentState {
     /// Loop-catalog projection rebuilt at enrichment, never reduced from events.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_waits: Vec<PendingWait>,
+    /// Background shells this session is running, folded from adapter hook
+    /// reports and carried forward; cleared when the session ends or
+    /// re-registers. Independent of the `Parked` phase.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_shells: Vec<BackgroundShell>,
     /// What the parent asked this *subagent* to do, harvested from Claude's
     /// `subagentStatusLine`. Folded in at snapshot time by
     /// `SidebarSnapshot::with_subagent_context`, never reduced from the event
@@ -886,6 +892,8 @@ struct AgentStateWire {
     budget_park: Option<BudgetPark>,
     #[serde(default)]
     pending_waits: Vec<PendingWait>,
+    #[serde(default)]
+    background_shells: Vec<BackgroundShell>,
     subagent_description: Option<String>,
     #[serde(default)]
     subagent_cost_usd: Option<f64>,
@@ -974,6 +982,7 @@ impl From<AgentStateWire> for AgentState {
             estimated_active_secs: None,
             budget_park: wire.budget_park,
             pending_waits: wire.pending_waits,
+            background_shells: wire.background_shells,
             subagent_description: wire.subagent_description,
             subagent_cost_usd: wire.subagent_cost_usd,
             subagent_started_at: wire.subagent_started_at,
@@ -1067,6 +1076,7 @@ impl AgentState {
             estimated_active_secs: None,
             budget_park: None,
             pending_waits: Vec::new(),
+            background_shells: Vec::new(),
             subagent_description: None,
             subagent_cost_usd: None,
             subagent_started_at: None,
