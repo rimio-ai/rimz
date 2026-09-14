@@ -700,8 +700,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
                 .provider_argv
                 .iter()
                 .all(|arg| !arg.contains("system_reminder")),
-            "{kind}: {:?}",
-            process.provider_argv
+            "{kind}: reminder leaked into argv"
         );
 
         let bare = compile_agent_process_with_extra_env(
