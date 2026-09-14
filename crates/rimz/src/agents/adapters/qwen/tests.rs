@@ -1050,11 +1050,15 @@ fn stop_failure_maps_retryable_classes() {
         TurnErrorClass::PausedOverloaded
     );
     assert_eq!(
-        hook_output(&adapter, "StopFailure", &json!({"error":"loop_detected"}))
-            .turn_error()
-            .cloned()
-            .unwrap()
-            .class,
+        hook_output(
+            &adapter,
+            "StopFailure",
+            &json!({"error":"loop_detected","last_assistant_message":"retrying after rate limit"})
+        )
+        .turn_error()
+        .cloned()
+        .unwrap()
+        .class,
         TurnErrorClass::Failed
     );
 }
