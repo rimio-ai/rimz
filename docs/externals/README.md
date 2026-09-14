@@ -14,7 +14,7 @@ Each page names its upstream sources and the version or commit it was last refre
 
 | Page | Upstream | Refreshed against | RimZ mapping |
 | --- | --- | --- | --- |
-| [claude-reference.md](./agent-adapter/claude-reference.md) | Claude Code | No page-wide baseline; sections cite up to 2.1.269 | [adapter_claude.md](../internals/agents/adapter_claude.md) |
+| [claude-reference.md](./agent-adapter/claude-reference.md) | Claude Code | 2.1.270 (tag `v2.1.270`, 2026-09-12) | [adapter_claude.md](../internals/agents/adapter_claude.md) |
 | [codex-reference.md](./agent-adapter/codex-reference.md) | Codex | 0.150.1 | [adapter_codex.md](../internals/agents/adapter_codex.md) |
 | [amp-reference.md](./agent-adapter/amp-reference.md) | Amp CLI | `@ampcode/cli` 0.0.1783946745-g8c4c0a | [adapter_amp.md](../internals/agents/adapter_amp.md) |
 | [antigravity-reference.md](./agent-adapter/antigravity-reference.md) | Antigravity CLI | 1.1.2 (source tag 1.1.1) | [adapter_antigravity.md](../internals/agents/adapter_antigravity.md) |
