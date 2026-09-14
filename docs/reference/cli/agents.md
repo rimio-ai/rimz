@@ -482,7 +482,7 @@ When room tmp exists, `show` prints its host path and notes that sandboxed panes
 | `-n, --tail <N>` | Keep the last `N` chat lines. |
 | `-f, --follow` | Print new lines as they land. Conflicts with `--all`. |
 | `--all` | Include earlier sessions. |
-| `--json` | Emit JSON, or NDJSON with `--follow`. |
+| `--json` | Emit `{"entries": [...]}` with the [transcript entry fields](./transcript.md#json-output) and no `channel`, `focus`, or `archived_count`; with `--follow`, one entry per line. |
 
 #### `history`
 

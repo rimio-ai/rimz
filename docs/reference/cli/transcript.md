@@ -1,30 +1,188 @@
 # Transcript CLI
 
-`rimz transcript` reads RimZ's durable transcript log and renders a channel or one agent as a timestamped chat log. It reads only — nothing is sent, nothing changes — and it reaches back past what the agents keep: because RimZ records every prompt, answer, and inter-agent message itself, the log survives ended agents whose native transcript files have rotated away. It targets agents and channels with the [agent-address grammar](./agents.md#addressing-agents). Reading the conversation back as an everyday move is the [messaging guide](../../guide/messaging.md); the log model (entry kinds, JSONL buckets, retention) is [transcript.md](../../internals/harness/transcript.md).
+`rimz transcript` prints a channel or one agent as a timestamped chat log, read from RimZ's own transcript log. RimZ records every prompt, answer, and inter-agent message itself, so the log still reads after an agent has ended and its provider's native session files have rotated away. The command only reads; it sends nothing to any agent. Reading a conversation back as part of everyday work is covered in the [messaging guide](../../guide/messaging.md), and the log itself (entry kinds, storage, retention) in [internals: the transcript](../../internals/harness/transcript.md).
 
 ```sh
-rimz transcript @swift-otter            # one agent's channel messages
-rimz transcript @codex#cli-docs --last 4
-rimz transcript run_0123456789abcdef0123456789abcdef
-rimz transcript '#cli-docs'             # the channel chat log
-rimz transcript @all#cli-docs --last 12
-rimz transcript --all                   # include the dated history archive
-rimz transcript --flat                  # restore pure timestamp order
-rimz transcript --json
+rimz transcript                          # the current channel
+rimz transcript '#cli-docs'              # one channel
+rimz transcript @codex#cli-docs -n 4     # one agent, last 4 entries
+rimz transcript run_0123456789abcdef0123456789abcdef   # a supervised run's agent
+rimz transcript @all                     # every channel in the workspace
+rimz transcript --all                    # include prior sessions
+rimz transcript --flat                   # timestamp order, no threads
+rimz transcript --json > /tmp/chat.json
 ```
 
-Quote a target that starts with `#`: an unquoted `#` starts a shell comment in bash, and in zsh with `interactivecomments`, so `rimz transcript #cli-docs` runs as `rimz transcript` and shows the current channel.
+## Choose what to read
 
-A channel target (`#worktree`, `@all`, or no target for the current channel) projects every root agent's transcript-log entry in that exact lane into one chat log. Pane-backed children launched through `rimz subagents` are not root agents, so channel and `@all` views exclude their conversations in both human and `--json` output. A channel named explicitly (`#chan`, `@agent#chan`, `@all#chan`, or `-w chan`) that the current workspace has neither transcript entries nor a live agent for is located across every known workspace by its transcript entries, so the conversation renders from any directory; several matching workspaces is an error naming their project roots, and `--root <path>` pins the workspace and skips the lookup. The default view starts at the current live cohort for that scope, so a same-name team or worktree relaunch opens on its living conversation instead of replaying the prior one. Older lines remain in the append-only log, `--all` shows them under a dated history archive, and an empty scope exits successfully with a short note.
+The target names a channel or one agent, using the [agent-address grammar](./agents.md#addressing-agents).
 
-A single-agent target is deliberately non-ambiguous: a supervised-run id resolves to that run's bound agent session, an exact session id wins across channels, and otherwise a handle picks a live session in the current room when one exists, then the latest transcript activity. Targeting a launched child shows that child's conversation and attributes its launch brief to the parent as `@parent → @child`; the parent's own view does not include its children's conversations. A root-agent view builds the same channel log and filters it to messages the focal agent sent or received, so sent messages appear from peers' logs as well as received messages from the focal log. Confirmed sends made with `--no-from` are recorded as `rimz`-authored prompts and hidden from human rendering; cross-channel sends involving agents outside the focal channel are outside this view.
+| Target | Reads |
+| --- | --- |
+| none | The current channel. Outside a channel, every channel in the workspace. |
+| `'#<channel>'` | That channel. |
+| `@all` | Every channel in the workspace, with each handle suffixed by its channel. |
+| `@all#<channel>` | That channel. |
+| `@<handle>` | One agent, looked up in the current channel. |
+| `@<handle>#<channel>` | One agent, looked up in that channel. |
+| a session id | That agent session, in whatever channel it ran. |
+| `run_<id>` | The agent session bound to that supervised run. Fails with `run <id> has not bound an agent session yet` until the run's agent registers. |
 
-Rendering: each conversation starts at its timestamp in the margin, and the receiver's turn output plus any replies back to the sender expand chronologically beneath it behind a `│` spine. Threads are one level deep; a hand-off to a third party opens its own exchange at the margin. A turn output without recorded linkage threads beneath that agent's most recent turn opener, so prompts typed directly in an agent pane stay with their replies, and stays at the margin when that opener is a hidden harness entry; a reply whose recorded parent is outside the selected scope stays at the margin. `--flat` restores pure timestamp order.
+`-w <channel>` sets the channel for a target that names none. A target whose `#channel` disagrees with `-w` is an error.
 
-A [`rimz teams flip`](./teams.md#flip-the-board-to-the-next-stage) renders inside the lane's conversation as a `⇢ Explore → Plan  HH:MM  note` line: the transition in the accent tone, the time and note faint, the note's further lines hanging beneath it. It continues the flipper's most recent line when that line is in the same lane and within the grouping window, and otherwise opens the flipper's own block under a normal header. A flip with no prior stage reads `⇢ Plan · opened`, a same-stage re-fire `⇢ Plan · re-opened`. Flips come from the durable `team.stage` signal in the active event log, so registration re-wakes are excluded and flips older than an event-log rotation are not shown. `--json` carries each flip as an entry whose `text` is the note and whose `stage` object holds `team`, `from`, `to`, `owner`, and `by`.
+Quote a target that starts with `#`. An unquoted `#` starts a comment in bash, and in zsh with `interactivecomments`, so `rimz transcript #cli-docs` runs as `rimz transcript` and shows the current channel.
 
-Headers put the sender first, add the receiver with `→` when one exists, and show `HH:MM`; a thread reply on another day also shows its date. Consecutive messages from the same sender-to-receiver pair group under one header only within the same margin or thread lane. On a styled terminal, message bodies render markdown headings, emphasis, links, lists, code, quotes, and tables within their margin or thread width; piped or `--color never` output preserves the markdown as written, and `--color always` forces rendering. Bodies highlight `@agent` and `#channel` mentions, and provider API error entries render as error-styled agent lines. Blocking asks render as cards with a left spine, option lists, each option's description under its label, folded answers, and `◌ unanswered` when no answer exists in the log. An ask continues the preceding same-agent block even when the normal message grouping window has elapsed. A human prompt submitted while that ask is open is recorded and folded into the card as its answer instead of opening another top-level turn. Peer-opened turns include the receiver's assistant reply.
+### Channel views
 
-`--last <N>` keeps at least the last N lines after thread blocks are expanded into display order, widening the tail back to a cut thread's root so a thread always includes its opener. The tail follows the rendered room rather than the raw timestamp sequence. Status-only `SUBAGENT_REPORT` fleet digests from `@rimz` are recorded as `SubagentReport` entries but are always omitted from human rendering and do not count toward `--last`; there is no flag to reveal them in that view. A [`rimz wait`](./wait.md) or loop `--wait` delivery is recorded as a `wait` entry from `@rimz` and is omitted from human rendering the same way, as are `rimz`-authored prompts such as nudges and confirmed `--no-from` sends, so a conversation reads as the work rather than as the alarms that resumed it. Each of these openers hides together with the assistant and error output of the turn it opened, so the agent's narration in reply to a digest or wait stays out of the view; an ask from that turn, the output of a turn that asked the user, and any message the agent sends stay visible, and a turn opened by both a hidden entry and a visible message stays visible. `--json` retains these entries and emits `{channel, focus, entries}` for both channel and agent targets, with `archived_count` when prior-session lines are hidden. JSON entries remain timestamp-ordered and carry optional `message_id` plus `reply_to: [message_id, ...]`; `reply_to` preserves causal linkage, while the rendered view derives conversations from output edges and replies back to the sender. Absent fields mean the entry has no recorded linkage.
+A channel view merges the transcript of every root agent in the channel into one chat log, headed by a `#<channel>` line. Children launched through `rimz subagents` are not root agents: their conversations stay out of channel and `@all` views, in human and `--json` output alike. Read a child by targeting it.
 
-For an agent-centric tail that follows new lines as they land, [`rimz agents logs <ref>`](./agents.md#logs) uses this same transcript scope and rendering. It locates a `#channel` target across workspaces the same way. Its plain and `-f` human views hide `SubagentReport`, `wait`, and `rimz`-authored prompt entries with the output of the turns they open, while `rimz agents logs <ref> --json` includes them like `rimz transcript --json`.
+### One agent
+
+An agent view shows the messages the agent sent or received, including its messages as recorded in its peers' logs. Messages between agents in other channels are outside the view.
+
+The target resolves to exactly one agent session, in this order:
+
+1. A `run_<id>` resolves to the run's bound session.
+2. An exact session id wins, in any channel.
+3. Otherwise the selector matches handle, provider kind, name, profile, role, or session-id prefix within the channel. A live root agent in the room wins over ended sessions; among the remaining matches, the one with the latest transcript activity wins.
+
+No match fails with ``no agent matches target `<target>` in the transcript log``.
+
+Targeting a launched child shows the child's own conversation, with its launch brief attributed to the parent as `@parent → @child`. The parent's view leaves its children's conversations out.
+
+### Channels in other workspaces
+
+A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channel>`, or `-w <channel>`) is looked up in the current workspace first. When the current workspace has neither transcript entries nor a live agent for it, RimZ searches every known workspace whose project root still exists, so the conversation reads from any directory. When several workspaces match, the command fails:
+
+```text
+#cli-docs has conversations in several workspaces: /home/me/api, /home/me/web; run from one of them or pass --root <path>
+```
+
+`--root <path>` pins the workspace and skips the search.
+
+## Flags
+
+| Flag | Effect |
+| --- | --- |
+| `[TARGET]` | What to read; see [Choose what to read](#choose-what-to-read). |
+| `-w, --worktree <channel>` | Channel used to resolve the target. |
+| `-n, --last <N>` | Keep the last `N` entries; see [Tail with `--last`](#tail-with---last). |
+| `--all` | Include prior sessions; see [Prior sessions](#prior-sessions). |
+| `--flat` | Print entries in timestamp order instead of grouping replies into threads. |
+| `--json` | Emit JSON; see [JSON output](#json-output). |
+
+`--color`, `--root`, and the backend flags are [global flags](../cli.md#global-flags).
+
+## Prior sessions
+
+By default a view starts at the current live cohort: the earliest registration among the live root agents in scope (or the targeted agent, for an agent view). After a same-name team or worktree relaunch, the view opens on the living conversation. Earlier lines stay in the log, and a note on stderr counts them:
+
+```text
+⋯ 12 earlier lines from a prior session (Fri, Sep 11 2026) — rimz transcript --all
+```
+
+`--all` prints the earlier lines first, then a `Live · <when>` rule before the current cohort's lines. When nothing in scope is live, or every line predates the cohort, the whole scope prints without a rule.
+
+## Read the human view
+
+This is a piped channel view: a user's prompt with the agent's reply threaded beneath it, then a hand-off that opens its own exchange.
+
+```text
+#cli-docs
+
+ user  → @codex  14:02
+Draft the transcript reference from the code.
+│
+│ @codex  14:09
+│ Drafted docs/reference/cli/transcript.md. Asking @claude to review it.
+
+@codex → @claude  14:09
+Review docs/reference/cli/transcript.md against the transcript CLI code.
+│
+│ @claude  14:15
+│ Two drifts: @all reads every channel, and --json drops focus for channel targets.
+```
+
+### Headers and grouping
+
+Each header names the sender, then `→` and the receiver when there is one, then the local time as `HH:MM`. Human senders show as the `user` or `you` chip, and RimZ itself as `rimz`. A channel view drops the `#channel` suffix from handles. Consecutive entries from the same sender to the same receiver share one header when they fall within 5 minutes of each other, on the same day, in the same margin or thread. A rule labelled `Today` or with the date (`Sat, Jun 27 2026`) marks a change of day.
+
+### Threads
+
+Each conversation starts at the margin, and the receiver's turn output plus any replies back to the sender follow beneath it behind a `│` spine, in time order. Threads are one level deep. A hand-off to a third agent opens its own exchange at the margin, as does a reply whose parent is outside the view. A thread entry on a different day from its root shows the date in its header (`Mon, Jun 29 2026 · 00:02`).
+
+Output with no recorded parent, such as the reply to a prompt typed directly into the agent's pane, threads beneath that agent's most recent opening message. It stays at the margin when that opener is hidden (see [What the human view hides](#what-the-human-view-hides)). `--flat` turns threading off.
+
+### Bodies
+
+On a styled terminal, bodies render markdown (headings, emphasis, links, lists, code, quotes, tables) wrapped to the margin or thread width. Piped output and `--color never` print the markdown as written; `--color always` forces rendering. `@agent` and `#channel` mentions are highlighted, and provider API errors print as the agent's lines in the error tone.
+
+### Asks
+
+A blocking question or plan approval prints as a card behind its own `│` spine: the question, each option as `○ <label>` with its description beneath, and the answer folded in as `● <label> — you`. A card with no recorded answer ends in `◌ unanswered`. A prompt the user submits while the ask is open counts as its answer and folds into the card. An ask continues the agent's preceding block on the same day even after the 5-minute window.
+
+### Stage flips
+
+A [`rimz teams flip`](./teams.md#flip-the-board-to-the-next-stage) prints inside the channel's conversation as a flip line:
+
+```text
+@claude  14:10
+⇢ Explore → Plan  notes written
+⇢ Plan → Implement  14:13
+```
+
+The transition prints in the accent tone and the note faint, with further note lines hanging beneath. A flip continues its flipper's most recent line in the same channel when that line is within 5 minutes, adding its own `HH:MM`; otherwise it opens a block under its own header. A flip with no prior stage reads `⇢ Plan · opened`, and a flip to the current stage reads `⇢ Plan · re-opened`. Flips come from the [`team.stage` signal](./teams.md#the-teamstage-signal) in the active event log, so flips older than the last event-log rotation do not print.
+
+## What the human view hides
+
+The human view leaves out RimZ's own deliveries, so a conversation shows the work and not the wakeups that resumed it. `--json` keeps every one of them.
+
+| Hidden entry | Source |
+| --- | --- |
+| Fleet digest | The status-only `SUBAGENT_REPORT` from `@rimz` when an agent's launched subagents settle. |
+| Wait | A [`rimz wait`](./wait.md) or loop `--wait` delivery, a signal delivery, or a stage notice, from `@rimz`. |
+| `rimz` prompt | A prompt RimZ sent without a header, such as a nudge or a confirmed `rimz message --no-from` send. |
+
+Each hidden entry takes with it the agent's replies and error output in the turn it opened. Three things stay visible: an ask raised in that turn, the output of a turn that asked the user, and any message the agent sends. A turn opened by both a hidden entry and a visible message stays visible. No flag shows hidden entries in the human view.
+
+## Tail with `--last`
+
+`-n, --last <N>` keeps the last `N` entries in display order, after hidden entries are removed. One entry is one message, however many lines its body takes, and an answer folded into an ask card still counts as one. When the cut lands inside a thread, the tail widens back to the thread's root so the conversation keeps its opener. `--last` applies to `--json` the same way.
+
+## Empty results
+
+A scope with nothing to show exits 0 and prints a faint note on stderr. It reads `No conversation for #<channel> yet.` when the scope has a channel, `No conversation for <target> yet.` or `No conversation for this room yet.` otherwise, and `No conversation recorded yet.` when the log is empty or `--last 0` trimmed everything. With `--json`, stdout gets `{"entries": []}`.
+
+## JSON output
+
+`--json` prints one object with the selected entries in timestamp order, hidden entries included.
+
+| Field | Present | Value |
+| --- | --- | --- |
+| `channel` | When the view has a channel | The channel name, without `#`. |
+| `focus` | Agent targets only | The focal agent's handle. |
+| `entries` | Always | The entries, described below. |
+| `archived_count` | When prior-session lines are left out | How many lines `--all` would add. |
+
+Each entry carries these fields. A field shown as optional is absent when empty or false.
+
+| Field | Value |
+| --- | --- |
+| `from` | `user` for a prompt, `you` or `answered` for an answer, `@rimz` for a hidden delivery, otherwise the agent's handle. |
+| `to` | Optional. The receiving agent's handle. Absent on agent output and flips. |
+| `at` | The timestamp, RFC 3339 in UTC. |
+| `text` | The body. For a flip, the note. |
+| `message_id` | Optional. The id of the delivered message this entry records. |
+| `reply_to` | Optional. Ids of the messages that opened the turn this entry belongs to. |
+| `error` | Optional. `true` for a provider error. |
+| `questions` | Optional. An ask's questions: `question`, `options` (a label string or `{label, description, caution}`), `multi_select`, `has_option_previews`. |
+| `answers` | Optional. An answer's picks: `question`, `chosen`, `note`. |
+| `stage` | Optional. A flip: `team`, `from`, `to`, `owner`, `by`. |
+
+Entries carry no kind field. A prompt RimZ sent reads `from: "user"` like a human prompt, so JSON cannot tell the two apart. `reply_to` records causality as delivered. The human view builds threads from it, but only from turn output and replies back to the sender, so two entries linked in JSON can print in separate exchanges.
+
+## See also
+
+- [`rimz agents logs`](./agents.md#logs): one agent's transcript with the same scope, rendering, and hiding, plus `-f` to follow new lines.
+- [Messaging guide](../../guide/messaging.md): sending messages and reading conversations back.
+- [Internals: the transcript](../../internals/harness/transcript.md): entry kinds, causal links, and how threads are assembled.
