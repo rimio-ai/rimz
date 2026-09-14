@@ -134,7 +134,7 @@ fn grok_global_hooks_preserve_user_config_and_route_camelcase_events_neutrally()
         .filter(|entry| entry["_rimz_managed"] == true)
         .map(|entry| entry["hooks"][0]["command"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(managed_commands.len(), 12);
+    assert_eq!(managed_commands.len(), 13);
     assert!(
         managed_commands
             .iter()
