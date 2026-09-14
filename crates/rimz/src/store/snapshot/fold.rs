@@ -55,12 +55,36 @@ pub struct ResumeOutcome {
     pub updated_at: Timestamp,
 }
 
+/// Always-on observability seam beside the carryover read, the twin of
+/// [`event_log::testkit`]: carryover bytes parsed, so the performance tier
+/// can prove a warm fold re-parses no history and the sidebar tick meter
+/// counts a re-parse storm as fold bytes.
+#[doc(hidden)]
+pub mod testkit {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static CARRYOVER_BYTES_PARSED: AtomicU64 = AtomicU64::new(0);
+
+    /// `agents.carryover.json` bytes parsed since process start.
+    pub fn carryover_bytes_parsed() -> u64 {
+        CARRYOVER_BYTES_PARSED.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn count_bytes_parsed(n: u64) {
+        CARRYOVER_BYTES_PARSED.fetch_add(n, Ordering::Relaxed);
+        crate::lane::count_event_log_bytes_read(n);
+    }
+}
+
 fn read_carryover(path: &Path) -> Result<EventCarryover> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| SnapshotErr::Json {
-            path: path.to_path_buf(),
-            source,
-        }),
+        Ok(bytes) => {
+            testkit::count_bytes_parsed(bytes.len() as u64);
+            serde_json::from_slice(&bytes).map_err(|source| SnapshotErr::Json {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(EventCarryover::default()),
         Err(source) => Err(SnapshotErr::Io {
             path: path.to_path_buf(),
