@@ -140,7 +140,7 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 **Interface** — `docs/interface/`
 - [sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen: cockpit, agent cards, provider dashboard, rendered frames, glyph legend.
 
-**Reference** — `docs/reference/` answers a specific flag or field. [cli.md](./docs/reference/cli.md) is the command map and indexes a page per scene under `docs/reference/cli/`; [agent-support.md](./docs/reference/agent-support.md) carries per-agent status, integration surface, and permission-mode mapping for every built-in adapter, and [agent-plugins.md](./docs/reference/agent-plugins.md) the external bundle, canonical wire, and probe contracts.
+**Reference** — `docs/reference/` answers a specific flag or field, and [its README](./docs/reference/README.md) indexes the pages by topic. [cli.md](./docs/reference/cli.md) is the command map and indexes a page per scene under `docs/reference/cli/`; [agent-support.md](./docs/reference/agent-support.md) carries per-agent status, integration surface, and permission-mode mapping for every built-in adapter, and [agent-plugins.md](./docs/reference/agent-plugins.md) the external bundle, canonical wire, and probe contracts.
 
 **Internals** — `docs/internals/` documents each subsystem for people who read the code; [README.md](./docs/internals/README.md) is the index and the per-page table. The three multi-doc subsystems (`agents/`, `harness/`, `sidebar/`) keep a folder; every other subsystem is one flat file.
 
