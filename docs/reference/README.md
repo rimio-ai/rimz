@@ -6,7 +6,7 @@ These pages answer a specific question about the shipped product: what a command
 
 ## The command line
 
-[cli.md](./cli.md) is the command map: it indexes every `rimz` command by scene and collects the conventions every command page assumes (addressing, `--root`, `--mux`, `--json`, exit codes, and unit strings). Each command group has its own page under `cli/`.
+[cli.md](./cli.md) is the command map: it indexes every `rimz` command by scene and collects what every command page assumes: the global flags, addressing, which room and backend a command reaches, script output, exit codes, durations, color, and agent-prose rendering. Each command group has its own page under `cli/`.
 
 | Page | What it covers |
 | --- | --- |
