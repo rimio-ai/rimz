@@ -4,6 +4,8 @@
 
 Kiro support targets the stock v3 engine selected by `kiro-cli chat --v3`, verified on Kiro CLI 2.21.4. RimZ owns launch, exact resume, process identity, the managed global hook file, validated local-session discovery, transcript history, assistant streaming, and transient live state. Provider files are pulled display truth: the adapter and snapshot fold never append them to the RimZ event log.
 
+Only the registry reaches the concrete adapter. Installation and the local session store stay private to the Kiro adapter; other modules consume the provider-neutral capabilities.
+
 Since Kiro CLI 2.13.0, global hooks run in every workspace, so session, turn, and tool lifecycle arrive as native hooks. The validated local store still supplies what no hook reports: the newborn card before the first prompt, pending tool approvals, cancelled and failed turn outcomes, context percentage, and history.
 
 ## Launch and resume

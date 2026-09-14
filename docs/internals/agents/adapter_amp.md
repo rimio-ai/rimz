@@ -4,6 +4,8 @@
 
 Amp exposes no command-hook, statusline, or interactive RPC protocol, so RimZ owns the wire: [`plugin.ts`](../../../crates/rimz/src/agents/adapters/amp/plugin.ts) is installed at `~/.config/amp/plugins/rimz.ts` and forwards observation-only envelopes to `rimz hooks feed --source amp`. Upstream drift in that envelope is a RimZ adapter bug.
 
+Only the registry reaches the concrete adapter. The account probe, payloads, thread parsing, transcript paging, and spend stay private to the Amp adapter; other modules consume the provider-neutral capabilities.
+
 ## Hooks and lifecycle
 
 | Native event or state | Internal signal | Normalized fields |

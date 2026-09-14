@@ -4,6 +4,8 @@
 
 This doc is the single home for everything Pi-specific. Pi's integration surface is in-process TypeScript extensions, so the adapter ships one — [`extension.ts`](../../../crates/rimz/src/agents/adapters/pi/extension.ts), embedded at compile time — that forwards each event below to `rimz hooks feed --source pi` as a fire-and-forget child. The child direction inverts: Claude and Codex run RimZ as a hook child and read its stdout; pi's extension runs RimZ as *its* child. One event blocks: `tool_call`, pi's pre-tool gate, whose handler pi awaits — there the extension reads the child's stdout as the decision and applies it through the handler's return value. Every envelope also stamps the session name, model, thinking level as `effort`, context gauge (`context_pct` / `context_window` / `total_tokens`, rounded) from the in-process `ctx.getContextUsage()`, latest per-call token split, cumulative `total_cost_usd`, and latest captured rate-limit windows, so a pi row's live context is payload-first with no transcript tail read. Pi 0.80.4's `agent_settled` is the final turn boundary; the extension carries the preceding `agent_end` verdict into it so retries and queued continuations do not flash idle.
 
+Only the registry reaches the concrete adapter. Account probes, ask mapping, payloads, transcript normalization, and spend stay private to the Pi adapter; other modules consume the provider-neutral capabilities.
+
 ## Hooks and lifecycle
 
 Native event → internal mapping; the upstream extension API, payloads, and session JSONL are in [pi-reference.md](../../externals/agent-adapter/pi-reference.md).
