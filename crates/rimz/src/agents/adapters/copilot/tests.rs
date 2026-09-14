@@ -364,7 +364,7 @@ fn tool_mapping_uses_camel_case_names() {
     let signal = hook_observation(
         &CopilotAdapter,
         "postToolUse",
-        &json!({"sessionId":"s","toolCalls":[{"name":"view"},{"name":"bash"},{"name":"edit"}]}),
+        &json!({"sessionId":"s","toolCalls":[{"name":"bash","args":{"command":"ls"}},{"name":"view"},{"name":"edit"}]}),
     )
     .map(|observation| observation.signal);
     assert_eq!(
