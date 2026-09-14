@@ -241,12 +241,6 @@ impl Pricing {
     }
 }
 
-impl Default for Pricing {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
 /// A resolved model → price table.
 #[derive(Clone, Debug, Default)]
 pub struct PriceBook {
