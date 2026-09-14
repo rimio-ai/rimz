@@ -442,7 +442,7 @@ agent = "claude"
 model-reminder = false
 ```
 
-`model-reminder` defaults to on in both `[agents.profiles]` and `[subagents.profiles]`. Set it on the profile you launch: it is not inherited from a base profile, and launches without a profile keep the default. RimZ combines team context, the model line, and delegation guidance into one `<system_reminder>` block. Claude, Codex, Qwen, and Droid support this launch reminder; other adapters receive no model line.
+`model-reminder` defaults to on in both `[agents.profiles]` and `[subagents.profiles]`. Set it on the profile you launch: it is not inherited from a base profile, and launches without a profile keep the default. RimZ combines team context, the model line, and delegation guidance into one `<system_reminder>` block. Claude, Codex, Qwen, Droid, Grok, Pi, and OpenCode support this launch reminder; other adapters receive no model line.
 
 Drop-ins under `~/.agents/profiles/<name>/agent.toml` may declare either or both profile namespaces. Their relative prompt paths root at the drop-in directory, and same-named entries in the machine `agents.toml` take precedence.
 
