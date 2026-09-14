@@ -270,7 +270,7 @@ Two everyday tasks have their own guides, with the depth this page leaves out:
 - **Steer or queue an agent** — send text that parks at the turn boundary, interrupts the live turn, or arrives on a schedule: the [messaging guide](./messaging.md).
 - **Script an agent** — run one supervised, exit-coded turn for a pipeline or CI job with `rimz agents … -p`: the [scripting guide](./scripting.md).
 
-The complete `rimz agents` surface, every verb and flag, is the [agent-control reference](../reference/cli/agents.md).
+The complete `rimz agents` surface is the [agent-control reference](../reference/cli/agents.md).
 
 ## Answer asks from your phone
 
@@ -389,5 +389,5 @@ Not every provider defines every mode: the built-in set is `claude-{auto,ask,pla
 - [Budgets](./budget.md) — dollar caps on an agent, a task, a room, or a provider login, and what a park means.
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
-- [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.
+- [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents` surface.
 - [Agent support](../reference/agent-support.md) — which agents RimZ drives and what each integration adds.
