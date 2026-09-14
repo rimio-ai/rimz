@@ -228,53 +228,64 @@ fn move_chats_to_config_dir(home: &Path) -> session::CursorRoots {
     session::CursorRoots::new(vec![config, home.to_path_buf()], home.to_path_buf())
 }
 
-#[test]
-fn cursor_roots_read_the_config_dir_before_the_legacy_home() {
-    let env = |pairs: &[(&str, &str)]| {
-        pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect::<BTreeMap<_, _>>()
-    };
-    assert_eq!(
-        session::CursorRoots::resolve(&env(&[("HOME", "/h"), ("CURSOR_CONFIG_DIR", "/c")])),
-        Some(session::CursorRoots::new(
-            vec![PathBuf::from("/c"), PathBuf::from("/h/.cursor")],
-            PathBuf::from("/h/.cursor"),
-        ))
-    );
-    assert_eq!(
-        session::CursorRoots::resolve(&env(&[("HOME", "/h")])),
-        Some(session::CursorRoots::single(Path::new("/h/.cursor")))
-    );
-    assert_eq!(
-        session::CursorRoots::resolve(&env(&[("HOME", "/h"), ("CURSOR_CONFIG_DIR", " ")])),
-        Some(session::CursorRoots::single(Path::new("/h/.cursor")))
-    );
-    assert_eq!(
-        session::CursorRoots::resolve(&env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/x")])),
-        Some(session::CursorRoots::new(
-            vec![PathBuf::from("/x/cursor"), PathBuf::from("/h/.cursor")],
-            PathBuf::from("/h/.cursor"),
-        ))
-    );
-    assert_eq!(session::CursorRoots::resolve(&env(&[])), None);
+fn env_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect()
 }
 
 #[test]
-fn cursor_statusline_installs_into_the_cli_config_cursor_reads() {
+fn cursor_roots_read_the_config_dir_before_the_legacy_home() {
+    let roots = |chats: &[&str]| {
+        Some(session::CursorRoots::new(
+            chats.iter().map(PathBuf::from).collect(),
+            PathBuf::from("/h/.cursor"),
+        ))
+    };
+    assert_eq!(
+        session::CursorRoots::resolve(&env_of(&[("HOME", "/h"), ("CURSOR_CONFIG_DIR", "/c")])),
+        roots(&["/c", "/h/.cursor"])
+    );
+    // A shell without `XDG_CONFIG_HOME` resolves `~/.cursor`, but a tmux room
+    // pins it to `~/.config`, so Cursor there writes `~/.config/cursor`.
+    assert_eq!(
+        session::CursorRoots::resolve(&env_of(&[("HOME", "/h")])),
+        roots(&["/h/.cursor", "/h/.config/cursor"])
+    );
+    assert_eq!(
+        session::CursorRoots::resolve(&env_of(&[("HOME", "/h"), ("CURSOR_CONFIG_DIR", " ")])),
+        roots(&["/h/.cursor", "/h/.config/cursor"])
+    );
+    assert_eq!(
+        session::CursorRoots::resolve(&env_of(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/x")])),
+        roots(&["/x/cursor", "/h/.cursor"])
+    );
+    assert_eq!(session::CursorRoots::resolve(&env_of(&[])), None);
+}
+
+#[test]
+fn cursor_statusline_installs_into_every_cli_config_cursor_reads() {
     if std::env::var_os("RIMZ_CURSOR_CLI_CONFIG").is_some() {
         return;
     }
-    let env = [("HOME", "/h"), ("CURSOR_CONFIG_DIR", "/c")]
-        .into_iter()
-        .map(|(key, value)| (key.to_owned(), value.to_owned()))
-        .collect::<BTreeMap<_, _>>();
+    let paths = |env: &[(&str, &str)]| install::cursor_cli_config_paths(&env_of(env)).unwrap();
     assert_eq!(
-        install::cursor_cli_config_path(&env).unwrap(),
-        PathBuf::from("/c/cli-config.json")
+        paths(&[("HOME", "/h"), ("CURSOR_CONFIG_DIR", "/c")]),
+        [PathBuf::from("/c/cli-config.json")]
     );
-    assert!(install::cursor_cli_config_path(&BTreeMap::new()).is_err());
+    assert_eq!(
+        paths(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/x")]),
+        [PathBuf::from("/x/cursor/cli-config.json")]
+    );
+    assert_eq!(
+        paths(&[("HOME", "/h")]),
+        [
+            PathBuf::from("/h/.cursor/cli-config.json"),
+            PathBuf::from("/h/.config/cursor/cli-config.json"),
+        ]
+    );
+    assert!(install::cursor_cli_config_paths(&BTreeMap::new()).is_err());
 }
 
 #[test]
@@ -2061,6 +2072,57 @@ fn cursor_config_sanitization_preserves_statusline_ownership_and_restore_state()
         serde_json::from_str::<Value>(&std::fs::read_to_string(&config_path).unwrap()).unwrap(),
         original
     );
+    assert!(!state_path.exists());
+}
+
+#[test]
+fn statusline_install_covers_every_config_dir_and_uninstall_restores_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let state_path = dir.path().join("cursor-statusline.json");
+    let shell = dir.path().join(".cursor/cli-config.json");
+    let room = dir.path().join(".config/cursor/cli-config.json");
+    std::fs::create_dir_all(shell.parent().unwrap()).unwrap();
+    std::fs::write(
+        &shell,
+        r#"{ "statusLine": { "type": "command", "command": "user-status" } }"#,
+    )
+    .unwrap();
+    let configs = [shell.clone(), room.clone()];
+
+    let preview = install::preview_all(&hooks_path, &configs, &state_path).unwrap();
+    let previewed: Vec<_> = preview.files.iter().map(|file| file.path.clone()).collect();
+    assert_eq!(
+        previewed,
+        [
+            hooks_path.clone(),
+            shell.clone(),
+            state_path.clone(),
+            room.clone()
+        ]
+    );
+
+    let report = install::install_all(&hooks_path, &configs, &state_path).unwrap();
+    assert_eq!(report.files.len(), 4);
+    assert!(install::hooks_installed_at(&hooks_path));
+    assert!(
+        configs
+            .iter()
+            .all(|path| install::statusline_installed_at(path))
+    );
+    assert_eq!(
+        install::wrapped_status_line_command_at(&shell, &state_path).as_deref(),
+        Some("user-status")
+    );
+
+    let uninstall = install::uninstall_all(&hooks_path, &configs, &state_path).unwrap();
+    assert_eq!(uninstall.removed_events.len(), CURSOR_HOOKS.len());
+    for path in &configs {
+        assert_eq!(
+            install::read_existing_json(path).unwrap()["statusLine"]["command"],
+            "user-status"
+        );
+    }
     assert!(!state_path.exists());
 }
 

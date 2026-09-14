@@ -1,14 +1,14 @@
 //! Cursor `hooks.json` merge installer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use crate::agents::capabilities::LaunchCapability as _;
 use crate::agents::{
-    AgentErr, HookInstallFilePreview, HookInstallPreview, HookInstallReport, HookUninstallReport,
-    ManagedIntegration, Result, StatusLineChange, agent_config_path, read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, ManagedIntegration, Result, StatusLineChange, agent_config_path,
+    read_optional_file,
     settings_json::{self, PendingWrite},
 };
 use crate::disk::atomic;
@@ -29,25 +29,25 @@ pub(super) struct CursorManagedIntegration;
 
 impl ManagedIntegration for CursorManagedIntegration {
     fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
-        install_into(
+        install_all(
             &cursor_hooks_path()?,
-            &cursor_cli_config_path(login_env)?,
+            &cursor_cli_config_paths(login_env)?,
             &cursor_statusline_state_path()?,
         )
     }
 
     fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
-        preview_at(
+        preview_all(
             &cursor_hooks_path()?,
-            &cursor_cli_config_path(login_env)?,
+            &cursor_cli_config_paths(login_env)?,
             &cursor_statusline_state_path()?,
         )
     }
 
     fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
-        uninstall_from(
+        uninstall_all(
             &cursor_hooks_path()?,
-            &cursor_cli_config_path(login_env)?,
+            &cursor_cli_config_paths(login_env)?,
             &cursor_statusline_state_path()?,
         )
     }
@@ -56,24 +56,96 @@ impl ManagedIntegration for CursorManagedIntegration {
         let Ok(hooks_path) = cursor_hooks_path() else {
             return false;
         };
-        let Ok(config_path) = cursor_cli_config_path(login_env) else {
+        let Ok(config_paths) = cursor_cli_config_paths(login_env) else {
             return false;
         };
-        hooks_installed_at(&hooks_path) && statusline_installed_at(&config_path)
+        hooks_installed_at(&hooks_path)
+            && config_paths
+                .iter()
+                .all(|path| statusline_installed_at(path))
     }
 
     fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
         cursor_hooks_path().is_ok_and(|path| managed_artifacts_at(&path))
-            || cursor_cli_config_path(login_env).is_ok_and(|path| statusline_artifact_at(&path))
+            || cursor_cli_config_paths(login_env)
+                .is_ok_and(|paths| paths.iter().any(|path| statusline_artifact_at(path)))
             || cursor_statusline_state_path().is_ok_and(|path| path.exists())
     }
 
     fn wrapped_status_line_command(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
         wrapped_status_line_command_at(
-            &cursor_cli_config_path(login_env).ok()?,
+            cursor_cli_config_paths(login_env).ok()?.first()?,
             &cursor_statusline_state_path().ok()?,
         )
     }
+}
+
+pub(super) fn install_all(
+    hooks_path: &Path,
+    config_paths: &[PathBuf],
+    state_path: &Path,
+) -> Result<HookInstallReport> {
+    let mut files = Vec::new();
+    let mut installed_events = Vec::new();
+    // The last write wins the one displaced-statusline record, so the primary
+    // config dir goes last.
+    for config_path in config_paths.iter().rev() {
+        let report = install_into(hooks_path, config_path, state_path)?;
+        files.extend(report.files);
+        installed_events = report.installed_events;
+    }
+    Ok(HookInstallReport {
+        agent: "cursor",
+        files: first_report_per_path(files),
+        installed_events,
+    })
+}
+
+pub(super) fn preview_all(
+    hooks_path: &Path,
+    config_paths: &[PathBuf],
+    state_path: &Path,
+) -> Result<HookInstallPreview> {
+    let (primary, others) = config_paths.split_first().ok_or_else(no_config_dir)?;
+    let mut preview = preview_at(hooks_path, primary, state_path)?;
+    for config_path in others {
+        let extra = preview_at(hooks_path, config_path, state_path)?;
+        preview.files.extend(
+            extra
+                .files
+                .into_iter()
+                .filter(|file| file.path == *config_path),
+        );
+    }
+    Ok(preview)
+}
+
+pub(super) fn uninstall_all(
+    hooks_path: &Path,
+    config_paths: &[PathBuf],
+    state_path: &Path,
+) -> Result<HookUninstallReport> {
+    let mut files = Vec::new();
+    let mut removed_events = Vec::new();
+    for (index, config_path) in config_paths.iter().enumerate() {
+        let last = index + 1 == config_paths.len();
+        let report = uninstall_pair(hooks_path, config_path, state_path, last)?;
+        files.extend(report.files);
+        removed_events.extend(report.removed_events);
+    }
+    Ok(HookUninstallReport {
+        agent: "cursor",
+        files: first_report_per_path(files),
+        removed_events,
+    })
+}
+
+/// Every fan-out step reports the shared hooks and state files again; the
+/// first report saw them before any write.
+fn first_report_per_path(mut files: Vec<HookInstallFileReport>) -> Vec<HookInstallFileReport> {
+    let mut seen = HashSet::new();
+    files.retain(|file| seen.insert(file.path.clone()));
+    files
 }
 
 pub(super) fn cursor_hooks_path() -> Result<PathBuf> {
@@ -84,19 +156,31 @@ pub(super) fn cursor_hooks_path() -> Result<PathBuf> {
     )
 }
 
-pub(super) fn cursor_cli_config_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
+/// The `cli-config.json` in every config dir Cursor resolves for this user,
+/// primary first; see [`super::config_dirs`].
+pub(super) fn cursor_cli_config_paths(
+    login_env: &BTreeMap<String, String>,
+) -> Result<Vec<PathBuf>> {
     if let Some(raw) = std::env::var_os("RIMZ_CURSOR_CLI_CONFIG").filter(|value| !value.is_empty())
     {
-        return Ok(PathBuf::from(raw));
+        return Ok(vec![PathBuf::from(raw)]);
     }
-    super::CursorAdapter
-        .config_home(login_env)
+    let paths: Vec<PathBuf> = super::config_dirs(login_env)
+        .into_iter()
         .map(|home| home.join("cli-config.json"))
-        .ok_or_else(|| AgentErr::Install {
-            agent: "cursor",
-            reason: "$CURSOR_CONFIG_DIR, $XDG_CONFIG_HOME, and $HOME are not set; cannot resolve Cursor cli-config.json"
-                .to_owned(),
-        })
+        .collect();
+    if paths.is_empty() {
+        return Err(no_config_dir());
+    }
+    Ok(paths)
+}
+
+fn no_config_dir() -> AgentErr {
+    AgentErr::Install {
+        agent: "cursor",
+        reason: "$CURSOR_CONFIG_DIR, $XDG_CONFIG_HOME, and $HOME are not set; cannot resolve Cursor cli-config.json"
+            .to_owned(),
+    }
 }
 
 pub(super) fn cursor_statusline_state_path() -> Result<PathBuf> {
@@ -193,10 +277,22 @@ pub(super) fn preview_at(
     })
 }
 
+#[cfg(test)]
 pub(super) fn uninstall_from(
     hooks_path: &Path,
     config_path: &Path,
     state_path: &Path,
+) -> Result<HookUninstallReport> {
+    uninstall_pair(hooks_path, config_path, state_path, true)
+}
+
+/// `remove_state` stays false until the last config file has restored the
+/// displaced statusline from the shared state record.
+fn uninstall_pair(
+    hooks_path: &Path,
+    config_path: &Path,
+    state_path: &Path,
+    remove_state: bool,
 ) -> Result<HookUninstallReport> {
     let hooks_original = settings_json::read_optional_bytes("cursor", hooks_path)?;
     let config_original = settings_json::read_optional_bytes("cursor", config_path)?;
@@ -220,7 +316,7 @@ pub(super) fn uninstall_from(
         hooks_original.as_deref(),
         config_original.as_deref(),
     )?;
-    if state_existed {
+    if state_existed && remove_state {
         remove_statusline_state(state_path)?;
     }
     Ok(HookUninstallReport {
@@ -231,7 +327,7 @@ pub(super) fn uninstall_from(
                 (config_path, config_original.is_some()),
             ]
             .into_iter()
-            .chain(state_existed.then_some((state_path, true))),
+            .chain((state_existed && remove_state).then_some((state_path, true))),
         ),
         removed_events,
     })

@@ -499,6 +499,29 @@ impl crate::agents::capabilities::LaunchCapability for CursorAdapter {
     }
 }
 
+/// Every config dir Cursor resolves for this user: the env's own, then the one
+/// a tmux room gives it, since tmux panes pin an unset `XDG_CONFIG_HOME` to
+/// `$HOME/.config` while Zellij panes inherit the shell's.
+fn config_dirs(env: &BTreeMap<String, String>) -> Vec<PathBuf> {
+    let mut room_env = env.clone();
+    if !env
+        .get("XDG_CONFIG_HOME")
+        .is_some_and(|value| !value.trim().is_empty())
+        && let Some(home) = env.get("HOME").filter(|home| !home.is_empty())
+    {
+        room_env.insert(
+            "XDG_CONFIG_HOME".to_owned(),
+            Path::new(home).join(".config").display().to_string(),
+        );
+    }
+    let mut dirs: Vec<PathBuf> = [env, &room_env]
+        .into_iter()
+        .filter_map(|env| CursorAdapter.config_home(env))
+        .collect();
+    dirs.dedup();
+    dirs
+}
+
 /// Select the verified Cursor path when discovery found one. The fallback stays
 /// provider-unique so a colliding `agent` alias can fail to resolve but can
 /// never launch another provider as Cursor.

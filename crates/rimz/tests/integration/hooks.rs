@@ -761,9 +761,14 @@ fn cursor_parent_hook_derives_chats_store_children_once() {
     assert_eq!(String::from_utf8_lossy(&registered.stdout), "{}\n");
 
     let cursor_home = env.home_root.join(".cursor");
-    let bucket = cursor_home.join("chats").join(hex::encode(Md5::digest(
-        env.project_root.to_str().unwrap().as_bytes(),
-    )));
+    // Current Cursor writes chats under its config dir (`$XDG_CONFIG_HOME/cursor`
+    // here); the Ask journey below keeps the legacy `~/.cursor/chats` root covered.
+    let bucket = env
+        .config_root()
+        .join("cursor/chats")
+        .join(hex::encode(Md5::digest(
+            env.project_root.to_str().unwrap().as_bytes(),
+        )));
     let child = bucket.join(child_id);
     std::fs::create_dir_all(&child).unwrap();
     let connection = Connection::open(child.join("store.db")).unwrap();
@@ -2509,6 +2514,50 @@ fn statusline_feed_passes_json_through_to_wrapped_command() {
         payload,
         "wrapped command's stdout must be forwarded verbatim"
     );
+}
+
+/// A tmux room pins an unset `XDG_CONFIG_HOME` to `$HOME/.config`, so Cursor in
+/// the room reads a different `cli-config.json` than Cursor in the shell that
+/// ran `rimz start`. Both must see the statusline and agree it is installed.
+#[test]
+fn cursor_install_from_a_shell_without_xdg_is_current_inside_a_tmux_room() {
+    let env = Env::new();
+    let shell_install = || {
+        env.rimz()
+            .env_remove("XDG_CONFIG_HOME")
+            .args(["hooks", "install", "cursor"])
+            .output()
+            .expect("spawn hooks install")
+    };
+    let out = shell_install();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for config in [
+        env.home_root.join(".cursor/cli-config.json"),
+        env.home_root.join(".config/cursor/cli-config.json"),
+    ] {
+        let text = std::fs::read_to_string(&config)
+            .unwrap_or_else(|error| panic!("{}: {error}", config.display()));
+        assert!(
+            text.contains("rimz statusline feed --source cursor"),
+            "{text}"
+        );
+    }
+
+    let room_install = env
+        .rimz()
+        .env("XDG_CONFIG_HOME", env.home_root.join(".config"))
+        .args(["hooks", "install", "cursor"])
+        .output()
+        .expect("spawn hooks install");
+    let room_stdout = String::from_utf8_lossy(&room_install.stdout);
+    assert!(room_stdout.contains("hooks up to date"), "{room_stdout}");
+    let shell_again = shell_install();
+    let shell_stdout = String::from_utf8_lossy(&shell_again.stdout);
+    assert!(shell_stdout.contains("hooks up to date"), "{shell_stdout}");
 }
 
 #[test]

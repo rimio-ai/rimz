@@ -209,10 +209,10 @@ pub(super) struct CursorRoots {
 
 impl CursorRoots {
     pub(super) fn resolve(env: &BTreeMap<String, String>) -> Option<Self> {
-        use crate::agents::capabilities::LaunchCapability as _;
         let home = cursor_home(env.get("HOME").map(OsStr::new))?;
-        let config = super::CursorAdapter.config_home(env)?;
-        Some(Self::new(vec![config, home.clone()], home))
+        let mut chats = super::config_dirs(env);
+        chats.push(home.clone());
+        Some(Self::new(chats, home))
     }
 
     pub(super) fn new(mut chats: Vec<PathBuf>, home: PathBuf) -> Self {
