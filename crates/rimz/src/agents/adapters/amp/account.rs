@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::account::AccountProbe;
 use crate::agents::context::AgentAccount;
 
-pub(crate) fn probe() -> AccountProbe {
+pub(super) fn probe() -> AccountProbe {
     let api_key_present = std::env::var_os("AMP_API_KEY").is_some_and(|value| !value.is_empty());
     let secret_path = std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
