@@ -1,85 +1,58 @@
 # Antigravity CLI protocol reference
 
-> The landed adapter mapping is [adapter_antigravity.md](../../internals/agents/adapter_antigravity.md), the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the adapter implementation playbook is [agent-adapters.md](../../contributing/agent-adapters.md), and account, balance, spend, and pricing semantics are in [providers.md](../../internals/agents/providers.md).
+> RimZ's mapping of this surface is [adapter_antigravity.md](../../internals/agents/adapter_antigravity.md). The provider-neutral lifecycle contract is [model.md](../../internals/agents/model.md), accounts and spend are [providers.md](../../internals/agents/providers.md), and the adapter playbook is [agent-adapters.md](../../contributing/agent-adapters.md).
 
-This is the single home for the official **Antigravity CLI upstream surface** a RimZ adapter can bind to: the `agy` process and launch flags, JSON command hooks, custom statusline state, conversations, local persistence, permission and artifact waits, subagents, headless runs, authentication, models, and quota presentation.
+This page mirrors the upstream surface of Google's Antigravity CLI (`agy`) that an adapter can bind to: the process and its flags, JSON command hooks, the custom statusline payload, conversations and transcripts, permissions, subagents, print mode, authentication, models and quota, and the adjacent remote-control, MCP, and plugin surfaces. It records what upstream ships and makes no claim about what RimZ supports.
 
-Coverage is **depth on viable RimZ inputs, breadth as an index**. Google publishes the hook and statusline payloads but does not publish the CLI implementation or a schema for its conversation databases and transcripts. This reference keeps documented facts, release-note evidence, implementation inferences, and live-verification requirements visibly separate.
+## Baseline and evidence
 
-## Refresh target and upstream sources
+The page mirrors **Antigravity CLI 1.2.2**, tag [`1.2.2`](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.2.2) at commit `ba985e6b5de2ac8aa09860a154a102831eb7722b`, released 2026-09-12. Docs, changelog, and the installed binary were read on 2026-09-13. Repository paths below (`CHANGELOG.md`, `README.md`, `examples/`) are at that commit; the repository does not publish the CLI implementation.
 
-This reference was refreshed on 2026-07-13 against an installed Antigravity CLI `1.1.2`, its embedded hook/statusline documentation, and Google's living documentation. The [`1.1.1`](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.1) tag at commit [`b5578c4bbeae95fd9be14d14ac61563bd9f20363`](https://github.com/google-antigravity/antigravity-cli/tree/b5578c4bbeae95fd9be14d14ac61563bd9f20363) remains the latest public source snapshot used for repository examples; the distributed CLI implementation is not published there.
+Google publishes no CLI source, so each claim rests on one of these tiers, strongest first, and the tier is named where it is not the official docs:
 
-RimZ's typed fixtures target Antigravity CLI 1.1.2. The adapter keeps tolerant readers for additive fields; refresh this reference and its fixtures when Google changes hook decisions, config locations, payload semantics, or the private local-service wire. The local-service account probe deliberately abstains from running `agy --version`, because a version command is not a safe idle-enrichment precondition for this TUI.
-
-Google's website documentation is a living surface without versioned snapshots. The installed 1.1.2 embedded documentation wins for executable hook behavior, while the 1.1.1 tagged examples remain provenance for unchanged examples; every known conflict stays visible in [Documentation drift](#documentation-drift).
-
-| Surface | Official source |
-| --- | --- |
-| CLI release and version evidence | installed `agy 1.1.2`, [`1.1.1` source release](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.1), pinned [`CHANGELOG.md`](https://github.com/google-antigravity/antigravity-cli/blob/b5578c4bbeae95fd9be14d14ac61563bd9f20363/CHANGELOG.md) |
-| Product boundary and installation | [CLI overview](https://antigravity.google/docs/cli-overview), [installation and auth](https://antigravity.google/docs/cli-install), pinned [README](https://github.com/google-antigravity/antigravity-cli/blob/b5578c4bbeae95fd9be14d14ac61563bd9f20363/README.md) |
-| Launch flags and TUI commands | [CLI reference](https://antigravity.google/docs/cli-reference), the installed `agy 1.1.2 --help` output summarized below |
-| Settings and keybindings | [settings](https://antigravity.google/docs/cli-settings) |
-| Command hooks and tool vocabulary | [hooks](https://antigravity.google/docs/hooks) |
-| Custom statusline payload | [statusline](https://antigravity.google/docs/cli-statusline), pinned [example script](https://github.com/google-antigravity/antigravity-cli/blob/b5578c4bbeae95fd9be14d14ac61563bd9f20363/examples/statusline/statusline.sh) |
-| Custom terminal-title payload | [terminal title](https://antigravity.google/docs/cli-title), pinned [example script](https://github.com/google-antigravity/antigravity-cli/blob/b5578c4bbeae95fd9be14d14ac61563bd9f20363/examples/title/title.sh) |
-| Conversations, resume, and fork | [managing conversations](https://antigravity.google/docs/cli-conversations), [`/resume` command](https://antigravity.google/docs/cli/commands/resume) |
-| Permission engine and sandbox | [CLI permissions](https://antigravity.google/docs/cli-permissions), [settings](https://antigravity.google/docs/cli-settings) |
-| Artifact review | [CLI artifacts](https://antigravity.google/docs/cli-artifacts), [artifact model](https://antigravity.google/docs/artifacts) |
-| Subagents and background tasks | [subagents](https://antigravity.google/docs/cli-subagents) |
-| Headless `-p` | [best practices](https://antigravity.google/docs/cli-best-practices), pinned [1.1.1 release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.1) |
-| Models, plans, quota, and credits | [models](https://antigravity.google/docs/models), [plans](https://antigravity.google/docs/plans), [`/usage`](https://antigravity.google/docs/cli/commands/usage), [CLI credits](https://antigravity.google/docs/cli-credits) |
-| Authentication | [installation and auth](https://antigravity.google/docs/cli-install) |
-| Plugins and shared configuration | [CLI plugins and skills](https://antigravity.google/docs/cli-plugins), [MCP](https://antigravity.google/docs/mcp) |
-| Gemini CLI transition | [migration guide](https://antigravity.google/docs/gcli-migration), [official transition announcement](https://github.com/google-gemini/gemini-cli/discussions/27274) |
-| Programmatic sibling surface | [Antigravity SDK](https://antigravity.google/docs/sdk-overview), [official SDK repository](https://github.com/google-antigravity/antigravity-sdk-python) |
-
-## Product boundary and migration
-
-Antigravity CLI is the terminal TUI in the Antigravity product family. It shares an agent harness and settings with Antigravity 2.0 but has its own binary, CLI app-data directory, rendering, conversation cache, and terminal interaction surface.
-
-Google explicitly transitions the consumer, free-tier, and Google AI Pro/Ultra terminal experience from Gemini CLI to Antigravity CLI. Antigravity offers one-time import of Gemini CLI settings and converts Gemini extensions into Antigravity plugins. Compatibility and migration do not make the two products wire-compatible: do not reuse Gemini hook names, payload structs, session discovery, auth probing, permission flags, model limits, or transcript parsing.
-
-The initial RimZ integration target is **Antigravity CLI**, because it owns a stock terminal pane that `rimz pane capture`, `rimz pane send`, and `rimz message` can drive. Antigravity 2.0, the IDE, and the SDK are adjacent surfaces, not alternate observation channels for an `agy` pane.
-
-## Adapter feasibility at a glance
-
-Antigravity exposes enough official surface for a useful adapter, plus a version-sensitive private local service observed in a running CLI. The landed adapter owns process/launch/resume, validated local conversation discovery, transcript history and question waits, safe command hooks, derived child identity, custom-statusline context and live API-rate estimates, background parking, supervised completion, and read-only account/quota enrichment. Policy-changing pre-tool decisions, artifact waits, credits, provider-history/account spend, and remote control remain outside the verified boundary.
-
-| RimZ need | Antigravity surface | Verdict |
+| Tier | Evidence | How the page marks it |
 | --- | --- | --- |
-| Process discovery and launch | `agy`; stable interactive and prompt flags in 1.1.2 help | direct |
-| Session identity | exact `--conversation`; workspace-latest cache; hook `conversationId`; statusline `conversation_id` | direct hook binding with validated local fallback |
-| Registration before work | first `PreInvocation` identity plus local discovery | create-on-miss/derived; no session-only event |
-| Turn start | first `PreInvocation` plus captured `USER_INPUT` fallback | native realtime edge |
-| Turn completion and error | `Stop.terminationReason`, `Stop.error`, `Stop.fullyIdle` | native success/failure/background edge |
-| Session end | no session-end hook | pane/process presence only |
-| Tool activity and acting phase | disjoint `PostToolUse` matchers over the published tool vocabulary | native after execution, without changing permission policy |
-| Native permission wait | statusline `tool_confirmation_pending` | read-only card attention; native pane owns detail and decision |
-| Question wait | completed planner-response transcript record with typed `ask_question` questions | derived native-pane wait; no durable ask or out-of-band answer |
-| Plan/artifact review wait | statusline `artifacts` and artifact-review UI | schema/status enum incomplete; derived after capture |
-| Model and context | custom statusline `model` and `context_window` | direct live enrichment landed |
-| Background tasks | `Stop.fullyIdle`; statusline arrays remain identity-poor | native foreground parking, no task rows |
-| Subagents | stable child hook `conversationId`; ordered parent `invoke_subagent` request/result transcript records | partial derived identity; the result record is live-verified rather than documented |
-| Transcript/history | official hook path plus captured 1.1.2 text, question, and subagent records | root user/assistant history plus bounded typed child correlation landed |
-| Durable conversation store | 1.1.1 changelog says SQLite is the CLI conversation format | format known, schema and authoritative path unpublished |
-| Compaction | no documented hook, command, or marker | unsupported until verified |
-| Account identity | statusline `email` and `plan_tier`; private local `GetUserStatus` | direct live plus version-sensitive idle enrichment; treat email as private |
-| Quota and credits | private local `RetrieveUserQuotaSummary`; interactive `/usage`/`/quota` and `/credits` panels | conservative 5h/weekly quota windows landed; credits remain unsupported |
-| Session spend | statusline current token split plus exact model ID; no documented cumulative billing record | partial live API-rate estimate only |
-| Supervised `-p` runs | stock interactive prompt, `Stop`, and transcript final response | RimZ supervised hook transport landed; native headless mode remains separate |
-| Native resume | `--conversation <UUID>`; `-c`/`--continue` for workspace latest | direct |
-| Native fork in a new pane | `/fork` clones in the current TUI, but no launch flag forks a supplied source ID | unsupported for RimZ fork |
-| Structured answer | native TUI keys and artifact/question panels | pane-send fallback; no out-of-band answer API |
-| Remote control | no CLI remote-control host documented | unsupported |
+| Official docs | the `antigravity.google/docs` pages in [Upstream sources](#upstream-sources), a living site without versioned snapshots | cited by URL |
+| Release notes | `CHANGELOG.md` at the tag, which `agy changelog` prints verbatim | "1.1.28 changelog" |
+| Installed 1.2.2 binary | `agy --help` and subcommand help; the hook contract the binary embeds for its own `/hooks` answer; Go struct tags and protobuf message names in the binary's strings | "1.2.2 help", "embedded hook doc", "1.2.2 binary" |
+| Live captures | a stock 1.1.2 session (hook payloads, transcripts, subagents) and a 1.1.1 SQLite schema probe | "1.1.2 capture", "1.1.1 probe"; not re-captured against 1.2.2 |
+| Third-party source | CodexBar commit [`b41715f`](https://github.com/steipete/CodexBar/tree/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8) for the private local service | cited by path |
 
-The current adapter combines installed command hooks and a wrapped custom statusline with the workspace conversation cache and validated JSONL history. Derived subagent rows join stable child hook IDs to their candidate parent's validated transcript; the statusline roster remains display-only. Spend, permission/question/artifact waits, compaction, fork, and structured answers stay disabled until their verification items pass.
+Where two tiers disagree, the claim follows the wire and [Documentation drift](#documentation-drift) records the disagreement.
 
-## Launch and process surface
+### Upstream sources
 
-The official installer places the executable at `~/.local/bin/agy` on macOS and Linux and under the per-user local `agy\bin` directory on Windows. RimZ should detect and launch `agy`, not `antigravity`, `gemini`, or a desktop application process.
+| Surface | Source |
+| --- | --- |
+| Releases and changelog | [releases](https://github.com/google-antigravity/antigravity-cli/releases), [`CHANGELOG.md`](https://github.com/google-antigravity/antigravity-cli/blob/ba985e6b5de2ac8aa09860a154a102831eb7722b/CHANGELOG.md) |
+| Product boundary and install | [CLI overview](https://antigravity.google/docs/cli/overview/), [install](https://antigravity.google/docs/cli/install/), [`README.md`](https://github.com/google-antigravity/antigravity-cli/blob/ba985e6b5de2ac8aa09860a154a102831eb7722b/README.md), [`install.sh`](https://antigravity.google/cli/install.sh) |
+| Slash commands, keybindings, settings | [CLI reference](https://antigravity.google/docs/cli/reference/), [settings](https://antigravity.google/docs/cli/settings/), [execution modes](https://antigravity.google/docs/cli/modes/) |
+| Command hooks and tool vocabulary | [hooks](https://antigravity.google/docs/hooks/) |
+| Statusline and terminal title | [statusline](https://antigravity.google/docs/cli/statusline/), [terminal title](https://antigravity.google/docs/cli/title/), [`examples/statusline/statusline.sh`](https://github.com/google-antigravity/antigravity-cli/blob/ba985e6b5de2ac8aa09860a154a102831eb7722b/examples/statusline/statusline.sh), [`examples/title/title.sh`](https://github.com/google-antigravity/antigravity-cli/blob/ba985e6b5de2ac8aa09860a154a102831eb7722b/examples/title/title.sh) |
+| Conversations | [managing conversations](https://antigravity.google/docs/cli/conversations/), [`/resume`](https://antigravity.google/docs/cli/commands/resume/) |
+| Permissions and sandbox | [permissions](https://antigravity.google/docs/cli/permissions/), [sandbox](https://antigravity.google/docs/cli/sandbox/) |
+| Artifacts | [CLI artifacts](https://antigravity.google/docs/cli/artifacts/), [artifact model](https://antigravity.google/docs/artifacts/) |
+| Subagents and tasks | [subagents](https://antigravity.google/docs/cli/subagents/), [`/agents`](https://antigravity.google/docs/cli/commands/agents/) |
+| Print mode | [headless](https://antigravity.google/docs/cli/headless/), [best practices](https://antigravity.google/docs/cli/best-practices/) |
+| Models, plans, quota, credits | [models](https://antigravity.google/docs/models/), [plans](https://antigravity.google/docs/plans/), [`/usage`](https://antigravity.google/docs/cli/commands/usage/), [`/credits`](https://antigravity.google/docs/cli/commands/credits/) |
+| Remote control | [remote control](https://antigravity.google/docs/remote-control/) |
+| Plugins, skills, MCP | [CLI plugins](https://antigravity.google/docs/cli/plugins/), [MCP](https://antigravity.google/docs/mcp/) |
+| Gemini CLI transition | [migration guide](https://antigravity.google/docs/cli/gcli-migration/), [transition announcement](https://github.com/google-gemini/gemini-cli/discussions/27274) |
+| SDK | [SDK overview](https://antigravity.google/docs/sdk/overview/), [`antigravity-sdk-python`](https://github.com/google-antigravity/antigravity-sdk-python) |
 
-The pinned README publishes these installers:
+## Upstream scope
+
+Antigravity CLI is the terminal TUI of the Antigravity product family. It shares an agent harness and shared configuration (`~/.gemini/config/`) with the Antigravity 2.0 desktop app and the IDE, but has its own binary, its own app-data directory (`~/.gemini/antigravity-cli`), and its own conversation cache.
+
+Google moves the consumer terminal experience from Gemini CLI to Antigravity CLI. `agy plugin import gemini` converts Gemini extensions to plugins, and first launch offers a one-time settings import; skills must move from `.gemini/skills/` to `.agents/skills/` by hand ([migration guide](https://antigravity.google/docs/cli/gcli-migration/)). The two CLIs are not wire-compatible: hook names, payloads, session discovery, auth, flags, and transcripts all differ.
+
+The SDK hosts its own agent runtime and does not observe a stock `agy` process. Antigravity 2.0 shares the conversation ID namespace and can export conversations into the CLI, but its process and app-data root (`~/.gemini/antigravity`) are separate.
+
+Several upstream surfaces on this page have no RimZ binding at this baseline: print-mode `json` and `stream-json` output, `PostToolUse.toolCall`, `PreToolUse` decisions, the statusline `quota`, `cost`, and `conversation_title` fields, `--effort`, remote control, and the undocumented `SessionStart` hook variant. What RimZ leaves unsupported, and why, is in the internals page's [Known gaps](../../internals/agents/adapter_antigravity.md#known-gaps).
+
+## Install and launch
+
+The official installer places the executable at `~/.local/bin/agy` on macOS and Linux and under the per-user local `agy\bin` directory on Windows. The README publishes three installers:
 
 ```text
 # macOS and Linux
@@ -92,185 +65,207 @@ irm https://antigravity.google/cli/install.ps1 | iex
 curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
-Use `agy update` as the stale-version fix. `agy install` configures shell paths and aliases for an existing installation; its shipped flags are `--dir`, `--skip-path`, and `--skip-aliases`, so it is not the binary downloader RimZ should prescribe for a missing install.
+`install.sh` pins no version: it reads the `version` key of a per-platform download manifest, and the installed CLI updates itself in the background during ordinary runs. `agy update` updates on demand. `agy install` only configures an existing installation's shell `PATH` and aliases (`--dir`, `--skip-path`, `--skip-aliases`).
 
-The installed binary reports `1.1.2` from `agy --version` and this top-level surface from `agy --help`:
+### Flags
 
-| Flag/subcommand | Shipped meaning | RimZ use |
-| --- | --- | --- |
-| `--add-dir <path>` | add a workspace directory; repeatable | render an explicit multi-root preset when supported |
-| `--agent <name>` | choose a custom agent for this session | provider-native agent profile, not a RimZ kind |
-| `-c`, `--continue` | continue the most recent conversation | convenience only; prefer an exact ID for restart |
-| `--conversation <id>` | resume a conversation by ID | native resume |
-| `--dangerously-skip-permissions` | auto-approve tool permission requests | RimZ `yolo` |
-| `-i`, `--prompt-interactive <prompt>` | send an initial prompt, then stay interactive | fresh pane with startup prompt |
-| `--log-file <path>` | override the CLI log path | diagnostics only |
-| `--mode <accept-edits\|plan>` | select execution mode | RimZ `auto`/`plan`; see below |
-| `--model <name>` | choose the session model | launch preset model |
-| `--new-project` | create a project for the session | leave user-controlled by default |
-| `-p`, `--print`, `--prompt <prompt>` | run one prompt non-interactively and print the response | provider-native alternative; RimZ keeps the pane/UI hook transport |
-| `--print-timeout <duration>` | bound print-mode wait; default `5m0s` | unused by the interactive hook transport |
-| `--project <id>` | select a project | raw profile arg until project semantics are implemented |
-| `--sandbox` | enable terminal restrictions | optional launch hardening; orthogonal to approval mode |
-| `agent`, `agents` | list available custom agents | optional discovery, not lifecycle |
-| `models` | list available models | optional model discovery |
-| `plugin`, `plugins` | manage plugins | unused by direct named-hook installation |
-| `changelog`, `update`, `install` | release notes and client maintenance | outside ordinary adapter launches |
+`agy --help` in 1.2.2 lists these top-level flags. The [headless](https://antigravity.google/docs/cli/headless/) page documents the print-mode subset; no docs page lists the interactive set.
 
-A bare interactive launch is:
+| Flag | Meaning (1.2.2 help) |
+| --- | --- |
+| `--add-dir <path>` | add a workspace directory; repeatable |
+| `--agent <name>` | custom agent for the session (`agy agents` lists them) |
+| `-c`, `--continue` | continue the most recent conversation; see [Resume](#resume) |
+| `--conversation <id>` | resume a conversation by ID |
+| `--dangerously-skip-permissions` | auto-approve every tool permission request |
+| `--disable-slash-commands` | disable slash-command and skill expansion in print mode |
+| `--effort <low\|medium\|high>` | reasoning-effort variant of the selected model |
+| `-i`, `--prompt-interactive <prompt>` | send an initial prompt, then stay interactive |
+| `--input-format <text\|stream-json>` | print-mode input; `stream-json` requires `--output-format stream-json` |
+| `--json-schema <schema-or-path>` | enforce structured output; for `stream-json` it applies to the final result |
+| `--log-file <path>` | override the CLI log path |
+| `--mode <accept-edits\|plan>` | execution mode; see [Execution modes](#execution-modes) |
+| `--model <name>` | model by slug, name, or label (`agy models` lists them) |
+| `--new-project` | create a new project for the session |
+| `--output-format <text\|json\|stream-json>` | print-mode output, default `text` |
+| `-p`, `--print`, `--prompt <prompt>` | run one prompt non-interactively; see [Print mode](#print-mode) |
+| `--print-timeout <duration>` | print-mode wait ceiling, default `5m0s` |
+| `--project <id-or-name>` | project for the session |
+| `--sandbox` | enable terminal sandbox restrictions |
+
+A prompt argument outside `-p` or `-i` is an error: 1.2.2 prints `Prompts are read only from -p/--print, -i/--prompt-interactive, or stdin` and exits. Since 1.1.18 a valueless prompt flag no longer swallows the next flag as its prompt. The binary also accepts an unlisted `--remote-control` launch flag, which the 1.1.19 changelog names; its semantics are undocumented.
+
+No flag sets the working directory; the process cwd is the workspace. The [best-practices](https://antigravity.google/docs/cli/best-practices/) page shows `--cwd`, which 1.2.2 does not accept. No flag replaces or appends the system prompt; custom agents, rules, skills, and plugins carry instructions.
+
+### Subcommands
+
+| Subcommand | Meaning (1.2.2 help) |
+| --- | --- |
+| `agent`, `agents` | list available agents; `--output-format json\|stream-json` since 1.1.12 |
+| `models` | list models; same output flag |
+| `plugin`, `plugins` | `list`, `import [gemini\|claude]`, `install <target>` (supports `plugin@marketplace`), `uninstall`, `enable`, `disable`, `validate [path]`, `link <mp> <target>` |
+| `mcp` | `add`, `remove`, `list`, `enable`, `disable` over the user-level `mcp_config.json`; `add` takes `--type stdio\|http`, `--env`, `--header` |
+| `remote-control` | `start` (`--name`, `--session`), `status`, `stop`; see [Remote control](#remote-control-mcp-plugins-and-custom-agents) |
+| `mic-serve` | serve this machine's microphone to a CLI on another host (`--addr`, default `127.0.0.1:4713`) |
+| `changelog` | print release notes |
+| `update` | update the CLI |
+| `install` | configure `PATH` and aliases |
+| `help <subcommand>` | subcommand help |
+
+### Execution modes
+
+The [execution modes](https://antigravity.google/docs/cli/modes/) page defines three modes, cycled in the TUI with `Shift+Tab` (`default` → `accept-edits` → `plan`) and selectable at launch with `--mode`:
+
+| Mode | Behavior |
+| --- | --- |
+| `default` | pauses for diff review before creating or modifying a file (`y`, `n`, `f` full diff, `Ctrl+G` edit) |
+| `accept-edits` | auto-approves `write_to_file`, `replace_file_content`, and `multi_replace_file_content`; subagents inherit the mode |
+| `plan` | prepends the `/plan` instruction prefix so the agent outlines before writing code |
+
+Tool permission rules and `--dangerously-skip-permissions` govern `run_command` in every mode. `--sandbox` changes containment, not approval: it enables the terminal sandbox for the session, and the persistent `toolPermission: proceed-in-sandbox` policy (auto-run sandboxed commands, ask for unsandboxed ones) has no launch flag. A launch flag overrides the persistent setting for that process, and `/config` marks the overridden row ([settings](https://antigravity.google/docs/cli/settings/)).
+
+## Conversations
+
+Antigravity calls a durable session a **conversation**. Hooks name its ID `conversationId`, the statusline `conversation_id`, and print-mode JSON `conversation_id`. Examples use UUIDs, but no page states UUID syntax as an invariant.
+
+Conversation lists are scoped to the launch directory ([managing conversations](https://antigravity.google/docs/cli/conversations/)). `/resume` opens a picker with a flat or workspace-grouped view (`Ctrl+F`, default from the `pickerGrouping` setting since 1.1.26), `f2` rename, and `f4` delete. The picker can also import an Antigravity 2.0 conversation by cloning it into the CLI. Since 1.1.21 the CLI titles a conversation when it is created, and since 1.1.27 the title reaches the statusline as `conversation_title`.
+
+### Resume
 
 ```text
-agy
-```
-
-An interactive launch with an initial task is:
-
-```text
-agy --prompt-interactive "task"
-```
-
-The provider owns the current working directory, so RimZ launches `agy` with the pane/worktree directory as the child cwd. The living best-practices page shows `--cwd`, but 1.1.2 help exposes no such flag; do not emit it.
-
-### Permission-mode mapping
-
-The shipped native modes support this closest mapping:
-
-| RimZ mode | Provider argv | Boundary |
-| --- | --- | --- |
-| `ask` | no flag | keeps native default review and permission policy |
-| `auto` | `--mode accept-edits` | accepts edits; it does not promise approval of every command, URL, or MCP action |
-| `plan` | `--mode plan` | starts plan mode |
-| `yolo` | `--dangerously-skip-permissions` | bypasses tool permission requests; preserve the dangerous naming in help and docs |
-
-`--sandbox` changes execution containment rather than permission posture. The persistent `proceed-in-sandbox` policy auto-runs sandboxed terminal commands and asks for unsandboxed ones, but the shipped help exposes no one-shot flag that selects that policy. Do not silently add `--sandbox` to `accept-edits` or claim the pair is a provider-defined permission mode without a launch test.
-
-### Presets and prompts
-
-`--model` is the direct model preset. The official launch surface has no reasoning-effort flag and no flag that replaces or appends the system prompt. `--agent` chooses an Antigravity custom agent, which can carry its own instructions, and rules/skills/plugins provide other instruction surfaces; the adapter rejects unsupported preset fields rather than translating system prompts into unrelated flags.
-
-The CLI supports multiple workspaces with repeated `--add-dir`. Ordinary RimZ worktree isolation remains a process-cwd concern; Antigravity's separate project and desktop worktree concepts do not replace RimZ worktrees.
-
-## Conversation identity, resume, clear, rewind, and fork
-
-Antigravity calls its durable session a **conversation**. Hook payloads name it `conversationId`; the statusline names the same concept `conversation_id`. Official examples use UUIDs. Parse a non-empty opaque string and do not enforce UUID syntax unless upstream publishes that invariant.
-
-Conversation pickers are scoped to the current working directory. `/resume` opens the picker, and CLI 1.1.1 can also import an Antigravity 2.0 conversation by cloning it into the CLI. The shell launch forms are:
-
-```text
-agy --continue
-agy -c
 agy --conversation <conversation-id>
 agy --conversation=<conversation-id>
+agy --continue
+agy -c
 ```
 
-`-c` reads `~/.gemini/antigravity-cli/cache/last_conversations.json`, a documented map from absolute workspace path to latest conversation ID, and verifies the selected conversation with the backend. Live 1.1.2 can leave this cache pointing at an older conversation while a newer bare `agy` process is active. RimZ restart retains the exact hook/statusline conversation ID and uses `--conversation`; a matching hook-bound row authorizes local transcript enrichment before this latest-workspace fallback.
+`--conversation` resumes one exact ID and warns on stderr when the ID is not found. `-c` reads `~/.gemini/antigravity-cli/cache/last_conversations.json`, a map from absolute workspace path to latest conversation ID, and verifies the selection with the backend. Since 1.2.1, when that entry is missing or stale (launch from a subdirectory, after a crash, or with another session open in the workspace), `-c` falls back to the most recent non-empty conversation in the workspace or its parent and child directories. A 1.1.2 capture also showed the cache still naming an older conversation while a newer bare `agy` process was active. On exit the CLI prints the exact resume command.
 
-`/fork` (alias `/branch`) clones conversation history up to the current turn, allocates a new conversation ID, and switches the current TUI to that clone. It does not clone the Git checkout. Because no `agy --fork <source-id>` launch surface exists, it cannot implement `rimz agents fork`, whose contract opens a provider-native copy beside an untouched source.
+Since 1.1.10, opening a conversation that is already open in another CLI instance on the machine shows a non-blocking advisory that points at `/fork`.
 
-`/rewind` (alias `/undo`) rewinds conversation history. `/clear` resets the terminal and active conversation context. A sanitized live 1.1.2 capture observes the next first `PreInvocation` carrying a distinct `conversationId` while the same `agy` process remains in the same pane, so RimZ follows that newest active ID under guarded same-process pane ownership. This observation establishes an in-place active-ID switch only: the official reference does not define `/clear` versus `/fork` lineage, parentage, transcript persistence, or SQLite retention, and RimZ assigns no `Fresh` origin from it.
+### Fork, rewind, and clear
 
-The CLI prints an exact resume command on exit. That text is useful to humans but the hook/statusline ID remains the durable machine identity.
+`/fork` (alias `/branch`) clones the conversation up to the current turn into a new conversation ID and switches the current TUI to the clone; it does not clone the Git checkout. No launch flag forks a supplied source ID. Since 1.2.2 forks and snapshot reverts skip the internal `.system_generated/subagents` and `.system_generated/worktrees` directories.
 
-## JSON command hooks
+`/rewind` (alias `/undo`) reverts conversation history to an earlier step. `/clear` resets the terminal and the active conversation context. A 1.1.2 capture showed the first `PreInvocation` after `/clear` carrying a new `conversationId` while the same `agy` process kept running in the same pane. No page defines the lineage between the old and new IDs for `/clear` or `/fork`. In print mode, `-p "/clear"` and other interactive-only commands fail and name the flag or subcommand that replaces them (1.1.11 changelog).
 
-Hooks execute custom commands at five agent-loop points. They receive one camelCase JSON object on stdin and return one JSON object on stdout. Hook stdout is the decision channel, so RimZ logs go to stderr and any helper process starts with fresh stdio.
+## Command hooks
 
-### Configuration and discovery
+Hooks run shell commands at five points of the agent loop. Each handler receives one camelCase (protojson) JSON object on stdin and returns one JSON object on stdout. Handlers run synchronously and block the loop.
 
-The global shared hook file is:
+### Files and format
 
-```text
-~/.gemini/config/hooks.json
-```
+| File | Scope |
+| --- | --- |
+| `~/.gemini/config/hooks.json` | global, shared with Antigravity 2.0 |
+| `<workspace>/.agents/hooks.json` | workspace; loads once the folder is trusted |
+| `hooks.json` inside a plugin | plugin; a disabled plugin's hooks do not run (1.1.7 changelog) |
 
-The workspace hook file is:
+`hooks.json` maps a hook name to its event configuration. Named hooks from every source that target the same event are merged and run sequentially. `PreToolUse` and `PostToolUse` take matcher groups; `PreInvocation`, `PostInvocation`, and `Stop` take a flat list of handlers and ignore any matcher:
 
-```text
-<workspace>/.agents/hooks.json
-```
-
-The official 1.1.2 hook documentation describes `hooks.json` as a map from stable hook names to definitions and runs multiple named hooks sequentially. CLI 1.1.1 fixed workspace hook loading after a folder becomes trusted. RimZ installs one global named hook, `rimz`, preserves every other name, and refuses to replace a user-owned `rimz` definition.
-
-A shortened RimZ-owned shape is:
-
-```jsonc
+```json
 {
-  "rimz": {
+  "my-linter-hook": {
+    "PostToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          { "type": "command", "command": "./scripts/lint.sh", "timeout": 10 }
+        ]
+      }
+    ]
+  },
+  "safety-gate": {
+    "enabled": false,
+    "PreToolUse": [
+      { "matcher": "run_command", "hooks": [{ "command": "./scripts/safety-check.sh" }] }
+    ]
+  },
+  "reminder": {
     "PreInvocation": [
-      {
-        "type": "command",
-        "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PreInvocation",
-        "timeout": 5
-      }
-    ],
-    "Stop": [
-      {
-        "type": "command",
-        "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event Stop",
-        "timeout": 5
-      }
+      { "type": "command", "command": "./scripts/reminder.sh" }
     ]
   }
 }
 ```
 
-The complete installer also adds three disjoint `PostToolUse` matcher entries and one `PostInvocation` entry. Synthetic `--event` labels preserve the matcher class because `PostToolUse` input omits the tool name. The published handler object has `type` (only `command`, optional), `command` (required), and `timeout` in seconds (optional, default 30); RimZ uses five seconds.
+| Field | Level | Meaning |
+| --- | --- | --- |
+| `enabled` | named hook | optional boolean, default `true`; `false` disables every handler of the hook |
+| `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop` | named hook | handler arrays |
+| `matcher` | tool-event group | regular expression over the tool name; `""` and `*` match all tools |
+| `hooks` | tool-event group | the group's handlers |
+| `type` | handler | optional, default `command`, the only supported value |
+| `command` | handler | required; run through `sh -c` on Unix and `cmd /c` on Windows, with `~` expanded and the cwd set to the directory holding `hooks.json` (embedded hook doc) |
+| `timeout` | handler | optional seconds, default `30` |
 
-Plugins may also carry `hooks.json`. CLI 1.1.1's changelog establishes `~/.gemini/config/` as the active shared global customization directory even though older/living plugin prose still shows some assets under `~/.gemini/antigravity-cli/`. RimZ uses the direct named global entry because a plugin adds packaging without improving the wire.
+The matcher documents `run_command|view_file` and `browser_.*` as examples. Tool names are step types lowercased with the `CORTEX_STEP_TYPE_` prefix removed (embedded hook doc), so the browser tool names exist but are not catalogued.
 
-Workspace trust is a launch precondition for workspace-local hooks. RimZ's project trust preview must show the exact command and every config file it will edit; the trust hash includes the hook command, the custom statusline command, and any wrapped prior command.
+### Common input
 
-### Hook schema
+| Field | Meaning ([hooks](https://antigravity.google/docs/hooks/)) |
+| --- | --- |
+| `conversationId` | active conversation ID |
+| `workspacePaths` | absolute workspace directories |
+| `transcriptPath` | absolute path of the conversation transcript; documented as `<app_data_dir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl` |
+| `artifactDirectoryPath` | absolute path of the conversation's artifact directory, `<app_data_dir>/brain/<conversationId>` |
+| `modelName` | model handling the invocation, for example `gemini-3.6-flash-medium` (the embedded doc's example is `auto`) |
 
-Every hook input carries:
+`<app_data_dir>` is `~/.gemini/antigravity-cli` for the CLI, `~/.gemini/antigravity` for 2.0, and `antigravity-ide` for the IDE. The 1.1.2 capture's `transcriptPath` named `transcript_full.jsonl`, not the documented `transcript.jsonl`; see [Transcripts](#transcripts).
 
-```jsonc
-{
-  "conversationId": "conversation UUID/opaque id",
-  "workspacePaths": ["/absolute/workspace"],
-  "transcriptPath": "/absolute/app-data/brain/<id>/.system_generated/logs/transcript.jsonl",
-  "artifactDirectoryPath": "/absolute/app-data/brain/<id>"
-}
-```
+### Events
 
-The documented app-data roots are `~/.gemini/antigravity-cli` for CLI and `~/.gemini/antigravity` for Antigravity 2.0. Use the absolute hook path rather than reconstructing either root.
-
-The CLI 1.1.2 hook capture instead names `transcript_full.jsonl`. RimZ accepts that observed basename and the documented `transcript.jsonl`, validates either against the same conversation-root boundary, and prefers the observed full transcript when it must reconstruct a path.
-
-| Event | Fires | Event fields | Output |
+| Event | Fires | Event input | Output |
 | --- | --- | --- | --- |
-| `PreToolUse` | before a tool executes | `toolCall.name`, `toolCall.args`, `stepIdx` | required `decision`; optional `reason`, `permissionOverrides[]` |
-| `PostToolUse` | after a tool completes | `stepIdx`, optional/empty `error` | `{}` |
-| `PreInvocation` | before each model call | `invocationNum` (0-indexed), `initialNumSteps` | optional `injectSteps[]` |
-| `PostInvocation` | after tool calls finish | same documented input as `PreInvocation` | optional `injectSteps[]`, `terminationBehavior` |
+| `PreToolUse` | before a tool executes | `toolCall.name`, `toolCall.args`, `stepIdx` (0-based) | required `decision`; optional `reason`, `permissionOverrides[]`, `overwrite` |
+| `PostToolUse` | after a tool completes, tool steps only (1.1.9) | `toolCall` (`name`, `args`), `stepIdx`, optional `error` string, empty on success | `{}` |
+| `PreInvocation` | before each model call | `invocationNum` (0 for the first call of an execution), `initialNumSteps` | optional `injectSteps[]` |
+| `PostInvocation` | after each model invocation completes | same as `PreInvocation` | optional `injectSteps[]`, `terminationBehavior` |
 | `Stop` | when the execution loop terminates | `executionNum`, `terminationReason`, optional `error`, required `fullyIdle` | required `decision`; optional `reason` |
 
-An injected step has exactly one of `toolCall`, `userMessage`, or `ephemeralMessage`. `PostInvocation.terminationBehavior` is `force_continue`, `terminate`, or empty/omitted.
+`PostToolUse.toolCall` is documented on the web page and present in the 1.2.2 binary's hook message, but absent from the embedded hook doc and not yet live-captured. `Stop.terminationReason` examples are `model_stop`, `max_steps_exceeded`, and `error`. `fullyIdle = false` means background commands or asynchronous tasks are still running while the foreground loop stops.
 
-`Stop.terminationReason` examples are `model_stop`, `max_steps_exceeded`, and `error`. `fullyIdle = false` means background commands or asynchronous tasks remain active even though the foreground loop is stopping.
+Since 1.1.10, `hooks.json` hooks run before the built-in termination checks, so `PostInvocation` observes the final invocation of a turn and `Stop` hooks always run. Since 1.1.9, a `Stop` hook that keeps answering `continue` loses its block after a configured number of consecutive continuations and the turn ends.
 
-### Pre-tool decision channel
+### Decisions
 
-`PreToolUse.decision` accepts:
+`PreToolUse.decision` accepts five values ([hooks](https://antigravity.google/docs/hooks/)); the binary's JSON schema for the field enumerates the same five:
 
 | Value | Meaning |
 | --- | --- |
-| `allow` | auto-allow execution |
-| `deny` | hard-block execution |
-| `ask` | prompt the user while respecting an Always Allow grant |
-| `force_ask` | prompt regardless of cached permissions |
+| `allow` | run the tool without prompting |
+| `deny` | block the tool |
+| `ask` | prompt, honoring an Always Allow grant |
+| `force_ask` | prompt regardless of cached grants |
+| `deny_unless_prior_grant` | block unless the resource was approved by an earlier user grant |
 
-None of those four values is documented as a behavior-preserving observer result. `allow` can bypass the provider's native policy, while `ask` can introduce a prompt that policy would have skipped. The 1.0.16 release notes say the permission manager now handles an empty decision string safely, but they do not define whether `{}`, `{"decision":""}`, and absent stdout are equivalent, nor how exit codes and malformed JSON behave.
+`permissionOverrides` is an array of permission resources such as `command(npm test)` that override default tool permissions. `overwrite` (embedded hook doc) is an object shallow-merged into the tool call's arguments before it runs; the tool result then tells the agent which keys a hook rewrote.
 
-This remains the permission-integration gate. RimZ leaves `PreToolUse` uninstalled and returns no output if it is fed manually; native policy and the provider UI retain the decision.
+No value is documented as leaving native policy unchanged. `allow` can skip a prompt that policy would show, and `ask` can add one it would skip. The 1.0.16 changelog says an empty decision string no longer errors, but no source defines whether `{}`, `{"decision":""}`, empty stdout, a non-zero exit, or malformed JSON are equivalent.
 
-`Stop` documents `decision = "continue"` as the only value that prevents stopping and injects `reason`; any other value allows the stop. RimZ returns the golden `{"decision":""}` shape.
+An injected step (`injectSteps[]`) carries exactly one of `toolCall` (`{name, args}`), `userMessage` (string), or `ephemeralMessage` (string, a transient system message). `terminationBehavior` is `force_continue`, `terminate`, or empty.
 
-### Canonical tool vocabulary
+`Stop.decision = "continue"` blocks the stop, re-enters the loop, and injects `reason` as a system message; any other value, including `""`, allows the stop.
 
-The hook reference publishes these names and argument keys. Parse the tool name strictly and the args tolerantly so additions do not break lifecycle ingestion.
+### Undocumented hook fields in the 1.2.2 binary
 
-| Category | Tool | Documented arguments |
+The binary's hook protobuf messages define more than the docs publish. These names come from generated getters in the binary's strings; no page documents them and no capture shows whether the command transport serializes them.
+
+| Message | Undocumented fields |
+| --- | --- |
+| common arguments | `agentName`, `executionId`, `isBattleMode`, `lastUserInput` |
+| `PostInvocation` arguments | `modelOutput`, `modelThinking` |
+| `PostToolUse` arguments | `result` |
+| `PostToolUse` result | `overwriteResult` |
+| `Stop` arguments | `finalModelOutput` |
+| hook arguments oneof | a `SessionStart` variant (`sessionStartHookArgs`) whose result carries `injectSteps`; the string `SessionStart` also sits beside the five documented event names in the binary |
+| handler config | a `prompt` handler variant beside `command`, while the embedded doc says prompt hooks are unsupported |
+
+### Tool vocabulary
+
+The [hooks](https://antigravity.google/docs/hooks/) page publishes these tool names and argument keys:
+
+| Category | Tool | Arguments |
 | --- | --- | --- |
 | file | `view_file` | `AbsolutePath`, optional `StartLine`, `EndLine`, `IsSkillFile` |
 | file | `write_to_file` | `TargetFile`, `Overwrite`, `CodeContent`, `Description`, optional `IsArtifact`, `ArtifactMetadata` |
@@ -286,436 +281,364 @@ The hook reference publishes these names and argument keys. Parse the tool name 
 | execution | `schedule` | optional `DurationSeconds`, `CronExpression`, `MaxIterations`; `Prompt` |
 | permission | `list_permissions` | none |
 | permission | `ask_permission` | `Action`, `Target`, `Reason` |
-| agent | `invoke_subagent` | `Subagents[]`, each with `Prompt`, `Role`, `TypeName`, optional `Workspace` |
+| agent | `invoke_subagent` | `Subagents[]`, each `Prompt`, `Role`, `TypeName`, optional `Workspace` |
 | agent | `define_subagent` | `name`, `description`, `system_prompt`, optional `enable_mcp_tools`, `enable_write_tools`, `enable_subagent_tools` |
 | agent | `send_message` | `Recipient`, `Message` |
 | agent | `manage_subagents` | `Action` (`list`, `kill`, `kill_all`), optional `ConversationIds[]` |
-| interaction | `ask_question` | `questions[]`, each with `question`, `options[]`, `is_multi_select` |
+| interaction | `ask_question` | `questions[]`, each `question`, `options[]`, `is_multi_select` |
 | media | `generate_image` | `Prompt`, `ImageName`, optional `ImagePaths[]` |
 
-The matcher is a regular expression over `toolCall.name`; empty and `*` match all tools. The reference shows `browser_.*` as a matcher example without publishing the complete browser-tool catalog, so unknown browser names remain ordinary non-edit tools.
+The table is not exhaustive. Browser tools (`browser_*`), MCP tools, and tools the changelog names without arguments (`manage_inbox` in 1.1.13, `read_resource` in 1.1.16) also reach matchers.
 
-For RimZ phase semantics, only `write_to_file`, `replace_file_content`, and `multi_replace_file_content` are structured native file-edit proof. `run_command` may mutate the repository but remains generic work, matching the cross-provider rule.
+## Statusline and terminal title
 
-## Custom statusline state channel
+The custom statusline runs a command whenever agent state changes, pipes a snake_case JSON payload to its stdin, and renders its stdout with ANSI color. It is configured in `~/.gemini/antigravity-cli/settings.json`:
 
-Antigravity CLI can execute one custom statusline command whenever agent state changes. It sends detailed snake_case JSON on stdin, reads the command's stdout, and renders that stdout with ANSI support.
-
-Configuration lives in `~/.gemini/antigravity-cli/settings.json`:
-
-```jsonc
+```json
 {
   "statusLine": {
     "type": "command",
-    "command": "rimz statusline feed --source antigravity"
+    "command": "~/.gemini/antigravity-cli/statusline.sh"
   }
 }
 ```
 
-CLI 1.0.6 added `stack_with_default` to render the built-in and custom lines together. That option does not preserve a pre-existing user custom command. A RimZ installer must wrap and forward an existing command's output, exactly as other statusline adapters do, and uninstall must restore the previous object byte-for-byte where possible.
-
-The terminal-title command receives the same JSON, but it runs only when title customization is active and strips ANSI/non-printable output. Use the statusline as the primary feed and leave the title untouched.
-
-### Published payload
-
-| Field | Documented shape and meaning |
+| Key | Meaning ([statusline](https://antigravity.google/docs/cli/statusline/)) |
 | --- | --- |
-| `cwd` | current working directory |
-| `conversation_id` | current conversation identity |
-| `model` | `{id, display_name}`; live 1.1.2 can put the selected human label, such as `Gemini 3.5 Flash (Medium)`, in `id` |
-| `product` | product name, for example `antigravity-cli` |
-| `workspace` | `{current_dir, project_dir}`; the example uses a `file://` URI for `project_dir` |
-| `version` | CLI version string |
-| `plan_tier` | authenticated subscription tier |
-| `email` | authenticated account email/LDAP identity |
-| `agent` | active custom-agent profile object/name; nested schema is not published |
-| `context_window` | totals, limit, percentages, and current usage; detailed below |
-| `agent_state` | `idle`, `thinking`, `working`, `tool_use`, or `initializing` |
-| `vcs` | `{type, branch, client, dirty}`; documented types include `git`, `jj`, and `fig` |
-| `sandbox` | `{enabled, allow_network}` with optional fields tolerated |
-| `subagents` | array of active entries with `name`, `role`, `status` |
-| `artifacts` | array with `uri`, `status`, `type` |
-| `pending_input_count` | queued user-message count |
-| `background_tasks` | array with `name`, `status`, `index` |
-| `tool_confirmation_pending` | whether a tool-confirmation dialog is visible |
-| `terminal_width` | live terminal width |
+| `type` | `command` |
+| `command` | the command to run |
+| `padding` | blank lines above the status line |
+| `enabled` | `false` suspends the script while keeping the command |
+| `stack_with_default` | `true` renders the script below the built-in line instead of replacing it |
 
-The context object is:
+The terminal-title command ([terminal title](https://antigravity.google/docs/cli/title/)) receives the same payload but runs only while title customization is active, and strips ANSI and non-printable output.
 
-```jsonc
-{
-  "total_input_tokens": 88244,
-  "total_output_tokens": 61074,
-  "context_window_size": 1048576,
-  "used_percentage": 8.415603637695312,
-  "remaining_percentage": 91.58439636230469,
-  "current_usage": {
-    "input_tokens": 63382,
-    "output_tokens": 346,
-    "cache_creation_input_tokens": 0,
-    "cache_read_input_tokens": 20857
-  }
-}
-```
+### Payload
 
-Treat every field as optional, validate finite nonnegative numbers, and prefer upstream `used_percentage`/`context_window_size` rather than a hard-coded model limit. The example does not define whether the total token fields are current-window or cumulative session totals; `current_usage` clearly names one current usage object, but its refresh cadence is unpublished.
-
-### Release-example drift
-
-The pinned official 1.1.1 statusline example reads `artifact_count` and `task_count`, while the living schema documents `artifacts[]` and `background_tasks[]`. The script reads `subagents[]` as documented. RimZ's landed context parser ignores those drifting identity-poor fields and tolerates additive keys; task and artifact claims wait for stable identities and enums, while child identity comes from hooks plus transcripts instead.
-
-### Lifecycle projection
-
-The statusline is a sidecar state feed, not a durable event log. RimZ persists model, version, plan/account identity, and context usage without converting refreshes into lifecycle churn:
-
-| Statusline observation | RimZ projection | Constraint |
+| Field | Shape and meaning | Source |
 | --- | --- | --- |
-| `model`, `version` | model and CLI identity | sidecar only |
-| `plan_tier`, `email` | provider account identity | private sidecar; no diagnostic logging |
-| `context_window` | live context gauge and token composition | sidecar only |
-| `agent_state` | ignored for lifecycle | command hooks own durable edges |
-| `tool_confirmation_pending` | timestamped display-only permission wait | raises the card while newer than hook activity; no durable ask or detail |
-| `subagents`, `artifacts`, `background_tasks` | ignored for row identity | published entries lack the stable IDs RimZ requires |
+| `cwd` | launch directory | docs |
+| `session_id` | backward-compatibility alias of `conversation_id` | docs |
+| `conversation_id` | current conversation ID | docs |
+| `conversation_title` | current conversation title | 1.1.27 changelog, 1.2.2 binary |
+| `transcript_path` | absolute transcript path, optional | docs |
+| `model` | `{id, display_name}`; the docs example and the 1.1.2 capture put the selector label, such as `Gemini 3.5 Flash (Medium)`, in both | docs |
+| `workspace` | `{current_dir, project_dir}` | docs |
+| `version` | CLI version | docs |
+| `context_window` | token totals, limit, percentages, and `current_usage`; below | docs |
+| `exceeds_200k_tokens` | `true` once context exceeds 200k tokens; `null` before the first API call | docs |
+| `product` | application name, for example `antigravity` | docs |
+| `quota` | map from model or bucket ID to `{remaining_fraction, reset_time, reset_in_seconds}`, optional | docs |
+| `agent_state` | `idle`, `thinking`, `working`, `tool_use`, or `initializing` | docs |
+| `vcs` | `{type, branch, client, dirty}`; `type` is `git`, `jj`, or `hg` | docs |
+| `sandbox` | `{enabled, allow_network}` | docs |
+| `artifact_count` | artifacts produced in the conversation | docs |
+| `task_count` | running background tasks | docs |
+| `pending_input_count` | queued user messages | docs |
+| `tool_confirmation_pending` | `true` while a tool-confirmation dialog is showing | docs |
+| `plan_tier` | subscription tier, optional | docs |
+| `email` | account email or LDAP identity | docs |
+| `terminal_width` | live terminal width | docs |
+| `execution_mode` | active prompt execution mode | docs |
+| `vim` | `{mode}`: `NORMAL`, `INSERT`, `VISUAL`, or `VISUAL LINE`; present only in Vim editor mode | docs |
+| `cost` | unrounded estimated cost of the current session; nested shape unpublished | 1.1.21 changelog, 1.2.2 binary |
+| `agent` | active custom agent; shape unpublished | 1.2.2 binary |
+| `subagents` | array of active subagents; the example script reads its length | example script, 1.2.2 binary |
+| `artifacts`, `background_tasks` | arrays beside the two count fields; shape unpublished | 1.2.2 binary |
 
-`PreInvocation` fires for every model call inside an execution. RimZ emits `registered` and `turn_started` only when `invocationNum = 0`; later model calls do not reset acting to reasoning or create false prompt boundaries.
+Most of these fields carry `omitempty` tags in the binary, so treat a missing field and a zero value alike. The docs example:
 
-## Turn completion, errors, and background work
-
-`Stop` is the authoritative documented foreground-loop terminal signal:
-
-```jsonc
+```json
 {
-  "executionNum": 1,
-  "terminationReason": "model_stop",
-  "error": "",
-  "fullyIdle": true,
-  "conversationId": "...",
-  "workspacePaths": ["/workspace/project"],
-  "transcriptPath": ".../transcript_full.jsonl",
-  "artifactDirectoryPath": ".../brain/<id>"
+  "context_window": {
+    "total_input_tokens": 88244,
+    "total_output_tokens": 61074,
+    "context_window_size": 1048576,
+    "used_percentage": 14.24,
+    "remaining_percentage": 85.76,
+    "current_usage": {
+      "input_tokens": 63382,
+      "output_tokens": 346,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 20857
+    }
+  },
+  "quota": {
+    "gemini-weekly": {
+      "remaining_fraction": 0.9378,
+      "reset_time": "2026-07-06T07:50:32Z",
+      "reset_in_seconds": 560580
+    }
+  }
 }
 ```
 
-The initial mapping is:
+No source says whether the `total_*` token fields count the current window or the whole session, or how often `current_usage` refreshes. The 1.1.12 changelog fixed quota that lagged one fetch; the full set of `quota` bucket IDs is unpublished.
 
-| Stop payload | RimZ signal |
+## Transcripts and local state
+
+### Transcripts
+
+Each conversation keeps two JSONL transcripts under `<app_data_dir>/brain/<conversationId>/.system_generated/logs/`. The binary's embedded agent instructions describe them: `transcript.jsonl` is compact and truncates long fields, listing them in `truncated_fields`; `transcript_full.jsonl` is never truncated. Each line is one step:
+
+| Field | Meaning (embedded instructions, 1.1.2 capture) |
 | --- | --- |
-| `terminationReason = model_stop`, empty error, `fullyIdle = true` | `turn_ended { errored: false }` |
-| `terminationReason = error` or non-empty error, `fullyIdle = true` | `turn_ended { errored: true }`; no current error shape supplies a recovery certificate |
-| clean stop with `fullyIdle = false` | clean `turn_ended` with background work in flight, leaving the row running/parked |
-| error with `fullyIdle = false` | foreground failure wins; do not paint a success-shaped park |
-| `max_steps_exceeded` | failed |
+| `step_index` | step index in the trajectory |
+| `source` | `USER_EXPLICIT`, `MODEL`, `SYSTEM`, and others |
+| `type` | step type, including `USER_INPUT`, `PLANNER_RESPONSE`, `INVOKE_SUBAGENT`, `CONVERSATION_HISTORY`, `CHECKPOINT` |
+| `status` | `DONE`, `ERROR`, and others |
+| `created_at` | RFC 3339 timestamp |
+| `content` | optional text |
+| `thinking` | model reasoning on `PLANNER_RESPONSE` steps |
+| `tool_calls` | optional array of tool calls with arguments |
+| `truncated_fields` | compact file only: the fields cut on this line |
 
-The stop hook can itself force another loop. RimZ returns the documented non-`continue` empty decision, so observation does not extend the execution.
+No page publishes the full enums, an append guarantee, a locking contract, retention, or what `/rewind` does to either file. The 1.1.13 changelog fixed context compaction corrupting the transcript by rewriting it while a background message appended, so compaction rewrites the file in place.
 
-Antigravity documents no process/session-end hook. Pane process presence, shell reversion, and ordinary RimZ reaping remove the row. `Stop` ends an execution loop, not the conversation.
+The 1.1.2 capture observed these record shapes:
 
-### Recovery evidence gate
+- A text turn is `USER_EXPLICIT` / `USER_INPUT` / `DONE` with the user's text, then `MODEL` / `PLANNER_RESPONSE` / `DONE` with the reply, around `SYSTEM` `CONVERSATION_HISTORY` and `CHECKPOINT` records. User content can wrap the request in `<USER_REQUEST>...</USER_REQUEST>` followed by `<ADDITIONAL_METADATA>` and settings blocks.
+- A question turn adds an `ask_question` entry to a completed `MODEL` / `PLANNER_RESPONSE` record's `tool_calls`. `transcript_full.jsonl` carries `args.questions` as a JSON array; `transcript.jsonl` carries the same array JSON-encoded as a string.
+- A subagent turn adds the `invoke_subagent` request and `INVOKE_SUBAGENT` result described in [Subagents](#subagents-and-background-tasks).
 
-The supported installed version reports `1.1.2`. A recoverable classifier requires two independent captures of the same provider-limit Stop with a stable provider-owned typed discriminator after removing conversation IDs, paths, account/model identity, user text, request metadata, and dynamic values. The available evidence does not satisfy that gate: no rate-limit, spend-limit, overload, or transient class has a repeated typed discriminator, and no sanitized positive recovery payload exists. Raw Stop bodies stay out of the repository and logs.
+### Conversation databases
 
-The classification table is therefore closed:
+The CLI stores conversations in SQLite: the 1.0.4 changelog makes SQLite the conversation format, 1.0.5 makes `/resume` scan `.db` and `.db-wal` files, and 1.1.26 checkpoints the WAL on exit. A 1.1.1 probe found one database per conversation at `~/.gemini/antigravity-cli/conversations/<conversation-id>.db` and a shared `~/.gemini/antigravity-cli/conversation_summaries.db`, both at SQLite `user_version = 1`. Google publishes no schema; the tables below are that probe's.
 
-| 1.1.2 Stop shape | Classification |
+| Table (per-conversation) | Columns |
 | --- | --- |
-| exact `model_stop`, empty error, required `fullyIdle` | terminal clean/background mapping |
-| `max_steps_exceeded`, required `fullyIdle` | terminal error |
-| `error` with a string, message-only object, code-like object, empty object, or another unverified value | terminal error according to the existing failure mapping; no turn-error marker |
-| missing `fullyIdle` or malformed payload | no lifecycle observation |
-| future typed rate-limit, spend-limit, overload, or transient discriminator | unclassified until the same supported-version shape is captured twice and sanitized |
+| `trajectory_meta` | `trajectory_id`, `cascade_id`, `trajectory_type`, `source` |
+| `steps` | `idx`, `step_type`, `status`, `has_subtrajectory`, `metadata`, `error_details`, `permissions`, `task_details`, `render_info`, `step_payload`, `step_format` |
+| `gen_metadata` | `idx`, `data`, `size` |
+| `executor_metadata` | `idx`, `data` |
+| `parent_references` | `idx`, `data` |
+| `trajectory_metadata_blob` | `id`, `data` |
+| `battle_mode_infos` | `idx`, `data` |
 
-Account quota is timing evidence only. A `100%` window, a stalled pane, or a keyword-similar error cannot establish why the current turn stopped, so Antigravity supervised runs and loop attempts remain terminal on every current error Stop.
+Most payload columns are opaque blobs. The summary database's `conversation_summaries` table carries the conversation ID, title and preview, step count, modification and last-user-input times (both indexed), workspace URIs, status, source, project, agent, parent conversation ID, nesting depth, battle and winner IDs, `not_fully_idle`, `killed`, last-user-input step index, and `app_data_dir`.
 
-## Human waits and native answer surfaces
+### Other files
 
-Antigravity has three visible human-in-the-loop families:
+| Path under `~/.gemini/antigravity-cli/` | Role |
+| --- | --- |
+| `settings.json` | CLI preferences; see [Settings and permissions](#settings-and-permissions) |
+| `keybindings.json` | action → key-sequence map; delete to restore defaults |
+| `cache/last_conversations.json` | absolute workspace → latest conversation ID |
+| `cache/projects.json` | workspace → project mapping |
+| `brain/<conversationId>/` | artifacts, `scratch/`, and `.system_generated/` logs, subagent metadata, and worktrees |
+| `updater/` | updater lock and timestamp state |
+| `cli.log` | default CLI log (`--log-file` overrides) |
 
-- Tool permissions open a TUI card; the statusline exposes `tool_confirmation_pending`, while the preceding `PreToolUse` carries the proposed action.
-- `ask_question` carries one or more questions with options and multi-select state. The exact result wire is not published because the answer stays inside Antigravity's UI.
-- Artifacts include implementation plans, code diffs, and media. Depending on `artifactReviewPolicy`, the agent pauses at milestones for approval, rejection, or inline comments before changes reach disk.
-
-Root tool confirmations accept `y` and `n`. `Ctrl+K` fast-approves the pending subagent action surfaced by the status alert, and `Alt+J` jumps to the next subagent that needs approval. The Artifact Review panel opens with `Ctrl+R` and owns its own approve/reject/comment flow.
-
-Ordinary `rimz message` text continues through pane send. A future `rimz answer` planner may drive stable native keys after its dialog-state preconditions are captured, but there is no official out-of-band answer API. Never answer by returning `allow` from the observation hook: that changes provider behavior before the user acts and bypasses the invariant that the provider UI is the answer surface.
-
-RimZ's current `AskKind` has permission, plan approval, and question. Map a pending implementation-plan artifact to plan approval only after the payload's artifact `type` and pending `status` values are captured. Treat pending code diffs as permission until the shared model gains an artifact-review kind; do not hide them as generic idle.
+Shared customization lives in `~/.gemini/config/`: `hooks.json`, `config.json` (plugin enablement since 1.1.11, remote-control settings), `mcp_config.json`, and project-specific configuration under `projects/`.
 
 ## Subagents and background tasks
 
-Antigravity supports nested asynchronous subagents and non-agent background tasks.
+The agent drives subagents through `define_subagent`, `invoke_subagent`, `send_message`, and `manage_subagents`. Subagents run asynchronously and can nest. The `/agents` panel shows each one's identifier, role, status (`running`, `done`, `killed`, `error`), and current step; `K` kills, `A` and `D` approve or deny inline, and `Enter` expands a group ([`/agents`](https://antigravity.google/docs/cli/commands/agents/)). Globally, `Ctrl+K` fast-approves the pending subagent action and `Alt+J` jumps to the next subagent that needs approval. Descendants' tool confirmations relay to the root conversation. Custom agents declare subagents in Markdown frontmatter (`agents`, 1.1.27) and choose a model tier with `model`, default `inherit` (1.1.5).
 
-The parent can call `define_subagent`, `invoke_subagent`, `send_message`, and `manage_subagents`. The `/agents` panel shows identifier, role, status (`running`, `done`, `killed`, or `error` in the published prose), and current step. Nested descendants and their tool confirmations relay to the root conversation in CLI 1.1.1.
+A child is an ordinary conversation, and the 1.1.2 two-child capture showed how it links to its parent:
 
-The statusline schema exposes active subagents with `name`, `role`, and `status`, but it does not document a child `conversationId`, parent ID, start time, task text, token usage, or terminal result identity. The tagged example only counts the array, so RimZ keeps that roster out of identity.
+- Every child receives the ordinary command hooks with its own stable `conversationId`, its first workspace path, and its own transcript path. Child hooks carry no parent ID.
+- The parent transcript holds a completed `MODEL` / `PLANNER_RESPONSE` record whose `invoke_subagent` `args.Subagents[]` entries carry `Prompt`, `Role`, `TypeName`, and optional `Workspace` in request order. Nested children that inherit the workspace use the literal `inherit`.
+- The next completed `MODEL` / `INVOKE_SUBAGENT` record's `content` holds consecutive JSON objects inside prose, one per child in request order. Each carries `conversationId`, a `file:` `logAbsoluteUri` naming the child's transcript under `brain/<conversationId>`, and optional `workspaceUris`.
+- The parent transcript flushed late: both children's `PreInvocation` and `Stop` hooks ran before the request and result records reached disk, and the records flushed before the parent's own `Stop`.
+- `manage_subagents` with `Action=list` returned the same child IDs after completion, with no lifecycle state.
 
-A live 1.1.2 two-child run resolves the stable relation through hooks and transcripts:
+Print mode publishes the same relation directly: a `stream-json` `step_update` for an `invoke_subagent` step carries `subagent_info.subagents[]` with `type_name`, `role`, `conversation_id`, `log_uri`, and `workspace_uris` ([headless](https://antigravity.google/docs/cli/headless/)).
 
-- Every child receives the ordinary command hooks with its own stable `conversationId`, first workspace path, and dedicated transcript path. Child hooks do not carry a parent ID.
-- The eventual parent transcript contains a completed `MODEL` / `PLANNER_RESPONSE` record whose `invoke_subagent.args.Subagents[]` entries carry `Prompt`, `Role`, `TypeName`, and optional `Workspace` in request order; nested inherited workspaces use the literal `inherit`.
-- The following completed `MODEL` / `INVOKE_SUBAGENT` record contains consecutive JSON objects in `content`, one per requested child in the same order. Each object carries `conversationId`, a `file:` `logAbsoluteUri` naming that child's transcript beneath `brain/<conversationId>`, and may carry `workspaceUris` for the child workspace.
-- Live 1.1.2 flush timing is later than the logical record order: one two-child capture placed both child `PreInvocation` hooks and both child `Stop` hooks before the parent transcript write, then flushed the request/result records before the parent's `Stop` hook.
-- `manage_subagents(Action=list)` returns the same child IDs after completion but no lifecycle state. Child `PreInvocation`, tool, and `Stop` hooks remain lifecycle authority.
+Background shell work starts through `run_command` with `RunPersistent` and is managed with `manage_task` and the `/tasks` panel. The statusline counts it in `task_count`, and `Stop.fullyIdle` is `false` while it runs. Stopping a subagent tree stops every descendant and the tasks they own (1.1.10 changelog).
 
-RimZ therefore joins only bounded same-kind, same-pane parent candidates. It pairs the planner request and result by transcript order, pairs their arrays by provider order, validates counts, unique child IDs, canonical transcript URIs, and requested/inherited workspace, and accepts exactly one candidate. Because the live flush can follow every child hook, the parent `Stop` also enumerates all validated results and adopts any child whose earlier hooks remained root observations. A nested candidate flattens to its already-established root parent. Malformed, torn, unsafe, ambiguous, self-referential, cyclic, or workspace-mismatched evidence leaves the relation unclaimed. This is partial support because hooks and the subagent product are official while the parent-result transcript shape remains an observed 1.1.2 implementation wire.
+## Human waits
 
-Background shell work appears through `run_command` with `RunPersistent`, `manage_task`, the `/tasks` panel, and the statusline task surface. `Stop.fullyIdle` is enough to keep a clean foreground completion parked while work remains. Rich per-task rows wait for the array/count drift and stable task IDs to be captured.
+Antigravity has three wait families, and each is answered only inside the TUI:
 
-## Transcript and durable local state
+| Wait | Signal | Native answer |
+| --- | --- | --- |
+| tool permission | a prompt card (`Run this command?`, `Allow access to this URL?`, `Allow calling this tool?`, with a `Reason:` line when a hook or cross-project path caused it, since 1.1.28); statusline `tool_confirmation_pending`; the preceding `PreToolUse` carries the proposed call | `y` / `n`; file, URL, and MCP targets can be edited to widen the grant before allowing |
+| question | `ask_question` with `questions[]` of options and `is_multi_select` | the question dialog; space or `x` toggles a multi-select option |
+| artifact review | implementation plans, diffs, and media held for review per `artifactReviewPolicy` | the Artifact Review panel (`Ctrl+R`): approve, reject, or comment |
 
-Every hook carries an absolute `transcriptPath`. The official hook page says it points to:
+No API answers a wait out of band, and the answer to `ask_question` is not published as a wire. The artifact `status` and `type` enums are unpublished ([artifact model](https://antigravity.google/docs/artifacts/)).
+
+Print mode has no one to answer: a tool needing unobtainable approval is soft-denied with a stderr notice (1.1.3) and listed in `denied_actions` (1.1.27), the agent settles questions itself (1.1.12), and plan review proceeds automatically (1.1.28).
+
+## Print mode
+
+`-p` runs one prompt and exits. Diagnostics, authentication prompts, progress, and permission notices go to stderr; stdout carries only the response or the event stream ([headless](https://antigravity.google/docs/cli/headless/)). Print mode uses cached credentials and fails with an authentication error rather than blocking when none exist. It honors `settings.json` policies (1.1.4), `--mode` (1.1.12), `--model` and `--effort` (1.1.10), and expands slash commands and skills unless `--disable-slash-commands` is set (1.1.9).
 
 ```text
-<app_data_dir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl
-```
-
-For CLI, `<app_data_dir>` is `~/.gemini/antigravity-cli`; for Antigravity 2.0 it is `~/.gemini/antigravity`.
-
-Google publishes no JSONL record schema, append/replace guarantee, retention rule, file-locking contract, rewind semantics, or relationship between a root transcript and child transcripts. The path is safe to retain as provider identity evidence. Keep context and spend disabled, and derive visible history only from record shapes captured against the one supported release.
-
-### Live 1.1.2 transcript probe
-
-A stock root conversation confirms `transcript.jsonl` and `transcript_full.jsonl` as newline-delimited JSON with these top-level fields; the 1.1.2 hook payload points at `transcript_full.jsonl` even though the hook documentation still names `transcript.jsonl`:
-
-| Field | Captured shape |
-| --- | --- |
-| `step_index` | integer physical step index |
-| `source` | string source enum |
-| `type` | string record-type enum |
-| `status` | string status enum |
-| `created_at` | RFC 3339 timestamp |
-| `content` | optional string |
-| `tool_calls` | optional array of typed tool call objects |
-
-The captured simple text turn contains `USER_EXPLICIT` / `USER_INPUT` / `DONE` with visible user content, `MODEL` / `PLANNER_RESPONSE` / `DONE` with visible assistant content, and `SYSTEM` `CONVERSATION_HISTORY`/`CHECKPOINT` records that stay internal. Provider-authored user content may wrap the request in exact `<USER_REQUEST>...</USER_REQUEST>` tags followed by `<ADDITIONAL_METADATA>` and settings blocks; only the request body is user-visible.
-
-The captured native question turn adds `tool_calls` to a completed `MODEL` / `PLANNER_RESPONSE` record. `transcript_full.jsonl` carries `ask_question.args.questions` as a JSON array of typed question objects; `transcript.jsonl` carries the same array as a JSON-encoded string. The first nonblank `question` is sufficient to project a native waiting card at the record timestamp; answer state remains inside the TUI.
-
-The captured two-child turn adds the ordered `invoke_subagent` planner request and `INVOKE_SUBAGENT` result described above. The result's prose-wrapped consecutive JSON objects are parsed with the `serde_json` stream deserializer; no string extraction supplies identity. Each returned `logAbsoluteUri` must resolve to a validated direct child transcript beneath the canonical CLI brain directory, and any returned `workspaceUris` must be valid file URIs containing the request's canonical workspace, before the request metadata can label that child.
-
-The visible-history parser accepts only the two visible source/type pairs, ignores system and unknown records, tolerates malformed complete lines, and retains a torn final line for the next incremental read. Ordinary completed planner responses supply partial pulled turn completion; the validated `ask_question` shape supplies a read-only question wait. The separate fail-closed subagent correlation parser consumes only the captured request/result shapes from a bounded tail. These records do not prove failure, cancel, compaction, or historical spend semantics. Re-capture those before broadening the parser.
-
-The official CLI changelog adds a second persistence fact:
-
-- 1.0.4 adds SQLite `.db` conversations and says SQLite will be the CLI conversation format.
-- 1.0.5 makes `/resume` scan `.db` and `.db-wal` files.
-- 1.0.16 uses a shared SQLite summary store for background synchronization.
-
-The database path, table schema, transaction mode, row identity, and relationship to `transcript.jsonl` are not published. Treat the hook transcript as an agent-loop log and SQLite as conversation persistence until a live trace proves a stronger relationship. A future row-store parser follows RimZ's durability rules: open read-only, tolerate WAL, select by typed conversation ID, and never mutate or checkpoint the provider database.
-
-### Live 1.1.1 persistence probe
-
-A read-only probe of the locally installed latest CLI confirms one conversation database at `~/.gemini/antigravity-cli/conversations/<conversation-id>.db` and a shared `~/.gemini/antigravity-cli/conversation_summaries.db`. These are implementation observations, not published compatibility promises, so fixtures must be regenerated for every latest-version advance.
-
-The per-conversation database reports SQLite `user_version = 1`. Its visible schema is:
-
-| Table | Columns visible in SQLite schema | Implementation value |
-| --- | --- | --- |
-| `trajectory_meta` | `trajectory_id`, `cascade_id`, `trajectory_type`, `source` | possible root identity; enum meanings unpublished |
-| `steps` | `idx`, `step_type`, `status`, `has_subtrajectory`, `metadata`, `error_details`, `permissions`, `task_details`, `render_info`, `step_payload`, `step_format` | ordered activity shell; most payloads are opaque blobs |
-| `gen_metadata` | `idx`, `data`, `size` | opaque generation metadata |
-| `executor_metadata` | `idx`, `data` | opaque executor metadata |
-| `parent_references` | `idx`, `data` | possible fork/subagent relation; blob wire unpublished |
-| `trajectory_metadata_blob` | `id`, `data` | opaque trajectory metadata |
-| `battle_mode_infos` | `idx`, `data` | opaque battle-mode state |
-
-The shared summary database also reports `user_version = 1`. Its `conversation_summaries` row exposes `conversation_id`, title/preview, step count, modification and last-user-input times, workspace URIs, status/source/project/agent fields, parent conversation ID, nesting depth, battle/winner IDs, `not_fully_idle`, `killed`, last-user-input step index, and `app_data_dir`. Indexes cover the two time fields.
-
-This schema makes exact resume discovery and candidate parent/nesting recovery plausible, but it does not make the blob payloads a supported transcript wire. Validate enum values, concurrent WAL behavior, parent semantics, and schema drift before parsing; keep titles, previews, workspace paths, and account-bearing app-data paths out of diagnostics.
-
-Documented cache files relevant to identity are:
-
-| Path | Role | Adapter use |
-| --- | --- | --- |
-| `~/.gemini/antigravity-cli/cache/last_conversations.json` | absolute workspace → latest conversation ID | optional resume fallback only |
-| `~/.gemini/antigravity-cli/cache/projects.json` | centralized workspace → project mapping | do not use for session identity |
-| `~/.gemini/antigravity-cli/updater/` | updater lock/timestamp state | ignore |
-
-## Model, context, account, quota, and spend
-
-### Model and context
-
-The statusline is the authoritative live model/context surface. Preserve `model.id` byte-for-byte as provider identity even when 1.1.2 supplies the human selector label rather than the canonical-shaped hook hint. A terminal case-insensitive `(Low)`, `(Medium)`, or `(High)` display qualifier supplies lowercase effort; `(Thinking)` supplies the thinking flag; unknown parenthetical suffixes remain presentation. Model choice is sticky for the current turn: changing the selector while a turn runs applies after that turn finishes or is canceled.
-
-Antigravity is multi-model. The captured 1.1.2 selector lists `Gemini 3.5 Flash (Medium)`, `Gemini 3.5 Flash (High)`, `Gemini 3.5 Flash (Low)`, `Gemini 3.1 Pro (Low)`, `Gemini 3.1 Pro (High)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, and `GPT-OSS 120B (Medium)`. Current and selected markers are selector UI state rather than part of these labels. Availability changes by plan. Do not infer provider, context window, or pricing from the `antigravity` kind; use the exact live model and upstream-reported context limit.
-
-### Account and authentication
-
-The CLI authenticates through the OS secure keyring (Apple Keychain, Linux Secret Service/D-Bus, or Windows Credential Manager), silently reusing a session and falling back to browser Google Sign-In. SSH launches use a URL-and-code OAuth flow. `/logout` purges the saved authentication profile.
-
-No credential file or stable machine-readable auth command is documented. Do not scrape or export keyring tokens. While a pane is live, statusline `email` and `plan_tier` populate best-effort account identity; while the same user's `agy` process is already running, its private local service can return email and the native user tier or plan label through `GetUserStatus`. Discard or redact email outside the account cache and diagnostics according to RimZ privacy policy. `AGY_CLI_HIDE_ACCOUNT_INFO` hides header presentation but the official docs do not say it removes those statusline or local-service fields, so verify rather than assuming.
-
-### Quota and credits
-
-`/usage` (alias `/quota`) refreshes model configuration and backend quota state, then opens an interactive panel. `/credits` opens credit details and purchase/upgrade links. The built-in statusline displays quota and remaining AI credits in current releases, but the documented custom-statusline JSON does not publish quota-window or credit fields.
-
-Plans provide baseline quota with plan-dependent five-hour and/or weekly refresh behavior, and optional AI-credit overages for eligible paid plans. Google explicitly says quota is capacity-dependent and measured by work rather than a stable prompt or token count. Do not synthesize RimZ `RateLimitWindow`s from plan prose.
-
-The distributed CLI exposes a private Connect-over-HTTPS service on process-owned loopback sockets. This surface is undocumented by Google and therefore version-sensitive; its wire and discovery were cross-checked against CodexBar commit [`b41715f`](https://github.com/steipete/CodexBar/tree/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8), specifically the pinned [`AntigravityStatusProbe`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe.swift), [`AntigravityStatusProbe+PortDetection`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe%2BPortDetection.swift), and [`AntigravityQuotaSummaryParser`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityQuotaSummaryParser.swift).
-
-RimZ POSTs `{}` to `/exa.language_server_pb.LanguageServerService/GetUserStatus` and `{"forceRefresh":true}` to `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`, with `Content-Type: application/json` and `Connect-Protocol-Version: 1`. It accepts only an exact current-uid `agy` executable and `argv[0]`, intersects that process's owned sockets with loopback listeners, discovers candidates once newest-first, and revalidates the process start identity before each RPC. One direct usage attempt pairs status and quota on the same candidate endpoint; once status identifies an owner, quota failure returns that owner's failed result instead of falling back to another process or endpoint. The client starts no process, reads no credential, follows no redirect, applies bounded deadlines and body size, and accepts the service's self-signed certificate only after those process/socket checks.
-
-The direct usage owner key is SHA-256 over the trimmed ASCII-lowercased email under the versioned `rimz:antigravity-account:v1` domain, rendered with an `antigravity:v1:` prefix. Only that digest reaches the account-usage cache. A known owner switch invalidates the prior windows even when the paired quota call fails; an ownerless early failure retains prior truth. The separate display account probe may retain plan-only status and stays independently cached.
-
-The quota response can wrap its summary at the root, under `response`, or under `summary`, and can encode a remaining fraction directly, nested, or through an observed oneof shape. RimZ recognizes only explicit five-hour and weekly period labels/IDs; every enabled native model bucket in a period folds to the smallest remaining fraction, with later reset and stable model identity breaking ties. A missing or disabled recognized period stays an unknown window, unknown periods are ignored, and any malformed recognized fraction or nonfuture reset rejects the reading. The normalized `5h` and `7d` windows are authoritative account quota; AI credits and dollars remain unknown.
-
-### Spend
-
-The statusline exposes current input, output, cache-creation, and cache-read tokens plus a model value, but no dollars. Live 1.1.2 may express that value as the selected human label. Baseline plan quota and AI-credit overages are not equivalent to API-token billing, and Antigravity can route multiple model providers. No official per-session cost field or cumulative usage ledger is published.
-
-RimZ may price those four disjoint current-usage classes through its local public API price book. A canonical ID uses the shared resolver; a captured selector label must carry a recognized reasoning qualifier, and its qualifier-free normalized candidate must resolve by exact table key. Render the result as an ordinary dollar value with current-usage coverage: room/provider aggregates, budgets, full-history spend, provider/account totals, and `rimz stats` exclude it because the replace-style value is non-additive. Never present the price as subscription billing or synthesize it from the plan or agent kind.
-
-## Headless and supervised runs
-
-The stock one-shot form is:
-
-```text
-agy --print "prompt"
 agy -p "prompt"
-```
-
-`--prompt` is an alias for `--print`. `--print-timeout` defaults to five minutes. Resume composes with print mode:
-
-```text
+agy -p "prompt" --output-format json
 agy --conversation <conversation-id> -p "next prompt"
-agy --conversation=<conversation-id> -p "next prompt"
 agy -c -p "next prompt"
 ```
 
-CLI 1.1.1 fixes two contract-critical behaviors: a server-side request failure writes its error to stderr and exits nonzero instead of returning empty success, and a flagged prompt no longer causes the process to read stdin and hang inside scripts/subprocesses. The response is plain stdout text.
+### JSON result
 
-No JSON result mode, streaming JSON mode, event envelope, or documented token/cost footer exists in the shipped help or official headless prose. A first supervised adapter can support plain text and process exit status; its normalized JSON mode must be RimZ's wrapper around that text rather than a claimed provider-native format.
+`--output-format json` prints one object; `stream-json` ends with the same object as its `result` event:
 
-Before enabling supervised runs, verify hook/statusline behavior in `-p`, timeout exit codes, signal exits, empty final responses, permission-required failures, and whether `--print-timeout` accepts Go duration syntax beyond the shown default.
+| Field | Meaning |
+| --- | --- |
+| `conversation_id` | conversation to resume |
+| `status` | `SUCCESS`, `ERROR`, `CANCELED`, `INTERRUPTED` (for example SIGINT), `INVALID`, `WAITING` (ended waiting on input), `RUNNING` (no terminal state) |
+| `response` | free-text response |
+| `error` | error message, only on failure |
+| `duration_seconds` | wall-clock duration |
+| `num_turns` | user turns in the conversation |
+| `structured_output`, `json_schema` | parsed output and enforced schema under `--json-schema` |
+| `usage` | `input_tokens`, `output_tokens`, `thinking_tokens`, `cache_read_tokens`, `total_tokens` |
+| `denied_actions` | actions soft-denied during the run (1.1.27 changelog and a 1.2.2 binary tag; not on the docs page) |
 
-## Settings, permissions, trust, and privacy
+No field reports dollars.
 
-CLI preferences live in sparse JSON at:
+### Stream events
 
-```text
-~/.gemini/antigravity-cli/settings.json
+`--output-format stream-json` emits NDJSON with an `event` discriminator:
+
+| Event | Payload |
+| --- | --- |
+| `init` | once: `conversation_id` and `init` `{cwd, tools[], permission_mode, model?, agent?, json_schema?}`; `permission_mode` is `request-review`, or `always-proceed` under `--dangerously-skip-permissions` |
+| `step_update` | per step transition or text delta: `step_update` `{conversation_id, step_index, state, step_type, tool_name?, text_delta?, duration_seconds?, usage?, tool_info?, subagent_info?}` |
+| `result` | once, at the end: `result`, the [JSON result](#json-result) |
+
+`state` is `ACTIVE` or `DONE`. `step_type` is the closed set `user_input`, `agent_response`, `tool`, `checkpoint`. `tool_info` is `{name, parameters, output, error: {type, message}}`. A docs example:
+
+```json
+{"event":"init","conversation_id":"9ec58bfd-4d67-4f5e-83a5-9d907e9c6b1f","init":{"cwd":"/home/user/project","tools":["ask_permission","run_command","write_to_file","..."],"permission_mode":"request-review"}}
+{"event":"step_update","step_update":{"conversation_id":"9ec58bfd-4d67-4f5e-83a5-9d907e9c6b1f","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"9ec58bfd-4d67-4f5e-83a5-9d907e9c6b1f","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"apple"}}
 ```
 
-The parser preserves unknown fields in current releases. RimZ still edits it with typed JSON, temp-file plus rename, conflict detection, and a preview; it never regenerates the whole file from a partial schema.
+### Stream input
 
-Implementation-relevant documented keys are:
+`--input-format stream-json` reads one message per stdin line and runs a turn for each in one conversation until stdin closes:
 
-| Key | Values/default | Relevance |
+```json
+{"event":"user","message":{"content":"string or [{\"type\":\"text\",\"text\":\"string\"}]"}}
+```
+
+| Input | Result |
+| --- | --- |
+| unrecognized `event` name | skipped, warning on stderr |
+| `control_request` or `control_response` | `ERROR` result, session ends, exit 2 |
+| a slash command the CLI answers itself, such as `/model` | `ERROR` result, session ends, exit 2 |
+| missing `event`, invalid JSON, or a non-text content block | `ERROR` result, session ends, exit 1 |
+
+### Exit, timeout, and read-only commands
+
+A run that produces a response exits 0; a run that fails exits non-zero with the reason on stderr and, in JSON modes, in `status` and `error`. An unknown `--model` exits 1 with an error envelope that lists the available models. Fatal errors carry a stable `error:` marker on stderr (1.1.28). Tool errors and permission denials inside a run do not change the exit code (1.1.20).
+
+`--print-timeout` bounds the wait and accepts durations such as `15m`. Since 1.1.28 an expired timeout returns the partial output and exits 0 with a stderr warning; an interrupt such as `Ctrl+C` still exits non-zero. The run also waits for running background tasks and timers within that bound, and leaves daemon tasks such as dev servers running.
+
+Read-only slash commands answer without an agent turn, quota, or conversation: `-p "/usage"`, `/quota`, `/credits`, `/model`, `/effort`, `/skills` (1.1.11), and `/permissions`, `/hooks`, `/help`, `/changelog`, `/config` (1.1.12). Text output is one tab-separated record per line; the JSON formats give a structured payload whose shape is unpublished.
+
+## Settings and permissions
+
+`~/.gemini/antigravity-cli/settings.json` is sparse: it stores only non-default values. Since 1.1.16 a file the CLI cannot parse is left byte-identical and the status line names it.
+
+| Key | Values and default ([settings](https://antigravity.google/docs/cli/settings/), [CLI reference](https://antigravity.google/docs/cli/reference/)) |
+| --- | --- |
+| `toolPermission` | `request-review` (default), `proceed-in-sandbox`, `strict`, `always-proceed` |
+| `artifactReviewPolicy` | `asks-for-review` (default), `agent-decides`, `always-proceed` |
+| `permissions` | `{allow[], deny[], ask[]}` of permission resources |
+| `enableTerminalSandbox` | terminal sandbox on or off |
+| `allowNonWorkspaceAccess` | off by default; since 1.1.14 grants read access only |
+| `altScreenMode` | `default` (adaptive: inline over SSH), `always`, `never` (inline, for tmux, screen, and SSH) |
+| `statusLine` | see [Statusline](#statusline-and-terminal-title) |
+| `notifications` | desktop notification and terminal bell when a task completes or needs attention |
+| `enableTelemetry` | usage statistics and crash reports |
+| `modelProvider` | `gemini` routes to the Gemini API with `GEMINI_API_KEY` (1.1.13) |
+| `pickerGrouping` | `/resume` default view, flat or by workspace (1.1.26) |
+| `copyOnSelect` | copy mouse selections in alt-screen mode, default on (1.1.8) |
+| `useG1Credits` | spend AI credits once plan quota is exhausted |
+| `colorScheme`, `verbosity`, `runningLightSpeed`, `editor`, `editorMode`, `vimInsertFirst`, `showTips`, `showFeedbackSurvey` | presentation and editor preferences |
+
+### Permission resources
+
+A permission resource is `action(target)` ([permissions](https://antigravity.google/docs/cli/permissions/)). Precedence is Deny > Ask > Allow, and `*` as the target matches the whole action.
+
+| Action | Target | Default |
 | --- | --- | --- |
-| `toolPermission` | `request-review` default; `proceed-in-sandbox`, `always-proceed`, `strict` | native permission posture |
-| `artifactReviewPolicy` | `asks-for-review` default; `agent-decides`, `always-proceed` | plan/code review waits |
-| `permissions.allow/deny/ask` | resource strings | exact tool policy; living docs use plural `permissions` |
-| `allowNonWorkspaceAccess` | `false` | workspace boundary |
-| `enableTerminalSandbox` | `false` | persistent sandbox |
-| `enableTelemetry` | `true` | privacy-visible data collection setting |
-| `altScreenMode` | `default`, `always`, `never` | multiplexer rendering; inline `never` is designed for tmux/SSH |
-| `statusLine` | command object | RimZ live state wrapper |
-| `notifications` | `false` | native desktop/bell notifications |
+| `read_file` | absolute or workspace-relative path, recursive | Ask; auto-allowed in the workspace |
+| `write_file` | same; implies `read_file` on the target | Ask; auto-allowed in the workspace |
+| `read_url` | hostname, covering subdomains | Ask (always-allowed before 1.1.28) |
+| `execute_url` | hostname, for browser actuation | Ask |
+| `command` | word-by-word prefix, or `regex:<pattern>` | Ask |
+| `unsandboxed` | command prefix or `regex:` pattern allowed to run outside the sandbox | Ask; deprecated, see below |
+| `mcp` | `server/tool` or `server/*` | Ask |
 
-Permission resources use `action(target)` with actions `read_file`, `write_file`, `read_url`, `execute_url`, `command`, `unsandboxed`, and `mcp`. Conflict precedence is Deny > Ask > Allow. Workspace reads/writes are auto-allowed by default; web, commands, MCP, browser actuation, and non-workspace access default to Ask.
+Denying `read_file` on a path also denies `write_file` there. The system temp directory is readable and writable by default (1.1.6, 1.1.9). `always-proceed` also auto-approves MCP calls and page reads (1.1.21). A pattern approved at a prompt holds for the rest of the conversation (1.1.9).
 
-Project-specific configuration under `~/.gemini/config/projects/` takes precedence over global CLI settings in the 1.1.1 changelog. The broader Antigravity product also merges shared user and project permissions. A launch flag overrides persistent settings for that process. RimZ should read enough effective config to describe a mode mismatch, but leave provider policy evaluation to Antigravity.
+The 1.2.2 changelog calls `unsandboxed` rules deprecated: at startup the CLI warns about each one in CLI, shared, and project configuration and explains migrating it to a `command` rule. The permissions page still documents `unsandboxed` without a deprecation note.
 
-The executable trust surface includes at least:
+Project configuration under `~/.gemini/config/projects/` takes precedence over the global CLI settings (1.1.1 changelog).
 
-- every command inserted into `~/.gemini/config/hooks.json`;
-- the custom `statusLine.command` and any pre-existing command RimZ wraps;
-- any plugin path or command if installation moves to a plugin;
-- raw profile arguments that select `--dangerously-skip-permissions`, hooks, MCP servers, or project behavior.
+## Authentication
 
-The official CLI README warns about autonomous execution, data exfiltration, prompt injection, and supply-chain risk and says interaction-data collection can be disabled in settings. Hook payloads contain workspace paths, transcript locations, tool arguments, account identity through the separate statusline, and potentially source code inside edit arguments. RimZ stores only the normalized fields its product surfaces require and keeps raw payloads out of ordinary logs.
+The CLI signs in with Google in a browser and stores the session in the OS keyring (Apple Keychain, Secret Service over D-Bus, Windows Credential Manager); SSH sessions use a URL-and-code flow ([install](https://antigravity.google/docs/cli/install/)). On Linux without a D-Bus session bus, or for an hour after a keyring timeout, the CLI bypasses the keyring and stores tokens in files (1.1.3, 1.1.26). A 1.2.2 installation on this host has an `antigravity-oauth-token` file in the app-data root; its format is undocumented. `/logout` removes the stored session.
+
+Other sign-in paths exist: Business sign-in for Gemini Enterprise with a Google Cloud project, Workforce Identity Federation, and Application Default Credentials (1.1.10), and a `GEMINI_API_KEY` environment variable with `modelProvider: "gemini"` (1.1.13), for which `/logout` has nothing to clear. No credential file or machine-readable auth-status command is documented.
+
+| Environment variable | Effect |
+| --- | --- |
+| `GEMINI_API_KEY` | Gemini API credential, with `modelProvider: "gemini"` |
+| `GOOGLE_GEMINI_BASE_URL` | custom Gemini API endpoint |
+| `AGY_CLI_HIDE_ACCOUNT_INFO` | hides email and plan tier from the header; not documented to remove them from the statusline payload |
+| `AGY_CLI_HIDE_LOGO` | hides the banner art |
+| `AGY_CLI_DISABLE_ESCAPE_SEQUENCE_OPTIMIZATIONS` | disables renderer diffing |
+
+## Models, quota, and cost
+
+### Models
+
+Antigravity routes several model families. The [models](https://antigravity.google/docs/models/) page lists Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.6 Flash, Gemini 3.1 Pro, Claude Sonnet 4.6 (thinking), Claude Opus 4.6 (thinking), GPT-OSS-120b, and the Nano Banana 2 image model; availability depends on plan and sign-in path. `agy models` prints the slugs `--model` accepts, and `--effort` or `/effort` picks a reasoning variant. `/model <name>` switches and saves the default (1.1.22), and `/model <name> <prompt>` runs one prompt on another model and returns (1.1.27). A model change during a turn applies after the turn.
+
+The selector label format, seen in `model.id` and `model.display_name`, is a base name plus a parenthesized variant. The 1.1.2 capture listed `Gemini 3.5 Flash (Medium)`, `(High)`, `(Low)`, `Gemini 3.1 Pro (Low)`, `(High)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, and `GPT-OSS 120B (Medium)`. Hook `modelName` uses slug form, for example `gemini-3.6-flash-medium`.
+
+### Quota and credits
+
+Plans grant baseline quota that refreshes on plan-dependent five-hour and weekly windows, with optional AI-credit overage on eligible paid plans ([plans](https://antigravity.google/docs/plans/)). Google says quota is measured by work, not by a fixed prompt or token count. `/usage` (alias `/quota`) refreshes and shows quota; `/credits` shows credit balance and purchase links. The statusline `quota` map carries per-bucket remaining fractions and resets; credits have no documented machine-readable field outside print-mode `/credits`.
+
+### Cost
+
+The statusline `cost` field (1.1.21 changelog) is an unrounded estimated cost of the current session; its unit and nested shape are unpublished. Print-mode `usage` reports tokens without dollars. Plan quota and AI credits are not API-token billing.
+
+### Private local service
+
+A running `agy` exposes an undocumented Connect-over-HTTPS service on process-owned loopback ports with a self-signed certificate. Google does not publish it; the 1.2.2 binary still contains both paths below, and the wire was cross-checked against CodexBar's [`AntigravityStatusProbe`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe.swift), [`AntigravityStatusProbe+PortDetection`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe%2BPortDetection.swift), and [`AntigravityQuotaSummaryParser`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityQuotaSummaryParser.swift).
+
+| RPC (POST) | Body | Returns |
+| --- | --- | --- |
+| `/exa.language_server_pb.LanguageServerService/GetUserStatus` | `{}` | account email and user tier or plan label |
+| `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary` | `{"forceRefresh":true}` | per-model quota buckets grouped by period |
+
+Both take `Content-Type: application/json` and `Connect-Protocol-Version: 1`. The quota summary can sit at the root, under `response`, or under `summary`, and a bucket's remaining fraction can be direct, nested, or in a oneof wrapper. Period labels include explicit five-hour and weekly periods; the complete label set is unpublished.
+
+## Remote control, MCP, plugins, and custom agents
+
+These surfaces change tool vocabulary, prompts, or executable configuration, so they are indexed here without depth.
+
+| Surface | What ships |
+| --- | --- |
+| Remote control | `agy remote-control start\|status\|stop` registers a headless daemon, built into the CLI, as a systemd user service (boot), LaunchAgent (login), or Scheduled Task, reachable from a browser. `--name` sets the instance name, stored as `cliRemoteControlHostname` in `~/.gemini/config/config.json`; `--session` scopes it to the login session. The daemon uses the CLI's sign-in ([remote control](https://antigravity.google/docs/remote-control/), 1.2.0 changelog). |
+| MCP | servers in the user-level `mcp_config.json` (comments and trailing commas allowed since 1.1.24), managed with `agy mcp` or `/mcp`; per-server `disabled`, `disabledTools[]`, `enabledTools`, `timeoutSeconds`, `url`, and `authProviderType: "google_credentials"`; plugin-bundled servers are namespaced `<plugin>_<server>` (1.2.2) ([MCP](https://antigravity.google/docs/mcp/)) |
+| Plugins | installed and enabled with `agy plugin`; enablement lives in `~/.gemini/config/config.json`; a plugin can ship `hooks.json`, skills, and `rules.json` |
+| Skills | `SKILL.md` under `.agents/skills/`; `disable-slash-command: true` hides a skill from the `/` menu (1.1.12) |
+| Custom agents | Markdown `agent.md` with YAML frontmatter (`mainAgent`, `subagent`, `hidden`, `model`, `skills`, `rules`, `agents`, `inheritCustomizations`, `excludeDefaultComponents`, `commandExecutionPolicy`); since 1.1.25 they inherit ambient skills, rules, and subagents by default |
+| SDK | Python SDK that hosts its own agent runtime with lifecycle hooks, streaming, persistence, and structured output ([SDK overview](https://antigravity.google/docs/sdk/overview/)); it does not attach to a running `agy` |
 
 ## Documentation drift
 
-These official sources disagree as of the refresh. Treat the pinned release as the shipped 1.1.1 contract and retain tolerant parsers where the real payload may carry both shapes.
+Official sources disagree with each other or with the 1.2.2 binary at these points:
 
-| Surface | Living documentation | Pinned 1.1.1 evidence | Implementation rule |
+| Surface | Official docs | Other evidence | Rule this page follows |
 | --- | --- | --- | --- |
-| Plan commands | CLI reference still lists `/planning` and `/fast` | 1.1.0 removes both and adds `/plan`; `--mode plan` ships | use `--mode plan`; do not emit removed slash commands |
-| Working directory | best-practices example passes `--cwd` | 1.1.1 `--help` has no `--cwd` | set child cwd at spawn |
-| Statusline artifacts/tasks | `artifacts[]`, `background_tasks[]` | tagged example reads `artifact_count`, `task_count` | tolerate both; capture before capability claims |
-| Hook global path | general prose mentions customization directories and older CLI plugin paths | 1.0.8 fixes `/hooks` to shared `~/.gemini/config/hooks.json` | install into shared config after a clean-room probe |
-| Plugin location | CLI plugin page shows `~/.gemini/antigravity-cli/plugins/` in places | 1.0.2 moves installed plugins to `~/.gemini/config/`; 1.1.0 fixes global agents to shared config | avoid plugin installation initially |
-| Pre-tool neutral result | hook page requires `decision` and lists only behavioral decisions | 1.0.16 accepts an empty decision string without the former error | live-verify exact neutral bytes |
-| Permission key spelling | permission page shows `permissions.{allow,deny,ask}` | 1.1.1 notes say `permission.allow` in one line | preserve unknown fields and capture the actual settings file |
-| Conversation record | hook page promises per-conversation `transcript.jsonl` | 1.1.2 hooks point at `transcript_full.jsonl`; changelog says SQLite is the CLI conversation format; live capture confirms both visible JSONL text records | retain and validate either verified hook basename, prefer `transcript_full.jsonl` for reconstruction, parse only captured visible shapes, and keep SQLite blobs opaque |
-
-## Adjacent surfaces kept out of the initial adapter
-
-The Antigravity SDK exposes a richer programmatic lifecycle with session start/end, pre/post turn, tool calls, user interaction, compaction, streaming, token usage, and structured output. It starts and owns its own agent runtime; it does not observe a stock `agy` TUI session. Replacing the CLI with an SDK-hosted agent would change the product boundary and the provider UI, so it is not an implementation shortcut for RimZ's pane adapter.
-
-Antigravity 2.0 shares the harness and can import/export conversations, but its desktop process is not the pane child and its app-data root differs. Do not join its background conversations to a local `agy` pane solely because both use a conversation ID namespace.
-
-MCP, skills, rules, custom agents, and plugins affect tool vocabulary, prompts, and executable trust. The current pulled adapter ignores unknown transcript records and does not manage or report those customizations.
-
-## Native-event mapping for the live-channel promotion
-
-The landed adapter uses this conservative mapping:
-
-| Antigravity observation | RimZ signal/enrichment | Notes |
-| --- | --- | --- |
-| first `PreInvocation`, `invocationNum = 0` | `turn_started` | create-on-miss establishes identity, switches guarded same-pane ownership to a newly reported active conversation ID, and carries transcript/workspace/model enrichment plus the latest completed visible user prompt from the bounded validated transcript tail |
-| later `PreInvocation` | activity only | do not reopen the turn after tool use |
-| successful edit-matcher `PostToolUse` | `tool_used { mutates: true, edits: true }` | acting begins only after execution succeeds |
-| successful `run_command` matcher `PostToolUse` | `tool_used { mutates: true, edits: false }` | durable proof of generic mutation |
-| remaining documented-tool matcher `PostToolUse` | `tool_used { mutates: false, edits: false }` | progress without durable churn unless it changes state |
-| failed `PostToolUse` | `tool_used { mutates: false, edits: false }` | failure does not claim a completed edit |
-| statusline `tool_confirmation_pending = true` | display card as waiting | read-only marker; native pane remains the answer surface |
-| `Stop`, clean and fully idle | `turn_ended { errored: false }` | terminal success |
-| `Stop`, error | `turn_ended { errored: true }` | no 1.1.2 error class passes the repeated typed-discriminator recovery gate |
-| `Stop`, clean and not fully idle | `turn_ended { errored: false, background work }` | shared fold leaves running/parked |
-| pane process exits/reverts | `ended` through presence reconciliation | no native session-end event |
-| statusline model/context/account | `AgentContext` sidecar | no event-log churn |
-
-An edit moves to acting only after successful execution. The installer selects the tool class through disjoint `PostToolUse` matchers, so no pre-tool cache or policy callback is required. Newly added upstream tool names remain unclassified until the vocabulary fixture advances.
-
-Compaction stays unsupported. `/clear`, `/rewind`, and implicit context management are not substitutes for an opener/closer signal.
-
-## Implementation verification checklist
-
-Run the remaining probes with a temporary HOME and throwaway Git workspace against the current latest `agy` release. Record sanitized payloads as typed test fixtures before expanding the adapter; older-release fixtures and speculative compatibility fallbacks stay out of the implementation.
-
-### Process and launch
-
-- Capture `agy --version`, `agy --help`, `agy agents`, and `agy models`; pin the one supported latest version and tolerate model-list failure while logged out.
-- Verify process name, parent/child tree, cwd, and whether hooks inherit RimZ's mux-stamped environment on macOS and Linux.
-- Verify `--prompt-interactive`, `--conversation`, `--mode accept-edits`, `--mode plan`, `--sandbox`, and `--dangerously-skip-permissions` independently.
-- Prove `--conversation <id>` and `--conversation=<id>` resume the same hook/statusline ID and `-c` remains workspace-scoped.
-- Prove `/clear`, `/rewind`, and `/fork` identity and persistence behavior; keep unsupported claims until then.
-
-### Hook installation and decisions
-
-- Create global-only, workspace-only, same-name global/workspace, different-name global/workspace, and plugin hook configurations; capture merge and order behavior after workspace trust.
-- Re-check command cwd, environment, timeout, signal, and malformed-output behavior when a release changes the hook executor.
-- For `PreToolUse`, compare no hook, absent/empty decision, `allow`, `ask`, `force_ask`, and `deny` under each native policy before ever expanding into permission observation; defer the event unless one result is behavior-preserving.
-- Re-probe the non-`continue` `Stop` decision whenever the documented decision contract changes.
-- Verify hooks in root agents, nested subagents, resumed sessions, forked sessions, print mode, and after `/clear`.
-- Install/uninstall/preview must preserve unrelated named hooks and unknown fields and write with temp-file plus rename.
-
-### Statusline
-
-- Capture the first payload before any prompt and every transition through initializing, idle, thinking, working, tool use, root permission, root question, artifact review, background task, subagent wait, stop, error, cancel, resume, rewind, clear, and fork.
-- Record absent vs null fields and exact nested schemas/enums for `agent`, `subagents`, `artifacts`, `background_tasks`, `sandbox`, `vcs`, and `context_window`.
-- Check whether 1.1.2 emits array fields, count fields, or both; verify whether `tool_confirmation_pending` covers subagent, question, and artifact waits.
-- Verify callback coalescing, maximum payload size, concurrent invocation, timeout, stdout forwarding, and whether a custom command runs in print mode.
-- Re-test a real prior statusline command's ANSI output across CLI releases; fixture tests prove structural preservation and uninstall restoration.
-- Confirm whether `email` disappears when account-info hiding is enabled and keep raw identity out of logs.
-
-### Lifecycle and transcripts
-
-- Expand the post-tool matcher fixture when Google publishes new tool names; retain non-overlap among edit, generic-mutation, and observed-only sets.
-- Capture every `Stop.terminationReason`, provider-limit/network error text, `fullyIdle` combination, and statusline state before/after Stop.
-- Re-capture the two-child and nested-child request/result order, returned fields, workspace behavior, and child hook timing whenever the supported Antigravity version changes.
-- Re-capture the observed SQLite `user_version`, tables, columns, indexes, `.db-wal` behavior, and blob encodings; map conversation IDs to rows and test concurrent writes, rewind, fork/import, and retention before claiming history, parentage, or spend.
-- Search for a real compaction command/event/record in the supported release; otherwise leave smart compaction unavailable.
-
-### Headless, account, and quota
-
-- Verify `-p` stdout/stderr and exit codes for success, provider error, permission required, timeout, SIGINT, empty answer, resume, and sandbox.
-- Verify whether a prompt supplied by stdin has any supported form; RimZ should pass the prompt flag until a contract exists.
-- Confirm the final answer contains only the new response on resumed print runs.
-- Re-capture `GetUserStatus` and `RetrieveUserQuotaSummary` envelopes, success codes, period labels, fractions, and reset fields against each supported CLI release; keep `/credits` TUI-only and do not scrape pane text into account truth.
-- Verify statusline context token semantics across turns, model changes, cache reads, and any implicit compaction before using totals for anything beyond live context.
-
-### Conformance target
-
-The landed descriptor claims only what the current fixtures prove: lazy pulled registration; interactive launch; exact resume; model preset; ask/auto/plan/yolo launch mappings; basic text transcript history and streaming; partial pulled text-turn state; safe hook-driven lifecycle/tool/wait signals; derived subagent rows from the hook/transcript join; live context; supervised runs; and private-service account/quota enrichment. Cumulative session/account spend, credits, native fork, compaction, remote control, and structured answers remain unsupported. Promote each capability in the same commit that adds its typed parser, fixture, mapping, and conformance case.
+| Plan commands | [CLI reference](https://antigravity.google/docs/cli/reference/) lists `/planning` and `/fast`; the statusline page gives `planning` and `fast` as `execution_mode` examples | 1.1.0 changelog removes both and adds `/plan`; the [modes](https://antigravity.google/docs/cli/modes/) page uses `/plan` and `--mode plan` | use `--mode plan`; treat `execution_mode` values as unknown strings |
+| Working directory | best-practices example passes `--cwd` | 1.2.2 help has no `--cwd` | set the process cwd |
+| Transcript basename | hooks page names `transcript.jsonl` | 1.1.2 hooks sent `transcript_full.jsonl`; embedded instructions define both files | expect either basename |
+| Statusline fields | statusline table lists counts (`artifact_count`, `task_count`) and omits `agent`, `subagents`, `artifacts`, `background_tasks`, `conversation_title`, `cost` | the binary tags all of them; the example script reads `subagents`; changelog adds `conversation_title` and `cost` | tolerate every field as optional |
+| `PostToolUse` input | hooks page lists `toolCall` | embedded hook doc lists only `stepIdx` and `error`; not captured | treat `toolCall` as optional |
+| `PostInvocation` timing | "immediately after each model invocation completes" | embedded hook doc: "after tool calls finish" | not settled without a capture |
+| `PreToolUse` decisions | hooks page lists `deny_unless_prior_grant` | binary schema agrees; embedded hook doc lists four values | five values |
+| `unsandboxed` rules | permissions page documents them | 1.2.2 changelog deprecates them in favor of `command` | treat as deprecated |
+| Plugin location | CLI plugins page shows `~/.gemini/antigravity-cli/plugins/` | 1.0.2 changelog moves plugins to `~/.gemini/config/`; 1.1.11 moves enablement to `config.json` | shared config directory |
+| Model catalog | models page starts at Gemini 3.6 Flash | the statusline payload example and the settings page's `--model="Gemini 3.5 Flash"` example still use Gemini 3.5 Flash | read the model from the payload |
