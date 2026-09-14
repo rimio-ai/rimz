@@ -130,8 +130,8 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the store window — teal in both |
 | `⧉ N`           | the subagents an agent has spawned — lifetime count on the card's delegation line, shared with waits; current entries beneath it when expanded, with prior-turn finished children behind `+K more`; click the line to toggle; the marker violet, the label soft |
 | `⋯ bg`          | an agent has background work pending — a faint secondary marker after the description that rides the settled `✓` as “done, background chore still running” |
-| `⧖ N`           | armed one-shot waits for the agent: timers, existing PIDs, watched commands, and one-shot signals; shares the clickable delegation line with subagents, with wait entries beneath when expanded; the marker violet, the label soft |
-| `◷` / `⢿` / `⌁` | a wait entry's lead names what it waits on: a timer, a PID or shell wait (the dim animated working spinner), or a signal |
+| `⧖ N`           | armed one-shot waits for the agent: timers, existing PIDs, watched commands, and one-shot signals, then the background shells the agent runs (`bg shell {program}`, Claude only); shares the clickable delegation line with subagents, with wait entries beneath when expanded; the marker violet, the label soft |
+| `◷` / `⢿` / `⌁` | a wait entry's lead names what it waits on: a timer, a PID, shell wait, or background shell (the dim animated working spinner), or a signal |
 | `⑂ name` / `⮌ name` | a group header with a git story — branch for pristine/diverged worktrees, merge for landed removable worktrees |
 | `name` (bold)   | a directory room's own pod — name-only, no git story |
 | `▎`             | the selection lane — the worktree you're in, a dim selection-tone bracket |
