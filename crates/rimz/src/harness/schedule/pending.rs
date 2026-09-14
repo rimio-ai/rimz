@@ -104,34 +104,48 @@ pub(crate) fn project_pending_waits(
     project_root: Option<&Path>,
     config: &MachineConfig,
 ) {
-    let mut waits = project_root.map_or_else(BTreeMap::new, |root| {
+    let now = snapshot.now.to_zoned(config.time_zone());
+    SessionWaits::load_at(project_root, || now).attach(snapshot);
+}
+
+/// Armed one-shot deliveries keyed by the session they wake. Turn-completion
+/// waits load these before the message queue and the rollup, since a wake
+/// publishes its message record before its catalog row is consumed.
+pub struct SessionWaits(BTreeMap<(AgentKind, AgentSessionId), Vec<PendingWait>>);
+
+impl SessionWaits {
+    /// Read the catalog now. The machine config is loaded only for a
+    /// workspace that holds instance rows.
+    pub fn load(project_root: Option<&Path>) -> Self {
+        Self::load_at(project_root, || {
+            jiff::Zoned::now().with_time_zone(MachineConfig::load_lenient().time_zone())
+        })
+    }
+
+    fn load_at(project_root: Option<&Path>, now: impl FnOnce() -> jiff::Zoned) -> Self {
+        let Some(root) = project_root else {
+            return Self(BTreeMap::new());
+        };
         let instance_root = crate::disk::paths::workspaces_dir()
             .join(WorkspaceId::from_project_root(root).as_str());
         if super::instances::load_from(&instance_root).0.is_empty() {
-            return BTreeMap::new();
+            return Self(BTreeMap::new());
         }
-        pending_waits_by_session(
+        Self(pending_waits_by_session(
             &TaskCatalog::load_lenient(Some(root)),
             root,
-            &snapshot.now.to_zoned(config.time_zone()),
-        )
-    });
-    for agent in &mut snapshot.agents {
-        agent.pending_waits = waits
-            .remove(&(agent.kind.clone(), agent.agent_id.clone()))
-            .unwrap_or_default();
+            &now(),
+        ))
     }
-}
 
-/// Attach armed one-shot deliveries to a store snapshot so turn-completion
-/// waits see `sleeping` agents; the rollup base carries no pending waits.
-pub fn attach_pending_waits(snapshot: &mut SidebarSnapshot) {
-    let project_root = snapshot.project_root.clone();
-    project_pending_waits(
-        snapshot,
-        project_root.as_deref(),
-        &MachineConfig::load_lenient(),
-    );
+    pub fn attach(mut self, snapshot: &mut SidebarSnapshot) {
+        for agent in &mut snapshot.agents {
+            agent.pending_waits = self
+                .0
+                .remove(&(agent.kind.clone(), agent.agent_id.clone()))
+                .unwrap_or_default();
+        }
+    }
 }
 
 #[cfg(test)]

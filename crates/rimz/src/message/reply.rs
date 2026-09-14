@@ -16,7 +16,7 @@ use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus, Turn
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::EventKind;
 use crate::store::event_log;
-use crate::store::message::{MessageRecord, MessageSender, MessageStatus};
+use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, MessageStatus};
 use crate::store::run::RunStatus;
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -263,18 +263,22 @@ impl ReplyWait {
             });
         }
 
-        let messages = store.list_messages()?;
-        let mut snapshot = store.snapshot_cached()?;
-        crate::harness::schedule::pending::attach_pending_waits(&mut snapshot);
+        let mut view = TurnWaitView::load(store)?;
         let mut newly_settled = Vec::new();
         if self.tick == 0
             && let Some((self_kind, self_name)) = self.caller_identity.as_ref()
         {
-            snapshot = snapshot
+            view.snapshot = view
+                .snapshot
                 .with_agent_context(crate::store::agent_context::read_all(store.runtime_paths()));
             let history = store.list_message_history()?;
             for (index, cycle) in deadlocked_legs(
-                &self.legs, &messages, &history, &snapshot, self_kind, self_name,
+                &self.legs,
+                &view.messages,
+                &history,
+                &view.snapshot,
+                self_kind,
+                self_name,
             ) {
                 let leg = &mut self.legs[index];
                 let first = cycle.first();
@@ -291,7 +295,7 @@ impl ReplyWait {
             if leg.done.is_some() {
                 continue;
             }
-            if advance_leg(leg, store, &messages, &snapshot, self.steer)? {
+            if advance_leg(leg, store, &view, self.steer)? {
                 newly_settled.push(index);
             }
         }
@@ -485,10 +489,58 @@ struct CardView {
     turn_started_at: Option<Timestamp>,
 }
 
-impl From<&AgentState> for CardView {
-    fn from(agent: &AgentState) -> Self {
-        Self {
-            status: agent.effective_status(),
+/// One wait poll's read of whether agents have finished a turn.
+///
+/// A wake publishes its message record before its loop-catalog row is
+/// consumed, and a provider's turn start lands before the delivery ack settles
+/// that record. Reading the catalog, then the queue, then the rollup therefore
+/// catches every wake in flight in at least one of the three reads.
+pub struct TurnWaitView {
+    pub snapshot: SidebarSnapshot,
+    messages: Vec<MessageRecord>,
+}
+
+impl TurnWaitView {
+    pub fn load(store: &Store) -> Result<Self, crate::store::StoreErr> {
+        // An unreadable record leaves no root, as snapshot assembly does.
+        let project_root = crate::workspace::record::read_optional(&store.paths().workspace_record)
+            .ok()
+            .flatten()
+            .map(|record| record.project_root);
+        let waits = crate::harness::schedule::pending::SessionWaits::load(project_root.as_deref());
+        let messages = store.list_messages()?;
+        let mut snapshot = store.snapshot_cached()?;
+        waits.attach(&mut snapshot);
+        Ok(Self { snapshot, messages })
+    }
+
+    /// Effective status, held at `sleeping` while a wake for the agent is
+    /// still between its consumed catalog row and its delivered turn.
+    fn status(&self, agent: &AgentState) -> AgentStatus {
+        let status = agent.effective_status();
+        let waking = self.messages.iter().any(|message| {
+            matches!(
+                message.sender,
+                MessageSender::Harness {
+                    notice: HarnessNotice::Wait | HarnessNotice::Signal
+                }
+            ) && !message.status.is_terminal()
+                && message.same_agent_card(agent)
+        });
+        if waking && matches!(status, AgentStatus::Idle | AgentStatus::Success) {
+            AgentStatus::Sleeping
+        } else {
+            status
+        }
+    }
+
+    pub fn completion(&self, agent: &AgentState) -> TurnCompletion {
+        TurnCompletion::of(self.status(agent), agent.turn_started_at)
+    }
+
+    fn card(&self, agent: &AgentState) -> CardView {
+        CardView {
+            status: self.status(agent),
             turn_started_at: agent.turn_started_at,
         }
     }
@@ -560,16 +612,16 @@ fn step_reply(turn_started_at: Option<Timestamp>, card: CardView) -> Step {
 fn advance_leg(
     leg: &mut Leg,
     store: &Store,
-    messages: &[MessageRecord],
-    snapshot: &SidebarSnapshot,
+    view: &TurnWaitView,
     steer: bool,
 ) -> Result<bool, ReplyErr> {
     if let Some(status) =
-        current_message_status(store, messages, &leg.message_id, &mut leg.wait_base)?
+        current_message_status(store, &view.messages, &leg.message_id, &mut leg.wait_base)?
     {
         leg.message_status = status;
     }
-    let agent = snapshot
+    let agent = view
+        .snapshot
         .agents
         .iter()
         .find(|agent| leg.target.matches(agent));
@@ -602,7 +654,7 @@ fn advance_leg(
         leg.phase,
         steer,
         leg.message_status,
-        agent.map(CardView::from),
+        agent.map(|agent| view.card(agent)),
     ) {
         Step::Wait(next) => {
             leg.phase = next;

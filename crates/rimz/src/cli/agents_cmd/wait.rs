@@ -3,6 +3,7 @@ use super::*;
 use super::runs_lookup::{agent_name, newest_run_by_ref};
 use crate::cli::render;
 use rimz::agents::TurnCompletion;
+use rimz::message::reply::TurnWaitView;
 
 pub(in crate::cli) fn wait_agent(
     references: Vec<String>,
@@ -79,14 +80,9 @@ fn wait_stream_request(
             let run = rimz::harness::run::load(store.paths(), &run_id)?;
             wait_run_stream(store, &run, options)
         }
-        WaitTarget::Agent { reference, kind } => wait_interactive_agent_stream(
-            store,
-            &reference,
-            &kind,
-            snapshot,
-            current_channel,
-            options,
-        ),
+        WaitTarget::Agent { reference, kind } => {
+            wait_interactive_agent_stream(store, &reference, &kind, current_channel, options)
+        }
     }
 }
 
@@ -364,7 +360,7 @@ impl TargetOutcome {
                     .flatten(),
             ),
             TerminalPayload::Agent(agent) => WaitEntryJson::new(
-                if agent.turn_completion() == TurnCompletion::Failed {
+                if agent.effective_status() == rimz::agents::AgentStatus::Failed {
                     RunStatus::Failed
                 } else {
                     RunStatus::Completed
@@ -464,7 +460,7 @@ fn resolve_wait_target(
 
 fn poll_target(
     store: &rimz::Store,
-    agent_snapshot: Option<&rimz::store::snapshot::SidebarSnapshot>,
+    agent_view: Option<&TurnWaitView>,
     target: &WaitTarget,
     current_channel: Option<&str>,
 ) -> Result<Option<TargetOutcome>> {
@@ -480,10 +476,16 @@ fn poll_target(
             }))
         }
         WaitTarget::Agent { reference, .. } => {
-            let snapshot = agent_snapshot.context("pending agent target without snapshot")?;
-            match crate::cli::resolve_agent_one(store, snapshot, reference, None, current_channel) {
+            let view = agent_view.context("pending agent target without snapshot")?;
+            match crate::cli::resolve_agent_one(
+                store,
+                &view.snapshot,
+                reference,
+                None,
+                current_channel,
+            ) {
                 Ok(agent) => {
-                    let terminal = agent.turn_completion() != TurnCompletion::Open;
+                    let terminal = view.completion(agent) != TurnCompletion::Open;
                     Ok(terminal.then(|| TargetOutcome {
                         name: agent_name(agent).to_owned(),
                         payload: TerminalPayload::Agent(Box::new(agent.clone())),
@@ -538,18 +540,14 @@ impl WaitSet {
     }
 
     fn poll(&mut self, store: &rimz::Store, current_channel: Option<&str>) -> Result<WaitPoll> {
-        let agent_snapshot = self
+        let agent_view = self
             .targets
             .iter()
             .zip(&self.outcomes)
             .any(|(target, outcome)| {
                 outcome.is_none() && matches!(target, WaitTarget::Agent { .. })
             })
-            .then(|| {
-                let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-                rimz::harness::schedule::pending::attach_pending_waits(&mut snapshot);
-                anyhow::Ok(snapshot)
-            })
+            .then(|| TurnWaitView::load(store).context("reading agent snapshot"))
             .transpose()?;
 
         let mut settled = Vec::new();
@@ -557,8 +555,7 @@ impl WaitSet {
             if self.outcomes[index].is_some() {
                 continue;
             }
-            let Some(outcome) =
-                poll_target(store, agent_snapshot.as_ref(), target, current_channel)?
+            let Some(outcome) = poll_target(store, agent_view.as_ref(), target, current_channel)?
             else {
                 continue;
             };
@@ -746,7 +743,6 @@ fn wait_interactive_agent_stream(
     store: &rimz::Store,
     reference: &str,
     kind: &rimz::ids::AgentKind,
-    mut snapshot: rimz::store::snapshot::SidebarSnapshot,
     current_channel: Option<&str>,
     options: WaitStreamOptions,
 ) -> Result<()> {
@@ -768,9 +764,9 @@ fn wait_interactive_agent_stream(
     };
     let deadline = options.timeout.map(|duration| Instant::now() + duration);
     loop {
-        rimz::harness::schedule::pending::attach_pending_waits(&mut snapshot);
+        let view = TurnWaitView::load(store).context("reading agent snapshot")?;
         let agent =
-            crate::cli::resolve_agent_one(store, &snapshot, reference, None, current_channel)?;
+            crate::cli::resolve_agent_one(store, &view.snapshot, reference, None, current_channel)?;
         for text in cursor.messages(
             agent.transcript_path.as_deref(),
             Some(&agent.agent_id),
@@ -779,7 +775,7 @@ fn wait_interactive_agent_stream(
             sink.message(text)?;
         }
         sink.status(interactive_live_status(agent))?;
-        match agent.turn_completion() {
+        match view.completion(agent) {
             TurnCompletion::Completed => {
                 sink.end_status(RunStatus::Completed, None)?;
                 std::process::exit(0);
@@ -797,7 +793,6 @@ fn wait_interactive_agent_stream(
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
         std::thread::sleep(Duration::from_millis(500));
-        snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     }
 }
 

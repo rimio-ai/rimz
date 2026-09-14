@@ -147,11 +147,17 @@ fn turn_completion_requires_a_rested_turn_without_armed_waits() {
 
     let mut registered = test_agent(AgentStatus::Idle, 1_000);
     registered.turn_started_at = None;
-    assert_eq!(registered.turn_completion(), TurnCompletion::Open);
+    assert_eq!(
+        TurnCompletion::of(registered.effective_status(), registered.turn_started_at),
+        TurnCompletion::Open
+    );
 
     let mut sleeping = test_agent(AgentStatus::Success, 1_000);
     sleeping.turn_started_at = started;
-    assert_eq!(sleeping.turn_completion(), TurnCompletion::Completed);
+    assert_eq!(
+        TurnCompletion::of(sleeping.effective_status(), sleeping.turn_started_at),
+        TurnCompletion::Completed
+    );
     sleeping.pending_waits.push(PendingWait {
         name: "timer".into(),
         trigger: PendingWaitTrigger::Command {
@@ -159,7 +165,10 @@ fn turn_completion_requires_a_rested_turn_without_armed_waits() {
         },
         armed_at: None,
     });
-    assert_eq!(sleeping.turn_completion(), TurnCompletion::Open);
+    assert_eq!(
+        TurnCompletion::of(sleeping.effective_status(), sleeping.turn_started_at),
+        TurnCompletion::Open
+    );
 }
 
 #[test]
