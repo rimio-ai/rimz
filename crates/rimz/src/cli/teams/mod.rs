@@ -300,7 +300,12 @@ fn show_target(
 ) -> Result<(Option<String>, Option<String>)> {
     let Some(name) = name else {
         if worktree.is_none() {
-            bail!("expected a team name or #lane");
+            // An unquoted `#lane` never reaches us: shells with interactive
+            // comments (zsh under oh-my-zsh, bash) drop it as a comment.
+            bail!(
+                "expected a team name or #lane (quote a bare lane as '#lane'; \
+                 an unquoted # starts a shell comment)"
+            );
         }
         return Ok((None, worktree));
     };
@@ -562,7 +567,8 @@ mod tests {
                 (None, Some("feat-x".to_owned()))
             );
         }
-        assert!(show_target(None, None).is_err());
+        let missing = show_target(None, None).unwrap_err();
+        assert!(missing.to_string().contains("'#lane'"));
         assert!(show_target(Some("#".into()), None).is_err());
         assert!(show_target(Some("#feat-x".into()), Some("other".into())).is_err());
     }
