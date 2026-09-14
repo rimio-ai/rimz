@@ -228,8 +228,7 @@ impl AgentUsageSummary {
 /// event carries plus the enrichment it reports. A definition's hook capability attaches it
 /// to the decoded hook so the Store can record an `agent.lifecycle` event
 /// without each adapter touching durable state. The status is *derived* from
-/// the signal through [`step`](super::lifecycle::step), never decided by the
-/// adapter.
+/// the signal through `step`, never decided by the adapter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecycleObservation {
     /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
@@ -245,9 +244,8 @@ pub struct AgentLifecycleObservation {
     #[serde(flatten)]
     pub launch: LaunchParams,
     /// The agent-agnostic lifecycle intent this event carries. The reducer and
-    /// the ingestion path fold it onto the rollup through the one
-    /// [`step`](super::lifecycle::step) table; the adapter no longer decides a
-    /// final [`AgentStatus`](crate::agents::AgentStatus).
+    /// the ingestion path fold it onto the rollup through the one `step` table;
+    /// the adapter no longer decides a final [`AgentStatus`](crate::agents::AgentStatus).
     pub signal: LifecycleSignal,
     /// Process identity observed by the hook runner. The sidebar uses this
     /// best-effort liveness marker to suppress stale store overlays when the

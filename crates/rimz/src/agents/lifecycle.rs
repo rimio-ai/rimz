@@ -4,7 +4,7 @@
 //! a [`LifecycleSignal`] — the agent-agnostic *intent* an adapter reads off a
 //! native hook event — onto the reduced [`LifecycleState`]. Both the snapshot
 //! reducer (silently, on replay) and the hook ingestion path (with one-shot
-//! anomaly logging) call the one pure [`step`] function, so the transition
+//! anomaly logging) call the one pure `step` function, so the transition
 //! table lives in exactly one place. See
 //! [docs/internals/agents/model.md](../../../../docs/internals/agents/model.md).
 //!
@@ -193,7 +193,7 @@ pub enum LifecycleSignal {
         failed: bool,
     },
     /// The session ended (Claude `SessionEnd`/`offline`). The reducer stamps
-    /// the durable row; [`step`] fails running or waiting rows and preserves
+    /// the durable row; `step` fails running or waiting rows and preserves
     /// resting statuses.
     Ended,
     /// The agent's pane disappeared because its mux session died. Retained so
@@ -312,7 +312,7 @@ impl TurnPhase {
     }
 }
 
-/// The small reduced lifecycle state [`step`] owns — and the only fields it
+/// The small reduced lifecycle state `step` owns — and the only fields it
 /// writes. Everything else on the agent rollup (identity, task, prompt, model,
 /// gauges, worktree, parent link, timestamps) is governed by the reducer's
 /// field lifetimes, untouched by the state machine.
@@ -327,7 +327,7 @@ pub struct LifecycleState {
     pub compacting: bool,
 }
 
-/// How [`step`] classifies a transition, for observability. The reducer ignores
+/// How `step` classifies a transition, for observability. The reducer ignores
 /// this tag (it wants `next` and the transition facts); the ingestion path logs
 /// `Reconciled`/`Ignored` once per fresh event under the
 /// `rimz::agent::lifecycle` target.
@@ -370,7 +370,7 @@ pub struct Transition {
 /// Provider turn ids the prior record remembers, which [`step`] correlates
 /// id-bearing signals against. Both are absent for providers without turn ids.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PriorTurnIds<'a> {
+pub(crate) struct PriorTurnIds<'a> {
     /// The most recent turn start's id; an id-less start clears it.
     pub started: Option<&'a str>,
     /// The id `started` held before a start with another id replaced it.
@@ -382,7 +382,7 @@ pub struct PriorTurnIds<'a> {
 /// The `(started, superseded)` turn ids a record carries once `signal` folds
 /// onto one whose prior ids are `prior`. Only a turn start moves them, and a
 /// repeated start for the open turn keeps both.
-pub fn turn_ids_after(
+pub(crate) fn turn_ids_after(
     prior: PriorTurnIds<'_>,
     signal: &LifecycleSignal,
 ) -> (Option<String>, Option<String>) {
@@ -397,7 +397,7 @@ pub fn turn_ids_after(
 
 /// Fold one [`LifecycleSignal`] onto the prior [`LifecycleState`]. Pure and
 /// total: any `(prev, signal)` pair returns a `Transition` and never panics.
-pub fn step(
+pub(crate) fn step(
     prev: Option<&LifecycleState>,
     open_ask_key: Option<&str>,
     turn_ids: PriorTurnIds<'_>,
