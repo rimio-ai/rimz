@@ -326,7 +326,7 @@ surface-budget = 310
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
-surface-budget = 172
+surface-budget = 120
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
@@ -2396,3 +2396,68 @@ reason = "One-caller observer flag: presentation passes None, streaming passes S
 kind = "item"
 key = "harness::run::report::record_report_messages"
 reason = "One-caller message_id flag pinned by e3798c70c (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pixel::probe::PixelRenderCaps"
+reason = "Parameter of pub pets::resolve_render_tier and part of pub detect_pixel_render_env's return, both called from the CLI binary; re-exported pub at sidebar_pane (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pixel::PLACEHOLDER"
+reason = "web::ttyd::client and testkit serialize the placeholder encoding outside sidebar_pane; stays pub(crate) (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pixel::ROW_COLUMN_DIACRITICS"
+reason = "web::ttyd::client and testkit serialize the placeholder encoding outside sidebar_pane; stays pub(crate) (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pixel::RESIDENT_REFRESH_MS"
+reason = "The pets painter test asserts resend timing through PixelPainter; private would respell the policy as literals there. Stays at sidebar_pane reach; the resend gate is pinned by 30108e572 (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pixel::MIN_RESEND_SPACING_MS"
+reason = "The pets painter test asserts resend spacing through PixelPainter; private would respell the policy as literals there. Stays at sidebar_pane reach (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pixel::meter::MeterPixels"
+reason = "Field type of pub(crate) UiState::meter_pixels in the held render root; private_interfaces floors it at pub(crate) (pass 22a, open deferral)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pets::PetView"
+reason = "Field type of pub(crate) UiState::pet in the held render root; private_interfaces floors it at pub(crate) (pass 22a, open deferral)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pets::PetBody"
+reason = "Field type of pub(crate) PetView::body; floored with PetView (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pets::PetPixelView"
+reason = "Payload of pub(crate) PetBody::Pixel; floored with PetView (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::pets::PixelPreviewFrame"
+reason = "Field of pub PetPixelPreview::frame, which the CLI binary builds in list-pets tests; stays pub (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::supervise::SidebarSuperviseErr"
+reason = "Error type of pub supervise::run, which the CLI binary calls (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::supervise::Result"
+reason = "Return alias of pub supervise::run, which the CLI binary calls (pass 22a)."
+
+[[verdict]]
+kind = "pass-through"
+key = "sidebar_pane::pixel::tty::drop"
+reason = "Drop forwards to BarrierSource::restore, a trait method the pacer also calls directly (pass 22a)."

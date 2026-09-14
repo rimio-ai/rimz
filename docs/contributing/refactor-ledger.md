@@ -70,6 +70,12 @@ One row per module at the granularity `survey` ranks (`store/snapshot`, `agents/
 | `sidebar/presence` | holds; landed pass-20b | `e3785a2be` | 30 | `ingest_zellij_wake` is one accept/reject transaction; CLI-reached wake and telemetry types keep `pub`. |
 | `sidebar/notify` | holds; landed pass-20b | `e3785a2be` | 30 | debounce/coalesce, link-health episodes and handler delivery are distinct policies. |
 | `sidebar_pane/app` | holds; landed pass-11 | `f0d27f230` | 30 | loop transitions, dispatch, folds, focus repair and input reviewed; width control and the three elder-gated workers hold. |
+| `sidebar_pane/pets` | holds; landed pass-22a | `b8e4115e3` | 30 | serve-loop types narrowed to the pane; `PetView`/`PetBody`/`PetPixelView` floored by the held `UiState::pet` field; preview types stay `pub` for the CLI; load machine, track selection and voice hold. |
+| `sidebar_pane/pixel` | holds; landed pass-22a | `b8e4115e3` | 30 | transport narrowed to the pane; `PLACEHOLDER`/`ROW_COLUMN_DIACRITICS` stay `pub(crate)` for ttyd and testkit; `PixelRenderCaps` and the CLI-reached encoders stay `pub`; `MeterPixels` floored by `UiState`; the resend gate (`30108e572`) and `ZellijKittySupport`'s five variants (`3718d6f34`) hold. |
+| `sidebar_pane/supervise` | holds; landed pass-22a | `b8e4115e3` | 30 | reload and respawn codes pane-private; `run`, its error type, `run_worker`, `is_worker`, `instance_id` and `SELF_CLOSE_EXIT_CODE` stay `pub` for the CLI. |
+| `sidebar_pane/render/chrome` | holds; landed pass-22a | `b8e4115e3` | 30 | home abbreviation private with its test; the nine bottom-chrome builders are `compose`'s vocabulary. |
+| `sidebar_pane/render/labels` | holds; landed pass-22a | `b8e4115e3` | 30 | glyph and meter vocabulary already at render reach; four style helpers stay inside labels. |
+| `sidebar_pane/render/theme` | holds; landed pass-22a | `b8e4115e3` | 30 | the Layer-3/4 carrier `docs/internals/theme.md` names and the color invariant exempts; file-local tones private. |
 | `sidebar_pane/render/(root)` | holds; landed pass-18b | `134e4e8db` | 30 | reviewed as the render bundle (root, compose, layout, sections). |
 | `sidebar_pane/render/compose` | holds; landed pass-18b | `134e4e8db` | 30 | reviewed as the render bundle. |
 | `sidebar_pane/render/sections` | holds; landed pass-18b | `134e4e8db` | 30 | the full-frame snapshot suite pins root → compose → chrome/sections; width budgets are distinct rules; `text_width`/`clip` are the layout vocabulary. |
@@ -132,4 +138,5 @@ Candidates a pass judged real but could not land, each with the condition that u
 - `proc::in_pane_agent_start` is uncalled; its eager `then_some(starts[0])` panics on an empty match. Deletion trips `dead_code`; reported, not fixed.
 - `agents/adapters/codex`: transcript lookup ignores `CODEX_HOME` (`codex/transcript.rs`), substring daemon classification (`codex/process.rs`), per-attempt refresh budget (`codex/app_server.rs`); reported, not fixed.
 - `sidebar_pane/render/sections/provider.rs`: the tab rail measures `chars().count()`, mis-sizing a non-ASCII product name; reported, not fixed.
+- `sidebar_pane/render/ui_state.rs`: `UiState::pet` and `UiState::meter_pixels` are `pub(crate)`, flooring `pets::{PetView, PetBody, PetPixelView}` and `pixel::meter::MeterPixels` at crate reach; a pass on the held render root that narrows those fields to `pub(in crate::sidebar_pane)` lets the four types follow.
 - Compiler-refused narrowings (E0446 / `private_interfaces`, atlas caveat 13) stay at their current visibility everywhere; do not re-plan them from `inspect`'s `narrow to` column without checking the signature that floors them.
