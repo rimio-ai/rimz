@@ -2,14 +2,27 @@
 //!
 //! Only display/pricing identity and context capacity cross this boundary.
 //! Credentials, endpoints, provider options, and environment interpolation are
-//! intentionally absent from the typed projection and from every error path.
+//! intentionally absent from the typed projection and from every error path:
+//! the load filter reads their presence, and the placeholder-key check reads
+//! the key only to compare it.
+//!
+//! The catalogue mirrors Droid 0.218.2: each settings file loads and names its
+//! own entries, `settings.local.json` replaces its sibling's list, the folder's
+//! legacy `config.json` appends entries it does not already hold, and the
+//! project folder precedes the user folder with duplicate ids dropped.
 
+use std::collections::HashMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
 
 #[cfg(test)]
 use super::transcript;
+use crate::agents::transcript_fs::deserialize_optional_u64_lossy;
+
+/// Template keys Droid ships in sample configs; entries carrying one are dropped.
+const PLACEHOLDER_API_KEYS: [&str; 2] = ["YOUR_API_KEY", "YOUR_OPENAI_API_KEY"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ResolvedCustomModel {
@@ -18,53 +31,120 @@ pub(super) struct ResolvedCustomModel {
     pub max_context_limit: Option<u64>,
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default)]
 struct SettingsProjection {
     #[serde(rename = "customModels")]
-    custom_models: Option<Vec<CustomModel>>,
+    custom_models: Option<Vec<Value>>,
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default)]
 struct LegacyProjection {
-    custom_models: Option<Vec<LegacyCustomModel>>,
+    custom_models: Option<Vec<Value>>,
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default)]
 struct CustomModel {
+    #[serde(deserialize_with = "string_only")]
     id: Option<String>,
-    #[serde(rename = "displayName")]
+    #[serde(rename = "displayName", deserialize_with = "string_only")]
     display_name: Option<String>,
+    #[serde(deserialize_with = "string_only")]
     model: Option<String>,
-    #[serde(rename = "maxContextLimit")]
+    #[serde(rename = "provider", deserialize_with = "is_string")]
+    has_provider: bool,
+    #[serde(rename = "baseUrl", deserialize_with = "is_string")]
+    has_base_url: bool,
+    #[serde(rename = "bedrock", deserialize_with = "is_object")]
+    has_bedrock: bool,
+    #[serde(rename = "apiKey", deserialize_with = "is_placeholder_key")]
+    placeholder_key: bool,
+    #[serde(deserialize_with = "deserialize_optional_u64_lossy")]
+    index: Option<u64>,
+    #[serde(
+        rename = "maxContextLimit",
+        deserialize_with = "deserialize_optional_u64_lossy"
+    )]
     max_context_limit: Option<u64>,
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default)]
 struct LegacyCustomModel {
-    display_name: Option<String>,
+    #[serde(deserialize_with = "string_only")]
+    model_display_name: Option<String>,
+    #[serde(deserialize_with = "string_only")]
     model: Option<String>,
+    #[serde(rename = "provider", deserialize_with = "is_string")]
+    has_provider: bool,
+    #[serde(rename = "base_url", deserialize_with = "is_string")]
+    has_base_url: bool,
+    #[serde(rename = "bedrock", deserialize_with = "is_object")]
+    has_bedrock: bool,
+    #[serde(rename = "api_key", deserialize_with = "is_placeholder_key")]
+    placeholder_key: bool,
+    #[serde(deserialize_with = "deserialize_optional_u64_lossy")]
     max_context_limit: Option<u64>,
 }
 
-impl From<LegacyCustomModel> for CustomModel {
-    fn from(model: LegacyCustomModel) -> Self {
-        Self {
-            id: None,
-            display_name: model.display_name,
-            model: model.model,
-            max_context_limit: model.max_context_limit,
+/// One entry that survived Droid's load filter, before its id is assigned.
+struct LoadedModel {
+    stored_id: Option<String>,
+    name: String,
+    model: String,
+    index: Option<u64>,
+    max_context_limit: Option<u64>,
+}
+
+struct CatalogEntry {
+    id: String,
+    index: u64,
+    name: String,
+    model: String,
+    max_context_limit: Option<u64>,
+}
+
+impl CustomModel {
+    fn load(self) -> Option<LoadedModel> {
+        let model = self.model?;
+        if !self.has_provider || !(self.has_base_url || self.has_bedrock) || self.placeholder_key {
+            return None;
         }
+        Some(LoadedModel {
+            stored_id: self.id,
+            name: self.display_name.unwrap_or_else(|| model.clone()),
+            model,
+            index: self.index,
+            max_context_limit: self.max_context_limit,
+        })
+    }
+}
+
+impl LegacyCustomModel {
+    fn load(self) -> Option<LoadedModel> {
+        let model = self.model?;
+        if !self.has_provider || !(self.has_base_url || self.has_bedrock) || self.placeholder_key {
+            return None;
+        }
+        Some(LoadedModel {
+            stored_id: None,
+            name: self
+                .model_display_name
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| model.clone()),
+            model,
+            index: None,
+            max_context_limit: self.max_context_limit,
+        })
     }
 }
 
 /// Resolve one raw Factory custom selector through the current settings
-/// hierarchy. Any unreadable or malformed present source makes the result
-/// unknown; enrichment abstains rather than borrowing stale identity from a
-/// lower-precedence file.
+/// hierarchy. Any unreadable or malformed present settings file makes the
+/// result unknown; enrichment abstains rather than borrowing identity from a
+/// catalogue Droid itself would not have loaded.
 #[cfg(test)]
 pub(super) fn resolve_custom_model(
     selector: &str,
@@ -85,71 +165,116 @@ pub(super) fn resolve_custom_model_from_cwd(
     user_settings: &Path,
 ) -> Option<ResolvedCustomModel> {
     let selector = non_empty(selector)?;
-    if !selector.starts_with("custom:") || !cwd.is_absolute() {
+    let raw_model = selector.strip_prefix("custom:")?;
+    if !cwd.is_absolute() {
         return None;
     }
-    let layers = current_layers(user_settings, cwd)?;
-
-    // Stable ids are authoritative. A duplicate at one precedence tier is a
-    // conflict; a lower tier cannot override a proven higher-tier match.
-    for layer in &layers {
-        let matches = layer
-            .iter()
-            .filter(|model| non_empty_opt(model.id.as_deref()) == Some(selector))
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [] => {}
-            [model] => return resolved(model),
-            _ => return None,
+    let mut catalog = folder_catalog(&cwd.join(".factory/settings.json"))?;
+    for entry in folder_catalog(user_settings)? {
+        if !catalog.iter().any(|held| held.id == entry.id) {
+            catalog.push(entry);
         }
     }
 
-    // Index-bearing selectors predate stable ids. Mixing the two generations
-    // makes the reconstructed index ambiguous, so legacy reconstruction is
-    // allowed only for an all-legacy current catalogue.
-    let current_entries = layers.iter().flatten().collect::<Vec<_>>();
-    if current_entries
+    if let Some(entry) = catalog.iter().find(|entry| entry.id == selector) {
+        return resolved(entry);
+    }
+    if let Some(name) = generated_selector_name(raw_model) {
+        let by_index = catalog.iter().find(|entry| {
+            let prefix = format!("custom:{}-", slug(&entry.name));
+            entry.id.starts_with(&prefix) && format!("{prefix}{}", entry.index) == selector
+        });
+        if let Some(entry) = by_index {
+            return resolved(entry);
+        }
+        let by_name = catalog
+            .iter()
+            .filter(|entry| slug(&entry.name) == name)
+            .collect::<Vec<_>>();
+        if let [entry] = by_name.as_slice()
+            && entry.id.starts_with(&format!("custom:{name}-"))
+        {
+            return resolved(entry);
+        }
+    }
+    catalog
         .iter()
-        .any(|model| non_empty_opt(model.id.as_deref()).is_some())
-    {
-        return None;
-    }
-    if !current_entries.is_empty() {
-        return unique_legacy_match(selector, &layers);
-    }
-
-    // `settings*.json` owns the current catalogue. Only an entirely absent
-    // current catalogue falls back to the legacy user `config.json` shape.
-    let legacy_path = user_settings.with_file_name("config.json");
-    let legacy = read_optional::<LegacyProjection>(&legacy_path)?
-        .and_then(|projection| projection.custom_models)
-        .unwrap_or_default()
-        .into_iter()
-        .map(CustomModel::from)
-        .collect::<Vec<_>>();
-    unique_legacy_match(selector, &[legacy])
+        .find(|entry| entry.model == raw_model)
+        .and_then(resolved)
 }
 
-fn current_layers(user_settings: &Path, cwd: &Path) -> Option<Vec<Vec<CustomModel>>> {
-    let user_local = user_settings.with_file_name("settings.local.json");
-    let project_settings = cwd.join(".factory/settings.json");
-    let project_local = cwd.join(".factory/settings.local.json");
-    // Highest precedence first: project-local, project, user-local, user.
-    [
-        project_local,
-        project_settings,
-        user_local,
-        user_settings.to_path_buf(),
-    ]
-    .into_iter()
-    .map(|path| {
-        read_optional::<SettingsProjection>(&path).map(|projection| {
-            projection
-                .and_then(|projection| projection.custom_models)
-                .unwrap_or_default()
+/// One settings folder's effective catalogue, named by its `settings.json`.
+fn folder_catalog(settings: &Path) -> Option<Vec<CatalogEntry>> {
+    let base = read_optional::<SettingsProjection>(settings)?;
+    let local =
+        read_optional::<SettingsProjection>(&settings.with_file_name("settings.local.json"))?;
+    let current = local
+        .and_then(|projection| projection.custom_models)
+        .or_else(|| base.and_then(|projection| projection.custom_models))
+        .unwrap_or_default();
+    let mut catalog = assign_ids(
+        current
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value::<CustomModel>(entry).ok())
+            .filter_map(CustomModel::load),
+    );
+
+    // Droid skips an unreadable legacy file rather than failing the folder.
+    let legacy = read_optional::<LegacyProjection>(&settings.with_file_name("config.json"))
+        .flatten()
+        .and_then(|projection| projection.custom_models)
+        .unwrap_or_default();
+    let legacy = assign_ids(
+        legacy
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value::<LegacyCustomModel>(entry).ok())
+            .filter_map(LegacyCustomModel::load),
+    );
+    for entry in legacy {
+        if !catalog
+            .iter()
+            .any(|held| held.model == entry.model || held.id == entry.id)
+        {
+            catalog.push(entry);
+        }
+    }
+    Some(catalog)
+}
+
+/// Droid's generated id: `custom:<slug>-<n>`, where `n` counts earlier entries
+/// of the same file sharing the slug. A stored id wins.
+fn assign_ids(loaded: impl Iterator<Item = LoadedModel>) -> Vec<CatalogEntry> {
+    let mut ordinals = HashMap::<String, u64>::new();
+    loaded
+        .enumerate()
+        .map(|(position, model)| {
+            let slug = slug(&model.name);
+            let ordinal = ordinals.entry(slug.clone()).or_default();
+            let generated = format!("custom:{slug}-{ordinal}");
+            *ordinal += 1;
+            CatalogEntry {
+                id: model.stored_id.unwrap_or(generated),
+                index: model.index.unwrap_or(position as u64),
+                name: model.name,
+                model: model.model,
+                max_context_limit: model.max_context_limit,
+            }
         })
-    })
-    .collect()
+        .collect()
+}
+
+fn slug(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join("-")
+}
+
+/// The name part of a `<name>-<n>` selector body, when `n` is a canonical
+/// non-negative integer.
+fn generated_selector_name(body: &str) -> Option<&str> {
+    let (name, ordinal) = body.rsplit_once('-')?;
+    let canonical = ordinal
+        .parse::<u64>()
+        .is_ok_and(|value| value.to_string() == ordinal);
+    (!name.is_empty() && canonical).then_some(name)
 }
 
 fn read_optional<T: serde::de::DeserializeOwned>(path: &Path) -> Option<Option<T>> {
@@ -160,29 +285,12 @@ fn read_optional<T: serde::de::DeserializeOwned>(path: &Path) -> Option<Option<T
     crate::agents::jsonc::from_slice(&bytes).ok().map(Some)
 }
 
-fn unique_legacy_match(selector: &str, layers: &[Vec<CustomModel>]) -> Option<ResolvedCustomModel> {
-    let matches = layers
-        .iter()
-        .flat_map(|models| models.iter().enumerate())
-        .filter_map(|(index, model)| {
-            let display = non_empty_opt(model.display_name.as_deref())?;
-            let reconstructed = format!("custom:{}-{index}", display.replace(' ', "-"));
-            (reconstructed == selector)
-                .then(|| resolved(model))
-                .flatten()
-        })
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [model] => Some(model.clone()),
-        _ => None,
-    }
-}
-
-fn resolved(model: &CustomModel) -> Option<ResolvedCustomModel> {
+fn resolved(entry: &CatalogEntry) -> Option<ResolvedCustomModel> {
+    let model_id = non_empty(&entry.model)?.to_owned();
     Some(ResolvedCustomModel {
-        display_name: non_empty_opt(model.display_name.as_deref())?.to_owned(),
-        model_id: non_empty_opt(model.model.as_deref())?.to_owned(),
-        max_context_limit: model.max_context_limit.filter(|limit| *limit > 0),
+        display_name: non_empty(&entry.name).unwrap_or(&model_id).to_owned(),
+        model_id,
+        max_context_limit: entry.max_context_limit.filter(|limit| *limit > 0),
     })
 }
 
@@ -191,8 +299,32 @@ fn non_empty(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
-fn non_empty_opt(value: Option<&str>) -> Option<&str> {
-    value.and_then(non_empty)
+fn string_only<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Ok(match Option::<Value>::deserialize(deserializer)? {
+        Some(Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn is_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(matches!(
+        Option::<Value>::deserialize(deserializer)?,
+        Some(Value::String(_))
+    ))
+}
+
+fn is_object<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(matches!(
+        Option::<Value>::deserialize(deserializer)?,
+        Some(Value::Object(_))
+    ))
+}
+
+fn is_placeholder_key<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(matches!(
+        Option::<Value>::deserialize(deserializer)?,
+        Some(Value::String(key)) if PLACEHOLDER_API_KEYS.contains(&key.as_str())
+    ))
 }
 
 #[cfg(test)]
@@ -225,12 +357,12 @@ mod tests {
         let transcript = session(root.path(), &cwd);
         write(
             &user,
-            r#"{"customModels":[{"id":"custom:deepseek","displayName":"User DeepSeek","model":"old-model","apiKey":"secret-user"}]}"#,
+            r#"{"customModels":[{"id":"custom:deepseek","displayName":"User DeepSeek","model":"old-model","provider":"openai","baseUrl":"https://user.invalid","apiKey":"secret-user"}]}"#,
         );
         write(
             &cwd.join(".factory/settings.local.json"),
             r#"{// comment
-              "customModels":[{"id":"custom:deepseek","displayName":"DeepSeek V4 Pro","model":"deepseek-v4-pro","maxContextLimit":200000,"baseUrl":"https://secret.invalid","apiKey":"${SECRET}"}],
+              "customModels":[{"id":"custom:deepseek","displayName":"DeepSeek V4 Pro","model":"deepseek-v4-pro","provider":"openai","maxContextLimit":200000,"baseUrl":"https://secret.invalid","apiKey":"${SECRET}"}],
             }"#,
         );
 
@@ -244,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_selector_reconstruction_preserves_spaces_hyphens_and_index() {
+    fn generated_ids_count_per_name_and_skip_filtered_entries() {
         let root = tempfile::tempdir().unwrap();
         let cwd = root.path().join("project");
         let user = root.path().join("user/settings.json");
@@ -252,66 +384,144 @@ mod tests {
         write(
             &user,
             r#"{"customModels":[
-              {"displayName":"Other","model":"other"},
-              {"displayName":"DeepSeek V4-Pro","model":"deepseek-v4-pro","maxContextLimit":128000}
+              {"displayName":"Other","model":"other","provider":"openai","baseUrl":"https://o.invalid"},
+              {"displayName":"Draft","model":"draft","provider":"openai","baseUrl":"https://d.invalid","apiKey":"YOUR_API_KEY"},
+              {"displayName":"No Endpoint","model":"none","provider":"openai"},
+              {"id":"custom:pinned","displayName":"DeepSeek  V4","model":"pinned","provider":"openai","baseUrl":"https://p.invalid"},
+              {"displayName":" DeepSeek V4 ","model":"deepseek-v4-pro","provider":"anthropic","bedrock":{},"maxContextLimit":128000},
+              {"model":"bare-model","provider":"openai","baseUrl":"https://b.invalid"}
             ]}"#,
         );
 
-        let resolved =
-            resolve_custom_model("custom:DeepSeek-V4-Pro-1", &transcript, &user).unwrap();
-        assert_eq!(resolved.display_name, "DeepSeek V4-Pro");
-        assert!(resolve_custom_model("custom:DeepSeek-V4-Pro-0", &transcript, &user).is_none());
-
-        write(
-            &user,
-            r#"{"customModels":[
-              {"displayName":"DeepSeek V4-Pro","model":"deepseek-v4-pro","maxContextLimit":128000},
-              {"displayName":"Other","model":"other"}
-            ]}"#,
+        let resolved = resolve_custom_model("custom:DeepSeek-V4-1", &transcript, &user).unwrap();
+        assert_eq!(resolved.model_id, "deepseek-v4-pro");
+        assert_eq!(resolved.display_name, "DeepSeek V4");
+        assert_eq!(resolved.max_context_limit, Some(128_000));
+        assert_eq!(
+            resolve_custom_model("custom:bare-model-0", &transcript, &user)
+                .unwrap()
+                .display_name,
+            "bare-model"
         );
-        assert!(
-            resolve_custom_model("custom:DeepSeek-V4-Pro-1", &transcript, &user).is_none(),
-            "a selector with a stale index must not borrow the reordered entry"
+        assert_eq!(
+            resolve_custom_model("custom:pinned", &transcript, &user)
+                .unwrap()
+                .model_id,
+            "pinned"
+        );
+        assert!(resolve_custom_model("custom:Draft-0", &transcript, &user).is_none());
+        assert!(resolve_custom_model("custom:No-Endpoint-0", &transcript, &user).is_none());
+        assert_eq!(
+            resolve_custom_model("custom:other", &transcript, &user)
+                .unwrap()
+                .display_name,
+            "Other",
+            "a bare custom model selector falls back to the model field"
         );
     }
 
     #[test]
-    fn ambiguous_or_malformed_sources_abstain_without_falling_back() {
+    fn stale_selectors_fall_back_by_index_then_unique_name() {
         let root = tempfile::tempdir().unwrap();
         let cwd = root.path().join("project");
         let user = root.path().join("user/settings.json");
         let transcript = session(root.path(), &cwd);
         write(
             &user,
-            r#"{"customModels":[{"displayName":"Same","model":"one"}]}"#,
+            r#"{"customModels":[
+              {"displayName":"Other","model":"other","provider":"openai","baseUrl":"https://o.invalid"},
+              {"displayName":"Solo","model":"solo","provider":"openai","baseUrl":"https://s.invalid"}
+            ]}"#,
+        );
+        assert_eq!(
+            resolve_custom_model("custom:Solo-1", &transcript, &user)
+                .unwrap()
+                .model_id,
+            "solo",
+            "a pre-ordinal selector carries the entry's position"
+        );
+        assert_eq!(
+            resolve_custom_model("custom:Solo-7", &transcript, &user)
+                .unwrap()
+                .model_id,
+            "solo"
+        );
+        assert!(resolve_custom_model("custom:Missing-0", &transcript, &user).is_none());
+    }
+
+    #[test]
+    fn folders_merge_by_id_and_malformed_settings_abstain() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().join("project");
+        let user = root.path().join("user/settings.json");
+        let transcript = session(root.path(), &cwd);
+        write(
+            &user,
+            r#"{"customModels":[{"displayName":"Same","model":"user","provider":"openai","baseUrl":"https://u.invalid"},{"displayName":"User Only","model":"user-only","provider":"openai","baseUrl":"https://u.invalid"}]}"#,
         );
         write(
             &cwd.join(".factory/settings.json"),
-            r#"{"customModels":[{"displayName":"Same","model":"two"}]}"#,
+            r#"{"customModels":[{"displayName":"Same","model":"project","provider":"openai","baseUrl":"https://p.invalid"}]}"#,
         );
-        assert!(resolve_custom_model("custom:Same-0", &transcript, &user).is_none());
+        assert_eq!(
+            resolve_custom_model("custom:Same-0", &transcript, &user)
+                .unwrap()
+                .model_id,
+            "project"
+        );
+        assert_eq!(
+            resolve_custom_model("custom:User-Only-0", &transcript, &user)
+                .unwrap()
+                .model_id,
+            "user-only"
+        );
+
+        write(
+            &cwd.join(".factory/settings.local.json"),
+            r#"{"customModels":[{"displayName":"Local","model":"local","provider":"openai","baseUrl":"https://l.invalid"}]}"#,
+        );
+        assert_eq!(
+            resolve_custom_model("custom:Same-0", &transcript, &user)
+                .unwrap()
+                .model_id,
+            "user",
+            "settings.local.json replaces its sibling's list"
+        );
 
         write(&cwd.join(".factory/settings.local.json"), "{ malformed");
         assert!(resolve_custom_model("custom:Same-0", &transcript, &user).is_none());
     }
 
     #[test]
-    fn legacy_user_config_is_only_a_current_settings_fallback() {
+    fn legacy_config_appends_entries_the_current_catalogue_lacks() {
         let root = tempfile::tempdir().unwrap();
         let cwd = root.path().join("project");
         let user = root.path().join("user/settings.json");
         let transcript = session(root.path(), &cwd);
         write(
             &user.with_file_name("config.json"),
-            r#"{"custom_models":[{"display_name":"Legacy Model","model":"legacy-model","max_context_limit":64000}]}"#,
+            r#"{"custom_models":[
+              {"model_display_name":"Legacy Model","model":"legacy-model","provider":"openai","base_url":"https://l.invalid","max_context_limit":64000},
+              {"model_display_name":"Shadowed","model":"current","provider":"openai","base_url":"https://l.invalid"}
+            ]}"#,
         );
         let resolved = resolve_custom_model("custom:Legacy-Model-0", &transcript, &user).unwrap();
         assert_eq!(resolved.model_id, "legacy-model");
+        assert_eq!(resolved.max_context_limit, Some(64_000));
 
         write(
             &user,
-            r#"{"customModels":[{"displayName":"Current","model":"current"}]}"#,
+            r#"{"customModels":[{"displayName":"Current","model":"current","provider":"openai","baseUrl":"https://c.invalid"}]}"#,
         );
-        assert!(resolve_custom_model("custom:Legacy-Model-0", &transcript, &user).is_none());
+        assert_eq!(
+            resolve_custom_model("custom:Legacy-Model-0", &transcript, &user)
+                .unwrap()
+                .model_id,
+            "legacy-model"
+        );
+        assert!(
+            resolve_custom_model("custom:Shadowed-0", &transcript, &user).is_none(),
+            "a legacy entry whose model the current catalogue holds is dropped"
+        );
     }
 }
