@@ -20,11 +20,11 @@ use std::thread;
 use crate::config::{CellAspect, PetsConfig, PetsGlyphMode, PixelMode};
 
 #[cfg(test)]
-pub(crate) use cellart::PetCell;
-pub(crate) use cellart::PetCellGrid;
+pub(super) use cellart::PetCell;
+pub(super) use cellart::PetCellGrid;
 pub use cellart::probe_cell_aspect;
-pub(crate) use model::PetAction;
-pub(crate) use painter::PixelPainter;
+pub(super) use model::PetAction;
+pub(super) use painter::PixelPainter;
 pub use preview::{
     PetPixelPreview, PetPreview, PixelPreviewFrame, PreviewCell, listable_ids, load_cell_preview,
     load_cell_previews, load_pixel_preview, load_pixel_previews,
@@ -61,15 +61,15 @@ pub struct PetGridSize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PetViewFrame {
-    pub(crate) action: PetAction,
-    pub(crate) phase: u64,
-    pub(crate) refresh_ms: u16,
-    pub(crate) body: Option<PetRenderTier>,
-    pub(crate) pixel_id_base: u32,
-    pub(crate) cell_aspect: CellAspect,
-    pub(crate) motion_enabled: bool,
-    pub(crate) unread_triggered: bool,
+pub(super) struct PetViewFrame {
+    pub(super) action: PetAction,
+    pub(super) phase: u64,
+    pub(super) refresh_ms: u16,
+    pub(super) body: Option<PetRenderTier>,
+    pub(super) pixel_id_base: u32,
+    pub(super) cell_aspect: CellAspect,
+    pub(super) motion_enabled: bool,
+    pub(super) unread_triggered: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -90,7 +90,7 @@ pub fn resolve_render_tier(mode: PetsGlyphMode, caps: PixelRenderCaps) -> PetRen
 /// The tier actually painted this frame: `resolve_render_tier` downgraded to
 /// cell art when pixels resolve but cannot paint here — no provider block to
 /// ride, or a suppressed body. Cell tiers pass through untouched.
-pub(crate) fn effective_render_tier(
+pub(super) fn effective_render_tier(
     mode: PetsGlyphMode,
     pixel_mode: PixelMode,
     caps: PixelRenderCaps,
@@ -116,7 +116,7 @@ pub fn dashboard_pet_size(tier: PetRenderTier) -> PetGridSize {
 }
 
 #[derive(Default)]
-pub(crate) struct PetAssets {
+pub(super) struct PetAssets {
     load_state: PetLoadState,
     previous_action: Option<PetAction>,
     jump_started_phase: Option<u64>,
@@ -253,7 +253,7 @@ struct TrackSelection {
 
 impl PetAssets {
     #[cfg(test)]
-    pub(crate) fn test_loaded_pixel_frame(pet_id: &str) -> Self {
+    pub(super) fn test_loaded_pixel_frame(pet_id: &str) -> Self {
         let frame = RgbaImage {
             width: 1,
             height: 1,
@@ -275,7 +275,7 @@ impl PetAssets {
         }
     }
 
-    pub(crate) fn observe_unread_rows(
+    pub(super) fn observe_unread_rows(
         &mut self,
         unread_rows: impl IntoIterator<Item = String>,
     ) -> bool {
@@ -298,7 +298,7 @@ impl PetAssets {
         self.caption = None;
     }
 
-    pub(crate) fn view(&mut self, config: &PetsConfig, frame: PetViewFrame) -> Option<PetView> {
+    pub(super) fn view(&mut self, config: &PetsConfig, frame: PetViewFrame) -> Option<PetView> {
         let PetViewFrame {
             action,
             phase,
@@ -386,7 +386,7 @@ impl PetAssets {
         })
     }
 
-    pub(crate) fn pixel_frame(&self, pet_id: &str, sprite_index: usize) -> Option<&RgbaImage> {
+    pub(super) fn pixel_frame(&self, pet_id: &str, sprite_index: usize) -> Option<&RgbaImage> {
         let PetLoadState::Loaded { request, asset } = &self.load_state else {
             return None;
         };
