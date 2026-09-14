@@ -311,7 +311,7 @@ const STATUS_LINE: ManagedStatusLineSpec = ManagedStatusLineSpec {
     key_path: &["statusLine"],
     command: STATUS_LINE_COMMAND,
     command_marker: RIMZ_STATUS_LINE_MARKER,
-    rendering_options: RenderingOptions::Only(&["padding"]),
+    rendering_options: RenderingOptions::Only(&["padding", "refreshInterval"]),
     wrap_policy: WrapPolicy::CommandMode,
     required_for_install: true,
 };
