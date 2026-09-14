@@ -385,7 +385,7 @@ impl Env {
     }
 
     pub fn cursor_cli_config_path(&self) -> PathBuf {
-        self.home_root.join(".cursor").join("cli-config.json")
+        self.config_root().join("cursor").join("cli-config.json")
     }
 
     pub fn copilot_settings_path(&self) -> PathBuf {
