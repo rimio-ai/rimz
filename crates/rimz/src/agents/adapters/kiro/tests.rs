@@ -663,7 +663,6 @@ fn launch_resume_and_presets_use_v3_surface() {
             "--v3".to_owned(),
             "--agent".to_owned(),
             "reviewer".to_owned(),
-            "--".to_owned(),
             "review".to_owned(),
         ])
     );

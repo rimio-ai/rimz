@@ -84,7 +84,9 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
     launch: super::LaunchSpec {
         program: Some("kiro-cli"),
         fixed_args: &["chat", "--v3"],
-        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        // The v3 TUI re-parses argv and treats `--` as an unknown flag that
+        // swallows the next token, so the prompt must stay a bare positional.
+        prompt: super::PromptStyle::Positional,
         resume: Some(super::SessionCommand {
             before_id: &["kiro-cli", "chat", "--v3", "--resume-id"],
             after_id: &[],
