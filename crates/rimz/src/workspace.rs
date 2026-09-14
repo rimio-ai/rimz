@@ -89,7 +89,7 @@ pub fn channel_shell_argv(
 }
 
 /// Shell pane argv for a resume tab label, falling back to a plain shell.
-pub fn channel_label_shell_argv(
+pub(crate) fn channel_label_shell_argv(
     workspace_id: &WorkspaceId,
     project_root: &Path,
     worktree_path: &Path,
@@ -304,7 +304,10 @@ fn normalize_known_workspace_record(
 /// template and long-lived presence plugin outlast swept build generations.
 /// Legacy rooms without that link use their recorded build while it exists,
 /// then fall back to the current executable.
-pub fn resolve_recorded_rimz_bin(workspace_id: &WorkspaceId, recorded: Option<&Path>) -> PathBuf {
+pub(crate) fn resolve_recorded_rimz_bin(
+    workspace_id: &WorkspaceId,
+    recorded: Option<&Path>,
+) -> PathBuf {
     if let Ok(paths) = crate::disk::paths::StatePaths::for_workspace(workspace_id.clone())
         && paths.room_bin.is_file()
     {
@@ -368,7 +371,7 @@ type EnvReader<'a> = &'a dyn Fn(&str) -> Option<std::ffi::OsString>;
 /// injected like `EnvReader` so recovery unit-tests without `/proc`. The
 /// caller owns process discovery and per-candidate verification
 /// ([`verify_pin`]); the resolver owns the agreement rule.
-pub type PinScan<'a> = &'a dyn Fn(&Path) -> Vec<PathBuf>;
+type PinScan<'a> = &'a dyn Fn(&Path) -> Vec<PathBuf>;
 
 /// The no-op scan every pin-recovery-free resolution passes.
 const NO_SCAN: PinScan<'static> = &|_| Vec::new();
@@ -575,7 +578,7 @@ fn read_verified_pin(env: EnvReader) -> Option<PathBuf> {
 /// Verify one identity pin: `None` unless the id parses, the root exists, and
 /// the id is the hash of that root, so a stale or corrupt pin never misroutes
 /// a write into the wrong store. The single validation path for the env pin
-/// and every sibling-process candidate a [`PinScan`] yields.
+/// and every sibling-process candidate a `PinScan` yields.
 pub fn verify_pin(id: &str, root: &Path) -> Option<PathBuf> {
     let Ok(id) = WorkspaceId::parse(id) else {
         tracing::warn!(pin = %id, "ignoring unparseable workspace pin");
