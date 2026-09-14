@@ -387,3 +387,83 @@ fn answer_plan_rejects_mismatched_answers() {
             .contains("cannot combine picks and text")
     );
 }
+
+/// Pi 0.84.4 `ui_prompt_start`/`ui_prompt_end` bracket every extension dialog
+/// the RimZ extension forwards (in-turn, TUI, outside the questionnaire).
+#[test]
+fn extension_dialog_waits_until_its_own_prompt_end() {
+    use crate::agents::AgentStatus;
+    use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
+
+    let start = json!({
+        "session_id": "sess-1",
+        "ui_prompt_id": "ui_prompt:1",
+        "ui_prompt_kind": "select",
+        "ui_prompt_title": "  Allow rm -rf build?  ",
+        "has_ui": true
+    });
+    let opened = decode("ui_prompt_start", &start);
+    assert_eq!(opened.class(), AgentHookClass::AwaitingUser);
+    assert!(opened.questions().is_empty());
+    assert_eq!(opened.ask_detail(), Some("Allow rm -rf build?"));
+    let wait = opened.lifecycle().expect("wait").signal.clone();
+    assert_eq!(
+        wait,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question,
+            ask_id: None,
+            detail: Some("Allow rm -rf build?".to_owned()),
+            native_key: Some("ui_prompt:1".to_owned()),
+        }
+    );
+
+    let mut headless = start.clone();
+    headless["has_ui"] = json!(false);
+    assert_eq!(signal("ui_prompt_start", &headless), None);
+    assert_eq!(
+        decode("ui_prompt_start", &headless).class(),
+        AgentHookClass::Unknown
+    );
+
+    let running = LifecycleState {
+        status: AgentStatus::Running,
+        phase: TurnPhase::Reasoning,
+        compacting: false,
+    };
+    let waiting = step(Some(&running), None, None, &wait).next;
+    assert_eq!(waiting.status, AgentStatus::Waiting);
+
+    // A parallel sibling tool finishing keeps the dialog's wait open.
+    let sibling = observe(
+        "tool_execution_end",
+        &json!({ "session_id": "sess-1", "tool_call_id": "call-2", "tool_name": "read" }),
+    );
+    assert_eq!(
+        step(Some(&waiting), Some("ui_prompt:1"), None, &sibling.signal)
+            .next
+            .status,
+        AgentStatus::Waiting
+    );
+
+    let end = decode(
+        "ui_prompt_end",
+        &json!({ "session_id": "sess-1", "ui_prompt_id": "ui_prompt:1" }),
+    );
+    assert!(end.records_progress());
+    let closed = end.lifecycle().expect("close").signal.clone();
+    assert!(matches!(
+        closed,
+        LifecycleSignal::ToolUsed { name: None, .. }
+    ));
+    let resumed = step(Some(&waiting), Some("ui_prompt:1"), None, &closed);
+    assert_eq!(resumed.next.status, AgentStatus::Running);
+    assert!(resumed.waiting_cleared);
+
+    assert!(
+        PiAdapter
+            .answer_plan(AskKind::Question, &[], &[])
+            .unwrap_err()
+            .to_string()
+            .contains("answer in the pane")
+    );
+}

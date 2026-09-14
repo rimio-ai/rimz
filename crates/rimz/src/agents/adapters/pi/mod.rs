@@ -20,11 +20,13 @@
 //! `session_before_compact`/`session_compact`/`session_shutdown` are the
 //! compaction and exit signals. Spend stays in [`spend`].
 //!
-//! One wired event is an ask: `tool_call`, pi's pre-tool gate, whose extension
-//! handler pi awaits. The `@juicesharp/rpiv-ask-user-question` extension draws
-//! the `ask_user_question` questionnaire in pi's pane; RimZ records that one
+//! Two wired events are asks. `tool_call`, pi's pre-tool gate, is awaited by
+//! pi; the `@juicesharp/rpiv-ask-user-question` extension draws the
+//! `ask_user_question` questionnaire in pi's pane, and RimZ records that one
 //! blocking tool as a native question and returns neutral so pi can open its
-//! UI. Managed extension instances also identify child Pi sessions through
+//! UI. `ui_prompt_start` (Pi 0.84.4+) marks any other extension dialog opened
+//! inside a run as a generic question, and `ui_prompt_end` clears it by key.
+//! Managed extension instances also identify child Pi sessions through
 //! RimZ-owned process-lineage markers and feed lifecycle rows keyed by the
 //! child's own session id, so its model, effort, context, and usage envelopes
 //! enrich the nested row. Background tasks stay declared off.
@@ -149,13 +151,13 @@ const PI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "session_start/before_agent_start/agent_settled",
     },
     permission: ConcernCoverage::Unsupported {
-        reason: "pi runs tools unasked; the pre-tool gate stays neutral",
+        reason: "pi runs tools unasked; extension permission dialogs raise only a generic wait",
     },
     plan_approval: ConcernCoverage::Unsupported {
         reason: "no plan-approval gate",
     },
     user_question: ConcernCoverage::Wired {
-        via: "tool_call (ask_user_question, rpiv extension tool)",
+        via: "tool_call (ask_user_question, rpiv extension tool) + ui_prompt_start/ui_prompt_end (Pi 0.84.4+ extension dialogs)",
     },
     answer: ConcernCoverage::Wired {
         via: "answer_plan questionnaire choreography",
@@ -218,7 +220,7 @@ const PI_USER_COVERAGE: UserCoverage = UserCoverage {
         note: "login and plan with the backing provider's windows, their fill, reset, and credits",
     },
     ask: CapabilityLevel::Full {
-        note: "the questionnaire raises Waiting and its question and choices reach rimz asks",
+        note: "questionnaires and extension dialogs raise Waiting; questionnaire choices reach rimz asks",
     },
     subagents: CapabilityLevel::Full {
         note: "child pi sessions nest under the parent, with label, context, tokens, and cost",
@@ -274,6 +276,8 @@ const PI_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle( "message_update", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle( "session_info_changed", r#"{"session_id":"sess-1","session_name":"Parser cleanup"}"#),
     HookEventSpec::lifecycle( "tool_execution_end", r#"{"session_id":"sess-1","tool_call_id":"sibling-call","tool_name":"bash"}"#).progress(),
+    HookEventSpec::blocking( "ui_prompt_start", r#"{"session_id":"sess-1","ui_prompt_id":"ui_prompt:1","ui_prompt_kind":"confirm","ui_prompt_title":"Allow rm -rf build?","has_ui":true}"#, AskKind::Question),
+    HookEventSpec::lifecycle( "ui_prompt_end", r#"{"session_id":"sess-1","ui_prompt_id":"ui_prompt:1"}"#).progress(),
     HookEventSpec::lifecycle( "model_select", r#"{"session_id":"sess-1","model":"gpt-5.5"}"#),
     HookEventSpec::lifecycle( "thinking_level_select", r#"{"session_id":"sess-1","effort":"high"}"#),
     HookEventSpec::lifecycle( "session_before_compact", r#"{"session_id":"sess-1"}"#),
@@ -359,24 +363,24 @@ impl crate::agents::capabilities::LaunchCapability for PiAdapter {
 
 impl crate::agents::capabilities::HookCapability for PiAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
-        // Only the rpiv questionnaire blocks on native UI. Ordinary tool calls
-        // remain neutral, and headless calls cannot strand a waiting row.
-        let ask_kind = (event_name == "tool_call"
-            && payload.get("has_ui").and_then(Value::as_bool) != Some(false))
-        .then(|| {
-            self.spec()
-                .blocking_tool_kind(payload.get("tool_name").and_then(Value::as_str))
-        })
-        .flatten();
+        // The rpiv questionnaire and in-turn extension dialogs block on native
+        // UI. Ordinary tool calls remain neutral, and headless calls cannot
+        // strand a waiting row.
+        let has_ui = payload.get("has_ui").and_then(Value::as_bool) != Some(false);
+        let ask_kind = match event_name {
+            "tool_call" if has_ui => self
+                .spec()
+                .blocking_tool_kind(payload.get("tool_name").and_then(Value::as_str)),
+            "ui_prompt_start" if has_ui => Some(AskKind::Question),
+            _ => None,
+        };
         let mut decoded = decode_catalog_hook(PI_HOOKS, event_name, ask_kind);
         let agent_id = optional_payload_string(payload, &["session_id"]);
         decoded.set_routing(
             HookRouting::session(agent_id.map(Into::into))
                 .with_worktree(optional_payload_string(payload, &["worktree_path", "cwd"])),
         );
-        let questions = if event_name == "tool_call"
-            && payload.get("has_ui").and_then(Value::as_bool) != Some(false)
-        {
+        let questions = if event_name == "tool_call" && has_ui {
             payload
                 .get("tool_name")
                 .and_then(Value::as_str)
@@ -385,7 +389,11 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
         } else {
             Vec::new()
         };
-        decoded.set_ask(questions, None);
+        let ui_prompt_title = (event_name == "ui_prompt_start" && has_ui)
+            .then(|| optional_payload_string(payload, &["ui_prompt_title"]))
+            .flatten()
+            .and_then(|title| non_empty_trimmed(&title));
+        decoded.set_ask(questions, ui_prompt_title.clone());
         decoded.set_native_answers(
             (event_name == "tool_execution_end"
                 && payload.get("tool_name").and_then(Value::as_str) == Some("ask_user_question"))
@@ -434,9 +442,6 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
 
         let parsed = payloads::parse_payload(payload);
         let tool_name = payload.get("tool_name").and_then(Value::as_str);
-        let blocking_kind = (payload.get("has_ui").and_then(Value::as_bool) != Some(false))
-            .then(|| self.spec().blocking_tool_kind(tool_name))
-            .flatten();
         let signal = match event_name {
             "session_start" => Some(LifecycleSignal::Registered),
             "before_agent_start" => Some(LifecycleSignal::TurnStarted),
@@ -447,11 +452,26 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
                 errored: payloads::agent_end_errored(&parsed),
                 parked_on_background: false,
             }),
-            "tool_call" => blocking_kind.map(|kind| LifecycleSignal::AwaitingInput {
+            "tool_call" => ask_kind.map(|kind| LifecycleSignal::AwaitingInput {
                 kind,
                 ask_id: None,
                 detail: None,
                 native_key: optional_payload_string(payload, &["tool_call_id"]),
+            }),
+            "ui_prompt_start" => ask_kind.map(|kind| LifecycleSignal::AwaitingInput {
+                kind,
+                ask_id: None,
+                detail: ui_prompt_title,
+                native_key: optional_payload_string(payload, &["ui_prompt_id"]),
+            }),
+            // Unnamed, so the closed dialog clears only its own keyed wait and
+            // never counts as a tool call.
+            "ui_prompt_end" => Some(LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+                name: None,
+                native_key: optional_payload_string(payload, &["ui_prompt_id"]),
+                turn_id: None,
             }),
             "tool_execution_end" if tool_name == Some("ask_user_question") => {
                 Some(LifecycleSignal::ToolUsed {

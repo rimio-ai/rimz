@@ -76,6 +76,11 @@ pub(super) fn answer_plan(
             "pi supports answers only for questionnaire asks".to_owned(),
         ));
     }
+    if questions.is_empty() {
+        return Err(AnswerPlanErr::Invalid(
+            "pi extension dialogs carry no structured questions; answer in the pane".to_owned(),
+        ));
+    }
     if questions.len() != answers.len() {
         return Err(AnswerPlanErr::Invalid(format!(
             "expected {} answers, got {}",
