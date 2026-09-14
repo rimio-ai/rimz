@@ -1,40 +1,116 @@
 # Wait CLI
 
-`rimz wait` is a self-only alarm: wake the calling agent after a delay, when an existing process disappears, or when a watched command exits, without holding its turn open. It pins the caller's live session from its launch environment or process ancestry; arming and canceling require an identifiable agent, not a user shell. To target another agent, attach a note, or subscribe to a signal, use [`rimz loop add --wait`](./loop.md#waits-and-checks). The [loops guide](../../guide/loops.md#wake-a-running-agent) covers the workflow.
+`rimz wait` is an alarm an agent sets for itself. The agent arms it and ends its turn; RimZ sends a message back into the same conversation when a delay elapses, an existing process goes away, or a watched command exits. It is the opposite direction of [`rimz agents wait`](./agents.md#list-and-manage-agents), which blocks a shell until an agent finishes.
+
+Only an agent RimZ can identify (from its launch environment or process ancestry) can arm or cancel a wait, and every wait targets that agent's own live session. To wake another agent, attach a prompt, repeat on a schedule, or subscribe to a signal, use [`rimz loop add --wait`](./loop.md#waits-and-checks). The [loops guide](../../guide/loops.md#wake-a-running-agent) teaches the workflow.
 
 ```sh
-rimz wait --in 30m
-rimz wait --pid 16776
-rimz wait -- gh run watch --exit-status
-rimz wait --on fail -- cargo test
-rimz wait --timeout 1h -- cargo build
-rimz wait list
-rimz wait list --json
+rimz wait --in 30m                          # timer
+rimz wait --pid 16776                       # an existing process
+rimz wait -- gh run watch --exit-status     # a watched command
+rimz wait --on fail -- cargo test           # deliver only if the command fails
+rimz wait --timeout 1h -- cargo build       # check in after 1h instead of 30m
+rimz wait list                              # pending waits (bare `rimz wait` does the same)
 rimz wait cancel wait-bold-comet
 rimz wait cancel --all
 ```
 
-Exactly one trigger is required when arming: `--in`, `--pid`, or a command after `--`. Bare `rimz wait` lists pending deliveries. Each arm mints a workspace-unique `wait-<adjective>-<noun>` name and prints a receipt followed by the caller's pending rows; `--json` includes `pending` alongside `name`, `trigger`, and `target`.
+The [global flags](../cli.md#global-flags) apply.
+
+## Arm a wait
+
+Give exactly one trigger: `--in`, `--pid`, or a command after `--`. With no trigger and no other arming flag, `rimz wait` lists pending waits instead.
+
+| Flag | Applies to | Meaning |
+| --- | --- | --- |
+| `--in <DURATION>` | timer | Fire once after this delay. Greater than zero and less than `24h`. |
+| `--pid <PID>` | process | Fire once this existing process is gone. `1` to `2147483647`. |
+| `-- <COMMAND>...` | command | Run the command in a detached watcher and fire on its exit. |
+| `--on fail\|success\|any` | command only | Which final outcome delivers. Default `any`. |
+| `--timeout <DURATION>` | process or command | When to send one still-running check-in. Default `30m`, greater than zero and less than `24h`. The command is never killed. |
+| `--json` | all | Print the receipt as JSON. |
+
+Durations take `s`, `m`, `h`, or `d` units (`90s`, `30m`, `1h`).
+
+Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the workspace (a collision appends `-<N>`). The receipt names the wait, its trigger, and its target, then lists every pending row for the caller:
+
+```console
+$ rimz wait -- cargo test
+armed wait-solid-pixel: watch: cargo test → @coder
+NAME              STATE               TARGET  AGE  TRIGGER
+wait-bold-comet   due 14:32           @coder  -    once at 14:32
+wait-solid-pixel  watching pid 48213  @coder  0s   watch: cargo test
+```
+
+The trigger text in the receipt is `in <DURATION>`, `pid <PID>`, or `watch: <command>`. `--json` prints `{"name", "trigger", "target", "pending"}`, where `trigger` carries the same text and `pending` is the array [`rimz wait list --json`](#list-pending-waits) prints.
+
+Arming is refused, exit 1, in these cases:
+
+| Error | Cause |
+| --- | --- |
+| `choose exactly one wait trigger: --in, --pid, or a command after --` | No trigger with `--on` or `--timeout`, or more than one trigger. |
+| `--on requires a command after --` | `--on` with `--in` or `--pid`. |
+| `--timeout requires --pid or a command after --` | `--timeout` with `--in`. |
+| `--in must be greater than zero`, `--timeout must be less than 24h` | A duration out of range. |
+| `cannot watch PID <PID>: permission denied; choose a process owned by your user` | The caller may not signal that process. |
+| `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
+| `the calling agent has not registered a real session yet` | The agent has not reported its provider session yet. |
 
 ## Triggers
 
-Once the caller rests, an armed one-shot wait makes its status `sleeping` rather than `idle` or `success`. The standard agent card counts pending one-shot waits on its `⧉ subagents (N) · ⧖ waits (N)` line while any is armed, even when the agent is working, and lists each wait beneath when the card is expanded; the subagents half is absent until the session has spawned a child. The sidebar shows a static cool-toned `☾` and names the wait, for example `wait timer 30m · in 12m` or `wait shell cargo test`; `--pid` reads `wait pid <PID>`. Running, waiting, failed, paused, and delegation to live children take precedence. A normal message can start another turn immediately without canceling the wait. The same projection covers one-shot loop deliveries, but standing subscriptions listed by `wait list` do not make an agent sleep. A pending one-shot wait also withholds `team.idle`; cancellation is reevaluated at the caller's following lifecycle boundary, not by emitting an idle signal when the row is removed.
+### Timer: `--in`
 
-Below 46 columns the card's waits count shortens to `⧖ N`, sharing its line with `⧉ N` when subagents are present. At 46 columns and wider the full labels return. Clicking the shared count line toggles the entries without focusing the pane. Expanded wait entries name the kind first (`timer`, `pid`, `shell`, or `signal`) and keep their elapsed clocks muted even for long waits.
+A timer fires once. RimZ adds the delay to the current time in the configured timezone and rounds up to the next whole minute, so `rimz wait --in 30m` armed at 14:01:20 fires at 14:32. The list shows it as `once at 14:32` with the state `due 14:32`. Firing needs a clock: the room's sidebar elder, or the [loop timer](./loop.md#timer) when no room is open.
 
-**`--in <DURATION>`** fires once after a positive delay shorter than 24 hours. The delay resolves in the configured timezone and rounds up to the next scheduler minute. It needs the room's elder tick or the [loop timer](./loop.md#timer).
+### Existing process: `--pid`
 
-**`--pid <PID>`** waits for an existing process without needing `tail --pid=<PID> -f /dev/null`. The receipt starts `armed <name>: pid <PID>`; the pending list and sidebar wait entry also read `pid <PID>`. It watches a positive PID using a portable `kill -0` check once per second, so no GNU `tail` is required. Permission to observe the PID is checked before arming; an inaccessible PID is refused, and an already-absent PID completes immediately. This observes PID presence, not the original process identity or its exit status: an unreaped zombie or a reused PID can keep the wait open. `exit 0` means the wait finished, not that the process succeeded; `--on` is therefore command-only. No process output is captured, and canceling this wait stops only the watcher, not the existing process.
+`--pid` replaces `tail --pid=<PID> -f /dev/null` and needs no GNU `tail`. The watcher runs `kill -0 <PID>` once per second and fires when the check fails. An already-absent PID fires at once.
 
-**A command after `--`** runs through `sh -c` at the root of the checkout it was armed from (including linked worktrees) with stdin closed, in a detached watcher that outlives the arming turn. `--on fail|success|any` filters its final outcome, defaulting to `any`: `fail` covers a non-zero exit or a lost watcher, and `success` a zero exit. A filtered outcome records `skipped` and retires the row without a final message.
+It observes whether the PID exists, nothing more:
 
-**`--timeout <DURATION>` is a check-in, not a kill deadline.** It defaults to `30m`, independent of `loop.default-timeout`, and must be positive and shorter than 24 hours. If the command or PID wait is still running then, RimZ sends one notice with the current output file's size and line count, leaves the watcher and row running, and later delivers the exit verdict. The check-in is never filtered by `--on` and does not repeat automatically. `--timeout` requires `--pid` or a command.
+- The process's exit status is unavailable, so the delivered verdict is `exit 0` whenever the watch ends, and `--on` is refused.
+- An unreaped zombie, or another process that reuses the PID, keeps the wait open.
+- No output is captured; the output file stays empty unless the watcher itself fails.
+- Canceling stops the watcher only. The process keeps running.
+
+The receipt, the list, and the sidebar read `pid <PID>`. The delivered message names the watcher's shell loop instead: ``waited on `while kill -0 16776 2>/dev/null; do sleep 1; done` ``.
+
+### Watched command: `--`
+
+The command after `--` runs through `sh -c` with stdin closed, at the root of the checkout it was armed from (a linked worktree's root when armed from one). It runs in a detached watcher in its own process group, so it outlives the turn that armed it. Stdout and stderr go to the [output file](#the-output-file).
+
+`--on` picks which final outcome delivers a message:
+
+| `--on` | Delivers on |
+| --- | --- |
+| `any` (default) | every final outcome |
+| `fail` | a non-zero exit, death by signal, or a lost watcher |
+| `success` | exit 0 |
+
+An outcome `--on` filters out records `skipped` in the loop history and retires the wait without a message.
+
+### Check-ins: `--timeout`
+
+`--timeout` sets when a still-running process or command checks in; it never kills anything. If the watch is still running at that point, RimZ sends one check-in message with the output file's current size and line count, keeps watching, and delivers the final verdict later. The check-in ignores `--on`, happens once per wait, and leaves the wait pending. The default is `30m` and does not follow `loop.default-timeout`.
 
 ## The delivered message
 
-Self waits are durable messages from `@rimz` with `Type: WAIT`, dispatched as steer: they interrupt a working agent rather than waiting for its next `done` boundary. Scheduled and signal [loop deliveries](./loop.md#signals) instead park at that boundary. Delivered waits are hidden from the rendered transcript and retained by [`rimz transcript --json`](./transcript.md).
+A wait arrives as a message from `@rimz` with `Type: WAIT` (see [the message header](./message.md#the-message-header)). It is sent as a steer: it interrupts a working agent at once instead of waiting for the turn to end. Clock and signal deliveries from `rimz loop add --wait` park until the turn ends instead. [`rimz transcript`](./transcript.md) hides wait messages from its rendered view and keeps them in `--json`.
 
-The body names the wait, its elapsed outcome and task name, and the combined output file's path, byte size, and line count. It never inlines command output, and an empty output file is left out of the message. A timer reads `waited 30m [<name>]`. A command check-in has this shape:
+The body never inlines command output. It names what was waited on, the verdict, and the output file with its size and line count (left out when the file is empty), and ends with the wait's name in brackets. A timer is one line:
+
+```text
+waited 30m [wait-bold-comet]
+```
+
+A final command verdict:
+
+```text
+waited on `cargo test`
+exit 1 after 12m · output (48 KB, 1210 lines): /tmp/rimz-waits/wait-solid-pixel.output [wait-solid-pixel]
+```
+
+A check-in adds the two follow-up commands. `Another check-in` repeats the wait's `--timeout` value; running it arms a separate timer that neither restarts nor stops the command:
 
 ```text
 waited on `cargo build`
@@ -44,20 +120,51 @@ Stop it: rimz wait cancel wait-solid-pixel
 Another check-in: rimz wait --in 30m
 ```
 
-The follow-up timer is a separate alarm; it does not restart or stop the watched command. Final verdicts include `exit 0 after 4m`, `exit 1 after 12m`, `killed by signal after 3s`, and `watcher died after 3m; the command may still be running or may have died with it`. Commands longer than 120 characters are middle-truncated in receipts, wait lines, and lists only; stored commands and logs stay complete.
+| Verdict | When |
+| --- | --- |
+| `exit <CODE> after <ELAPSED>` | The command exited, or a `--pid` watch ended (always `exit 0`). |
+| `killed by signal after <ELAPSED>` | The command died from a signal. |
+| `still running after <ELAPSED>` | The check-in. |
+| `watcher died after <ELAPSED>; the command may still be running or may have died with it` | The watcher vanished without reporting. |
+
+A message for an empty output file leaves the `output (...)` segment out, so a silent command ends at its verdict. A command longer than 120 characters is shortened in the middle in the message, receipt, and list; the stored command and the logs keep it whole.
 
 ### The output file
 
-Combined stdout and stderr go to `~/.local/state/rimz/workspaces/<workspace-id>/tmp/rimz-waits/<name>.output` as they arrive. Under sandbox isolation the message shows `/tmp/rimz-waits/<name>.output`; in host mode it shows the host path. The watcher uses that file for its own stderr too, so an early startup failure leaves evidence there. Room teardown removes the file; in a long-lived room, `rimz gc` removes it once its row is gone, no watcher is running, and its last write is over 14 days old. The durable run record retains the last 4 KiB for `rimz loop logs` after the file is gone.
+The watcher writes combined stdout and stderr to `~/.local/state/rimz/workspaces/<workspace-id>/tmp/rimz-waits/<name>.output` as they arrive, along with its own startup errors. The message shows `/tmp/rimz-waits/<name>.output` when the machine's `agents.isolation` is sandbox and the host path otherwise; an agent launched with a different per-launch isolation can see the form that does not match its own view.
 
-## List and cancel
+Closing the room removes the file. In a long-lived room, `rimz gc` removes it once the wait is gone, no watcher runs, and the file has not been written for 14 days. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#fire-stop-list-show-logs-rename).
 
-`rimz wait list` shows pending instance delivery rows in this workspace, including loop and team subscriptions. An identified agent sees only rows targeting its session; a user shell can read every delivery row in the room. The list includes name, state, target, age, and trigger, including signal matches; only watched commands armed from a linked worktree show `· in <dir>` in the trigger. JSON includes the optional home-relative `dir` when set on any delivery row: it records the arming worktree's root, even for timers and signal subscriptions that run no command. Only checks and watched commands execute there. Disabled or paused rows show their held state rather than waiting or due. An active command row reports `watching pid <PID>` or `watcher lost`.
+## While a wait is pending
 
-`rimz wait cancel <name>` cancels a pending row targeting the caller; `rimz wait cancel --all` cancels every such row, including loop and team deliveries. A name and `--all` are mutually exclusive. Cancellation removes rows first and sends SIGTERM to each watcher's process group, stopping its command too. Every cancel prints the canceled names followed by the remaining pending rows, including an explicit empty state. JSON returns `{"canceled":[…],"pending":[…]}`.
+An agent at rest with a pending one-shot wait shows the status `sleeping` (`☾` in the sidebar) instead of `idle` or `success`; the [status table](./agents.md#list) gives the precedence. Timers, PID waits, watched commands, and one-shot or deadline signal deliveries count. Standing signal subscriptions do not.
+
+A sleeping agent still takes messages: a normal message starts a turn and leaves the wait armed. A team member with a pending wait does not emit `team.idle`. The sidebar card counts pending waits as `⧖ waits (N)` and lists each one when expanded; [the card](../../interface/sidebar.md#the-card) shows how.
+
+## List pending waits
+
+`rimz wait list` (alias `ls`, or bare `rimz wait`) lists pending delivery rows for the current project. From an agent it shows rows targeting that agent's session, including `rimz loop add --wait` deliveries and team subscriptions. From a user shell it shows every delivery row in the project, read-only. With nothing pending it prints `no pending waits`.
+
+| Column | Values |
+| --- | --- |
+| `NAME` | The wait or task name. |
+| `STATE` | `due HH:MM` (or `due now`) for a clock row; `waiting`, or `waiting · <N> left` with a deadline, for a signal row; `watching pid <PID>` or `watcher lost` for a command or PID row; `disabled` or `paused · <time>` for a held row. |
+| `TARGET` | The target agent's handle. |
+| `AGE` | Time since arming for signal rows with an arm stamp, time since the watcher started for command rows, otherwise `-`. |
+| `TRIGGER` | `once at HH:MM` for a timer, `pid <PID>`, `watch: <command>`, a loop schedule such as `every day at 09:00`, or `on <selector> [k=v]`. A PID or command row armed from a linked worktree adds `· in <dir>`. |
+
+`--json` prints an array of `{"name", "trigger", "dir", "target", "age", "state"}`. `dir` appears only when the row recorded a linked worktree, as a home-relative path; timers and signal rows record it too, though only commands run there.
+
+## Cancel a wait
+
+`rimz wait cancel <name>` cancels one pending row targeting the caller, and `rimz wait cancel --all` cancels all of them, loop and team deliveries included. Give a name or `--all`, not both. Cancel refuses a user shell (`canceling a wait requires an agent RimZ can identify; run this command from an agent pane`) and a name not in the caller's list (``no pending wait named `<name>`; see `rimz wait list` ``).
+
+Cancel removes each row, then sends SIGTERM to its watcher's process group, which stops a watched command with it. It prints `canceled <name>, ...` and the remaining pending rows, or only `no pending waits` when `--all` found nothing. `--json` prints `{"canceled": [...], "pending": [...]}`.
 
 ## What a wait writes on your machine
 
-Every wait is an instance row in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`, never `loop.toml`. The watcher runs in its own process group and holds `loop-watch-<name>.lock` in workspace runtime storage. The row retires after the timer or final command outcome, cancellation, or session retirement; a check-in alone does not consume it.
+A wait is one row in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`; it never touches `loop.toml` or project config. A command or PID watcher runs in its own process group and holds `loop-watch-<name>.lock` in the workspace runtime directory.
 
-Each fire records durable loop history, so `rimz loop show <name>` and `rimz loop logs <name>` remain useful after retirement. If the watcher dies, the elder detects its missing lock after a 30-second grace and delivers the lost-watcher verdict. Session end, loss, and explicit stop retire pinned deliveries and stop watchers; `rimz gc` is the backstop.
+The row retires when the timer fires, the command or PID watch reaches its final outcome, the wait is canceled, or the target session ends, is lost, or is stopped. A check-in does not retire it. If a watcher dies without reporting, the room's elder notices the missing lock after a 30-second grace and delivers the `watcher died` verdict. `rimz gc` removes rows left behind.
+
+Every fire writes loop history, so `rimz loop show <name>` and `rimz loop logs <name>` keep working after the wait retires. The mechanics are in [watched commands](../../internals/harness/loops.md#watched-commands) and [waits](../../internals/harness/loops.md#waits).
