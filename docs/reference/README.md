@@ -12,7 +12,7 @@ These pages answer a specific question about the shipped product: what a command
 | --- | --- |
 | [getting-started.md](./cli/getting-started.md) | Opening, reaching, and diagnosing a local room: `rimz`, `start`, `attach`, `sessions`, `list`, `setup`, and `doctor`. |
 | [remote.md](./cli/remote.md) | `rimz remote`: attaching to a room on another host over SSH, aliases, remote setup, and dev-server forwards. |
-| [web.md](./cli/web.md) | `rimz web`: opening any room in the browser through the machine-wide ttyd daemon. |
+| [web.md](./cli/web.md) | `rimz web`: opening a room in the browser, read-only broadcasts, the ttyd daemons, the machine credential, and the JSON payloads. |
 | [agents.md](./cli/agents.md) | `rimz agents`: cards, launching panes and teams, supervised `-p` runs, focus, stop, resume, budgets, and the address grammar every agent-facing command shares. |
 | [subagents.md](./cli/subagents.md) | `rimz subagents`: delegating one bounded prompt to a supervised child, fanout, waits, and the agent-only launch rule. |
 | [teams.md](./cli/teams.md) | `rimz teams`: listing, inspecting, launching, resuming, and driving named teams, stage flips, and installing team bundles. |

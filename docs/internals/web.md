@@ -101,7 +101,7 @@ A live record is reused only when every desired value matches: the listener, the
 | --- | --- | --- |
 | `rimz start` with `[web] enabled = true` | Ensures it after the room is ready. Any failure, including a missing or old ttyd, prints `rimz: browser daemon was not started: …` and the room starts anyway. | Untouched. |
 | `rimz web open` | Preflights ttyd before birthing the room, waits up to 5 seconds for the session to be addressable, then ensures the daemon. | Untouched. |
-| `rimz web open --no-start` | Requires a live record and the credential, and fails with `TtydOffline` otherwise. It checks neither the ttyd version nor config drift. | Untouched. |
+| `rimz web open --no-start` | Requires a live record and the credential, and fails with `TtydOffline` otherwise. It skips the config-drift comparison; the ttyd version is still checked before the room is resolved. | Untouched. |
 | `rimz web url` | Reads the record and credential; changes nothing beyond stale-record cleanup. | Untouched. |
 | `rimz web start` | Ensures it. | Untouched. |
 | `rimz web restart` | Always starts a fresh process, stopping the live one first. | Restarts it when the allowlist is non-empty, otherwise stops it. |
