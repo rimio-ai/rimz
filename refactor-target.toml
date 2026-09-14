@@ -79,7 +79,7 @@ upward-dependencies = ["address"]
 # Store's fold and follower pass the prior record's turn ids to `lifecycle::step`
 # and advance them through the one shared `lifecycle::turn_ids_after`.
 # Background shells and their report are folded by store and listed by the renderer.
-surface-budget = 990
+surface-budget = 973
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -736,11 +736,6 @@ reason = "The callees live once in AgentSpec, payload, SessionSource, and Compac
 kind = "shape"
 key = "AnswerPlanErr::Invalid+AnswerStep::Key+Vec::new+std::iter::repeat_n+zip"
 reason = "Question extraction is shared in agents::question; the planners share only a small validation shell and otherwise implement distinct provider TUI state machines (pass 2)."
-
-[[verdict]]
-kind = "shape"
-key = "PendingWrite::optional+report_files+settings_json::commit_pair+settings_json::read_optional_bytes+settings_json::render_json"
-reason = "settings_json::commit_pair owns the shared transaction; Copilot and Cursor retain different fix-pinned rollback policies (pass 2)."
 
 [[verdict]]
 kind = "guard"
@@ -2561,3 +2556,78 @@ reason = "Return alias of pub supervise::run, which the CLI binary calls (pass 2
 kind = "pass-through"
 key = "sidebar_pane::pixel::tty::drop"
 reason = "Drop forwards to BarrierSource::restore, a trait method the pacer also calls directly (pass 22a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::pricing::TokenSplit"
+reason = "Named by the pub CachedEntry::new in agents::spending::cache, so a narrower struct is a private-interface lint; its builders narrow to agents (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::pricing::from_base_rates"
+reason = "pub(super) for the codex spend test's rate assertion; private would move that test out of a held adapter (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::pricing::from_litellm_json"
+reason = "Binary-crate statusline tests build price books from fixture JSON (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::pricing::source::SourceErr"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::pricing::source::Result"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::pricing::source::RefreshReport"
+reason = "Returned by pub refresh; the binary's pricing-refresh command reads its three counts (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::lifecycle::LifecycleState"
+reason = "The pub Transition::next field and AgentState::lifecycle return it, and the binary's hook observer reads transition.next.status (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::lifecycle::tag"
+reason = "The binary's hook reactors and active-time accounting read the signal tag (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::lifecycle::event::LIFECYCLE_EVENT_VERSION"
+reason = "The binary's events stream test builds a LifecycleEvent at the current wire version (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::attribution::MessageCounts"
+reason = "Reached from the binary: the attribution command's tests build it as a struct literal (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::attribution::SubagentStat"
+reason = "Reached from the binary: the attribution command's tests build it as a struct literal (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::attribution::Presence"
+reason = "Reached from the binary: the attribution command's tests build it as a struct literal (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::attribution::TeamRef"
+reason = "Reached from the binary: the attribution command's tests build it as a struct literal (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::attribution::LaneLifetime"
+reason = "Reached from the binary: the attribution command's tests construct LaneLifetime::Since (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::attribution::new"
+reason = "LaneLifetimes::new is reached from the binary: the attribution command's tests build lifetimes directly (pass 22c)."
