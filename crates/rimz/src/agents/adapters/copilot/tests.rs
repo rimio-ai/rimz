@@ -535,7 +535,7 @@ fn malformed_payloads_degrade_without_inventing_lifecycle_data() {
     }), @r###"
     {
       "class": "Lifecycle",
-      "observation": "TurnStarted"
+      "observation": "TurnStarted { turn_id: None }"
     }
     "###);
 }
