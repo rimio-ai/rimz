@@ -347,7 +347,7 @@ Every other agent is **experimental**: wired and tested against its documented s
 | OpenCode    | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
 | Antigravity | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ●    |  ◐  |     ◐     |
 | Copilot     | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ◐     |
-| Droid       | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
+| Droid       | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ✗    |  ●  |     ✗     |
 | Cursor      | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ◐  |     ◐     |
 | Amp         | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ✗     |
 | Kiro        | ⚪ Experimental  |   ◐   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
