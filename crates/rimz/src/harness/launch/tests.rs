@@ -531,7 +531,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         let channel = crate::agents::find_definition(kind)
             .and_then(|adapter| adapter.append_system_text_channel())
             .expect("system text matcher");
-        let matcher = crate::agents::PresetArgMatcher::try_from(&channel).expect("argv channel");
+        let matcher = super::argv_matcher(&channel).expect("argv channel");
         let occurrences = matcher.occurrences(&process.provider_argv);
         assert_eq!(
             occurrences.len(),
@@ -571,7 +571,7 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             let channel = crate::agents::find_definition(kind)
                 .and_then(|adapter| adapter.append_system_text_channel())
                 .expect("system text channel");
-            let occurrences = crate::agents::PresetArgMatcher::try_from(&channel)
+            let occurrences = super::argv_matcher(&channel)
                 .expect("argv channel")
                 .occurrences(&process.provider_argv);
             assert_eq!(occurrences.len(), 1);
@@ -617,7 +617,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 let channel = crate::agents::find_definition(kind)
                     .and_then(|adapter| adapter.append_system_text_channel())
                     .expect("system text channel");
-                let occurrences = crate::agents::PresetArgMatcher::try_from(&channel)
+                let occurrences = super::argv_matcher(&channel)
                     .expect("argv channel")
                     .occurrences(&process.provider_argv);
                 assert_eq!(occurrences.len(), 1);

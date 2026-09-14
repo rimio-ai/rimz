@@ -683,12 +683,10 @@ fn compile_agent_process_with_extra_env(
     }
     let reminder = crate::harness::launch_reminders::render(request, reminders, cwd);
     let channel = adapter.append_system_text_channel();
-    if let Some(matcher) = channel
-        .as_ref()
-        .and_then(|channel| crate::agents::PresetArgMatcher::try_from(channel).ok())
+    if let Some(channel) = &channel
         && let Some(text) = &reminder
     {
-        merge_appended_system_text(action.extra_args_mut(), &matcher, text);
+        merge_appended_system_text(action.extra_args_mut(), channel, text);
     }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
@@ -720,35 +718,51 @@ fn compile_agent_process_with_extra_env(
     })
 }
 
-fn merge_appended_system_text(
-    extra_args: &mut Vec<String>,
-    matcher: &crate::agents::PresetArgMatcher,
-    text: &str,
-) {
+/// The argv shape a channel occupies; the extension channel has none.
+fn argv_matcher(channel: &SystemTextChannel) -> Option<crate::agents::PresetArgMatcher> {
     use crate::agents::PresetArgMatcher;
 
+    match channel {
+        SystemTextChannel::TextFlag { flags } => Some(PresetArgMatcher::TextFlag(flags.clone())),
+        SystemTextChannel::ConfigKey { flags, key } => Some(PresetArgMatcher::ConfigKey {
+            flags: flags.clone(),
+            key: key.clone(),
+        }),
+        SystemTextChannel::ExtensionEnv => None,
+    }
+}
+
+fn merge_appended_system_text(
+    extra_args: &mut Vec<String>,
+    channel: &SystemTextChannel,
+    text: &str,
+) {
+    let Some(matcher) = argv_matcher(channel) else {
+        return;
+    };
     let Some(existing) = matcher.occurrences(extra_args).into_iter().last() else {
-        if let Some((flag, value)) = render_system_text_channel(matcher, text) {
+        if let Some((flag, value)) = render_system_text_channel(channel, text) {
             extra_args.extend([flag, value]);
         }
         return;
     };
 
-    let existing_text = match matcher {
-        PresetArgMatcher::ConfigKey { .. } => parse_toml_string_or_raw(&existing.value),
-        PresetArgMatcher::TextFlag(_)
-        | PresetArgMatcher::Flag(_)
-        | PresetArgMatcher::EnvPathVar(_) => existing.value.clone(),
+    let config_key = match channel {
+        SystemTextChannel::ConfigKey { key, .. } => Some(key),
+        SystemTextChannel::TextFlag { .. } | SystemTextChannel::ExtensionEnv => None,
+    };
+    let existing_text = if config_key.is_some() {
+        parse_toml_string_or_raw(&existing.value)
+    } else {
+        existing.value.clone()
     };
     let merged = format!("{existing_text}\n\n{text}");
-    let (single_token_value, separate_value) = match matcher {
-        PresetArgMatcher::ConfigKey { key, .. } => {
+    let (single_token_value, separate_value) = match config_key {
+        Some(key) => {
             let quoted = toml::Value::String(merged).to_string();
             (quoted.clone(), format!("{key}={quoted}"))
         }
-        PresetArgMatcher::TextFlag(_)
-        | PresetArgMatcher::Flag(_)
-        | PresetArgMatcher::EnvPathVar(_) => (merged.clone(), merged),
+        None => (merged.clone(), merged),
     };
     if existing.argv_range.len() == 1 {
         let arg = &mut extra_args[existing.argv_range.start];
@@ -759,19 +773,14 @@ fn merge_appended_system_text(
     }
 }
 
-fn render_system_text_channel(
-    matcher: &crate::agents::PresetArgMatcher,
-    text: &str,
-) -> Option<(String, String)> {
-    use crate::agents::PresetArgMatcher;
-
-    match matcher {
-        PresetArgMatcher::TextFlag(flags) => Some((flags.first()?.clone(), text.to_owned())),
-        PresetArgMatcher::ConfigKey { flags, key } => Some((
+fn render_system_text_channel(channel: &SystemTextChannel, text: &str) -> Option<(String, String)> {
+    match channel {
+        SystemTextChannel::TextFlag { flags } => Some((flags.first()?.clone(), text.to_owned())),
+        SystemTextChannel::ConfigKey { flags, key } => Some((
             flags.first()?.clone(),
             format!("{key}={}", toml::Value::String(text.to_owned())),
         )),
-        PresetArgMatcher::Flag(_) | PresetArgMatcher::EnvPathVar(_) => None,
+        SystemTextChannel::ExtensionEnv => None,
     }
 }
 
