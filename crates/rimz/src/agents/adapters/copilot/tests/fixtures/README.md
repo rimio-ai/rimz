@@ -10,6 +10,8 @@ Captured `github.copilot.cost` was a finite per-chat `0.0`, while `invoke_agent`
 
 `statusline-modern.json` preserves the snake-case session payload captured from Copilot CLI 1.0.71 after an auto-model turn. It includes the selected live denominator and fill, current-call composition, cumulative session categories, duration and line counters, AI credits, and remote state needed to pin both mapped and deliberately ignored fields. Names, paths, identifiers, counts, model labels, and code-change totals are sanitized while the captured types and field relationships remain intact.
 
+`subagents-agent-id.jsonl` preserves the parent-side records of one delegated `explore` child from a Copilot CLI 1.0.83 capture. From 1.0.83 the child's hook `sessionId` is a fresh UUID that appears only as the top-level `agentId` of `subagent.started`, `subagent.configured`, the child's own tool records, and `subagent.completed`; the task `toolCallId` no longer equals it. `subagents.jsonl` is the 1.0.71 shape, where the same top-level `agentId` equals the `toolCallId`. Prompts, paths, and identifiers are synthetic replacements.
+
 `shutdown-history.jsonl` preserves a 1.0.71 `session.start` plus three cumulative `session.shutdown` records from one resumed session. The event shapes, timestamps, model, counters, and category relationships are captured; the cwd, session ID, and record IDs are synthetic replacements.
 
 Prompts, replies, paths, repositories, session/request/interaction IDs, encrypted fields, hook bodies, tool definitions, and provider-generated identifiers are replaced. The malformed, unknown, and torn records are synthetic additions after the captured structures.

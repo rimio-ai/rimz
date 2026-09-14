@@ -1,4 +1,8 @@
 //! Parent-transcript fold for Copilot child hook sessions.
+//!
+//! A child's hook `sessionId` is the top-level `agentId` of the parent's
+//! `subagent.started` record. Copilot CLI 1.0.83 mints a fresh UUID for it;
+//! 1.0.71 set it to the task `toolCallId`, which stays the fallback key.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,7 +18,15 @@ use crate::agents::transcript_fs::{
 #[serde(tag = "type")]
 enum CorrelationRecord {
     #[serde(rename = "subagent.started")]
-    SubagentStarted { data: SubagentStartedData },
+    SubagentStarted {
+        data: SubagentStartedData,
+        #[serde(
+            default,
+            rename = "agentId",
+            deserialize_with = "deserialize_optional_string_lossy"
+        )]
+        agent_id: Option<String>,
+    },
     #[serde(rename = "subagent.completed")]
     SubagentCompleted { data: SubagentCompletedData },
     #[serde(rename = "tool.execution_start")]
@@ -68,6 +80,7 @@ struct TaskArguments {
 
 #[derive(Debug, Default)]
 struct FoldedChild {
+    agent_id: Option<String>,
     execution: Option<ToolExecutionStartData>,
     started: Option<SubagentStartedData>,
     completed: Option<SubagentCompletedData>,
@@ -111,9 +124,10 @@ fn fold(parent_transcript: &Path, parent_id: &str) -> Option<Vec<Correlated>> {
             continue;
         };
         match record {
-            CorrelationRecord::SubagentStarted { data } => {
-                let child_id = data.tool_call_id.clone();
-                children.entry(child_id).or_default().started = Some(data);
+            CorrelationRecord::SubagentStarted { data, agent_id } => {
+                let child = children.entry(data.tool_call_id.clone()).or_default();
+                child.agent_id = normalized(agent_id.as_deref());
+                child.started = Some(data);
             }
             CorrelationRecord::SubagentCompleted { data } => {
                 let child_id = data.tool_call_id.clone();
@@ -129,15 +143,15 @@ fn fold(parent_transcript: &Path, parent_id: &str) -> Option<Vec<Correlated>> {
     Some(
         children
             .into_iter()
-            .filter_map(|(child_id, child)| correlated(child_id, child))
+            .filter_map(|(tool_call_id, child)| correlated(tool_call_id, child))
             .collect(),
     )
 }
 
-fn correlated(child_id: String, child: FoldedChild) -> Option<Correlated> {
+fn correlated(tool_call_id: String, child: FoldedChild) -> Option<Correlated> {
     let started = child.started?;
     let execution = child.execution.unwrap_or(ToolExecutionStartData {
-        tool_call_id: child_id.clone(),
+        tool_call_id: tool_call_id.clone(),
         tool_name: "task".to_owned(),
         arguments: TaskArguments::default(),
         model: None,
@@ -149,7 +163,7 @@ fn correlated(child_id: String, child: FoldedChild) -> Option<Correlated> {
         .or_else(|| normalized(started.model.as_deref()))
         .or_else(|| normalized(execution.model.as_deref()));
     Some(Correlated {
-        child_id,
+        child_id: child.agent_id.unwrap_or(tool_call_id),
         agent_name: normalized(execution.arguments.name.as_deref())
             .or_else(|| normalized(started.agent_name.as_deref())),
         task: normalized(execution.arguments.description.as_deref())
@@ -197,6 +211,41 @@ mod tests {
                 completed: true,
             })
         );
+    }
+
+    #[test]
+    fn correlates_uuid_child_ids_through_the_start_record_agent_id() {
+        let (_dir, path) = transcript(include_str!("tests/fixtures/subagents-agent-id.jsonl"));
+        let child_id = "6f1c2e0a-1111-4a5b-9c3d-000000000001";
+
+        assert_eq!(correlate(&path, "parent-session", "call_alpha"), None);
+        assert_eq!(
+            correlate(&path, "parent-session", child_id),
+            Some(Correlated {
+                child_id: child_id.to_owned(),
+                agent_name: Some("readme-first-line".to_owned()),
+                task: Some("Read README first line".to_owned()),
+                prompt: Some("View README.md and report its first line".to_owned()),
+                model: Some("gpt-5.6-luna".to_owned()),
+                total_tokens: Some(11_444),
+                completed: true,
+            })
+        );
+        assert_eq!(
+            completed(&path, "parent-session")
+                .into_iter()
+                .map(|child| child.child_id)
+                .collect::<Vec<_>>(),
+            [child_id]
+        );
+    }
+
+    #[test]
+    fn start_records_without_agent_id_fall_back_to_the_tool_call_id() {
+        let without_agent_id = FIXTURE.replace(r#","agentId":"toolu_alpha""#, "");
+        let (_dir, path) = transcript(&without_agent_id);
+
+        assert!(correlate(&path, "parent-session", "toolu_alpha").is_some());
     }
 
     #[test]

@@ -889,6 +889,101 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
 }
 
 #[test]
+fn copilot_uuid_child_hooks_join_through_the_start_record_agent_id() {
+    let (_store_dir, store) = hooks_test_store();
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let parent_dir = transcript_dir.path().join("parent-session");
+    std::fs::create_dir(&parent_dir).unwrap();
+    let transcript = parent_dir.join("events.jsonl");
+    std::fs::write(
+        &transcript,
+        include_str!("../../agents/adapters/copilot/tests/fixtures/subagents-agent-id.jsonl"),
+    )
+    .unwrap();
+    let child_id = "6f1c2e0a-1111-4a5b-9c3d-000000000001";
+    let parent = |event: &str, extra: serde_json::Value| {
+        let mut payload = serde_json::json!({
+            "sessionId":"parent-session",
+            "cwd":"/tmp/hooks-test",
+            "transcriptPath":transcript,
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        feed_copilot(&store, event, payload);
+    };
+    let child = |event: &str, extra: serde_json::Value| {
+        let mut payload = serde_json::json!({
+            "sessionId":child_id,
+            "cwd":"/tmp/hooks-test",
+            "transcriptPath":transcript,
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        feed_copilot(&store, event, payload);
+    };
+    let state = |agent_id: &str| {
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|state| state.agent_id == agent_id)
+    };
+
+    parent("sessionStart", serde_json::json!({"source":"new"}));
+    parent(
+        "userPromptSubmitted",
+        serde_json::json!({"prompt":"delegate"}),
+    );
+    child(
+        "userPromptSubmitted",
+        serde_json::json!({"prompt":"View README.md and report its first line"}),
+    );
+    parent(
+        "permissionRequest",
+        serde_json::json!({"toolName":"bash","toolInput":{"command":"ls"}}),
+    );
+    assert_eq!(
+        state("parent-session").unwrap().status,
+        rimz::agents::AgentStatus::Waiting
+    );
+    child(
+        "postToolUse",
+        serde_json::json!({"toolName":"bash","toolArgs":"{}"}),
+    );
+    // The child's hooks carry its own session id, so only the parent's next
+    // hook (the completed task call below) clears the parent's permission wait.
+    assert_eq!(
+        state("parent-session").unwrap().status,
+        rimz::agents::AgentStatus::Waiting
+    );
+    child("agentStop", serde_json::json!({"stopReason":"end_turn"}));
+
+    let joined = state(child_id).expect("the UUID child joins its parent");
+    assert_eq!(joined.parent_agent_id.as_deref(), Some("parent-session"));
+    assert_eq!(joined.name.as_deref(), Some("readme-first-line"));
+    assert_eq!(joined.model.as_deref(), Some("gpt-5.6-luna"));
+    assert_eq!(joined.status, rimz::agents::AgentStatus::Success);
+    assert!(
+        state("call_alpha").is_none(),
+        "the task call id must not surface as a phantom child"
+    );
+
+    parent("postToolUse", serde_json::json!({"toolName":"task"}));
+    let reconciled = state(child_id).unwrap();
+    assert_eq!(reconciled.usage.total_tokens, Some(11_444));
+    assert!(state("call_alpha").is_none());
+    assert_eq!(
+        state("parent-session").unwrap().status,
+        rimz::agents::AgentStatus::Running
+    );
+}
+
+#[test]
 fn pi_bridge_adopts_an_existing_rich_root_with_the_live_signal() {
     let (_dir, store) = hooks_test_store();
     let adapter = hook_definition(Box::leak(Box::new(PiAdoptionTestAdapter {
