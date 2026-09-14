@@ -48,7 +48,7 @@ Already made the tree with `git worktree add`? If it is in the configured worktr
 
 ### From a pull request
 
-`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree. A PR URL must name the same host and repository as `origin`. On GitHub, Gitea, and Forgejo, the authenticated forge CLI identifies whether the head belongs to the origin repository or a fork: same-repository branches track `origin`, while fork branches pull from and push to the fork so a plain `git push` updates the pull request. Without a supported forge CLI, RimZ creates a review-only local branch at the exact PR head and leaves pushes unconfigured.
+`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree. A PR URL must name the same host and repository as `origin`. On GitHub, Gitea, and Forgejo, the authenticated forge CLI identifies whether the head belongs to the origin repository or a fork: same-repository branches track `origin`, while fork branches pull from and push to the fork, and the create report prints the push command when the local branch name differs from the PR's ([pull request checkouts](../reference/cli/worktree.md#check-out-a-pull-request)). Without a supported forge CLI, RimZ creates a review-only local branch at the exact PR head and leaves pushes unconfigured.
 
 ```sh
 rimz agents claude --from-pr 42               # review PR 42 in its own tree
