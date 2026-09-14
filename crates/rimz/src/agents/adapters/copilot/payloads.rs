@@ -85,20 +85,22 @@ impl CopilotHookPayload {
     }
 }
 
-impl NormalizedToolCall<'_> {
+impl<'a> NormalizedToolCalls<'a> {
     /// Key one shell call across hooks that carry no call id. A 1.0.83
     /// `permissionRequest` narrows `toolInput` to `{command}` while the same
     /// call's `postToolUse.toolArgs` adds `description`, `initial_wait`, and
-    /// `mode`, so the key digests only the tool name and command text.
+    /// `mode`, so the key digests only the tool name and command text. A
+    /// batch stays keyless: one key cannot name every call it completes.
     pub(super) fn command_key(&self) -> Option<String> {
-        let name = self.name.filter(|name| !name.is_empty())?;
-        let command = self.args?.get("command")?.as_str()?;
+        let [call] = self.calls.as_slice() else {
+            return None;
+        };
+        let name = call.name.filter(|name| !name.is_empty())?;
+        let command = call.args?.get("command")?.as_str()?;
         let digest = Sha256::digest(format!("{name}\0{command}").as_bytes());
         Some(format!("{name}:{}", hex::encode(&digest[..8])))
     }
-}
 
-impl<'a> NormalizedToolCalls<'a> {
     pub(super) fn selected(&self) -> Option<NormalizedToolCall<'a>> {
         self.calls
             .iter()
