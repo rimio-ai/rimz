@@ -1,6 +1,6 @@
 # The agent harness
 
-> The entry point for contributors working on the harness. This page maps the whole area, then owns the launch core: spawning a fleet, addressing it, resuming it, and reclaiming what it leaves behind. The other seven pages in this folder each go deep on one job: supervised runs, subagents, loops, budgets, messaging, worktrees, and trust.
+> The entry point for contributors working on the harness. This page maps the whole area, then owns the launch core: spawning a fleet, addressing it, resuming it, and reclaiming what it leaves behind. The other nine pages in this folder each go deep on one job: supervised runs, subagents, loops, budgets, messaging, the transcript, worktrees, teams, and trust.
 
 ## What the harness does
 

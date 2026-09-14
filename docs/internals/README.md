@@ -1,66 +1,92 @@
 # RimZ internals
 
-How RimZ works under the hood, one subsystem per document. These pages are for contributors who read the code; they point into `crates/rimz/src/` rather than paraphrasing it. If you are here to use RimZ, start with the [user documentation](../README.md) instead.
+These pages document how RimZ works, one subsystem at a time, for contributors who read the code. Each page points into `crates/rimz/src/` by path and symbol, and each module's `//!` header stays the authority for its own file. To use RimZ rather than change it, start at the [user documentation](../README.md).
 
-Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem, the design pillars, and the invariants; [ARCHITECTURE.md](../../ARCHITECTURE.md) is the runtime shape and the on-disk state. Each subsystem below carries its own `AGENTS.md` contract in the matching source tree.
+Read the shape before a subsystem. [DESIGN.md](../../DESIGN.md) states the attention problem, the design pillars, and the invariants; [ARCHITECTURE.md](../../ARCHITECTURE.md) gives the runtime shape and the on-disk state. When you start from a source tree instead of a topic, [from a source tree to its page](#from-a-source-tree-to-its-page) names the page that documents it.
 
 ## The agent layer
 
-`agents/` models a running agent and prices it.
+`agents/` turns each coding agent's native events into one provider-neutral model, and prices and accounts for what the agent spends.
 
 | Page | What it owns |
 | --- | --- |
-| [model.md](./agents/model.md) | The agent model: status and phase, the rollup's field lifetimes, the state machine, the displayed status, activity clocks, and enrichment. |
-| [instances.md](./agents/instances.md) | Agent instances: binding sessions to panes, local session observations, same-pane ownership, launch identity across conversations, and session death. |
-| [attribution.md](./agents/attribution.md) | Effort attribution: lane and lifetime admission, the seat fold, figure sources, and membership. |
-| [adapter.md](./agents/adapter.md) | The adapter layer: the registry, the capability traits, the hook path, install, context sources, and declared coverage. |
-| [plugin.md](./agents/plugin.md) | Process-plugin loading, the derived spec and coverage, canonical hook ingest, probe execution, and invalid-manifest policy. |
-| [adapter_claude.md](./agents/adapter_claude.md), [adapter_codex.md](./agents/adapter_codex.md), [adapter_amp.md](./agents/adapter_amp.md), [adapter_copilot.md](./agents/adapter_copilot.md), [adapter_kimi.md](./agents/adapter_kimi.md), [adapter_pi.md](./agents/adapter_pi.md), [adapter_opencode.md](./agents/adapter_opencode.md), [adapter_antigravity.md](./agents/adapter_antigravity.md), [adapter_cursor.md](./agents/adapter_cursor.md), [adapter_droid.md](./agents/adapter_droid.md), [adapter_kiro.md](./agents/adapter_kiro.md), [adapter_qwen.md](./agents/adapter_qwen.md), [adapter_grok.md](./agents/adapter_grok.md) | Per-kind adapter mappings: how each native event, transcript, and account surface folds onto RimZ's types. |
-| [providers.md](./agents/providers.md) | Provider accounts and balances: the account model, the out-of-band probe, panel aggregation, window fusion and its caches, usage refresh, parked turns, auto-redeem, auto-continue, and daily-cap display. |
-| [spending.md](./agents/spending.md) | Spend and token pricing: live cost coverage, the full-history spending walk, its incremental cache and service, and the price table. |
+| [model.md](./agents/model.md) | The agent model: status and phase, the rollup and its field lifetimes, the state machine, publishing transitions, the displayed status, activity clocks, and enrichment. |
+| [instances.md](./agents/instances.md) | Agent instances: recognizing a hosted CLI, binding a session to a pane, same-pane ownership, launch identity across conversations, instance exit, and session death. |
+| [attribution.md](./agents/attribution.md) | Effort attribution: record selection by lane and lifetime, the seat fold, where each figure comes from, and membership. |
+| [adapter.md](./agents/adapter.md) | The adapter layer: the registry, the spec and the capability traits, the hook path, hook install, context sources, declared coverage, and adding an agent. |
+| [plugin.md](./agents/plugin.md) | Process plugins: loading, the derived spec, canonical hook ingest, probes, invalid-manifest handling at each entry point, and the authoring commands. |
+| [adapter_claude.md](./agents/adapter_claude.md), [adapter_codex.md](./agents/adapter_codex.md), [adapter_amp.md](./agents/adapter_amp.md), [adapter_copilot.md](./agents/adapter_copilot.md), [adapter_kimi.md](./agents/adapter_kimi.md), [adapter_pi.md](./agents/adapter_pi.md), [adapter_opencode.md](./agents/adapter_opencode.md), [adapter_antigravity.md](./agents/adapter_antigravity.md), [adapter_cursor.md](./agents/adapter_cursor.md), [adapter_droid.md](./agents/adapter_droid.md), [adapter_kiro.md](./agents/adapter_kiro.md), [adapter_qwen.md](./agents/adapter_qwen.md), [adapter_grok.md](./agents/adapter_grok.md) | One page per built-in adapter: how that agent's hooks, launch and resume, transcript, account, and cost map onto RimZ's types. |
+| [providers.md](./agents/providers.md) | Provider accounts and balances: the account model and logins, the out-of-band probe, producer aggregation, window fusion and its caches, refresh cadences, spent windows and parked turns, auto-redeem, auto-continue, and daily dollar caps. |
+| [spending.md](./agents/spending.md) | Spend and token pricing: live cost coverage, the cost-history walk, its incremental cache, one walk per namespace, and the price table. |
 
 ## The harness
 
-The harness runs the fleet: spawn, address, message, and reclaim. It is a product area rather than a single module, spanning `harness/`, `address.rs`, `message/`, `worktree.rs`, and `trust.rs`. Start at [fleet.md](./harness/fleet.md), which maps the area and names the source tree behind each page.
+The harness spawns the fleet, addresses it, drives it, and reclaims what it leaves behind. It is a product area rather than one module: most of its code is in `harness/`, and the rest is in `message/`, the top-level `address.rs`, `transcript.rs`, `worktree.rs`, and `trust.rs`, and the CLI verbs that drive them. Start at [fleet.md](./harness/fleet.md), whose code table names the source files behind each page.
 
 | Page | What it owns |
 | --- | --- |
-| [fleet.md](./harness/fleet.md) | The area map and the launch core: the rules that shape the design, the state-machine index, the layout IR, the exec wrapper, the address grammar, resume planning, and pane reclamation. |
+| [fleet.md](./harness/fleet.md) | The area map and the launch core: the rules that shape the design, the vocabulary, one launch end to end, the layout IR, the exec wrapper, the address grammar, resume and rebirth, and pane reclamation. |
 | [scripting.md](./harness/scripting.md) | Supervised `-p` runs: the durable run record and exit codes, the completion fold, the wake socket and deadlines, verification and retry, the output projections, background joins, and run-pane reclamation. |
-| [subagents.md](./harness/subagents.md) | Agent-launched children: agent-only launch, fanout, wait, and stop; the shell-readable list and profile catalog; direct-parent stamps; and the boundary with provider-native subagents. |
-| [loops.md](./harness/loops.md) | Loop scheduling: the task catalog and its sources, elder firing, the fire gate ladder, run history, signals, waits, and the assist log. |
-| [budget.md](./harness/budget.md) | Dollar caps: the scopes, the ledgers on disk, the verdict, the human waiver, the pane interrupt, and the fail-fast gate. |
-| [messaging.md](./harness/messaging.md) | Message routing: send modes, durable records, the delivery pipeline, the pane write, compaction commands, reply waits, and the channel lanes. |
-| [transcript.md](./harness/transcript.md) | The durable conversation log: entry kinds, causality, the `rimz transcript` projection, and the ask lifecycle behind `rimz asks` and `rimz answer`. |
-| [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: the ownership marker, creation and seeding, the landed-content proof, landing on main, removal protection, and every reclaiming caller. |
-| [teams.md](./harness/teams.md) | Team memory: the scratch-file scan, the `blackboard.md` stage board, stage flips and the hand-off check, and registration re-wakes. |
-| [trust.md](./harness/trust.md) | The permission model: the executable launch surface, grants, and the stale-grant diff. |
+| [subagents.md](./harness/subagents.md) | Agent-launched children: the agent-only doorway, what a launch desugars to, fanout, where a child's pane and checkout land, direct-parent stamps, the no-redelegation rule, and the boundary with provider-native subagents. |
+| [loops.md](./harness/loops.md) | Loop scheduling: the task and where tasks live, triggers and schedule shapes, elder firing, one fire, run history, signals, watched commands, waits, and the assist log. |
+| [budget.md](./harness/budget.md) | Dollar caps: the scopes, where caps and spend come from, the ledgers on disk, the verdict, the human waiver, the park, and the fail-fast gate. |
+| [messaging.md](./harness/messaging.md) | Message delivery: the record and its status lifecycle, sending, the delivery pipeline, the pane write, compaction commands, reply waits, scheduling, the inbox verbs, and channels. |
+| [transcript.md](./harness/transcript.md) | The durable conversation log: entry kinds, writing entries, causality, the `rimz transcript` projection, and the ask records behind `rimz asks` and `rimz answer`. |
+| [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: the ownership marker, creation and seeding, dirty and landed status, landing on main, removal, and every caller that triggers it. |
+| [teams.md](./harness/teams.md) | Team memory: the scratch-file scan, the `blackboard.md` stage board, `rimz teams flip`, and registration re-wakes. |
+| [trust.md](./harness/trust.md) | Project trust: the hashed executable surface, launch-time enforcement, grant storage, the stale-grant diff, and every way a grant is made. |
 
 ## The sidebar
 
-`sidebar/` renders presence and routes attention.
+The sidebar spans two source trees. `sidebar/` is the data plane, the view model a renderer draws; `sidebar_pane/` is the renderer process, including pets. What each zone looks like on screen is [interface/sidebar.md](../interface/sidebar.md).
 
 | Page | What it owns |
 | --- | --- |
-| [sidebar.md](./sidebar/sidebar.md) | Rendering mechanics: presence, ranking, layout, and recovery. |
-| [state.md](./sidebar/state.md) | The data plane: the producer/consumer split, the published caches, push channels, fusion, and timing. |
-| [notifications.md](./sidebar/notifications.md) | The push path over unread episodes: producer policy, renderer bell and banner, reminders, handlers, and the notification trace log. |
-| [pets.md](./sidebar/pets.md) | The dashboard pet: action projection, animation tracks, asset loading, and the pixel and cell-art render tiers. |
+| [sidebar.md](./sidebar/sidebar.md) | From store to screen: the presence model and binding ladder, ranking and grouping, the cards, process rows, frame composition, the serve loop, reload and repair, and resume on rebirth. |
+| [state.md](./sidebar/state.md) | The data plane: renderers and producer election, one fetch cycle, the published lanes, realtime events and push channels, fusion rules, focus intent, cadences, and failure modes. |
+| [notifications.md](./sidebar/notifications.md) | Notifications over unread episodes: the producer's policy, the renderer's bell and banner, unread reminders, remote link alerts, handlers, and the trace log. |
+| [pets.md](./sidebar/pets.md) | The dashboard pet: from card state to animation, captions, asset loading and its state machine, the cell-art and pixel render tiers, and `rimz list-pets`. |
 
-## Single-doc subsystems
+## Single-file subsystems
 
-Each of these subsystems is one file at the top level.
+Each of these subsystems is one page at the top of `docs/internals/`.
 
 | Page | What it owns |
 | --- | --- |
-| [theme.md](./theme.md) | The four-layer color pipeline, the glyph catalog, provider identity, and the shared human value formats. |
-| [store.md](./store.md) | The durable state engine: the on-disk tiers and the workspace record, the event log, the write path and write classes, the read path, session death, and reset and gc. |
-| [sandbox.md](./sandbox.md) | Linux agent mount views: bubblewrap preflight, mount order, host-path reachability, environment pins, per-room tmp and skill-copy lifecycle, and profile skill views. |
-| [multiplexers.md](./multiplexers.md) | The `MuxBackend` seam: backend selection, pane and view identity, presence and focus, sidebar repair, session lifecycle, the Zellij and tmux backends, and the Zellij presence plugin. |
-| [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes, how they are identified, and how they are repaired. |
-| [remote.md](./remote.md) | SSH attach and aliases, the reconnect supervisor, link health, port forwarding, and bandwidth attribution. |
-| [web.md](./web.md) | Browser access: the writable and broadcast ttyd daemons, their records and reuse, the trusted-header gate, room attach and the session picker, the credential, the generated browser page, and remote web tunnels. |
-| [stats.md](./stats.md) | The `rimz stats` panel: the cache it reads, the window model, the heatmap and breakdowns, terminal fitting, the held dashboard, and the JSON and assists surfaces. |
-| [diagnostics.md](./diagnostics.md) | The diagnostics log, the frame observer, and off-box Sentry. |
-| [performance.md](./performance.md) | The cost model: where work runs, the principles, the cost map, the tick budget and CI gates, benchmarks, fleet overhead, anti-patterns, and deferred wins. |
-| [profiling.md](./profiling.md) | The field guide for profiling a live fleet. |
+| [theme.md](./theme.md) | The theme core: the four-layer color pipeline, palette resolution and color depth, glyphs, provider identity, the interface language, shared value formats, and the theme boundaries. |
+| [store.md](./store.md) | The durable state engine: the on-disk tiers and the workspace record, the event log, the write path and write classes, the read path, session death, maintenance, and what survives what. |
+| [sandbox.md](./sandbox.md) | Linux agent mount views: choosing the isolation, bubblewrap preflight, mount order, reachable host paths, environment pins, room tmp, and profile skill views. |
+| [multiplexers.md](./multiplexers.md) | The Zellij and tmux seam: backend selection, the `MuxBackend` trait, pane and view identity, reading the room, focus, one sidebar per view, session lifecycle with the `room/` birth, health gate, and reset, both backends, and the Zellij presence plugin. |
+| [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes and how they are specified and identified, the content supervisor, reconciliation and repair, and the loop zone. |
+| [remote.md](./remote.md) | SSH attach: targets and aliases, the connect loop and reconnect pacing, terminal hygiene, the connection panel, link health, port forwarding, web tunnels, and bandwidth attribution. |
+| [web.md](./web.md) | Browser access: the writable and broadcast ttyd daemons, the trusted-header gate, room attach and the session picker, sharing a room, the credential, the browser client, remote rooms, and the security boundaries. |
+| [stats.md](./stats.md) | The `rimz stats` panel: where its figures come from, windows, the heatmap and breakdowns, terminal fitting, the held dashboard, and the machine-readable surfaces. |
+| [diagnostics.md](./diagnostics.md) | Diagnostic evidence: the durable log and its record envelope, the event taxonomy, the frame-stream observer, retention, frame captures, reading an episode, and off-box error reporting. |
+
+## Cost and profiling
+
+These two pages cut across every subsystem above.
+
+| Page | What it owns |
+| --- | --- |
+| [performance.md](./performance.md) | The cost model: the workload, where work runs, the principles, the cost map, the tick budget, CI counter gates and benchmarks, fleet overhead, anti-patterns, deferred and rejected work, and how to make a performance change. |
+| [profiling.md](./profiling.md) | The field guide for measuring a live fleet: what RimZ already publishes, finding the producer, profiling the process, and turning a finding into a guard. |
+
+## From a source tree to its page
+
+Twelve trees under `crates/rimz/src/` carry their own `AGENTS.md` contract, which states the tree's boundaries and links the pages that describe its behaviour. Top-level modules without a contract are indexed in the root [AGENTS.md code map](../../AGENTS.md#code-map).
+
+| Source tree | Page |
+| --- | --- |
+| `agents/` | [adapter.md](./agents/adapter.md), then the other agent-layer pages |
+| `cli/` | No internals page; the commands are in the [CLI reference](../reference/cli.md) and the house rules in [rust-conventions.md](../contributing/rust-conventions.md) |
+| `diag/` | [diagnostics.md](./diagnostics.md) |
+| `harness/` | [fleet.md](./harness/fleet.md), then the other harness pages |
+| `message/` | [messaging.md](./harness/messaging.md) |
+| `mux/` | [multiplexers.md](./multiplexers.md) |
+| `remote/` | [remote.md](./remote.md) |
+| `room/` | [multiplexers.md § Session lifecycle](./multiplexers.md#session-lifecycle) and [rimzd.md](./rimzd.md) |
+| `sandbox/` | [sandbox.md](./sandbox.md) |
+| `sidebar/` | [state.md](./sidebar/state.md) and [sidebar.md](./sidebar/sidebar.md) |
+| `sidebar_pane/` | [sidebar.md](./sidebar/sidebar.md), [notifications.md](./sidebar/notifications.md), and [pets.md](./sidebar/pets.md) |
+| `store/` | [store.md](./store.md) |
