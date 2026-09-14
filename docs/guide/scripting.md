@@ -15,7 +15,7 @@ rimz agents claude "Summarize what changed on this branch." -p    # the claude -
 rimz agents codex "Prepare the release checklist." -p             # the same grammar, any agent
 ```
 
-- **One grammar for every fully scripted adapter.** The same flags, exit codes, and output formats drive Claude, Codex, Amp, Pi, OpenCode, Droid, and Qwen; swapping the model behind a pipeline is a one-word change. (Kiro's CLI exposes no verified turn-completion signal yet, so `rimz agents kiro -p` refuses before opening a pane rather than hanging.)
+- **One grammar for every fully scripted adapter.** The same flags, exit codes, and output formats drive Claude, Codex, Amp, Pi, OpenCode, Droid, and Qwen; swapping the model behind a pipeline is a one-word change. (Kiro reports no hook for a cancelled or errored turn, so give `rimz agents kiro -p` a `--timeout`.)
 - **A pane instead of a headless process.** The turn runs the stock CLI in your room with a live card in the sidebar, so a scripted run is exactly as observable — and as steerable — as one you launched by hand ([a real agent, not a background job](#a-real-agent-not-a-background-job)).
 
 ## What a run does on your machine

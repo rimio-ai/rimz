@@ -663,6 +663,6 @@ The command refuses, printing the reason on stderr with empty stdout and exit `1
 
 - is compacting now, already has a compaction queued, or has taken no user turn since its last compaction;
 - has no bound pane or no native compaction command;
-- has no native turn-start hook (Kiro), because RimZ could not guarantee a compaction never follows a compaction; use the native command in the agent's pane.
+- has no native turn-start hook (a plugin that declares no `turn_start` event), because RimZ could not guarantee a compaction never follows a compaction; use the native command in the agent's pane.
 
 Each compaction is recorded as a message and an audit event, as an operator action rather than an automation assist.

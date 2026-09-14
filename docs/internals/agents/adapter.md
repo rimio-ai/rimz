@@ -175,7 +175,7 @@ An adapter declares one `managed_integration`, and that single interface drives 
 | Shared [`ManagedSource`](../../../crates/rimz/src/agents/managed_source.rs): a JSON merge, or a whole file RimZ authors | Claude, Droid, Qwen, Grok, Amp, Pi, OpenCode |
 | The adapter's own `install.rs`: a TOML rewrite or a multi-file transaction | Codex, Cursor, Copilot, Kimi, Antigravity, Kiro |
 
-Copilot, Cursor, and Antigravity report their per-file rows in order through the shared [`install_report.rs`](../../../crates/rimz/src/agents/adapters/install_report.rs). Kiro's integration only uninstalls: install and preview return the unavailable error, so `rimz hooks uninstall` still removes RimZ entries from Kiro's hook file while `rimz coverage` shows `install ✗`.
+Copilot, Cursor, and Antigravity report their per-file rows in order through the shared [`install_report.rs`](../../../crates/rimz/src/agents/adapters/install_report.rs). Kiro installs a whole marked file through the shared managed source, after refusing a Kiro CLI older than 2.13.0 and reclaiming the unmarked file earlier RimZ builds wrote.
 
 Install wires every event the state machine needs (the turn-boundary signals) plus the high-frequency per-tool events that keep enrichment current, and each adapter's hook catalog constant is the source of truth for that set. For the JSON-merge adapters, detection walks the whole catalog, so an under-wired config reports not installed and `rimz start` offers the idempotent merge again. An agent that runs before its hooks land is therefore invisible to RimZ rather than half-tracked, and `rimz doctor` reports the install state.
 
@@ -283,7 +283,7 @@ A declared absence renders as a declared absence, in the sidebar and in `rimz do
 
 ## Adding an agent
 
-A third-party agent normally ships as a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, an agent-side shim speaking the canonical envelope, optional probes, and no RimZ source change. A built-in is warranted when RimZ must own a native config migration (a hook installer that writes the agent's own config) or a protocol surface the canonical wire cannot express (an out-of-band rich-context transport, a bespoke ask-answer path). A built-in may also leave hook installation unsupported while a validated provider-owned local store supplies session truth, as Kiro does.
+A third-party agent normally ships as a [process plugin](../../reference/agent-plugins.md): one machine-tier manifest, an agent-side shim speaking the canonical envelope, optional probes, and no RimZ source change. A built-in is warranted when RimZ must own a native config migration (a hook installer that writes the agent's own config) or a protocol surface the canonical wire cannot express (an out-of-band rich-context transport, a bespoke ask-answer path).
 
 A built-in lands as one private directory under [`adapters/`](../../../crates/rimz/src/agents/adapters/mod.rs), one `registry::BUILTINS` entry, conformance coverage, and its own adapter page. The directory layout is consistent across kinds:
 
