@@ -37,7 +37,7 @@ These pages answer a specific question about the shipped product: what a command
 
 | Page | What it covers |
 | --- | --- |
-| [agent-support.md](./agent-support.md) | Every built-in adapter: support tiers, the six capabilities, the compatibility and wiring matrices, launch-prompt replacement, auto-compaction windows, the lifecycle hook surface, per-agent permission-mode mappings, and versions. |
+| [agent-support.md](./agent-support.md) | Every built-in adapter: support tiers, `rimz coverage`, the six capabilities and the compatibility matrix, per-agent gaps, config homes and skill roots, launch flags (permission modes, model, effort, prompt replacement, auto-compaction), the wiring matrix, and the lifecycle hook surface. |
 | [agent-plugins.md](./agent-plugins.md) | External agent plugins, an early and unstable surface: registering and validating a bundle, the manifest, the canonical event envelope, the shim contract, probe contracts, and failure behavior. |
 
 ## Where to go next

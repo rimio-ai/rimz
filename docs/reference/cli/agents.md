@@ -111,11 +111,11 @@ A `<kind>-<mode>` cell launches that kind with one permission posture. RimZ rend
 | Cell | Available for | Launch posture |
 | --- | --- | --- |
 | `<kind>-ask` | every kind | the agent asks before tool use |
-| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (`claude-plan`, `antigravity-plan`); the default posture otherwise (`codex-plan`, `grok-plan`) |
+| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (Claude, Antigravity, Copilot, Cursor, Droid, Kimi, OpenCode, Qwen); the default posture otherwise (Codex, Grok, Pi, Amp, Kiro) |
 | `<kind>-auto` | every kind except `opencode`, `amp`, `kiro`, and `pi` | the adapter's automatic-approval flags |
 | `<kind>-yolo` | every kind except `droid`, `amp`, `kiro`, and `pi` | the adapter's bypass flags |
 
-On the command line, `--ask` keeps native permission prompts and `--yolo` passes the adapter's bypass flags; with neither, each CLI keeps its own default. Each agent's exact flags are in its mapping doc, linked from [agent support](../agent-support.md#per-agent-mappings).
+On the command line, `--ask` keeps native permission prompts and `--yolo` passes the adapter's bypass flags; with neither, each CLI keeps its own default. Each agent's exact flags per mode are in [agent support](../agent-support.md#permission-modes).
 
 ### Shared launch params
 
@@ -123,8 +123,8 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 
 | Flag | Effect |
 | --- | --- |
-| `--model <MODEL>` | Model for every agent cell, replacing the profile's. |
-| `--effort <LEVEL>` | Reasoning effort, passed to the provider's effort flag without validation. Levels are provider-specific; see each agent's mapping doc from [agent support](../agent-support.md#per-agent-mappings). |
+| `--model <MODEL>` | Model for every agent cell, replacing the profile's. Droid refuses it; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
+| `--effort <LEVEL>` | Reasoning effort, passed to the provider's effort flag without validation, so levels are whatever the provider accepts. Kinds with no effort flag refuse the launch; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
 | `--budget <AMOUNT[/day]>` | Dollar cap per agent: a bare amount caps the session, `/day` resets at the local day boundary. Inspect or change it later with [`rimz agents budget`](./budget.md#cap-one-agent). |
 | `--system-prompt-file <PATH>` | Replace each agent's base system prompt with the file. |
 | `--append-system-prompt-file <PATH>` | Repeatable. Replaces the inherited fragment list with these files, in command-line order. |
