@@ -110,6 +110,34 @@ path = "crates/rimz/src/agents/adapters/qwen"
 surface-budget = 1
 
 [[module]]
+path = "crates/rimz/src/agents/adapters/amp"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/droid"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/grok"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/kiro"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/opencode"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/pi"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/plugin"
+surface-budget = 15
+
+[[module]]
 path = "crates/rimz/src/agents/spending"
 # Parser wire, walker, and cache records stay public for the adapters, bench, perf and example crates.
 surface-budget = 84
@@ -691,8 +719,8 @@ reason = "Mirrors MessageStatus::is_terminal on purpose: the event method names 
 
 [[verdict]]
 kind = "shape"
-key = "AgentLifecycleObservation::new+HookRouting::session+Vec::new+attach_lifecycle+decode_catalog_hook+optional_payload_string+payloads::parse_payload+sanitize_user_prompt+set_ask+set_final_message+set_observed_context+set_routing+spec+with_worktree+with_worktree_from_payload"
-reason = "Each adapter's decode_hook is provider policy over the shared HookOutput and catalog API; its divergences are pinned fixes (pass 2)."
+key = "attach_lifecycle+decode_catalog_hook+set_final_message+set_routing+spec"
+reason = "Each adapter's decode_hook is provider policy over the shared HookOutput and catalog API; its divergences are pinned fixes (pass 2; re-keyed pass 21c)."
 
 [[verdict]]
 kind = "shape"
@@ -1807,7 +1835,57 @@ reason = "Five production callers (otel, subagent, spend, two in mod.rs) share t
 [[verdict]]
 kind = "item"
 key = "agents::adapters::install_report::report_files"
-reason = "One ordered (path, existed) row builder for the multi-file installers (Copilot, Cursor, Antigravity); single-file ManagedSource and Kimi reports build one row inline and gain nothing from it (pass 20c)."
+reason = "One ordered (path, existed) row builder for the multi-file installers (Copilot, Cursor, Antigravity); single-file ManagedSource installs (Grok, Droid, Qwen), Kimi's and Kiro's one-row reports, and the installer-less Pi, OpenCode and Amp gain nothing from it (pass 20c; pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::pi::PiAdapter"
+reason = "Registry registration is the only outside-provider interface; ask mapping, payloads, account probes, transcript and spend stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::opencode::OpencodeAdapter"
+reason = "Registry registration is the only outside-provider interface; database access, payloads, account probes, transcript paging and spend stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::grok::GrokAdapter"
+reason = "Registry registration is the only outside-provider interface; the hook catalog and its install constants, context refresh, paths, transcript folding and spend stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::droid::DroidAdapter"
+reason = "Registry registration is the only outside-provider interface; custom-model config, hook-process attribution, transcript telemetry, install and spend stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::kiro::KiroAdapter"
+reason = "Registry registration is the only outside-provider interface; the global-hook install and the local session store stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::amp::AmpAdapter"
+reason = "Registry registration is the only outside-provider interface; the plugin wire payloads, thread parsing, transcript paging and spend stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::plugin::loaded"
+reason = "The plugin directory keeps a second public surface: discovery, conformance and diagnostics re-exported through the agents::plugins facade for the binary crate's register, check, doctor and hooks commands, which see only pub items. PluginAdapter itself is private; the registry reaches plugin definitions through loaded() (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::amp::payloads::parse_payload"
+reason = "Stays pub(super) with AmpHookPayload: it returns the payload to mod.rs, so private_interfaces refutes the private narrowing. Inlining the one-line tolerant parse is line-neutral and loses the named contract payload_parse_is_tolerant pins (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::opencode::payloads::parse_payload"
+reason = "Stays pub(super) with OpencodeHookPayload: parse_payload and errored take or return it in mod.rs, so private_interfaces refutes the private narrowing. Inlining the one-line tolerant parse is line-neutral and loses the named contract tolerant_parse_degrades_to_empty_default pins (pass 21c)."
+
+[[verdict]]
+kind = "pass-through"
+key = "agents::adapters::opencode::transcript::sqlite_io"
+reason = "Private rusqlite-to-io error adapter used as map_err(sqlite_io) at seven sites in the same file; deleting it reintroduces io::Error::other at each (pass 21c)."
 
 [[verdict]]
 kind = "item"
