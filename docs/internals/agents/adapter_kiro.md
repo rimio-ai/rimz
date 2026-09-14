@@ -66,7 +66,7 @@ Kiro usage summaries report credits, not tokens or dollars. RimZ does not infer 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 
 - **Errored and cancelled turns fire no hook.** The card settles once the store records `turn_end`, but a supervised run, `message --wait`, or a scheduled turn waiting on that turn ends at its deadline. A refused turn fires `Stop`, so its hook outcome is a success while the card folds to failed.
-- **Kiro CLI older than 2.13.0 gets no hooks.** Install refuses there, and supervised runs keep refusing because hooks are not installed.
+- **Kiro CLI older than 2.13.0 gets no hooks.** `rimz hooks install kiro` refuses there, detected installs skip Kiro, and supervised runs keep refusing because hooks are not installed.
 - **Pending approvals and questions have no hook.** The waiting card comes from the store and stays out of `rimz asks`.
 - **Credits are not dollars.** Until Kiro publishes token counts or a dollar figure, no spend parser can be honest.
 - **Native Ask/Answer routing, plan and question handling, compaction events, subagents, background parking, remote control, and account probing** have no available surface.

@@ -172,10 +172,10 @@ An adapter declares one `managed_integration`, and that single interface drives 
 
 | Backend | Adapters |
 | --- | --- |
-| Shared [`ManagedSource`](../../../crates/rimz/src/agents/managed_source.rs): a JSON merge, or a whole file RimZ authors | Claude, Droid, Qwen, Grok, Amp, Pi, OpenCode |
-| The adapter's own `install.rs`: a TOML rewrite or a multi-file transaction | Codex, Cursor, Copilot, Kimi, Antigravity, Kiro |
+| Shared [`ManagedSource`](../../../crates/rimz/src/agents/managed_source.rs): a JSON merge, or a whole file RimZ authors | Claude, Droid, Qwen, Grok, Amp, Pi, OpenCode, Kiro |
+| The adapter's own `install.rs`: a TOML rewrite or a multi-file transaction | Codex, Cursor, Copilot, Kimi, Antigravity |
 
-Copilot, Cursor, and Antigravity report their per-file rows in order through the shared [`install_report.rs`](../../../crates/rimz/src/agents/adapters/install_report.rs). Kiro installs a whole marked file through the shared managed source, after refusing a Kiro CLI older than 2.13.0 and reclaiming the unmarked file earlier RimZ builds wrote.
+Copilot, Cursor, and Antigravity report their per-file rows in order through the shared [`install_report.rs`](../../../crates/rimz/src/agents/adapters/install_report.rs). Kiro wraps its whole-file `ManagedSource` in a thin `install.rs` that refuses a Kiro CLI older than 2.13.0 and reclaims the unmarked file earlier RimZ builds wrote. An adapter whose install is refused on this machine before any file is touched reports it through `install_blocker`, and detected installs (`rimz start`, `rimz setup`, bare `rimz hooks install`) skip it while an install that names the agent still refuses.
 
 Install wires every event the state machine needs (the turn-boundary signals) plus the high-frequency per-tool events that keep enrichment current, and each adapter's hook catalog constant is the source of truth for that set. For the JSON-merge adapters, detection walks the whole catalog, so an under-wired config reports not installed and `rimz start` offers the idempotent merge again. An agent that runs before its hooks land is therefore invisible to RimZ rather than half-tracked, and `rimz doctor` reports the install state.
 

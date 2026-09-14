@@ -57,6 +57,18 @@ pub(super) fn detected_installable_adapters() -> Vec<&'static rimz::agents::Agen
             continue;
         }
 
+        if let Some(reason) = agent
+            .managed_integration()
+            .and_then(|integration| integration.install_blocker())
+        {
+            tracing::debug!(
+                agent = definition.kind,
+                reason,
+                "installed agent cannot take rimz-managed hooks; skipping hook install",
+            );
+            continue;
+        }
+
         detected.push(agent);
     }
     detected
