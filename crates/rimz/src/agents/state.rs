@@ -1177,12 +1177,6 @@ impl AgentState {
         self.sleeping_over(self.rested_status())
     }
 
-    /// Turn completion over [`Self::effective_status`]; project pending waits
-    /// onto the row first, or a sleeping agent reads as finished.
-    pub fn turn_completion(&self) -> TurnCompletion {
-        TurnCompletion::of(self.effective_status(), self.turn_started_at)
-    }
-
     pub fn sleeping_over(&self, status: AgentStatus) -> AgentStatus {
         if matches!(status, AgentStatus::Idle | AgentStatus::Success)
             && !self.pending_waits.is_empty()

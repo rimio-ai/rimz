@@ -650,10 +650,23 @@ fn self_wait_queues_with_any_gate_for_working_and_idle_targets() {
         let env = Env::new();
         env.install_agent_hooks("claude");
         register_calling_agent(&env);
-        if working {
+        // The idle target rests after a finished turn, so only the wake in
+        // flight can keep `agents wait` open once the wait row is consumed.
+        let turn: &[LifecycleSignal] = if working {
+            &[LifecycleSignal::TurnStarted]
+        } else {
+            &[
+                LifecycleSignal::TurnStarted,
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                },
+            ]
+        };
+        for signal in turn {
             let observation = AgentLifecycleObservation::new(
                 Some(AgentSessionId::from("provider-session")),
-                LifecycleSignal::TurnStarted,
+                signal.clone(),
             );
             env.store()
                 .append_agent_lifecycle(AgentLifecycleIntent {
@@ -678,6 +691,11 @@ fn self_wait_queues_with_any_gate_for_working_and_idle_targets() {
         );
         assert!(messages[0].text.contains("self-wait-marker"));
         wait_for_no_wait_instances(&env);
+        assert_eq!(
+            agents_wait_exit(&env),
+            Some(124),
+            "wait settled while its wake was in flight"
+        );
     }
 }
 

@@ -454,6 +454,7 @@ impl<'a> TaskFire<'a> {
                 Ok(self.finish_record(record, presentation, notice, None))
             }
             (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered(message_id)) => {
+                self.consume_ephemeral()?;
                 let handle = target.handle;
                 Ok(self.record_terminal_with(
                     LoopRunResult::Delivered,
@@ -490,7 +491,11 @@ impl<'a> TaskFire<'a> {
     }
 
     pub fn finish_error(&mut self, err: &anyhow::Error) -> TaskFireFinished {
-        self.pending = None;
+        if matches!(self.pending.take(), Some(PendingEffect::Deliver { .. }))
+            && let Err(consume) = self.consume_ephemeral()
+        {
+            tracing::warn!(task = %self.name, error = %format!("{consume:#}"), "failed to consume errored one-shot delivery");
+        }
         let error = format!("{err:#}");
         self.record_terminal_with(
             LoopRunResult::Errored,
@@ -735,7 +740,9 @@ impl<'a> TaskFire<'a> {
             )));
         }
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
-        self.consume_ephemeral()?;
+        // The one-shot row is consumed in `finish`, once the wake's message
+        // record exists: turn-completion waits read the row, then the queue,
+        // so the agent never looks rested between the two.
         self.pending = Some(PendingEffect::Deliver {
             target: target.clone(),
             check: check.clone(),

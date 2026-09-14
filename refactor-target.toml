@@ -76,7 +76,7 @@ upward-dependencies = ["address"]
 # Native skill roots and user-only markers belong to the same capability seam.
 # Model sub-cap matching and parent-axis headroom are shared with the renderer.
 # Turn completion is shared by reply waits and `agents wait`, apart from the delivery gate.
-surface-budget = 987
+surface-budget = 986
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -192,8 +192,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Sandbox env pins rebuild shell argv while preserving post-rc account stages.
 # The typed team.stage payload and its flip reader feed transcript rendering.
 # Rebirth reads resumed keys to preflight sandbox-isolated recovered agents.
-# Wait polls attach pending deliveries so sleeping agents stay unfinished.
-surface-budget = 519
+# Turn-completion waits load pending deliveries ahead of the queue and the rollup.
+surface-budget = 521
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -221,7 +221,8 @@ upward-dependencies = [
     "harness::schedule::pending",
     "sidebar::produce",
 ]
-surface-budget = 67
+# The turn-completion wait view is shared by reply waits and `agents wait`.
+surface-budget = 70
 
 [[module]]
 path = "crates/rimz/src/mux"

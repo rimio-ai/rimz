@@ -209,7 +209,7 @@ The run lock is `loop-run-<name>.lock` beside `loop-fire.json`, holding the hold
 3. Send SIGTERM to the holder and wait five seconds more. Only this step appends a `canceled` row from the stop path itself.
 4. A holder that still owns the lock is not escalated to SIGKILL; the error names its PID and the lock path.
 
-An ephemeral task removes its own row before the supervised run or delivery starts, so a one-shot that then fails to launch is not retried. A poll-until row also removes itself when its check fires the action, and expires without delivery once its deadline passes. A watch check-in is nonterminal and leaves the row in place; the final outcome consumes it.
+An ephemeral task removes its own row before its supervised run starts, so a one-shot that then fails to launch is not retried. A delivery removes the row once dispatch returns, whether it succeeded or errored, so the wake's message record exists before its row disappears and turn-completion waits never see the agent rested in between ([messaging.md § Reply waits](./messaging.md#reply-waits)). A crash between dispatch and removal leaves the row to fire again. A poll-until row also removes itself when its check fires the action, and expires without delivery once its deadline passes. A watch check-in is nonterminal and leaves the row in place; the final outcome consumes it.
 
 ### Where a scheduled run lands
 
@@ -378,7 +378,7 @@ The stage owner does not learn of a flip through a subscription. `team_stage` di
 3. Drop any task whose arming overlay is not `Live`, so a disabled or paused subscription stays quiet.
 4. On `Skip`, append a `SignalSkipped` run record carrying the observed signal and spawn nothing. On `Deliver`, spawn a detached `rimz loop run <name> --signal-json <encoded>` and return the name for the emitter to print.
 
-`fire_signal` never touches an instance row, so a sibling observation leaves the subscription armed. The runner consumes a one-shot before delivery, and a standing subscription stays.
+`fire_signal` never touches an instance row, so a sibling observation leaves the subscription armed. The runner consumes a one-shot once its delivery is dispatched, and a standing subscription stays.
 
 Nothing queues a match. Signal firing leaves `loop-fire.json` untouched, and a subscription written one second after the emit misses it. The elder may stamp a signal row when it first sees the catalog, but `fire_signal` never consults that stamp. A signal reaches only the subscriptions armed in that workspace at that instant, which is what lets an emitter run with no room open.
 

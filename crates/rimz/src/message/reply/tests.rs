@@ -81,6 +81,49 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
 }
 
 #[test]
+fn wake_in_flight_keeps_a_rested_agent_sleeping() {
+    let mut agent = crate::testkit::agent_state("claude", "sess-wake", Timestamp::UNIX_EPOCH);
+    agent.status = AgentStatus::Success;
+    agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
+    let workspace = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+    let view = |sender, status| {
+        let mut message = MessageRecord::new(
+            workspace.clone(),
+            &agent,
+            "wake".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        message.sender = sender;
+        message.status = status;
+        TurnWaitView {
+            snapshot: SidebarSnapshot::build_with_agents(
+                workspace.clone(),
+                vec![agent.clone()],
+                Timestamp::now(),
+            ),
+            messages: vec![message],
+        }
+    };
+    let wake = |notice| MessageSender::Harness { notice };
+    for notice in [HarnessNotice::Wait, HarnessNotice::Signal] {
+        for status in [
+            MessageStatus::Queued,
+            MessageStatus::Claimed,
+            MessageStatus::Sent,
+        ] {
+            let view = view(wake(notice.clone()), status);
+            assert_eq!(view.status(&agent), AgentStatus::Sleeping, "{status:?}");
+            assert_eq!(view.completion(&agent), TurnCompletion::Open);
+        }
+    }
+    let delivered = view(wake(HarnessNotice::Wait), MessageStatus::Delivered);
+    assert_eq!(delivered.completion(&agent), TurnCompletion::Completed);
+    let report = view(wake(HarnessNotice::SubagentReport), MessageStatus::Queued);
+    assert_eq!(report.completion(&agent), TurnCompletion::Completed);
+}
+
+#[test]
 fn sleeping_reply_waits_through_the_wake_turn() {
     let anchored = |second| WaitPhase::Reply {
         turn_started_at: Some(Timestamp::from_second(second).unwrap()),
@@ -235,12 +278,20 @@ fn parked_reply_reanchors_when_delivery_starts() {
         Timestamp::now(),
     );
 
-    assert!(!advance_leg(&mut leg, &store, &[message.clone()], &running, false).unwrap());
+    let running = TurnWaitView {
+        snapshot: running,
+        messages: vec![message.clone()],
+    };
+    assert!(!advance_leg(&mut leg, &store, &running, false).unwrap());
     assert_eq!(leg.last_message, None);
 
     agent.status = AgentStatus::Idle;
     let idle = SidebarSnapshot::build_with_agents(workspace_id, vec![agent], Timestamp::now());
-    assert!(advance_leg(&mut leg, &store, &[message], &idle, false).unwrap());
+    let idle = TurnWaitView {
+        snapshot: idle,
+        messages: vec![message],
+    };
+    assert!(advance_leg(&mut leg, &store, &idle, false).unwrap());
     assert_eq!(leg.result().final_message, None);
 }
 
