@@ -35,7 +35,7 @@ fn heat_fraction(age_secs: i64) -> Option<f32> {
         .then(|| ((age_secs - first_quarter) as f32 / heat_span as f32).min(1.0))
 }
 
-pub(super) fn age_heat_color(theme: &Theme, age_secs: i64) -> Option<Color> {
+fn age_heat_color(theme: &Theme, age_secs: i64) -> Option<Color> {
     heat_fraction(age_secs).map(|amount| theme.warm_heat_tone(amount))
 }
 

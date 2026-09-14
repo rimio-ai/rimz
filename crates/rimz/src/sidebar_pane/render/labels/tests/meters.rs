@@ -11,12 +11,10 @@ fn assert_no_fg(spans: &[Span<'_>]) {
     assert!(spans.iter().all(|span| span.style.fg.is_none()));
 }
 
-fn rgb(color: Color) -> (u8, u8, u8) {
-    crate::sidebar_pane::render::theme::color_to_rgb(color).expect("color rgb")
-}
-
 fn indexed_from_truecolor(color: Color) -> Color {
-    let (red, green, blue) = rgb(color);
+    let Color::Rgb(red, green, blue) = color else {
+        panic!("truecolor tone {color:?} is not RGB");
+    };
     Color::Indexed(crate::config::nearest_xterm_index(red, green, blue))
 }
 
