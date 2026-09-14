@@ -45,6 +45,7 @@ fn launch_resume_and_preset_commands_match_amp_cli() {
             "fix auth".to_owned(),
             "--plugin-ready-timeout".to_owned(),
             "30".to_owned(),
+            "--no-archive-after-execute".to_owned(),
         ])
     );
     assert_eq!(

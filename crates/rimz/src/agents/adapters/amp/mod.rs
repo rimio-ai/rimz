@@ -79,7 +79,9 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
         fixed_args: &[],
         prompt: super::PromptStyle::FlagWithSuffix {
             flag: "-x",
-            suffix: &["--plugin-ready-timeout", "30"],
+            // Amp refuses to continue an archived thread, and execute mode
+            // archives by default, so supervised threads stay unarchived.
+            suffix: &["--plugin-ready-timeout", "30", "--no-archive-after-execute"],
         },
         resume: Some(super::SessionCommand {
             before_id: &["amp", "threads", "continue"],
