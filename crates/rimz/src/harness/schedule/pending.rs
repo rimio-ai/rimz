@@ -123,6 +123,17 @@ pub(crate) fn project_pending_waits(
     }
 }
 
+/// Attach armed one-shot deliveries to a store snapshot so turn-completion
+/// waits see `sleeping` agents; the rollup base carries no pending waits.
+pub fn attach_pending_waits(snapshot: &mut SidebarSnapshot) {
+    let project_root = snapshot.project_root.clone();
+    project_pending_waits(
+        snapshot,
+        project_root.as_deref(),
+        &MachineConfig::load_lenient(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

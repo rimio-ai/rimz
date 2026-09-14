@@ -68,7 +68,6 @@ use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, own_pane_id};
 use rimz::room::{RoomContext, RoomSizing};
 use rimz::sidebar::refresh::usage::AccountUsageRefreshRequest;
-use rimz::store::message::{DeliveryGate, gate_open};
 use rimz::store::run::{RunRecord, RunStatus};
 use rimz::store::{
     writer::AgentLaunchBatch, writer::AgentLaunchIdentity, writer::AgentLaunchName,

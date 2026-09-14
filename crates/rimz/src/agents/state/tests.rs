@@ -129,6 +129,40 @@ fn effective_status_projects_pending_wait_to_sleeping() {
 }
 
 #[test]
+fn turn_completion_requires_a_rested_turn_without_armed_waits() {
+    let started = Some(Timestamp::from_second(1_000).unwrap());
+    for (status, stamp, expected) in [
+        (AgentStatus::Failed, None, TurnCompletion::Failed),
+        (AgentStatus::Idle, started, TurnCompletion::Completed),
+        (AgentStatus::Success, started, TurnCompletion::Completed),
+        (AgentStatus::Idle, None, TurnCompletion::Open),
+        (AgentStatus::Success, None, TurnCompletion::Open),
+        (AgentStatus::Sleeping, started, TurnCompletion::Open),
+        (AgentStatus::Running, started, TurnCompletion::Open),
+        (AgentStatus::Waiting, started, TurnCompletion::Open),
+        (AgentStatus::Paused, started, TurnCompletion::Open),
+    ] {
+        assert_eq!(TurnCompletion::of(status, stamp), expected, "{status:?}");
+    }
+
+    let mut registered = test_agent(AgentStatus::Idle, 1_000);
+    registered.turn_started_at = None;
+    assert_eq!(registered.turn_completion(), TurnCompletion::Open);
+
+    let mut sleeping = test_agent(AgentStatus::Success, 1_000);
+    sleeping.turn_started_at = started;
+    assert_eq!(sleeping.turn_completion(), TurnCompletion::Completed);
+    sleeping.pending_waits.push(PendingWait {
+        name: "timer".into(),
+        trigger: PendingWaitTrigger::Command {
+            command: "sleep 60".into(),
+        },
+        armed_at: None,
+    });
+    assert_eq!(sleeping.turn_completion(), TurnCompletion::Open);
+}
+
+#[test]
 fn pending_wait_labels_and_wire_preserve_trigger_details() {
     let now = Timestamp::from_second(1_000).unwrap();
     let due = Timestamp::from_second(1_720).unwrap();

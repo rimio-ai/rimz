@@ -61,23 +61,61 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
             Step::Wait(WaitPhase::Reply { .. })
         ));
     }
-    for status in [
-        AgentStatus::Idle,
-        AgentStatus::Success,
-        AgentStatus::Sleeping,
-    ] {
+    for status in [AgentStatus::Idle, AgentStatus::Success] {
+        let reply = WaitPhase::Reply {
+            turn_started_at: None,
+        };
         assert_eq!(
-            step(
-                WaitPhase::Reply {
-                    turn_started_at: None
-                },
-                false,
-                MessageStatus::Delivered,
-                card(status, 1),
-            ),
+            step(reply, false, MessageStatus::Delivered, card(status, 1)),
             Step::Finish(RunStatus::Completed)
         );
+        let never_started = Some(CardView {
+            status,
+            turn_started_at: None,
+        });
+        assert_eq!(
+            step(reply, false, MessageStatus::Delivered, never_started),
+            Step::Wait(reply)
+        );
     }
+}
+
+#[test]
+fn sleeping_reply_waits_through_the_wake_turn() {
+    let anchored = |second| WaitPhase::Reply {
+        turn_started_at: Some(Timestamp::from_second(second).unwrap()),
+    };
+    let sleeping = step(
+        anchored(1),
+        false,
+        MessageStatus::Delivered,
+        card(AgentStatus::Sleeping, 1),
+    );
+    let Step::Wait(slept) = sleeping else {
+        panic!("sleeping agent finished the reply: {sleeping:?}");
+    };
+    assert_eq!(
+        slept,
+        WaitPhase::Reply {
+            turn_started_at: None
+        }
+    );
+    let wake = step(
+        slept,
+        false,
+        MessageStatus::Delivered,
+        card(AgentStatus::Running, 2),
+    );
+    assert_eq!(wake, Step::Wait(anchored(2)));
+    assert_eq!(
+        step(
+            anchored(2),
+            false,
+            MessageStatus::Delivered,
+            card(AgentStatus::Success, 2),
+        ),
+        Step::Finish(RunStatus::Completed)
+    );
 }
 
 #[test]
@@ -162,6 +200,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
     .unwrap();
     let mut agent = crate::testkit::agent_state("claude", "sess-reply", Timestamp::UNIX_EPOCH);
     agent.status = AgentStatus::Running;
+    agent.turn_started_at = Some(Timestamp::UNIX_EPOCH);
     agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
     let adapter = crate::agents::find_definition("claude").unwrap();
     let target = ReplyTarget::new(&agent, "@claude".to_owned(), adapter);
