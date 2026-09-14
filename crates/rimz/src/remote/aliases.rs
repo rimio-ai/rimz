@@ -58,7 +58,7 @@ pub enum AliasErr {
     InvalidTarget(#[from] RemoteTargetError),
 }
 
-pub type Result<T> = std::result::Result<T, AliasErr>;
+type Result<T> = std::result::Result<T, AliasErr>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteAlias {
@@ -90,16 +90,16 @@ impl RemoteAliases {
     /// Load aliases from `$XDG_CONFIG_HOME/rimz/remote.toml`. A missing file is
     /// an empty alias set.
     pub fn load() -> Result<Self> {
-        Self::load_from(&default_path())
+        Self::load_from(&Self::config_path())
     }
 
     /// Save aliases to `$XDG_CONFIG_HOME/rimz/remote.toml`.
     pub fn save(&self) -> Result<()> {
-        self.save_to(&default_path())
+        self.save_to(&Self::config_path())
     }
 
     pub fn config_path() -> PathBuf {
-        default_path()
+        config_home().join(RIMZ_CONFIG_SUBDIR).join(REMOTE_FILE)
     }
 
     pub fn ensure_template() -> Result<bool> {
@@ -228,10 +228,6 @@ fn validate_name(name: &str) -> Result<()> {
 
 fn sort_key(a: &RemoteAlias, b: &RemoteAlias) -> std::cmp::Ordering {
     a.name.cmp(&b.name)
-}
-
-fn default_path() -> PathBuf {
-    config_home().join(RIMZ_CONFIG_SUBDIR).join(REMOTE_FILE)
 }
 
 fn default_reconnect() -> bool {
