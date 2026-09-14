@@ -216,6 +216,7 @@ impl LaunchSpec {
                 PromptStyle::PositionalAfterDoubleDash => {
                     argv.extend(["--".to_owned(), prompt.to_owned()]);
                 }
+                PromptStyle::Positional => argv.push(prompt.to_owned()),
                 PromptStyle::Flag(flag) => {
                     argv.extend([flag.to_owned(), prompt.to_owned()]);
                 }
@@ -267,6 +268,9 @@ impl SessionCommand {
 pub enum PromptStyle {
     None,
     PositionalAfterDoubleDash,
+    /// A bare trailing positional, for a CLI whose own parser drops any
+    /// argument that follows `--`.
+    Positional,
     Flag(&'static str),
     FlagWithSuffix {
         flag: &'static str,
