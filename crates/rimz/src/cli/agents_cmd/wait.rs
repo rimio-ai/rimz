@@ -2,6 +2,7 @@ use super::*;
 
 use super::runs_lookup::{agent_name, newest_run_by_ref};
 use crate::cli::render;
+use rimz::agents::TurnCompletion;
 
 pub(in crate::cli) fn wait_agent(
     references: Vec<String>,
@@ -363,7 +364,7 @@ impl TargetOutcome {
                     .flatten(),
             ),
             TerminalPayload::Agent(agent) => WaitEntryJson::new(
-                if agent.status == rimz::agents::AgentStatus::Failed {
+                if agent.turn_completion() == TurnCompletion::Failed {
                     RunStatus::Failed
                 } else {
                     RunStatus::Completed
@@ -482,8 +483,7 @@ fn poll_target(
             let snapshot = agent_snapshot.context("pending agent target without snapshot")?;
             match crate::cli::resolve_agent_one(store, snapshot, reference, None, current_channel) {
                 Ok(agent) => {
-                    let terminal = gate_open(DeliveryGate::Done, agent.status)
-                        || agent.status == rimz::agents::AgentStatus::Failed;
+                    let terminal = agent.turn_completion() != TurnCompletion::Open;
                     Ok(terminal.then(|| TargetOutcome {
                         name: agent_name(agent).to_owned(),
                         payload: TerminalPayload::Agent(Box::new(agent.clone())),
@@ -545,7 +545,11 @@ impl WaitSet {
             .any(|(target, outcome)| {
                 outcome.is_none() && matches!(target, WaitTarget::Agent { .. })
             })
-            .then(|| store.snapshot_cached().context("reading agent snapshot"))
+            .then(|| {
+                let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+                rimz::harness::schedule::pending::attach_pending_waits(&mut snapshot);
+                anyhow::Ok(snapshot)
+            })
             .transpose()?;
 
         let mut settled = Vec::new();
@@ -764,6 +768,7 @@ fn wait_interactive_agent_stream(
     };
     let deadline = options.timeout.map(|duration| Instant::now() + duration);
     loop {
+        rimz::harness::schedule::pending::attach_pending_waits(&mut snapshot);
         let agent =
             crate::cli::resolve_agent_one(store, &snapshot, reference, None, current_channel)?;
         for text in cursor.messages(
@@ -774,13 +779,16 @@ fn wait_interactive_agent_stream(
             sink.message(text)?;
         }
         sink.status(interactive_live_status(agent))?;
-        if gate_open(DeliveryGate::Done, agent.status) {
-            sink.end_status(RunStatus::Completed, None)?;
-            std::process::exit(0);
-        }
-        if agent.status == rimz::agents::AgentStatus::Failed {
-            sink.end_status(RunStatus::Failed, None)?;
-            std::process::exit(RunStatus::Failed.exit_code());
+        match agent.turn_completion() {
+            TurnCompletion::Completed => {
+                sink.end_status(RunStatus::Completed, None)?;
+                std::process::exit(0);
+            }
+            TurnCompletion::Failed => {
+                sink.end_status(RunStatus::Failed, None)?;
+                std::process::exit(RunStatus::Failed.exit_code());
+            }
+            TurnCompletion::Open => {}
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             if sink.is_text() {

@@ -12,7 +12,7 @@ use jiff::Timestamp;
 
 use crate::Store;
 use crate::agents::transcript::TranscriptCursor;
-use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus};
+use crate::agents::{AgentCardRef, AgentDefinition, AgentState, AgentStatus, TurnCompletion};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::EventKind;
 use crate::store::event_log;
@@ -265,6 +265,7 @@ impl ReplyWait {
 
         let messages = store.list_messages()?;
         let mut snapshot = store.snapshot_cached()?;
+        crate::harness::schedule::pending::attach_pending_waits(&mut snapshot);
         let mut newly_settled = Vec::new();
         if self.tick == 0
             && let Some((self_kind, self_name)) = self.caller_identity.as_ref()
@@ -487,7 +488,7 @@ struct CardView {
 impl From<&AgentState> for CardView {
     fn from(agent: &AgentState) -> Self {
         Self {
-            status: agent.status,
+            status: agent.effective_status(),
             turn_started_at: agent.turn_started_at,
         }
     }
@@ -532,24 +533,28 @@ fn step(
 }
 
 fn step_reply(turn_started_at: Option<Timestamp>, card: CardView) -> Step {
-    match card.status {
-        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping => {
-            Step::Finish(RunStatus::Completed)
-        }
-        AgentStatus::Failed => Step::Finish(RunStatus::Failed),
-        AgentStatus::Running
-            if turn_started_at.is_some()
-                && card.turn_started_at.is_some()
-                && turn_started_at != card.turn_started_at =>
-        {
-            Step::Finish(RunStatus::Completed)
-        }
-        AgentStatus::Running | AgentStatus::Waiting | AgentStatus::Paused => {
-            Step::Wait(WaitPhase::Reply {
-                turn_started_at: turn_started_at.or(card.turn_started_at),
-            })
-        }
+    match TurnCompletion::of(card.status, card.turn_started_at) {
+        TurnCompletion::Completed => return Step::Finish(RunStatus::Completed),
+        TurnCompletion::Failed => return Step::Finish(RunStatus::Failed),
+        TurnCompletion::Open => {}
     }
+    // The wake turn after a sleep continues this reply, so it must not read
+    // as a newer turn replacing the anchored one.
+    if card.status == AgentStatus::Sleeping {
+        return Step::Wait(WaitPhase::Reply {
+            turn_started_at: None,
+        });
+    }
+    if card.status == AgentStatus::Running
+        && turn_started_at.is_some()
+        && card.turn_started_at.is_some()
+        && turn_started_at != card.turn_started_at
+    {
+        return Step::Finish(RunStatus::Completed);
+    }
+    Step::Wait(WaitPhase::Reply {
+        turn_started_at: turn_started_at.or(card.turn_started_at),
+    })
 }
 
 fn advance_leg(

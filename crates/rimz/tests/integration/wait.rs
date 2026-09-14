@@ -19,6 +19,11 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
             ..LaunchParams::default()
         },
     );
+    assert_eq!(
+        agents_wait_exit(&env),
+        Some(124),
+        "never-started agent finished"
+    );
     let stdout = wait_ok(&env, &["wait", "--in", "5m"]);
     assert!(stdout.starts_with("armed wait-"), "{stdout}");
     assert!(stdout.contains("in 5m"), "{stdout}");
@@ -64,6 +69,7 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     let teams: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["teams", "--json"])).expect("team report");
     assert_eq!(teams[0]["instances"][0]["state"], "sleeping", "{teams}");
+    assert_eq!(agents_wait_exit(&env), Some(124), "sleeping agent finished");
     wait_ok(&env, &["wait", "cancel", name]);
     let report: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
@@ -72,6 +78,16 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     let teams: serde_json::Value = serde_json::from_str(&wait_ok(&env, &["teams", "--json"]))
         .expect("team report after cancellation");
     assert_eq!(teams[0]["instances"][0]["state"], "done");
+    assert_eq!(agents_wait_exit(&env), Some(0));
+}
+
+fn agents_wait_exit(env: &Env) -> Option<i32> {
+    env.rimz()
+        .args(["agents", "wait", "@planner", "--timeout", "1s"])
+        .output()
+        .expect("run agents wait")
+        .status
+        .code()
 }
 
 #[test]

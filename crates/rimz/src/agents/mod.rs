@@ -123,7 +123,7 @@ pub use state::{
     BudgetWindow, COMPACTING_WINDOW_SECS, ContextSeverity, DEFAULT_ACTIVE_GRACE_SECS,
     DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS,
     DEFAULT_TOOL_REPEAT_ATTENTION_AFTER, DEFAULT_TOOL_REPEAT_WARN_AFTER, OpenAsk, PendingWait,
-    PendingWaitTrigger, is_stalled, is_tool_looping, is_turn_dead, settled_outcome,
+    PendingWaitTrigger, TurnCompletion, is_stalled, is_tool_looping, is_turn_dead, settled_outcome,
     single_line_description,
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_description};

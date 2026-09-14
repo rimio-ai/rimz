@@ -388,7 +388,7 @@ The fork always opens in the source agent's recorded worktree. A plain fork take
 
 #### `wait`
 
-`wait` blocks on supervised runs (by run id or pet name) and interactive agents reaching an idle/success gate. One reference keeps the answer-oriented behavior: a plain run wait prints the final assistant message, `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing.
+`wait` blocks on supervised runs (by run id or pet name) and interactive agents finishing a turn: `idle`, `success`, or `failed` after a turn has opened. A sleeping agent (an armed one-shot wait) and a freshly registered agent that never opened a turn keep the wait blocked. One reference keeps the answer-oriented behavior: a plain run wait prints the final assistant message, `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays from the top before tailing.
 
 Several references form a join. Text mode prints each final answer in completion order under a `--- <name> ---` header using the shared [agent-prose rendering rule](../cli.md#agent-prose); only abnormal results add a status suffix. Diagnostics on stderr carry the same header. `--json` prints one labeled map `{name: {status, exit, cost, transcript_path, last_message}}` after every target settles. The command succeeds when every target completes; otherwise it exits with the first non-completed target's status code in argument order. `--stream` accepts one target because one stdout stream has one transcript.
 

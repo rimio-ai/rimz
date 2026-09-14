@@ -257,6 +257,35 @@ impl AgentStatus {
     }
 }
 
+/// Whether an agent has finished a turn, the question every wait on an
+/// interactive agent asks. Distinct from the delivery gate: a sleeping agent
+/// or one that never opened a turn may receive a message, but has not finished.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnCompletion {
+    Open,
+    Completed,
+    Failed,
+}
+
+impl TurnCompletion {
+    /// Decide from an effective status and the current turn's start stamp.
+    /// `Idle`/`Success` without a stamp is a registration that never opened a turn.
+    pub fn of(status: AgentStatus, turn_started_at: Option<Timestamp>) -> Self {
+        match status {
+            AgentStatus::Failed => Self::Failed,
+            AgentStatus::Idle | AgentStatus::Success if turn_started_at.is_some() => {
+                Self::Completed
+            }
+            AgentStatus::Idle
+            | AgentStatus::Success
+            | AgentStatus::Sleeping
+            | AgentStatus::Running
+            | AgentStatus::Waiting
+            | AgentStatus::Paused => Self::Open,
+        }
+    }
+}
+
 /// The context meter's four-tier severity ramp — calm → yellow → amber → red.
 /// Classified once ([`ContextSeverity::classify`]) from the configured
 /// `[theme.display.context_meter]` bands and stamped on each agent's sidebar row where the
@@ -1146,6 +1175,12 @@ impl AgentState {
     /// armed one-shot delivery read as `sleeping`.
     pub fn effective_status(&self) -> AgentStatus {
         self.sleeping_over(self.rested_status())
+    }
+
+    /// Turn completion over [`Self::effective_status`]; project pending waits
+    /// onto the row first, or a sleeping agent reads as finished.
+    pub fn turn_completion(&self) -> TurnCompletion {
+        TurnCompletion::of(self.effective_status(), self.turn_started_at)
     }
 
     pub fn sleeping_over(&self, status: AgentStatus) -> AgentStatus {
