@@ -13,7 +13,7 @@ pub type Rgb = (u8, u8, u8);
 /// Perceptually-even interpolation between two sRGB colors: `amount` of `0.0`
 /// returns `left`, `1.0` returns `right`, blended in OKLab so the midpoint
 /// reads as the visual midpoint.
-pub fn blend(left: Rgb, right: Rgb, amount: f32) -> Rgb {
+pub(super) fn blend(left: Rgb, right: Rgb, amount: f32) -> Rgb {
     let left = Oklab::from_rgb(left);
     let right = Oklab::from_rgb(right);
     Oklab {
@@ -47,7 +47,7 @@ pub(crate) fn lift_lightness(rgb: Rgb, delta: f32) -> Rgb {
 /// shortest-path hue swing toward `target` (`0.0` holds `base`'s hue), and
 /// `chroma_scale` multiplies chroma (`1.0` holds it). Chroma eases back into the
 /// sRGB gamut if the enriched tone overshoots.
-pub(crate) fn warm_toward(base: Rgb, target: Rgb, rotate: f32, chroma_scale: f32) -> Rgb {
+pub(super) fn warm_toward(base: Rgb, target: Rgb, rotate: f32, chroma_scale: f32) -> Rgb {
     use std::f32::consts::{PI, TAU};
     let base = Oklab::from_rgb(base);
     let target = Oklab::from_rgb(target);
