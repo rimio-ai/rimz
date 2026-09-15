@@ -538,6 +538,13 @@ fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
     );
     assert!(!assists.exists(), "auto = false records nothing");
 
+    write_machine_config(&env, "[gc]\nauto = false\nolder_than = \"2w\"\n");
+    unattended();
+    assert!(
+        !state.auto_gc_stamp.exists(),
+        "a config that fails to parse keeps the opt-out"
+    );
+
     write_machine_config(&env, "[gc]\nolder_than = \"3d\"\n");
     unattended();
     let stamp: serde_json::Value =
