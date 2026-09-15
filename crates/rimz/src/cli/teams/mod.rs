@@ -5,6 +5,7 @@ mod flip;
 mod install;
 mod list;
 mod show;
+mod wait;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -91,6 +92,8 @@ enum TeamsSubcmd {
     Restart(CohortArgs),
     /// Hand the board to the next stage's owner.
     Flip(FlipArgs),
+    /// Block until team cohorts' boards reach Done, then print their Result.
+    Wait(WaitArgs),
     /// List or install team bundles from the matching RimZ release.
     Install(install::InstallArgs),
 }
@@ -169,6 +172,35 @@ struct FlipArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     team: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct WaitArgs {
+    /// Team or team#lane whose live cohort to wait on; several wait on all.
+    #[arg(
+        value_name = "NAME",
+        required = true,
+        num_args = 1..,
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
+    )]
+    references: Vec<String>,
+    /// Select the cohort by worktree name or lane (one NAME only).
+    #[arg(
+        long,
+        short = 'w',
+        value_name = "NAME",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
+    )]
+    worktree: Option<String>,
+    /// Return when the first cohort settles instead of all of them.
+    #[arg(long)]
+    any: bool,
+    /// Give up after this long, exiting 124 and leaving the cohorts running.
+    #[arg(long, value_name = "DURATION", value_parser = crate::cli::supervised::parse_timeout)]
+    timeout: Option<std::time::Duration>,
+    /// Emit the outcome as JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 fn parse_progress_note(note: &str) -> Result<String, String> {
@@ -260,6 +292,7 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(TeamsSubcmd::Install(args)) => install::run(args),
         Some(TeamsSubcmd::Flip(args)) => flip::run(args, globals),
+        Some(TeamsSubcmd::Wait(args)) => wait::run(args, globals),
     }
 }
 
@@ -476,6 +509,32 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn wait_parses_references_and_join_flags() {
+        let args = parse_teams(&[
+            "rimz",
+            "wait",
+            "forge#a",
+            "forge#b",
+            "--any",
+            "--timeout",
+            "5m",
+            "--json",
+        ]);
+        let Some(TeamsSubcmd::Wait(args)) = args.command else {
+            panic!("wait verb");
+        };
+        assert_eq!(args.references, ["forge#a", "forge#b"]);
+        assert!(args.any && args.json);
+        assert_eq!(args.timeout, Some(std::time::Duration::from_secs(300)));
+        let args = parse_teams(&["rimz", "wait", "forge", "-w", "feat-x"]);
+        let Some(TeamsSubcmd::Wait(args)) = args.command else {
+            panic!("wait verb");
+        };
+        assert_eq!(args.worktree.as_deref(), Some("feat-x"));
+        assert!(TeamsHarness::try_parse_from(["rimz", "wait"]).is_err());
     }
 
     #[test]
