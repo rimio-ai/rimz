@@ -338,11 +338,12 @@ What each sweep removes on disk is in [store internals](../../internals/store.md
 rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 ```
 
-`uninstall` removes RimZ from the machine. It prints a preview of every root, room, hook, timer, and binary it will touch, asks `[y/N]`, and then reports each removal. Preview and report go to stderr.
+`uninstall` removes RimZ from the machine. It prints a preview of every root, room, hook, skill-link root, timer, and binary it will touch, asks `[y/N]`, and then reports each removal. Preview and report go to stderr.
 
 | What | Default | Flag to change it |
 | --- | --- | --- |
 | RimZ hooks, in each provider's own home and every declared account home | Removed | |
+| RimZ skill links in each provider's skill root, including declared account homes | Removed; your own entries are kept | |
 | Running rooms, on both backends | Torn down | |
 | The external [loop timer](./loop.md) | Removed | |
 | Runtime and cache directories | Removed | |

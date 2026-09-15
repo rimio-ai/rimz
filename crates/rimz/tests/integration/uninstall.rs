@@ -148,6 +148,9 @@ fn bare_uninstall_removes_runtime_cache_data_and_keeps_state_config() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty(), "uninstall writes no stdout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Uninstalling RimZ..."), "{stderr}");
+    assert_eq!(stderr.matches("Skill links: none").count(), 2, "{stderr}");
     fixture.assert_absent(RootKind::Runtime);
     fixture.assert_absent(RootKind::Cache);
     fixture.assert_absent(RootKind::Data);
@@ -239,6 +242,94 @@ fn uninstall_requires_yes_without_tty_and_removes_nothing() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn uninstall_previews_and_removes_only_owned_skill_links_in_every_mode() {
+    use std::os::unix::fs::symlink;
+
+    for flags in [vec![], vec!["--state"], vec!["--config"], vec!["--all"]] {
+        let fixture = UninstallFixture::new();
+        fixture.seed_roots();
+        let library_home = fixture.env.home_root.join("custom-library");
+        let library = library_home.join("skills");
+        fs::create_dir_all(library.join("shared")).unwrap();
+        fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
+        let account_home = fixture.root(RootKind::Data).join("accounts/claude/work");
+        fs::write(
+            fixture.root(RootKind::Config).join("config.toml"),
+            format!("[accounts.claude.work]\nhome = {:?}\n", account_home),
+        )
+        .unwrap();
+        let roots = [
+            fixture.env.home_root.join(".agents/skills"),
+            fixture.env.home_root.join(".claude/skills"),
+            account_home.join("skills"),
+        ];
+        let foreign = fixture.env.home_root.join("foreign");
+        fs::create_dir_all(&foreign).unwrap();
+        for root in &roots {
+            fs::create_dir_all(root.join("mine")).unwrap();
+            fs::write(root.join("mine/SKILL.md"), "my skill").unwrap();
+            symlink(library.join("shared"), root.join("shared")).unwrap();
+            symlink(library.join("gone"), root.join("stale")).unwrap();
+            symlink(&foreign, root.join("foreign")).unwrap();
+        }
+
+        let preview = fixture
+            .rimz()
+            .env("RIMZ_AGENTS_HOME", &library_home)
+            .args(["uninstall", "--keep-binary"])
+            .args(&flags)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&preview.stderr);
+        assert!(!preview.status.success(), "{stderr}");
+        assert!(stderr.contains("pass --yes"), "{stderr}");
+        assert!(stderr.contains("Skill links:\n"), "{stderr}");
+        for root in &roots {
+            assert!(
+                stderr.contains(&format!("  {}\n", root.display())),
+                "{stderr}"
+            );
+            assert_eq!(
+                fs::read_link(root.join("shared")).unwrap(),
+                library.join("shared")
+            );
+            assert!(fs::symlink_metadata(root.join("stale")).is_ok());
+        }
+
+        let output = fixture
+            .rimz()
+            .env("RIMZ_AGENTS_HOME", &library_home)
+            .args(["uninstall", "--yes", "--keep-binary"])
+            .args(&flags)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(
+            stderr.matches("Skill links: removed 2 from ").count(),
+            roots.len(),
+            "{stderr}"
+        );
+        for root in &roots {
+            assert!(
+                stderr.contains(&format!("Skill links: removed 2 from {}", root.display())),
+                "{stderr}"
+            );
+            assert!(fs::symlink_metadata(root.join("shared")).is_err());
+            assert!(fs::symlink_metadata(root.join("stale")).is_err());
+            assert_eq!(
+                fs::read_to_string(root.join("mine/SKILL.md")).unwrap(),
+                "my skill"
+            );
+            assert_eq!(fs::read_link(root.join("foreign")).unwrap(), foreign);
+        }
+        assert!(library.join("shared/SKILL.md").is_file());
+    }
+}
+
 #[test]
 fn uninstall_removes_managed_hooks() {
     let fixture = UninstallFixture::new();
@@ -293,6 +384,14 @@ fn uninstall_unhooks_native_homes_when_the_accounts_config_is_refused() {
     )
     .expect("seed refused accounts config");
 
+    let root = fixture.env.home_root.join(".agents/skills");
+    fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(
+        fixture.env.agents_home().join("skills/gone"),
+        root.join("gone"),
+    )
+    .unwrap();
+
     let output = fixture
         .rimz()
         .args(["uninstall", "--yes", "--keep-binary"])
@@ -303,6 +402,11 @@ fn uninstall_unhooks_native_homes_when_the_accounts_config_is_refused() {
     assert!(!output.status.success(), "stderr:\n{stderr}");
     assert!(!fixture.env.agent_hooks_installed("claude"), "{stderr}");
     assert!(stderr.contains("Hooks: removed claude"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("Skill links: removed 1 from {}", root.display())),
+        "{stderr}"
+    );
+    assert!(fs::symlink_metadata(root.join("gone")).is_err());
     assert!(
         stderr.contains("read provider accounts: `accounts.claude.b.home`"),
         "{stderr}"

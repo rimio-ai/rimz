@@ -30,6 +30,8 @@ What it does on your machine:
 
 RimZ writes no credentials and copies no settings or skills. Run the printed login command once, so the provider stores its own credentials in the new home, and copy any settings you want to share. The account named `default` is always the provider's own home; you never declare it.
 
+A named Claude home's first host launch links in your shared [library skills](./configuration.md#skills); no skill copies are needed.
+
 `rimz accounts list` shows every account and whether a room can use it:
 
 ```console

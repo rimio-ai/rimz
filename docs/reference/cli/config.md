@@ -26,7 +26,7 @@ The directory is `$XDG_CONFIG_HOME/rimz/`, or `~/.config/rimz/` when `XDG_CONFIG
 
 Two key families land under a different table than their dotted name suggests. `theme.colors.*` lands in the root `[colors.*]` tables of `theme.toml`, so an Alacritty palette pasted there keeps working. `loop.*` drops the `loop.` prefix inside `loop.toml`, so `loop.default-timeout` is the file's top-level `default-timeout`.
 
-The same directory holds `remote.toml` (SSH room aliases, managed by [`rimz remote`](./remote.md)) and `skills/` (the shared skill library for [sandbox launches](../../guide/configuration.md#profiles)). `rimz config` reads and writes neither.
+The same directory holds `remote.toml` (SSH room aliases, managed by [`rimz remote`](./remote.md)) and `profiles/`, `teams/`, and `skills/` (drop-in fragments and the shared [skill library](../../guide/configuration.md#skills)). `rimz config` reads and writes none of them.
 
 ## Write the templates
 
