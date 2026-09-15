@@ -36,6 +36,7 @@ mod diagnosis;
 mod display;
 mod edit;
 pub mod effective;
+mod gc;
 mod glyphs;
 mod harness;
 mod loop_;
@@ -79,6 +80,7 @@ pub use edit::{
     ConfigEditErr, ConfigEditor, FileMergeOutcome, FragmentRepairOutcome, FragmentRepairReport,
     MergeAction, MergeReport, SkippedKey,
 };
+pub use gc::{GcConfig, parse_older_than};
 pub use glyphs::{GlyphOverrides, GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
 pub use harness::{
@@ -489,6 +491,7 @@ pub struct MachineConfig {
     pub tmux: TmuxConfig,
     pub resume: ResumeConfig,
     pub harness: HarnessConfig,
+    pub gc: GcConfig,
     pub sentry: SentryConfig,
     pub web: WebPrefs,
     #[serde(skip_serializing_if = "ThemeConfig::is_unset")]
@@ -751,6 +754,7 @@ impl MachineConfig {
             tmux: core.tmux,
             resume: core.resume,
             harness: core.harness,
+            gc: core.gc,
             sentry: core.sentry,
             web: core.web,
             theme,
@@ -994,6 +998,7 @@ struct CoreConfig {
     tmux: TmuxConfig,
     resume: ResumeConfig,
     harness: HarnessConfig,
+    gc: GcConfig,
     sentry: SentryConfig,
     web: WebPrefs,
 }

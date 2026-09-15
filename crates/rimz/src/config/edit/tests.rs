@@ -293,6 +293,8 @@ fn validates_config_key_read_and_write_surfaces() {
         "harness.idle_compact_after",
         "harness.budget",
         "harness.turn_budget",
+        "gc.auto",
+        "gc.older_than",
     ] {
         validate_set_key(&test_files(), &parse_key(key).unwrap())
             .unwrap_or_else(|err| panic!("{key}: {err}"));
@@ -1348,6 +1350,21 @@ fn harness_idle_compact_validation_accepts_modes_and_duration() {
         .expect_err("invalid idle compact duration")
         .to_string();
     assert!(err.contains("use a duration such as 59m or 2h"), "{err}");
+}
+
+#[test]
+fn gc_older_than_is_a_validated_duration_string() {
+    let key = parse_key("gc.older_than").expect("key");
+
+    let value = parse_set_value(&key, "3d");
+    assert_eq!(value.as_str(), Some("3d"));
+    validate_set_value(&key, &value).expect("day span");
+    for bad in ["0d", "soon"] {
+        let err = validate_set_value(&key, &Value::from(bad))
+            .expect_err("invalid gc span")
+            .to_string();
+        assert!(err.contains("use a duration such as 8h or 3d"), "{err}");
+    }
 }
 
 #[test]
