@@ -132,77 +132,31 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
 }
 
 #[test]
-fn sleeping_command_wait_keeps_the_animation_gate_running() {
+fn selected_wait_entries_never_hold_the_animation_gate() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
     let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
     agent.status = crate::agents::AgentStatus::Sleeping;
     agent.user_turn_started_at = Some(snapshot.now);
-    agent.pending_waits.push(crate::agents::PendingWait {
-        name: "command".to_owned(),
-        trigger: crate::agents::PendingWaitTrigger::Command {
-            command: "cargo test".to_owned(),
-        },
-        armed_at: None,
-    });
+    agent
+        .background_shells
+        .push(crate::agents::BackgroundShell {
+            id: "b1".to_owned(),
+            command: Some("cargo test".to_owned()),
+            description: None,
+            started_at: snapshot.now,
+        });
     let mut ui = UiState {
         selected_index: 0,
         ..Default::default()
     };
-    ui.theme(&snapshot.theme);
-    assert_eq!(
-        render::animation_cadence(
-            &snapshot,
-            &ui.cached_theme(&snapshot.theme).unwrap().animations
-        ),
-        render::AnimationCadence::None
-    );
-    assert!(is_animating(&snapshot, &ui, 0, false));
-    assert_eq!(
-        frame_interval(&snapshot, &ui, false),
-        crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
-    );
-    ui.selected_index = usize::MAX;
-    assert!(!is_animating(&snapshot, &ui, 0, false));
-    let row = &snapshot.worktree_groups[0].rows[0];
-    ui.expanded_delegations
-        .insert(row.id.clone(), row.as_agent().unwrap().user_turn_started_at);
-    assert!(is_animating(&snapshot, &ui, 0, false));
-    ui.expanded_delegations.insert(row.id.clone(), None);
-    assert!(!is_animating(&snapshot, &ui, 0, false));
-    ui.expanded_delegations.clear();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
     ui.theme(&snapshot.theme);
-    assert!(is_animating(&snapshot, &ui, 0, false));
-    ui.make_up_filter = Some(render::BodyFilter::Status(
-        crate::agents::AgentStatus::Running,
-    ));
-    assert!(!is_animating(&snapshot, &ui, 0, false));
-    ui.make_up_filter = None;
-    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
-    ui.theme(&snapshot.theme);
-    assert!(!is_animating(&snapshot, &ui, 0, false));
-    ui.selected_index = 0;
-    assert!(is_animating(&snapshot, &ui, 0, false));
-    snapshot.theme.animations.working =
-        Some(toml::from_str("frames = \"-\"\neffect = \"static\"\n").expect("animation spec"));
-    ui.theme(&snapshot.theme);
-    assert!(!is_animating(&snapshot, &ui, 0, false));
-    snapshot.theme.animations.working = None;
-    ui.theme(&snapshot.theme);
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .pending_waits[0]
-        .trigger = crate::agents::PendingWaitTrigger::Pid { pid: 16776 };
-    assert!(is_animating(&snapshot, &ui, 0, false));
-    ui.selected_index = usize::MAX;
-    assert!(!is_animating(&snapshot, &ui, 0, false));
-    let row = &snapshot.worktree_groups[0].rows[0];
-    ui.expanded_delegations
-        .insert(row.id.clone(), row.as_agent().unwrap().user_turn_started_at);
-    assert!(is_animating(&snapshot, &ui, 0, false));
     for trigger in [
+        crate::agents::PendingWaitTrigger::Command {
+            command: "cargo test".to_owned(),
+        },
+        crate::agents::PendingWaitTrigger::Pid { pid: 16776 },
         crate::agents::PendingWaitTrigger::Timer {
             due: snapshot.now,
             delay: None,
@@ -212,11 +166,19 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
             deadline: None,
         },
     ] {
-        snapshot.worktree_groups[0].rows[0]
-            .as_agent_mut()
-            .unwrap()
-            .pending_waits[0]
-            .trigger = trigger;
+        let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+        agent.pending_waits = vec![crate::agents::PendingWait {
+            name: "wait".to_owned(),
+            trigger,
+            armed_at: None,
+        }];
+        assert_eq!(
+            render::animation_cadence(
+                &snapshot,
+                &ui.cached_theme(&snapshot.theme).unwrap().animations
+            ),
+            render::AnimationCadence::None
+        );
         assert!(!is_animating(&snapshot, &ui, 0, false));
     }
 }

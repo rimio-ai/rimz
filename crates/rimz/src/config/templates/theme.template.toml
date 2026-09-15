@@ -208,6 +208,7 @@
 ## subagents = "⧉"
 ## waits = "⧖"
 ## wait_timer = "◷"
+## wait_shell = "❯"
 ## wait_signal = "⌁"
 ## parked_bg = "⋯"
 
@@ -317,6 +318,7 @@
 ## subagents = ""
 ## waits = "󰂠"
 ## wait_timer = "󰔟"
+## wait_shell = "󰞷"
 ## wait_signal = "󱜠"
 ## parked_bg = "⋯"
 

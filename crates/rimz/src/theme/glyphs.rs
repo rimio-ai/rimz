@@ -90,6 +90,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(CardSubagents, "⧉", Some("\u{ed50}")),
     glyph!(CardWaits, "⧖", Some("\u{f00a0}")),
     glyph!(CardWaitTimer, "◷", Some("\u{f051f}")),
+    glyph!(CardWaitShell, "❯", Some("\u{f07b7}")),
     glyph!(CardWaitSignal, "⌁", Some("\u{f1720}")),
     glyph!(CardParkedBg, "⋯", None),
     glyph!(ProcessCpu, "C", Some("\u{ef8f}")),
@@ -326,6 +327,8 @@ mod tests {
         assert_eq!(nerd_font_glyph(GlyphRole::CardWaits), Some("\u{f00a0}"));
         assert_eq!(unicode_glyph(GlyphRole::CardWaitTimer), "◷");
         assert_eq!(nerd_font_glyph(GlyphRole::CardWaitTimer), Some("\u{f051f}"));
+        assert_eq!(unicode_glyph(GlyphRole::CardWaitShell), "❯");
+        assert_eq!(nerd_font_glyph(GlyphRole::CardWaitShell), Some("\u{f07b7}"));
         assert_eq!(unicode_glyph(GlyphRole::CardWaitSignal), "⌁");
         assert_eq!(
             nerd_font_glyph(GlyphRole::CardWaitSignal),

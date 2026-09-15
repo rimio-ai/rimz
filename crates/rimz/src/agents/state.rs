@@ -137,37 +137,43 @@ pub enum PendingWaitTrigger {
 }
 
 impl PendingWait {
+    /// The sleeping card's sentence: `wakes in 12m`, `wakes now`,
+    /// `wakes after cargo test`, or `wakes on pr.merged · 2h left`.
     pub fn label(&self, now: Timestamp) -> String {
-        format!("wait {}", self.trigger.summary(now))
+        let summary = self.trigger.summary(now);
+        match &self.trigger {
+            PendingWaitTrigger::Timer { due, .. } if *due <= now => "wakes now".to_owned(),
+            PendingWaitTrigger::Timer { .. } => format!("wakes {summary}"),
+            PendingWaitTrigger::Pid { .. } | PendingWaitTrigger::Command { .. } => {
+                format!("wakes after {summary}")
+            }
+            PendingWaitTrigger::Signal { .. } => format!("wakes on {summary}"),
+        }
     }
 }
 
 impl PendingWaitTrigger {
+    /// The wait itself, without a kind word (a card glyph carries the kind):
+    /// `in 12m` or `due`, `pid 16776`, the command with its program path
+    /// trimmed, or `pr.merged · 2h left`. A timer's armed `delay` is not shown.
     pub(crate) fn summary(&self, now: Timestamp) -> String {
-        use crate::theme::fmt::{command_preview, duration_label};
+        use crate::theme::fmt::duration_label;
 
         match self {
-            Self::Timer { due, delay } => {
-                let mut label = "timer".to_owned();
-                if let Some(delay) = delay {
-                    label.push_str(&format!(" {delay}"));
-                }
+            Self::Timer { due, .. } => {
                 if *due <= now {
-                    label.push_str(" · due");
+                    "due".to_owned()
                 } else {
                     let minutes = (due.duration_since(now).as_secs() as u64)
                         .div_ceil(60)
                         .max(1);
-                    label.push_str(&format!(" · in {}", duration_label(minutes)));
+                    format!("in {}", duration_label(minutes))
                 }
-                label
             }
             Self::Pid { pid } => format!("pid {pid}"),
-            Self::Command { command } => {
-                format!("shell {}", command_preview(command))
-            }
+            Self::Command { command } => crate::proc::command::command_program_basename(command),
             Self::Signal { selector, deadline } => {
-                let mut label = format!("signal {selector}");
+                let mut label = selector.clone();
                 if let Some(deadline) = deadline {
                     let seconds = deadline.duration_since(now).as_secs().max(0) as u64;
                     let left = if *deadline <= now {
