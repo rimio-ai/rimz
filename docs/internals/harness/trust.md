@@ -74,7 +74,7 @@ A trusted project task still needs its own arming: trust approves the config con
 2. shell rc and profile env
 3. trusted project `[[agents]]` env
 4. adapter launch built-ins ([`AgentDefinition::launch_env`](../../../crates/rimz/src/agents/mod.rs))
-5. launch-plan env: the materialized system-prompt env and the account-home override
+5. launch-plan env: the materialized system-prompt env, the account-home override, and `RIMZ_ISOLATION` (`ENV_ISOLATION`: `sandbox` when the plan wraps the provider in bubblewrap, `host` otherwise)
 6. launch identity from `exec_identity_env`: `RIMZ_AGENT_KIND`, `RIMZ_AGENT_ID`, `RIMZ_RUN_ID`, `RIMZ_AGENT_NAME`, and the env-backed launch parameters (`RIMZ_AGENT_ROLE`, `RIMZ_TEAM`, `RIMZ_LAUNCH_GROUP`, `RIMZ_LAUNCH_ORDINAL`, `RIMZ_CHANNEL`, `RIMZ_AGENT_PROFILE`, `RIMZ_AGENT_MODEL`, `RIMZ_AGENT_EFFORT`, `RIMZ_AGENT_BUDGET`)
 7. subagent lockdown env, for supervised children (`AgentDefinition::lockdown_subagent_env`)
 8. `RIMZ_LAUNCH_REMINDERS` (`ENV_LAUNCH_REMINDERS`), the rendered launch reminders (empty when none) for adapters whose extension carries them (`SystemTextChannel::ExtensionEnv`)

@@ -88,6 +88,8 @@ The plan pins every environment variable it consulted, so shell startup files ca
 | The adapter's native override keys (`config_home_env_keys`: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `QWEN_HOME`, `KIRO_HOME`, and others) | Same, so a room account's home key is among them. |
 | `TMPDIR` | Always `/tmp`. |
 
+Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host` ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces.
+
 A key present with an empty value is pinned to the empty value. To move a root, export it before launching RimZ or set it in trusted launch environment config; changing it only in the pane's startup files does not change the planned mounts. Finalized provider-account launches keep their raw argv and get the same pins without another shell.
 
 ## Room tmp

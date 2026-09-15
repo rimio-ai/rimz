@@ -16,6 +16,11 @@ use super::prompt_compose::{
     self, MaterializedSystemPrompt, SystemPromptPlan, SystemPromptSources,
 };
 
+/// The isolation the provider process runs under: `sandbox` when the launch
+/// plan wraps it in bubblewrap, `host` otherwise. Set by the launch plan on
+/// every launch, so a parent's value never leaks into a child.
+const ENV_ISOLATION: &str = "RIMZ_ISOLATION";
+
 pub struct LaunchPlanInputs<'a> {
     pub request: &'a ExecRequest,
     pub cwd: &'a Path,
@@ -108,6 +113,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     )?;
     let mut extra_env = prompt.materialized.env.clone();
     extra_env.extend(login.env(&BTreeMap::new()));
+    let isolation = if inputs.bwrap.is_some() {
+        crate::config::Isolation::Sandbox
+    } else {
+        crate::config::Isolation::Host
+    };
+    extra_env.insert(ENV_ISOLATION.to_owned(), isolation.to_string());
     let mut stage = launch::compile_agent_process_stage_with_extra_env(
         inputs.project_root,
         &request,
