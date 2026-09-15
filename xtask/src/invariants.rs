@@ -456,6 +456,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
     let harness_root = root.join("crates/rimz/src/harness");
     let sidebar_graph_harness = [
         "auto_continue.rs",
+        "auto_gc.rs",
         "auto_redeem.rs",
         "budget.rs",
         "idle_compact.rs",

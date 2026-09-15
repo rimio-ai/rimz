@@ -97,6 +97,7 @@ pub struct ProducerRefreshState {
     cohort_rollup: crate::store::snapshot::RollupCursor,
     cohort_effort: crate::agents::spending::EffortParseMemo,
     orphan_sweep_checked_at_ms: Option<u64>,
+    auto_gc: crate::harness::auto_gc::AutoGcMemo,
 }
 
 /// Supply sidebar workspace scope to the account-global spending service. A
@@ -283,6 +284,14 @@ pub(super) fn refresh_heavy_lanes(
         state.orphan_sweep_checked_at_ms = Some(now_ms);
         crate::harness::orphan_sweep::enforce(state_paths, runtime, &runs, base.now);
     }
+    crate::harness::auto_gc::sweep_if_due(
+        state_paths,
+        runtime,
+        base.project_root.as_deref(),
+        &config.gc,
+        base.now,
+        &mut state.auto_gc,
+    );
     refresh_diff_stats_for(
         base,
         runtime,
