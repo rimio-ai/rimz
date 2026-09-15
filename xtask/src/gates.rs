@@ -361,11 +361,12 @@ fn gate_doc(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
 fn gate_test(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     let sandbox = HostSandbox::for_tests(root)?;
     let env = sandbox.command_env();
+    let removed = sandbox.removed_test_env();
     captured_cargo_gate(
         root,
         GATE_TEST_ARGS.iter().copied(),
         &env,
-        &["NO_COLOR"],
+        &str_refs(&removed),
         Some(extract_test_summary),
         progress,
     )
@@ -719,12 +720,14 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
     let command = parse_test_command(args)?;
     let sandbox = HostSandbox::for_tests(root)?;
     let env = sandbox.command_env();
+    let removed = sandbox.removed_test_env();
+    let removed = str_refs(&removed);
     let invocation = test_invocation(args);
 
     if command.list {
         let mut cargo_args = nextest_args("list");
         cargo_args.extend(command.forwarded);
-        let captured = capture_cargo_task(root, "test list", cargo_args, &env, &["NO_COLOR"])?;
+        let captured = capture_cargo_task(root, "test list", cargo_args, &env, &removed)?;
         if !captured.status.success() {
             report_task_failure("test list", &failure_detail(&captured.output), &invocation);
             bail!("test list failed");
@@ -740,9 +743,9 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
         let streams_output = requests_no_capture(&command.forwarded);
         cargo_args.extend(command.forwarded);
         if streams_output {
-            return run_streaming_tests(root, cargo_args, &env, &invocation, args);
+            return run_streaming_tests(root, cargo_args, &env, &removed, &invocation, args);
         }
-        let captured = capture_cargo_task(root, "test", cargo_args, &env, &["NO_COLOR"])?;
+        let captured = capture_cargo_task(root, "test", cargo_args, &env, &removed)?;
         if nextest_matched_no_tests(captured.status.code(), &captured.output) {
             report_zero_test_match(args);
             bail!("no tests matched");
@@ -750,7 +753,11 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
         return finish_cargo_task("test", captured, Some(extract_test_summary), &invocation);
     }
 
-    run_named_tests(root, command, &env, &invocation)
+    run_named_tests(root, command, &env, &removed, &invocation)
+}
+
+fn str_refs(keys: &[String]) -> Vec<&str> {
+    keys.iter().map(String::as_str).collect()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -828,6 +835,7 @@ fn run_named_tests(
     root: &Path,
     command: TestCommand,
     env: &[(&str, PathBuf)],
+    removed: &[&str],
     invocation: &str,
 ) -> Result<()> {
     let filterset = exact_name_filterset(&command.names);
@@ -839,7 +847,7 @@ fn run_named_tests(
         "--message-format".to_owned(),
         "json".to_owned(),
     ]);
-    let listed = capture_cargo_task(root, "test discovery", list_args, env, &["NO_COLOR"])?;
+    let listed = capture_cargo_task(root, "test discovery", list_args, env, removed)?;
     if !listed.status.success() {
         report_task_failure(
             "test discovery",
@@ -862,13 +870,13 @@ fn run_named_tests(
     run_args.extend(command.forwarded);
     if streams_output {
         report_test_selection(&command.names, &matches);
-        run_streaming_tests(root, run_args, env, invocation, &command.names)?;
+        run_streaming_tests(root, run_args, env, removed, invocation, &command.names)?;
         if !matches.unmatched.is_empty() {
             bail!("some requested test names matched no tests");
         }
         return Ok(());
     }
-    let captured = capture_cargo_task(root, "test", run_args, env, &["NO_COLOR"])?;
+    let captured = capture_cargo_task(root, "test", run_args, env, removed)?;
     report_test_selection(&command.names, &matches);
     finish_cargo_task("test", captured, Some(extract_test_summary), invocation)?;
     if !matches.unmatched.is_empty() {
@@ -891,10 +899,11 @@ fn run_streaming_tests(
     root: &Path,
     cargo_args: Vec<String>,
     env: &[(&str, PathBuf)],
+    removed: &[&str],
     invocation: &str,
     requested: &[String],
 ) -> Result<()> {
-    let status = crate::runner::run_inherited(root, "cargo", cargo_args, env, &["NO_COLOR"])?;
+    let status = crate::runner::run_inherited(root, "cargo", cargo_args, env, removed)?;
     if nextest_matched_no_tests(status.code(), "") {
         report_zero_test_match(requested);
         bail!("no tests matched");
@@ -1085,7 +1094,8 @@ pub(crate) fn test_archive(root: &Path, args: &[String]) -> Result<()> {
         "--locked".to_owned(),
     ];
     cargo_args.extend(args.iter().cloned());
-    run_with_env_and_removed(root, "cargo", cargo_args, &env, &["NO_COLOR"])
+    let removed = sandbox.removed_test_env();
+    run_with_env_and_removed(root, "cargo", cargo_args, &env, &str_refs(&removed))
 }
 
 fn nextest_archive_file(args: &[String]) -> Option<PathBuf> {
@@ -1124,7 +1134,7 @@ pub(crate) fn coverage(root: &Path) -> Result<()> {
             "--locked",
         ],
         &env,
-        &["NO_COLOR"],
+        &str_refs(&sandbox.removed_test_env()),
     )
 }
 

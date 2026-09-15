@@ -92,6 +92,17 @@ impl HostSandbox {
             .collect()
     }
 
+    /// Keys a test run drops from the inherited environment: `NO_COLOR`, plus
+    /// every ambient room session key (see [`session_key`]). Without this, a
+    /// suite launched from inside a RimZ pane or supervised run hands its
+    /// `RIMZ_RUN_ID` and identity pin to in-process unit tests, which then take
+    /// the supervised branch a clean shell never sees. Keys the sandbox sets
+    /// itself and build-script inputs survive: the runner applies removals after
+    /// the sandbox env, and dropping a build input would change the binary.
+    pub(crate) fn removed_test_env(&self) -> Vec<String> {
+        test_removed_env(std::env::vars_os().map(|(key, _)| key), &self.env)
+    }
+
     fn apply_to(&self, command: &mut Command, scrub_session: bool) {
         apply_env(command, &self.env, scrub_session);
     }
@@ -251,6 +262,31 @@ fn cleanup_sandbox(root: &Path, env: &BTreeMap<&'static str, PathBuf>) {
 fn session_key(key: &OsStr) -> bool {
     let key = key.to_string_lossy();
     key.starts_with("RIMZ_") || key.starts_with("TMUX") || key.starts_with("ZELLIJ")
+}
+
+/// `crates/rimz/build.rs` inputs that share the `RIMZ_` prefix with room
+/// session keys but configure the build rather than the session.
+const BUILD_INPUT_ENV: [&str; 4] = [
+    "RIMZ_PRICING_JSON_PATH",
+    "RIMZ_EMBED_PRESENCE_PLUGIN",
+    "RIMZ_BUILD_PROFILE_OVERRIDE",
+    "RIMZ_BUILD_VERSION_OVERRIDE",
+];
+
+fn test_removed_env(
+    ambient: impl Iterator<Item = std::ffi::OsString>,
+    sandbox: &BTreeMap<&'static str, PathBuf>,
+) -> Vec<String> {
+    let mut removed = vec!["NO_COLOR".to_owned()];
+    removed.extend(
+        ambient
+            .filter(|key| session_key(key))
+            .filter_map(|key| key.into_string().ok())
+            .filter(|key| {
+                !sandbox.contains_key(key.as_str()) && !BUILD_INPUT_ENV.contains(&key.as_str())
+            }),
+    );
+    removed
 }
 
 fn reap_bounded(mut command: Command) {
@@ -443,6 +479,33 @@ mod tests {
             assert!(session_key(OsStr::new(key)), "{key}");
         }
         assert!(!session_key(OsStr::new("PATH")));
+    }
+
+    #[test]
+    fn test_env_drops_room_session_keys_but_keeps_sandbox_and_build_inputs() {
+        let sandbox = sandbox_env(Path::new("/tmp/rimz-sandbox-aB123z"));
+        let ambient = [
+            "RIMZ_RUN_ID",
+            "RIMZ_WORKSPACE_ID",
+            "TMUX_PANE",
+            "ZELLIJ_SESSION_NAME",
+            "TMUX_TMPDIR",
+            "ZELLIJ_CONFIG_DIR",
+            "RIMZ_PRICING_JSON_PATH",
+            "RIMZ_BUILD_VERSION_OVERRIDE",
+            "PATH",
+        ]
+        .map(std::ffi::OsString::from);
+        assert_eq!(
+            test_removed_env(ambient.into_iter(), &sandbox),
+            [
+                "NO_COLOR",
+                "RIMZ_RUN_ID",
+                "RIMZ_WORKSPACE_ID",
+                "TMUX_PANE",
+                "ZELLIJ_SESSION_NAME",
+            ]
+        );
     }
 
     #[cfg(target_os = "linux")]
