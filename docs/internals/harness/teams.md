@@ -14,9 +14,11 @@ The reminder presents relative paths and line counts as a launch-time snapshot. 
 
 ## The board and its stage
 
-`scratch::board_stage` reads the first line starting `Stage:` in `<worktree>/blackboard.md`, whether or not `scratch-files` declares the board. Only a terminal ` (@owner)` suffix splits off as the owner, stored without `@`; other parenthesized text stays in the stage name, so `Stage: Implement (delta) (@coder)` is stage `Implement (delta)` owned by `coder`. A missing or unreadable board has no stage.
+`scratch::board_stage` reads the first line starting `Stage:` in `<worktree>/blackboard.md`, whether or not `scratch-files` declares the board. Only a terminal ` (@owner)` suffix splits off as the owner, stored without `@`; other parenthesized text stays in the stage name, so `Stage: Implement (delta) (@coder)` is stage `Implement (delta)` owned by `coder`. A missing or unreadable board has no stage. `scratch::board_section` reads the trimmed text under a `## <heading>` line up to the next heading, `None` when absent or blank.
 
 `teams show` combines the team's declared `stages` (its `pipeline` line, with the implicit `Done` last) with the board's current stage. The stage's age is the `at` of the newest `team.stage` event from `stage_flips` whose instance is the cohort and whose destination is the board's stage; a hand-edited board or a flip rotated out of the active event log leaves the age unknown, and the stage shows without one. Each armed signal subscription's fire state is the newest loop run-log record for its task name. Its PR and CI line comes from the published sidebar projection (the snapshot's `worktree_groups`), with no forge call of its own, so an absent PR line is not proof that no PR exists.
+
+`rimz teams wait` is the third reader. It resolves each cohort once through the drive verbs' selector, then polls `board_stage` at the members' shared worktree every 500 ms: an exact `Done` settles completed and reads the `Result` section; any other stage, or no board, reads a fresh live snapshot and settles failed only when the cohort is gone from `address::team_cohorts`. It never scans the event log or subscribes to `team.stage`, since signals do not replay and a blocking CLI cannot receive one.
 
 ## Flipping a stage
 
