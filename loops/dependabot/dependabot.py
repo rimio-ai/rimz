@@ -203,6 +203,8 @@ def branch_worktrees():
 def open_checkout(plan):
     """Resume the attempt checkout a previous fire kept, or cut a fresh one from the published branch."""
     branch = plan["branch"]
+    # A tree directory deleted by hand still pins its branch until its metadata is pruned.
+    command("git", "worktree", "prune")
     trees = branch_worktrees()
     stale = [dict(branch=other, path=path) for other, path in sorted(trees.items())
              if other.startswith(PREFIX) and other != branch]

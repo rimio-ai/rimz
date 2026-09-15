@@ -9,6 +9,7 @@ import fcntl
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -139,6 +140,13 @@ class CheckoutFixture(unittest.TestCase):
         launch.assert_not_called()
         self.assertEqual(self.remote_branch(), remote)
         self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json")])
+
+    def test_hand_deleted_checkout_directory_is_pruned_and_recreated(self):
+        self.publish_batch()
+        git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()), "origin/deps/repair-1")
+        shutil.rmtree(self.tree())
+        self.assertEqual(repair.open_checkout(self.plan)["attempt_checkout"], "created")
+        self.assertTrue(self.tree().is_dir())
 
     def test_kept_checkout_is_resumed_without_push_or_create(self):
         git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()))
