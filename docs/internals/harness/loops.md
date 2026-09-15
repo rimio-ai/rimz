@@ -247,7 +247,7 @@ A delivery, signal, or watch prompt goes through `compose_wait`: the wait line, 
 | Trigger | Wait and evidence lines |
 | --- | --- |
 | timer | `waited <delay> [<name>]` |
-| watch | `WatchVerdict::label`, the name, and `output: <agent-visible path> (<FileSummary::label>)` when a path is present and the file is non-empty, `no output` when it is empty; the tail is never inlined |
+| watch | `WatchVerdict::label`, the name, and `output: <agent-visible path> (<FileSummary::label>)` when a path is present and the file is non-empty, `no output` when it is empty except for a `--pid` wait (`WaitMeta.pid`), whose empty file says nothing about the process; the tail is never inlined |
 | signal | `waited on <subject>`, `fired [<name>]`, and compact JSON with the fired `signal` name; the subject adds branch and PR for forge signals, the handle for agents, or the instance for teams |
 | manual fire | `fired by hand` |
 
