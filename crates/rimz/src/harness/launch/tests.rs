@@ -328,13 +328,13 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
             .map(|pair| pair[1].as_str())
             .collect();
         if kind == "codex" {
-            assert_eq!(sandbox_values, ["danger-full-access"], "{sandboxed:?}");
+            assert_eq!(sandbox_values, ["danger-full-access"]);
             assert!(host.provider_argv.contains(&"workspace-write".to_owned()));
         } else {
             assert!(sandbox_values.is_empty());
             assert!(
                 sandboxed.provider_argv.starts_with(&host.provider_argv),
-                "only the sandbox reminder follows: {sandboxed:?}"
+                "only the sandbox reminder follows the host argv"
             );
         }
     }

@@ -567,9 +567,7 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
     assert!(
         plan.argv()
             .windows(2)
-            .any(|pair| pair == ["--sandbox", "danger-full-access"]),
-        "{:?}",
-        plan.argv()
+            .any(|pair| pair == ["--sandbox", "danger-full-access"])
     );
     let sandbox = plan.sandbox.as_ref().expect("sandbox plan");
     assert!(
