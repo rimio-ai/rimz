@@ -366,6 +366,15 @@ impl TaskCatalog {
             let target = match task.action() {
                 Ok(TaskAction::Deliver(target)) => target.clone(),
                 Ok(TaskAction::Spawn(_) | TaskAction::CheckOnly) => continue,
+                // RimZ is the only writer of instance rows, so one that no
+                // longer compiles can never fire or retire: reap it. User-owned
+                // rows keep rendering `<invalid>` for the user to fix.
+                Err(err) if task.source() == TaskSource::Instance => {
+                    tracing::debug!(task = %name, error = %err, "undeliverable loop instance reaped by schedule gc");
+                    self.reap_scheduled(&name, &task)?;
+                    reaped += 1;
+                    continue;
+                }
                 Err(err) => {
                     tracing::debug!(task = %name, error = %err, "invalid loop task skipped by schedule gc");
                     continue;
@@ -374,18 +383,7 @@ impl TaskCatalog {
             match delivery_target_alive(task.entry(), &target) {
                 Ok(true) => {}
                 Ok(false) => {
-                    if task
-                        .trigger()
-                        .as_ref()
-                        .is_ok_and(|parsed| matches!(parsed.trigger, super::Trigger::Watch { .. }))
-                        && let Ok(runtime) =
-                            RuntimePaths::for_workspace(WorkspaceResolver::persisted_workspace_id(
-                                task.entry().resolved_root(),
-                            )?)
-                    {
-                        let _ = super::signal::stop_watcher(&runtime, &name);
-                    }
-                    self.consume_scheduled(&name)?;
+                    self.reap_scheduled(&name, &task)?;
                     reaped += 1;
                 }
                 Err(err) => {
@@ -394,6 +392,21 @@ impl TaskCatalog {
             }
         }
         Ok(reaped)
+    }
+
+    fn reap_scheduled(&self, name: &str, task: &LoadedTask) -> Result<()> {
+        if task
+            .trigger()
+            .as_ref()
+            .is_ok_and(|parsed| matches!(parsed.trigger, super::Trigger::Watch { .. }))
+            && let Ok(runtime) = RuntimePaths::for_workspace(
+                WorkspaceResolver::persisted_workspace_id(task.entry().resolved_root())?,
+            )
+        {
+            let _ = super::signal::stop_watcher(&runtime, name);
+        }
+        self.consume_scheduled(name)?;
+        Ok(())
     }
 }
 

@@ -274,7 +274,7 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 | `messages` | Current workspace | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. |
 | `event log` | Current workspace | Cuts a corrupt tail off the event log. |
 | `agent cache` | Current workspace | Prunes prior-agent carryover older than 14 days. |
-| `loop schedules` | Machine | Removes loop delivery tasks whose target agent is gone, and prunes [wait output files](./wait.md) older than 14 days that nothing claims. |
+| `loop schedules` | Machine | Removes loop delivery tasks whose target agent is gone and RimZ-owned instance rows that no longer compile to an action, and prunes [wait output files](./wait.md) older than 14 days that nothing claims. |
 
 | Flag | Default | Effect |
 | --- | --- | --- |
@@ -321,7 +321,7 @@ The second line counts the areas that ran (`checked 4 of 8 areas` when the four 
 | `temps` | `files_removed`, `bytes_removed`. |
 | `messages` | `archived`, `reconciled`. |
 | `carryover_pruned` | Carryover entries pruned. |
-| `schedules_reaped` | Loop delivery tasks removed because their target is gone. |
+| `schedules_reaped` | Loop delivery tasks removed because their target is gone, plus RimZ-owned instance rows removed because they no longer compile to an action. |
 | `wait_logs_pruned` | Wait output files pruned. |
 | `repair` | `bytes_truncated` and `frames_kept`, or `null` when store maintenance was skipped. |
 | `store_maintenance` | `done`, `skipped_dry_run`, or `skipped_no_store`. |
