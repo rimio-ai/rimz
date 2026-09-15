@@ -71,7 +71,8 @@ When several copies of a team are working in parallel, checking each pane loses 
 
 ```sh
 rimz teams                              # every definition and live instance
-rimz teams show forge#feat-query        # stage, PR/CI, memory files, and member activity
+rimz teams show forge#feat-query        # stage, liveness, PR/CI, members, signal fires, memory files
+rimz teams show forge                   # the definition, then one row per live cohort
 rimz teams show '#feat-query'           # every team live in this lane
 rimz teams forge -w feat-query          # launch or reconcile one cohort
 rimz teams resume forge                 # reopen its newest closed cohort
@@ -85,7 +86,7 @@ The bare team name and the longer `launch` form use the same reconciliation engi
 
 Fresh launches that open a new pane or tab print the worktree lane, absolute path, `board blackboard.md`, and each member's handle and resolved model, marking the effective leader with `<- leader`. When signal bindings are configured, a `signals` line closes the member list. If you supplied a task, the receipt names its recipient and echoes a shortened version of that prompt. This tells you how the team was launched, not whether its providers are ready: startup is asynchronous, and members may not yet appear in `teams show`.
 
-Run `rimz teams show forge#feat-query` to see each cohort's state, member status, activity, context fill, cost, and time since last activity. The report shows the absolute worktree path once and lists existing memory files relative to the worktree with line counts and modification ages, so you can open the board or notes directly rather than read every pane. The isolation line shows the members' isolation (the `--isolation` given at launch, else the machine setting) and their temporary directory. Stage comes from the `Stage:` line that `rimz teams flip` updates in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
+Run `rimz teams show forge#feat-query` to check on a run. It leads with what that question needs: the cohort's state and, unless it is working, how long since any member did anything; a `stage:` line with how long the board has sat in that stage (`Done for 2h` once finished); the pipeline and PR/CI; then each member's status, time since last activity, activity, context fill, and cost; and whether each armed signal subscription has fired. The definition follows at the end. `rimz teams show forge` answers the other question, what the team is: the definition first, then one row per live cohort with its stage, PR, and state. The lane report shows the absolute worktree path once and lists existing memory files relative to the worktree with line counts and modification ages, so you can open the board or notes directly rather than read every pane. The isolation line shows the members' isolation (the `--isolation` given at launch, else the machine setting) and their temporary directory. Stage comes from the `Stage:` line that `rimz teams flip` updates in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
 
 Use `rimz message @planner#feat-query '<text>'` to message the leader, or arm a wait on the cohort's next idle transition instead of polling. For an agent waiting on this cohort:
 

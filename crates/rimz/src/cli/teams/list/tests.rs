@@ -157,6 +157,22 @@ fn catalog_projects_cohort_observability_by_worktree() {
     }
     let mut snapshot = snapshot(agents);
     snapshot.worktree_groups = groups;
+    let flip = |instance: &str, to: &str, second: i64| StageSignal {
+        team: "forge".into(),
+        instance: instance.into(),
+        to: to.into(),
+        by: "planner".into(),
+        board: first.join("blackboard.md"),
+        at: jiff::Timestamp::from_second(second).unwrap(),
+        from: None,
+        owner: None,
+        note: None,
+    };
+    let flips = [
+        flip("forge#first", "Implement (delta)", 30),
+        flip("forge#first", "Plan", 60),
+        flip("forge#second", "Implement (delta)", 90),
+    ];
     let build = |snapshot: &SidebarSnapshot| {
         build_catalog(
             &teams,
@@ -166,6 +182,8 @@ fn catalog_projects_cohort_observability_by_worktree() {
                 isolation: Isolation::Host,
                 tmp_dir: Path::new("/tmp"),
                 tasks: &BTreeMap::new(),
+                flips: &flips,
+                runs: &BTreeMap::new(),
                 snapshot,
                 audit_agents: &[],
                 lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -186,6 +204,10 @@ fn catalog_projects_cohort_observability_by_worktree() {
     assert_eq!(
         first_report.stage.as_ref().unwrap().owner.as_deref(),
         Some("coder")
+    );
+    assert_eq!(
+        first_report.stage.as_ref().unwrap().since,
+        Some(jiff::Timestamp::from_second(30).unwrap())
     );
     assert_eq!(first_report.pr.as_ref().unwrap().number, Some(41));
     assert_eq!(first_report.pr.as_ref().unwrap().state, None);
@@ -258,7 +280,17 @@ fn catalog_merges_definition_and_live_instance() {
     agent.role = Some("planner".to_owned());
     agent.channel = Some("feat-x".to_owned());
     agent.isolation = Some(Isolation::Sandbox);
-    let snapshot = snapshot(vec![agent]);
+    agent.last_activity = jiff::Timestamp::UNIX_EPOCH;
+    let mut reviewer = agent.clone();
+    reviewer.agent_id = "sess-reviewer".into();
+    reviewer.role = Some("reviewer".to_owned());
+    reviewer.status = AgentStatus::Idle;
+    reviewer.last_activity = jiff::Timestamp::from_second(90).unwrap();
+    let mut stray = reviewer.clone();
+    stray.agent_id = "sess-stray".into();
+    stray.role = Some("auditor".to_owned());
+    stray.last_activity = jiff::Timestamp::UNIX_EPOCH;
+    let snapshot = snapshot(vec![stray, reviewer, agent]);
     let reports = build_catalog(
         &teams,
         &ProfilesConfig::default(),
@@ -267,6 +299,8 @@ fn catalog_merges_definition_and_live_instance() {
             isolation: Isolation::Host,
             tmp_dir: Path::new("/state/room/tmp"),
             tasks: &BTreeMap::new(),
+            flips: &[],
+            runs: &BTreeMap::new(),
             snapshot: &snapshot,
             audit_agents: &[],
             lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -280,8 +314,19 @@ fn catalog_merges_definition_and_live_instance() {
     assert!(reports[0].valid);
     assert_eq!(reports[0].roles[0].model.as_deref(), Some("fable"));
     assert_eq!(reports[0].instances[0].channel, "feat-x");
-    assert_eq!(reports[0].instances[0].members.len(), 1);
-    assert_eq!(reports[0].instances[0].state, "working");
+    assert_eq!(
+        reports[0].instances[0]
+            .members
+            .iter()
+            .map(|member| member.role.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("planner"), Some("reviewer"), Some("auditor")]
+    );
+    assert_eq!(
+        reports[0].instances[0].last_activity_at,
+        Some(jiff::Timestamp::from_second(90).unwrap())
+    );
+    assert_eq!(reports[0].instances[0].state, CohortState::Working);
     assert_eq!(reports[0].instances[0].isolation, Isolation::Sandbox);
     assert_eq!(
         reports[0].instances[0].tmp_dir,
@@ -318,6 +363,8 @@ fn catalog_merges_definition_and_live_instance() {
             isolation: Isolation::Host,
             tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
+            flips: &[],
+            runs: &BTreeMap::new(),
             snapshot: &snapshot,
             audit_agents: &[],
             lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -367,6 +414,8 @@ fn live_member_cost_comes_from_its_audit_slot() {
             isolation: Isolation::Host,
             tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
+            flips: &[],
+            runs: &BTreeMap::new(),
             snapshot: &snapshot(vec![agent.clone()]),
             audit_agents: &[agent],
             lifetimes: &lifetimes,
@@ -444,6 +493,8 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
                 isolation: Isolation::Host,
                 tmp_dir: Path::new("/tmp"),
                 tasks: &BTreeMap::new(),
+                flips: &[],
+                runs: &BTreeMap::new(),
                 snapshot: &snapshot(vec![current.clone()]),
                 audit_agents: &audit_agents,
                 lifetimes: &lifetimes,
@@ -513,6 +564,8 @@ fn invalid_team_stays_visible_with_its_error() {
             isolation: Isolation::Host,
             tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
+            flips: &[],
+            runs: &BTreeMap::new(),
             snapshot: &snapshot(Vec::new()),
             audit_agents: &[],
             lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -550,7 +603,8 @@ fn live_instance_state_follows_team_attention_priority() {
             instance_state(&BTreeMap::from([
                 ("sleeping".to_owned(), 1),
                 (other.to_owned(), 1),
-            ])),
+            ]))
+            .as_str(),
             expected,
             "sleeping with {other}"
         );
@@ -560,18 +614,18 @@ fn live_instance_state_follows_team_attention_priority() {
             ("running".to_owned(), 2),
             ("failed".to_owned(), 1),
         ])),
-        "blocked"
+        CohortState::Blocked
     );
     assert_eq!(
         instance_state(&BTreeMap::from([
             ("success".to_owned(), 1),
             ("paused".to_owned(), 1),
         ])),
-        "paused"
+        CohortState::Paused
     );
     assert_eq!(
         instance_state(&BTreeMap::from([("success".to_owned(), 2)])),
-        "done"
+        CohortState::Idle
     );
 }
 
@@ -585,6 +639,8 @@ fn human_catalog_and_empty_state_teach_the_command() {
             isolation: Isolation::Host,
             tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
+            flips: &[],
+            runs: &BTreeMap::new(),
             snapshot: &snapshot(Vec::new()),
             audit_agents: &[],
             lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -647,6 +703,8 @@ fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
                 isolation: Isolation::Host,
                 tmp_dir: Path::new("/tmp"),
                 tasks: &BTreeMap::new(),
+                flips: &[],
+                runs: &BTreeMap::new(),
                 snapshot: &snapshot(vec![agent.clone()]),
                 audit_agents: &[],
                 lifetimes: &rimz::worktree::lane_lifetimes([]),

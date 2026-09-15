@@ -78,7 +78,7 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     assert_eq!(report["agent"]["status"], "success");
     let teams: serde_json::Value = serde_json::from_str(&wait_ok(&env, &["teams", "--json"]))
         .expect("team report after cancellation");
-    assert_eq!(teams[0]["instances"][0]["state"], "done");
+    assert_eq!(teams[0]["instances"][0]["state"], "idle");
     assert_eq!(agents_wait_exit(&env), Some(0));
     rimz::transcript::append(
         env.store().paths(),
