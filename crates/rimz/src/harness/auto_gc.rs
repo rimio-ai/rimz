@@ -28,6 +28,9 @@ const AUTO_GC_RESPAWN_THROTTLE: Duration = Duration::from_secs(10 * 60);
 pub(crate) struct AutoGcMemo {
     producer_since: Option<Timestamp>,
     last_spawn: Option<Timestamp>,
+    /// Stamps only move forward, so one read inside the interval settles the
+    /// rest of the day without touching disk.
+    last_swept: Option<Timestamp>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -45,13 +48,18 @@ pub(crate) fn sweep_if_due(
     memo: &mut AutoGcMemo,
 ) {
     let producer_since = *memo.producer_since.get_or_insert(now);
-    if !due(
-        config.auto,
-        read_stamp(state_paths),
-        producer_since,
-        memo.last_spawn,
-        now,
-    ) {
+    let last_spawn = memo.last_spawn;
+    let cached_sweep = &mut memo.last_swept;
+    let last_swept = || {
+        if let Some(swept) = *cached_sweep
+            && !interval_elapsed(swept, now)
+        {
+            return Some(swept);
+        }
+        *cached_sweep = read_stamp(state_paths);
+        *cached_sweep
+    };
+    if !due(config.auto, last_swept, producer_since, last_spawn, now) {
         return;
     }
     let Some(project_root) = project_root else {
@@ -80,19 +88,25 @@ pub(crate) fn sweep_if_due(
     memo.last_spawn = Some(now);
 }
 
+/// The stamp is read last, so an idle or opted-out tick never touches disk.
 fn due(
     auto: bool,
-    last_swept: Option<Timestamp>,
+    last_swept: impl FnOnce() -> Option<Timestamp>,
     producer_since: Timestamp,
     last_spawn: Option<Timestamp>,
     now: Timestamp,
 ) -> bool {
-    let elapsed = |since: Timestamp, span: Duration| {
-        now.as_second() - since.as_second() >= span.as_secs() as i64
-    };
-    auto && elapsed(producer_since, AUTO_GC_SETTLE)
-        && last_swept.is_none_or(|swept| elapsed(swept, AUTO_GC_INTERVAL))
-        && last_spawn.is_none_or(|spawn| elapsed(spawn, AUTO_GC_RESPAWN_THROTTLE))
+    auto && elapsed(producer_since, AUTO_GC_SETTLE, now)
+        && last_spawn.is_none_or(|spawn| elapsed(spawn, AUTO_GC_RESPAWN_THROTTLE, now))
+        && last_swept().is_none_or(|swept| interval_elapsed(swept, now))
+}
+
+fn interval_elapsed(swept: Timestamp, now: Timestamp) -> bool {
+    elapsed(swept, AUTO_GC_INTERVAL, now)
+}
+
+fn elapsed(since: Timestamp, span: Duration, now: Timestamp) -> bool {
+    now.as_second() - since.as_second() >= span.as_secs() as i64
 }
 
 /// When this workspace last ran an unattended sweep; unreadable reads as never.
@@ -170,7 +184,7 @@ mod tests {
                 "throttle elapsed",
             ),
         ] {
-            assert_eq!(due(auto, swept, since, spawn, now), expected, "{case}");
+            assert_eq!(due(auto, || swept, since, spawn, now), expected, "{case}");
         }
     }
 
