@@ -351,7 +351,7 @@ The receiver's turn-start hook parses the header into transcript entries ([trans
 
 ## Compaction commands
 
-Three callers send a native compact command through a `Command` record: smart compaction ahead of a prompt, idle compaction from the sidebar producer, and the operator's `rimz agents compact`. Routing the command through a record gives it the same claim, retry, audit, and at-most-once write as any message.
+Four callers send a native compact command through a `Command` record: smart compaction ahead of a prompt, idle compaction from the sidebar producer, flip compaction at a team hand-off, and the operator's `rimz agents compact`. Routing the command through a record gives it the same claim, retry, audit, and at-most-once write as any message.
 
 `agents::compact_command` is the one composer every automatic caller uses: it picks the brief for the agent's seat, `CompactSeat::Team` when the launch-stamped `AgentState.team` is set and `Solo` otherwise, and `HarnessConfig::compact_instruction` returns a set `compact_instruction` for either seat or RimZ's brief for that seat. `rimz agents compact` bypasses the composer only for an explicit instruction. `LaunchSpec::compact_command` renders the adapter's native command. When the adapter declares `CompactInstruction::Trailing`, it appends [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction), folded to one line because a newline would submit it, and the send path types it as the [second segment](#commands-are-typed). Other adapters receive the bare command.
 
