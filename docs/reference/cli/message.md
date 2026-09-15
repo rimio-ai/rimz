@@ -138,7 +138,7 @@ Read plan.md when the planner finishes.
 | --- | --- | --- |
 | `USER_MESSAGE` | A send from a user shell | `@user` |
 | `AGENT_MESSAGE` | A send from an agent, whether RimZ launched it or only saw it running | The sender's handle, with `#channel` when the message crosses channels |
-| `SUBAGENT_REPORT` | The status digest sent once all of an agent's [subagents](./subagents.md) settle | `@rimz` |
+| `SUBAGENT_REPORT` | The status digest sent once all of an agent's [subagents](./subagents.md) and background runs settle | `@rimz` |
 | `WAIT` | A [`rimz wait`](./wait.md) delivery, or a loop `--wait` delivery not triggered by a signal | `@rimz` |
 | `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery | `@rimz` |
 | `STAGE` | A [team stage](./teams.md) opening | `@rimz` |

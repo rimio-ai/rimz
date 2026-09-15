@@ -92,7 +92,7 @@ Each inline cell is `term` (a plain shell), an agent kind, a [permission-mode ce
 
 The optional `PROMPT` goes to exactly one leader: the team's configured `leader` role, else its first declared role, else the first agent cell. When the first cell repeats (`claude,claude`), give it a role so the target is unambiguous. To send every agent the same text, launch without a prompt and use `rimz message @all`. A second positional that is itself a cell (`rimz agents claude codex`) is refused with a `rimz agents a,b` hint, and a scope such as `rimz agents '#auth'` takes no prompt.
 
-A launch that opens a new pane or tab prints a receipt: the checkout path, then each member's handle, provider, and resolved model (`-` when unset). When you gave a prompt, a shortened echo names its recipient, and non-team launches add a copy-ready `Reach` command for the leader. The receipt records what was launched; the agents start asynchronously. A named team prints the [team receipt](./teams.md#launch-a-team) instead, and a launch that takes over the current pane prints none.
+A launch that opens a new pane or tab prints a receipt: the checkout path, then each member's handle, provider, and resolved model (`-` when unset). When you gave a prompt, a shortened echo names its recipient, and non-team launches add copy-ready `Reach` and `Wait` commands for the leader. The receipt records what was launched; the agents start asynchronously. A named team prints the [team receipt](./teams.md#launch-a-team) instead, and a launch that takes over the current pane prints none.
 
 Launches refuse before they create any pane or record when:
 
@@ -219,7 +219,7 @@ In text mode, stdout carries only the final assistant answer, rendered by the sh
 | `--input-format text\|stream-json` | `text` (default) uses the positional `PROMPT` plus `--stdin` content; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt or `--stdin`. |
 | `--stdin` | Read stdin to EOF as prompt content. With a positional prompt, the prompt comes first and stdin follows inside `<stdin>…</stdin>` tags. |
 | `--timeout <DURATION>` | Cap the run; exceeding it exits `124`. |
-| `--bg` | Print the run's pet name and return immediately. Use that name with `agents wait`, `agents show`, `agents stop`, or `message --steer`. Refuses `--output-format stream-json`. |
+| `--bg` | Print the run's pet name on stdout and return immediately, with a receipt on stderr. Use that name with `agents wait`, `agents show`, `agents stop`, or `message --steer`. Launched from an agent, the run joins that agent's [fleet report](./subagents.md#the-fleet-report), and the receipt says so. Refuses `--output-format stream-json`. |
 | `--keep` | Leave the pane open after the run completes; `rimz agents stop` reclaims it. |
 | `--max-turns <N>` | Cap agentic turns through the CLI's native limit (Claude and Grok `--max-turns`, Qwen `--max-session-turns`). Other kinds refuse the run with `<agent> does not support --max-turns`. |
 | `--retries <N>` | Rerun a failed (exit `1`) run up to `N` more times, appending the previous failure tail to the prompt. `--timeout` and `--budget` apply per attempt, timeout, budget, and cancel never retry, and the last attempt sets the exit code. |
@@ -617,7 +617,7 @@ Other kinds, including plugins, cannot fork.
 
 `rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. A sleeping agent (one with an armed one-shot wait) and a freshly registered agent that never opened a turn keep the wait blocked. A reference is a run id, a pet name, or any address.
 
-With one reference, `wait` prints the final assistant message. `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays the transcript from the top before tailing.
+With one reference, `wait` prints the final assistant message: a run's answer, or the message that closed an interactive agent's turn. When a completed turn left no message, stderr says so and stdout stays empty. `--json` prints a run's full record, or for an interactive agent one `{status, exit, cost, transcript_path, last_message}` entry, omitting fields that have no value. `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays the transcript from the top before tailing.
 
 Several references form a join. Text mode prints each final answer in completion order under a `--- <name> ---` header, rendered by the [agent-prose rule](../cli.md#agent-prose), and adds a status suffix only to abnormal results; stderr diagnostics carry the same header. `--json` prints one map after every target settles, `{name: {status, exit, cost, transcript_path, last_message, error}}`, omitting `cost`, `transcript_path`, `last_message`, and `error` when they have no value. `--stream` accepts one reference.
 
