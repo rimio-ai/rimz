@@ -249,6 +249,20 @@ fn sandbox_isolation_replaces_codex_sandbox_overrides() {
     );
     assert_eq!(args, once);
 
+    let mut approve_for_me = vec!["--not-so-yolo".to_owned(), "--approve-for-me".to_owned()];
+    CodexAdapter.disable_native_sandbox_args(&mut approve_for_me);
+    assert_eq!(
+        approve_for_me,
+        [
+            "-c",
+            r#"approvals_reviewer="auto_review""#,
+            "-c",
+            r#"approval_policy="on-request""#,
+            "--sandbox",
+            "danger-full-access",
+        ]
+    );
+
     let mut yolo = vec!["--dangerously-bypass-approvals-and-sandbox".to_owned()];
     CodexAdapter.disable_native_sandbox_args(&mut yolo);
     assert_eq!(yolo, ["--dangerously-bypass-approvals-and-sandbox"]);
