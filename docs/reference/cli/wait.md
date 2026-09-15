@@ -97,7 +97,7 @@ An outcome `--on` filters out records `skipped` in the loop history and retires 
 
 A wait arrives as a message from `@rimz` with `Type: WAIT` (see [the message header](./message.md#the-message-header)). It is sent as a steer: it interrupts a working agent at once instead of waiting for the turn to end. Clock and signal deliveries from `rimz loop add --wait` park until the turn ends instead. [`rimz transcript`](./transcript.md) hides wait messages from its rendered view and keeps them in `--json`.
 
-The body never inlines command output. It names what was waited on, the verdict, and the output file with its size and line count (left out when the file is empty), and ends with the wait's name in brackets. A timer is one line:
+The body never inlines command output. It names what was waited on, the verdict, and the output file with its estimated tokens and line count (or `no output` when the file is empty), and ends with the wait's name in brackets. A timer is one line:
 
 ```text
 waited 30m [wait-bold-comet]
@@ -107,14 +107,14 @@ A final command verdict:
 
 ```text
 waited on `cargo test`
-exit 1 after 12m · output (48 KB, 1210 lines): /tmp/rimz-waits/wait-solid-pixel.output [wait-solid-pixel]
+exit 1 after 12m · output: /tmp/rimz-waits/wait-solid-pixel.output (~14k tokens, 1210 lines) [wait-solid-pixel]
 ```
 
 A check-in adds the two follow-up commands. `Another check-in` repeats the wait's `--timeout` value; running it arms a separate timer that neither restarts nor stops the command:
 
 ```text
 waited on `cargo build`
-still running after 30m · output (12 KB, 340 lines): /tmp/rimz-waits/wait-solid-pixel.output [wait-solid-pixel]
+still running after 30m · output: /tmp/rimz-waits/wait-solid-pixel.output (~3.4k tokens, 340 lines) [wait-solid-pixel]
 
 Stop it: rimz wait cancel wait-solid-pixel
 Another check-in: rimz wait --in 30m
@@ -127,7 +127,7 @@ Another check-in: rimz wait --in 30m
 | `still running after <ELAPSED>` | The check-in. |
 | `watcher died after <ELAPSED>; the command may still be running or may have died with it` | The watcher vanished without reporting. |
 
-A message for an empty output file leaves the `output (...)` segment out, so a silent command ends at its verdict. A command longer than 120 characters is shortened in the middle in the message, receipt, and list; the stored command and the logs keep it whole.
+A silent command reads `· no output` after its verdict and names no file. The token count is an estimate from OpenAI's public `o200k_base` tokenizer (`<1k`, `~1.2k`, `~22k`, `~1.2M`); Claude's tokenizer is not published and typically counts somewhat higher. Past the first 1 MiB the count is scaled from that sample. A command longer than 120 characters is shortened in the middle in the message, receipt, and list; the stored command and the logs keep it whole.
 
 ### The output file
 

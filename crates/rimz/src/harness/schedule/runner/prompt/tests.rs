@@ -54,15 +54,18 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
                         FileSummary {
                             bytes: 24,
                             lines: 2,
+                            tokens: 6,
                         }
                     },
                 }),
                 ..signal("wait.test", serde_json::json!({}))
             };
-            let path = if output_path.is_none() || output.is_empty() {
-                ""
-            } else {
-                " · output (24 B, 2 lines): /tmp/rimz-waits/wait-test.output"
+            let path = match (&output_path, output.is_empty()) {
+                (None, _) => "",
+                (Some(_), true) => " · no output",
+                (Some(_), false) => {
+                    " · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 2 lines)"
+                }
             };
             assert_eq!(
                 compose_wait(
@@ -136,6 +139,7 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
                         FileSummary {
                             bytes: 10,
                             lines: 1,
+                            tokens: 3,
                         }
                     },
                 }),
@@ -143,9 +147,9 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
             };
             let delay = timeout.unwrap_or("30m");
             let path = if output.is_empty() {
-                ""
+                " · no output"
             } else {
-                " · output (10 B, 1 line): /tmp/rimz-waits/wait-test.output"
+                " · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 1 line)"
             };
             assert_eq!(
                 compose_wait(

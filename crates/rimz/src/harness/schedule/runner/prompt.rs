@@ -100,14 +100,16 @@ fn verdict_line(
     if let Evidence::Signal(signal) = evidence
         && let Some(watch) = &signal.watch
         && let Some(path) = &watch.output_path
-        && watch.summary.bytes > 0
     {
-        verdict.push_str(&format!(
-            " · output ({}, {}): {}",
-            crate::theme::fmt::fmt_bytes(watch.summary.bytes),
-            watch.summary.lines_label(),
-            path.display()
-        ));
+        if watch.summary.is_empty() {
+            verdict.push_str(" · no output");
+        } else {
+            verdict.push_str(&format!(
+                " · output: {} ({})",
+                path.display(),
+                watch.summary.label()
+            ));
+        }
     }
     verdict.push_str(&format!(" [{name}]"));
     Some(verdict)

@@ -275,8 +275,19 @@ fn compose_digest(rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)]) -> 
     } else {
         "background agent"
     };
+    let responses = rows
+        .iter()
+        .filter_map(|(_, _, response)| response.map(|response| response.summary))
+        .collect::<Vec<_>>();
     let heading = if rows.len() == 1 {
         format!("Your {noun} settled:")
+    } else if responses.len() >= 2 {
+        let total = responses.into_iter().sum::<FileSummary>();
+        format!(
+            "All {} {noun}s settled, responses total {}:",
+            rows.len(),
+            total.label()
+        )
     } else {
         format!("All {} {noun}s settled:", rows.len())
     };
@@ -331,7 +342,7 @@ fn compose_digest_row(
         Some(response) => row.push_str(&format!(
             ", response: {} ({})",
             response.path.display(),
-            response.summary.lines_label(),
+            response.summary.label(),
         )),
         None => row.push_str(", no response"),
     }
@@ -469,13 +480,14 @@ mod tests {
             summary: FileSummary {
                 bytes: 23,
                 lines: 3,
+                tokens: 6,
             },
         };
 
         assert_eq!(
             compose_digest(&[(&child, &result, Some(&response))]),
             "Your subagent settled:\n\
-             - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (3 lines)"
+             - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (<1k tokens, 3 lines)"
         );
     }
 
@@ -495,6 +507,7 @@ mod tests {
             summary: FileSummary {
                 bytes: 19,
                 lines: 2,
+                tokens: 1_200,
             },
         };
         let partial = ResponseFile {
@@ -502,6 +515,7 @@ mod tests {
             summary: FileSummary {
                 bytes: 15,
                 lines: 1,
+                tokens: 21_000,
             },
         };
 
@@ -511,10 +525,10 @@ mod tests {
                 (&runtime, &blank, None),
                 (&reviewer, &timed_out, Some(&partial)),
             ]),
-            "All 3 subagents settled:\n\
-             - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (2 lines)\n\
+            "All 3 subagents settled, responses total ~22k tokens, 3 lines:\n\
+             - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (~1.2k tokens, 2 lines)\n\
              - @runtime: completed in 4m12s, task: \"map it\", no response\n\
-             - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", response: /tmp/rimz-subagents/slow-reviewer.output (1 line)"
+             - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", response: /tmp/rimz-subagents/slow-reviewer.output (~21k tokens, 1 line)"
         );
     }
 

@@ -3047,7 +3047,10 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
                     "1 line"
                 };
                 assert!(
-                    report.contains(&format!("response: {} ({lines})", visible.display())),
+                    report.contains(&format!(
+                        "response: {} (<1k tokens, {lines})",
+                        visible.display()
+                    )),
                     "{report}"
                 );
                 assert!(!report.contains(message));

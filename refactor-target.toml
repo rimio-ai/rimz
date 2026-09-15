@@ -200,12 +200,14 @@ path = "crates/rimz/src/disk"
 allowed-dependencies = [
     "ids",
     "sock",
+    "utils",
 ]
 # Pane writers share one user-scoped lock path across workspace boundaries.
 # Room lifecycle owns private tmp and rewritten-skill directory creation and removal.
 # Wait and subagent reports share streaming output-file measurements.
 # Stage flips share a canonical-worktree board lock across rooms.
-surface-budget = 132
+# Output-file summaries estimate tokens through `utils::tokens` and expose `is_empty` for the wait and digest renderers.
+surface-budget = 133
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -380,7 +382,8 @@ surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/utils.rs"
-surface-budget = 2
+# `tokens` joins `path` and `time` as a cross-domain helper.
+surface-budget = 3
 
 [[module]]
 path = "crates/rimz/src/web"
