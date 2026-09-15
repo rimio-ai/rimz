@@ -162,3 +162,7 @@ aggressive_resize = true
 ## idle_compact = "auto"           # compact idle agents before the provider cache expires; auto = while another same-channel agent is running
 ## idle_compact_after = "59m"      # idle span before compaction
 ## flip_compact = "180k"          # compact on stage hand-off at this context threshold; unset = off
+
+[gc]
+# auto = true                         # sweep stale state once a day from every open room
+# older_than = "7d"                   # age cutoff for `rimz gc` (s/m/h/d)

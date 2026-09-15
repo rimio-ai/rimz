@@ -1099,6 +1099,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_daily_budget_edit(path)
         || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
+        || is_gc_older_than_edit(path)
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
     {
@@ -1121,6 +1122,14 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         };
         if let Err(err) = super::parse_auto_redeem_min_gain(raw) {
             invalid_value!("resume.auto_redeem_min_gain {err}");
+        }
+    }
+    if is_gc_older_than_edit(path) {
+        let Some(raw) = value.as_str() else {
+            invalid_value!("gc.older_than must be a duration string");
+        };
+        if let Err(err) = super::parse_older_than(raw) {
+            invalid_value!("gc.older_than {err}; use a duration such as 8h or 3d");
         }
     }
     if is_daily_budget_edit(path) {
@@ -1234,6 +1243,10 @@ fn is_turn_budget_edit(path: &[String]) -> bool {
 
 fn is_auto_redeem_min_gain_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "resume" && child == "auto_redeem_min_gain")
+}
+
+fn is_gc_older_than_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "gc" && child == "older_than")
 }
 
 fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {
