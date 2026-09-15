@@ -1187,6 +1187,267 @@ fn sandbox_skills_under_host_are_ignored_at_provider_exec() {
 }
 
 #[test]
+fn host_skill_links_reconcile_only_owned_entries() {
+    use rimz::agents::skill_links::{self, Desired, SkillLinkAction};
+    use std::os::unix::fs::symlink;
+
+    let env = Env::new();
+    let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+    let root = env.home_root.join(".agents/skills");
+    let empty = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    assert!(empty.is_empty());
+    skill_links::apply(&empty).unwrap();
+    assert!(!root.exists());
+    assert!(!library.exists());
+    for name in ["created", "directory", "foreign", "wrong"] {
+        std::fs::create_dir_all(library.join(name)).unwrap();
+        std::fs::write(library.join(name).join("SKILL.md"), "skill").unwrap();
+    }
+    std::fs::create_dir_all(library.join("not-a-skill")).unwrap();
+    symlink("created", library.join("alias")).unwrap();
+    std::fs::create_dir_all(root.join("directory")).unwrap();
+    std::fs::write(root.join("directory/keep"), "mine").unwrap();
+    symlink("/foreign/missing", root.join("foreign")).unwrap();
+    symlink(library.join("gone"), root.join("stale")).unwrap();
+    symlink(library.join("created"), root.join("wrong")).unwrap();
+    let plan = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    assert_eq!(plan.shadowed(), ["directory", "foreign"]);
+    assert!(plan.actions().windows(2).any(|actions| matches!(actions,
+        [SkillLinkAction::Unlink { name }, SkillLinkAction::Link { name: next, .. }]
+            if name == "wrong" && next == name
+    )));
+    let outcome = skill_links::apply(&plan).unwrap();
+    assert_eq!((outcome.linked, outcome.unlinked), (3, 2));
+    assert!(outcome.shadowed.is_empty());
+    for name in ["created", "alias", "wrong"] {
+        assert_eq!(
+            std::fs::read_link(root.join(name)).unwrap(),
+            library.join(name)
+        );
+    }
+    assert!(!root.join("stale").is_symlink());
+    assert!(!root.join("not-a-skill").exists());
+    let repeated = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    assert!(!repeated.has_owned_changes());
+    assert_eq!(repeated.shadowed(), ["directory", "foreign"]);
+    for name in ["directory", "foreign"] {
+        std::fs::remove_dir_all(library.join(name)).unwrap();
+    }
+    assert!(
+        skill_links::plan(&root, &library, Desired::Library)
+            .unwrap()
+            .is_empty()
+    );
+    let remove = skill_links::plan(&root, &library, Desired::None).unwrap();
+    assert!(remove.shadowed().is_empty());
+    assert_eq!(skill_links::apply(&remove).unwrap().unlinked, 3);
+    assert_eq!(skill_links::apply(&remove).unwrap().unlinked, 0);
+    assert_eq!(
+        std::fs::read_to_string(root.join("directory/keep")).unwrap(),
+        "mine"
+    );
+    assert_eq!(
+        std::fs::read_link(root.join("foreign")).unwrap(),
+        Path::new("/foreign/missing")
+    );
+    symlink(library.join("gone"), root.join("stale")).unwrap();
+    std::fs::remove_dir_all(&library).unwrap();
+    let stale = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    assert_eq!(skill_links::apply(&stale).unwrap().unlinked, 1);
+}
+
+#[test]
+fn host_skill_links_apply_tolerates_siblings_and_reports_foreign_races() {
+    use rimz::agents::skill_links::{self, Desired};
+    use std::os::unix::fs::symlink;
+
+    let env = Env::new();
+    let root = env.home_root.join("provider/skills");
+    let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+    std::fs::create_dir_all(library.join("skill")).unwrap();
+    std::fs::write(library.join("skill/SKILL.md"), "skill").unwrap();
+    let plan = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    assert_eq!(skill_links::apply(&plan).unwrap().linked, 1);
+    let sibling = skill_links::apply(&plan).unwrap();
+    assert_eq!(sibling.linked, 0);
+    assert!(sibling.shadowed.is_empty());
+    std::fs::remove_file(root.join("skill")).unwrap();
+    std::fs::create_dir(root.join("skill")).unwrap();
+    assert_eq!(skill_links::apply(&plan).unwrap().shadowed, ["skill"]);
+    std::fs::remove_dir(root.join("skill")).unwrap();
+    symlink(library.join("gone"), root.join("skill")).unwrap();
+    let replace = skill_links::plan(&root, &library, Desired::Library).unwrap();
+    std::fs::remove_file(root.join("skill")).unwrap();
+    symlink("/foreign/skill", root.join("skill")).unwrap();
+    assert_eq!(skill_links::apply(&replace).unwrap().shadowed, ["skill"]);
+    assert_eq!(
+        std::fs::read_link(root.join("skill")).unwrap(),
+        Path::new("/foreign/skill")
+    );
+}
+
+#[test]
+fn host_exec_links_library_into_codex_and_claude_account_roots_once() {
+    for kind in ["codex", "claude"] {
+        let env = Env::new();
+        let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+        std::fs::create_dir_all(library.join("shared")).unwrap();
+        std::fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
+        let account = env.home_root.join("named-claude");
+        let root = if kind == "claude" {
+            account.join("skills")
+        } else {
+            env.home_root.join(".agents/skills")
+        };
+        let shell = write_fake_login_shell(&env, "host-skills-shell", &[]);
+        let shim_dir = write_env_dump_shim(&env, kind);
+        let request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        for first in [true, false] {
+            let output = env
+                .rimz()
+                .args(exec_args(&env, &request))
+                .env("CLAUDE_CONFIG_DIR", &account)
+                .env("SHELL", &shell)
+                .env("PATH", path_with_front(&shim_dir))
+                .env(
+                    "RIMZ_TEST_AGENT_ENV_DUMP",
+                    env.home_root.join("provider-env"),
+                )
+                .bounded_output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stderr}");
+            assert_eq!(
+                stderr.contains(&format!("linked 1 skill(s) into {}", root.display())),
+                first,
+                "{stderr}"
+            );
+            assert_eq!(
+                std::fs::read_link(root.join("shared")).unwrap(),
+                library.join("shared")
+            );
+            assert!(!env.store().paths().tmp_dir.exists());
+            assert!(!env.store().paths().skills_dir.exists());
+        }
+        assert!(!env.home_root.join(".claude/skills").exists());
+    }
+}
+
+#[test]
+fn host_skill_links_explain_is_read_only_and_reports_shadowed() {
+    let env = Env::new();
+    let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+    let root = env.home_root.join(".agents/skills");
+    let empty = env
+        .rimz()
+        .args(["agents", "explain", "codex", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(empty.status.success());
+    let empty: serde_json::Value = serde_json::from_slice(&empty.stdout).unwrap();
+    assert!(empty.get("skill_links").is_none());
+    assert!(!root.exists());
+    for name in ["shared", "foreign"] {
+        std::fs::create_dir_all(library.join(name)).unwrap();
+        std::fs::write(library.join(name).join("SKILL.md"), "skill").unwrap();
+    }
+    std::fs::create_dir_all(root.join("foreign")).unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "codex", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["skill_links"]["root"], root.to_str().unwrap());
+    assert_eq!(report["skill_links"]["library"], library.to_str().unwrap());
+    assert_eq!(
+        report["skill_links"]["shadowed"],
+        serde_json::json!(["foreign"])
+    );
+    assert_eq!(
+        report["skill_links"]["actions"][0]["Link"]["name"],
+        "shared"
+    );
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("these entries are yours"))
+    );
+    let human = env
+        .rimz()
+        .args(["agents", "explain", "codex"])
+        .bounded_output()
+        .unwrap();
+    assert!(human.status.success());
+    let human = String::from_utf8_lossy(&human.stdout);
+    assert!(human.contains("Skill links"));
+    assert!(human.contains("link: shared"));
+    assert!(human.contains("shadowed: foreign"));
+    assert!(!root.join("shared").exists());
+    assert!(!env.store().paths().tmp_dir.exists());
+    assert!(!env.store().paths().skills_dir.exists());
+}
+
+#[test]
+fn sandbox_preserves_host_library_link_without_duplicate_bind() {
+    let env = Env::new();
+    let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+    let root = env.home_root.join(".agents/skills");
+    std::fs::create_dir_all(library.join("shared")).unwrap();
+    std::fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(library.join("shared"), root.join("shared")).unwrap();
+    let native = skill_prepare(
+        &env,
+        &environment(&env),
+        SkillInputs {
+            kind: "codex",
+            home: Some(root.clone()),
+            manual: ManualSkill::OpenAiPolicy,
+            callable: None,
+        },
+    )
+    .unwrap();
+    assert!(!native.plan.mounts.iter().any(|mount| matches!(mount,
+        rimz::sandbox::Mount::RoBind { target, .. } | rimz::sandbox::Mount::Bind { target, .. } if target == &root.join("shared")
+    )));
+    assert_eq!(
+        std::fs::read_link(root.join("shared")).unwrap(),
+        library.join("shared")
+    );
+    std::fs::create_dir_all(library.join("library-only")).unwrap();
+    std::fs::write(library.join("library-only/SKILL.md"), "library skill").unwrap();
+    let plan = skill_prepare(
+        &env,
+        &environment(&env),
+        SkillInputs {
+            kind: "codex",
+            home: Some(root.clone()),
+            manual: ManualSkill::OpenAiPolicy,
+            callable: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.plan.mounts.iter().filter(|mount| matches!(mount,
+        rimz::sandbox::Mount::Symlink { target, path } if target == &library.join("shared") && path == &root.join("shared")
+    )).count(), 1);
+    assert!(!plan.plan.mounts.iter().any(|mount| matches!(mount,
+        rimz::sandbox::Mount::RoBind { target, .. } | rimz::sandbox::Mount::Bind { target, .. } if target == &root.join("shared")
+    )));
+    assert!(plan.copies.is_empty());
+}
+
+#[test]
 fn sandbox_skill_root_symlink_keeps_its_manual_view() {
     if !available() {
         return;

@@ -95,15 +95,25 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     for warning in &plan.warnings {
         let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
     }
+    if let Some(links) = &plan.skill_links {
+        for line in links.to_string().lines() {
+            let _ = writeln!(crate::cli::render::err(), "rimz: {line}");
+        }
+    }
     if let Some(sandbox) = &plan.sandbox {
         for skipped in &sandbox.skipped {
             let _ = writeln!(crate::cli::render::err(), "rimz: {skipped}");
         }
     }
-    rimz::harness::launch_plan::apply(&plan).inspect_err(|_| {
+    let skill_links = rimz::harness::launch_plan::apply(&plan).inspect_err(|_| {
         mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
         fail_run_on_exec_precondition(run_context.as_ref());
     })?;
+    if let Some((links, outcome)) = plan.skill_links.as_ref().zip(skill_links)
+        && let Some(report) = links.shadowed_report(&outcome.shadowed)
+    {
+        let _ = writeln!(crate::cli::render::err(), "rimz: {report}");
+    }
     let entered_worktree = request
         .worktree_path
         .as_deref()

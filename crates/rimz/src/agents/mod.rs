@@ -39,6 +39,7 @@ pub mod registry;
 pub mod runtime_control;
 pub mod session;
 pub(crate) mod settings_json;
+pub mod skill_links;
 pub mod spending;
 pub mod state;
 #[cfg(test)]

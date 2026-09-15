@@ -268,6 +268,8 @@ struct ExplainReport<'a> {
     redacted_keys: &'a BTreeSet<String>,
     prompt: PromptReport<'a>,
     sandbox: Option<SandboxReport<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_links: Option<&'a rimz::agents::skill_links::SkillLinkPlan>,
     warnings: Vec<String>,
 }
 
@@ -388,6 +390,9 @@ impl<'a> ExplainReport<'a> {
                     .collect(),
             }
         });
+        if let Some(links) = &plan.skill_links {
+            warnings.extend(links.shadowed_report(links.shadowed()));
+        }
         Ok(Self {
             target: &args.target,
             kind: &request.kind,
@@ -444,6 +449,7 @@ impl<'a> ExplainReport<'a> {
                 reminder_delivered: plan.reminder_channel.is_some() && process.reminder.is_some(),
             },
             sandbox,
+            skill_links: plan.skill_links.as_ref(),
             warnings,
         })
     }
@@ -612,6 +618,24 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
             "not applied (host isolation)"
         }
     )?;
+    if let Some(links) = report.skill_links {
+        writeln!(output, "\nSkill links")?;
+        writeln!(output, "  root: {}", links.root().display())?;
+        writeln!(output, "  library: {}", links.library().display())?;
+        for action in links.actions() {
+            match action {
+                rimz::agents::skill_links::SkillLinkAction::Link { name, target } => {
+                    writeln!(output, "  link: {name} → {}", target.display())?;
+                }
+                rimz::agents::skill_links::SkillLinkAction::Unlink { name } => {
+                    writeln!(output, "  unlink: {name}")?;
+                }
+            }
+        }
+        if !links.shadowed().is_empty() {
+            writeln!(output, "  shadowed: {}", links.shadowed().join(", "))?;
+        }
+    }
     writeln!(output, "\nSandbox")?;
     if let Some(sandbox) = &report.sandbox {
         writeln!(output, "  bwrap: {}", sandbox.bwrap.display())?;
