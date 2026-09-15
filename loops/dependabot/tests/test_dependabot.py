@@ -4,7 +4,7 @@
 # ///
 """Dependabot loop regression tests for duplicate prevention and per-attempt checkouts."""
 
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 import fcntl
 import io
 import json
@@ -134,7 +134,7 @@ class CheckoutFixture(unittest.TestCase):
         self.commit("unpushed", self.tree())
         git(self.root, "worktree", "remove", str(self.tree()))
         remote = self.remote_branch()
-        with patch.object(repair, "query_plan", return_value=self.plan), \
+        with self.planned(), \
              patch.object(repair, "launch") as launch, self.assertRaisesRegex(RuntimeError, "push or delete it"):
             self.run_quietly(repair.run)
         launch.assert_not_called()
@@ -145,11 +145,19 @@ class CheckoutFixture(unittest.TestCase):
         self.publish_batch()
         git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()), "origin/deps/repair-1")
         shutil.rmtree(self.tree())
-        with patch.object(repair, "query_plan", return_value=self.plan), \
+        with self.planned(), \
              patch.object(repair, "launch", side_effect=subprocess.CalledProcessError(1, "rimz")), \
              self.assertRaises(subprocess.CalledProcessError):
             self.run_quietly(repair.run)
-        self.assertEqual(self.lines[1]["attempt_checkout"], "created")
+        self.assertIn(dict(pruned_batch_branch=True, branch="deps/repair-1", where="origin"), self.lines)
+        self.assertEqual([line["attempt_checkout"] for line in self.lines if "attempt_checkout" in line], ["created", "removed"])
+
+    def planned(self):
+        stack = ExitStack()
+        stack.enter_context(patch.object(repair, "repo_view", return_value=REPO))
+        stack.enter_context(patch.object(repair, "pull_requests", return_value=[]))
+        stack.enter_context(patch.object(repair, "query_plan", return_value=self.plan))
+        return stack
 
     def forge(self, prs):
         endpoints = {"repos/owner/repo/pulls?state=all&per_page=100": prs,
@@ -166,10 +174,11 @@ class CheckoutFixture(unittest.TestCase):
         github, pages = self.forge([closed])
         with github, pages:
             with self.assertRaisesRegex(RuntimeError, "covers closed"):
-                repair.query_plan()
+                repair.query_plan(REPO, [closed])
             self.assertNotEqual(self.remote_branch(), "")
-            self.assertEqual(self.run_quietly(lambda: print(json.dumps(repair.query_plan(prune=True))))[-1]["action"], "idle")
-        self.assertEqual(self.lines[0], dict(pruned_batch_branch=True, branch="deps/repair-1", where="origin"))
+            self.run_quietly(repair.prune_empty_batches, "main", set())
+            self.assertEqual(repair.query_plan(REPO, [closed])["action"], "idle")
+        self.assertEqual(self.lines, [dict(pruned_batch_branch=True, branch="deps/repair-1", where="origin")])
         self.assertEqual(git(self.origin, "ls-remote", ".", "refs/heads/deps/repair-1"), "")
         self.assertEqual(git(self.root, "for-each-ref", "refs/remotes/origin/deps/repair-1"), "")
 
@@ -231,7 +240,7 @@ class CheckoutFixture(unittest.TestCase):
     def test_refused_remove_keeps_the_checkout_and_still_verifies_the_pr(self):
         self.rimz.refusal = "worktree `deps-repair-1` has local changes or work not proven landed; use --force to remove it"
         rows = [dict(number=10)]
-        with patch.object(repair, "query_plan", return_value=self.plan), patch.object(repair, "launch"), \
+        with self.planned(), patch.object(repair, "launch"), \
              patch.object(repair, "github", return_value=rows) as github, \
              patch.object(repair, "verify_result", return_value="pending"):
             self.run_quietly(repair.run)
@@ -244,7 +253,7 @@ class CheckoutFixture(unittest.TestCase):
 
     def test_failed_launch_still_settles_and_fails_the_run(self):
         failure = subprocess.CalledProcessError(124, "rimz")
-        with patch.object(repair, "query_plan", return_value=self.plan), \
+        with self.planned(), \
              patch.object(repair, "launch", side_effect=failure), \
              patch.object(repair, "github") as github, self.assertRaises(subprocess.CalledProcessError):
             self.run_quietly(repair.run)

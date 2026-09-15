@@ -183,13 +183,16 @@ def prune_empty_batches(base, open_heads):
         print(json.dumps(dict(pruned_batch_branch=True, branch=branch, where=where)), flush=True)
 
 
-def query_plan(prune=False):
-    repo = github("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
+def repo_view():
+    return github("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
+
+
+def pull_requests(repo):
+    return pages(f"repos/{repo['nameWithOwner']}/pulls?state=all&per_page=100")
+
+
+def query_plan(repo, prs):
     slug = repo["nameWithOwner"]
-    prs = pages(f"repos/{slug}/pulls?state=all&per_page=100")
-    if prune:
-        prune_empty_batches(repo["defaultBranchRef"]["name"],
-                            {pr["head"]["ref"] for pr in prs if pr["state"] == "open"})
     refs = command("git", "for-each-ref", "--format=%(refname)",
                    "refs/heads/deps/repair-*", "refs/remotes/origin/deps/repair-*")
     branches = {ref.removeprefix("refs/heads/").removeprefix("refs/remotes/origin/")
@@ -312,7 +315,11 @@ def run():
         # A tree directory deleted by hand still pins its branch until its metadata is pruned.
         command("git", "worktree", "prune")
         command("git", "fetch", "origin")
-        plan = query_plan(prune=True)  # Re-read after taking the shared lock, never consume a stale plan file.
+        # Re-read after taking the shared lock, never consume a stale plan file.
+        repo = repo_view()
+        prs = pull_requests(repo)
+        prune_empty_batches(repo["defaultBranchRef"]["name"], {pr["head"]["ref"] for pr in prs if pr["state"] == "open"})
+        plan = query_plan(repo, prs)
         print(json.dumps(plan), flush=True)
         if plan["action"] != "repair":
             return
@@ -333,7 +340,8 @@ def main():
     args = parser.parse_args()
     try:
         if args.action == "plan":
-            print(json.dumps(query_plan()))
+            repo = repo_view()
+            print(json.dumps(query_plan(repo, pull_requests(repo))))
         else:
             run()
     except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
