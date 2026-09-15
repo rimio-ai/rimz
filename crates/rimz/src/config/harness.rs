@@ -280,16 +280,6 @@ pub(crate) fn parse_idle_compact_after(raw: &str) -> Result<Duration, String> {
     parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS).map_err(|err| err.to_string())
 }
 
-fn format_idle_compact_after(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    for (unit, factor) in [("d", 86_400), ("h", 3_600), ("m", 60)] {
-        if seconds >= factor && seconds.is_multiple_of(factor) {
-            return format!("{}{unit}", seconds / factor);
-        }
-    }
-    format!("{seconds}s")
-}
-
 mod idle_compact_after_serde {
     use super::*;
 
@@ -310,7 +300,9 @@ mod idle_compact_after_serde {
         S: Serializer,
     {
         match idle_compact_after {
-            Some(duration) => serializer.serialize_str(&format_idle_compact_after(*duration)),
+            Some(duration) => {
+                serializer.serialize_str(&crate::utils::time::format_duration_compact(*duration))
+            }
             None => serializer.serialize_none(),
         }
     }

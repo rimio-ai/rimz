@@ -130,9 +130,34 @@ pub fn parse_duration_units(raw: &str, allowed: &[DurationUnit]) -> Result<Durat
     Ok(unit.duration(amount))
 }
 
+/// Render a span in the largest of `d`/`h`/`m`/`s` that divides it exactly,
+/// the inverse of [`parse_duration_units`] for whole seconds.
+pub fn format_duration_compact(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    for (unit, factor) in [("d", 86_400), ("h", 3_600), ("m", 60)] {
+        if seconds >= factor && seconds.is_multiple_of(factor) {
+            return format!("{}{unit}", seconds / factor);
+        }
+    }
+    format!("{seconds}s")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_duration_compact_picks_the_largest_exact_unit() {
+        for (secs, expected) in [
+            (7 * 86_400, "7d"),
+            (36 * 3_600, "36h"),
+            (90 * 60, "90m"),
+            (45, "45s"),
+            (0, "0s"),
+        ] {
+            assert_eq!(format_duration_compact(Duration::from_secs(secs)), expected);
+        }
+    }
 
     const SMH: &[DurationUnit] = &[
         DurationUnit::Second,
