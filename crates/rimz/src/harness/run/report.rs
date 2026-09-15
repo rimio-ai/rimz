@@ -12,11 +12,6 @@ use crate::store::Store;
 
 use super::{RecordMutation, Result, RunRecord, update_record};
 
-/// Where the fleet report writes a settled run's captured final response.
-pub fn response_path(paths: &StatePaths, agent_name: &str) -> std::path::PathBuf {
-    paths.subagents_dir.join(format!("{agent_name}.output"))
-}
-
 pub fn join_and_settle_digest(
     store: &Store,
     session_name: &str,

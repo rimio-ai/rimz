@@ -59,7 +59,8 @@ layers = [
 
 [[module]]
 path = "crates/rimz/src/address.rs"
-surface-budget = 32
+# The fleet digest and its orphan backstop share one launched-fleet selector.
+surface-budget = 33
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -79,7 +80,8 @@ upward-dependencies = ["address"]
 # Store's fold and follower pass the prior record's turn ids to `lifecycle::step`
 # and advance them through the one shared `lifecycle::turn_ids_after`.
 # Background shells and their report are folded by store and listed by the renderer.
-surface-budget = 973
+# A peer's `launched_by` link and its launcher accessors route the fleet digest.
+surface-budget = 976
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -356,7 +358,8 @@ surface-budget = 31
 path = "crates/rimz/src/transcript.rs"
 # Human rendering and statistics share harness classification and its sender sentinel.
 # The CLI locates a named channel's workspace from transcript evidence.
-surface-budget = 19
+# `agents wait` reads an interactive agent's final message from the transcript.
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/trust.rs"
