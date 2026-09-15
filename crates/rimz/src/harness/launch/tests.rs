@@ -285,6 +285,62 @@ fn process_compiler_locks_down_only_subagent_launches() {
 }
 
 #[test]
+fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
+    let project = tempfile::tempdir().expect("project");
+    for (kind, args) in [
+        (
+            "codex",
+            vec![
+                "--ask-for-approval",
+                "never",
+                "--sandbox",
+                "workspace-write",
+            ],
+        ),
+        ("claude", vec!["--permission-mode", "auto"]),
+    ] {
+        let invocation = request(
+            kind,
+            ExecAction::Resume {
+                session_id: "session".to_owned(),
+                extra_args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            },
+        );
+        let host = compile_agent_process(project.path(), &invocation, project.path())
+            .expect("host process");
+        let reminders = LaunchReminders {
+            sandbox: true,
+            ..LaunchReminders::default()
+        };
+        let sandboxed = compile_agent_process_with_extra_env(
+            project.path(),
+            &invocation,
+            project.path(),
+            &BTreeMap::new(),
+            &reminders,
+        )
+        .expect("sandboxed process");
+
+        let sandbox_values: Vec<_> = sandboxed
+            .provider_argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--sandbox")
+            .map(|pair| pair[1].as_str())
+            .collect();
+        if kind == "codex" {
+            assert_eq!(sandbox_values, ["danger-full-access"], "{sandboxed:?}");
+            assert!(host.provider_argv.contains(&"workspace-write".to_owned()));
+        } else {
+            assert!(sandbox_values.is_empty());
+            assert!(
+                sandboxed.provider_argv.starts_with(&host.provider_argv),
+                "only the sandbox reminder follows: {sandboxed:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn process_compiler_appends_subagent_reminder_for_native_adapters() {
     let project = tempfile::tempdir().expect("project");
     for kind in ["claude", "qwen", "droid"] {

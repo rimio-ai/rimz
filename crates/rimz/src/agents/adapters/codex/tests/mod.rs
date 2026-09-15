@@ -217,6 +217,44 @@ fn subagent_lockdown_replaces_codex_multi_agent_overrides() {
 }
 
 #[test]
+fn sandbox_isolation_replaces_codex_sandbox_overrides() {
+    let mut args = [
+        "--sandbox",
+        "workspace-write",
+        "-s",
+        "read-only",
+        "--sandbox=workspace-write",
+        "-c",
+        "sandbox_mode=read-only",
+        "--config=sandbox_mode=workspace-write",
+        "--ask-for-approval",
+        "never",
+    ]
+    .map(ToOwned::to_owned)
+    .to_vec();
+
+    CodexAdapter.disable_native_sandbox_args(&mut args);
+    let once = args.clone();
+    CodexAdapter.disable_native_sandbox_args(&mut args);
+
+    assert_eq!(
+        args,
+        [
+            "--ask-for-approval",
+            "never",
+            "--sandbox",
+            "danger-full-access"
+        ]
+        .map(ToOwned::to_owned)
+    );
+    assert_eq!(args, once);
+
+    let mut yolo = vec!["--dangerously-bypass-approvals-and-sandbox".to_owned()];
+    CodexAdapter.disable_native_sandbox_args(&mut yolo);
+    assert_eq!(yolo, ["--dangerously-bypass-approvals-and-sandbox"]);
+}
+
+#[test]
 fn codex_descriptor_declares_lazy_registration() {
     // Codex's instances can be present before a session binds (lazy
     // `SessionStart`, daemon-routed unstamped hooks), so it opts into cwd

@@ -2,7 +2,7 @@
 
 Sandbox isolation runs each agent's provider process inside Linux bubblewrap with a rearranged filesystem view. It is machine policy, `agents.isolation = "sandbox"` in `agents.toml`, and the default is `host`. The view gives every agent in a room a private shared `/tmp` ([room tmp](#room-tmp)) and lets a profile decide which skills the model may call ([profile skill views](#profile-skill-views)). Raw command panes and the room's multiplexer stay on the host.
 
-The view is not containment. The host root stays bound read-write, credentials stay visible, the PID, network, and IPC namespaces are shared, and provider permission modes apply unchanged. Trust decides what a repository may run; a sandbox does not make an untrusted command safe ([trust.md](./harness/trust.md#the-executable-surface)).
+The view is not containment. The host root stays bound read-write, credentials stay visible, the PID, network, and IPC namespaces are shared, and provider approval postures apply unchanged while provider command sandboxes are switched off ([provider command sandboxes](#provider-command-sandboxes)). Trust decides what a repository may run; a sandbox does not make an untrusted command safe ([trust.md](./harness/trust.md#the-executable-surface)).
 
 The code lives in `crates/rimz/src/sandbox/`: `mod.rs` plans the mounts, pins, and bubblewrap argv, `linux.rs` probes bubblewrap, `skills.rs` builds the skill view, and `rewrite.rs` produces the user-only skill copies. `harness/launch_plan.rs` is the one caller that plans and applies a view for a launch.
 
@@ -42,6 +42,12 @@ The wrapped process has three properties a contributor should expect:
 - Each pane gets exactly one RimZ sandbox, never nested wrappers. The wrapper runs the absolute bubblewrap path its preflight probed, so a trusted provider `PATH` override does not change it.
 - Bubblewrap forks the provider instead of becoming it. `--die-with-parent` ensures that terminating the supervised bubblewrap process also terminates the provider.
 - Bubblewrap sets `NoNewPrivs`, so `sudo` and setuid binaries cannot escalate inside the pane. Privileged work belongs in a host shell.
+
+### Provider command sandboxes
+
+Under sandbox isolation the RimZ view is the agent's one sandbox. A provider that nests its own command sandbox inside it (Codex's `workspace-write` bubblewrap binds the root read-only and unshares the network) breaks work the pane itself can do: a build child cannot write `~/.cargo` or reach a local sccache server. The exec wrapper's process compiler therefore calls `LaunchCapability::disable_native_sandbox_args` on the provider's extra arguments for every sandboxed launch, resume, and fork, right after the subagent lockdown; `LaunchReminders.sandbox`, set from the launch plan's bubblewrap path, is the gate, and `rimz agents explain` renders the same argv. Host launches are unchanged, because there the provider's sandbox is the only one.
+
+Codex replaces every `--sandbox`/`-s` flag and `sandbox_mode` override with `--sandbox danger-full-access`, which switches off the command sandbox and leaves the approval policy the mode chose. Every other adapter, process plugins included, keeps the no-op default until a native switch is verified: Claude runs without a command sandbox by default, and Cursor's `--sandbox disabled` is passed only by its Yolo mode.
 
 ## Mount order
 

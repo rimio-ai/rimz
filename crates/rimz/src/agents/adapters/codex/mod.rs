@@ -735,6 +735,25 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         .remove_occurrences(extra_args);
         extra_args.extend(["-c".to_owned(), "features.multi_agent=false".to_owned()]);
     }
+
+    /// Yolo's bypass flag already runs commands unsandboxed, so its argv stays
+    /// as rendered.
+    fn disable_native_sandbox_args(&self, extra_args: &mut Vec<String>) {
+        if extra_args
+            .iter()
+            .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+        {
+            return;
+        }
+        crate::agents::PresetArgMatcher::Flag(vec!["--sandbox".to_owned(), "-s".to_owned()])
+            .remove_occurrences(extra_args);
+        crate::agents::PresetArgMatcher::ConfigKey {
+            flags: vec!["-c".to_owned(), "--config".to_owned()],
+            key: "sandbox_mode".to_owned(),
+        }
+        .remove_occurrences(extra_args);
+        extra_args.extend(["--sandbox".to_owned(), "danger-full-access".to_owned()]);
+    }
 }
 
 impl crate::agents::capabilities::SessionCapability for CodexAdapter {

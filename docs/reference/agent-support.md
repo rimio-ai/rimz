@@ -183,6 +183,8 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
+Under `agents.isolation = "sandbox"` a Codex launch replaces any `--sandbox` choice with `--sandbox danger-full-access`, because the RimZ view is its sandbox; approval flags stay as listed ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
+
 Grok Plan adds no arguments because Grok's `/plan` is an interactive command, and a session launched with `--permission-mode plan` does not start in plan mode.
 
 ### Model and effort
