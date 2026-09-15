@@ -65,18 +65,16 @@ fn delegation_line_click_toggles_entries_without_focus() {
             .iter()
             .any(|line| line.to_string().contains("old-child"))
     );
-    let tail = expanded
-        .lines
-        .iter()
-        .position(|line| line.to_string().contains("− less"))
-        .unwrap();
-    ui.interactions = expanded.interactions;
-    assert_eq!(
-        ui.interactions.target_at(10, tail as u16),
-        Some(target.clone())
+    assert!(
+        !expanded
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("− less"))
     );
+    ui.interactions = expanded.interactions;
+    let (_, summary) = ui.interactions.line_for_target(&target).unwrap();
     assert_eq!(
-        handle_mouse_click(10, tail as u16, &mut ui, &snapshot),
+        handle_mouse_click(10, summary, &mut ui, &snapshot),
         InputOutcome::redraw()
     );
     assert!(!ui.expanded_delegations.contains_key(&row_id));
@@ -116,7 +114,7 @@ fn delegation_line_click_toggles_entries_without_focus() {
         reopened
             .lines
             .iter()
-            .any(|line| line.to_string().contains("− less"))
+            .any(|line| line.to_string().contains("old-child"))
     );
     let mut ordinals = (0..reopened.interactions.line_count())
         .filter_map(|line| reopened.interactions.row_at_line(line))

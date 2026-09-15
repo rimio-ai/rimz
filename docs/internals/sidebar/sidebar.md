@@ -220,7 +220,7 @@ The `Delegation` slot is one standing line with the lifetime child count and cos
 
 Delegation entries have two sources. Selection or `expanded` density shows the current entries. The renderer-local `UiState.expanded_delegations` toggle also reveals prior-turn history, independently of selection:
 
-- Snapshots keep finished prior-turn children tagged `prior_turn`, and the entries list hides them unless the toggle is open. The muted tail reads `  +K more` for K tagged entries while closed and `  − less` while open, and is absent without history.
+- Snapshots keep finished prior-turn children tagged `prior_turn`, and the entries list hides them unless the toggle is open. The muted tail reads `  +K more` for K tagged entries while closed and at least one untagged child entry is shown; it is absent while open, without history, or with no child entry above it, where the delegation line is the only toggle.
 - The delegation line and the history tail both carry `HitTarget::ToggleDelegation`. A click toggles the entry, anchors selection, and pins manual scroll, and never focuses a pane. Closing the toggle falls back to whatever selection or density shows.
 - Each toggle entry stores the row id and the parent's `user_turn_started_at`. A changed turn stamp makes it inert at once and pruning removes it, so the next user-authored prompt closes the toggle; automatic deliveries leave it open.
 

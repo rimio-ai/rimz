@@ -317,7 +317,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     ui.expanded_delegations.insert(row_id, turn);
     let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);
     assert!(opened.contains("previous render audit"));
-    assert!(opened.contains("− less"));
+    assert!(!opened.contains("− less"));
     assert!(!opened.contains("+1 more"));
 }
 

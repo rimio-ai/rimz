@@ -60,7 +60,7 @@ fn prior_turn_children_expand_without_hiding_running_children() {
             selected_index == 0 && !open,
             "{rendered}"
         );
-        assert_eq!(rendered.contains("− less"), open, "{rendered}");
+        assert!(!rendered.contains("− less"), "{rendered}");
         assert_snapshot(name, rendered);
     }
 }
@@ -334,9 +334,9 @@ fn subagent_stats_line_outlives_the_turn() {
     );
 
     let selected = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert_eq!(selected.len(), 7, "{}", selected.join("\n"));
+    assert_eq!(selected.len(), 6, "{}", selected.join("\n"));
     assert!(selected[5].contains("⧉ subagents (1)"));
-    assert!(selected[6].contains("+1 more"));
+    assert!(!selected.iter().any(|line| line.contains("more")));
     assert!(!selected.iter().any(|line| line.contains("map sidebar")));
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
