@@ -399,9 +399,10 @@ impl TaskCatalog {
             .trigger()
             .as_ref()
             .is_ok_and(|parsed| matches!(parsed.trigger, super::Trigger::Watch { .. }))
-            && let Ok(runtime) = RuntimePaths::for_workspace(
-                WorkspaceResolver::persisted_workspace_id(task.entry().resolved_root())?,
-            )
+            && let Some(runtime) =
+                WorkspaceResolver::persisted_workspace_id(task.entry().resolved_root())
+                    .ok()
+                    .and_then(|workspace_id| RuntimePaths::for_workspace(workspace_id).ok())
         {
             let _ = super::signal::stop_watcher(&runtime, name);
         }
