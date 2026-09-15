@@ -685,7 +685,7 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
     );
     crate::cli::profile_report::list_profiles(
         reports,
-        rimz::config::effective::ProfileScope::Subagents,
+        crate::cli::profile_report::ProfileListing::Subagents,
         json,
         path,
     )

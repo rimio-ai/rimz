@@ -208,6 +208,15 @@ pub struct Profile {
 #[serde(transparent)]
 pub struct TeamsConfig(pub BTreeMap<String, Team>);
 
+impl TeamsConfig {
+    /// Splits `<team>.<role>` when `<team>` is configured; the launch grammar
+    /// resolves such a name as a team role before any profile of that name.
+    pub fn role_spec<'a>(&self, name: &'a str) -> Option<(&'a str, &'a str)> {
+        name.split_once('.')
+            .filter(|(team, _)| self.0.contains_key(*team))
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Team {
     #[serde(default)]

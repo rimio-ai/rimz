@@ -305,11 +305,12 @@ Resume planning is described in [fleet.md → Resume and rebirth](../../internal
 
 ### Discover agent profiles
 
-`rimz agents profiles` lists the configured `[agents.profiles]` profiles and launch commands as compact cards, with each profile's description. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams`](./teams.md#list-teams).
+`rimz agents profiles` lists the configured `[agents.profiles]` profiles and launch commands as compact cards, with each profile's description. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
 
 ```sh
 rimz agents profiles
 rimz agents profiles --path          # add each entry's defining file
+rimz agents profiles --teams         # include team role profiles
 rimz agents profiles --json --path
 ```
 

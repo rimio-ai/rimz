@@ -6,7 +6,7 @@ mod install;
 mod list;
 mod show;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::{GlobalFlags, agents_cmd};
@@ -71,6 +71,15 @@ enum TeamsSubcmd {
         /// Emit the team catalogue as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// List the team role profiles (`<team>.<role>`).
+    Profiles {
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+        /// Include each profile's defining file path.
+        #[arg(long)]
+        path: bool,
     },
     /// Resume a configured team's prior cohort.
     Resume(ResumeArgs),
@@ -212,6 +221,7 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
             show::run(name.as_deref(), worktree.as_deref(), json, globals)
         }
         Some(TeamsSubcmd::List { json }) => list::run(json, globals),
+        Some(TeamsSubcmd::Profiles { json, path }) => list_profiles(json, path),
         Some(TeamsSubcmd::Launch(args)) => {
             launch_team(args.name, args.prompt, args.launch, args.isolation, globals)
         }
@@ -334,6 +344,23 @@ fn reject_launch_flags_without_name(
     Ok(())
 }
 
+fn list_profiles(json: bool, path: bool) -> Result<()> {
+    let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
+        .context("loading machine config")?;
+    let reports = crate::cli::profile_report::available_profiles(
+        &config.agents.profiles,
+        &config.agents.commands,
+        &sources,
+        rimz::config::effective::ProfileScope::Agents,
+    );
+    crate::cli::profile_report::list_profiles(
+        crate::cli::profile_report::partition_team_profiles(reports, &config.agents.teams).0,
+        crate::cli::profile_report::ProfileListing::Teams,
+        json,
+        path,
+    )
+}
+
 fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {
     let teams = list::effective_teams(globals)?;
     validate_team_name(name, &teams)?;
@@ -344,9 +371,7 @@ fn validate_team_name(name: &str, teams: &rimz::config::TeamsConfig) -> Result<(
     if teams.0.contains_key(name) {
         return Ok(());
     }
-    if let Some((team, _role)) = name.split_once('.')
-        && teams.0.contains_key(team)
-    {
+    if teams.role_spec(name).is_some() {
         bail!("`{name}` names one role; launch it with `rimz agents {name}`");
     }
     let valid = teams.0.keys().cloned().collect::<Vec<_>>();
@@ -399,6 +424,18 @@ mod tests {
 
         let error = validate_team_name("forge.reviewer", &teams).unwrap_err();
         assert!(error.to_string().contains("rimz agents forge.reviewer"));
+    }
+
+    #[test]
+    fn profiles_parse_as_team_profile_listing() {
+        let args = parse_teams(&["rimz", "profiles", "--json", "--path"]);
+        assert!(matches!(
+            args.command,
+            Some(TeamsSubcmd::Profiles {
+                json: true,
+                path: true
+            })
+        ));
     }
 
     #[test]

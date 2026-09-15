@@ -339,6 +339,9 @@ enum AgentsSubcmd {
         /// Include each profile's defining file path.
         #[arg(long)]
         path: bool,
+        /// Include team role profiles (`<team>.<role>`), listed alone by `rimz teams profiles`.
+        #[arg(long)]
+        teams: bool,
     },
     /// List agent cards in the current room.
     #[command(aliases = ["ls", "ps"])]
@@ -613,17 +616,25 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Explain(args)) => return explain::run(args, globals),
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
-        Some(AgentsSubcmd::Profiles { json, path }) => {
+        Some(AgentsSubcmd::Profiles { json, path, teams }) => {
             let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
                 .context("loading machine config")?;
-            return crate::cli::profile_report::list_profiles(
-                crate::cli::profile_report::available_profiles(
-                    &config.agents.profiles,
-                    &config.agents.commands,
-                    &sources,
-                    rimz::config::effective::ProfileScope::Agents,
-                ),
+            let mut reports = crate::cli::profile_report::available_profiles(
+                &config.agents.profiles,
+                &config.agents.commands,
+                &sources,
                 rimz::config::effective::ProfileScope::Agents,
+            );
+            if !teams {
+                reports = crate::cli::profile_report::partition_team_profiles(
+                    reports,
+                    &config.agents.teams,
+                )
+                .1;
+            }
+            return crate::cli::profile_report::list_profiles(
+                reports,
+                crate::cli::profile_report::ProfileListing::Agents,
                 json,
                 path,
             );

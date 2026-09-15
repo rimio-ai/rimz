@@ -60,6 +60,18 @@ pub(crate) fn available_profiles(
     reports
 }
 
+/// Splits off the profiles named `<team>.<role>` for a configured team. The
+/// launch grammar resolves those names as team roles, so they belong to
+/// `rimz teams profiles` rather than the standalone agent catalog.
+pub(crate) fn partition_team_profiles(
+    reports: Vec<AgentProfileReport>,
+    teams: &rimz::config::TeamsConfig,
+) -> (Vec<AgentProfileReport>, Vec<AgentProfileReport>) {
+    reports
+        .into_iter()
+        .partition(|report| report.source == "profile" && teams.role_spec(&report.name).is_some())
+}
+
 pub(crate) fn subagent_reports(
     catalog: SubagentCatalog,
     profiles: &rimz::config::ProfilesConfig,
@@ -129,9 +141,16 @@ fn provider_brand_kind<'a>(
     raw_agent
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ProfileListing {
+    Agents,
+    Subagents,
+    Teams,
+}
+
 pub(crate) fn list_profiles(
     mut reports: Vec<AgentProfileReport>,
-    scope: ProfileScope,
+    listing: ProfileListing,
     json: bool,
     show_path: bool,
 ) -> Result<()> {
@@ -139,7 +158,7 @@ pub(crate) fn list_profiles(
     if json {
         return render::json_pretty(&reports);
     }
-    render::finish(profile_cards(&reports, scope, &mut render::out()))
+    render::finish(profile_cards(&reports, listing, &mut render::out()))
 }
 
 fn apply_path_visibility(reports: &mut [AgentProfileReport], show_path: bool) {
@@ -152,13 +171,18 @@ fn apply_path_visibility(reports: &mut [AgentProfileReport], show_path: bool) {
 
 fn profile_cards(
     reports: &[AgentProfileReport],
-    scope: ProfileScope,
+    listing: ProfileListing,
     out: &mut impl Write,
 ) -> std::io::Result<()> {
     if reports.is_empty() {
-        let profile_section = match scope {
-            ProfileScope::Agents => "agents.profiles",
-            ProfileScope::Subagents => "subagents.profiles",
+        let profile_section = match listing {
+            ProfileListing::Agents => "agents.profiles",
+            ProfileListing::Subagents => "subagents.profiles",
+            ProfileListing::Teams => {
+                writeln!(out, "No team profiles configured.")?;
+                writeln!(out, "Install a team with `rimz teams install forge`.")?;
+                return Ok(());
+            }
         };
         writeln!(out, "No profiles or commands configured.")?;
         writeln!(
@@ -251,7 +275,7 @@ mod tests {
 
         profile_cards(
             &reports,
-            ProfileScope::Agents,
+            ProfileListing::Agents,
             &mut anstream::StripStream::new(&mut output),
         )
         .expect("render profile cards");
@@ -296,7 +320,7 @@ mod tests {
     #[test]
     fn empty_catalog_names_the_configuration_section() {
         let mut output = Vec::new();
-        profile_cards(&[], ProfileScope::Subagents, &mut output).expect("render empty catalog");
+        profile_cards(&[], ProfileListing::Subagents, &mut output).expect("render empty catalog");
 
         assert_eq!(
             String::from_utf8(output).expect("utf-8"),
@@ -346,6 +370,39 @@ mod tests {
                 .get("brand_kind")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn team_role_profiles_split_from_standalone_profiles() {
+        let profiles = rimz::config::ProfilesConfig(
+            [
+                ("forge.coder".to_owned(), profile("claude")),
+                ("gone.coder".to_owned(), profile("claude")),
+                ("coder".to_owned(), profile("claude")),
+            ]
+            .into(),
+        );
+        let commands =
+            rimz::config::CommandsConfig([("forge.lint".to_owned(), "lint".to_owned())].into());
+        let teams =
+            rimz::config::TeamsConfig([("forge".to_owned(), rimz::config::Team::default())].into());
+        let reports = available_profiles(
+            &profiles,
+            &commands,
+            &rimz::config::AgentSpecSources::default(),
+            ProfileScope::Agents,
+        );
+
+        let (team, standalone) = partition_team_profiles(reports, &teams);
+
+        let names = |reports: &[AgentProfileReport]| {
+            reports
+                .iter()
+                .map(|report| report.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&team), ["forge.coder"]);
+        assert_eq!(names(&standalone), ["coder", "gone.coder", "forge.lint"]);
     }
 
     #[test]

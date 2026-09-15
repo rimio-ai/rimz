@@ -60,8 +60,14 @@ fn profiles_parse_as_agent_profile_listings_without_legacy_aliases() {
         args.command,
         Some(AgentsSubcmd::Profiles {
             json: true,
-            path: true
+            path: true,
+            teams: false
         })
+    ));
+    let args = parse_agents(&["rimz", "profiles", "--teams"]);
+    assert!(matches!(
+        args.command,
+        Some(AgentsSubcmd::Profiles { teams: true, .. })
     ));
     for command in ["specs", "types"] {
         let args = parse_agents(&["rimz", command]);
