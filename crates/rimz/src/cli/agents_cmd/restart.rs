@@ -208,6 +208,7 @@ pub(super) fn relaunch_request(
         parent_agent_id: agent.parent_agent_id.clone(),
         parent_agent_kind: agent.parent_agent_kind.clone(),
         launch_depth: agent.launch_depth,
+        launched_by: agent.launched_by.clone().map(Box::new),
         profile: agent.profile.clone(),
         login: agent.login.clone(),
         role: agent.role.clone(),
@@ -340,6 +341,7 @@ fn append_fresh_launch(
     request.launch.parent_agent_id = agent.parent_agent_id.clone();
     request.launch.parent_agent_kind = agent.parent_agent_kind.clone();
     request.launch.launch_depth = agent.launch_depth;
+    request.launch.launched_by = agent.launched_by.clone().map(Box::new);
     request.launch.mode = mode;
     request.launch.isolation = agent.isolation;
     request.launch.role = agent.role.clone();

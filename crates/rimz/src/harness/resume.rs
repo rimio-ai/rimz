@@ -734,6 +734,7 @@ impl ResumeCandidate {
                 parent_agent_id: None,
                 parent_agent_kind: None,
                 launch_depth: None,
+                launched_by: None,
                 isolation: None,
             },
             stamped_mode: None,
@@ -1362,7 +1363,10 @@ fn materialize_team_restore_tab(
                 })
             }
             (None, Some(launch_generation)) => {
-                Some(crate::harness::ancestry::LaunchAncestry::Peer { launch_generation })
+                Some(crate::harness::ancestry::LaunchAncestry::Peer {
+                    launch_generation,
+                    launched_by: agent.launched_by.clone(),
+                })
             }
             _ => None,
         })

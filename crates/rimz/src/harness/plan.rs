@@ -78,6 +78,7 @@ pub(super) struct ResumeLaunchIdentity {
     pub parent_agent_id: Option<AgentSessionId>,
     pub parent_agent_kind: Option<crate::ids::AgentKind>,
     pub launch_depth: Option<u8>,
+    pub launched_by: Option<crate::agents::LaunchedBy>,
     pub isolation: Option<crate::config::Isolation>,
 }
 
@@ -98,6 +99,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             parent_agent_id: agent.parent_agent_id.clone(),
             parent_agent_kind: agent.parent_agent_kind.clone(),
             launch_depth: agent.launch_depth,
+            launched_by: agent.launched_by.clone(),
             isolation: agent.isolation,
         }
     }
@@ -785,8 +787,12 @@ pub fn launch_identity_requests(
         launch.kind_ordinal = None;
         if let Some(ancestry) = ancestry {
             match ancestry {
-                LaunchAncestry::Peer { launch_generation } => {
+                LaunchAncestry::Peer {
+                    launch_generation,
+                    launched_by,
+                } => {
                     launch.launch_depth = Some(*launch_generation);
+                    launch.launched_by = launched_by.clone().map(Box::new);
                 }
                 LaunchAncestry::Subagent {
                     parent_agent_id,
@@ -851,6 +857,7 @@ pub(super) fn resume_command(
         parent_agent_id: identity.parent_agent_id.clone(),
         parent_agent_kind: identity.parent_agent_kind.clone(),
         launch_depth: identity.launch_depth,
+        launched_by: identity.launched_by.clone().map(Box::new),
         profile: identity.profile.clone(),
         role: identity.role.clone(),
         team: identity.team.clone(),

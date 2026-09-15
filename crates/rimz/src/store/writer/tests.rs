@@ -50,6 +50,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             parent_agent_id: Some(AgentSessionId::from("parent-session")),
             parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
             launch_depth: Some(2),
+            launched_by: None,
             profile: Some("codex-coder".to_owned()),
             login: None,
             mode: Some(crate::agents::PermissionMode::Yolo),

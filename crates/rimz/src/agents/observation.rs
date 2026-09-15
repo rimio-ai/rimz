@@ -30,6 +30,14 @@ pub enum SessionOrigin {
     Forked,
 }
 
+/// The agent that launched a top-level peer: its launch id, with session-id
+/// fallback for launchless callers, and its provider kind.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchedBy {
+    pub kind: crate::ids::AgentKind,
+    pub agent_id: AgentSessionId,
+}
+
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
@@ -49,6 +57,12 @@ pub struct LaunchParams {
     /// paneless subagent; without a parent, it tracks a top-level peer chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_depth: Option<u8>,
+    /// The agent that launched this top-level peer. Absent for subagents,
+    /// which name their launcher through `parent_agent_id`, and for launches
+    /// from a human shell. It never nests, reaps, or cascades: it only routes
+    /// the launcher's fleet report. Boxed to keep launch events compact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launched_by: Option<Box<LaunchedBy>>,
     /// The profile selected from `[agents.profiles]` or
     /// `[subagents.profiles]`, passed through `RIMZ_AGENT_PROFILE`. Used as the
     /// card handle when no role is present.

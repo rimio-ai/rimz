@@ -1448,12 +1448,24 @@ fn launch_request_names_and_metadata() {
         None,
         Some(&LaunchAncestry::Peer {
             launch_generation: 2,
+            launched_by: Some(crate::agents::LaunchedBy {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: AgentSessionId::from("root-launch"),
+            }),
         }),
     )
     .unwrap();
     assert_eq!(peer_requests[0].launch.parent_agent_id, None);
     assert_eq!(peer_requests[0].launch.parent_agent_kind, None);
     assert_eq!(peer_requests[0].launch.launch_depth, Some(2));
+    assert_eq!(
+        peer_requests[0]
+            .launch
+            .launched_by
+            .as_ref()
+            .map(|launcher| launcher.agent_id.as_str()),
+        Some("root-launch")
+    );
 
     let requests = launch_identity_requests(
         &layout,

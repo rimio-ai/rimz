@@ -655,6 +655,11 @@ pub struct AgentState {
     /// `rimz subagents` children; provider-native subagents stay `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_depth: Option<u8>,
+    /// The agent that launched this top-level peer; see
+    /// [`LaunchedBy`](crate::agents::LaunchedBy). Subagents use
+    /// `parent_agent_id` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launched_by: Option<crate::agents::LaunchedBy>,
     pub worktree_path: Option<String>,
     /// Latest observed branch for this identity.
     pub worktree_branch: Option<String>,
@@ -864,6 +869,8 @@ struct AgentStateWire {
     parent_agent_kind: Option<AgentKind>,
     #[serde(default)]
     launch_depth: Option<u8>,
+    #[serde(default)]
+    launched_by: Option<crate::agents::LaunchedBy>,
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
     #[serde(default)]
@@ -962,6 +969,7 @@ impl From<AgentStateWire> for AgentState {
             parent_agent_id: wire.parent_agent_id,
             parent_agent_kind: wire.parent_agent_kind,
             launch_depth: wire.launch_depth,
+            launched_by: wire.launched_by,
             worktree_path: wire.worktree_path,
             worktree_branch: wire.worktree_branch,
             worktree_branches: wire.worktree_branches,
@@ -1056,6 +1064,7 @@ impl AgentState {
             parent_agent_id: None,
             parent_agent_kind: None,
             launch_depth: None,
+            launched_by: None,
             worktree_path: None,
             worktree_branch: None,
             worktree_branches: BTreeSet::new(),
@@ -1116,6 +1125,29 @@ impl AgentState {
     /// The provider account this session belongs to.
     pub fn login_key(&self) -> LoginKey {
         LoginKey::new(self.kind.clone(), self.login.clone().unwrap_or_default())
+    }
+
+    /// The agent this one reports to when its supervised run settles: the
+    /// parent of a launched child, or the launcher of a top-level peer.
+    /// Only the fleet report reads it; lifecycle code uses the parent link.
+    pub fn launcher(&self) -> Option<(&AgentKind, &AgentSessionId)> {
+        if self.is_launched_child() {
+            return self
+                .parent_agent_id
+                .as_ref()
+                .map(|id| (self.parent_agent_kind.as_ref().unwrap_or(&self.kind), id));
+        }
+        self.launched_by
+            .as_ref()
+            .map(|launcher| (&launcher.kind, &launcher.agent_id))
+    }
+
+    /// Match [`launcher`](Self::launcher) to a candidate session or launch.
+    pub fn launcher_is(&self, candidate: &AgentState) -> bool {
+        self.launcher().is_some_and(|(kind, id)| {
+            kind == &candidate.kind
+                && (&candidate.agent_id == id || candidate.launch_id.as_ref() == Some(id))
+        })
     }
 
     /// Match the parent link to a candidate session or launch of the right kind.
