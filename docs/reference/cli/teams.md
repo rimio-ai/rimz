@@ -42,8 +42,8 @@ The catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams
 ## Inspect one team
 
 ```sh
-rimz teams show forge                    # the definition and every live forge cohort
-rimz teams show forge#feat-rate-limits   # the definition and one cohort
+rimz teams show forge                    # the definition, then one row per live cohort
+rimz teams show forge#feat-rate-limits   # one cohort's status, then the definition
 rimz teams show '#feat-rate-limits'      # every team live in that lane
 rimz teams show forge --json
 ```
@@ -52,13 +52,44 @@ rimz teams show forge --json
 
 | Target | Reports |
 | --- | --- |
-| `<team>` | The definition and every live cohort of the team. The team must be defined: a removed team's live cohort shows only in the list and in lane-only forms. |
-| `<team>#<lane>`, or `<team> -w <lane>` | The definition, with live cohorts narrowed to the one whose lane is `<lane>` or whose members run in worktree `<lane>`. With no match it prints `no live instance in #<lane>` and exits 0. |
-| `'#<lane>'`, or `-w <lane>` alone | A full report for every team live in that lane, defined or not. With none it prints `no live team in #<lane>` and exits 0. |
+| `<team>` | The definition, then a table of the team's live cohorts. The team must be defined: a removed team's live cohort shows only in the list and in lane-only forms. |
+| `<team>#<lane>`, or `<team> -w <lane>` | The lane block of the cohort whose lane is `<lane>` or whose members run in worktree `<lane>`, then the definition. With no match it prints `no live instance in #<lane>` before the definition and exits 0. |
+| `'#<lane>'`, or `-w <lane>` alone | For every team live in that lane, defined or not, its lane block then its definition. With none it prints `no live team in #<lane>` and exits 0. |
 
 Give the lane once: the fused form and `-w` together are refused. Quote `'#lane'` so the shell does not read it as a comment.
 
-A report for a forge cohort in `#feat-x` looks like this:
+Each form leads with what it is asked for. A lane form, here `rimz teams show forge#feat-x`, checks on a run:
+
+```text
+forge#feat-x · idle 48s
+  stage:    Implement (@coder) for 28m
+  pipeline: Explore → Plan → [Implement] → Review → Submit → Reflect → Done
+  pr:       #412 · open · ci pending · https://github.com/acme/api/pull/412
+
+  MEMBER     STATUS   AGE  ACTIVITY           CTX   COST
+  @planner   success  28m  -                  61%  $1.84
+  @coder     success  48s  editing ingest.rs  42%  $0.95
+  @reviewer  idle     31m  -                   8%  $0.12
+
+  signals: ci.failed → @coder · never fired · team-forge-feat-x-coder-ci-failed
+
+  worktree:  /repo-worktrees/feat-x
+  isolation: host · tmp /tmp
+  memory:    blackboard.md   41 lines · 2m ago
+             plan-notes.md  120 lines · 18m ago
+
+forge
+  source: ~/.agents/teams/forge/team.toml
+  layout: planner,coder+reviewer
+
+  @planner   claude  fable        <- leader
+  @coder     codex   gpt-6-astra
+  @reviewer  claude  opus
+  signals   ci.failed → @coder
+  (prompt stack: rimz teams show forge --json)
+```
+
+The team form, `rimz teams show forge`, describes the team and lists its cohorts:
 
 ```text
 forge
@@ -71,41 +102,30 @@ forge
   signals   ci.failed → @coder
   (prompt stack: rimz teams show forge --json)
 
-#feat-x · working · Implement (@coder)
-  worktree:  /repo-worktrees/feat-x
-  isolation: host · tmp /tmp
-  stages:    Explore → Plan → [Implement] → Review → Submit → Reflect → Done
-  pr:        #412 · open · ci pending
-  memory:    blackboard.md   41 lines · 2m ago
-             plan-notes.md  120 lines · 18m ago
-
-  MEMBER     STATUS   ACTIVITY           CTX   COST  AGE
-  @planner   idle     -                  61%  $1.84  18m
-  @coder     running  editing ingest.rs  42%  $0.95   0s
-  @reviewer  idle     -                   8%  $0.12  31m
-
-Live signals
-  LANE     MEMBER  NAME                               SIGNAL     MATCH
-  #feat-x  @coder  team-forge-feat-x-coder-ci-failed  ci.failed  path=/repo-worktrees/feat-x
+  LANE     STAGE                       PR                        STATUS
+  #feat-x  Implement (@coder) for 28m  #412 · open · ci pending  idle 48s
+  #feat-y  Plan (@planner) for 4m      -                         working
 ```
 
 The definition block names `source` and `layout`, and adds an `error` line only when the definition is broken. The roster lists each role's handle, provider, and model (`-` when unset), marks the leader with `<- leader`, and ends with a `signals` line when roles declare [signal bindings](../../guide/configuration.md#team-signal-bindings), each shown as `signal (match filters) → @role` and clipped to the terminal width. When any role has system-prompt files, a pointer to `--json` follows, since the JSON carries the resolved prompt stack.
 
-Each live cohort gets its own block:
+The cohort table's `STAGE` and `STATUS` cells carry the same text as a lane block's `stage` line and header state; `PR` is the `pr` line without the URL.
+
+A lane block reads top to bottom:
 
 | Line | Shows |
 | --- | --- |
-| Header | `#<lane> · <state>`, then ` · <stage>` when the board has one. |
+| Header | `<team>#<lane> · <state>`, the [cohort state](#cohort-state) followed by the time since any member's last activity, except while `working`. |
+| `stage` | Always present. The [board stage](#board-stage) with ` (@owner)` when the board names one, then ` for <age>`, the time since the flip into that stage; `Done for <age>` once the board is flipped to `Done`; `none` without a board stage. The age is omitted when no recorded flip matches (a hand-edited board, or a flip rotated out of the event log). |
+| `pipeline` | The declared `stages` with the implicit `Done` last, bracketing the board stage when it matches a name exactly. Omitted when the team declares no `stages`. |
+| `pr` | Cached PR number, state (`open`, `merged`, `closed`), `ci passing`, `ci pending`, or `ci failing`, and URL, as far as known; `none` when nothing is cached. |
+| Member table | `MEMBER STATUS AGE ACTIVITY CTX COST`, members in the team's declared role order. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` is the time since the member's last activity, and `COST` is each role's lifetime spend in this worktree. |
+| `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `never fired`, `fired <age> ago` when the last firing delivered, `skipped <age> ago` when it matched the family but not the subscription, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` counts runs past the first. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
 | `isolation` | `host · tmp /tmp`, or `sandbox · tmp <room tmp dir> (as /tmp)`: the `--isolation` recorded at launch, else the machine's `agents.isolation`. Members that disagree show the machine setting. |
-| `stages` | The declared pipeline with the implicit `Done` last, bracketing the board stage when it matches a name exactly. Omitted when the team declares no `stages`. |
-| `pr` | Cached PR number, state (`open`, `merged`, `closed`), `ci passing`, `ci pending`, or `ci failing`, and URL, as far as known; `none` when nothing is cached. |
 | `memory` | Files matching the team's `scratch-files`, relative to the worktree, with line counts and modification ages. Omitted when none exist. |
-| Member table | `MEMBER STATUS ACTIVITY CTX COST AGE`. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `COST` is each role's lifetime spend in this worktree, and `AGE` is the time since the member's last activity. |
 
-`Live signals` lists the subscriptions RimZ armed for members from their role bindings, one row per subscription, and appears only when at least one is armed. The roster's `signals` line shows what is declared; this table shows what is armed now.
-
-The report ends there, with no launch, resume, or focus hints.
+A script watching for completion greps `^  stage:` in the human output or reads `.stage.name` from `--json`. The report ends with the definition, with no launch, resume, or focus hints.
 
 ### Cohort state
 
@@ -117,8 +137,7 @@ A cohort's state is the first rule that matches its members' statuses:
 | `paused` | Any member is `paused`. |
 | `working` | Any member is `running`. |
 | `sleeping` | Any member is `sleeping`: at rest with a one-shot wait or delivery armed. Standing subscriptions do not count. |
-| `done` | Any member's last turn succeeded (`success`). |
-| `idle` | Otherwise. |
+| `idle` | Otherwise, including members whose last turn succeeded. Whether the pipeline finished is the [board stage](#board-stage), never member status. |
 
 ### Board stage
 
@@ -142,14 +161,15 @@ PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` neve
 | --- | --- |
 | `channel`, `state` | Lane name without `#`, and the [cohort state](#cohort-state). |
 | `status_counts` | Object mapping each member status to its count. |
+| `last_activity_at` | The newest member `last_activity_at` (UTC timestamp). |
 | `worktree`, `branch` | Absolute checkout path and branch; `null` when unavailable or when members disagree. |
 | `isolation`, `tmp_dir` | `host` or `sandbox`; `/tmp` for host, the absolute room tmp directory mounted at `/tmp` for sandbox. |
 | `stages` | Declared stage names in order; `[]` when undeclared or the team is no longer defined. |
-| `stage` | `{ "name": "Implement", "owner": "coder" }`, owner without `@` and nullable; `null` when the board has no stage. |
+| `stage` | `{ "name": "Implement", "owner": "coder", "since": "2026-09-15T08:33:23Z" }`; `null` when the board has no stage. `name` is `Done` once the board is flipped to `Done`, so `.stage.name` is the field to script against. `owner` is without `@` and nullable; `since` is the UTC time of the flip into this stage, `null` when no recorded flip matches. |
 | `pr` | `number`, `state` (`open`, `merged`, `closed`), `ci` (`passing`, `pending`, `failing`), and `url`, each nullable; `null` when nothing is cached. |
 | `memory[]` | `path` (absolute), `lines`, and `modified_at` (UTC timestamp or `null`). |
-| `members[]` | `role` (nullable), `handle`, `kind`, `status`, `phase`, `activity` (nullable), `last_activity_at` (UTC timestamp), `signals`, and optional `context_fill_pct` and `cost_usd`. |
-| `members[].signals[]` | Armed subscriptions: `name` (the loop task name), `selector`, and `matches`. These keys differ from the declared `roles[].signals[]`. |
+| `members[]` | In declared role order: `role` (nullable), `handle`, `kind`, `status`, `phase`, `activity` (nullable), `last_activity_at` (UTC timestamp), `signals`, and optional `context_fill_pct` and `cost_usd`. |
+| `members[].signals[]` | Armed subscriptions: `name` (the loop task name), `selector`, `matches`, and optional `fired`, the task's latest loop run: `at` (UTC timestamp), `result` (the snake_case run result, `delivered` for a delivered firing), and `runs`. These keys differ from the declared `roles[].signals[]`. |
 
 ## Launch a team
 

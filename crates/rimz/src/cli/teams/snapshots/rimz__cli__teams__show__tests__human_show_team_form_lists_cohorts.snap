@@ -1,0 +1,15 @@
+---
+source: crates/rimz/src/cli/teams/show.rs
+expression: "rendered(&report(vec![live_instance(), idle]), None)"
+---
+forge
+  source: /tmp/.agents/teams/forge/team.toml
+  layout: planner,coder+reviewer
+
+  @planner   claude  fable  <- leader
+  signals   ci.failed → @planner
+  (prompt stack: rimz teams show forge --json)
+
+  LANE     STAGE                           PR                        STATUS
+  #feat-x  Plan (delta) (@planner) for 2m  -                         working
+  #feat-y  -                               #412 · open · ci failing  idle 2m

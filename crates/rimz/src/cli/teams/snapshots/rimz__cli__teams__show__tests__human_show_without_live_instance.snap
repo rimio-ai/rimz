@@ -2,6 +2,8 @@
 source: crates/rimz/src/cli/teams/show.rs
 expression: "rendered(&report(Vec::new()), Some(\"ended-lane\"))"
 ---
+no live instance in #ended-lane
+
 forge
   source: /tmp/.agents/teams/forge/team.toml
   layout: planner,coder+reviewer
@@ -9,5 +11,3 @@ forge
   @planner   claude  fable  <- leader
   signals   ci.failed → @planner
   (prompt stack: rimz teams show forge --json)
-
-no live instance in #ended-lane

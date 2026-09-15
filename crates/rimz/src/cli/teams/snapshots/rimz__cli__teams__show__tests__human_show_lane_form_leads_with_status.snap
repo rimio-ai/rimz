@@ -1,0 +1,24 @@
+---
+source: crates/rimz/src/cli/teams/show.rs
+expression: "rendered(&report(vec![live_instance()]), Some(\"feat-x\"))"
+---
+forge#feat-x · working
+  stage:    Plan (delta) (@planner) for 2m
+  pipeline: Explore → Plan → Implement → Done
+  pr:       none
+
+  MEMBER    STATUS   AGE  ACTIVITY         CTX   COST
+  @planner  running   2m  reading show.rs  42%  $0.25
+
+  signals: ci.failed → @planner · fired 1m ago ×2 · team-forge-feat-x-planner-ci-failed
+
+  worktree:  /repo/worktrees/feat-x
+  isolation: host · tmp /tmp
+
+forge
+  source: /tmp/.agents/teams/forge/team.toml
+  layout: planner,coder+reviewer
+
+  @planner   claude  fable  <- leader
+  signals   ci.failed → @planner
+  (prompt stack: rimz teams show forge --json)

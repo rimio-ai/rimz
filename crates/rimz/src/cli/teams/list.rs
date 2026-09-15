@@ -13,7 +13,9 @@ use rimz::config::{
     ThemeConfig,
 };
 use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
+use rimz::harness::schedule::run_log::{self, LoopRunResult, LoopRunStats};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
+use rimz::harness::team_stage::StageSignal;
 use rimz::store::snapshot::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
 use rimz::utils::path::normalize_path_lexical;
 use rimz::workspace::WorkspaceResolver;
@@ -57,8 +59,9 @@ pub(super) struct RoleReport {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct LiveInstance {
     pub channel: String,
-    pub state: String,
+    pub state: CohortState,
     pub status_counts: BTreeMap<String, usize>,
+    pub last_activity_at: Option<jiff::Timestamp>,
     pub members: Vec<LiveMember>,
     pub worktree: Option<PathBuf>,
     pub branch: Option<String>,
@@ -74,6 +77,32 @@ pub(super) struct LiveInstance {
 pub(super) struct StageReport {
     pub name: String,
     pub owner: Option<String>,
+    /// When the latest durable flip into this stage landed; `None` for a hand-edited board or a rotated event log.
+    pub since: Option<jiff::Timestamp>,
+}
+
+/// A cohort's attention state, folded from its members' statuses.
+/// Pipeline completion is the board's `Done` stage, never a member status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CohortState {
+    Blocked,
+    Paused,
+    Working,
+    Sleeping,
+    Idle,
+}
+
+impl CohortState {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Blocked => "blocked",
+            Self::Paused => "paused",
+            Self::Working => "working",
+            Self::Sleeping => "sleeping",
+            Self::Idle => "idle",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -120,6 +149,16 @@ pub(super) struct LiveSignal {
     pub name: String,
     pub selector: String,
     pub matches: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fired: Option<SignalFire>,
+}
+
+/// The loop run log's latest record for an armed subscription.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct SignalFire {
+    pub at: jiff::Timestamp,
+    pub result: LoopRunResult,
+    pub runs: usize,
 }
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
@@ -148,6 +187,13 @@ pub(super) fn load_catalog(
     render::warn_unreadable_lanes(&lifetimes);
     let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
     let tasks = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
+    let flips =
+        rimz::harness::team_stage::stage_flips(&ctx.store).context("reading team stage flips")?;
+    let runs = run_log::stats(
+        &rimz::disk::paths::state_home(),
+        &jiff::Timestamp::now().to_zoned(machine.time_zone()),
+        Some(&ctx.workspace.project_root),
+    );
     Ok(build_catalog(
         &effective.teams,
         &effective.profiles,
@@ -155,6 +201,8 @@ pub(super) fn load_catalog(
         LiveCatalog {
             snapshot: &snapshot,
             tasks: tasks.visible(),
+            flips: &flips,
+            runs: &runs,
             audit_agents: &audit.agents,
             lifetimes: &lifetimes,
             prices: &prices,
@@ -219,6 +267,8 @@ fn build_catalog(
 struct LiveCatalog<'a> {
     snapshot: &'a SidebarSnapshot,
     tasks: &'a BTreeMap<String, LoadedTask>,
+    flips: &'a [StageSignal],
+    runs: &'a BTreeMap<String, LoopRunStats>,
     audit_agents: &'a [AgentState],
     lifetimes: &'a LaneLifetimes,
     prices: &'a rimz::agents::PriceBook,
@@ -440,6 +490,12 @@ fn live_instances(
             .as_deref()
             .and_then(rimz::harness::scratch::board_stage)
             .map(|stage| StageReport {
+                since: catalog
+                    .flips
+                    .iter()
+                    .rev()
+                    .find(|flip| flip.instance == instance && flip.to == stage.name)
+                    .map(|flip| flip.at),
                 name: stage.name,
                 owner: stage.owner,
             });
@@ -500,14 +556,15 @@ fn live_instances(
                 .entry(agent.effective_status().as_str().to_owned())
                 .or_default() += 1;
         }
-        let state = instance_state(&status_counts).to_owned();
+        let state = instance_state(&status_counts);
+        let last_activity_at = members.iter().map(|agent| agent.last_activity).max();
         let isolation = unique_value(
             members
                 .iter()
                 .map(|agent| Some(agent.isolation.unwrap_or(catalog.isolation))),
         )
         .unwrap_or(catalog.isolation);
-        let members = members
+        let mut members = members
             .iter()
             .map(|agent| {
                 let status = agent.effective_status();
@@ -522,6 +579,14 @@ fn live_instances(
                         .iter()
                         .filter_map(|(name, task)| {
                             live_signal(name, task.entry(), task.source(), &instance, agent)
+                        })
+                        .map(|signal| LiveSignal {
+                            fired: catalog.runs.get(&signal.name).map(|stats| SignalFire {
+                                at: stats.last.at,
+                                result: stats.last.result,
+                                runs: stats.runs,
+                            }),
+                            ..signal
                         })
                         .collect(),
                     handle: rimz::address::agent_handle(agent, &members, false),
@@ -540,7 +605,20 @@ fn live_instances(
                         .and_then(|effort| effort.cost_usd),
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let role_rank = |member: &LiveMember| {
+            team.and_then(|team| {
+                team.roles
+                    .iter()
+                    .position(|binding| Some(&binding.role) == member.role.as_ref())
+            })
+            .unwrap_or(usize::MAX)
+        };
+        members.sort_by(|left, right| {
+            role_rank(left)
+                .cmp(&role_rank(right))
+                .then_with(|| left.handle.cmp(&right.handle))
+        });
         by_team
             .entry(cohort.team.to_owned())
             .or_default()
@@ -548,6 +626,7 @@ fn live_instances(
                 channel: cohort.channel,
                 state,
                 status_counts,
+                last_activity_at,
                 members,
                 worktree,
                 branch,
@@ -594,22 +673,21 @@ fn live_signal(
         name: name.to_owned(),
         selector: entry.signal.clone()?,
         matches: entry.matches.clone().unwrap_or_default(),
+        fired: None,
     })
 }
 
-fn instance_state(counts: &BTreeMap<String, usize>) -> &'static str {
+fn instance_state(counts: &BTreeMap<String, usize>) -> CohortState {
     if counts.contains_key("waiting") || counts.contains_key("failed") {
-        "blocked"
+        CohortState::Blocked
     } else if counts.contains_key("paused") {
-        "paused"
+        CohortState::Paused
     } else if counts.contains_key("running") {
-        "working"
+        CohortState::Working
     } else if counts.contains_key("sleeping") {
-        "sleeping"
-    } else if counts.contains_key("success") {
-        "done"
+        CohortState::Sleeping
     } else {
-        "idle"
+        CohortState::Idle
     }
 }
 
