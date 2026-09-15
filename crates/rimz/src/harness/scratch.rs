@@ -110,8 +110,9 @@ pub(super) fn parse_board_stage(board: &str) -> Option<BoardStage> {
     })
 }
 
-/// Read the trimmed text under `## <heading>`, up to the next heading line;
-/// `None` when the heading is absent or the section is blank.
+/// Read the trimmed text under `## <heading>`, up to the next ATX heading
+/// outside a fenced code block; `None` when the heading is absent or the
+/// section is blank.
 pub fn board_section(root: &Path, heading: &str) -> Option<String> {
     let board = std::fs::read_to_string(root.join("blackboard.md")).ok()?;
     parse_board_section(&board, heading)
@@ -122,11 +123,22 @@ fn parse_board_section(board: &str, heading: &str) -> Option<String> {
         .lines()
         .skip_while(|line| line.strip_prefix("## ").map(str::trim) != Some(heading))
         .skip(1)
-        .take_while(|line| !line.starts_with('#'))
+        .scan(false, |in_fence, line| {
+            if ["```", "~~~"].iter().any(|fence| line.starts_with(fence)) {
+                *in_fence = !*in_fence;
+            }
+            (*in_fence || !is_atx_heading(line)).then_some(line)
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let section = section.trim();
     (!section.is_empty()).then(|| section.to_owned())
+}
+
+fn is_atx_heading(line: &str) -> bool {
+    let text = line.trim_start_matches('#');
+    (1..=6).contains(&(line.len() - text.len()))
+        && (text.is_empty() || text.starts_with([' ', '\t']))
 }
 
 #[cfg(test)]
@@ -220,9 +232,14 @@ mod tests {
     fn board_section_reads_to_the_next_heading_and_drops_blank_sections() {
         let worktree = tempfile::tempdir().expect("worktree");
         assert_eq!(board_section(worktree.path(), "Result"), None);
-        let text = "# Blackboard\r\nStage: Done\r\n\r\n## Results\r\nwrong\r\n## Result\r\n\r\nPR: https://x/1\r\n- tests pass\r\n\r\n### Detail\r\nnot included\r\n## Empty\r\n  \r\n## Tail\r\nlast";
+        let text = "# Blackboard\r\nStage: Done\r\n\r\n## Results\r\nwrong\r\n## Result\r\n\r\nPR: https://x/1\r\n#412 merged\r\n```sh\r\n# rerun the gate\r\n## not a heading\r\n```\r\n- tests pass\r\n\r\n### Detail\r\nnot included\r\n## Empty\r\n  \r\n## Tail\r\nlast";
         for (heading, section) in [
-            ("Result", Some("PR: https://x/1\n- tests pass")),
+            (
+                "Result",
+                Some(
+                    "PR: https://x/1\n#412 merged\n```sh\n# rerun the gate\n## not a heading\n```\n- tests pass",
+                ),
+            ),
             ("Results", Some("wrong")),
             ("Empty", None),
             ("Tail", Some("last")),
