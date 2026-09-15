@@ -39,14 +39,20 @@ pub struct GcArgs {
 }
 
 pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
-    let config = MachineConfig::load_lenient();
-    let older_than = args.older_than.unwrap_or(config.gc.older_than);
     let outcome = if args.unattended {
+        // A destructive automation never starts from a config that fails to
+        // parse: lenient defaults would re-enable a `gc.auto = false` opt-out.
+        let Ok(config) = MachineConfig::load() else {
+            return Ok(());
+        };
         if !config.gc.auto {
             return Ok(());
         }
-        sweep_unattended(older_than, globals)?
+        sweep_unattended(args.older_than.unwrap_or(config.gc.older_than), globals)?
     } else {
+        let older_than = args
+            .older_than
+            .unwrap_or(MachineConfig::load_lenient().gc.older_than);
         sweep(older_than, args.dry_run, globals)?
     };
     if args.json {
