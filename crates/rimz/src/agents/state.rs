@@ -1022,7 +1022,7 @@ impl AgentState {
     /// The compaction seat: `Team` when the agent launched under a team.
     /// `team` is launch-stamped and carried forward on rebirth, so the seat
     /// survives restarts and resumes.
-    pub fn compact_seat(&self) -> crate::config::CompactSeat {
+    pub(super) fn compact_seat(&self) -> crate::config::CompactSeat {
         match self.team {
             Some(_) => crate::config::CompactSeat::Team,
             None => crate::config::CompactSeat::Solo,
