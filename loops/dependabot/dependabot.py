@@ -2,12 +2,11 @@
 # requires-python = ">=3.14"
 # dependencies = []
 # ///
-"""Select one Dependabot repair batch; supervise Astra in its own RimZ worktree."""
+"""Select one Dependabot repair batch; supervise Astra in a fresh RimZ worktree per attempt."""
 
 import argparse
 import fcntl
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -19,9 +18,9 @@ PREFIX = "deps/repair-"
 MARKER = "rimz-dependabot-repair:v1 sources="
 
 
-def command(*args, root=ROOT):
+def command(*args, root=None):
     result = subprocess.run(
-        args, cwd=root, text=True, capture_output=True, timeout=120, check=False
+        args, cwd=root or ROOT, text=True, capture_output=True, timeout=120, check=False
     )
     if result.returncode:
         raise RuntimeError(f"{args[0]} failed: {result.stderr.strip() or result.stdout.strip()}")
@@ -182,37 +181,61 @@ def query_plan():
     return select(repo, prs, branches, checks)
 
 
-def control_worktree():
+def rimz(*args):
+    return command("rimz", *args)
+
+
+def git_succeeds(*args):
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, timeout=120, check=False).returncode == 0
+
+
+def branch_worktrees():
     # NUL-delimited porcelain preserves spaces, quotes, and newlines in paths.
     listing = command("git", "worktree", "list", "--porcelain", "-z")
-    matches = []
+    trees = {}
     for record in listing.split("\0\0"):
         fields = dict(field.partition(" ")[::2] for field in record.split("\0") if field)
-        if fields.get("branch") == "refs/heads/dependabot-loop" and "prunable" not in fields:
-            matches.append(Path(fields["worktree"]))
-    if len(matches) != 1:
-        raise RuntimeError("Create the dedicated control worktree with rimz worktree new dependabot-loop and put the loop code there")
-    script = matches[0] / "loops/dependabot/dependabot.py"
-    if not script.is_file():
-        raise RuntimeError(f"Control worktree is missing {script}; bring the loop code into that worktree")
-    return matches[0]
+        if fields.get("branch", "").startswith("refs/heads/") and "prunable" not in fields:
+            trees[fields["branch"].removeprefix("refs/heads/")] = fields["worktree"]
+    return trees
 
 
-def dispatch():
-    control = control_worktree()
-    os.chdir(control)
-    # Replace the bootstrap, preserving the scheduler's timeout/cancellation tree.
-    os.execvp("uv", ["uv", "run", "--no-project", "--script",
-                     "loops/dependabot/dependabot.py", "run"])
+def open_checkout(plan):
+    """Resume the attempt checkout a previous fire kept, or cut a fresh one from the published branch."""
+    branch = plan["branch"]
+    trees = branch_worktrees()
+    stale = [dict(branch=other, path=path) for other, path in sorted(trees.items())
+             if other.startswith(PREFIX) and other != branch]
+    if branch in trees:
+        return dict(attempt_checkout="resumed", branch=branch, path=trees[branch], stale_attempt_checkouts=stale)
+    published = f"origin/{branch}"
+    if not git_succeeds("rev-parse", "--verify", "--quiet", f"refs/remotes/{published}"):
+        # Publishing first makes an interrupted first attempt recoverable by name.
+        command("git", "push", "origin", f"origin/{plan['default_base']}:refs/heads/{branch}")
+        command("git", "fetch", "origin", branch)
+    if git_succeeds("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"):
+        if not git_succeeds("merge-base", "--is-ancestor", f"refs/heads/{branch}", published):
+            raise RuntimeError(f"Local branch {branch} holds commits absent from {published}; push or delete it")
+        command("git", "branch", "-D", branch)
+    # A base of origin/<branch> makes RimZ's landed proof mean "every commit is pushed".
+    rimz("worktree", "new", branch, "--base", published)
+    return dict(attempt_checkout="created", branch=branch, path=branch_worktrees().get(branch),
+                stale_attempt_checkouts=stale)
 
 
-def require_control_worktree():
-    git_dir = command("git", "rev-parse", "--path-format=absolute", "--git-dir").strip()
-    common = command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
-    branch = command("git", "branch", "--show-current").strip()
-    if Path(git_dir).resolve() == Path(common).resolve() or branch != "dependabot-loop":
-        raise RuntimeError("Run the coordinator from the dedicated dependabot-loop linked worktree")
-    return Path(common)
+def settle_checkout(branch):
+    """Report whether RimZ reclaimed the attempt checkout; never raises, never forces."""
+    try:
+        if branch not in branch_worktrees():
+            outcome = dict(attempt_checkout="removed", reason="reclaimed by RimZ after the worker exited")
+        elif occupied_repair_lane(json.loads(rimz("agents", "list", "--all", "--json"))):
+            outcome = dict(attempt_checkout="kept", reason="worker still live")
+        else:
+            rimz("worktree", "remove", branch)
+            outcome = dict(attempt_checkout="removed", reason="clean and pushed")
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        outcome = dict(attempt_checkout="kept", reason=str(error))
+    print(json.dumps(dict(outcome, branch=branch)), flush=True)
 
 
 def occupied_repair_lane(report):
@@ -250,7 +273,7 @@ def verify_result(plan, rows):
 
 
 def run():
-    common = require_control_worktree()
+    common = Path(command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
     with (common / "rimz-dependabot-repair.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -258,29 +281,33 @@ def run():
             print(json.dumps(dict(action="idle", reason="another coordinator holds the repository lock")))
             return
         # A supervisor can die while its pane survives. Do not spawn a second worker there.
-        occupied = occupied_repair_lane(json.loads(command("rimz", "agents", "list", "--all", "--json")))
+        occupied = occupied_repair_lane(json.loads(rimz("agents", "list", "--all", "--json")))
         if occupied:
             print(json.dumps(dict(action="idle", reason="repair lane still occupied", agents=occupied)))
             return
+        command("git", "fetch", "origin")
         plan = query_plan()  # Re-read after taking the shared lock, never consume a stale plan file.
         print(json.dumps(plan), flush=True)
-        if plan["action"] == "repair":
+        if plan["action"] != "repair":
+            return
+        print(json.dumps(open_checkout(plan)), flush=True)
+        try:
             launch(plan)
-            rows = github("pr", "list", "--repo", plan["repo"], "--head", plan["branch"],
-                          "--state", "all", "--json", "number,state,body,statusCheckRollup,headRefOid")
-            print(json.dumps(dict(replacement_pr=rows[0]["number"] if rows else None,
-                                  outcome=verify_result(plan, rows))), flush=True)
+        finally:
+            settle_checkout(plan["branch"])
+        rows = github("pr", "list", "--repo", plan["repo"], "--head", plan["branch"],
+                      "--state", "all", "--json", "number,state,body,statusCheckRollup,headRefOid")
+        print(json.dumps(dict(replacement_pr=rows[0]["number"] if rows else None,
+                              outcome=verify_result(plan, rows))), flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, suggest_on_error=True, color=False)
-    parser.add_argument("action", choices=("plan", "run", "dispatch"))
+    parser.add_argument("action", choices=("plan", "run"))
     args = parser.parse_args()
     try:
         if args.action == "plan":
             print(json.dumps(query_plan()))
-        elif args.action == "dispatch":
-            dispatch()
         else:
             run()
     except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:

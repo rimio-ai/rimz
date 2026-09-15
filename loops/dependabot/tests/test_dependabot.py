@@ -2,13 +2,14 @@
 # requires-python = ">=3.14"
 # dependencies = []
 # ///
-"""Dependabot loop regression tests for duplicate prevention and isolated dispatch."""
+"""Dependabot loop regression tests for duplicate prevention and per-attempt checkouts."""
 
 from contextlib import redirect_stdout
 import fcntl
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -41,33 +42,161 @@ def select(prs, checks=None, branches=()):
     return repair.select(REPO, prs, set(branches), checks or {})
 
 
+def git(cwd, *args):
+    return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=True).stdout.strip()
+
+
+class FakeRimz:
+    """Records rimz argv and performs the Git effect the real CLI would."""
+
+    def __init__(self, root, roster=(), refusal=None):
+        self.root, self.roster, self.refusal, self.calls = root, list(roster), refusal, []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        match args:
+            case ("agents", "list", *_):
+                return json.dumps(dict(schema=1, agents=self.roster))
+            case ("worktree", "new", branch, "--base", base):
+                git(self.root, "worktree", "add", "-b", branch, str(self.root.parent / branch.replace("/", "-")), base)
+                return f"created {branch}"
+            case ("worktree", "remove", branch):
+                if self.refusal:
+                    raise RuntimeError(f"rimz failed: {self.refusal}")
+                git(self.root, "worktree", "remove", str(self.root.parent / branch.replace("/", "-")))
+                git(self.root, "branch", "-d", branch)
+                return ""
+        raise AssertionError(f"unexpected rimz call {args}")
+
+
+class CheckoutFixture(unittest.TestCase):
+    """A bare origin and a primary clone with main published; the coordinator runs in the clone."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        base = Path(directory.name)
+        self.origin, self.root = base / "origin.git", base / "project"
+        git(base, "init", "--quiet", "--bare", "-b", "main", str(self.origin))
+        git(base, "clone", "--quiet", str(self.origin), str(self.root))
+        for key, value in (("user.name", "Test"), ("user.email", "test@example.com"), ("commit.gpgsign", "false")):
+            git(self.root, "config", key, value)
+        self.commit("initial")
+        git(self.root, "push", "--quiet", "origin", "main")
+        self.rimz = FakeRimz(self.root)
+        for name, value in (("ROOT", self.root), ("rimz", self.rimz)):
+            patcher = patch.object(repair, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.plan = select([source(1)], {1: "failed"})
+
+    def commit(self, message, cwd=None):
+        git(cwd or self.root, "commit", "--quiet", "--allow-empty", "-m", message)
+
+    def publish_batch(self):
+        git(self.root, "push", "--quiet", "origin", "main:refs/heads/deps/repair-1")
+        git(self.root, "fetch", "--quiet", "origin")
+
+    def remote_branch(self, branch="deps/repair-1"):
+        return git(self.origin, "for-each-ref", "--format=%(objectname)", f"refs/heads/{branch}")
+
+    def tree(self, branch="deps/repair-1"):
+        return self.root.parent / branch.replace("/", "-")
+
+    def run_quietly(self, function, *args):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            try:
+                function(*args)
+            finally:
+                self.lines = [json.loads(line) for line in output.getvalue().splitlines()]
+        return self.lines
+
+    def test_fresh_batch_is_published_before_its_checkout_is_cut_from_origin(self):
+        self.assertEqual(self.remote_branch(), "")
+        report = repair.open_checkout(self.plan)
+        self.assertEqual(report["attempt_checkout"], "created")
+        self.assertEqual(self.remote_branch(), git(self.origin, "rev-parse", "main"))
+        self.assertEqual(self.rimz.calls, [("worktree", "new", "deps/repair-1", "--base", "origin/deps/repair-1")])
+        self.assertEqual(Path(report["path"]).resolve(), self.tree().resolve())
+
+    def test_stale_local_branch_already_on_origin_is_replaced_by_a_fresh_checkout(self):
+        self.publish_batch()
+        git(self.root, "branch", "deps/repair-1", "origin/deps/repair-1")
+        self.assertEqual(repair.open_checkout(self.plan)["attempt_checkout"], "created")
+        self.assertEqual(git(self.tree(), "rev-parse", "HEAD"), self.remote_branch())
+
+    def test_unpushed_local_branch_stops_before_push_create_or_launch(self):
+        self.publish_batch()
+        git(self.root, "branch", "deps/repair-1", "origin/deps/repair-1")
+        git(self.root, "worktree", "add", "--quiet", str(self.tree()), "deps/repair-1")
+        self.commit("unpushed", self.tree())
+        git(self.root, "worktree", "remove", str(self.tree()))
+        remote = self.remote_branch()
+        with patch.object(repair, "query_plan", return_value=self.plan), \
+             patch.object(repair, "launch") as launch, self.assertRaisesRegex(RuntimeError, "push or delete it"):
+            self.run_quietly(repair.run)
+        launch.assert_not_called()
+        self.assertEqual(self.remote_branch(), remote)
+        self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json")])
+
+    def test_kept_checkout_is_resumed_without_push_or_create(self):
+        git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()))
+        report = repair.open_checkout(self.plan)
+        self.assertEqual((report["attempt_checkout"], Path(report["path"]).resolve()), ("resumed", self.tree().resolve()))
+        self.assertEqual(self.remote_branch(), "")
+        self.assertEqual(self.rimz.calls, [])
+
+    def test_other_repair_checkouts_are_reported_stale_and_left_alone(self):
+        git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-2", str(self.tree("deps/repair-2")))
+        report = repair.open_checkout(self.plan)
+        self.assertEqual([entry["branch"] for entry in report["stale_attempt_checkouts"]], ["deps/repair-2"])
+        self.assertTrue(self.tree("deps/repair-2").is_dir())
+
+    def test_settle_trusts_rimz_reclamation_and_liveness_before_one_unforced_remove(self):
+        self.run_quietly(repair.settle_checkout, "deps/repair-1")
+        self.assertEqual((self.lines[0]["attempt_checkout"], self.rimz.calls), ("removed", []))
+
+        self.publish_batch()
+        repair.open_checkout(self.plan)
+        self.rimz.calls.clear()
+        self.rimz.roster = [dict(handle="@worker", placement=dict(branch="deps/repair-1", pane="tmux:%1"))]
+        self.run_quietly(repair.settle_checkout, "deps/repair-1")
+        self.assertEqual(self.lines[0], dict(attempt_checkout="kept", reason="worker still live", branch="deps/repair-1"))
+        self.assertNotIn("remove", [call[1] for call in self.rimz.calls])
+
+        self.rimz.roster, self.rimz.calls = [], []
+        self.run_quietly(repair.settle_checkout, "deps/repair-1")
+        self.assertEqual(self.lines[0]["attempt_checkout"], "removed")
+        self.assertEqual(self.rimz.calls[-1], ("worktree", "remove", "deps/repair-1"))
+        self.assertFalse(self.tree().exists())
+
+    def test_refused_remove_keeps_the_checkout_and_still_verifies_the_pr(self):
+        self.rimz.refusal = "worktree `deps-repair-1` has local changes or work not proven landed; use --force to remove it"
+        rows = [dict(number=10)]
+        with patch.object(repair, "query_plan", return_value=self.plan), patch.object(repair, "launch"), \
+             patch.object(repair, "github", return_value=rows) as github, \
+             patch.object(repair, "verify_result", return_value="pending"):
+            self.run_quietly(repair.run)
+        github.assert_called_once()
+        settled = next(line for line in self.lines if line.get("attempt_checkout") in ("kept", "removed"))
+        self.assertEqual(settled["attempt_checkout"], "kept")
+        self.assertIn("not proven landed", settled["reason"])
+        self.assertEqual(self.rimz.calls[-1], ("worktree", "remove", "deps/repair-1"))
+        self.assertTrue((self.root / ".git" / "rimz-dependabot-repair.lock").is_file())
+
+    def test_failed_launch_still_settles_and_fails_the_run(self):
+        failure = subprocess.CalledProcessError(124, "rimz")
+        with patch.object(repair, "query_plan", return_value=self.plan), \
+             patch.object(repair, "launch", side_effect=failure), \
+             patch.object(repair, "github") as github, self.assertRaises(subprocess.CalledProcessError):
+            self.run_quietly(repair.run)
+        github.assert_not_called()
+        self.assertEqual([line.get("attempt_checkout") for line in self.lines[1:]], ["created", "removed"])
+        self.assertFalse(self.tree().exists())
+
+
 class RepairTests(unittest.TestCase):
-    def test_dispatch_finds_control_worktree_without_shell_parsing_paths(self):
-        with tempfile.TemporaryDirectory(prefix="loop ' quoted\n") as directory:
-            root = Path(directory)
-            script = root / "loops/dependabot/dependabot.py"
-            script.parent.mkdir(parents=True)
-            script.touch()
-            listing = ("worktree /primary\0HEAD abc\0branch refs/heads/main\0\0"
-                       f"worktree {root}\0HEAD def\0branch refs/heads/dependabot-loop\0\0")
-            with patch.object(repair, "command", return_value=listing), \
-                 patch.object(repair.os, "chdir") as chdir, \
-                 patch.object(repair.os, "execvp") as execute:
-                repair.dispatch()
-            chdir.assert_called_once_with(root)
-            execute.assert_called_once_with("uv", ["uv", "run", "--no-project", "--script",
-                                                  "loops/dependabot/dependabot.py", "run"])
-
-    def test_dispatch_refuses_missing_prunable_or_ambiguous_control_worktrees(self):
-        record = "worktree /absent\0HEAD abc\0branch refs/heads/dependabot-loop\0"
-        for listing in ("", record + "\0", record + "prunable stale\0\0", record + "\0" + record + "\0"):
-            with patch.object(repair, "command", return_value=listing), \
-                 patch.object(repair.os, "chdir") as chdir, \
-                 patch.object(repair.os, "execvp") as execute, self.assertRaises(RuntimeError):
-                repair.dispatch()
-            chdir.assert_not_called()
-            execute.assert_not_called()
-
     def test_selects_all_failed_bot_updates_in_stable_order(self):
         human = source(311)
         human["user"]["login"] = "dependabot"
@@ -152,18 +281,12 @@ class RepairTests(unittest.TestCase):
             self.assertEqual(repair.pages("endpoint"), [1, 2, 3])
             gh.assert_called_once_with("api", "--paginate", "--slurp", "endpoint")
 
-    def test_primary_checkout_and_wrong_control_branch_are_refused(self):
-        for outputs in (("/repo/.git", "/repo/.git", "main"),
-                        ("/repo/.git/worktrees/other", "/repo/.git", "other")):
-            with patch.object(repair, "command", side_effect=outputs), self.assertRaises(RuntimeError):
-                repair.require_control_worktree()
-
     def test_lock_contention_does_not_query_or_launch(self):
         with tempfile.TemporaryDirectory() as directory:
             common = Path(directory)
             with (common / "rimz-dependabot-repair.lock").open("a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                with patch.object(repair, "require_control_worktree", return_value=common), \
+                with patch.object(repair, "command", return_value=f"{common}\n"), \
                      patch.object(repair, "query_plan") as query, \
                      patch.object(repair, "launch") as launch, redirect_stdout(io.StringIO()):
                     repair.run()
@@ -173,8 +296,8 @@ class RepairTests(unittest.TestCase):
     def test_surviving_worker_prevents_duplicate_launch_after_supervisor_death(self):
         report = dict(schema=1, agents=[dict(handle="@worker", placement=dict(branch="deps/repair-1", pane="tmux:%1"))])
         with tempfile.TemporaryDirectory() as directory, \
-             patch.object(repair, "require_control_worktree", return_value=Path(directory)), \
-             patch.object(repair, "command", return_value=json.dumps(report)), \
+             patch.object(repair, "command", return_value=f"{directory}\n"), \
+             patch.object(repair, "rimz", return_value=json.dumps(report)), \
              patch.object(repair, "query_plan") as query, \
              patch.object(repair, "launch") as launch, redirect_stdout(io.StringIO()):
             repair.run()
