@@ -797,6 +797,7 @@ fn into_loop_check_request(
 pub(in crate::cli) struct BackgroundLaunch {
     pub name: String,
     pub run_id: rimz::RunId,
+    pub response_path: Option<PathBuf>,
 }
 
 pub(in crate::cli) enum BackgroundLaunchOutcome {
@@ -815,12 +816,15 @@ pub(in crate::cli) fn launch_supervised_background(
         return Ok(BackgroundLaunchOutcome::Aborted);
     };
     match outcome {
-        SupervisedRunOutcome::Background { agent_name, run_id } => {
-            Ok(BackgroundLaunchOutcome::Launched(BackgroundLaunch {
-                name: agent_name,
-                run_id,
-            }))
-        }
+        SupervisedRunOutcome::Background {
+            agent_name,
+            run_id,
+            response_path,
+        } => Ok(BackgroundLaunchOutcome::Launched(BackgroundLaunch {
+            name: agent_name,
+            run_id,
+            response_path,
+        })),
         SupervisedRunOutcome::BudgetExceeded { reason } => {
             Ok(BackgroundLaunchOutcome::BudgetExceeded { reason })
         }

@@ -676,6 +676,37 @@ impl RunFixture {
 }
 
 #[test]
+fn background_receipt_names_the_report_or_the_wait_command() {
+    let receipt = |names: &[&str], path: Option<&str>, subagent: bool| {
+        let mut err = Vec::new();
+        super::output::write_background_receipt(&mut err, names, path.map(Path::new), subagent)
+            .unwrap();
+        String::from_utf8(err).unwrap()
+    };
+
+    assert_eq!(
+        receipt(&["otter"], Some("/tmp/rimz-subagents/otter.output"), true),
+        "@otter runs in the background. When every subagent you launched has settled, one SUBAGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and its captured final response at /tmp/rimz-subagents/otter.output. Keep working or end your turn; to block instead: rimz subagents wait @otter\n"
+    );
+    assert_eq!(
+        receipt(
+            &["otter", "fox"],
+            Some("/tmp/rimz-subagents/otter.output"),
+            false
+        ),
+        "@otter, @fox run in the background. When every agent you launched has settled, one SUBAGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and its captured final response at /tmp/rimz-subagents/<name>.output. Keep working or end your turn; to block instead: rimz agents wait otter fox\n"
+    );
+    assert_eq!(
+        receipt(&["otter"], None, false),
+        "@otter runs in the background; print its final response with: rimz agents wait otter\n"
+    );
+    assert_eq!(
+        receipt(&["otter", "fox"], None, true),
+        "@otter, @fox run in the background; print their final responses with: rimz agents wait otter fox\n"
+    );
+}
+
+#[test]
 fn presented_blocking_attempt_is_joined_only_once_terminal() {
     let fixture = RunFixture::new(RunStatus::Running);
     super::run::join_presented_attempt(&fixture.store, "rimz-test", &fixture.record);

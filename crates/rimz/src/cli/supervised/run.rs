@@ -146,8 +146,18 @@ pub(in crate::cli) fn run_print(
     };
     let record = match outcome {
         SupervisedRunOutcome::Record(record) => Some(*record),
-        SupervisedRunOutcome::Background { agent_name, .. } => {
+        SupervisedRunOutcome::Background {
+            agent_name,
+            response_path,
+            ..
+        } => {
             writeln!(render::out(), "{agent_name}")?;
+            supervised::output::write_background_receipt(
+                &mut render::err(),
+                &[agent_name.as_str()],
+                response_path.as_deref(),
+                false,
+            )?;
             None
         }
         SupervisedRunOutcome::BudgetExceeded { reason } => {
@@ -192,6 +202,8 @@ struct PreparedRun {
     stream_text: bool,
     managed_launch: rimz::agents::ManagedLaunchState,
     ancestry: Option<rimz::harness::ancestry::LaunchAncestry>,
+    /// The launching agent's view of room tmp, when an agent launched the run.
+    caller_tmp: Option<rimz::sandbox::TmpView>,
     /// The room's accounts as a cold birth would freeze them.
     logins: rimz::ids::RoomLogins,
 }
@@ -205,6 +217,7 @@ enum AttemptOutcome {
     Background {
         agent_name: String,
         run_id: rimz::RunId,
+        response_path: Option<std::path::PathBuf>,
     },
     Blocking(Box<BlockingAttempt>),
 }
@@ -431,6 +444,8 @@ fn prepare_supervised(
         request.subagent,
         machine_config.agents.max_chain_length,
     )?;
+    let caller_tmp =
+        caller.map(|caller| rimz::sandbox::TmpView::current(caller.isolation, store.paths()));
     // The room pin keeps the store and effective config on the same project root.
     let workspace = supervised::anchor_subagent_workspace(workspace, request, caller, globals)?;
     let scope = if request.subagent {
@@ -582,6 +597,7 @@ fn prepare_supervised(
         stream_text: presentation.stream_text,
         managed_launch,
         ancestry,
+        caller_tmp,
         logins,
     }))
 }
@@ -701,6 +717,12 @@ fn execute_attempt(
     open_attempt_pane(prepared, room, request, &run_id, &launch_batch, &pane)?;
     if request.background {
         return Ok(AttemptOutcome::Background {
+            response_path: prepared.caller_tmp.as_ref().map(|view| {
+                view.agent_path(&rimz::harness::run::report::response_path(
+                    prepared.store.paths(),
+                    &launch_identity.name,
+                ))
+            }),
             agent_name: launch_identity.name.clone(),
             run_id,
         });
@@ -934,10 +956,15 @@ pub(in crate::cli) fn run_supervised(
             retries,
         )?;
         let blocking = match attempt_outcome {
-            AttemptOutcome::Background { agent_name, run_id } => {
+            AttemptOutcome::Background {
+                agent_name,
+                run_id,
+                response_path,
+            } => {
                 return Ok(Some(SupervisedRunOutcome::Background {
                     agent_name,
                     run_id,
+                    response_path,
                 }));
             }
             AttemptOutcome::Blocking(blocking) => *blocking,

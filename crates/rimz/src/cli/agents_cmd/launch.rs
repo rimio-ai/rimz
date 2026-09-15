@@ -794,6 +794,9 @@ fn write_launch_hints(
     if let Some(handle) = leader.or(fallback_handle) {
         let lane = channel.map_or_else(String::new, |channel| format!("#{channel}"));
         writeln!(w, "Reach: rimz message @{handle}{lane} '<text>'")?;
+        if team.is_none() {
+            writeln!(w, "Wait:  rimz agents wait @{handle}{lane}")?;
+        }
     }
     if let (Some(team), Some(channel)) = (team, channel) {
         writeln!(
@@ -998,11 +1001,11 @@ mod tests {
         assert!(!output.contains("Check:"));
         assert!(!output.contains("leader"));
         assert!(!output.contains("starting"));
-        assert!(!output.contains("Wait:"));
         assert!(!output.contains("board"));
         assert!(output.contains("  @worker   codex  -"));
         assert!(output.contains("  prompt    → @worker  \"Read the handoff.\""));
         assert!(output.contains("Reach: rimz message @worker '<text>'"));
+        assert!(output.contains("Wait:  rimz agents wait @worker\n"));
 
         let layout = rimz::harness::spec::parse_layout_spec(
             "claude,claude",
@@ -1031,6 +1034,12 @@ mod tests {
         .unwrap();
         let output = String::from_utf8(output.into_inner()).unwrap();
         assert!(output.contains("Reach: rimz message @first-peer#parallel '<text>'"));
+        let wait = output
+            .lines()
+            .find_map(|line| line.strip_prefix("Wait:  "))
+            .unwrap();
+        assert_eq!(wait, "rimz agents wait @first-peer#parallel");
+        <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
         assert!(!output.contains("leader"));
         assert!(!output.contains("prompt"));
     }
