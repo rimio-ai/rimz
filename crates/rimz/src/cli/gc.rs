@@ -14,7 +14,7 @@ use super::spinner::Spinner;
 use super::{GlobalFlags, open_store};
 use rimz::store::event_log::RepairOutcome;
 use rimz::store::gc;
-use rimz::utils::time::{DurationUnit, parse_duration_units};
+use rimz::utils::time::{DurationUnit, format_duration_compact, parse_duration_units};
 use rimz::workspace::WorkspaceResolver;
 use rimz::worktree::{FailedWorktree, KeptReason, KeptWorktree, SweptWorktree, WorktreeSweep};
 
@@ -339,12 +339,12 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     let checked_text = if skipped > 0 {
         format!(
             "checked {checked} of {GC_AREAS} areas · cutoff {}",
-            fmt_duration_compact(out.older_than)
+            format_duration_compact(out.older_than)
         )
     } else {
         format!(
             "checked {GC_AREAS} areas · cutoff {}",
-            fmt_duration_compact(out.older_than)
+            format_duration_compact(out.older_than)
         )
     };
     writeln!(w, "  {}", paint(palette::muted(), &checked_text))?;
@@ -805,17 +805,6 @@ fn removed_workspace_detail(removed: &gc::RemovedWorkspace) -> String {
             removed.workspace_id,
             fmt_bytes(removed.bytes)
         ),
-    }
-}
-
-fn fmt_duration_compact(duration: Duration) -> String {
-    let secs = duration.as_secs();
-    if secs >= 3_600 && secs.is_multiple_of(3_600) {
-        format!("{}h", secs / 3_600)
-    } else if secs >= 60 && secs.is_multiple_of(60) {
-        format!("{}m", secs / 60)
-    } else {
-        format!("{secs}s")
     }
 }
 
