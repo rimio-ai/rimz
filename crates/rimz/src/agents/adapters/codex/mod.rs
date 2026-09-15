@@ -737,13 +737,27 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     }
 
     /// Yolo's bypass flag already runs commands unsandboxed, so its argv stays
-    /// as rendered.
+    /// as rendered. `--approve-for-me` conflicts with `--sandbox` in clap, so it
+    /// is replaced by the approval half of its upstream expansion.
     fn disable_native_sandbox_args(&self, extra_args: &mut Vec<String>) {
         if extra_args
             .iter()
             .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
         {
             return;
+        }
+        let approve_for_me_len = extra_args.len();
+        extra_args.retain(|arg| arg != "--approve-for-me" && arg != "--not-so-yolo");
+        if extra_args.len() != approve_for_me_len {
+            extra_args.extend(
+                [
+                    "-c",
+                    r#"approvals_reviewer="auto_review""#,
+                    "-c",
+                    r#"approval_policy="on-request""#,
+                ]
+                .map(ToOwned::to_owned),
+            );
         }
         crate::agents::PresetArgMatcher::Flag(vec!["--sandbox".to_owned(), "-s".to_owned()])
             .remove_occurrences(extra_args);

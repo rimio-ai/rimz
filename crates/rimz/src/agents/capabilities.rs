@@ -327,7 +327,7 @@ pub trait LaunchCapability: CoreCapability {
 
     /// Switch off the provider's native command sandbox for a launch inside
     /// RimZ sandbox isolation, where the RimZ view is the agent's one sandbox;
-    /// approval posture stays as the mode set it. The default leaves argv
+    /// approval flags stay as the mode set them. The default leaves argv
     /// unchanged for providers without a verified native switch.
     fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}
 
