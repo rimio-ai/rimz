@@ -30,10 +30,10 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌    ✓ Explore — locate the render seam                   ← done child: collapses to one line
 ▌    ⠁ Explore — audit the trust hash                     ← active child: thinking head
 ▌      ◇ 3k · Opus 4.8                           ◔  3m    ← running child: tokens · model · elapsed
-▌    ◷ timer 30m · in 12m                        ◔ 18m    ← timer: armed delay · time until wait · elapsed since armed
-▌    ⢿ shell cargo                               ◔  4m    ← shell: program · elapsed since armed
-▌      cargo test                                         ← shell command, muted
-▌    ⌁ signal pr.merged                          ◔  5m    ← signal: selector · elapsed since armed
+▌    ◷ in 12m                                    ◔ 18m    ← timer: time until it fires · elapsed since armed
+▌    ❯ Run the test suite                        ◔  4m    ← shell job: command, or a background shell's description · elapsed
+▌      cargo test                                         ← a described background shell's command, muted
+▌    ⌁ pr.merged                                 ◔  5m    ← signal: selector · elapsed since armed
 
  ─────────────────────────────────────────────────────
   Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control health (green up / red down)
@@ -130,8 +130,8 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the store window — teal in both |
 | `⧉ N`           | the subagents an agent has spawned — lifetime count on the card's delegation line, shared with waits; current entries beneath it when expanded, with prior-turn finished children behind `+K more`; click the line to toggle; the marker violet, the label soft |
 | `⋯ bg`          | an agent has background work pending — a faint secondary marker after the description that rides the settled `✓` as “done, background chore still running” |
-| `⧖ N`           | armed one-shot waits for the agent: timers, existing PIDs, watched commands, and one-shot signals, then the background shells the agent runs (`bg shell {program}`, Claude only); shares the clickable delegation line with subagents, with wait entries beneath when expanded; the marker violet, the label soft |
-| `◷` / `⢿` / `⌁` | a wait entry's lead names what it waits on: a timer, a PID, shell wait, or background shell (the dim animated working spinner), or a signal |
+| `⧖ N`           | armed one-shot waits for the agent: timers, existing PIDs, watched commands, and one-shot signals, plus the background shells the agent runs (Claude only); shares the clickable delegation line with subagents, with wait entries beneath when expanded; the marker violet, the label soft |
+| `◷` / `❯` / `⌁` | a wait entry's lead names what it waits on: a timer, a shell job (a PID, a watched command, or a background shell), or a signal; all static and violet |
 | `⑂ name` / `⮌ name` | a group header with a git story — branch for pristine/diverged worktrees, merge for landed removable worktrees |
 | `name` (bold)   | a directory room's own pod — name-only, no git story |
 | `▎`             | the selection lane — the worktree you're in, a dim selection-tone bracket |
@@ -222,7 +222,7 @@ complete:
 - **The context meter (`▣`/`▢`).** The resting card's one bar: `▢` hollow at 0%, including before the first measurement, and `▣` once anything fills it; the value is always the raw percent *used*. The drawn fill's log curve grows with the context window: windows up to 256k stay linear, and 1M windows use the full curve to keep useful visual resolution through their working range; linear geometry remains configurable. Supported kitty-graphics paths move the fill edge at pixel precision; every other flat bar rounds to the nearest half cell, and any nonzero fill keeps a one-pixel or half-cell floor. The fill also shows *where* the window went — a dominant cache-read run in the current health tone, with gap-fronted `╺` runs for cache-write (`◍`) and fresh-input (`↘`) accents. When cache reads are absent, the bar uses only the flat composition tones (violet cache-write and vermilion fresh input); severity remains visible on the `▣` and `▤` glyphs. Components at or above 0.5% of the filled window earn the cell bar's half-cell floor; smaller components fold into the lead run, and the segmented fill rounds to a whole cell so its final accent meets the track without a trailing gap. A row with no per-call split yet paints one flat run. The health bands, fill geometry, and pixel tier are tunable ([theme.md → Display](../guide/theme.md#display)).
 - **The stats line.** Before token data arrives it reads `▤ 0`; all-zero composition columns drop whole. With current-window data, it is the meter's absolute companion: `▤` is `input + cache-write + cache-read` of the latest API call, the numerator the `▣` percent scales, followed after a `·` by `◌` cache-read, `◍` cache-write, `↘` fresh input, and `↗` output. A provider-reported occupancy without categories renders as the bare `▤ total` and a flat meter; Qwen adds transcript categories only while their filled-input sum matches its live scalar. A zero or unreported column drops whole, so a cache-write marker appears only for a reported nonzero write; these columns stay disjoint per call, unlike the fleet lines whose `↘` subsumes cache-write. When current-window occupancy is absent and a provider exposes only cumulative session counters, as stock-pane Droid does, the line instead uses `◇ total ↘ input ↗ output ◌ cache-read`; cache creation folds into input and separately reported thinking folds into output. Cumulative categories never establish gauge occupancy or a `▤` composition. When cumulative input-side counters exist, the trailing plain percent is the session cache-hit ratio and uses the shared green/yellow/red health bands. A completed-compaction count joins as `· ↻ N` from the first, and the last-activity age pins right once it crosses five minutes (a delegating parent reads the freshest of its own and its children's activity).
 
-While sleeping, line 2 names the first pending wait instead of the usual session label: timers read `wait timer 30m · in 12m` or `wait timer 30m · due` (omitting the delay when none was stored), PID waits `wait pid 16776`, shell commands `wait shell cargo test`, and signals `wait signal <selector>` with ` · 12m left` when a deadline exists. Timers sort soonest-first, followed by PID/shell waits and signals, with names breaking ties. The wait description uses the soft italic body tone; a turn-error label still takes precedence.
+While sleeping, line 2 names the first pending wait as a sentence instead of the usual session label: timers read `wakes in 12m` or `wakes now`, PID waits `wakes after pid 16776`, watched commands `wakes after cargo test`, and signals `wakes on <selector>` with ` · 12m left` when a deadline exists. Timers sort soonest-first, followed by PID/shell waits and signals, with names breaking ties. The wait description uses the soft italic body tone; a turn-error label still takes precedence.
 
 The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an aligned grid.
 
@@ -260,15 +260,20 @@ The expanded card lists the current **subagents**, including still-running RimZ-
 ▌      ◇ 22k · Haiku 4.5
 ```
 
-The **waits** follow the subagent entries: timers by due time, then PID/shell waits, then signals. Timer entries lead with `◷`, PID and shell waits with a dim working spinner using the running head's animation, and signals with `⌁`; timer and signal leads stay static and violet. The PID and shell spinners keep moving while the agent sleeps. The section title keeps `⧖` (a sleeping bell in Nerd Font), distinct from the agent's sleeping status. Every entry names its kind first. A timer takes one line, reading `timer 30m · in 12m` or `timer 30m · due`; without a stored delay (such as a loop `--at` delivery), it reads `timer · in 12m`. A PID wait is one line, `pid 16776`. A signal is one line, `signal pr.merged · 2h left`, or `signal pr.merged` without a deadline. A shell wait takes two lines: `shell cargo` on line 1, then the shell command with the program's path trimmed on a deeper-indented, muted line 2. The elapsed-since-armed clock pins right on line 1 in the same glyph and duration vocabulary as subagents, but stays muted rather than heating with age: a wait is pending by design. It is absent when the arm time is unknown.
+The **waits** follow the subagent entries in the same grammar: the lead glyph is the kind, line 1 is the wait itself, and a second line appears only when a second fact deserves one. Timers come first by due time, then shell jobs, then signals. Timers lead with `◷` and read `in 12m`, or `due` once it passes. Shell jobs lead with `❯`: a watched command reads as the command with its program path trimmed, a PID wait as `pid 16776`, and a Claude background shell as its description with the command on a deeper-indented, muted line 2, or as the command alone when it has no description. Command and PID waits list before background shells. Signals lead with `⌁` and read `pr.merged · 2h left`, or `pr.merged` without a deadline. Every lead is static and violet, so a sleeping card holds still; the elapsed clock says the job is still running. The section title keeps `⧖` (a sleeping bell in Nerd Font), distinct from the agent's sleeping status. The elapsed-since-armed clock pins right on line 1 in the same glyph and duration vocabulary as subagents, but stays muted rather than heating with age: a wait is pending by design. It is absent when the arm time is unknown.
 
 ```
-▌  ⧉ subagents (7) · ⧖ waits (4)              $0.42
-▌    ◷ timer 30m · in 12m                     ◔ 18m
-▌    ⢿ pid 16776                              ◔  3m
-▌    ⢿ shell cargo                            ◔  4m
-▌      cargo xtask gate --name foo_test
-▌    ⌁ signal pr.merged · 2h left             ◔  1h
+▌  ⧉ subagents (2) · ⧖ waits (5)                $0.42
+▌    ⠁ Explore — map the render path            $0.42
+▌      ◇ 31k · opus · high                      ◔  3m
+▌    ✓ review — audit the trust hash
+▌      ◇ 22k · haiku
+▌    ◷ in 12m                                   ◔ 18m
+▌    ❯ cargo xtask gate --name foo_test         ◔  4m
+▌    ❯ pid 16776                                ◔  3m
+▌    ❯ Run the test suite                       ◔  5m
+▌      cargo test --workspace
+▌    ⌁ pr.merged · 2h left                      ◔  1h
 ```
 
 Claude's description, cumulative tokens, and precise start time ride in from `subagentStatusLine`; the Claude-only feed is configured at install and fed at runtime. The same feed incrementally prices every request in that child's dedicated transcript; when every model resolves, the exact cumulative figure pins right on line 1. Any unpriced request hides the figure rather than showing a partial sum. That provider-native figure is display-only because Claude's parent session spend already includes it. A child launched through `rimz subagents` instead shows its launch profile as its type, prices its own provider session, and adds that cost to the parent's line-1 figure across every turn. A Codex-native child reads nickname, task path, role, model/effort, and current context tokens — not a cumulative total — from the child rollout around each hook; its elapsed fallback starts at durable child registration. Copilot reads the model from the parent's start record and reconciles the exact total from the completion record at the next parent checkpoint. Siblings on different models read apart at a glance and a reasoning child uses the same thinking animation its parent would. A child with no enrichment shows just its `glyph type` line. Provider-native subagents have no pane; a launched child owns a pane while it runs or is kept. Neither gets a duplicate top-level row while its parent is visible; both nest here only.

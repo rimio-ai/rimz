@@ -5,8 +5,8 @@
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
-use crate::agents::{AgentStatus, ContextSeverity, PendingWaitTrigger};
-use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
+use crate::agents::{AgentStatus, ContextSeverity};
+use crate::config::{AnimationRole, ContextMeterConfig, GlyphRole};
 use crate::store::snapshot::{AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -23,7 +23,7 @@ use crate::sidebar_pane::render::labels::{
     context_breakdown_spans, context_compaction_spans, context_gauge_spans,
     context_tool_repeat_spans, context_total_spans, elapsed_glyph, emphasize, role_glyph,
     severity_heat_amount, severity_heat_color, subagent_head_style, token_breakdown_spans,
-    token_total_glyph, unread_run_spans, window_style, working_style,
+    token_total_glyph, unread_run_spans, window_style,
 };
 use crate::sidebar_pane::render::layout::ellipsize;
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -82,25 +82,6 @@ pub(in crate::sidebar_pane) fn agent_card_cost_usd(
 
 pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
     matches!(CardStage::of(row), CardStage::Fresh { labeled: false })
-}
-
-pub(in crate::sidebar_pane::render) fn has_command_wait_entries(
-    row: &SidebarRow,
-    density: CardDensityMode,
-    expanded: CardExpansion,
-) -> bool {
-    let Some(agent) = row.as_agent() else {
-        return false;
-    };
-    template(CardStage::of(row), agent.status, density, expanded)
-        .contains(&CardSlot::DelegationEntries)
-        && (!agent.background_shells.is_empty()
-            || agent.pending_waits.iter().any(|wait| {
-                matches!(
-                    wait.trigger,
-                    PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Pid { .. }
-                )
-            }))
 }
 
 pub(super) fn row_lines(
@@ -178,14 +159,13 @@ pub(super) fn row_lines(
                             .map(CardLine::from),
                     );
                     inner.extend(
-                        waits::wait_entry_lines(ctx, &agent.pending_waits)
-                            .into_iter()
-                            .map(CardLine::from),
-                    );
-                    inner.extend(
-                        waits::background_shell_entry_lines(ctx, &agent.background_shells)
-                            .into_iter()
-                            .map(CardLine::from),
+                        waits::wait_entry_lines(
+                            ctx,
+                            &agent.pending_waits,
+                            &agent.background_shells,
+                        )
+                        .into_iter()
+                        .map(CardLine::from),
                     );
                     let hidden = agent
                         .sub_agents

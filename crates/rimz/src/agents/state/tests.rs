@@ -185,62 +185,66 @@ fn turn_completion_requires_a_rested_turn_without_armed_waits() {
 fn pending_wait_labels_and_wire_preserve_trigger_details() {
     let now = Timestamp::from_second(1_000).unwrap();
     let due = Timestamp::from_second(1_720).unwrap();
-    for (trigger, label) in [
+    for (trigger, summary, label) in [
         (
             PendingWaitTrigger::Timer { due, delay: None },
-            "wait timer · in 12m",
+            "in 12m",
+            "wakes in 12m",
         ),
         (
             PendingWaitTrigger::Timer {
                 due,
                 delay: Some("30m".into()),
             },
-            "wait timer 30m · in 12m",
-        ),
-        (
-            PendingWaitTrigger::Timer {
-                due: now,
-                delay: None,
-            },
-            "wait timer · due",
+            "in 12m",
+            "wakes in 12m",
         ),
         (
             PendingWaitTrigger::Timer {
                 due: now,
                 delay: Some("30m".into()),
             },
-            "wait timer 30m · due",
+            "due",
+            "wakes now",
         ),
-        (PendingWaitTrigger::Pid { pid: 16776 }, "wait pid 16776"),
+        (
+            PendingWaitTrigger::Pid { pid: 16776 },
+            "pid 16776",
+            "wakes after pid 16776",
+        ),
         (
             PendingWaitTrigger::Command {
-                command: "cargo test".into(),
+                command: "/usr/bin/cargo test".into(),
             },
-            "wait shell cargo test",
+            "cargo test",
+            "wakes after cargo test",
         ),
         (
             PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: None,
             },
-            "wait signal pr.merged",
+            "pr.merged",
+            "wakes on pr.merged",
         ),
         (
             PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: Some(due),
             },
-            "wait signal pr.merged · 12m left",
+            "pr.merged · 12m left",
+            "wakes on pr.merged · 12m left",
         ),
         (
             PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: Some(now),
             },
-            "wait signal pr.merged · 0m left",
+            "pr.merged · 0m left",
+            "wakes on pr.merged · 0m left",
         ),
     ] {
-        assert_eq!(trigger.summary(now), label.strip_prefix("wait ").unwrap());
+        assert_eq!(trigger.summary(now), summary);
         if matches!(trigger, PendingWaitTrigger::Pid { .. }) {
             assert_eq!(
                 serde_json::to_value(&trigger).unwrap(),
