@@ -531,15 +531,17 @@ fn poll_target(
             ) {
                 Ok(agent) => {
                     let completion = view.completion(agent);
-                    let latest = if completion == TurnCompletion::Open {
-                        None
-                    } else {
-                        rimz::transcript::latest_assistant(
-                            store.paths(),
-                            &agent.kind,
-                            &agent.agent_id,
-                        )
-                        .context("reading the agent's final message")?
+                    let latest = match agent.turn_started_at {
+                        Some(since) if completion != TurnCompletion::Open => {
+                            rimz::transcript::latest_assistant(
+                                store.paths(),
+                                &agent.kind,
+                                &agent.agent_id,
+                                since,
+                            )
+                            .context("reading the agent's final message")?
+                        }
+                        _ => None,
                     };
                     let settled = settle_agent_turn(
                         completion,

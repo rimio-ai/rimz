@@ -404,22 +404,32 @@ pub fn latest_open_ask(
     Ok(None)
 }
 
-/// The agent's newest `Assistant` entry: the final message of its latest
-/// recorded turn.
+/// The agent's newest `Assistant` entry stamped at or after `since`: the final
+/// message of a turn that opened then.
+///
+/// Buckets are walked newest-first and the walk stops at the first bucket that
+/// reaches back before `since`, since every older bucket predates it.
 pub fn latest_assistant(
     paths: &StatePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
+    since: Timestamp,
 ) -> Result<Option<TranscriptEntry>> {
     let mut files = transcript_files(&paths.transcript_dir)?;
     files.sort_by(|left, right| right.cmp(left));
     for path in files {
-        if let Some(entry) = read_bucket(&path)?.into_iter().rev().find(|entry| {
-            entry.entry == TranscriptKind::Assistant
+        let entries = read_bucket(&path)?;
+        let reaches_before = entries.first().is_some_and(|entry| entry.at < since);
+        if let Some(entry) = entries.into_iter().rev().find(|entry| {
+            entry.at >= since
+                && entry.entry == TranscriptKind::Assistant
                 && &entry.kind == kind
                 && &entry.agent_id == agent_id
         }) {
             return Ok(Some(entry));
+        }
+        if reaches_before {
+            break;
         }
     }
     Ok(None)
@@ -763,9 +773,15 @@ mod tests {
             append(&paths, entry).expect("append entry");
         }
 
-        let latest = latest_assistant(&paths, &newer.kind, &newer.agent_id).expect("read log");
+        let since = |at: &str| at.parse::<Timestamp>().expect("timestamp");
+        let latest = |at| {
+            latest_assistant(&paths, &newer.kind, &newer.agent_id, since(at))
+                .expect("read log")
+                .map(|entry| entry.text)
+        };
 
-        assert_eq!(latest.map(|entry| entry.text), Some("newer".to_owned()));
+        assert_eq!(latest("2026-06-01T00:00:00Z"), Some("newer".to_owned()));
+        assert_eq!(latest("2026-06-08T00:00:01Z"), None);
     }
 
     #[test]
