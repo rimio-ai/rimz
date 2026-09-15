@@ -94,7 +94,7 @@ A task's `timeout` wins over the fanout's `--timeout`, which wins over `[agents.
 
 | Mode | stdout |
 | --- | --- |
-| default | Each petname as its child launches; a count and the launch receipt go to stderr |
+| default | Each petname as its child launches; the launch receipt goes to stderr |
 | `--json` | One object mapping each petname to `{"run_id": "..."}` |
 | `--wait[=DURATION]` | Each answer as it finishes, under a `--- <petname> ---` header, with a status suffix only for an abnormal outcome; the exit code follows [`agents wait`](./agents.md#wait) |
 | `--wait --json` | The labeled result map of [`agents wait --json`](./agents.md#wait) |
