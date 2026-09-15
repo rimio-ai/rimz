@@ -1257,6 +1257,42 @@ fn host_skill_links_reconcile_only_owned_entries() {
 }
 
 #[test]
+fn host_skill_links_leave_a_library_overlapping_the_provider_root_untouched() {
+    use rimz::agents::skill_links::{self, Desired};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::symlink;
+
+    let env = Env::new();
+    let root = env.home_root.join(".agents/skills");
+    std::fs::create_dir_all(root.join("created")).unwrap();
+    std::fs::write(root.join("created/SKILL.md"), "skill").unwrap();
+    symlink("created", root.join("alias")).unwrap();
+    symlink("loop", root.join("loop")).unwrap();
+    std::fs::write(root.join(std::ffi::OsStr::from_bytes(b"\xff")), "mine").unwrap();
+
+    let library = env.home_root.join(".agents/skills");
+    for desired in [Desired::Library, Desired::None] {
+        let plan = skill_links::plan(&root, &library, desired).unwrap();
+        assert!(plan.is_empty(), "{plan:?}");
+        skill_links::apply(&plan).unwrap();
+    }
+    let nested = skill_links::plan(&root, &root.join("created"), Desired::Library).unwrap();
+    assert!(nested.is_empty(), "{nested:?}");
+    assert_eq!(
+        std::fs::read_link(root.join("alias")).unwrap(),
+        Path::new("created")
+    );
+
+    let separate = env.agents_home().join("skills");
+    std::fs::create_dir_all(separate.join("shared")).unwrap();
+    std::fs::write(separate.join("shared/SKILL.md"), "skill").unwrap();
+    symlink("loop", separate.join("loop")).unwrap();
+    let plan = skill_links::plan(&root, &separate, Desired::Library).unwrap();
+    assert_eq!(plan.shadowed(), Vec::<String>::new());
+    assert_eq!(plan.actions().len(), 1, "{plan:?}");
+}
+
+#[test]
 fn host_skill_links_apply_tolerates_siblings_and_reports_foreign_races() {
     use rimz::agents::skill_links::{self, Desired};
     use std::os::unix::fs::symlink;
