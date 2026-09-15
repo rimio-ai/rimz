@@ -79,6 +79,7 @@ rimz teams resume forge                 # reopen its newest closed cohort
 rimz teams focus forge                  # jump to the role that needs attention
 rimz teams restart forge                # restart every role in declared order
 rimz teams stop forge                   # close the whole live cohort
+rimz teams wait forge#feat-query        # block until the board reaches Done, then print its Result
 ```
 
 Add `--json` to `rimz teams` or `show` for the structured report. Named-team inspection returns one record; lane-only inspection returns an array of team records.
@@ -88,7 +89,7 @@ Fresh launches that open a new pane or tab print the worktree lane, absolute pat
 
 Run `rimz teams show forge#feat-query` to check on a run. It leads with what that question needs: the cohort's state and, unless it is working, how long since any member did anything; a `stage:` line with how long the board has sat in that stage (`Done for 2h` once finished); the pipeline and PR/CI; then each member's status, time since last activity, activity, context fill, and cost; and whether each armed signal subscription has fired. The definition follows at the end. `rimz teams show forge` answers the other question, what the team is: the definition first, then one row per live cohort with its stage, PR, and state. The lane report shows the absolute worktree path once and lists existing memory files relative to the worktree with line counts and modification ages, so you can open the board or notes directly rather than read every pane. The isolation line shows the members' isolation (the `--isolation` given at launch, else the machine setting) and their temporary directory. Stage comes from the `Stage:` line that `rimz teams flip` updates in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
 
-Use `rimz message @planner#feat-query '<text>'` to message the leader, or arm a wait on the cohort's next idle transition instead of polling. For an agent waiting on this cohort:
+Use `rimz message @planner#feat-query '<text>'` to message the leader. To block a shell or script until the work is done, run `rimz teams wait forge#feat-query`: it returns when the board reaches `Done` (at once if it already has), prints the board's Result section, and exits `1` if the cohort ends first ([teams reference](../reference/cli/teams.md#wait-for-a-cohort-to-finish)). An agent that must end its turn while it waits arms a signal subscription on the cohort's next idle transition instead:
 
 ```sh
 rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-query --once

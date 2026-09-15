@@ -11,6 +11,7 @@ A team is a configured set of roles and a layout. Each role keeps its own model,
 | `rimz teams <team>`, `launch` | [Launch a team](#launch-a-team). |
 | `rimz teams resume` | [Resume a team](#resume-a-team)'s closed cohort. |
 | `rimz teams focus`, `stop`, `restart` | [Drive a live team](#drive-a-live-team). |
+| `rimz teams wait` | [Wait for a cohort to finish](#wait-for-a-cohort-to-finish). |
 | `rimz teams flip` | [Flip the board to the next stage](#flip-the-board-to-the-next-stage). |
 | `rimz teams install` | [Install a team bundle](#install-a-team-bundle). |
 
@@ -125,7 +126,7 @@ A lane block reads top to bottom:
 | `isolation` | `host · tmp /tmp`, or `sandbox · tmp <room tmp dir> (as /tmp)`: the `--isolation` recorded at launch, else the machine's `agents.isolation`. Members that disagree show the machine setting. |
 | `memory` | Files matching the team's `scratch-files`, relative to the worktree, with line counts and modification ages. Omitted when none exist. |
 
-A script watching for completion greps `^  stage:` in the human output or reads `.stage.name` from `--json`. The report ends with the definition, with no launch, resume, or focus hints.
+A script that blocks until the work is done runs [`rimz teams wait`](#wait-for-a-cohort-to-finish) rather than polling `.stage.name` from `--json`. The report ends with the definition, with no launch, resume, or focus hints.
 
 ### Cohort state
 
@@ -215,7 +216,7 @@ launched forge in worktree #feat-rate-limits
 
 The header names the lane as `in worktree #<lane>`, for a `--channel` lane too. `path` is the absolute checkout, and `board` is `blackboard.md` relative to it, whether or not the file exists yet. The `prompt` line appears only when you gave one: whitespace collapsed, quotes escaped, clipped to the terminal width. Member rows show handle, provider, and model (`-` when unset), and a `signals` line closes them when roles declare bindings. The receipt has no command hints and no JSON form.
 
-The receipt records what was launched. Members start asynchronously and may not yet appear in `rimz teams show`, which is the source of live status. To be told when the cohort next goes idle instead of polling, arm a one-shot [signal subscription](./loop.md#signals):
+The receipt records what was launched. Members start asynchronously and may not yet appear in `rimz teams show`, which is the source of live status. To block until the board reaches `Done`, run [`rimz teams wait forge#feat-rate-limits`](#wait-for-a-cohort-to-finish); the cohort is resolvable as soon as the launch command returns. To be told when the cohort next goes idle instead, arm a one-shot [signal subscription](./loop.md#signals):
 
 ```sh
 rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-rate-limits --once
@@ -259,6 +260,36 @@ rimz teams stop forge -w feat-rate-limits
 `stop` and `restart` continue past a failed member and exit `1` when any member failed.
 
 Each verb acts on one live cohort. Without a lane, RimZ takes the cohort in your current lane, or the only live cohort; when several are live elsewhere it refuses and lists their lanes. `team#worktree` or `-w NAME` selects by lane or worktree name. With no live cohort, the error suggests `rimz teams resume <team>`.
+
+## Wait for a cohort to finish
+
+```sh
+rimz teams wait forge#feat-rate-limits
+rimz teams wait forge -w feat-rate-limits --timeout 4h
+rimz teams wait forge#feat-a forge#feat-b --json
+rimz teams wait forge#feat-a forge#feat-b --any
+```
+
+`rimz teams wait <NAME>... [-w NAME] [--any] [--timeout DURATION] [--json]` blocks until each named cohort's board reaches the `Done` stage. Each `NAME` selects one live cohort the way the [drive verbs](#drive-a-live-team) do, once, when the command starts; `-w NAME` is accepted only with a single `NAME`. The team must be configured.
+
+The wait reads the [board stage](#board-stage) every 500 ms and settles a cohort when:
+
+| Outcome | When | Exit |
+| --- | --- | --- |
+| completed | The board's stage is exactly `Done` (`Done (delta)` is not). A board already at `Done` settles at once. | `0` |
+| failed | Every member has ended while the board is not at `Done`. | `1` |
+
+A missing board, or a member waiting on you or failed, keeps the wait blocked: only the board says the work is done. With several names the wait settles when all of them have, exiting `0` when all completed and otherwise with the code of the first name, in argument order, that did not. `--any` settles on the first cohort to finish and exits with its code. `--timeout` caps the whole wait and exits `124`, leaving the cohorts running. The wait writes nothing.
+
+With one name, a completed wait prints the board's `## Result` section on stdout and nothing else; a board without one prints a note on stderr instead, and a failed wait prints `rimz: <team>#<lane>: cohort ended before Done (stage: <stage>)` on stderr. With several names, or `--any`, each cohort prints as it settles under a `--- <team>#<lane> ---` header, suffixed with its status when it did not complete; a timeout prints `--- <team>#<lane> (timed out) ---` on stderr for each cohort still pending.
+
+`--json` prints one object for a single name, and an object keyed by `<team>#<lane>` for several once the wait ends:
+
+```json
+{"status": "completed", "exit": 0, "stage": "Done", "board": "/repo-worktrees/feat-rate-limits/blackboard.md", "result": "PR: https://github.com/acme/api/pull/42"}
+```
+
+`status` is `completed`, `failed`, or `timed_out`; `stage` is the board's stage when the wait ended (`null` without a board); `result` is the `## Result` section, `null` unless completed with one; a failed entry adds `error`.
 
 ## Flip the board to the next stage
 

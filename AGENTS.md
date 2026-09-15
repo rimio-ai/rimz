@@ -56,6 +56,7 @@ rimz teams show forge#feat-x         # resolved roles, status, and one live coho
 rimz teams forge -w feat-x           # launch one configured cohort in a worktree
 rimz teams resume forge              # reopen a configured team cohort
 rimz teams focus|restart|stop forge  # drive one live team cohort
+rimz teams wait forge#feat-x         # block until the board reaches Done
 rimz subagents claude "review this"  # from an agent: launch a supervised child
 rimz subagents profiles              # configured child profiles, commands, and descriptions
 rimz subagents wait @otter @fox      # collect named children's results
