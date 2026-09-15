@@ -335,7 +335,7 @@ Content:
 | --- | --- | --- |
 | `AGENT_MESSAGE` | A send from an identified agent caller | The sender's handle |
 | `USER_MESSAGE` | A human's `rimz message` | `@user` |
-| `SUBAGENT_REPORT` | The status-only fleet digest after all of an agent's launched children settle | `@rimz` |
+| `SUBAGENT_REPORT` | The status-only fleet digest after all of an agent's launched children and `-p --bg` peer runs settle | `@rimz` |
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row | `@rimz` |
 | `STAGE` | A direct prose-only stage-open delivery from a flip or registration re-wait | `@rimz` |

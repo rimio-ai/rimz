@@ -23,7 +23,7 @@ rimz subagents launch reviewer --prompt-file /tmp/review-brief.md
 rimz subagents codex "find the smallest safe fix" --wait=10m
 ```
 
-The bare form and `launch` are the same command. `PROFILE` is a `[subagents.profiles]` profile, an agent kind (`claude`, `codex`, ...), or an `[agents.commands]` command. The launch prints the child's petname on stdout and returns at once, with a notice on stderr, so a parent can start several children in a row and keep working. A later `rimz subagents wait <petname>` or the [fleet report](#the-fleet-report) delivers the result.
+The bare form and `launch` are the same command. `PROFILE` is a `[subagents.profiles]` profile, an agent kind (`claude`, `codex`, ...), or an `[agents.commands]` command. The launch prints the child's petname on stdout and returns at once, with a receipt on stderr that names the coming fleet report, its response file, and the `wait` command that blocks instead, so a parent can start several children in a row and keep working. A later `rimz subagents wait <petname>` or the [fleet report](#the-fleet-report) delivers the result.
 
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
@@ -94,7 +94,7 @@ A task's `timeout` wins over the fanout's `--timeout`, which wins over `[agents.
 
 | Mode | stdout |
 | --- | --- |
-| default | Each petname as its child launches; a count and notice go to stderr |
+| default | Each petname as its child launches; a count and the launch receipt go to stderr |
 | `--json` | One object mapping each petname to `{"run_id": "..."}` |
 | `--wait[=DURATION]` | Each answer as it finishes, under a `--- <petname> ---` header, with a status suffix only for an abnormal outcome; the exit code follows [`agents wait`](./agents.md#wait) |
 | `--wait --json` | The labeled result map of [`agents wait --json`](./agents.md#wait) |
@@ -105,7 +105,7 @@ A launch that fails partway stops the remaining launches. The error names the ch
 
 ## The fleet report
 
-A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. The message is parked and delivered at the parent's next turn boundary:
+A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet. The message is parked and delivered at the parent's next turn boundary:
 
 ```text
 Type: SUBAGENT_REPORT
@@ -121,7 +121,7 @@ The report lists status and where each answer is, and asks for nothing: reading 
 
 | Part | Format |
 | --- | --- |
-| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more |
+| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more; `background agent` replaces `subagent` when any row is a `-p --bg` run |
 | Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({N} lines)`, or ending `, no response` |
 | Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled` |
 | `in` / `after` | `after` for a timed-out child, `in` for every other status; elapsed time is compact (`4m12s`) |
@@ -136,7 +136,8 @@ A fleet is every child launched before the report is composed. A child launched 
 A child drops out of a report that has not been composed yet when:
 
 - a join (`subagents wait`, `fanout --wait`, or `--wait` on a launch) printed its result while the parent's turn was open;
-- a [`rimz agents wait`](./agents.md#wait) from a user shell printed its result;
+- a [`rimz agents wait`](./agents.md#wait) printed its result from a user shell or while the caller's turn was open, which is how a `-p --bg` run is joined;
+- it is a `-p` run the parent launched without `--bg`, which prints its own result;
 - the parent stopped it with `rimz subagents stop`.
 
 A join that finishes after the parent's turn has ended still prints, but its rows stay in the report, so the parent is woken with them at its next boundary. A report already queued is canceled only when every row it lists has been read or stopped, and a delivered report cannot be recalled. A child stopped by someone else with `rimz agents stop @child` still appears as `canceled`. If the normal report is missed, the room's sidebar producer rebuilds it from the run records within about a minute ([backstops](../../internals/harness/subagents.md#backstops)).
