@@ -10,7 +10,10 @@ use crate::ids::{AgentKind, AgentSessionId};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchAncestry {
     /// A top-level peer that participates in an agent-launch chain.
-    Peer { launch_generation: u8 },
+    Peer {
+        launch_generation: u8,
+        launched_by: Option<crate::agents::LaunchedBy>,
+    },
     /// A pane-backed child created through `rimz subagents`.
     Subagent {
         parent_agent_id: AgentSessionId,
@@ -158,12 +161,13 @@ pub fn resolve_launch_ancestry(
         return Err(LaunchAncestryError::SubagentCaller);
     }
     let generation = caller.launch_depth.unwrap_or(0);
+    let caller_id = caller
+        .launch_id
+        .clone()
+        .unwrap_or_else(|| caller.agent_id.clone());
     if subagent {
         return Ok(Some(LaunchAncestry::Subagent {
-            parent_agent_id: caller
-                .launch_id
-                .clone()
-                .unwrap_or_else(|| caller.agent_id.clone()),
+            parent_agent_id: caller_id,
             parent_agent_kind: caller.kind.clone(),
             launch_generation: generation.saturating_add(1),
         }));
@@ -176,6 +180,10 @@ pub fn resolve_launch_ancestry(
     }
     Ok(Some(LaunchAncestry::Peer {
         launch_generation: generation.saturating_add(1),
+        launched_by: Some(crate::agents::LaunchedBy {
+            kind: caller.kind.clone(),
+            agent_id: caller_id,
+        }),
     }))
 }
 
@@ -252,6 +260,10 @@ mod tests {
             resolve_launch_ancestry(Some(&root), false, 3).unwrap(),
             Some(LaunchAncestry::Peer {
                 launch_generation: 1,
+                launched_by: Some(crate::agents::LaunchedBy {
+                    kind: AgentKind::new_unchecked("claude"),
+                    agent_id: AgentSessionId::from("root"),
+                }),
             })
         );
         assert_eq!(

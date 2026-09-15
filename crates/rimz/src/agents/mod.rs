@@ -107,8 +107,8 @@ pub use login::{
 };
 pub use managed_source::ManagedIntegration;
 pub use observation::{
-    AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin, SpawnedSubagent,
-    SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
+    AgentLifecycleObservation, AgentUsageSummary, LaunchParams, LaunchedBy, SessionOrigin,
+    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub(crate) use payload::{

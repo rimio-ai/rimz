@@ -626,6 +626,10 @@ fn launched_peer_generation_survives_provider_adoption_without_parenting() {
             launch_id: Some(AgentSessionId::from("launch_peer")),
             launch: LaunchParams {
                 launch_depth: Some(2),
+                launched_by: Some(Box::new(crate::agents::LaunchedBy {
+                    kind: AgentKind::new_unchecked("claude"),
+                    agent_id: AgentSessionId::from("launch_root"),
+                })),
                 ..Default::default()
             },
             pane_id: Some(PaneId::parse("tmux:%2").expect("pane id")),
@@ -652,6 +656,13 @@ fn launched_peer_generation_survives_provider_adoption_without_parenting() {
     assert_eq!(peer.parent_agent_id, None);
     assert_eq!(peer.parent_agent_kind, None);
     assert_eq!(peer.launch_depth, Some(2));
+    assert_eq!(
+        peer.launcher(),
+        Some((
+            &AgentKind::new_unchecked("claude"),
+            &AgentSessionId::from("launch_root")
+        ))
+    );
     assert!(!peer.is_launched_child());
     assert!(!peer.is_provider_subagent());
 }
