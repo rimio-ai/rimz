@@ -310,6 +310,96 @@ fn gc_reaps_dead_loop_delivery_schedule() {
 }
 
 #[test]
+fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-live", "feature-live");
+    let root = env.project_root.display().to_string();
+    let team_row = |channel: &str| {
+        let dir = env.home_root.join("worktrees").join(channel);
+        json!({
+            "team": format!("forge#{channel}"),
+            "root": root,
+            "dir": dir,
+            "signal": "ci.failed",
+            "match": { "path": dir },
+        })
+    };
+    let mut live = team_row("live");
+    live["wait"] = json!({ "kind": "claude", "session": "sess-live", "handle": "@coder" });
+    let instances = json!({
+        "team-forge-a-coder-ci-failed": team_row("a"),
+        "team-forge-b-coder-ci-failed": team_row("b"),
+        "legacy-wake": {
+            "wake": { "kind": "claude", "session": "sess-gone", "handle": "@coder" },
+            "prompt": "wake up",
+            "root": root,
+            "at": "07:00",
+        },
+        "team-forge-live-coder-ci-failed": live,
+    });
+    let instances_path = env
+        .state_path_for(&env.project_root)
+        .root
+        .join("loop-instances.json");
+    std::fs::create_dir_all(instances_path.parent().expect("instances dir")).expect("mkdir state");
+    std::fs::write(&instances_path, instances.to_string()).expect("write instances");
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    let config_path = config_dir.join("loop.toml");
+    std::fs::write(
+        &config_path,
+        format!("[tasks.actionless]\nprompt = \"fix me\"\nroot = \"{root}\"\nat = \"07:00\"\n"),
+    )
+    .expect("write loop config");
+
+    let reaped = |env: &Env| {
+        let output = env.rimz().args(["gc", "--json"]).output().expect("gc");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("gc json");
+        report["schedules_reaped"].clone()
+    };
+    assert_eq!(reaped(&env), json!(3));
+
+    let kept: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&instances_path).expect("read instances"))
+            .expect("instances json");
+    let names = kept
+        .as_object()
+        .expect("instance map")
+        .keys()
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["team-forge-live-coder-ci-failed"], "{kept}");
+    assert_eq!(
+        kept["team-forge-live-coder-ci-failed"]["wait"]["session"],
+        "sess-live"
+    );
+    let config = std::fs::read_to_string(&config_path).expect("read loop config");
+    assert!(config.contains("[tasks.actionless]"), "{config}");
+
+    let list = env
+        .rimz()
+        .args(["loop", "list", "--color", "never"])
+        .output()
+        .expect("loop list");
+    let list = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list.contains("actionless") && list.contains("<invalid>"),
+        "{list}"
+    );
+    assert!(
+        !list.contains("legacy-wake") && !list.contains("forge-a"),
+        "{list}"
+    );
+
+    assert_eq!(reaped(&env), json!(0));
+}
+
+#[test]
 fn gc_sweeps_orphan_temps_and_probe_markers() {
     let env = Env::new();
     let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
