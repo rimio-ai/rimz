@@ -314,7 +314,7 @@ def run():
             return
         # A tree directory deleted by hand still pins its branch until its metadata is pruned.
         command("git", "worktree", "prune")
-        command("git", "fetch", "origin")
+        command("git", "fetch", "--prune", "origin")  # A stale tracking ref would fail the lease delete below.
         # Re-read after taking the shared lock, never consume a stale plan file.
         repo = repo_view()
         prs = pull_requests(repo)
