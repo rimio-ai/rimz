@@ -65,6 +65,9 @@ skip = [
     { crate = "thiserror@1.0.69", reason = "kdl 4.7.1 pins thiserror 1; workspace otherwise on 2" },
     { crate = "thiserror-impl@1.0.69", reason = "kdl 4.7.1 pins thiserror 1; workspace otherwise on 2" },
     { crate = "unicode-width@0.1.14", reason = "kdl 4.7.1's miette stack pins unicode-width 0.1; workspace otherwise on 0.2" },
+    # `tiktoken-rs` 0.12 still decodes its embedded vocabularies with base64
+    # 0.22; drop when it moves to the workspace's 0.23.
+    { crate = "base64@0.22.1", reason = "tiktoken-rs 0.12 pins base64 0.22; workspace otherwise on 0.23" },
 ]
 
 [advisories]

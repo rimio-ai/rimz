@@ -176,6 +176,7 @@ terminal_size.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 thiserror.workspace = true
+tiktoken-rs.workspace = true
 unicode-width.workspace = true
 tokio.workspace = true
 tracing.workspace = true

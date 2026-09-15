@@ -71,6 +71,13 @@ toml_edit = { version = "0.25", features = ["serde"] }
 # of string-splicing a format Zellij itself owns.
 kdl = "4.7.1"
 
+# Output-file stats estimate tokens for the agent that reads the capture.
+# `tiktoken-rs` embeds OpenAI's public BPE vocabularies (`o200k_base`, the
+# current GPT tokenizer) and runs them offline; a real byte-pair encoder over a
+# 200k-entry vocabulary is not a twenty-line helper, and a bytes/4 heuristic
+# drifts badly on code and non-English text.
+tiktoken-rs = "0.12"
+
 # Error handling
 thiserror = "2"
 anyhow = "1"
