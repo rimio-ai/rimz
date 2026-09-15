@@ -405,7 +405,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
         )
         .unwrap();
     start.transcript_path = Some("[session]/agents/agent-0/wire.jsonl".to_owned());
-    insta::assert_debug_snapshot!(start, @r###"
+    insta::assert_debug_snapshot!(start, @r#"
     AgentLifecycleObservation {
         agent_id: Some(
             AgentSessionId(
@@ -419,6 +419,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             parent_agent_id: None,
             parent_agent_kind: None,
             launch_depth: None,
+            launched_by: None,
             profile: None,
             login: None,
             mode: None,
@@ -472,7 +473,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
         ),
         background_shells: None,
     }
-    "###);
+    "#);
 
     std::fs::create_dir_all(&child).unwrap();
     write_child_wire(
