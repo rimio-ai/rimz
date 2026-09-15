@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::ProviderLogin;
 use crate::agents::capabilities::SystemTextChannel;
+use crate::agents::skill_links::{self, Desired, SkillLinkErr, SkillLinkOutcome, SkillLinkPlan};
 use crate::config::effective::LaunchAgents;
 use crate::config::{AccountsConfig, CommandsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths};
@@ -44,6 +45,7 @@ pub struct LaunchPlan {
     pub reminder_channel: Option<SystemTextChannel>,
     pub stage: AgentProcessStage,
     pub sandbox: Option<SandboxPlan>,
+    pub skill_links: Option<SkillLinkPlan>,
     pub warnings: Vec<LaunchPlanWarning>,
     runtime: RuntimePaths,
     state: StatePaths,
@@ -67,6 +69,8 @@ pub enum LaunchPlanErr {
     Wire(#[from] launch::ExecWireErr),
     #[error(transparent)]
     Sandbox(#[from] sandbox::SandboxErr),
+    #[error(transparent)]
+    SkillLinks(#[from] SkillLinkErr),
     #[error(transparent)]
     Paths(#[from] crate::disk::paths::PathErr),
     #[error("unknown agent kind `{0}`")]
@@ -128,10 +132,24 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         &extra_env,
         &reminders,
     )?;
+    let process = match &stage {
+        AgentProcessStage::Ready(process)
+        | AgentProcessStage::LoginShellReentry { process, .. } => process,
+    };
+    let mut env = inputs.ambient_env.clone();
+    env.extend(process.env.clone());
+    let skill_links = if inputs.bwrap.is_none() {
+        adapter
+            .skills_home(&env)
+            .zip(crate::disk::paths::skills_library_in(&env))
+            .map(|(root, library)| skill_links::plan(&root, &library, Desired::Library))
+            .transpose()?
+            .filter(|plan| !plan.is_empty())
+    } else {
+        None
+    };
     let sandbox =
         if let (Some(bwrap), AgentProcessStage::Ready(process)) = (inputs.bwrap, &mut stage) {
-            let mut env = inputs.ambient_env.clone();
-            env.extend(process.env.clone());
             let provider_home = adapter.config_home(&env).map(|path| sandbox::ProviderHome {
                 source: path.clone(),
                 target: path,
@@ -166,13 +184,14 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         reminder_channel: adapter.append_system_text_channel(),
         stage,
         sandbox,
+        skill_links,
         warnings,
         runtime: inputs.runtime.clone(),
         state: inputs.state.clone(),
     })
 }
 
-pub fn apply(plan: &LaunchPlan) -> Result<(), LaunchPlanErr> {
+pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanErr> {
     plan.runtime.ensure_dirs()?;
     prompt_compose::apply_system_prompt(&plan.prompt)?;
     if let AgentProcessStage::LoginShellReentry {
@@ -186,7 +205,11 @@ pub fn apply(plan: &LaunchPlan) -> Result<(), LaunchPlanErr> {
         plan.state.ensure_tmp_dir()?;
         sandbox::apply(sandbox)?;
     }
-    Ok(())
+    plan.skill_links
+        .as_ref()
+        .map(skill_links::apply)
+        .transpose()
+        .map_err(Into::into)
 }
 
 fn reminders(
