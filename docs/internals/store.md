@@ -85,6 +85,7 @@ boot.json                                     the host boot id last seen, for re
 live-roster.json                              the producer's last pane-backed live agent set
 last-death.json                               the last incident, for `rimz list --all`
 doctor-cleared.json                           the watermark `rimz doctor` clears incidents against
+auto-gc.json                                  when `rimz gc --unattended` last swept, pacing the elder's daily sweep
 crashes/<utc-ts>/                             mux forensics from a crash birth, newest five kept
 diag.log.jsonl, diag-frames/                  typed anomaly records and captured frames
 tmp/                                          room tmp (scratchpad, rimz-subagents, rimz-waits/<name>.output)
@@ -314,7 +315,7 @@ The recovery flow from roster to repopulated panes is [fleet.md → Resume and r
 
 `rimz reset` is a room boundary ([`writer/reset.rs`](../../crates/rimz/src/store/writer/reset.rs)). After the mux teardown, `Store::reset_records` runs one log boundary that cancels active runs, clears `logins`, removes `diag.log*` and `diag-frames/`, and force-rotates the log; it then terminal-wakes the canceled runs' waiters and removes the runtime directory. A soft reset stages carryover first, as rotation does, so agent identity, ended sessions included, survives within retention. `--hard` is the explicit forget boundary: it deletes the carryover and the snapshot caches and publishes nothing. Provider-owned session files live outside this store either way.
 
-`rimz gc` ([`cli/gc.rs`](../../crates/rimz/src/cli/gc.rs)) sweeps the whole machine, then maintains the workspace it runs in. `--older-than` (default 24 hours) sets the age for runtime hints and orphan temps, and `--dry-run` reports without removing anything.
+`rimz gc` ([`cli/gc.rs`](../../crates/rimz/src/cli/gc.rs)) sweeps the whole machine, then maintains the workspace it runs in. `--older-than` (default `gc.older_than`, 7 days; units `s` through `d`) sets the age for runtime hints and orphan temps, and `--dry-run` reports without removing anything.
 
 Machine-wide, it:
 

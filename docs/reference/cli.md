@@ -85,11 +85,11 @@ Commands that report an outcome add their own codes, so a script branches withou
 
 ### Durations
 
-A duration is one integer followed by one unit: `30s`, `15m`, `4h`, `30d`. Compound values such as `1h30m` are rejected. The units are `ms`, `s`, `m`, `h`, and `d`, and each flag accepts the subset that fits it (a supervised `--timeout` takes `s` through `d`; `gc --older-than` stops at `h`). A value with a unit the flag does not accept fails at parse time and lists the units it takes:
+A duration is one integer followed by one unit: `30s`, `15m`, `4h`, `30d`. Compound values such as `1h30m` are rejected. The units are `ms`, `s`, `m`, `h`, and `d`, and each flag accepts the subset that fits it (a supervised `--timeout` takes `s` through `d`; `agents top --interval` stops at `m`). A value with a unit the flag does not accept fails at parse time and lists the units it takes:
 
 ```console
 $ rimz gc --older-than 1h30m
-error: invalid value '1h30m' for '--older-than <OLDER_THAN>': unknown duration unit `h30m`; use s/m/h
+error: invalid value '1h30m' for '--older-than <OLDER_THAN>': unknown duration unit `h30m`; use s/m/h/d
 ```
 
 ### Color

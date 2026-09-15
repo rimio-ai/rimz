@@ -563,7 +563,7 @@ The `--json` document has the keys `schema` (`7`), `generated_at`, `rimz_version
 | model row | `model` (`null` when unnamed), `tokens`, `cost_usd` |
 | `totals` (group and document) | `agents`, `active_secs`, `wall_clock_secs`, `cost_usd`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens` |
 
-`cost_usd` and `tokens` are all-in at every level; `active_secs`, asks, tool calls, compactions, and messages count the member's own seat. `sessions` counts the seat's own sessions, never children. A member's `models` splits that member's figures; the document's `models` is the list the panel and `--md` render, and groups carry none. Active time comes from per-session sidecars that `rimz gc` removes after its runtime retention (24 hours by default); older credit keeps its other figures with `active_secs` set to `null`.
+`cost_usd` and `tokens` are all-in at every level; `active_secs`, asks, tool calls, compactions, and messages count the member's own seat. `sessions` counts the seat's own sessions, never children. A member's `models` splits that member's figures; the document's `models` is the list the panel and `--md` render, and groups carry none. Active time comes from per-session sidecars that `rimz gc` removes after its runtime retention (`gc.older_than`, 7 days by default); older credit keeps its other figures with `active_secs` set to `null`.
 
 #### `top`
 
