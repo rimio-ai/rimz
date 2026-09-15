@@ -56,7 +56,7 @@ $ rimz config path
 
 ## Read a value
 
-`rimz config get` loads the effective config (the four files layered over built-in defaults, plus profiles and teams from `~/.agents/`) and prints it. It reads strictly: a file with a TOML or validation error fails the command with that error instead of falling back to defaults.
+`rimz config get` loads the effective config (the four files layered over built-in defaults, plus profiles and teams from `~/.config/rimz/`) and prints it. It reads strictly: a file with a TOML or validation error fails the command with that error instead of falling back to defaults.
 
 | Form | Prints |
 | --- | --- |

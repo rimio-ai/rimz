@@ -206,6 +206,22 @@ fn render_machine_config(
     tally: &mut Tally,
 ) -> io::Result<()> {
     section(w, tally, "MACHINE CONFIG")?;
+    if let Some(legacy) = &config.legacy_agents_home {
+        let mut kv = KeyVals::new().indent(2);
+        kv.push(
+            "legacy root",
+            verdict(
+                tally,
+                Health::Warn,
+                format!(
+                    "{} holds profiles or teams RimZ no longer reads",
+                    home_relative(&legacy.path)
+                ),
+            ),
+        );
+        kv.push("fix", verdict(tally, Health::Warn, &legacy.fix));
+        kv.render(w)?;
+    }
     if config.broken_files.is_empty() {
         let mut kv = KeyVals::new().indent(2);
         kv.push(

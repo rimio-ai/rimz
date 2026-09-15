@@ -37,7 +37,7 @@ The bare command, `list`, and `ls` print one row per live cohort, and one row fo
 
 A broken definition replaces `STATUS` with `broken: <error>` on every row of that team. A live cohort whose team is no longer defined keeps its state with ` · not defined` appended. Resolved roles and models appear in [`show`](#inspect-one-team).
 
-The catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/<name>/team.toml`, and the repository's `.rimz/config.toml` when the project is trusted. An unreadable or invalid config fails with the source error. Unknown fields print a warning and are otherwise ignored; `rimz setup` removes them. With no teams defined, the command prints `No teams defined.` and the install command; when only the built-in `peer` team exists, the table ends with the same install hint.
+The catalogue merges the machine `agents.toml`, fragments under `~/.config/rimz/teams/<name>/team.toml`, and the repository's `.rimz/config.toml` when the project is trusted. An unreadable or invalid config fails with the source error. Unknown fields print a warning and are otherwise ignored; `rimz setup` removes them. With no teams defined, the command prints `No teams defined.` and the install command; when only the built-in `peer` team exists, the table ends with the same install hint.
 
 `--json` prints an array of [team records](#json-report). `--json` works only on the list forms and `show`: `rimz teams forge --json` is refused with a pointer to `rimz teams show forge --json`.
 
@@ -91,7 +91,7 @@ forge#feat-x · idle 48s
              plan-notes.md  120 lines · 18m ago
 
 forge
-  source: ~/.agents/teams/forge/team.toml
+  source: ~/.config/rimz/teams/forge/team.toml
   layout: planner,coder+reviewer
 
   @planner   claude  fable        <- leader
@@ -105,7 +105,7 @@ The team form, `rimz teams show forge`, describes the team and lists its cohorts
 
 ```text
 forge
-  source: ~/.agents/teams/forge/team.toml
+  source: ~/.config/rimz/teams/forge/team.toml
   layout: planner,coder+reviewer
 
   @planner   claude  fable        <- leader
@@ -439,10 +439,10 @@ rimz teams install forge --force
 rimz teams install forge --ref main
 ```
 
-Bare `install` lists the bundles under `examples/teams/` in the RimZ GitHub repository as a `TEAM REF` table. `install <name>` downloads every file of that bundle into `~/.agents/teams/<name>/` and prints:
+Bare `install` lists the bundles under `examples/teams/` in the RimZ GitHub repository as a `TEAM REF` table. `install <name>` downloads every file of that bundle into `~/.config/rimz/teams/<name>/` and prints:
 
 ```text
-installed forge at /home/you/.agents/teams/forge
+installed forge at /home/you/.config/rimz/teams/forge
 launch with: rimz teams forge -w <worktree>
 ```
 

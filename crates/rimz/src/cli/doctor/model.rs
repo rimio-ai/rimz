@@ -68,6 +68,14 @@ pub(super) struct Sandbox {
 #[derive(Debug, Serialize)]
 pub(super) struct MachineConfigHealth {
     pub(super) broken_files: Vec<MachineConfigProblem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) legacy_agents_home: Option<LegacyAgentsHome>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct LegacyAgentsHome {
+    pub(super) path: String,
+    pub(super) fix: String,
 }
 
 #[derive(Debug, Serialize)]

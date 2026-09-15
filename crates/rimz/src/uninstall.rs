@@ -53,10 +53,12 @@ pub fn remove_root(path: &Path) -> RemovalOutcome {
     }
 }
 
-/// Remove everything under `root` except its child `keep`, which holds files
-/// RimZ does not own; the root itself stays while `keep` exists.
-pub fn remove_root_keeping(root: &Path, keep: &str) -> Vec<RemovalOutcome> {
-    if !root.join(keep).exists() {
+/// Remove everything under `root` except the named children, which hold files RimZ does not own; the root stays while any kept child exists.
+pub fn remove_root_keeping(root: &Path, keep: &[&str]) -> Vec<RemovalOutcome> {
+    if !keep
+        .iter()
+        .any(|name| root.join(name).symlink_metadata().is_ok())
+    {
         return vec![remove_root(root)];
     }
     let entries = match fs::read_dir(root) {
@@ -65,7 +67,7 @@ pub fn remove_root_keeping(root: &Path, keep: &str) -> Vec<RemovalOutcome> {
     };
     entries
         .filter_map(|entry| match entry {
-            Ok(entry) if entry.file_name() == keep => None,
+            Ok(entry) if keep.iter().any(|name| entry.file_name() == *name) => None,
             Ok(entry) => {
                 let path = entry.path();
                 let removed = if path.is_dir() && !path.is_symlink() {
@@ -178,22 +180,25 @@ mod tests {
     }
 
     #[test]
-    fn remove_root_keeping_spares_only_the_kept_child() {
+    fn remove_root_keeping_spares_only_the_kept_children() {
         let temp = tempdir().unwrap();
         let root = temp.path().join("rimz");
         fs::create_dir_all(root.join("accounts/claude/work")).unwrap();
+        fs::create_dir_all(root.join("skills")).unwrap();
         fs::create_dir_all(root.join("pets")).unwrap();
         fs::write(root.join("room.bin"), b"data").unwrap();
 
-        let outcomes = remove_root_keeping(&root, "accounts");
+        let outcomes = remove_root_keeping(&root, &["accounts", "skills", "profiles"]);
 
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
         assert!(root.join("accounts/claude/work").is_dir());
+        assert!(root.join("skills").is_dir());
         assert!(!root.join("pets").exists() && !root.join("room.bin").exists());
 
         fs::remove_dir_all(root.join("accounts")).unwrap();
-        let outcomes = remove_root_keeping(&root, "accounts");
+        fs::remove_dir_all(root.join("skills")).unwrap();
+        let outcomes = remove_root_keeping(&root, &["accounts", "skills"]);
         assert!(matches!(
             outcomes[..],
             [RemovalOutcome {

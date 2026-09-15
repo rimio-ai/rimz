@@ -67,6 +67,7 @@ fn machine_config_section_keeps_the_classified_problem_compact() {
             error: "line 144: `auto_continue` is defined more than once in the same table; fix: remove the extra `auto_continue` at /home/eddie/.config/rimz/config.toml:144, then re-run".to_owned(),
             kind: MachineConfigProblemKind::Parse,
         }],
+        legacy_agents_home: None,
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -96,6 +97,7 @@ fn machine_config_fragment_problem_names_launch_precondition() {
             error: "empty layout cell in `claude,,codex`".to_owned(),
             kind: MachineConfigProblemKind::Fragment,
         }],
+        legacy_agents_home: None,
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -106,6 +108,28 @@ fn machine_config_fragment_problem_names_launch_precondition() {
     assert!(out.contains("refuse launches"), "{out}");
     assert!(!out.contains("unparseable"), "{out}");
     assert!(!out.contains("built-in defaults"), "{out}");
+}
+
+#[test]
+fn machine_config_legacy_agents_home_warns_with_the_move() {
+    let config = MachineConfigHealth {
+        broken_files: Vec::new(),
+        legacy_agents_home: Some(super::super::model::LegacyAgentsHome {
+            path: "/home/eddie/.agents".to_owned(),
+            fix: "mkdir -p /home/eddie/.config/rimz && mv /home/eddie/.agents/teams /home/eddie/.config/rimz/".to_owned(),
+        }),
+    };
+    let mut tally = Tally::default();
+    let out = strip(|w| render_machine_config(w, &config, &mut tally));
+
+    assert!(out.contains("legacy root"), "{out}");
+    assert!(out.contains("no longer reads"), "{out}");
+    assert!(
+        out.lines()
+            .any(|line| line.contains("fix") && line.contains("mkdir -p /home/eddie/.config/rimz")),
+        "{out}"
+    );
+    assert!(out.contains("all present files parse"), "{out}");
 }
 
 fn mux_fixture() -> Mux {
@@ -233,6 +257,7 @@ fn report_fixture() -> DoctorReport {
         terminal: terminal_fixture(),
         machine_config: MachineConfigHealth {
             broken_files: Vec::new(),
+            legacy_agents_home: None,
         },
         sandbox: super::super::model::Sandbox {
             mode: rimz::config::Isolation::Host,

@@ -146,7 +146,7 @@ Each sandbox launch overlays at most one user skill root, declared by the adapte
 
 A provider marked `Unsupported`, or without a root, refuses every configured list under sandbox isolation, whatever skills are installed. `Frontmatter` writes `disable-model-invocation: true` into `SKILL.md` frontmatter. `OpenAiPolicy` writes `policy.allow_implicit_invocation: false` into `agents/openai.yaml`.
 
-The RimZ skill library at `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/` is merged into the provider root; a name already in the provider root shadows the library entry. `RIMZ_AGENTS_HOME` moves RimZ config fragments, not the library. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour.
+The RimZ skill library at `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/` is merged into the provider root; a name already in the provider root shadows the library entry. `RIMZ_AGENTS_HOME` moves RimZ config fragments and the skill library together; the library is then `$RIMZ_AGENTS_HOME/skills/`. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour.
 
 ### What a list means
 

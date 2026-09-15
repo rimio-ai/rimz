@@ -98,7 +98,7 @@ Launches refuse before they create any pane or record when:
 
 - the final prompt exceeds 120 KiB (122880 bytes), counting `--stdin` content and any reminder text appended to it, because the provider receives the prompt as one argument (move detail into a file the agent reads);
 - an agent-launched command would exceed `[agents] max-chain-length` successive agent-to-agent launches (default `3`);
-- a discovered `~/.agents` config fragment has a syntax error or invalid value (the error names the file and the fix; unknown fields only warn, and `rimz setup` removes them).
+- a discovered `~/.config/rimz` config fragment has a syntax error or invalid value (the error names the file and the fix; unknown fields only warn, and `rimz setup` removes them).
 
 When an agent runs `rimz agents`, each new agent is an independent top-level peer with its own sidebar row. A parented child with one prompt comes only from the agent-only [`rimz subagents`](./subagents.md) command, and a subagent cannot launch agents or subagents.
 
