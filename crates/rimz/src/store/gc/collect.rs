@@ -474,11 +474,19 @@ impl Sweep {
     }
 }
 
+/// A file that vanished between the listing and the stat (a concurrent sweep
+/// or an atomic publish renaming its temp) is not a candidate.
 fn is_older_than(path: &Path, older_than: Duration) -> Result<bool> {
-    let meta = fs::symlink_metadata(path).map_err(|source| GcErr::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(source) => {
+            return Err(GcErr::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
     let modified = meta.modified().map_err(|source| GcErr::Io {
         path: path.to_path_buf(),
         source,
@@ -496,6 +504,13 @@ mod tests {
     use crate::ids::{MuxName, SidebarInstanceId};
     use crate::wakeup::heartbeat::SidebarHeartbeat;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_file_vanished_before_its_age_check_is_not_a_candidate() {
+        let temp = tempdir().unwrap();
+
+        assert!(!is_older_than(&temp.path().join("gone.json"), Duration::ZERO).unwrap());
+    }
 
     #[test]
     fn runtime_gc_reaps_sidecars_and_unblocks_the_workspace_root() {
