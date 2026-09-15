@@ -16,7 +16,7 @@ rimz config set theme.style modern             # truecolor plus Nerd Font glyphs
 rimz config set theme.pets.enabled true        # an animated companion on the provider dashboard
 rimz config set resume.auto_continue true      # resume rate-limit and API-error parks on their own
 rimz config set harness.smart_compact 200k     # compact before a message once context passes 200k tokens
-rimz config set harness.compact_instruction "" # send a bare compact command instead of RimZ's summary brief
+rimz config set harness.compact_instruction "" # send a bare compact command instead of RimZ's built-in brief
 rimz config set harness.idle_compact auto      # compact warm idle contexts while work may return
 rimz config set notifications.triggers '["waiting", "failed"]'   # which rows raise a banner
 rimz config set sidebar.focus_key "Alt+p"      # the chord that jumps to the sidebar from any pane
@@ -182,7 +182,7 @@ compact_instruction = "preserve the open questions and exact decisions"
 
 `smart_compact` sets the default threshold for compact-first `rimz message` sends and scheduled loop waits, as an occupied-token count (`"200k"` or `"120000"`) or a percentage of the window (`"70%"`). When an agent's context window has reached the threshold, RimZ submits its compact command ahead of the text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag for messages, which overrides this value.
 
-`compact_instruction` steers both smart and idle compaction; [`rimz agents compact`](../reference/cli/agents.md#compact) uses the same brief unless overridden on the command line. Unset, it uses RimZ's built-in brief asking the agent to preserve decisions, problems, alternatives, exact details, current state, and next steps. Set it to another string to replace that brief, or to `""` to send the bare command. Only adapters whose native command accepts trailing text receive it: Claude receives `/compact <instruction>` today, while Codex and other adapters receive their bare command. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
+`compact_instruction` steers both smart and idle compaction; [`rimz agents compact`](../reference/cli/agents.md#compact) uses the same brief unless overridden on the command line. Unset, RimZ picks a built-in brief by the agent's seat. A solo agent's brief asks it to preserve decisions, problems, alternatives, exact details, current state, and next steps. A [team](./teams.md) member's brief points at the board, the stage files, and git by path and section, and keeps only what its window alone knows plus what is in flight. Set it to another string to replace both briefs, or to `""` to send the bare command. Only adapters whose native command accepts trailing text receive it: Claude receives `/compact <instruction>` today, while Codex and other adapters receive their bare command. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
 
 ### Idle compaction
 

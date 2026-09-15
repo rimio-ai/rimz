@@ -3624,7 +3624,7 @@ fn steer_auto_compact_runs_before_a_full_window() {
     );
     assert_compact_segments_then_enter(
         &lines,
-        rimz::config::HarnessConfig::default().compact_instruction(),
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
     );
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("compacted"),
@@ -3650,7 +3650,8 @@ fn steer_auto_compact_runs_before_a_full_window() {
         command.text,
         format!(
             "/compact {}",
-            rimz::config::HarnessConfig::default().compact_instruction()
+            rimz::config::HarnessConfig::default()
+                .compact_instruction(rimz::config::CompactSeat::Solo)
         )
     );
     assert_eq!(command.sender, MessageSender::System);
@@ -4038,7 +4039,7 @@ fn pane_write_lock_holds_a_steer_behind_an_in_flight_command() {
     let lines = trace_lines(&trace);
     assert_compact_segments_then_enter(
         &lines,
-        rimz::config::HarnessConfig::default().compact_instruction(),
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
     );
     let paste_at = lines
         .iter()
@@ -4070,7 +4071,7 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude (msg_"));
     assert_compact_segments_then_enter(
         &trace_lines(&trace),
-        rimz::config::HarnessConfig::default().compact_instruction(),
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
     );
     let messages = env.store().list_messages().expect("messages");
     assert_eq!(messages.len(), 1);
@@ -4156,7 +4157,7 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude (msg_"));
     assert_compact_segments_then_enter(
         &trace_lines(&next_trace),
-        rimz::config::HarnessConfig::default().compact_instruction(),
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
     );
 }
 
@@ -4376,7 +4377,7 @@ fn agents_compact_queues_for_a_running_agent() {
     }
     assert_compact_segments_then_enter(
         &trace_lines(&trace),
-        rimz::config::HarnessConfig::default().compact_instruction(),
+        rimz::config::HarnessConfig::default().compact_instruction(rimz::config::CompactSeat::Solo),
     );
     assert_eq!(
         message_by_id(&env, &command.message_id).status,
@@ -4492,7 +4493,7 @@ fn smart_compact_sends_the_configured_instruction() {
 #[test]
 fn smart_compact_types_the_slash_token_apart_from_its_instruction() {
     let harness = rimz::config::HarnessConfig::default();
-    let instruction = harness.compact_instruction();
+    let instruction = harness.compact_instruction(rimz::config::CompactSeat::Solo);
     assert!(
         instruction.len() > 800,
         "the regression instruction must exceed Claude's paste threshold"

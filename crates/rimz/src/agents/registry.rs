@@ -20,7 +20,8 @@ use super::adapters::opencode::OpencodeAdapter;
 use super::adapters::pi::PiAdapter;
 use super::adapters::qwen::QwenAdapter;
 use super::definition::{AgentDefinition, AgentSpec};
-use super::{AgentErr, Result};
+use super::{AgentErr, AgentState, Result};
+use crate::config::HarnessConfig;
 use crate::ids::AgentSessionId;
 
 const PROCESS_DESCENT_DEPTH: usize = 8;
@@ -82,6 +83,14 @@ pub fn find_definition(kind: &str) -> Option<&'static AgentDefinition> {
 /// (branding, capabilities, tool tables) without the behavioral trait.
 pub fn spec_by_kind(kind: &str) -> Option<&'static AgentSpec> {
     find_definition(kind).map(AgentDefinition::spec)
+}
+
+/// The compaction command for `agent`, carrying the harness brief for its
+/// seat; `None` when its adapter has no native compaction command.
+pub fn compact_command(agent: &AgentState, harness: &HarnessConfig) -> Option<String> {
+    spec_by_kind(agent.kind.as_str())?
+        .launch
+        .compact_command(harness.compact_instruction(agent.compact_seat()))
 }
 
 /// Display-order kinds — the walk doctor and the wiring probes iterate.
@@ -234,7 +243,31 @@ fn resumed_session_id_for_root_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{ConcernCoverage, IntegrationConcern};
+    use crate::agents::{AgentStatus, ConcernCoverage, IntegrationConcern};
+    use crate::ids::AgentKind;
+
+    #[test]
+    fn compact_command_carries_the_brief_for_the_agent_seat() {
+        let harness = HarnessConfig::default();
+        let mut agent = AgentState::seed(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-compact"),
+            AgentStatus::Idle,
+            jiff::Timestamp::from_second(1_700_000_000).expect("valid timestamp"),
+        );
+        let solo = compact_command(&agent, &harness).expect("claude compacts");
+        assert!(
+            solo.starts_with(
+                "/compact Summarize the transcript inside <summary></summary> tags. Include"
+            ),
+            "{solo}"
+        );
+
+        agent.team = Some("forge".to_owned());
+        let team = compact_command(&agent, &harness).expect("claude compacts");
+        assert!(team.starts_with("/compact Summarize the transcript inside <summary></summary> tags so a new context window continues"), "{team}");
+        assert!(team.contains("This seat is a team member"), "{team}");
+    }
 
     #[test]
     fn registry_resolves_kinds_and_sub_providers_without_collisions() {

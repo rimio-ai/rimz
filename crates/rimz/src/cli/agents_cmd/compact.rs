@@ -51,7 +51,7 @@ pub(super) fn compact_agent(
         .compact_command(
             instruction
                 .as_deref()
-                .unwrap_or(config.harness.compact_instruction()),
+                .unwrap_or(config.harness.compact_instruction(agent.compact_seat())),
         )
         .context("adapter has no native compaction command")?;
     let caller = send::resolve_caller(&ctx.store)?;

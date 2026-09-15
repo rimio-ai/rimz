@@ -17,6 +17,16 @@ fn legacy_state_defaults_to_no_observed_branches() {
 }
 
 #[test]
+fn compact_seat_follows_the_launch_stamped_team() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    assert_eq!(agent.compact_seat(), crate::config::CompactSeat::Solo);
+    agent.parent_agent_id = Some(AgentSessionId::from("parent"));
+    assert_eq!(agent.compact_seat(), crate::config::CompactSeat::Solo);
+    agent.team = Some("forge".to_owned());
+    assert_eq!(agent.compact_seat(), crate::config::CompactSeat::Team);
+}
+
+#[test]
 fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     let at = Timestamp::from_second(1_700_000_000).unwrap();
     let running = AgentState::seed(
