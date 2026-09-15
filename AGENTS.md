@@ -85,7 +85,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - Root docs stay short and authoritative; detail lives in `docs/` and is linked. Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request. It is written as a standalone change once the work merges and before the version release, so concurrent branches never contend over the same lines.
 - `examples/` is sample configuration for users to copy: not source code, not documentation. Do not read it while working unless the user asks, and do not treat it as authority on behaviour.
-- Contributor automation lives in `xtask/`. Each repository loop task owns a directory under [loops/](./loops/README.md), with dedicated coordinator and worker worktrees. The command surface and gate stack live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
+- Contributor automation lives in `xtask/`. Each repository loop task owns a directory under [loops/](./loops/README.md), whose coordinator runs read-only at the project root and gives each editing attempt a fresh RimZ worktree. The command surface and gate stack live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Bulk command output (`--json` snapshots, transcript tails, gate logs) reaches an agent truncated, so printing it to stdout burns a turn and still loses the part that mattered. Redirect it to a file under `/tmp` in the same command, then narrow it with `jq` or a targeted read.
 
 ## Testing
