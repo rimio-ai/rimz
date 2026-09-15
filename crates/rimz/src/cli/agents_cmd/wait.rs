@@ -80,9 +80,9 @@ fn wait_stream_request(
             let run = rimz::harness::run::load(store.paths(), &run_id)?;
             wait_run_stream(store, &run, options)
         }
-        WaitTarget::Agent { reference, kind } => {
-            wait_interactive_agent_stream(store, &reference, &kind, current_channel, options)
-        }
+        WaitTarget::Agent {
+            reference, kind, ..
+        } => wait_interactive_agent_stream(store, &reference, &kind, current_channel, options),
     }
 }
 
@@ -324,6 +324,7 @@ enum WaitTarget {
     Agent {
         reference: String,
         kind: rimz::ids::AgentKind,
+        completed_seen_at: Option<Instant>,
     },
 }
 
@@ -343,7 +344,10 @@ pub(super) struct TargetOutcome {
 
 pub(super) enum TerminalPayload {
     Run(Box<RunRecord>),
-    Agent(Box<AgentState>),
+    Agent {
+        agent: Box<AgentState>,
+        last_message: Option<String>,
+    },
     Disappeared,
 }
 
@@ -359,7 +363,10 @@ impl TargetOutcome {
                     .then(|| record.failure_tail.clone())
                     .flatten(),
             ),
-            TerminalPayload::Agent(agent) => WaitEntryJson::new(
+            TerminalPayload::Agent {
+                agent,
+                last_message,
+            } => WaitEntryJson::new(
                 if agent.effective_status() == rimz::agents::AgentStatus::Failed {
                     RunStatus::Failed
                 } else {
@@ -371,7 +378,7 @@ impl TargetOutcome {
                     .and_then(|context| context.cost.as_ref())
                     .and_then(|cost| cost.total_cost_usd),
                 agent.transcript_path.clone(),
-                None,
+                last_message.clone(),
                 None,
             ),
             TerminalPayload::Disappeared => WaitEntryJson::new(
@@ -455,14 +462,48 @@ fn resolve_wait_target(
             .context("resolved wait agent without state")?
             .kind
             .clone(),
+        completed_seen_at: None,
     })
+}
+
+/// How long a completed turn may wait for its final message to reach the
+/// transcript. The hook helper records the turn's end before it appends the
+/// message, and a provider whose hook carries none settles after this grace.
+const FINAL_MESSAGE_GRACE: Duration = Duration::from_secs(3);
+
+/// Decide whether an interactive turn has settled, and with which message.
+/// `None` keeps waiting; `Some(message)` settles. Only a message recorded
+/// during the current turn counts. A wait deadline cuts the grace short, since
+/// the turn itself has already completed.
+pub(super) fn settle_agent_turn(
+    completion: TurnCompletion,
+    turn_started_at: Option<jiff::Timestamp>,
+    latest: Option<rimz::transcript::TranscriptEntry>,
+    completed_seen_at: &mut Option<Instant>,
+    (now, deadline): (Instant, Option<Instant>),
+) -> Option<Option<String>> {
+    if completion == TurnCompletion::Open {
+        *completed_seen_at = None;
+        return None;
+    }
+    let message = latest
+        .filter(|entry| turn_started_at.is_some_and(|started| entry.at >= started))
+        .map(|entry| entry.text);
+    if message.is_some() || completion == TurnCompletion::Failed {
+        return Some(message);
+    }
+    let seen = *completed_seen_at.get_or_insert(now);
+    (now.duration_since(seen) >= FINAL_MESSAGE_GRACE
+        || deadline.is_some_and(|deadline| now >= deadline))
+    .then_some(None)
 }
 
 fn poll_target(
     store: &rimz::Store,
     agent_view: Option<&TurnWaitView>,
-    target: &WaitTarget,
+    target: &mut WaitTarget,
     current_channel: Option<&str>,
+    deadline: Option<Instant>,
 ) -> Result<Option<TargetOutcome>> {
     match target {
         WaitTarget::Run { run_id, name } => {
@@ -475,7 +516,11 @@ fn poll_target(
                 payload: TerminalPayload::Run(Box::new(record)),
             }))
         }
-        WaitTarget::Agent { reference, .. } => {
+        WaitTarget::Agent {
+            reference,
+            completed_seen_at,
+            ..
+        } => {
             let view = agent_view.context("pending agent target without snapshot")?;
             match crate::cli::resolve_agent_one(
                 store,
@@ -485,10 +530,30 @@ fn poll_target(
                 current_channel,
             ) {
                 Ok(agent) => {
-                    let terminal = view.completion(agent) != TurnCompletion::Open;
-                    Ok(terminal.then(|| TargetOutcome {
+                    let completion = view.completion(agent);
+                    let latest = if completion == TurnCompletion::Open {
+                        None
+                    } else {
+                        rimz::transcript::latest_assistant(
+                            store.paths(),
+                            &agent.kind,
+                            &agent.agent_id,
+                        )
+                        .context("reading the agent's final message")?
+                    };
+                    let settled = settle_agent_turn(
+                        completion,
+                        agent.turn_started_at,
+                        latest,
+                        completed_seen_at,
+                        (Instant::now(), deadline),
+                    );
+                    Ok(settled.map(|last_message| TargetOutcome {
                         name: agent_name(agent).to_owned(),
-                        payload: TerminalPayload::Agent(Box::new(agent.clone())),
+                        payload: TerminalPayload::Agent {
+                            agent: Box::new(agent.clone()),
+                            last_message,
+                        },
                     }))
                 }
                 Err(_) => Ok(Some(TargetOutcome {
@@ -551,11 +616,17 @@ impl WaitSet {
             .transpose()?;
 
         let mut settled = Vec::new();
-        for (index, target) in self.targets.iter().enumerate() {
+        for (index, target) in self.targets.iter_mut().enumerate() {
             if self.outcomes[index].is_some() {
                 continue;
             }
-            let Some(outcome) = poll_target(store, agent_view.as_ref(), target, current_channel)?
+            let Some(outcome) = poll_target(
+                store,
+                agent_view.as_ref(),
+                target,
+                current_channel,
+                self.deadline,
+            )?
             else {
                 continue;
             };
@@ -612,6 +683,23 @@ pub(super) fn print_wait_block(
     prose: render::prose::Prose,
 ) -> Result<()> {
     write_wait_header(out, outcome)?;
+    if let TerminalPayload::Agent { last_message, .. } = &outcome.payload {
+        let completed = outcome.entry().status == RunStatus::Completed;
+        if completed && last_message.is_none() {
+            write_wait_header(err, outcome)?;
+        }
+        supervised::output::print_final_message(
+            supervised::output::FinalMessage {
+                scope: "turn",
+                message: last_message.as_deref(),
+                completed,
+            },
+            out,
+            err,
+            prose,
+            render::prose::prose_width(0),
+        )?;
+    }
     if let TerminalPayload::Run(record) = &outcome.payload {
         let emits_diagnostics = record.status != RunStatus::Completed
             || record
@@ -669,8 +757,19 @@ fn print_single_outcome(outcome: &TargetOutcome, json: bool) -> Result<()> {
                 render::prose::prose_width(0),
             )
         }
-        TerminalPayload::Agent(agent) if json => render::json_pretty(agent),
-        TerminalPayload::Agent(_) | TerminalPayload::Disappeared => Ok(()),
+        TerminalPayload::Agent { .. } if json => render::json_pretty(&outcome.entry()),
+        TerminalPayload::Agent { last_message, .. } => supervised::output::print_final_message(
+            supervised::output::FinalMessage {
+                scope: "turn",
+                message: last_message.as_deref(),
+                completed: outcome.entry().status == RunStatus::Completed,
+            },
+            &mut render::out(),
+            &mut render::err(),
+            render::prose::Prose::for_stdout(),
+            render::prose::prose_width(0),
+        ),
+        TerminalPayload::Disappeared => Ok(()),
     }
 }
 

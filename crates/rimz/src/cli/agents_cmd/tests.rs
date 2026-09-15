@@ -2000,7 +2000,7 @@ fn plural_wait_block_marks_failure_and_prints_forensics() {
 }
 
 #[test]
-fn plural_wait_block_for_agent_payload_is_header_only() {
+fn plural_wait_block_for_agent_payload_prints_last_message() {
     let agent = agent_with_status(
         "agent_0123456789abcdef0123456789abcdef",
         AgentStatus::Idle,
@@ -2009,7 +2009,10 @@ fn plural_wait_block_for_agent_payload_is_header_only() {
     );
     let outcome = wait::TargetOutcome {
         name: "quiet-lynx".to_owned(),
-        payload: wait::TerminalPayload::Agent(Box::new(agent)),
+        payload: wait::TerminalPayload::Agent {
+            agent: Box::new(agent),
+            last_message: Some("reviewed; two findings".to_owned()),
+        },
     };
     let mut out = Vec::new();
     let mut err = Vec::new();
@@ -2024,9 +2027,107 @@ fn plural_wait_block_for_agent_payload_is_header_only() {
 
     assert_eq!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
-        "--- quiet-lynx ---\n\n"
+        "--- quiet-lynx ---\nreviewed; two findings\n\n"
     );
     assert!(err.is_empty());
+    assert_eq!(
+        serde_json::to_value(outcome.entry()).unwrap()["last_message"],
+        "reviewed; two findings"
+    );
+}
+
+#[test]
+fn agent_wait_settles_on_this_turns_final_message_or_after_grace() {
+    use rimz::agents::TurnCompletion;
+    use rimz::transcript::{TranscriptEntry, TranscriptKind};
+    use std::time::Instant;
+
+    let started = Timestamp::from_second(1_000).unwrap();
+    let entry = |second| {
+        TranscriptEntry::new(
+            Timestamp::from_second(second).unwrap(),
+            AgentKind::new_unchecked("codex"),
+            AgentSessionId::from("peer"),
+            TranscriptKind::Assistant,
+            format!("answer at {second}"),
+        )
+    };
+    let now = Instant::now();
+    let mut seen = None;
+
+    assert_eq!(
+        wait::settle_agent_turn(
+            TurnCompletion::Open,
+            Some(started),
+            Some(entry(1_001)),
+            &mut seen,
+            (now, None)
+        ),
+        None
+    );
+    assert_eq!(
+        wait::settle_agent_turn(
+            TurnCompletion::Completed,
+            Some(started),
+            Some(entry(999)),
+            &mut seen,
+            (now, None)
+        ),
+        None
+    );
+    assert_eq!(
+        wait::settle_agent_turn(
+            TurnCompletion::Completed,
+            Some(started),
+            Some(entry(1_001)),
+            &mut seen,
+            (now, None)
+        ),
+        Some(Some("answer at 1001".to_owned()))
+    );
+    assert_eq!(
+        wait::settle_agent_turn(
+            TurnCompletion::Failed,
+            Some(started),
+            Some(entry(999)),
+            &mut None,
+            (now, None)
+        ),
+        Some(None)
+    );
+
+    let mut seen = None;
+    assert_eq!(
+        wait::settle_agent_turn(
+            TurnCompletion::Completed,
+            Some(started),
+            None,
+            &mut seen,
+            (now, None)
+        ),
+        None
+    );
+    assert_eq!(
+        wait::settle_agent_turn(
+            TurnCompletion::Completed,
+            Some(started),
+            None,
+            &mut seen,
+            (now + Duration::from_secs(3), None)
+        ),
+        Some(None)
+    );
+    let mut seen = None;
+    assert_eq!(
+        wait::settle_agent_turn(
+            TurnCompletion::Completed,
+            Some(started),
+            None,
+            &mut seen,
+            (now, Some(now))
+        ),
+        Some(None)
+    );
 }
 
 #[test]
