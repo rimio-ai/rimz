@@ -56,7 +56,10 @@ pub(super) fn wait_entry_lines(
 /// A described shell reads as its description over its command; otherwise the
 /// command alone takes line 1.
 fn shell_entry(shell: &BackgroundShell) -> WaitEntry {
-    let command = shell.command.as_deref().map(command_program_basename);
+    let command = shell
+        .command
+        .as_deref()
+        .and_then(|command| single_line_description(&command_program_basename(command)));
     let description = shell
         .description
         .as_deref()

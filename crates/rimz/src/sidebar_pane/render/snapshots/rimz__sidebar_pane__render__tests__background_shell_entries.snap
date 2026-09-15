@@ -19,7 +19,7 @@ expression: screen
 ▌    ❯ make check                               ◔ <1m▐
 ▌    ❯ Run the test suite                       ◔  5m▐
 ▌      cargo test --workspace                        ▐
-▌    ❯ cargo build                              ◔  2m▐
+▌    ❯ cat <<'EOF' > notes foo EOF              ◔  2m▐
 ▌    ❯ background job                           ◔  1m▐
 ▌    ⌁ pr.merged                                ◔ <1m▐
 

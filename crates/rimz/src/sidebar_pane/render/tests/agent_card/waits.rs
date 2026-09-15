@@ -467,7 +467,7 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
         },
         BackgroundShell {
             id: "b2".to_owned(),
-            command: Some("/usr/bin/cargo build".to_owned()),
+            command: Some("cat <<'EOF' > notes\nfoo\nEOF".to_owned()),
             description: Some("  ".to_owned()),
             started_at: fixed_now() - Duration::from_secs(120),
         },
@@ -502,7 +502,8 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
         .find(|span| span.content == "cargo test --workspace")
         .unwrap();
     assert_eq!(detail.style.fg, theme.muted().fg);
-    assert!(rows[timer + 4].contains("❯ cargo build"));
+    assert!(rows[timer + 4].contains("❯ cat <<'EOF' > notes foo EOF"));
+    assert!(!rows[timer + 4].contains(char::is_control));
     assert!(rows[timer + 4].ends_with(&format!("{}  2m▐", elapsed_glyph(&theme, 120))));
     assert!(rows[timer + 5].contains("❯ background job"));
     assert!(rows[timer + 5].ends_with(&format!("{}  1m▐", elapsed_glyph(&theme, 60))));

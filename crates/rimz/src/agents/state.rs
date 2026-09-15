@@ -154,8 +154,8 @@ impl PendingWait {
 
 impl PendingWaitTrigger {
     /// The wait itself, without a kind word (a card glyph carries the kind):
-    /// `in 12m` or `due`, `pid 16776`, the command with its program path
-    /// trimmed, or `pr.merged · 2h left`. A timer's armed `delay` is not shown.
+    /// `in 12m` or `due`, `pid 16776`, the command on one line with its
+    /// program path trimmed, or `pr.merged · 2h left`. A timer's armed `delay` is not shown.
     pub(crate) fn summary(&self, now: Timestamp) -> String {
         use crate::theme::fmt::duration_label;
 
@@ -171,7 +171,10 @@ impl PendingWaitTrigger {
                 }
             }
             Self::Pid { pid } => format!("pid {pid}"),
-            Self::Command { command } => crate::proc::command::command_program_basename(command),
+            Self::Command { command } => {
+                single_line_description(&crate::proc::command::command_program_basename(command))
+                    .unwrap_or_default()
+            }
             Self::Signal { selector, deadline } => {
                 let mut label = selector.clone();
                 if let Some(deadline) = deadline {

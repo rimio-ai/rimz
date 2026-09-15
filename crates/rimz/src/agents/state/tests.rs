@@ -220,6 +220,13 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             "wakes after cargo test",
         ),
         (
+            PendingWaitTrigger::Command {
+                command: "/usr/bin/cargo test \\\n  --workspace".into(),
+            },
+            "cargo test \\ --workspace",
+            "wakes after cargo test \\ --workspace",
+        ),
+        (
             PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: None,
