@@ -499,7 +499,7 @@ fn remove_roots(
             continue;
         }
         if kind == StorageKind::Config {
-            let keep = ["profiles", "teams", rimz::disk::paths::SKILLS_SUBDIR];
+            let keep = ["profiles", "teams", "skills"];
             let outcomes = rimz::uninstall::remove_root_keeping(&root.path, &keep);
             render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
             for name in keep {
