@@ -625,16 +625,20 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
                 &sources,
                 rimz::config::effective::ProfileScope::Agents,
             );
+            let mut team_profiles_hidden = false;
             if !teams {
-                reports = crate::cli::profile_report::partition_team_profiles(
+                let (team, standalone) = crate::cli::profile_report::partition_team_profiles(
                     reports,
                     &config.agents.teams,
-                )
-                .1;
+                );
+                team_profiles_hidden = !team.is_empty();
+                reports = standalone;
             }
             return crate::cli::profile_report::list_profiles(
                 reports,
-                crate::cli::profile_report::ProfileListing::Agents,
+                crate::cli::profile_report::ProfileListing::Agents {
+                    team_profiles_hidden,
+                },
                 json,
                 path,
             );
