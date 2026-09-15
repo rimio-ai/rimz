@@ -382,16 +382,7 @@ pub fn latest_open_ask(
     let mut closed = std::collections::BTreeSet::new();
 
     for path in files {
-        let text = fs::read_to_string(&path).map_err(|source| TranscriptLogErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let entries = text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str::<TranscriptEntry>(line).ok())
-            .collect::<Vec<_>>();
-        for entry in entries.into_iter().rev() {
+        for entry in read_bucket(&path)?.into_iter().rev() {
             if &entry.kind != kind || &entry.agent_id != agent_id {
                 continue;
             }
@@ -411,6 +402,39 @@ pub fn latest_open_ask(
         }
     }
     Ok(None)
+}
+
+/// The agent's newest `Assistant` entry: the final message of its latest
+/// recorded turn.
+pub fn latest_assistant(
+    paths: &StatePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+) -> Result<Option<TranscriptEntry>> {
+    let mut files = transcript_files(&paths.transcript_dir)?;
+    files.sort_by(|left, right| right.cmp(left));
+    for path in files {
+        if let Some(entry) = read_bucket(&path)?.into_iter().rev().find(|entry| {
+            entry.entry == TranscriptKind::Assistant
+                && &entry.kind == kind
+                && &entry.agent_id == agent_id
+        }) {
+            return Ok(Some(entry));
+        }
+    }
+    Ok(None)
+}
+
+fn read_bucket(path: &Path) -> Result<Vec<TranscriptEntry>> {
+    let text = fs::read_to_string(path).map_err(|source| TranscriptLogErr::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<TranscriptEntry>(line).ok())
+        .collect())
 }
 
 pub fn answer_text(decision: &Value) -> String {
@@ -717,6 +741,31 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["second", "first"]
         );
+    }
+
+    #[test]
+    fn latest_assistant_picks_the_agents_newest_final_message() {
+        let (_dir, paths) = paths();
+        let older = entry(TranscriptKind::Assistant, "older", "2026-06-01T00:00:00Z");
+        let newer = entry(TranscriptKind::Assistant, "newer", "2026-06-08T00:00:00Z");
+        let prompt = entry(
+            TranscriptKind::Prompt,
+            "later prompt",
+            "2026-06-08T00:00:01Z",
+        );
+        let mut other = entry(
+            TranscriptKind::Assistant,
+            "other agent",
+            "2026-06-08T00:00:02Z",
+        );
+        other.agent_id = AgentSessionId::from("someone-else");
+        for entry in [&older, &newer, &prompt, &other] {
+            append(&paths, entry).expect("append entry");
+        }
+
+        let latest = latest_assistant(&paths, &newer.kind, &newer.agent_id).expect("read log");
+
+        assert_eq!(latest.map(|entry| entry.text), Some("newer".to_owned()));
     }
 
     #[test]

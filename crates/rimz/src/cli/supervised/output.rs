@@ -16,15 +16,44 @@ pub(crate) fn print_run_output(
     prose: Prose,
     width: usize,
 ) -> Result<()> {
-    if let Some(message) = trimmed_message(record.last_message.as_deref()) {
+    print_final_message(
+        FinalMessage {
+            scope: "run",
+            message: record.last_message.as_deref(),
+            completed: record.status == RunStatus::Completed,
+        },
+        out,
+        err,
+        prose,
+        width,
+    )?;
+    print_run_forensics(record, err)
+}
+
+/// A settled run's or turn's final assistant message, as `wait` presents it.
+pub(crate) struct FinalMessage<'a> {
+    pub(crate) scope: &'static str,
+    pub(crate) message: Option<&'a str>,
+    pub(crate) completed: bool,
+}
+
+pub(crate) fn print_final_message(
+    final_message: FinalMessage<'_>,
+    out: &mut impl Write,
+    err: &mut impl Write,
+    prose: Prose,
+    width: usize,
+) -> Result<()> {
+    if let Some(message) = trimmed_message(final_message.message) {
         write_prose(out, message, prose, width)?;
-    } else if record.status == RunStatus::Completed {
+    } else if final_message.completed {
         writeln!(
             err,
-            "rimz: run completed but no final assistant message was extracted"
+            "rimz: {} completed but no final assistant message was extracted",
+            final_message.scope
         )?;
     }
-    print_run_forensics(record, err)
+    Ok(())
 }
 
 pub(crate) fn print_run_forensics<W: Write + ?Sized>(

@@ -80,6 +80,21 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
         .expect("team report after cancellation");
     assert_eq!(teams[0]["instances"][0]["state"], "done");
     assert_eq!(agents_wait_exit(&env), Some(0));
+    rimz::transcript::append(
+        env.store().paths(),
+        &rimz::transcript::TranscriptEntry::new(
+            jiff::Timestamp::now(),
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("provider-session"),
+            rimz::transcript::TranscriptKind::Assistant,
+            "planned the rollout".to_owned(),
+        ),
+    )
+    .expect("record the turn's final message");
+    assert_eq!(
+        wait_ok(&env, &["agents", "wait", "@planner", "--timeout", "1s"]),
+        "planned the rollout\n"
+    );
 }
 
 fn agents_wait_exit(env: &Env) -> Option<i32> {
