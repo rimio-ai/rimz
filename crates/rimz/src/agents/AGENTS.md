@@ -34,6 +34,8 @@ Nothing under `agents` imports `store`: Store folds the agent model, and agent r
 - **One command runs every provider's out-of-band refresh.** An adapter's `context_refresh_spawn` returns argv for the shared `rimz agents refresh-context` helper, and `refresh_session_context` returns that pass's write intent. The adapter reads only its own provider source; the CLI owns every durable write and the sidebar wakeup.
 - **Emit only the normalized outputs generic flows consume** — lifecycle observations, blocking-ask classifications, hook ingress ownership, interactive process identity, and supervised-run final messages. Keep provider-only capabilities in deep provider modules until a second generic consumer proves an adapter seam.
 
+`skill_links` owns host-mode provider-root symlinks. Ownership is structural: the symlink target, resolved relative to the root and lexically normalized without canonicalizing, lies under the RimZ skill library. Plan/apply preserves foreign entries and returns reports for the CLI; uninstall uses the same planner with no desired links.
+
 ## Hook discipline
 
 - **Blocking ask hooks are sync.** Installing one as async is a hard install error — the source of truth for "must block" is the adapter's hook catalog or equivalent typed installer declaration, never the on-disk config.

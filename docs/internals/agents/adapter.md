@@ -75,6 +75,8 @@ The launch block is data so that one registry entry is enough to light up `<kind
 
 The table names each trait's central methods; the trait file is the full list.
 
+`LaunchCapability::skills_home` also supplies the root for host-mode library links. `agents::skill_links` plans and applies them; uninstall resolves the same root for every native and declared login. Ownership is structural: a symlink target, resolved relative to its root and lexically normalized without canonicalizing, lies under the RimZ skill library. User-owned entries are preserved.
+
 | Trait | Central methods | The default means |
 | --- | --- | --- |
 | `CoreCapability` | `spec()`, plus the test-only conformance fixtures | required, no default |

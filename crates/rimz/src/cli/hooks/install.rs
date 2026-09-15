@@ -81,18 +81,15 @@ fn install_definitions(
     Ok(adapters)
 }
 
-/// A provider home's account, its adapter, and the env its hooks live under.
-type ManagedHookLogin = (
+/// A provider home's account, its adapter, and its launch environment.
+type ProviderHomeLogin = (
     rimz::ids::LoginKey,
     &'static rimz::agents::AgentDefinition,
     std::collections::BTreeMap<String, String>,
 );
 
-/// Every provider home that carries RimZ-managed hooks: each kind's own home
-/// and every declared account's, labelled by account. An accounts config the
-/// catalog refuses still yields the providers' own homes, alongside its error.
-pub(crate) fn managed_hook_logins() -> (Vec<ManagedHookLogin>, Option<rimz::agents::LoginConfigErr>)
-{
+/// Every native and declared account home; a refused catalog yields native homes alongside its error.
+pub(crate) fn provider_home_logins() -> (Vec<ProviderHomeLogin>, Option<LoginConfigErr>) {
     let ambient = rimz::agents::ambient_env();
     let (logins, config_err) =
         match rimz::agents::LoginCatalog::from_config(&crate::cli::machine_config().accounts) {
@@ -113,10 +110,18 @@ pub(crate) fn managed_hook_logins() -> (Vec<ManagedHookLogin>, Option<rimz::agen
         .filter_map(|login| {
             let adapter = rimz::agents::find_definition(login.kind().as_str())?;
             let login_env = login.env(&ambient);
-            adapter
-                .managed_hook_artifacts_present(&login_env)
-                .then(|| (login.key(), adapter, login_env))
+            Some((login.key(), adapter, login_env))
         })
+        .collect();
+    (logins, config_err)
+}
+
+/// Every provider home carrying RimZ-managed hooks, alongside any catalog error.
+fn managed_hook_logins() -> (Vec<ProviderHomeLogin>, Option<LoginConfigErr>) {
+    let (logins, config_err) = provider_home_logins();
+    let logins = logins
+        .into_iter()
+        .filter(|(_, adapter, env)| adapter.managed_hook_artifacts_present(env))
         .collect();
     (logins, config_err)
 }

@@ -154,9 +154,11 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused |
 | Process plugin | none | none | none | refused |
 
+Host launches link [RimZ library skills](../guide/configuration.md#skills) into the resolved skill root, including each named Claude account home, without replacing user-owned entries.
+
 Claude Code and Codex also run under named accounts: RimZ sets the override variable to a separate config home per account when a room launches that provider. Other agents always use their default home. See [provider accounts](../guide/accounts.md).
 
-Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config home from the launch environment and merges the RimZ skill library into the agent's skill root. The sandbox does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. A profile `skills` list keeps the listed skills model-callable and makes the rest user-only; agents marked refused in the table fail the launch when a list is set. Host isolation ignores every `skills` list, including `[]`, and duplicate or invalid names are parse errors under both. The profile rules are in [configuration: profiles](../guide/configuration.md#profiles), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
+Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config home from the launch environment and merges the RimZ skill library into the agent's skill root. The sandbox does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. A profile `skills` list keeps the listed skills model-callable and makes the rest user-only; agents marked refused in the table fail the launch when a list is set. Host isolation ignores every `skills` list, including `[]`, and duplicate or invalid names are parse errors under both. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 
 ## Launch flags
 

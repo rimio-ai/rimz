@@ -12,6 +12,7 @@ use clap::Args;
 use super::GlobalFlags;
 use super::loop_timer::{self, TimerStatus};
 use super::render::fmt_bytes;
+use rimz::agents::skill_links::{self, Desired, SkillLinkPlan};
 use rimz::disk::paths;
 use rimz::disk::usage::{RuntimeStorage, StorageKind, StorageRoot};
 use rimz::ids::{MuxName, WorkspaceId};
@@ -51,6 +52,7 @@ struct Preview<'a> {
     remove_config: bool,
     live_rooms: &'a [LiveRoom],
     hook_agents: &'a [String],
+    skill_links: &'a [SkillLinkPlan],
     loop_timer: &'a TimerStatus,
     keep_binary: bool,
     binaries: &'a [PathBuf],
@@ -75,16 +77,30 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     let disk_usage = rimz::disk::usage::measure();
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
-    let (hook_logins, accounts_err) = super::hooks::managed_hook_logins();
+    let (logins, accounts_err) = super::hooks::provider_home_logins();
     if let Some(err) = accounts_err {
         failures.push(format!(
-            "read provider accounts: {err}; only the providers' own homes were unhooked"
+            "read provider accounts: {err}; only the providers' own homes were cleaned"
         ));
     }
-    let hook_agents = hook_logins
+    let hook_agents = logins
         .iter()
+        .filter(|(_, adapter, env)| adapter.managed_hook_artifacts_present(env))
         .map(|(key, _, _)| hook_label(key))
         .collect::<Vec<_>>();
+    let library = paths::skills_library();
+    let skill_roots = logins
+        .iter()
+        .filter_map(|(_, adapter, env)| adapter.skills_home(env))
+        .collect::<BTreeSet<_>>();
+    let mut skill_links = Vec::new();
+    for root in skill_roots {
+        match skill_links::plan(&root, &library, Desired::None) {
+            Ok(plan) if plan.has_owned_changes() => skill_links.push(plan),
+            Ok(_) => {}
+            Err(err) => failures.push(format!("plan skill link removal: {err}")),
+        }
+    }
     let timer_status = loop_timer::status().unwrap_or(TimerStatus::NotInstalled);
     let binaries = if args.keep_binary {
         Vec::new()
@@ -103,6 +119,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
         remove_config,
         live_rooms: &live_rooms,
         hook_agents: &hook_agents,
+        skill_links: &skill_links,
         loop_timer: &timer_status,
         keep_binary: args.keep_binary,
         binaries: &binaries,
@@ -129,6 +146,30 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
             writeln!(stderr, "Hooks: removed {agents}")?;
         }
         Err(err) => failures.push(format!("remove managed hooks: {err}")),
+    }
+
+    let mut removed_skill_links = false;
+    for plan in &skill_links {
+        match skill_links::apply(plan) {
+            Ok(outcome) => {
+                if outcome.unlinked > 0 {
+                    removed_skill_links = true;
+                    writeln!(
+                        stderr,
+                        "Skill links: removed {} from {}",
+                        outcome.unlinked,
+                        plan.root().display()
+                    )?;
+                }
+                if let Some(report) = plan.shadowed_report(&outcome.shadowed) {
+                    writeln!(stderr, "{report}")?;
+                }
+            }
+            Err(err) => failures.push(format!("remove skill links: {err}")),
+        }
+    }
+    if !removed_skill_links {
+        writeln!(stderr, "Skill links: none")?;
     }
 
     match loop_timer::remove() {
@@ -226,6 +267,14 @@ fn render_preview(preview: Preview<'_>) -> Result<()> {
         writeln!(stderr, "Hooks: none installed")?;
     } else {
         writeln!(stderr, "Hooks: {}", preview.hook_agents.join(", "))?;
+    }
+    if preview.skill_links.is_empty() {
+        writeln!(stderr, "Skill links: none")?;
+    } else {
+        writeln!(stderr, "Skill links:")?;
+        for plan in preview.skill_links {
+            writeln!(stderr, "  {}", plan.root().display())?;
+        }
     }
     match preview.loop_timer {
         TimerStatus::Installed {
