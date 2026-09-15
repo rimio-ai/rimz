@@ -59,6 +59,7 @@ mod sidebar_wakeup;
 mod start;
 mod store;
 mod teams_flip;
+mod teams_wait;
 mod transcript;
 mod transcript_watch;
 mod trust;

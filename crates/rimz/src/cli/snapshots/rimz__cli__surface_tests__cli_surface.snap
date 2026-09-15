@@ -1163,6 +1163,8 @@ rimz help teams show
 
 rimz help teams stop
 
+rimz help teams wait
+
 rimz help transcript
 
 rimz help trust
@@ -2505,6 +2507,8 @@ rimz teams help show
 
 rimz teams help stop
 
+rimz teams help wait
+
 rimz teams install
     <name>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
@@ -2583,6 +2587,19 @@ rimz teams stop
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <NAME>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz teams wait
+    <references>  [action=append takes=1..=inf required]
+    --any  [action=set-true takes=0..=0]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --timeout <DURATION>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     -w, --worktree <NAME>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
