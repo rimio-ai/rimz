@@ -103,6 +103,7 @@ use show::{focus_agent, show_agent};
 pub(in crate::cli) use stop::StopTracker;
 use stop::stop_agent;
 pub(in crate::cli) use stop::stop_resolved;
+pub(crate) use subagent_report::response_path;
 use supervised::OutputFormat;
 use supervised::run::{run_print, run_supervised};
 use top::{TopArgs, run_top};

@@ -76,7 +76,7 @@ fn write_response_files(
             else {
                 return Ok(None);
             };
-            let path = run::report::response_path(paths, child_name(child, run));
+            let path = response_path(paths, child_name(child, run));
             let mut bytes = message.as_bytes().to_vec();
             if !bytes.ends_with(b"\n") {
                 bytes.push(b'\n');
@@ -360,6 +360,11 @@ fn format_compact_duration(mut seconds: u64) -> String {
         rendered.push_str(&format!("{seconds}s"));
     }
     rendered
+}
+
+/// Where the fleet report writes a settled run's captured final response.
+pub(crate) fn response_path(paths: &StatePaths, agent_name: &str) -> PathBuf {
+    paths.subagents_dir.join(format!("{agent_name}.output"))
 }
 
 fn child_name<'a>(child: &'a AgentState, run: &'a RunRecord) -> &'a str {
@@ -680,7 +685,7 @@ mod tests {
         assert!(messages[0].text.contains("@child"));
         assert!(!messages[0].text.contains("@shell-peer"));
         assert_eq!(
-            std::fs::read_to_string(run::report::response_path(store.paths(), "peer")).unwrap(),
+            std::fs::read_to_string(response_path(store.paths(), "peer")).unwrap(),
             "peer answer\n"
         );
     }
