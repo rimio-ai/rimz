@@ -120,26 +120,22 @@ fn entries(root: &Path) -> Result<BTreeMap<String, PathBuf>, SkillLinkErr> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(err) => return Err(io_err(root, err)),
     };
-    entries
-        .map(|entry| {
-            let entry = entry.map_err(|err| io_err(root, err))?;
-            let name = entry.file_name().into_string().map_err(|_| {
-                io_err(
-                    &entry.path(),
-                    io::Error::new(io::ErrorKind::InvalidData, "skill name is not UTF-8"),
-                )
-            })?;
-            Ok((name, entry.path()))
-        })
-        .collect()
+    let mut named = BTreeMap::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| io_err(root, err))?;
+        // A non-UTF-8 name can never match a skill name, so it is never RimZ's.
+        if let Ok(name) = entry.file_name().into_string() {
+            named.insert(name, entry.path());
+        }
+    }
+    Ok(named)
 }
 
-fn metadata(path: &Path) -> Result<Option<fs::Metadata>, SkillLinkErr> {
-    match fs::metadata(path) {
-        Ok(meta) => Ok(Some(meta)),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(io_err(path, err)),
-    }
+/// A library entry is a skill when it resolves to a directory holding `SKILL.md`;
+/// a broken or looping user symlink is simply not one.
+fn is_skill(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_dir())
+        && fs::metadata(path.join("SKILL.md")).is_ok_and(|meta| meta.is_file())
 }
 
 fn owned_target(root: &Path, library: &Path, target: &Path) -> Option<PathBuf> {
@@ -166,22 +162,25 @@ fn owned(root: &Path, library: &Path, name: &str) -> Result<Option<PathBuf>, Ski
 pub fn plan(root: &Path, library: &Path, desired: Desired) -> Result<SkillLinkPlan, SkillLinkErr> {
     let root = absolute(root)?;
     let library = absolute(library)?;
-    let mut wanted = BTreeMap::new();
-    if matches!(desired, Desired::Library) {
-        for (name, path) in entries(&library)? {
-            if metadata(&path)?.is_some_and(|meta| meta.is_dir())
-                && metadata(&path.join("SKILL.md"))?.is_some_and(|meta| meta.is_file())
-            {
-                wanted.insert(name, path);
-            }
-        }
-    }
     let mut plan = SkillLinkPlan {
         root,
         library,
         actions: Vec::new(),
         shadowed: Vec::new(),
     };
+    // A library that is, or nests with, the provider root is read natively or not at
+    // all; linking there would replace the library's own entries with self-links.
+    if plan.root.starts_with(&plan.library) || plan.library.starts_with(&plan.root) {
+        return Ok(plan);
+    }
+    let mut wanted = BTreeMap::new();
+    if matches!(desired, Desired::Library) {
+        for (name, path) in entries(&plan.library)? {
+            if is_skill(&path) {
+                wanted.insert(name, path);
+            }
+        }
+    }
     for (name, _) in entries(&plan.root)? {
         let target = wanted.remove(&name);
         match owned(&plan.root, &plan.library, &name)? {
