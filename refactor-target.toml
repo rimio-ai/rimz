@@ -82,7 +82,8 @@ upward-dependencies = ["address"]
 # Background shells and their report are folded by store and listed by the renderer.
 # A peer's `launched_by` link and its launcher accessors route the fleet digest.
 # Providers switch off their native command sandbox inside the RimZ view.
-surface-budget = 977
+# One compaction composer picks the brief for the agent's seat.
+surface-budget = 979
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -176,7 +177,8 @@ upward-dependencies = [
     "store::message",
 ]
 # Isolation and parsed skill policy cross config, harness and sandbox seams.
-surface-budget = 174
+# The compaction seat selects the harness brief.
+surface-budget = 175
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
