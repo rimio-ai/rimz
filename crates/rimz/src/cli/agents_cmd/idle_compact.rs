@@ -19,20 +19,6 @@ use super::Ctx;
 
 pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let config = MachineConfig::load_lenient();
-    let expected_command = rimz::agents::spec_by_kind(request.kind.as_str())
-        .and_then(|spec| {
-            spec.launch
-                .compact_command(config.harness.compact_instruction())
-        })
-        .context("idle-compaction target adapter has no compact command")?;
-    if request.command != expected_command {
-        bail!(
-            "idle-compaction command `{}` does not match {} adapter command `{expected_command}`",
-            request.command,
-            request.kind
-        );
-    }
-
     if config.harness.idle_compact == IdleCompactMode::Off {
         return Ok(());
     }
@@ -48,6 +34,15 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         .iter()
         .find(|agent| agent.kind == request.kind && agent.agent_id == request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
+    let expected_command = rimz::agents::compact_command(agent, &config.harness)
+        .context("idle-compaction target adapter has no compact command")?;
+    if request.command != expected_command {
+        bail!(
+            "idle-compaction command `{}` does not match {} adapter command `{expected_command}`",
+            request.command,
+            request.kind
+        );
+    }
     snapshot
         .agent_panes
         .iter()

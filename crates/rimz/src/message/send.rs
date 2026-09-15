@@ -282,9 +282,7 @@ fn compact_message_for_target<'a>(
         return None;
     }
     let config = crate::config::MachineConfig::load_lenient();
-    let command = crate::agents::spec_by_kind(target.kind.as_str())?
-        .launch
-        .compact_command(config.harness.compact_instruction())?;
+    let command = crate::agents::compact_command(agent, &config.harness)?;
     let occupied = agent.occupied_context_tokens();
     if let Some(used) = occupied
         && already_compacted_at(store, agent, used)

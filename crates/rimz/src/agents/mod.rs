@@ -117,8 +117,8 @@ pub(crate) use payload::{
 };
 pub use pricing::{PriceBook, TokenSplit};
 pub use registry::{
-    all_definitions, definition_by_kind, find_definition, known_kinds, resumed_session_id_for_root,
-    resumed_session_id_from_cmdline, spec_by_kind,
+    all_definitions, compact_command, definition_by_kind, find_definition, known_kinds,
+    resumed_session_id_for_root, resumed_session_id_from_cmdline, spec_by_kind,
 };
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
 pub use state::{

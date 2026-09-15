@@ -396,7 +396,7 @@ rimz agents compact @coder               # compact context at the next turn boun
 | `refresh` | one agent, the channel, or `--all` | re-reads card context now |
 | `stop` | one run or agent; `--all` for every match | cancels the run or closes the pane |
 | `restart` | one live agent | replaces its pane and resumes its session |
-| `compact` | one agent with a bound pane | sends its native compaction command at a turn boundary |
+| `compact` | one agent with a bound pane | sends its native compaction command, with the brief for its seat, at a turn boundary |
 
 `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` change no agent. `fork` starts a new agent and leaves its source untouched; `stop`, `restart`, and `compact` act on the agent. [Resume a lane by place](#resume-a-lane-by-place) covers `resume`, and the [Budget CLI](./budget.md#cap-one-agent) covers `budget`.
 

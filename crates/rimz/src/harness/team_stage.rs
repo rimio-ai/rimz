@@ -636,14 +636,9 @@ fn compact_flipper(
             .as_ref()
             .ok_or_else(|| FlipCompactErr::Unavailable("no bound pane".to_owned()))?;
         let machine = MachineConfig::load_lenient();
-        let command = crate::agents::spec_by_kind(agent.kind.as_str())
-            .and_then(|spec| {
-                spec.launch
-                    .compact_command(machine.harness.compact_instruction())
-            })
-            .ok_or_else(|| {
-                FlipCompactErr::Unavailable(format!("{} does not support compaction", agent.kind))
-            })?;
+        let command = crate::agents::compact_command(agent, &machine.harness).ok_or_else(|| {
+            FlipCompactErr::Unavailable(format!("{} does not support compaction", agent.kind))
+        })?;
         compact::send_compact(
             request.workspace,
             request.store,

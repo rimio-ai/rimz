@@ -9,6 +9,16 @@ use crate::harness::budget::BudgetSpec;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
 const DEFAULT_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags. Include relevant information in the summary such that this conversation will be continued by a new context window without needing to redo work or be reprovided with relevant constraints or context. Be sure to preserve: (1) any difficulties or problems that came up, and how they were handled or resolved; (2) any possibilities, options, or approaches that were raised, tried, or set aside, and why; (3) anything that was asked for, decided, agreed, ruled out, or established as a preference, constraint, or boundary — stated exactly; (4) exactly where things stand now — what has been covered, settled, or completed so far; (5) anything still open, unresolved, promised, or expected to happen next; (6) specific details that would be hard to reconstruct — names, numbers, dates, exact wording, links or references — kept exactly. Be complete on these even at the cost of length; keep everything else concise. Weight the two voices differently: keep what the user said, asked for, shared, or established carefully and close to their own words; your own explanations and reasoning can be condensed much further, to what they concluded or produced — as long as nothing in the six items above is dropped.";
+const TEAM_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags so a new context window continues without redoing work. This seat is a team member: on resume I reread the board, the stage files, and git, so point at them by path and section and copy nothing they hold. Keep only what this window alone knows: (1) facts, decisions, and drafts not yet filed, and the words of the user and teammates that shaped them, each tagged with the file and section it belongs in, so my first act on resume writes it there; (2) what is in flight: replies I wait on, messages I owe.";
+
+/// The seat an agent holds, which selects RimZ's built-in compaction brief.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompactSeat {
+    /// A standalone agent: its summary is its only memory.
+    Solo,
+    /// A team member: the board, stage files, and git carry the run's memory.
+    Team,
+}
 
 /// A local-calendar-day dollar cap stored as cents so machine config keeps
 /// exact equality while reusing the public budget grammar.
@@ -229,7 +239,8 @@ pub struct HarnessConfig {
     )]
     pub smart_compact: Option<AutoCompact>,
     /// Free text appended to compact commands whose adapters accept it.
-    /// Unset sends RimZ's summary brief; an empty string sends the bare command.
+    /// Unset sends RimZ's brief for the agent's seat; a set value (an empty
+    /// string sends the bare command) replaces the brief for every seat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_instruction: Option<String>,
     /// Compact an idle agent before its provider prompt cache expires.
@@ -252,10 +263,11 @@ pub struct HarnessConfig {
 }
 
 impl HarnessConfig {
-    pub fn compact_instruction(&self) -> &str {
-        self.compact_instruction
-            .as_deref()
-            .unwrap_or(DEFAULT_COMPACT_INSTRUCTION)
+    pub fn compact_instruction(&self, seat: CompactSeat) -> &str {
+        self.compact_instruction.as_deref().unwrap_or(match seat {
+            CompactSeat::Solo => DEFAULT_COMPACT_INSTRUCTION,
+            CompactSeat::Team => TEAM_COMPACT_INSTRUCTION,
+        })
     }
 
     pub fn idle_compact_after(&self) -> Duration {
@@ -403,10 +415,17 @@ mod tests {
     }
 
     #[test]
-    fn compact_instruction_defaults_to_the_summary_brief() {
+    fn compact_instruction_defaults_to_the_brief_for_the_seat() {
         let config: HarnessConfig = toml::from_str("").expect("parse harness config");
 
-        assert_eq!(config.compact_instruction(), DEFAULT_COMPACT_INSTRUCTION);
+        assert_eq!(
+            config.compact_instruction(CompactSeat::Solo),
+            DEFAULT_COMPACT_INSTRUCTION
+        );
+        assert_eq!(
+            config.compact_instruction(CompactSeat::Team),
+            TEAM_COMPACT_INSTRUCTION
+        );
         assert!(
             !toml::to_string(&config)
                 .expect("serialize harness config")
@@ -420,7 +439,8 @@ mod tests {
             toml::from_str("compact_instruction = \"\"").expect("parse harness config");
 
         assert_eq!(config.compact_instruction, Some(String::new()));
-        assert_eq!(config.compact_instruction(), "");
+        assert_eq!(config.compact_instruction(CompactSeat::Solo), "");
+        assert_eq!(config.compact_instruction(CompactSeat::Team), "");
         let rendered = toml::to_string(&config).expect("serialize harness config");
         assert!(
             rendered.contains("compact_instruction = \"\""),

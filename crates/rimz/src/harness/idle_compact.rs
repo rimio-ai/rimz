@@ -51,8 +51,7 @@ pub(crate) fn compact_idle_agents(
         return;
     }
     for agent in &snapshot.agents {
-        let command = crate::agents::spec_by_kind(agent.kind.as_str())
-            .and_then(|spec| spec.launch.compact_command(config.compact_instruction()));
+        let command = crate::agents::compact_command(agent, config);
         let occupied = agent.occupied_context_tokens();
         let record_path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
         let teammate_working =

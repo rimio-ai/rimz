@@ -82,7 +82,8 @@ pub use edit::{
 pub use glyphs::{GlyphOverrides, GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
 pub use harness::{
-    DayCap, DayCapParseError, HarnessConfig, IdleCompactMode, TurnCap, TurnCapParseError,
+    CompactSeat, DayCap, DayCapParseError, HarnessConfig, IdleCompactMode, TurnCap,
+    TurnCapParseError,
 };
 pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WaitMeta};
 pub use mux::{
