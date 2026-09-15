@@ -8,6 +8,7 @@ A team is a configured set of roles and a layout. Each role keeps its own model,
 | --- | --- |
 | `rimz teams`, `list`, `ls` | [List teams](#list-teams) and their live cohorts. |
 | `rimz teams show`, `inspect` | [Inspect one team](#inspect-one-team), or every team live in a lane. |
+| `rimz teams profiles` | [List team role profiles](#list-team-role-profiles). |
 | `rimz teams <team>`, `launch` | [Launch a team](#launch-a-team). |
 | `rimz teams resume` | [Resume a team](#resume-a-team)'s closed cohort. |
 | `rimz teams focus`, `stop`, `restart` | [Drive a live team](#drive-a-live-team). |
@@ -38,6 +39,16 @@ A broken definition replaces `STATUS` with `broken: <error>` on every row of tha
 The catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/<name>/team.toml`, and the repository's `.rimz/config.toml` when the project is trusted. An unreadable or invalid config fails with the source error. Unknown fields print a warning and are otherwise ignored; `rimz setup` removes them. With no teams defined, the command prints `No teams defined.` and the install command; when only the built-in `peer` team exists, the table ends with the same install hint.
 
 `--json` prints an array of [team records](#json-report). `--json` works only on the list forms and `show`: `rimz teams forge --json` is refused with a pointer to `rimz teams show forge --json`.
+
+## List team role profiles
+
+```sh
+rimz teams profiles
+rimz teams profiles --path          # add each profile's defining file
+rimz teams profiles --json --path
+```
+
+`rimz teams profiles` lists the `[agents.profiles]` entries named `<team>.<role>` for a configured team, such as `forge.coder`, as the same cards and JSON as [`rimz agents profiles`](./agents.md#discover-agent-profiles). The launch grammar resolves those names as team roles, so `rimz agents profiles` leaves them out unless it gets `--teams`. The listing reads the machine configuration; with none configured it prints `No team profiles configured.` and the install command.
 
 ## Inspect one team
 

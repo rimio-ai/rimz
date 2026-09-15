@@ -693,10 +693,7 @@ pub(super) fn resolve_spec_with_agent_override(
             base_override.as_ref(),
         );
     }
-    if let Some((team, role)) = raw
-        .split_once('.')
-        .filter(|(team, _)| teams.0.contains_key(*team))
-    {
+    if let Some((team, role)) = teams.role_spec(raw) {
         return resolve_team_role(
             team,
             role,
