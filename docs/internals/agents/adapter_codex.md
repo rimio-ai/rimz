@@ -90,6 +90,7 @@ Codex gates each installed hook behind its own per-hash trust state and silently
 | System prompt replacement | `-c model_instructions_file=<path>`: the resolved base file, or a content-addressed composed file when fragments exist |
 | Appended text, such as the subagent no-delegation reminder | `-c developer_instructions=<text>`, a developer-role message that leaves the user prompt unchanged |
 | Supervised child lockdown | drops every `features.multi_agent` override, then appends `-c features.multi_agent=false` |
+| Sandbox isolation | drops every `--sandbox`/`-s` flag and `sandbox_mode` override, then appends `--sandbox danger-full-access`; argv already carrying `--dangerously-bypass-approvals-and-sandbox` is left as is ([sandbox.md](../sandbox.md#provider-command-sandboxes)) |
 | Max turns | unsupported |
 | Compaction | bare `/compact`; Codex accepts no summary brief, so the configured brief is never sent |
 

@@ -681,6 +681,9 @@ fn compile_agent_process_with_extra_env(
     if request.subagent {
         adapter.lockdown_subagent_args(action.extra_args_mut());
     }
+    if reminders.sandbox {
+        adapter.disable_native_sandbox_args(action.extra_args_mut());
+    }
     let reminder = crate::harness::launch_reminders::render(request, reminders, cwd);
     let channel = adapter.append_system_text_channel();
     if let Some(channel) = &channel

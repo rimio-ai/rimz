@@ -325,6 +325,12 @@ pub trait LaunchCapability: CoreCapability {
     /// native restriction.
     fn lockdown_subagent_args(&self, _extra_args: &mut Vec<String>) {}
 
+    /// Switch off the provider's native command sandbox for a launch inside
+    /// RimZ sandbox isolation, where the RimZ view is the agent's one sandbox;
+    /// approval posture stays as the mode set it. The default leaves argv
+    /// unchanged for providers without a verified native switch.
+    fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}
+
     /// Provider channel for additive launch-scoped system or developer text.
     /// The default leaves callers to deliver the text through the user prompt.
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {

@@ -11,6 +11,8 @@ use crate::config::Team;
 pub struct LaunchReminders {
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
+    /// The launch runs inside the RimZ sandbox view: adds the sandbox reminder
+    /// and switches off the provider's native command sandbox.
     pub sandbox: bool,
     pub subagent_catalog: Option<SubagentCatalog>,
     pub team: Option<Team>,

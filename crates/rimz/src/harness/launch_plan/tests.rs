@@ -564,6 +564,13 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
     })
     .expect("compile");
 
+    assert!(
+        plan.argv()
+            .windows(2)
+            .any(|pair| pair == ["--sandbox", "danger-full-access"]),
+        "{:?}",
+        plan.argv()
+    );
     let sandbox = plan.sandbox.as_ref().expect("sandbox plan");
     assert!(
         sandbox.plan.mounts.iter().any(
