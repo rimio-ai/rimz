@@ -159,6 +159,16 @@ class CheckoutFixture(unittest.TestCase):
         stack.enter_context(patch.object(repair, "query_plan", return_value=self.plan))
         return stack
 
+    def test_branch_deleted_on_origin_behind_a_stale_tracking_ref_costs_no_strike(self):
+        git(self.root, "push", "--quiet", "origin", "main:refs/heads/deps/repair-7")
+        git(self.root, "fetch", "--quiet", "origin")
+        git(self.origin, "update-ref", "-d", "refs/heads/deps/repair-7")
+        with self.planned(), patch.object(repair, "launch"), \
+             patch.object(repair, "github", return_value=[]), patch.object(repair, "verify_result", return_value="pending"):
+            self.run_quietly(repair.run)
+        self.assertFalse(any(line.get("pruned_batch_branch") for line in self.lines))
+        self.assertEqual(git(self.root, "for-each-ref", "refs/remotes/origin/deps/repair-7"), "")
+
     def forge(self, prs):
         endpoints = {"repos/owner/repo/pulls?state=all&per_page=100": prs,
                      "repos/owner/repo/git/matching-refs/heads/deps/repair-": []}
