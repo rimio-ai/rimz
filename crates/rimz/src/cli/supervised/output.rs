@@ -30,6 +30,59 @@ pub(crate) fn print_run_output(
     print_run_forensics(record, err)
 }
 
+/// Tell the launcher of background runs what happens next: an agent learns
+/// that one fleet report will wake it and where each captured response lands;
+/// a shell learns how to read the answers. `response_path` is the first
+/// name's path as the launching agent sees it, `None` for a shell launch.
+pub(crate) fn write_background_receipt(
+    err: &mut impl Write,
+    names: &[&str],
+    response_path: Option<&std::path::Path>,
+    subagent: bool,
+) -> Result<()> {
+    let handles = names
+        .iter()
+        .map(|name| format!("@{name}"))
+        .collect::<Vec<_>>();
+    let Some(response_path) = response_path else {
+        let (verb, pronoun, noun) = match names {
+            [_] => ("runs", "its", "response"),
+            _ => ("run", "their", "responses"),
+        };
+        writeln!(
+            err,
+            "{} {verb} in the background; print {pronoun} final {noun} with: rimz agents wait {}",
+            handles.join(", "),
+            names.join(" "),
+        )?;
+        return Ok(());
+    };
+    let (verb, response_path) = match names {
+        [_] => ("runs", response_path.display().to_string()),
+        _ => (
+            "run",
+            response_path
+                .with_file_name("<name>.output")
+                .display()
+                .to_string(),
+        ),
+    };
+    let (noun, wait) = if subagent {
+        (
+            "subagent",
+            format!("rimz subagents wait {}", handles.join(" ")),
+        )
+    } else {
+        ("agent", format!("rimz agents wait {}", names.join(" ")))
+    };
+    writeln!(
+        err,
+        "{} {verb} in the background. When every {noun} you launched has settled, one SUBAGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and its captured final response at {response_path}. Keep working or end your turn; to block instead: {wait}",
+        handles.join(", "),
+    )?;
+    Ok(())
+}
+
 /// A settled run's or turn's final assistant message, as `wait` presents it.
 pub(crate) struct FinalMessage<'a> {
     pub(crate) scope: &'static str,

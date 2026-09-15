@@ -116,8 +116,17 @@ impl SupervisedRunRequest {
 #[derive(Debug)]
 pub enum SupervisedRunOutcome {
     Record(Box<RunRecord>),
-    Background { agent_name: String, run_id: RunId },
-    BudgetExceeded { reason: String },
+    Background {
+        agent_name: String,
+        run_id: RunId,
+        /// Where the launching agent's fleet report will write the captured
+        /// final response, as that agent sees the path. `None` when no agent
+        /// launched the run, so nothing reports back.
+        response_path: Option<std::path::PathBuf>,
+    },
+    BudgetExceeded {
+        reason: String,
+    },
 }
 
 impl RunCancellation {
