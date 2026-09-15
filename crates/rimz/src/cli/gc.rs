@@ -5,41 +5,119 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Args;
 use serde::Serialize;
 
 use super::render::{self, fmt_bytes, paint, palette};
 use super::spinner::Spinner;
 use super::{GlobalFlags, open_store};
+use rimz::config::MachineConfig;
+use rimz::harness::assist_log::{self, Assist, AssistRecord};
 use rimz::store::event_log::RepairOutcome;
 use rimz::store::gc;
-use rimz::utils::time::{DurationUnit, format_duration_compact, parse_duration_units};
+use rimz::utils::time::format_duration_compact;
 use rimz::workspace::WorkspaceResolver;
 use rimz::worktree::{FailedWorktree, KeptReason, KeptWorktree, SweptWorktree, WorktreeSweep};
 
 #[derive(Debug, Args)]
 pub struct GcArgs {
-    /// Remove runtime artifacts older than this duration (`30s`, `5m`, `1h`).
-    #[arg(long, default_value = "24h", value_parser = parse_duration)]
-    older_than: Duration,
+    /// Remove runtime artifacts older than this duration (`8h`, `3d`);
+    /// defaults to the `gc.older_than` setting (7d).
+    #[arg(long, value_parser = rimz::config::parse_older_than)]
+    older_than: Option<Duration>,
     /// Report what gc would remove without removing anything.
     #[arg(long)]
     dry_run: bool,
     /// Emit the garbage collection report as JSON.
     #[arg(long)]
     json: bool,
+    /// Run as the room's automatic daily sweep: honour `gc.auto`, then record
+    /// the assist and the workspace sweep stamp.
+    #[arg(long, hide = true, conflicts_with = "dry_run")]
+    unattended: bool,
 }
 
 pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
-    if args.older_than.is_zero() {
-        bail!("--older-than must be greater than zero");
+    let config = MachineConfig::load_lenient();
+    let older_than = args.older_than.unwrap_or(config.gc.older_than);
+    let outcome = if args.unattended {
+        if !config.gc.auto {
+            return Ok(());
+        }
+        sweep_unattended(older_than, globals)?
+    } else {
+        sweep(older_than, args.dry_run, globals)?
+    };
+    if args.json {
+        print_json_report(&outcome)?;
+    } else {
+        let mut out = render::out();
+        render_report(&outcome, &mut out)?;
     }
+    Ok(())
+}
+
+/// Sweep, then record the attempt, failed or not, in the assist log and the
+/// workspace stamp so a persistent failure retries daily instead of per tick.
+fn sweep_unattended(older_than: Duration, globals: &GlobalFlags) -> Result<GcOutcome> {
+    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
+        .context("resolving the workspace for automatic gc")?;
+    let result = sweep(older_than, false, globals);
+    let now = jiff::Timestamp::now();
+    assist_log::append(&AssistRecord {
+        at: now,
+        assist: auto_gc_assist(&workspace.workspace_id, older_than, &result),
+    });
+    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing store paths")?;
+    if paths.root.is_dir() {
+        rimz::harness::auto_gc::write_stamp(&paths, now)?;
+    }
+    result
+}
+
+fn auto_gc_assist(
+    workspace_id: &rimz::WorkspaceId,
+    older_than: Duration,
+    result: &Result<GcOutcome>,
+) -> Assist {
+    let (outcome, error) = match result {
+        Ok(outcome) => (outcome.clone(), None),
+        Err(err) => (GcOutcome::default(), Some(format!("{err:#}"))),
+    };
+    let (worktrees_removed, messages_archived) = (
+        match &outcome.worktrees {
+            WorktreeSweepStatus::Swept(sweep) => sweep.removed.len(),
+            WorktreeSweepStatus::Skipped(_) => 0,
+        },
+        match &outcome.store_maintenance {
+            StoreMaintenance::Done { archived, .. } => *archived,
+            StoreMaintenance::SkippedDryRun | StoreMaintenance::SkippedNoStore => 0,
+        },
+    );
+    Assist::AutoGc {
+        workspace_id: workspace_id.clone(),
+        older_than_secs: older_than.as_secs(),
+        reclaimed_bytes: outcome.reclaimed_bytes(),
+        worktrees_removed,
+        workspaces_pruned: outcome.prune.removed.len(),
+        files_removed: outcome.runtime.heartbeat_files_removed
+            + outcome.runtime.sidecar_files_removed
+            + outcome.runtime.sidebar_sockets_removed
+            + outcome.runtime.probe_markers_removed
+            + outcome.temps.files_removed,
+        messages_archived,
+        problems: problem_count(&outcome),
+        error,
+    }
+}
+
+fn sweep(older_than: Duration, dry_run: bool, globals: &GlobalFlags) -> Result<GcOutcome> {
     let spinner = Spinner::new("starting gc…");
     spinner.set("sweeping runtime hints…");
-    let report =
-        gc::collect_runtime(args.older_than, args.dry_run).context("collecting runtime garbage")?;
-    let store_maintenance = if args.dry_run {
+    let report = gc::collect_runtime(older_than, dry_run).context("collecting runtime garbage")?;
+    let store_maintenance = if dry_run {
         StoreMaintenance::SkippedDryRun
     } else {
         spinner.set("repairing store…");
@@ -87,7 +165,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     spinner.set("reaping dead schedules…");
-    let (schedules_reaped, wait_logs_pruned) = if args.dry_run {
+    let (schedules_reaped, wait_logs_pruned) = if dry_run {
         (0, 0)
     } else {
         let reaped = rimz::harness::schedule::catalog::TaskCatalog::reap_dead_deliveries()
@@ -103,13 +181,13 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         (reaped, wait_logs)
     };
     spinner.set("pruning dead workspaces…");
-    let prune = gc::prune_dead_workspaces(args.dry_run).context("pruning dead workspaces")?;
+    let prune = gc::prune_dead_workspaces(dry_run).context("pruning dead workspaces")?;
     spinner.set("sweeping orphan temps…");
-    let temps = gc::collect_orphan_temps(args.older_than, args.dry_run);
-    let worktrees = sweep_worktrees(globals, &spinner, args.dry_run);
-    let outcome = GcOutcome {
-        dry_run: args.dry_run,
-        older_than: args.older_than,
+    let temps = gc::collect_orphan_temps(older_than, dry_run);
+    let worktrees = sweep_worktrees(globals, &spinner, dry_run);
+    Ok(GcOutcome {
+        dry_run,
+        older_than,
         runtime: report,
         temps,
         store_maintenance,
@@ -117,15 +195,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         wait_logs_pruned,
         prune,
         worktrees,
-    };
-    drop(spinner);
-    if args.json {
-        print_json_report(&outcome)?;
-    } else {
-        let mut out = render::out();
-        render_report(&outcome, &mut out)?;
-    }
-    Ok(())
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1123,18 +1193,6 @@ fn runtime_breakdown(report: &gc::GcReport) -> String {
 fn plural(count: usize, singular: &str, plural: &str) -> String {
     let label = if count == 1 { singular } else { plural };
     format!("{count} {label}")
-}
-
-fn parse_duration(raw: &str) -> std::result::Result<Duration, String> {
-    parse_duration_units(
-        raw,
-        &[
-            DurationUnit::Second,
-            DurationUnit::Minute,
-            DurationUnit::Hour,
-        ],
-    )
-    .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

@@ -485,10 +485,89 @@ fn gc_json_emits_report() {
 
     assert_eq!(value["dry_run"], false);
     assert_eq!(value["wait_logs_pruned"], 0);
+    assert_eq!(value["older_than_secs"], 7 * 86_400, "default cutoff is 7d");
     assert!(
         value.get("reclaimed_bytes").is_some(),
         "json includes reclaimed_bytes: {value}"
     );
+}
+
+#[test]
+fn gc_older_than_takes_day_spans_and_the_configured_default() {
+    let env = Env::new();
+    let older_than_secs = |args: &[&str]| {
+        let assert = env.rimz().args(args).assert().success();
+        let value: serde_json::Value =
+            serde_json::from_slice(&assert.get_output().stdout).expect("gc json");
+        value["older_than_secs"].clone()
+    };
+
+    assert_eq!(
+        older_than_secs(&["gc", "--older-than", "3d", "--json"]),
+        3 * 86_400
+    );
+    env.rimz()
+        .args(["gc", "--older-than", "0d"])
+        .assert()
+        .failure()
+        .stderr(contains("must be greater than zero"));
+
+    write_machine_config(&env, "[gc]\nolder_than = \"8h\"\n");
+    assert_eq!(older_than_secs(&["gc", "--json"]), 8 * 3_600);
+}
+
+#[test]
+fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
+    let env = Env::new();
+    let state = env.state_path_for(&env.project_root);
+    let assists = env.state_root().join("rimz").join("assists.log.jsonl");
+    let unattended = || {
+        env.rimz()
+            .args(["gc", "--unattended", "--root"])
+            .arg(&env.project_root)
+            .assert()
+            .success();
+    };
+
+    write_machine_config(&env, "[gc]\nauto = false\n");
+    env.store();
+    unattended();
+    assert!(
+        !state.auto_gc_stamp.exists(),
+        "auto = false skips the sweep"
+    );
+    assert!(!assists.exists(), "auto = false records nothing");
+
+    write_machine_config(&env, "[gc]\nolder_than = \"3d\"\n");
+    unattended();
+    let stamp: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state.auto_gc_stamp).expect("stamp written"))
+            .expect("stamp json");
+    assert!(
+        stamp["swept_at"].is_string(),
+        "unattended sweep stamps the workspace: {stamp}"
+    );
+    let records = rimz::harness::assist_log::recent(&env.state_root(), None);
+    assert_eq!(records.len(), 1, "one assist per sweep: {records:?}");
+    match &records[0].assist {
+        rimz::harness::assist_log::Assist::AutoGc {
+            workspace_id,
+            older_than_secs,
+            error,
+            ..
+        } => {
+            assert_eq!(workspace_id, &state.workspace_id);
+            assert_eq!(*older_than_secs, 3 * 86_400);
+            assert_eq!(error, &None);
+        }
+        other => panic!("expected an auto_gc assist, got {other:?}"),
+    }
+}
+
+fn write_machine_config(env: &Env, text: &str) {
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    std::fs::write(config_dir.join("config.toml"), text).expect("write config");
 }
 
 #[test]
