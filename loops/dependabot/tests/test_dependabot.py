@@ -141,12 +141,61 @@ class CheckoutFixture(unittest.TestCase):
         self.assertEqual(self.remote_branch(), remote)
         self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json")])
 
-    def test_hand_deleted_checkout_directory_is_pruned_and_recreated(self):
+    def test_hand_deleted_checkout_directory_does_not_fail_the_fire(self):
         self.publish_batch()
         git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()), "origin/deps/repair-1")
         shutil.rmtree(self.tree())
-        self.assertEqual(repair.open_checkout(self.plan)["attempt_checkout"], "created")
-        self.assertTrue(self.tree().is_dir())
+        with patch.object(repair, "query_plan", return_value=self.plan), \
+             patch.object(repair, "launch", side_effect=subprocess.CalledProcessError(1, "rimz")), \
+             self.assertRaises(subprocess.CalledProcessError):
+            self.run_quietly(repair.run)
+        self.assertEqual(self.lines[1]["attempt_checkout"], "created")
+
+    def forge(self, prs):
+        endpoints = {"repos/owner/repo/pulls?state=all&per_page=100": prs,
+                     "repos/owner/repo/git/matching-refs/heads/deps/repair-": []}
+        rollups = {str(pr["number"]): dict(headRefOid=pr["head"]["sha"], statusCheckRollup=[]) for pr in prs}
+        return (patch.object(repair, "github", side_effect=lambda *args: REPO if args[0] == "repo" else rollups[args[2]]),
+                patch.object(repair, "pages", side_effect=endpoints.__getitem__))
+
+    def test_batch_branch_a_worker_left_empty_is_pruned_before_selection(self):
+        repair.open_checkout(self.plan)
+        self.run_quietly(repair.settle_checkout, "deps/repair-1")
+        closed = source(1)
+        closed["state"] = "closed"
+        github, pages = self.forge([closed])
+        with github, pages:
+            with self.assertRaisesRegex(RuntimeError, "covers closed"):
+                repair.query_plan()
+            self.assertNotEqual(self.remote_branch(), "")
+            self.assertEqual(self.run_quietly(lambda: print(json.dumps(repair.query_plan(prune=True))))[-1]["action"], "idle")
+        self.assertEqual(self.lines[0], dict(pruned_batch_branch=True, branch="deps/repair-1", where="origin"))
+        self.assertEqual(git(self.origin, "ls-remote", ".", "refs/heads/deps/repair-1"), "")
+        self.assertEqual(git(self.root, "for-each-ref", "refs/remotes/origin/deps/repair-1"), "")
+
+    def test_prune_keeps_branches_with_work_a_tree_or_an_open_pr(self):
+        self.publish_batch()
+        for branch in ("deps/repair-2", "deps/repair-3", "deps/repair-4"):
+            git(self.root, "push", "--quiet", "origin", f"main:refs/heads/{branch}")
+        git(self.root, "worktree", "add", "--quiet", "-b", "ahead", str(self.tree("ahead")), "origin/deps/repair-1")
+        self.commit("work", self.tree("ahead"))
+        git(self.tree("ahead"), "push", "--quiet", "origin", "HEAD:refs/heads/deps/repair-1")
+        git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-2", str(self.tree("deps/repair-2")))
+        git(self.root, "branch", "deps/repair-5", "main")
+        git(self.root, "fetch", "--quiet", "origin")
+        self.run_quietly(repair.prune_empty_batches, "main", {"deps/repair-3"})
+        self.assertEqual(sorted((line["branch"], line["where"]) for line in self.lines),
+                         [("deps/repair-4", "origin"), ("deps/repair-5", "local")])
+        for kept in ("deps/repair-1", "deps/repair-2", "deps/repair-3"):
+            self.assertNotEqual(self.remote_branch(kept), "")
+        self.assertEqual(git(self.root, "branch", "--list", "deps/repair-5"), "")
+
+    def test_plan_action_never_prunes(self):
+        self.publish_batch()
+        github, pages = self.forge([source(1)])
+        with github, pages, patch.object(repair.sys, "argv", ["dependabot.py", "plan"]), redirect_stdout(io.StringIO()):
+            self.assertEqual(repair.main(), 0)
+        self.assertNotEqual(self.remote_branch(), "")
 
     def test_kept_checkout_is_resumed_without_push_or_create(self):
         git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()))
