@@ -153,6 +153,7 @@ pub(super) fn row_lines(
                         .iter()
                         .filter(|child| expanded.delegation || !child.prior_turn)
                         .collect::<Vec<_>>();
+                    let hidden = agent.sub_agents.len() - children.len();
                     inner.extend(
                         sub_agent_entry_lines(ctx, &children)
                             .into_iter()
@@ -167,19 +168,11 @@ pub(super) fn row_lines(
                         .into_iter()
                         .map(CardLine::from),
                     );
-                    let hidden = agent
-                        .sub_agents
-                        .iter()
-                        .filter(|child| child.prior_turn)
-                        .count();
-                    if hidden > 0 {
-                        let label = if expanded.delegation {
-                            "  − less".to_owned()
-                        } else {
-                            format!("  +{hidden} more")
-                        };
+                    // The tail only extends a visible child list; with no child
+                    // shown, the delegation line above is the toggle.
+                    if hidden > 0 && !children.is_empty() {
                         inner.push(CardLine {
-                            line: Line::styled(label, ctx.theme.muted()),
+                            line: Line::styled(format!("  +{hidden} more"), ctx.theme.muted()),
                             target: Some(HitTarget::ToggleDelegation(row.id.clone())),
                         });
                     }

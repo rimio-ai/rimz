@@ -25,7 +25,6 @@ expression: strip_sgr(&ansi)
         22k · Haiku · xhigh
      ⠁ Plan — run focused nextest               $0.12
         18k · Haiku · xhigh                    󰪞  3m
-   − less
  ▁ claude · Opus 4.8 · xhigh · 1m              $28.90
    compact provider trace
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━────   79%
@@ -52,7 +51,6 @@ expression: strip_sgr(&ansi)
         22k · Haiku · xhigh
      ⠁ Plan — run focused nextest
         18k · Haiku · xhigh                    󰪞  3m
-   − less
   claude · Opus 4.8 · xhigh
 
   zellij-health                        ⇡1  +760 -210
@@ -75,7 +73,6 @@ expression: strip_sgr(&ansi)
         22k · Haiku · xhigh
      ⠁ Plan — run focused nextest               $0.12
         18k · Haiku · xhigh                    󰪞  3m
-   − less
 
   mux-merge #91                                main
   claude · Opus 4.8 · xhigh · 1m              $15.38
