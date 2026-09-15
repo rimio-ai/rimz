@@ -943,6 +943,7 @@ pub(in crate::cli) fn run_supervised(
             AttemptOutcome::Blocking(blocking) => *blocking,
         };
         let (record, verify_error, waiter) = verify_phase(&prepared, &room, &request, blocking)?;
+        join_presented_attempt(&prepared.store, &prepared.workspace.session_name, &record);
         if !request.keep {
             close_attempt_pane(&prepared, &room, &record);
         }
@@ -977,6 +978,28 @@ pub(in crate::cli) fn run_supervised(
         );
         retry_of = Some(record.run_id.clone());
         attempt += 1;
+    }
+}
+
+/// A blocking attempt's result reaches its caller inline, so it must not also
+/// wake a launching agent with a fleet report. Stamp it before the pane closes,
+/// which is what lets the in-pane wrapper evaluate the report; a caller killed
+/// before this point leaves the run to the report.
+pub(super) fn join_presented_attempt(store: &rimz::Store, session_name: &str, record: &RunRecord) {
+    if !record.status.is_terminal() {
+        return;
+    }
+    if let Err(err) = rimz::harness::run::report::join_and_settle_digest(
+        store,
+        session_name,
+        &record.run_id,
+        "joined inline",
+    ) {
+        tracing::warn!(
+            run_id = %record.run_id,
+            error = %err,
+            "could not mark the blocking run joined",
+        );
     }
 }
 

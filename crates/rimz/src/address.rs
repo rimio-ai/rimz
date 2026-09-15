@@ -972,6 +972,29 @@ pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> V
     )
 }
 
+/// Everything `launcher` launched that reports back to it: its launched
+/// children plus the top-level peers stamped with it as their launcher.
+///
+/// This is the fleet report's selector only. Peers keep their own lifecycle,
+/// so stop, nesting, orphan reaping, and attribution use
+/// [`launched_children`].
+pub fn launched_fleet<'a>(agents: &'a [AgentState], launcher: &AgentState) -> Vec<&'a AgentState> {
+    let members = launch_members(
+        agents,
+        &launcher.kind,
+        launcher.launch_id.as_ref().unwrap_or(&launcher.agent_id),
+    );
+    by_registration(
+        agents
+            .iter()
+            .filter(|agent| {
+                agent.launcher_is(launcher)
+                    || members.iter().any(|member| agent.launcher_is(member))
+            })
+            .collect(),
+    )
+}
+
 /// Pane-backed children launched through `rimz subagents` by any parent,
 /// scoped to `channel` when one is in play.
 pub fn launched_children_in_channel<'a>(
