@@ -46,14 +46,11 @@ pub(super) fn compact_agent(
         );
     }
     let config = crate::cli::machine_config();
-    let command = spec
-        .launch
-        .compact_command(
-            instruction
-                .as_deref()
-                .unwrap_or(config.harness.compact_instruction(agent.compact_seat())),
-        )
-        .context("adapter has no native compaction command")?;
+    let command = match instruction.as_deref() {
+        Some(instruction) => spec.launch.compact_command(instruction),
+        None => rimz::agents::compact_command(agent, &config.harness),
+    }
+    .context("adapter has no native compaction command")?;
     let caller = send::resolve_caller(&ctx.store)?;
     let message_id = MessageId::new();
     let outcome = send_compact(
