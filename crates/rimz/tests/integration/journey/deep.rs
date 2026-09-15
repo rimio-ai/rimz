@@ -1581,7 +1581,7 @@ fn tmux_settled_subagent_reports_to_parent() {
     assert!(fleet_digest.text.contains(&format!(
         "response: {} ({})",
         response_path.display(),
-        summary.lines_label()
+        summary.label()
     )));
     assert!(fleet_digest.text.contains("task: \"finish now\""));
     for run in [&first_run, &second_run] {

@@ -111,23 +111,24 @@ A parent that does not join its children gets one `SUBAGENT_REPORT` message from
 Type: SUBAGENT_REPORT
 From: @rimz
 Content:
-All 3 subagents settled:
-- @naming: completed in 4m12s, task: "map spec/profile surfaces", response: /tmp/rimz-subagents/naming.output (84 lines)
+All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
+- @naming: completed in 4m12s, task: "map spec/profile surfaces", response: /tmp/rimz-subagents/naming.output (~4.2k tokens, 84 lines)
 - @runtime: completed in 5m3s, task: "inspect runtime behavior", no response
-- @slow-reviewer: timed out after 30m; provider did not stop, task: "review correctness", response: /tmp/rimz-subagents/slow-reviewer.output (12 lines)
+- @slow-reviewer: timed out after 30m; provider did not stop, task: "review correctness", response: /tmp/rimz-subagents/slow-reviewer.output (<1k tokens, 12 lines)
 ```
 
 The report lists status and where each answer is, and asks for nothing: reading the response files is the parent's call. It never carries a child's answer text; `rimz subagents wait <names>` prints the answers, and `--json` gives structured results.
 
 | Part | Format |
 | --- | --- |
-| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more; `background agent` replaces `subagent` when any row is a `-p --bg` run |
-| Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({N} lines)`, or ending `, no response` |
+| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; `background agent` replaces `subagent` when any row is a `-p --bg` run |
+| Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({size})`, or ending `, no response` |
 | Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled` |
 | `in` / `after` | `after` for a timed-out child, `in` for every other status; elapsed time is compact (`4m12s`) |
 | Reason | The last non-empty line of the run's failure tail, for a status other than completed |
 | Task | The launch `--description`, else a shortened first line of the prompt, omitted when empty |
-| Response | The child's final message in `rimz-subagents/<name>.output` under room tmp, with its line count (`1 line`, `{N} lines`, blank lines included); `no response` when the message is empty |
+| Response | The child's final message in `rimz-subagents/<name>.output` under room tmp; `no response` when the message is empty, and no file is written |
+| Size | `{tokens} tokens, {lines}`: an estimated token count (`<1k`, `~1.2k`, `~22k`, `~1.2M`) from OpenAI's public `o200k_base` tokenizer, which only approximates Claude's, then the line count (`1 line`, `{N} lines`, blank lines included) |
 
 Rows follow launch order. Under sandbox isolation the path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. The files are removed when the room closes, and opening one does not count as reading the result.
 

@@ -683,6 +683,7 @@ mod tests {
                 summary: FileSummary {
                     bytes: 11,
                     lines: 1,
+                    tokens: 2,
                 },
             };
             let encoded = serde_json::to_string(&outcome).unwrap();
@@ -697,6 +698,20 @@ mod tests {
                     .unwrap()
                     .summary,
                 FileSummary::default()
+            );
+            let mut pre_tokens = serde_json::to_value(&outcome).unwrap();
+            pre_tokens["summary"]
+                .as_object_mut()
+                .unwrap()
+                .remove("tokens");
+            assert_eq!(
+                serde_json::from_value::<WatchOutcome>(pre_tokens)
+                    .unwrap()
+                    .summary,
+                FileSummary {
+                    tokens: 0,
+                    ..outcome.summary
+                }
             );
             let check = check_record(&outcome.to_check_outcome());
             assert_eq!(check.output, "actual tail");
