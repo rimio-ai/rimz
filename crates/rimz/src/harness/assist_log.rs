@@ -100,6 +100,18 @@ pub enum Assist {
         recovered: usize,
         labels: Vec<String>,
     },
+    AutoGc {
+        workspace_id: crate::ids::WorkspaceId,
+        older_than_secs: u64,
+        reclaimed_bytes: u64,
+        worktrees_removed: usize,
+        workspaces_pruned: usize,
+        files_removed: usize,
+        messages_archived: usize,
+        problems: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1586,6 +1586,34 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
                 labels: vec!["@coder".to_owned(), "@reviewer".to_owned()],
             },
         },
+        AssistRecord {
+            at: ts(4_300),
+            assist: Assist::AutoGc {
+                workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                older_than_secs: 7 * 86_400,
+                reclaimed_bytes: 2_048,
+                worktrees_removed: 2,
+                workspaces_pruned: 1,
+                files_removed: 0,
+                messages_archived: 0,
+                problems: 0,
+                error: None,
+            },
+        },
+        AssistRecord {
+            at: ts(4_400),
+            assist: Assist::AutoGc {
+                workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                older_than_secs: 7 * 86_400,
+                reclaimed_bytes: 0,
+                worktrees_removed: 0,
+                workspaces_pruned: 0,
+                files_removed: 0,
+                messages_archived: 0,
+                problems: 0,
+                error: Some("pruning dead workspaces\ncaused by".to_owned()),
+            },
+        },
     ];
     let stats = AssistStats::from_records("7d", records);
 
@@ -1599,14 +1627,20 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             compacts: 2,
             restores: 1,
             restored_sessions: 2,
+            sweeps: 1,
+            reclaimed_bytes: 2_048,
         }
     );
-    assert_eq!(stats.events.len(), 6, "every assist outcome stays forensic");
+    assert_eq!(stats.events.len(), 8, "every assist outcome stays forensic");
     let categories = category_rows(&stats.rollup)
         .into_iter()
         .map(|row| strip_ansi(&row))
         .collect::<Vec<_>>();
-    assert_eq!(categories.last().unwrap(), "Auto-resume: 1 (2 agents)");
+    assert_eq!(
+        categories[categories.len() - 2],
+        "Auto-resume: 1 (2 agents)"
+    );
+    assert_eq!(categories.last().unwrap(), "Auto-gc: 1 (2 KB)");
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
@@ -1659,10 +1693,19 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert!(forensics.iter().any(|line| {
         line.contains("workspace ws_0123456789abcdef01234567 · session rimz-test")
     }));
+    assert!(forensics.iter().any(|line| {
+        line.contains("♻ gc swept — 2 KB reclaimed, 2 worktrees, 1 workspace · workspace ws_0123456789abcdef01234567 · cutoff 7d")
+    }));
+    assert!(
+        forensics
+            .iter()
+            .any(|line| line.contains("♻ gc failed — pruning dead workspaces · workspace"))
+    );
 
     let json = serde_json::to_value(&stats).unwrap();
     assert_eq!(json["rollup"]["resumes"], 1);
-    assert_eq!(json["events"][0]["assist"], "auto_resume");
+    assert_eq!(json["rollup"]["sweeps"], 1);
+    assert_eq!(json["events"][0]["assist"], "auto_gc");
 }
 
 #[test]
@@ -1681,6 +1724,7 @@ fn assists_panel_omits_empty_chrome_and_formats_the_rollup() {
             compacts: 4,
             restores: 2,
             restored_sessions: 7,
+            ..Default::default()
         },
         events: Vec::new(),
     };

@@ -23,6 +23,8 @@ pub(super) struct AssistRollup {
     pub(super) compacts: usize,
     pub(super) restores: usize,
     pub(super) restored_sessions: usize,
+    pub(super) sweeps: usize,
+    pub(super) reclaimed_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -112,6 +114,20 @@ pub(super) enum AssistEvent {
         recovered: usize,
         labels: Vec<String>,
     },
+    #[serde(rename = "auto_gc")]
+    Gc {
+        at: Timestamp,
+        workspace_id: rimz::ids::WorkspaceId,
+        older_than_secs: u64,
+        reclaimed_bytes: u64,
+        worktrees_removed: usize,
+        workspaces_pruned: usize,
+        files_removed: usize,
+        messages_archived: usize,
+        problems: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 impl AssistStats {
@@ -154,6 +170,16 @@ impl AssistStats {
                 AssistEvent::Resume { recovered, .. } => {
                     rollup.restores += 1;
                     rollup.restored_sessions += recovered;
+                }
+                AssistEvent::Gc {
+                    reclaimed_bytes,
+                    error,
+                    ..
+                } => {
+                    if error.is_none() {
+                        rollup.sweeps += 1;
+                        rollup.reclaimed_bytes += reclaimed_bytes;
+                    }
                 }
             }
         }
@@ -288,6 +314,28 @@ impl AssistEvent {
                 recovered,
                 labels,
             },
+            Assist::AutoGc {
+                workspace_id,
+                older_than_secs,
+                reclaimed_bytes,
+                worktrees_removed,
+                workspaces_pruned,
+                files_removed,
+                messages_archived,
+                problems,
+                error,
+            } => Self::Gc {
+                at: record.at,
+                workspace_id,
+                older_than_secs,
+                reclaimed_bytes,
+                worktrees_removed,
+                workspaces_pruned,
+                files_removed,
+                messages_archived,
+                problems,
+                error,
+            },
         }
     }
 
@@ -298,7 +346,8 @@ impl AssistEvent {
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
             | Self::FlipCompact { at, .. }
-            | Self::Resume { at, .. } => *at,
+            | Self::Resume { at, .. }
+            | Self::Gc { at, .. } => *at,
         }
     }
 }
@@ -368,7 +417,7 @@ pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
 }
 
 fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
-    let mut rows = Vec::with_capacity(4);
+    let mut rows = Vec::with_capacity(5);
     if rollup.resumes > 0 {
         let mut value = rollup.resumes.to_string();
         if rollup.recovered_secs > 0 {
@@ -398,6 +447,13 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
             plural(rollup.restored_sessions)
         );
         rows.push(("Auto-resume:", value));
+    }
+    if rollup.sweeps > 0 {
+        let mut value = rollup.sweeps.to_string();
+        if rollup.reclaimed_bytes > 0 {
+            value.push_str(&format!(" ({})", render::fmt_bytes(rollup.reclaimed_bytes)));
+        }
+        rows.push(("Auto-gc:", value));
     }
     rows
 }
@@ -533,6 +589,35 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 plural(*recovered)
             )
         }
+        AssistEvent::Gc {
+            reclaimed_bytes,
+            worktrees_removed,
+            workspaces_pruned,
+            files_removed,
+            messages_archived,
+            problems,
+            error: None,
+            ..
+        } => {
+            let facts = [
+                (*worktrees_removed, "worktree"),
+                (*workspaces_pruned, "workspace"),
+                (*files_removed, "file"),
+                (*messages_archived, "message"),
+                (*problems, "problem"),
+            ]
+            .into_iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, noun)| format!(", {count} {noun}{}", plural(count)))
+            .collect::<String>();
+            format!(
+                "{time} ♻ gc swept — {} reclaimed{facts}",
+                render::fmt_bytes(*reclaimed_bytes)
+            )
+        }
+        AssistEvent::Gc {
+            error: Some(error), ..
+        } => format!("{time} ♻ gc failed — {}", first_line(error)),
     }
 }
 
@@ -598,6 +683,14 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             session_name,
             ..
         } => format!("{at} {benefit} · workspace {workspace_id} · session {session_name}"),
+        AssistEvent::Gc {
+            workspace_id,
+            older_than_secs,
+            ..
+        } => format!(
+            "{at} {benefit} · workspace {workspace_id} · cutoff {}",
+            rimz::utils::time::format_duration_compact(Duration::from_secs(*older_than_secs))
+        ),
     }
 }
 
