@@ -1192,7 +1192,7 @@ fn host_skill_links_reconcile_only_owned_entries() {
     use std::os::unix::fs::symlink;
 
     let env = Env::new();
-    let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+    let library = env.agents_home().join("skills");
     let root = env.home_root.join(".agents/skills");
     let empty = skill_links::plan(&root, &library, Desired::Library).unwrap();
     assert!(empty.is_empty());
@@ -1263,7 +1263,7 @@ fn host_skill_links_apply_tolerates_siblings_and_reports_foreign_races() {
 
     let env = Env::new();
     let root = env.home_root.join("provider/skills");
-    let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+    let library = env.agents_home().join("skills");
     std::fs::create_dir_all(library.join("skill")).unwrap();
     std::fs::write(library.join("skill/SKILL.md"), "skill").unwrap();
     let plan = skill_links::plan(&root, &library, Desired::Library).unwrap();
@@ -1290,7 +1290,7 @@ fn host_skill_links_apply_tolerates_siblings_and_reports_foreign_races() {
 fn host_exec_links_library_into_codex_and_claude_account_roots_once() {
     for kind in ["codex", "claude"] {
         let env = Env::new();
-        let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+        let library = env.agents_home().join("skills");
         std::fs::create_dir_all(library.join("shared")).unwrap();
         std::fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
         let account = env.home_root.join("named-claude");
@@ -1336,7 +1336,7 @@ fn host_exec_links_library_into_codex_and_claude_account_roots_once() {
 #[test]
 fn host_skill_links_explain_is_read_only_and_reports_shadowed() {
     let env = Env::new();
-    let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+    let library = env.agents_home().join("skills");
     let root = env.home_root.join(".agents/skills");
     let empty = env
         .rimz()
@@ -1401,7 +1401,7 @@ fn host_skill_links_explain_is_read_only_and_reports_shadowed() {
 #[test]
 fn sandbox_preserves_host_library_link_without_duplicate_bind() {
     let env = Env::new();
-    let library = env.agents_home().join(rimz::disk::paths::SKILLS_SUBDIR);
+    let library = env.agents_home().join("skills");
     let root = env.home_root.join(".agents/skills");
     std::fs::create_dir_all(library.join("shared")).unwrap();
     std::fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();

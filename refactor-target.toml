@@ -83,7 +83,8 @@ upward-dependencies = ["address"]
 # A peer's `launched_by` link and its launcher accessors route the fleet digest.
 # Providers switch off their native command sandbox inside the RimZ view.
 # One compaction composer picks the brief for the agent's seat.
-surface-budget = 979
+# Host-mode skill links: plan/apply, plan accessors and reports are shared by launch_plan, exec, explain and uninstall.
+surface-budget = 994
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -179,7 +180,8 @@ upward-dependencies = [
 # Isolation and parsed skill policy cross config, harness and sandbox seams.
 # The compaction seat selects the harness brief.
 # The [gc] section and its span parser feed `rimz gc` and the elder's auto-gc check.
-surface-budget = 177
+# Doctor and start notices classify agents-home fragments and find a legacy root through config's fragment walk.
+surface-budget = 179
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -211,7 +213,8 @@ allowed-dependencies = [
 # Wait and subagent reports share streaming output-file measurements.
 # Stage flips share a canonical-worktree board lock across rooms.
 # Output-file summaries estimate tokens through `utils::tokens` and expose `is_empty` for the wait and digest renderers.
-surface-budget = 133
+# The skill library resolves from process env for uninstall and from a launch env map for sandbox and launch planning.
+surface-budget = 135
 
 [[module]]
 path = "crates/rimz/src/forge"

@@ -833,7 +833,7 @@ pub fn agents_home() -> PathBuf {
 }
 
 /// Resolve the agent library root from a launch environment, ignoring empty values.
-pub fn agents_home_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+fn agents_home_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
     let path = |key: &str| {
         env.get(key)
             .filter(|value| !value.is_empty())
@@ -858,7 +858,7 @@ fn resolve_agents_home(
     })
 }
 
-pub const SKILLS_SUBDIR: &str = "skills";
+const SKILLS_SUBDIR: &str = "skills";
 
 /// Shared RimZ skill library under the agent library root.
 pub fn skills_library() -> PathBuf {
@@ -866,7 +866,7 @@ pub fn skills_library() -> PathBuf {
 }
 
 /// Resolve the shared skill library from a launch environment.
-pub fn skills_library_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+pub(crate) fn skills_library_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
     agents_home_in(env).map(|root| root.join(SKILLS_SUBDIR))
 }
 
