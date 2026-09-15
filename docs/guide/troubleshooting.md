@@ -271,17 +271,17 @@ A plain reset keeps the prior-agent carryover for history but still starts the r
 
 ### Sweep stale state with `rimz gc`
 
-`rimz gc` sweeps runtime state that has outlived its use: orphaned atomic-write temp files, dead workspace stores, abandoned queued messages, and clean RimZ-marked worktrees whose work has already landed with no live pane inside. It keeps anything dirty, pending, or unproven, and it always prints a checklist of what it cleaned, what it kept, and why. Run it with `--dry-run` first to see the plan without removing anything:
+`rimz gc` sweeps runtime state that has outlived its use: orphaned atomic-write temp files, dead workspace stores, abandoned queued messages, and clean RimZ-marked worktrees whose work has already landed with no live pane inside. It keeps anything dirty, pending, or unproven, and it always prints a checklist of what it cleaned, what it kept, and why. Every open room also runs it once a day on its own ([automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps)). Run it with `--dry-run` first to see the plan without removing anything:
 
 ```sh
 rimz gc --dry-run          # preview reclaimable state, remove nothing
-rimz gc                    # sweep runtime state older than 24h (the default cutoff)
-rimz gc --older-than 168h  # widen the cutoff to a week (units stop at h)
+rimz gc                    # sweep runtime state older than gc.older_than (7d by default)
+rimz gc --older-than 1d    # tighten the cutoff to a day
 ```
 
 ```
 gc — would reclaim 62 MB (dry run)
-  checked 4 of 8 areas · cutoff 24h
+  checked 4 of 8 areas · cutoff 7d
 
   ✦ worktrees       would remove 3 · 62 MB · 4 kept
       kept: api-redesign — in use

@@ -278,11 +278,15 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--older-than <DURATION>` | `24h` | The age cutoff for `runtime` and `temp files`. Units: `s`, `m`, `h` only, so write a week as `168h`. Must be greater than zero. |
+| `--older-than <DURATION>` | the `gc.older_than` setting, `7d` | The age cutoff for `runtime` and `temp files`. Units: `s`, `m`, `h`, `d` ([durations](../cli.md#durations)). Must be greater than zero. |
 | `--dry-run` | off | Report what would be removed and remove nothing. `messages`, `event log`, `agent cache`, and `loop schedules` show as skipped. |
 | `--json` | off | Print the report as JSON instead. |
 
 The four current-workspace areas show `skipped — no rimz store here` when the directory has no RimZ store, and `worktrees` shows `skipped — not inside a git repo` outside a repository.
+
+### Automatic sweeps
+
+Every open room runs `gc` on its own once a day, with the `gc.older_than` cutoff. The first sweep waits until the room has been up for 5 minutes, so a room coming back from a reboot finishes restoring its panes before the worktree area judges them. The last sweep time is kept per workspace, so a reboot does not reset the day. Each run, failed or not, appears in [`rimz stats --assists`](./stats.md#the-assist-timeline) as a `♻` line. Set `gc.auto = false` ([configuration](../../guide/configuration.md#garbage-collection)) to sweep only by hand.
 
 ### The report
 
@@ -291,7 +295,7 @@ The four current-workspace areas show `skipped — no rimz store here` when the 
 ```console
 $ rimz gc
 gc — reclaimed 21 MB
-  checked 8 areas · cutoff 24h
+  checked 8 areas · cutoff 7d
 
   ✦ worktrees       1 removed · 21 MB · 2 kept
       kept: api-redesign — in use

@@ -110,6 +110,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `harness.budget`, `accounts.budget.<kind>` | an amount ending in `/day` |
 | `harness.turn_budget` | a dollar amount such as `3` or `$2.50` |
 | `resume.auto_redeem_min_gain` | a duration |
+| `gc.older_than` | a duration such as `8h` or `3d` |
 | `agents.profiles.<name>.auto-compact`, `subagents.profiles.<name>.auto-compact` | a compaction threshold |
 
 The two shorthands write the full key: `rimz config set theme <name>` sets `theme.scheme`, and `rimz config set theme.glyphs <set>` sets `theme.glyphs.set`.

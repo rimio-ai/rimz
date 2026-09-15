@@ -102,6 +102,7 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 | [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) | Unattended recovery of parked turns and spent windows. See [providers.md § Auto-continue](../agents/providers.md#auto-continue) and [§ Auto-redeem](../agents/providers.md#auto-redeem). |
 | [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | The audit trail every unattended intervention appends to. See [loops.md § The assist log](./loops.md#the-assist-log). |
 | [`idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs) | The elder's idle compaction check. See [messaging.md § Idle compaction](./messaging.md#idle-compaction). |
+| [`auto_gc.rs`](../../../crates/rimz/src/harness/auto_gc.rs) | The elder's daily gc check and its sweep stamp. See [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs). |
 
 The CLI side lives in [`cli/agents_cmd/`](../../../crates/rimz/src/cli/agents_cmd) (launch placement, reconciliation, restart, resume, fork, stop, and the hidden `exec` wrapper), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) (the run driver both `agents -p` and loop fires call), and [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd). Those handlers parse flags, execute effects, and render; the harness keeps provider and durable-state rules.
 

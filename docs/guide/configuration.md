@@ -195,6 +195,16 @@ idle_compact_after = "59m"
 
 `idle_compact` is `off` by default. `auto` compacts an eligible idle agent only while another agent in the same channel is running; an open worktree pull request does not qualify. `always` ignores that re-engagement requirement. `idle_compact_after` accepts `s`, `m`, `h`, or `d` and defaults to `59m`. The reflex requires at least 50,000 occupied context tokens, uses each adapter's native compact command with the same `compact_instruction`, and fires at most once in one idle stretch. The behavior model is in [loops.md](./loops.md#idle-compaction), and the durable delivery mechanics are in [messaging.md](../internals/harness/messaging.md#idle-compaction).
 
+### Garbage collection
+
+```toml
+[gc]
+auto = true
+older_than = "7d"
+```
+
+Stale runtime files, orphaned temp files, dead workspace stores, and landed worktrees pile up as rooms come and go. With `auto` on (the default), every open room runs [`rimz gc`](../reference/cli/maintenance.md#sweep-stale-state) once a day, starting 5 minutes after the room comes up. It removes the same things a manual run does and keeps anything dirty, unmerged, occupied by an agent, or unproven. `older_than` is the age past which runtime and temp files go, and it is also the default for `rimz gc --older-than`; it accepts `s`, `m`, `h`, or `d`. Each automatic sweep shows in `rimz stats --assists`. `rimz config set gc.auto false` turns the daily sweep off and leaves `rimz gc` for you to run by hand.
+
 ### Remote control
 
 ```toml
