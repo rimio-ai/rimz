@@ -81,7 +81,8 @@ upward-dependencies = ["address"]
 # and advance them through the one shared `lifecycle::turn_ids_after`.
 # Background shells and their report are folded by store and listed by the renderer.
 # A peer's `launched_by` link and its launcher accessors route the fleet digest.
-surface-budget = 976
+# Providers switch off their native command sandbox inside the RimZ view.
+surface-budget = 977
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
