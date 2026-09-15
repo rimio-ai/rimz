@@ -286,7 +286,7 @@ The four current-workspace areas show `skipped — no rimz store here` when the 
 
 ### Automatic sweeps
 
-Every open room runs `gc` on its own once a day, with the `gc.older_than` cutoff. The first sweep waits until the room has been up for 5 minutes, so a room coming back from a reboot finishes restoring its panes before the worktree area judges them. The last sweep time is kept per workspace, so a reboot does not reset the day. Each run, failed or not, appears in [`rimz stats --assists`](./stats.md#the-assist-timeline) as a `♻` line. Set `gc.auto = false` ([configuration](../../guide/configuration.md#garbage-collection)) to sweep only by hand.
+Every open room runs `gc` on its own once a day, with the `gc.older_than` cutoff. The first sweep waits until the room has been up for 5 minutes, so a room coming back from a reboot finishes restoring its panes before the worktree area judges them. The last sweep time is kept per workspace, so a reboot does not reset the day. Each run, failed or not, appears in [`rimz stats --assists`](./stats.md#the-assist-timeline) as a `♻` line. Set `gc.auto = false` ([configuration](../../guide/configuration.md#garbage-collection)) to sweep only by hand. While a machine config file fails to load ([`rimz config get`](./config.md#read-a-value) names the error), automatic sweeps pause rather than fall back to the defaults.
 
 ### The report
 
