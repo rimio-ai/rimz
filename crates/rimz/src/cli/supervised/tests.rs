@@ -676,6 +676,18 @@ impl RunFixture {
 }
 
 #[test]
+fn presented_blocking_attempt_is_joined_only_once_terminal() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    super::run::join_presented_attempt(&fixture.store, "rimz-test", &fixture.record);
+    let load = || rimz::harness::run::load(&fixture.paths, &fixture.run_id()).unwrap();
+    assert_eq!(load().joined_at, None);
+
+    fixture.complete("done");
+    super::run::join_presented_attempt(&fixture.store, "rimz-test", &load());
+    assert!(load().joined_at.is_some());
+}
+
+#[test]
 fn subagent_zone_lock_serializes_workspace_launches() {
     let fixture = RunFixture::new(RunStatus::Running);
     let lock_path = fixture.paths.locks_dir.join("subagent-zone.lock");

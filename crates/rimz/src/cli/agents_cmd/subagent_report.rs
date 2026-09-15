@@ -76,9 +76,7 @@ fn write_response_files(
             else {
                 return Ok(None);
             };
-            let path = paths
-                .subagents_dir
-                .join(format!("{}.output", child_name(child, run)));
+            let path = run::report::response_path(paths, child_name(child, run));
             let mut bytes = message.as_bytes().to_vec();
             if !bytes.ends_with(b"\n") {
                 bytes.push(b'\n');
@@ -139,7 +137,7 @@ fn report_fleet_with_kind(
 
     let runs = run::list(store.paths())?;
     let mut seen = HashSet::<RunId>::new();
-    let children = rimz::address::launched_children(&projection.agents, parent)
+    let children = rimz::address::launched_fleet(&projection.agents, parent)
         .into_iter()
         .filter_map(|child| {
             let run = newest_run_for_agent(&runs, child)?;
@@ -232,7 +230,7 @@ pub(super) fn report_settled_child(
     store: &Store,
     run: &RunRecord,
 ) -> Result<ReportOutcome, ReportErr> {
-    if !run.subagent || !run.status.is_terminal() {
+    if !run.status.is_terminal() {
         return Ok(ReportOutcome::NotRequested);
     }
     let projection = store.runtime_projection(RuntimeScope::Audit)?;
@@ -245,15 +243,10 @@ pub(super) fn report_settled_child(
     }) else {
         return Ok(ReportOutcome::ChildMissing);
     };
-    let Some(parent_id) = child.parent_agent_id.as_ref() else {
+    let Some((launcher_kind, launcher_id)) = child.launcher() else {
         return Ok(ReportOutcome::NoParent);
     };
-    report_fleet_with_kind(
-        workspace,
-        store,
-        parent_id,
-        Some(child.parent_agent_kind.as_ref().unwrap_or(&child.kind)),
-    )
+    report_fleet_with_kind(workspace, store, launcher_id, Some(launcher_kind))
 }
 
 pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::Result<()> {
@@ -277,10 +270,15 @@ pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::
 }
 
 fn compose_digest(rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)]) -> String {
-    let heading = if rows.len() == 1 {
-        "Your subagent settled:".to_owned()
+    let noun = if rows.iter().all(|(_, run, _)| run.subagent) {
+        "subagent"
     } else {
-        format!("All {} subagents settled:", rows.len())
+        "background agent"
+    };
+    let heading = if rows.len() == 1 {
+        format!("Your {noun} settled:")
+    } else {
+        format!("All {} {noun}s settled:", rows.len())
     };
     let rows = rows
         .iter()
@@ -425,6 +423,7 @@ mod tests {
             PathBuf::from("/tmp/subagent-report"),
         );
         run.status = status;
+        run.subagent = true;
         run.started_at = Timestamp::from_second(1_000).unwrap();
         run.completed_at = Some(Timestamp::from_second(1_252).unwrap());
         run.updated_at = run.completed_at.unwrap();
@@ -614,6 +613,76 @@ mod tests {
             ReportOutcome::NothingToReport
         );
         assert_eq!(store.list_messages().unwrap().len(), 1);
+    }
+
+    fn append_peer(store: &Store, name: &str, launcher: Option<&str>) {
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(name)),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_name = Some(name.to_owned());
+        observation.launch.launch_depth = Some(1);
+        observation.launch.launched_by = launcher.map(|launcher| {
+            Box::new(rimz::agents::LaunchedBy {
+                kind: AgentKind::new_unchecked("codex"),
+                agent_id: AgentSessionId::from(launcher),
+            })
+        });
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "report-test",
+                agent_kind: AgentKind::new_unchecked("codex"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn settled_background_peer_reports_to_its_launcher_only() {
+        let (_dir, workspace, store) = fixture();
+        append_agent(&store, "launcher", None);
+        append_peer(&store, "peer", Some("launcher"));
+        append_peer(&store, "shell-peer", None);
+        append_agent(&store, "child", Some("launcher"));
+        let mut peer = child_run(&workspace.workspace_id, "peer", RunStatus::Completed);
+        peer.subagent = false;
+        peer.last_message = Some("peer answer".to_owned());
+        let mut shell_peer = child_run(&workspace.workspace_id, "shell-peer", RunStatus::Completed);
+        shell_peer.subagent = false;
+        let child = child_run(&workspace.workspace_id, "child", RunStatus::Running);
+        for record in [&peer, &shell_peer, &child] {
+            run::create(store.paths(), record).unwrap();
+        }
+
+        assert_eq!(
+            report_settled_child(&workspace, &store, &shell_peer).unwrap(),
+            ReportOutcome::NoParent
+        );
+        assert_eq!(
+            report_settled_child(&workspace, &store, &peer).unwrap(),
+            ReportOutcome::SiblingsRunning
+        );
+        let child = run::fail(store.paths(), &child.run_id).unwrap();
+        assert!(matches!(
+            report_settled_child(&workspace, &store, &child).unwrap(),
+            ReportOutcome::Queued { .. }
+        ));
+        let messages = store.list_messages().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(
+            messages[0]
+                .text
+                .starts_with("All 2 background agents settled:")
+        );
+        assert!(messages[0].text.contains("@peer"));
+        assert!(messages[0].text.contains("@child"));
+        assert!(!messages[0].text.contains("@shell-peer"));
+        assert_eq!(
+            std::fs::read_to_string(run::report::response_path(store.paths(), "peer")).unwrap(),
+            "peer answer\n"
+        );
     }
 
     #[test]

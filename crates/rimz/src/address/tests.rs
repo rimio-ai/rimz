@@ -1690,6 +1690,37 @@ fn launched_children_in_channel_spans_parents_and_honours_the_filter() {
 }
 
 #[test]
+fn launched_fleet_joins_children_and_own_peers_once() {
+    let mut launcher = agent("codex", "provider-launcher", None, "terminal_1");
+    launcher.launch_id = Some("launch-launcher".into());
+    let mut child = agent("claude", "child", None, "terminal_2");
+    child.parent_agent_id = Some("launch-launcher".into());
+    child.parent_agent_kind = Some(launcher.kind.clone());
+    child.launch_depth = Some(1);
+    let mut peer = agent("claude", "peer", None, "terminal_3");
+    peer.launch_depth = Some(1);
+    peer.launched_by = Some(crate::agents::LaunchedBy {
+        kind: launcher.kind.clone(),
+        agent_id: "launch-launcher".into(),
+    });
+    let mut foreign = peer.clone();
+    foreign.agent_id = "foreign-peer".into();
+    foreign.launched_by = Some(crate::agents::LaunchedBy {
+        kind: launcher.kind.clone(),
+        agent_id: "someone-else".into(),
+    });
+    let agents = [launcher.clone(), child, peer, foreign];
+
+    let fleet = launched_fleet(&agents, &launcher)
+        .into_iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(fleet, ["child", "peer"]);
+    assert_eq!(launched_children(&agents, &launcher).len(), 1);
+}
+
+#[test]
 fn launched_parent_matches_the_adopted_launch_id() {
     let mut parent = agent("codex", "provider-parent", None, "terminal_1");
     parent.launch_id = Some("launch-parent".into());
