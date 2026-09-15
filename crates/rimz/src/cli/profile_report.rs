@@ -143,7 +143,7 @@ fn provider_brand_kind<'a>(
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ProfileListing {
-    Agents,
+    Agents { team_profiles_hidden: bool },
     Subagents,
     Teams,
 }
@@ -176,7 +176,7 @@ fn profile_cards(
 ) -> std::io::Result<()> {
     if reports.is_empty() {
         let profile_section = match listing {
-            ProfileListing::Agents => "agents.profiles",
+            ProfileListing::Agents { .. } => "agents.profiles",
             ProfileListing::Subagents => "subagents.profiles",
             ProfileListing::Teams => {
                 writeln!(out, "No team profiles configured.")?;
@@ -189,6 +189,15 @@ fn profile_cards(
             out,
             "Add one under [{profile_section}] or [agents.commands]."
         )?;
+        if let ProfileListing::Agents {
+            team_profiles_hidden: true,
+        } = listing
+        {
+            writeln!(
+                out,
+                "Team role profiles are hidden; list them with `rimz teams profiles`."
+            )?;
+        }
         return Ok(());
     }
 
@@ -275,7 +284,9 @@ mod tests {
 
         profile_cards(
             &reports,
-            ProfileListing::Agents,
+            ProfileListing::Agents {
+                team_profiles_hidden: false,
+            },
             &mut anstream::StripStream::new(&mut output),
         )
         .expect("render profile cards");
@@ -326,6 +337,26 @@ mod tests {
             String::from_utf8(output).expect("utf-8"),
             "No profiles or commands configured.\n\
              Add one under [subagents.profiles] or [agents.commands].\n"
+        );
+    }
+
+    #[test]
+    fn empty_agent_catalog_points_at_hidden_team_profiles() {
+        let mut output = Vec::new();
+        profile_cards(
+            &[],
+            ProfileListing::Agents {
+                team_profiles_hidden: true,
+            },
+            &mut output,
+        )
+        .expect("render empty catalog");
+
+        assert_eq!(
+            String::from_utf8(output).expect("utf-8"),
+            "No profiles or commands configured.\n\
+             Add one under [agents.profiles] or [agents.commands].\n\
+             Team role profiles are hidden; list them with `rimz teams profiles`.\n"
         );
     }
 
