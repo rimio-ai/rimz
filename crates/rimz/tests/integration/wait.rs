@@ -236,7 +236,7 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
     );
     let checkin = wait_for_wait_messages(&env, 1);
     assert!(checkin[0].text.contains("still running after"));
-    assert!(!checkin[0].text.contains("output:"), "{}", checkin[0].text);
+    assert!(!checkin[0].text.contains("output"), "{}", checkin[0].text);
     assert!(process.try_wait().unwrap().is_none());
     assert_eq!(wait_instances(&env).0.len(), 1);
     process.kill().unwrap();
@@ -247,7 +247,7 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
         .find(|message| message.text.contains("exit 0 after"))
         .expect("process disappearance delivered");
     assert!(completed.text.contains(&pid));
-    assert!(!completed.text.contains("output:"), "{}", completed.text);
+    assert!(!completed.text.contains("output"), "{}", completed.text);
     wait_for_no_wait_instances(&env);
 
     let receipt = wait_ok(&env, &["wait", "--pid", &pid]);

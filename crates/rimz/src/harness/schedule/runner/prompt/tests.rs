@@ -118,6 +118,54 @@ fn watch_killed_by_signal_keeps_output_summary_path_and_note() {
 }
 
 #[test]
+fn pid_wait_never_claims_no_output_for_the_process() {
+    let task = TaskEntry {
+        watch: Some("while kill -0 42 2>/dev/null; do sleep 1; done".to_owned()),
+        ..task()
+    };
+    let pid_meta = WaitMeta {
+        pid: Some(42),
+        ..meta("@coder#feat-x")
+    };
+    for (bytes, segment) in [
+        (0, ""),
+        (
+            20,
+            " · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 1 line)",
+        ),
+    ] {
+        let signal = Signal {
+            watch: Some(WatchOutcome {
+                verdict: WatchVerdict::Exited {
+                    code: Some(0),
+                    elapsed_ms: 3_000,
+                },
+                output: String::new(),
+                output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
+                summary: FileSummary {
+                    bytes,
+                    lines: bytes.min(1),
+                    tokens: bytes / 4,
+                },
+            }),
+            ..signal("wait.test", serde_json::json!({}))
+        };
+        let body = compose_wait(
+            "wait-test",
+            &task,
+            Some(&pid_meta),
+            Evidence::Signal(&signal),
+            "",
+            now(),
+        );
+        assert!(
+            body.contains(&format!("exit 0 after 3s{segment} [wait-test]")),
+            "{body}"
+        );
+    }
+}
+
+#[test]
 fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
     for timeout in [None, Some("1s"), Some("12m")] {
         let task = TaskEntry {

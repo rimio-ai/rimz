@@ -101,14 +101,16 @@ fn verdict_line(
         && let Some(watch) = &signal.watch
         && let Some(path) = &watch.output_path
     {
-        if watch.summary.is_empty() {
-            verdict.push_str(" · no output");
-        } else {
+        if !watch.summary.is_empty() {
             verdict.push_str(&format!(
                 " · output: {} ({})",
                 path.display(),
                 watch.summary.label()
             ));
+        } else if meta.is_none_or(|meta| meta.pid.is_none()) {
+            // A `--pid` wait captures no process output; its file only holds
+            // watcher startup errors, so empty says nothing about the process.
+            verdict.push_str(" · no output");
         }
     }
     verdict.push_str(&format!(" [{name}]"));
