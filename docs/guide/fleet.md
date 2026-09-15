@@ -21,7 +21,7 @@ A bare `claude` is a general-purpose agent, and most work is not general: a plan
 
 ```sh
 claude --permission-mode auto --effort xhigh \
-       --system-prompt-file ~/.agents/prompts/claude-slim.md \
+       --system-prompt-file ~/.config/rimz/prompts/claude-slim.md \
        --strict-mcp-config \
        --tools 'Agent,AskUserQuestion,Bash,Edit,EnterPlanMode,ExitPlanMode,LSP,Read,Skill,TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,WebFetch,WebSearch,Write'
 ```
@@ -294,7 +294,7 @@ Before launching a changed preset, [`rimz agents explain <profile>`](../referenc
 agent = "claude"                                           # the base CLI, or another profile
 mode = "auto"
 effort = "xhigh"
-system-prompt-file = "~/.agents/prompts/claude-slim.md"    # a trimmed house prompt
+system-prompt-file = "~/.config/rimz/prompts/claude-slim.md"    # a trimmed house prompt
 args = "--strict-mcp-config --tools 'Agent,AskUserQuestion,Bash,Edit,EnterPlanMode,ExitPlanMode,LSP,Read,Skill,TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,WebFetch,WebSearch,Write'"
 
 [agents.profiles.claude-planner]                           # a specialist off the same base CLI
@@ -302,10 +302,10 @@ agent = "claude"
 model = "fable"
 mode = "auto"
 effort = "high"
-system-prompt-file = "~/.agents/prompts/claude-planner.md"  # its role, craft, and boundaries
+system-prompt-file = "~/.config/rimz/prompts/claude-planner.md"  # its role, craft, and boundaries
 append-system-prompt-files = [                             # composed after the base, in this order
-  "~/.agents/prompts/review-policy.md",
-  "~/.agents/prompts/rust-style.md",
+  "~/.config/rimz/prompts/review-policy.md",
+  "~/.config/rimz/prompts/rust-style.md",
 ]
 args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,AskUserQuestion,WebFetch,WebSearch,Skill,Agent(Explore,Plan)'"  # plan and explore, nothing that ships
 ```

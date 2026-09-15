@@ -371,6 +371,46 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
 }
 
 #[test]
+fn doctor_prints_the_move_for_fragments_left_under_the_legacy_root() {
+    let env = Env::new();
+    let legacy = env.home_root.join(".agents");
+    let profile = legacy.join("profiles/reviewer");
+    std::fs::create_dir_all(&profile).expect("mkdir legacy profile");
+    std::fs::write(profile.join("agent.toml"), "agent = \"claude\"\n").expect("write fragment");
+    std::fs::create_dir_all(legacy.join("skills/own")).expect("mkdir provider skills");
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+    let fix = format!(
+        "mkdir -p {home} && mv {src} {home}/",
+        home = env.agents_home().display(),
+        src = legacy.join("profiles").display(),
+    );
+    assert_eq!(
+        report["machine_config"]["legacy_agents_home"]["fix"], fix,
+        "{report:#}"
+    );
+
+    std::fs::create_dir_all(env.agents_home()).expect("mkdir agents home");
+    std::fs::rename(legacy.join("profiles"), env.agents_home().join("profiles"))
+        .expect("move profiles");
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+    assert!(
+        report["machine_config"].get("legacy_agents_home").is_none(),
+        "{report:#}"
+    );
+}
+
+#[test]
 fn doctor_classifies_an_unparseable_project_config() {
     let env = Env::new();
     let path = env.project_root.join(".rimz/config.toml");

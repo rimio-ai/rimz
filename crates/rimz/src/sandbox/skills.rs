@@ -2,7 +2,7 @@
 //! Unlisted skills that cannot be prepared are omitted and reported.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::agents::ManualSkill;
 
@@ -54,17 +54,7 @@ fn plan_view(
     let mut changed = false;
     let mut skipped = Vec::new();
     let mut copies = Vec::new();
-    let config = env
-        .get("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            env.get("HOME")
-                .filter(|value| !value.is_empty())
-                .map(|home| Path::new(home).join(".config"))
-        });
-    if let Some(config) = config {
-        let library = config.join("rimz/skills");
+    if let Some(library) = crate::disk::paths::skills_library_in(env) {
         super::validate_path(&library)?;
         for (name, source) in list_dir(&library, false)? {
             if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(name) {

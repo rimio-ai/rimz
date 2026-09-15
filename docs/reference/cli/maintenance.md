@@ -349,7 +349,8 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 | Data directory (`~/.local/share/rimz`) | Removed, except `accounts/` | |
 | [Provider account](./accounts.md) homes under `accounts/` | Kept: their credentials and history belong to the provider | |
 | Durable stores, spend history, and shared state (`~/.local/state/rimz`) | Kept | `--state` removes them |
-| Per-machine config, themes, trust grants, notification handlers, and remote aliases (`~/.config/rimz`) | Kept | `--config` removes them |
+| Per-machine config, themes, trust grants, notification handlers, and remote aliases (`~/.config/rimz`) | Kept | `--config` removes them, except `profiles/`, `teams/`, and `skills/` |
+| Agent library (`profiles/`, `teams/`, and `skills/`) | Always kept | |
 | `rimz` binaries at the running executable, Cargo's bin directory, and `/usr/local/bin` | Removed | `--keep-binary` keeps them; `RIMZ_SYSTEM_BIN_DIR` replaces `/usr/local/bin` |
 | Project `.rimz/` directories and RimZ-owned worktrees | Always kept: they can hold project config and unlanded work | |
 

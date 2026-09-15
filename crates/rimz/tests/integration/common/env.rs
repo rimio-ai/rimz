@@ -178,6 +178,10 @@ impl Env {
         self.home_root.join("config")
     }
 
+    pub fn agents_home(&self) -> PathBuf {
+        self.config_root().join("rimz")
+    }
+
     pub fn cache_root(&self) -> PathBuf {
         self.home_root.join(".cache")
     }

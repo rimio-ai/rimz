@@ -822,16 +822,52 @@ pub fn config_home() -> PathBuf {
     env::temp_dir().join("rimz-config")
 }
 
-/// Per-user agent library root. RimZ discovers drop-in profile and team
-/// fragments here, and `RIMZ_AGENTS_HOME` relocates it.
+/// Per-user agent library root, defaulting to `config_home()/rimz`. `RIMZ_AGENTS_HOME` relocates profiles, teams, and skills together.
 pub fn agents_home() -> PathBuf {
-    if let Some(value) = env_path("RIMZ_AGENTS_HOME") {
-        return value;
-    }
-    if let Some(home) = env_path("HOME") {
-        return home.join(".agents");
-    }
-    env::temp_dir().join("rimz-agents")
+    resolve_agents_home(
+        env_path("RIMZ_AGENTS_HOME"),
+        env_path("XDG_CONFIG_HOME"),
+        env_path("HOME"),
+    )
+    .unwrap_or_else(|| config_home().join("rimz"))
+}
+
+/// Resolve the agent library root from a launch environment, ignoring empty values.
+pub fn agents_home_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    let path = |key: &str| {
+        env.get(key)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    resolve_agents_home(
+        path("RIMZ_AGENTS_HOME"),
+        path("XDG_CONFIG_HOME"),
+        path("HOME"),
+    )
+}
+
+fn resolve_agents_home(
+    agents: Option<PathBuf>,
+    config: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    agents.or_else(|| {
+        config
+            .or_else(|| home.map(|home| home.join(".config")))
+            .map(|config| config.join("rimz"))
+    })
+}
+
+pub const SKILLS_SUBDIR: &str = "skills";
+
+/// Shared RimZ skill library under the agent library root.
+pub fn skills_library() -> PathBuf {
+    agents_home().join(SKILLS_SUBDIR)
+}
+
+/// Resolve the shared skill library from a launch environment.
+pub fn skills_library_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    agents_home_in(env).map(|root| root.join(SKILLS_SUBDIR))
 }
 
 /// Per-user data root. RimZ stores stable, user-level artifacts here, including
@@ -880,6 +916,35 @@ fn current_uid() -> u32 {
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+
+    #[test]
+    fn agents_home_environment_precedence() {
+        let mut env = BTreeMap::new();
+        assert_eq!(agents_home_in(&env), None);
+        assert_eq!(skills_library_in(&env), None);
+        env.insert("HOME".to_owned(), "/home/user".to_owned());
+        assert_eq!(
+            agents_home_in(&env),
+            Some(PathBuf::from("/home/user/.config/rimz"))
+        );
+        env.insert("XDG_CONFIG_HOME".to_owned(), "/config".to_owned());
+        assert_eq!(agents_home_in(&env), Some(PathBuf::from("/config/rimz")));
+        env.insert("RIMZ_AGENTS_HOME".to_owned(), "/library".to_owned());
+        assert_eq!(agents_home_in(&env), Some(PathBuf::from("/library")));
+        assert_eq!(
+            skills_library_in(&env),
+            Some(PathBuf::from("/library/skills"))
+        );
+        env.insert("RIMZ_AGENTS_HOME".to_owned(), String::new());
+        assert_eq!(agents_home_in(&env), Some(PathBuf::from("/config/rimz")));
+        env.insert("XDG_CONFIG_HOME".to_owned(), String::new());
+        assert_eq!(
+            agents_home_in(&env),
+            Some(PathBuf::from("/home/user/.config/rimz"))
+        );
+        env.insert("HOME".to_owned(), String::new());
+        assert_eq!(agents_home_in(&env), None);
+    }
 
     #[test]
     fn workspace_spending_file_names() {

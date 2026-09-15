@@ -128,8 +128,7 @@ fn config_set_host_never_probes_bwrap() {
 fn agents_home_profile_fragment_feeds_both_profile_catalogues_without_kind_rows() {
     let env = Env::new();
     write_machine_file(
-        &env.home_root
-            .join(".agents")
+        &env.agents_home()
             .join("profiles")
             .join("explorer")
             .join("agent.toml"),
@@ -1262,8 +1261,7 @@ agent = "claude"
 fn setup_yes_preserves_kind_profiles_required_by_agents_home_team() {
     let env = Env::new();
     write_machine_file(
-        &env.home_root
-            .join(".agents")
+        &env.agents_home()
             .join("teams")
             .join("forge")
             .join("team.toml"),
@@ -1320,8 +1318,7 @@ args = "--search"
 fn setup_yes_leaves_agents_file_when_fragments_keep_merge_invalid() {
     let env = Env::new();
     write_machine_file(
-        &env.home_root
-            .join(".agents")
+        &env.agents_home()
             .join("teams")
             .join("broken")
             .join("team.toml"),

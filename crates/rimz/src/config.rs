@@ -1,6 +1,6 @@
 //! Per-machine settings, loaded from `~/.config/rimz/config.toml`, `theme.toml`, `agents.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
 //!
-//! Agent and team fragments discovered under `~/.agents/{profiles,teams}` are the base layer for both profile namespaces in `agents.toml`, whose entries take precedence on name clashes. Strict and lenient load paths merge fragments before validating the agents view.
+//! Agent and team fragments discovered under `~/.config/rimz/{profiles,teams}` are the base layer for both profile namespaces in `agents.toml`, whose entries take precedence on name clashes. Strict and lenient load paths merge fragments before validating the agents view.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in
@@ -11,7 +11,7 @@
 //! A missing file is the default config, and unknown keys are ignored with a
 //! visible warning so an older binary tolerates a newer file. Runtime entry
 //! points use [`MachineConfig::load_lenient`], which degrades a broken machine
-//! file to built-in defaults. A broken `~/.agents` fragment drops only that
+//! file to built-in defaults. A broken `~/.config/rimz` fragment drops only that
 //! fragment from read-only views and blocks launches with its source error.
 //! Strict [`MachineConfig::load`] backs config inspection and reports precise errors.
 
@@ -1409,6 +1409,28 @@ fn child_dirs(path: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(dirs)
+}
+
+/// Whether `path` lies in the profile or team fragment tree under `agents_home`.
+/// The root itself also holds machine files, so a bare prefix test misfiles them.
+pub fn is_agents_home_fragment(agents_home: &Path, path: &Path) -> bool {
+    [AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR]
+        .iter()
+        .any(|subdir| path.starts_with(agents_home.join(subdir)))
+}
+
+/// The fragment subdirectories under `root` that hold at least one fragment file.
+pub fn agents_home_fragment_dirs(root: &Path) -> Vec<PathBuf> {
+    let fragments = agents_home_fragment_paths(root).paths;
+    [AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR]
+        .iter()
+        .map(|subdir| root.join(subdir))
+        .filter(|dir| {
+            fragments
+                .iter()
+                .any(|path| path.starts_with(dir) && path.is_file())
+        })
+        .collect()
 }
 
 struct AgentsHomeFragmentPaths {

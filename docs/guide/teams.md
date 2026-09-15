@@ -53,8 +53,8 @@ rimz teams forge -w feat-complex            # the whole team, one isolated workt
 From a repository checkout, copy the fragment instead when you want to edit that checkout's version directly:
 
 ```sh
-mkdir -p ~/.agents/teams
-cp -r examples/teams/forge ~/.agents/teams/
+mkdir -p ~/.config/rimz/teams
+cp -r examples/teams/forge ~/.config/rimz/teams/
 ```
 
 Then hand the task to the planner and let the loop carry it: type into the planner's pane, or message it.
@@ -108,7 +108,7 @@ The full flag surface lives in the [teams CLI reference](../reference/cli/teams.
 A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a list of roles, each bound to a configured profile or registered agent kind, with an optional `layout` using the same row and column operators as inline specs (commas split columns, plus signs tile rows, slashes stack them). A same-named machine profile overrides the kind's implicit base. Its cells name declared roles or roleless cells, while ad-hoc `cell:role` suffixes stay exclusive to inline specs:
 
 ```toml
-# Copy-ready drop-in fragment for ~/.agents/teams/forge/.
+# Copy-ready drop-in fragment for ~/.config/rimz/teams/forge/.
 # See examples/README.md for install and launch commands.
 
 [agents.teams.forge]

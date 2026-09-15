@@ -436,7 +436,7 @@ fn remove_roots(
         };
         if kind == StorageKind::Data {
             let outcomes =
-                rimz::uninstall::remove_root_keeping(&root.path, rimz::agents::ACCOUNTS_DIR);
+                rimz::uninstall::remove_root_keeping(&root.path, &[rimz::agents::ACCOUNTS_DIR]);
             render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
             let accounts = root.path.join(rimz::agents::ACCOUNTS_DIR);
             if accounts.exists() {
@@ -446,6 +446,18 @@ fn remove_roots(
                     kind.label(),
                     accounts.display()
                 )?;
+            }
+            continue;
+        }
+        if kind == StorageKind::Config {
+            let keep = ["profiles", "teams", rimz::disk::paths::SKILLS_SUBDIR];
+            let outcomes = rimz::uninstall::remove_root_keeping(&root.path, &keep);
+            render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
+            for name in keep {
+                let path = root.path.join(name);
+                if path.symlink_metadata().is_ok() {
+                    writeln!(stderr, "{}: kept {}", kind.label(), path.display())?;
+                }
             }
             continue;
         }

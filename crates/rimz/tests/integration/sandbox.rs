@@ -404,13 +404,19 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
     let root = env.home_root.join(".claude/skills");
     std::fs::create_dir_all(root.join("shared")).unwrap();
     std::fs::write(root.join("shared/SKILL.md"), "provider\n").unwrap();
-    for xdg in [true, false] {
+    for source in ["xdg", "home", "override"] {
         let mut vars = environment(&env);
-        let library = if xdg {
-            env.config_root().join("rimz/skills")
-        } else {
-            vars.remove("XDG_CONFIG_HOME");
-            env.home_root.join(".config/rimz/skills")
+        let library = match source {
+            "xdg" => env.agents_home().join("skills"),
+            "home" => {
+                vars.remove("XDG_CONFIG_HOME");
+                env.home_root.join(".config/rimz/skills")
+            }
+            _ => {
+                let root = env.home_root.join("relocated");
+                vars.insert("RIMZ_AGENTS_HOME".to_owned(), root.display().to_string());
+                root.join("skills")
+            }
         };
         for name in ["shared", "library-only"] {
             std::fs::create_dir_all(library.join(name)).unwrap();
