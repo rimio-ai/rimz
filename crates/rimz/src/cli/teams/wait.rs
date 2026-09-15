@@ -64,13 +64,33 @@ struct EntryJson {
     error: Option<&'static str>,
 }
 
-/// A target's outcome at one poll: `Done` completes it, a cohort gone before
-/// `Done` fails it, and anything else (a missing board included) stays pending.
-fn settle(stage: Option<&BoardStage>, cohort_live: bool) -> Option<RunStatus> {
-    if stage.is_some_and(|stage| stage.name == rimz::config::DONE_STAGE) {
-        return Some(RunStatus::Completed);
+/// A target's last board stage and outcome at one poll: `Done` completes it,
+/// and anything else (a missing board included) stays pending while the cohort
+/// lives. A gone cohort fails only on a board read taken after the liveness
+/// check, so a flip to `Done` that races the members' exit still completes.
+fn settle(
+    mut read_board: impl FnMut() -> Option<BoardStage>,
+    cohort_live: impl FnOnce() -> Result<bool>,
+) -> Result<(Option<BoardStage>, Option<RunStatus>)> {
+    let is_done = |stage: &Option<BoardStage>| {
+        stage
+            .as_ref()
+            .is_some_and(|stage| stage.name == rimz::config::DONE_STAGE)
+    };
+    let stage = read_board();
+    if is_done(&stage) {
+        return Ok((stage, Some(RunStatus::Completed)));
     }
-    (!cohort_live).then_some(RunStatus::Failed)
+    if cohort_live()? {
+        return Ok((stage, None));
+    }
+    let stage = read_board();
+    let status = if is_done(&stage) {
+        RunStatus::Completed
+    } else {
+        RunStatus::Failed
+    };
+    Ok((stage, Some(status)))
 }
 
 pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
@@ -171,20 +191,20 @@ fn poll(ctx: &Ctx, targets: &mut [Target]) -> Result<Vec<usize>> {
         if target.outcome.is_some() {
             continue;
         }
-        let stage = board_stage(&target.worktree);
-        target.stage = stage.as_ref().map(|stage| stage.name.clone());
-        let cohort_live = if settle(stage.as_ref(), true).is_some() {
-            true
-        } else {
-            let snapshot = match &mut snapshot {
-                Some(snapshot) => snapshot,
-                None => snapshot.insert(ctx.alive_snapshot()?),
-            };
-            rimz::address::team_cohorts(&snapshot.agents)
-                .iter()
-                .any(|cohort| cohort.team == target.team && cohort.channel == target.channel)
-        };
-        target.outcome = settle(stage.as_ref(), cohort_live);
+        let (stage, outcome) = settle(
+            || board_stage(&target.worktree),
+            || {
+                let snapshot = match &mut snapshot {
+                    Some(snapshot) => snapshot,
+                    None => snapshot.insert(ctx.alive_snapshot()?),
+                };
+                Ok(rimz::address::team_cohorts(&snapshot.agents)
+                    .iter()
+                    .any(|cohort| cohort.team == target.team && cohort.channel == target.channel))
+            },
+        )?;
+        target.stage = stage.map(|stage| stage.name);
+        target.outcome = outcome;
         if target.outcome.is_some() {
             settled.push(index);
         }
@@ -285,24 +305,51 @@ fn write_header(out: &mut impl Write, target: &Target) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn stage(name: &str) -> BoardStage {
-        BoardStage {
-            name: name.to_owned(),
-            owner: None,
-        }
+    fn settle_over(
+        boards: &[Option<&str>],
+        live: bool,
+    ) -> (Option<String>, Option<RunStatus>, usize) {
+        let mut reads = boards.iter().map(|board| {
+            board.map(|name| BoardStage {
+                name: name.to_owned(),
+                owner: None,
+            })
+        });
+        let mut count = 0;
+        let (last, status) = settle(
+            || {
+                count += 1;
+                reads.next().expect("no extra board read")
+            },
+            || Ok(live),
+        )
+        .expect("settle");
+        (last.map(|stage| stage.name), status, count)
     }
 
     #[test]
     fn settle_completes_on_exact_done_and_fails_only_a_dissolved_cohort() {
         for live in [true, false] {
             assert_eq!(
-                settle(Some(&stage("Done")), live),
-                Some(RunStatus::Completed)
+                settle_over(&[Some("Done")], live),
+                (Some("Done".into()), Some(RunStatus::Completed), 1)
             );
         }
-        for board in [None, Some(stage("Review")), Some(stage("Done (delta)"))] {
-            assert_eq!(settle(board.as_ref(), true), None);
-            assert_eq!(settle(board.as_ref(), false), Some(RunStatus::Failed));
+        for board in [None, Some("Review"), Some("Done (delta)")] {
+            let name = board.map(str::to_owned);
+            assert_eq!(settle_over(&[board], true), (name.clone(), None, 1));
+            assert_eq!(
+                settle_over(&[board, board], false),
+                (name, Some(RunStatus::Failed), 2)
+            );
         }
+    }
+
+    #[test]
+    fn settle_rereads_the_board_before_failing_a_dissolved_cohort() {
+        assert_eq!(
+            settle_over(&[Some("Reflect"), Some("Done")], false),
+            (Some("Done".into()), Some(RunStatus::Completed), 2)
+        );
     }
 }
