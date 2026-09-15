@@ -162,10 +162,34 @@ def select(repo, prs, branches, checks):
     return result
 
 
-def query_plan():
+def prune_empty_batches(base, open_heads):
+    """Delete repair branches that carry no work of their own, so select() only sees real batches."""
+    trees = branch_worktrees()
+    refs = command("git", "for-each-ref", "--format=%(refname) %(objectname)",
+                   "refs/heads/deps/repair-*", "refs/remotes/origin/deps/repair-*")
+    for ref, sha in (line.split() for line in refs.splitlines()):
+        branch = ref.removeprefix("refs/heads/").removeprefix("refs/remotes/origin/")
+        # Deleting an open PR's head would close it, and a closed replacement is never recreated.
+        if branch in trees or branch in open_heads:
+            continue
+        if not git_succeeds("merge-base", "--is-ancestor", ref, f"refs/remotes/origin/{base}"):
+            continue
+        if ref.startswith("refs/remotes/"):
+            command("git", "push", f"--force-with-lease=refs/heads/{branch}:{sha}", "origin", f":refs/heads/{branch}")
+            where = "origin"
+        else:
+            command("git", "branch", "-D", branch)
+            where = "local"
+        print(json.dumps(dict(pruned_batch_branch=True, branch=branch, where=where)), flush=True)
+
+
+def query_plan(prune=False):
     repo = github("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
     slug = repo["nameWithOwner"]
     prs = pages(f"repos/{slug}/pulls?state=all&per_page=100")
+    if prune:
+        prune_empty_batches(repo["defaultBranchRef"]["name"],
+                            {pr["head"]["ref"] for pr in prs if pr["state"] == "open"})
     refs = command("git", "for-each-ref", "--format=%(refname)",
                    "refs/heads/deps/repair-*", "refs/remotes/origin/deps/repair-*")
     branches = {ref.removeprefix("refs/heads/").removeprefix("refs/remotes/origin/")
@@ -203,8 +227,6 @@ def branch_worktrees():
 def open_checkout(plan):
     """Resume the attempt checkout a previous fire kept, or cut a fresh one from the published branch."""
     branch = plan["branch"]
-    # A tree directory deleted by hand still pins its branch until its metadata is pruned.
-    command("git", "worktree", "prune")
     trees = branch_worktrees()
     stale = [dict(branch=other, path=path) for other, path in sorted(trees.items())
              if other.startswith(PREFIX) and other != branch]
@@ -287,8 +309,10 @@ def run():
         if occupied:
             print(json.dumps(dict(action="idle", reason="repair lane still occupied", agents=occupied)))
             return
+        # A tree directory deleted by hand still pins its branch until its metadata is pruned.
+        command("git", "worktree", "prune")
         command("git", "fetch", "origin")
-        plan = query_plan()  # Re-read after taking the shared lock, never consume a stale plan file.
+        plan = query_plan(prune=True)  # Re-read after taking the shared lock, never consume a stale plan file.
         print(json.dumps(plan), flush=True)
         if plan["action"] != "repair":
             return
