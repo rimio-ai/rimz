@@ -109,7 +109,7 @@ forge
 
 The definition block names `source` and `layout`, and adds an `error` line only when the definition is broken. The roster lists each role's handle, provider, and model (`-` when unset), marks the leader with `<- leader`, and ends with a `signals` line when roles declare [signal bindings](../../guide/configuration.md#team-signal-bindings), each shown as `signal (match filters) → @role` and clipped to the terminal width. When any role has system-prompt files, a pointer to `--json` follows, since the JSON carries the resolved prompt stack.
 
-The cohort table's `STAGE` and `STATUS` cells carry the same text as a lane block's `stage` line and header state; `PR` is the `pr` line without the URL.
+The cohort table's `STAGE` and `STATUS` cells carry the same text as a lane block's `stage` line (`-` when there is none) and header state; `PR` is the `pr` line without the URL.
 
 A lane block reads top to bottom:
 
@@ -120,7 +120,7 @@ A lane block reads top to bottom:
 | `pipeline` | The declared `stages` with the implicit `Done` last, bracketing the board stage when it matches a name exactly. Omitted when the team declares no `stages`. |
 | `pr` | Cached PR number, state (`open`, `merged`, `closed`), `ci passing`, `ci pending`, or `ci failing`, and URL, as far as known; `none` when nothing is cached. |
 | Member table | `MEMBER STATUS AGE ACTIVITY CTX COST`, members in the team's declared role order. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` is the time since the member's last activity, and `COST` is each role's lifetime spend in this worktree. |
-| `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `never fired`, `fired <age> ago` when the last firing delivered, `skipped <age> ago` when it matched the family but not the subscription, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` counts runs past the first. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
+| `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `never fired`, `fired <age> ago` when the last firing delivered, `skipped <age> ago` when it matched the family but not the subscription, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` gives the total run count once it has run more than once. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
 | `isolation` | `host · tmp /tmp`, or `sandbox · tmp <room tmp dir> (as /tmp)`: the `--isolation` recorded at launch, else the machine's `agents.isolation`. Members that disagree show the machine setting. |
 | `memory` | Files matching the team's `scratch-files`, relative to the worktree, with line counts and modification ages. Omitted when none exist. |
