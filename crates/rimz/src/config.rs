@@ -588,7 +588,18 @@ impl MachineConfig {
                         message: error.message.clone(),
                     });
                 }
-                validate_agents_file(&config.agents, &config.subagents, agents_home)?;
+                if ignore_broken_definitions {
+                    // An edit judges config.toml's own keys; the definition set's
+                    // failures surface at launch and must not lock the editor out.
+                    let own_keys = AgentsConfig {
+                        profiles: ProfilesConfig::default(),
+                        teams: TeamsConfig::default(),
+                        ..config.agents.clone()
+                    };
+                    validate_agents_file(&own_keys, &SubagentProfilesConfig::default(), path)?;
+                } else {
+                    validate_agents_file(&config.agents, &config.subagents, agents_home)?;
+                }
                 config.notices = notices;
                 Ok(config)
             }
