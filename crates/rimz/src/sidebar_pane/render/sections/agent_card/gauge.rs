@@ -161,7 +161,7 @@ const LOG_SCALE_LINEAR_FLOOR_TOKENS: f64 = 256_000.0;
 /// Window at which the curve reaches full strength ([`LOG_SCALE_MAX_K`]).
 const LOG_SCALE_FULL_CURVE_TOKENS: f64 = 1_000_000.0;
 /// Log-curve strength ceiling (`ln(1 + K·f) / ln(1 + K)` at a 1M window).
-const LOG_SCALE_MAX_K: f64 = 6.0;
+const LOG_SCALE_MAX_K: f64 = 4.0;
 
 /// Scale the drawn fill's log-curve strength with the resolved context window.
 fn log_scaled_fill(pct: f64, window: Option<u64>) -> f64 {
@@ -447,9 +447,9 @@ mod tests {
     #[test]
     fn log_scaled_fill_at_one_million_preserves_bounds_and_known_points() {
         assert_close(log_scaled_fill(0.0, Some(1_000_000)), 0.0);
-        assert_close(log_scaled_fill(10.0, Some(1_000_000)), 24.1);
-        assert_close(log_scaled_fill(40.0, Some(1_000_000)), 62.9);
-        assert_close(log_scaled_fill(80.0, Some(1_000_000)), 90.3);
+        assert_close(log_scaled_fill(10.0, Some(1_000_000)), 20.9);
+        assert_close(log_scaled_fill(40.0, Some(1_000_000)), 59.4);
+        assert_close(log_scaled_fill(80.0, Some(1_000_000)), 89.2);
         assert_close(log_scaled_fill(100.0, Some(1_000_000)), 100.0);
     }
 
