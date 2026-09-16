@@ -221,13 +221,15 @@ pub fn load(
     }
     // Children resolve first so an agent's `subagents:` checks against what loaded.
     agent::resolve_namespace(
-        agents_home,
-        "subagents",
-        &subagents,
-        &agents,
-        &bases,
-        skills,
-        &BTreeSet::new(),
+        agent::Resolver::new(
+            agents_home,
+            "subagents",
+            &subagents,
+            &agents,
+            &bases,
+            skills,
+            &BTreeSet::new(),
+        ),
         &mut loaded,
     );
     let children: BTreeSet<String> = loaded
@@ -238,13 +240,15 @@ pub fn load(
         .cloned()
         .collect();
     agent::resolve_namespace(
-        agents_home,
-        "agents",
-        &agents,
-        &subagents,
-        &bases,
-        skills,
-        &children,
+        agent::Resolver::new(
+            agents_home,
+            "agents",
+            &agents,
+            &subagents,
+            &bases,
+            skills,
+            &children,
+        ),
         &mut loaded,
     );
     team::load(
