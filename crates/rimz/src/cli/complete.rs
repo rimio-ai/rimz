@@ -403,16 +403,16 @@ mod tests {
 
     #[test]
     fn agent_specs_include_configured_names_and_hide_permission_variants() {
-        let config: MachineConfig = toml::from_str(
-            r#"
-            [agents.profiles.writer]
-            agent = "claude"
-
-            [agents.teams.forge]
-            roles = [{ role = "planner", profile = "writer" }]
-            "#,
-        )
-        .expect("config fixture");
+        let mut config = MachineConfig::default();
+        config.agents.profiles.0.insert(
+            "writer".to_owned(),
+            toml::from_str(r#"agent = "claude""#).expect("profile fixture"),
+        );
+        config.agents.teams.0.insert(
+            "forge".to_owned(),
+            toml::from_str(r#"roles = [{ role = "planner", profile = "writer" }]"#)
+                .expect("team fixture"),
+        );
         let candidates = agent_specs_from(&config);
         assert!(
             candidates
@@ -435,16 +435,15 @@ mod tests {
 
     #[test]
     fn subagent_profiles_resolve_in_the_subagent_namespace() {
-        let config: MachineConfig = toml::from_str(
-            r#"
-            [agents.profiles.writer]
-            agent = "claude"
-
-            [subagents.profiles.reviewer]
-            agent = "codex"
-            "#,
-        )
-        .expect("config fixture");
+        let mut config = MachineConfig::default();
+        config.agents.profiles.0.insert(
+            "writer".to_owned(),
+            toml::from_str(r#"agent = "claude""#).expect("profile fixture"),
+        );
+        config.subagents.profiles.0.insert(
+            "reviewer".to_owned(),
+            toml::from_str(r#"agent = "codex""#).expect("profile fixture"),
+        );
         let candidates = launch_specs_from(&config, &config.subagents.profiles);
 
         assert!(
