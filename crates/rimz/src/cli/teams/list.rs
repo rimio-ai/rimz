@@ -389,38 +389,34 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
     team.roles
         .iter()
         .map(|binding| {
-            let resolved = rimz::harness::spec::resolve_profile(&binding.profile, profiles).ok();
+            // An unresolvable profile leaves the binding's own values as the report.
+            let resolved = rimz::harness::spec::resolve_role(binding, profiles).ok();
             RoleReport {
                 signals: Vec::new(),
                 role: binding.role.clone(),
                 profile: binding.profile.clone(),
                 kind: resolved.as_ref().map(|profile| profile.kind.to_string()),
-                model: binding.model.clone().or_else(|| {
-                    resolved
-                        .as_ref()
-                        .and_then(|profile| profile.launch.model.clone())
-                }),
-                effort: binding.effort.clone().or_else(|| {
-                    resolved
-                        .as_ref()
-                        .and_then(|profile| profile.launch.effort.clone())
-                }),
-                mode: binding
-                    .mode
-                    .or_else(|| resolved.as_ref().and_then(|profile| profile.launch.mode))
+                model: resolved
+                    .as_ref()
+                    .and_then(|profile| profile.launch.model.clone())
+                    .or_else(|| binding.model.clone()),
+                effort: resolved
+                    .as_ref()
+                    .and_then(|profile| profile.launch.effort.clone())
+                    .or_else(|| binding.effort.clone()),
+                mode: resolved
+                    .as_ref()
+                    .and_then(|profile| profile.launch.mode)
+                    .or(binding.mode)
                     .map(|mode| mode.to_string()),
-                system_prompt_file: binding.system_prompt_file.clone().or_else(|| {
-                    resolved
-                        .as_ref()
-                        .and_then(|profile| profile.system_prompt_file.clone())
-                }),
+                system_prompt_file: resolved
+                    .as_ref()
+                    .and_then(|profile| profile.system_prompt_file.clone())
+                    .or_else(|| binding.system_prompt_file.clone()),
                 append_system_prompt_files: resolved
                     .as_ref()
                     .map(|profile| profile.append_system_prompt_files.clone())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .chain(binding.append_system_prompt_files.iter().cloned())
-                    .collect(),
+                    .unwrap_or_else(|| binding.append_system_prompt_files.clone()),
             }
         })
         .collect()
