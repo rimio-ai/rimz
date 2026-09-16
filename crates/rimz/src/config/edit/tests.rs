@@ -683,6 +683,36 @@ fn set_definition_fields_names_the_markdown_source_without_writing() {
 }
 
 #[test]
+fn set_is_not_locked_out_by_a_broken_definition_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "[agents.commands]\nprobe = \"echo\"\n").unwrap();
+    for (file, text) in [
+        ("agents/claude.md", "---\ndescription: Base\n---\nBase."),
+        (
+            "agents/worker.md",
+            "---\ndescription: Worker\nmodel: opus\ntools: [Bash]\n---\n",
+        ),
+        (
+            "teams/probe.md",
+            "---\nleader: lead\nstages: [Plan]\nroles:\n  - agent: worker\n    role: lead\n    owns: [Plan]\n---\nPipeline.",
+        ),
+    ] {
+        let path = dir.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    assert!(MachineConfig::load_from(&config, dir.path()).is_err());
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(&config, dir.path()));
+    editor.set("timezone", "UTC").unwrap();
+    assert!(
+        std::fs::read_to_string(config)
+            .unwrap()
+            .contains("timezone")
+    );
+}
+
+#[test]
 fn setup_merge_leaves_legacy_toml_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let legacy = dir.path().join("profiles/old/agent.toml");
