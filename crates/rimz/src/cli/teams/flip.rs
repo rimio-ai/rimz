@@ -167,11 +167,12 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
             .unwrap_or(worktree.as_os_str())
             .to_string_lossy()
     )?;
-    if !team.stages.is_empty() {
+    let pipeline = team.pipeline_stages();
+    if !pipeline.is_empty() {
         writeln!(
             out,
             "  {}",
-            team_stage::stage_strip(&team.stages, Some(&receipt.to))
+            team_stage::stage_strip(&pipeline, Some(&receipt.to))
         )?;
     }
     writeln!(out, "  note     {}", args.note.replace(['\r', '\n'], " "))?;
