@@ -198,7 +198,7 @@ Each agent is a small stacked card whose anatomy is drawn in [the interface refe
 A card's line set is fixed before any content fills it, so a provider that starts reporting a field cannot grow a line. [`template`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/template.rs) maps four inputs to an ordered list of slots:
 
 - **Stage** (`CardStage`), from durable lifecycle facts only. A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge; `labeled` means it carries a RimZ-authored description instead of the compose affordance. Anything else is `Engaged`.
-- **Expansion**: selected (including every visible teammate of a selected named-team member), or opened by the delegation toggle.
+- **Expansion** (`CardExpansion`): `by_selection` (selected, including every visible teammate of a selected named-team member) picks the card shape; `delegation` (the sticky header override, else `by_selection` or `expanded` density) picks whether the delegation entries show.
 - **Density**: `[theme.display] card_density`, one of `auto`, `expanded`, `compact`.
 - **Status**, read only by the resting compact arm.
 
@@ -211,18 +211,19 @@ A card's line set is fixed before any content fills it, so a provider that start
 | fresh labeled, not expanded | identity, description |
 | fresh unlabeled, expanded | identity, awaiting dots, gauge |
 | fresh labeled, expanded | identity, description, gauge |
-| engaged, not expanded, `auto` or `compact` density | identity, description, gauge, tokens, delegation |
-| engaged, expanded or `expanded` density | the above plus delegation entries |
+| engaged, delegation closed | identity, description, gauge, tokens, delegation |
+| engaged, delegation open | the above plus delegation entries |
 
-A unit test pins every combination. Under `auto` and `expanded`, expansion only appends lines, so a card never reflows. Compact is the exception: a resting compact card is shorter, and expanding it reflows to its stage's full shape. Selection styling stays on the focused row even when teammates expand with it.
+A unit test pins every combination. Under `auto` and `expanded`, selection and the delegation section only append or drop the entries, so a card's standard lines never reflow. Compact is the exception: a resting compact card is shorter, and expanding it reflows to its stage's full shape. Selection styling stays on the focused row even when teammates expand with it.
 
-The `Delegation` slot is one standing line with the lifetime child count and cost and the count of armed one-shot waits plus background shells; it renders empty until any exists. `DelegationEntries` lists subagents, then pending waits with background shells merged in after the command and PID waits (ahead of signals), then an optional history tail. Pending waits come from the loop catalog at enrichment; background shells come from the rollup's durable `background_shells`, folded from adapter hook reports ([model.md](../agents/model.md#turn-endings-and-parked-turns)). One frame-rate rule follows from the slots: the serve loop holds the breath cadence while a visible expanded card shows the unlabeled compose affordance. Wait entries lead with static glyphs, so they never hold the frame grid.
+The `Delegation` slot is one standing line with the lifetime child count and cost and the count of armed one-shot waits plus background shells; it renders empty until any exists. `DelegationEntries` lists subagents in bands, then pending waits with background shells merged in after the command and PID waits (ahead of signals), then an optional `+K older` tail. Pending waits come from the loop catalog at enrichment; background shells come from the rollup's durable `background_shells`, folded from adapter hook reports ([model.md](../agents/model.md#turn-endings-and-parked-turns)). Two frame-rate rules follow from the slots: the serve loop holds the breath cadence while a visible selected card shows the unlabeled compose affordance, and it holds the fast grid while a visible card's open delegation entries hold motion (a live child's head or a running shell job's working lead), whatever the parent's own status. Timer and signal leads are static and hold nothing.
 
-Delegation entries have two sources. Selection or `expanded` density shows the current entries. The renderer-local `UiState.expanded_delegations` toggle also reveals prior-turn history, independently of selection:
+Delegation entries answer to two renderer-local states in `UiState`, neither of which travels back to the data plane:
 
-- Snapshots keep finished prior-turn children tagged `prior_turn`, and the entries list hides them unless the toggle is open. The muted tail reads `  +K more` for K tagged entries while closed and at least one untagged child entry is shown; it is absent while open, without history, or with no child entry above it, where the delegation line is the only toggle.
-- The delegation line and the history tail both carry `HitTarget::ToggleDelegation`. A click toggles the entry, anchors selection, and pins manual scroll, and never focuses a pane. Closing the toggle falls back to whatever selection or density shows.
-- Each toggle entry stores the row id and the parent's `user_turn_started_at`. A changed turn stamp makes it inert at once and pruning removes it, so the next user-authored prompt closes the toggle; automatic deliveries leave it open.
+- `delegation_overrides` maps a row id to open or closed. The delegation line carries `HitTarget::ToggleDelegation { row, open }` with the state its click sets, so a closed selected card and an open unselected one are both one click away. The override outranks selection and density, survives prompts and selection moves, and is pruned only when the row leaves the snapshot.
+- `delegation_history` maps a row id to the parent's `user_turn_started_at` at the `+K older` click (`HitTarget::ToggleDelegationHistory`). A changed turn stamp makes it inert at once and pruning removes it, so the next user-authored prompt folds the history; automatic deliveries leave it open. Closing the section clears it too. Both clicks anchor selection, pin manual scroll, and never focus a pane.
+
+The entries classify `sub_agents` by status and the snapshot clock ([`bands.rs`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/bands.rs)), never by the snapshot's `prior_turn` tag: live children (not `success`/`failed`) in the projection's spawn order, then finished children by `last_activity` descending while younger than `[theme.display] recent_subagent_secs` and up to `max_recent_subagents`, then the older rest when history is open. The muted `  +K older` tail shows while history is closed and `K = sub_agent_count − rows` is positive; children the projection reaped count in `K` with no row to reveal. The shorter list is a prefix of the longer one, and a finishing child moves only from the live band to the head of the recent band.
 
 ### What fills the slots
 
