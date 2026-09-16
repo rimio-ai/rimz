@@ -14,7 +14,7 @@ expression: screen
 ▌  delegate                                          ▐
 ▌  ▢ ──────────────────────────────────────────    0%▐
 ▌  ▤ 0                                               ▐
-▌  ⧉ subagents (9)                                   ▐
+▌  ⧉ subagents (9) · ⧖ waits (1)                     ▐
 ▌    ⣾ task-1                                        ▐
 ▌                                               ◑ <t>▐
 ▌    ⣾ task-4                                        ▐
@@ -24,8 +24,8 @@ expression: screen
 ▌    ✓ task-0                                   ◔  5m▐
 ▌    ✓ task-8                                   ◔  7m▐
 ▌    ✓ task-5                                   ◔ <t>▐
+▌    ⌁ deploy.done                              ◔ <1m▐
 ▌  +2 older                                          ▐
-
 
 
 
