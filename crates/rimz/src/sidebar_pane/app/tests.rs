@@ -219,12 +219,22 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         .unwrap(),
     ];
     assert!(is_animating(&snapshot, &ui, 0, false));
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .sub_agents[0]
-        .status = crate::agents::AgentStatus::Success;
-    assert!(!is_animating(&snapshot, &ui, 0, false));
+    // Only a running child's head moves on the fast grid; a live child resting
+    // in any other status, like a finished one, leaves the open section cold.
+    for status in [
+        crate::agents::AgentStatus::Idle,
+        crate::agents::AgentStatus::Sleeping,
+        crate::agents::AgentStatus::Waiting,
+        crate::agents::AgentStatus::Paused,
+        crate::agents::AgentStatus::Success,
+    ] {
+        snapshot.worktree_groups[0].rows[0]
+            .as_agent_mut()
+            .unwrap()
+            .sub_agents[0]
+            .status = status;
+        assert!(!is_animating(&snapshot, &ui, 0, false), "{status:?}");
+    }
 }
 
 #[test]
