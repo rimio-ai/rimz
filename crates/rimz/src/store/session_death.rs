@@ -170,14 +170,16 @@ fn cleared_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bo
 
 /// Whether the newer session is a *relaunch* of the older in their shared pane —
 /// a provably different process — rather than a same-process in-pane thread fork.
-/// A Codex `/side` / `/btw` fork registers a fresh session id in the live process
-/// the primary still owns, so the pair shares one owner pid and must not collapse;
-/// only the projection (`stamped_agent_for_pane`) arbitrates such a pair, pinning
-/// the pane to its earliest-registered primary. A standalone relaunch records two
-/// distinct live pids, so it still collapses here. A daemon-routed relaunch shares
-/// the daemon's owner pid like a fork, but the loaded-thread reaper
-/// (`SidebarSnapshot::reap_runtime`) and the projection's process-start guard
-/// (`crate::store::snapshot::panes::pane_start_allows_bind`) collapse it instead.
+/// A persistent in-process fork registers a fresh session id in the live
+/// process the primary still owns, so the pair shares one owner pid and must
+/// not collapse; only the projection (`stamped_agent_for_pane`) arbitrates such
+/// a pair, pinning the pane to its earliest-registered primary. A standalone
+/// relaunch records two distinct live pids, so it still collapses here. A
+/// daemon-routed relaunch shares the daemon's owner pid like a fork, but the
+/// loaded-thread reaper (`SidebarSnapshot::reap_runtime`) and the projection's
+/// process-start guard
+/// (`crate::store::snapshot::panes::pane_start_allows_bind`) collapse it
+/// instead.
 /// Unknown owners never collapse — a missing pid cannot prove a relaunch.
 fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
     match (agent_owner_pid(older), agent_owner_pid(newer)) {
