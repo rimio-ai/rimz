@@ -171,7 +171,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         writeln!(
             out,
             "  {}",
-            super::stage_strip(&team.stages, Some(&receipt.to))
+            team_stage::stage_strip(&team.stages, Some(&receipt.to))
         )?;
     }
     writeln!(out, "  note     {}", args.note.replace(['\r', '\n'], " "))?;

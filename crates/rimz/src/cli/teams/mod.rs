@@ -212,22 +212,6 @@ fn parse_progress_note(note: &str) -> Result<String, String> {
     Ok(note.to_owned())
 }
 
-pub(super) fn stage_strip(stages: &[String], current: Option<&str>) -> String {
-    stages
-        .iter()
-        .map(String::as_str)
-        .chain(std::iter::once(rimz::config::DONE_STAGE))
-        .map(|stage| {
-            if current == Some(stage) {
-                format!("[{stage}]")
-            } else {
-                stage.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" → ")
-}
-
 pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         None => match args.name {
@@ -535,23 +519,6 @@ mod tests {
         };
         assert_eq!(args.worktree.as_deref(), Some("feat-x"));
         assert!(TeamsHarness::try_parse_from(["rimz", "wait"]).is_err());
-    }
-
-    #[test]
-    fn stage_strip_matches_exact_names_and_includes_terminal() {
-        let stages = vec!["Plan".into(), "Plan review".into()];
-        assert_eq!(
-            stage_strip(&stages, Some("Plan review")),
-            "Plan → [Plan review] → Done"
-        );
-        assert_eq!(
-            stage_strip(&stages, Some("Done")),
-            "Plan → Plan review → [Done]"
-        );
-        assert_eq!(
-            stage_strip(&stages, Some("Plan (delta)")),
-            "Plan → Plan review → Done"
-        );
     }
 
     #[test]

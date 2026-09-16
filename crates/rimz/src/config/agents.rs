@@ -263,6 +263,16 @@ impl Team {
             .iter()
             .flat_map(|role| role.owns.iter().map(String::as_str))
     }
+
+    /// The declared pipeline: `stages` when the team lists them, else what the roles own,
+    /// in role order. `Done` is implicit and never part of it.
+    pub fn pipeline_stages(&self) -> Vec<String> {
+        if self.stages.is_empty() {
+            self.owned_stages().map(str::to_owned).collect()
+        } else {
+            self.stages.clone()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
