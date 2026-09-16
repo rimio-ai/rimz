@@ -988,6 +988,13 @@ fn compile_team_layout(
     Ok(layout)
 }
 
+/// Resolve a role binding: its profile chain, then the binding's own overrides on top.
+pub fn resolve_role(binding: &RoleBinding, profiles: &ProfilesConfig) -> Result<ResolvedProfile> {
+    let mut resolved = resolve_profile(&binding.profile, profiles)?;
+    resolved.apply_role(binding);
+    Ok(resolved)
+}
+
 /// Resolve `name` through profile inheritance to a concrete built-in kind.
 pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<ResolvedProfile> {
     let mut cur = name.to_owned();
@@ -1778,8 +1785,7 @@ fn prepare_team<'a>(
                 profile: binding.profile.clone(),
             });
         }
-        let mut resolved = resolve_profile(&binding.profile, profiles)?;
-        resolved.apply_role(binding);
+        let mut resolved = resolve_role(binding, profiles)?;
         normalize_auto_compact(&mut resolved.auto_compact, &binding.profile)?;
         let resolved = rebase_onto(resolved, base_override);
         let args = render_profile_args(&binding.profile, &resolved)?;
