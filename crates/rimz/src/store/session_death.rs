@@ -269,9 +269,9 @@ mod tests {
     }
 
     #[test]
-    fn side_conversation_host_is_a_launched_child_but_never_a_provider_subagent() {
-        let (_, newer) =
-            conversation_pair("codex", AgentStatus::Success, Some(SessionOrigin::Fresh));
+    fn side_conversation_host_is_the_unsuperseded_card_owner() {
+        let (predecessor, mut newer) =
+            conversation_pair("codex", AgentStatus::Running, Some(SessionOrigin::Fresh));
         let mut side = AgentLifecycleObservation::new(
             Some(crate::ids::AgentSessionId::from("side")),
             crate::agents::lifecycle::LifecycleSignal::Registered,
@@ -282,6 +282,15 @@ mod tests {
         let host = |agents: &[AgentState]| {
             side_conversation_host(agents, &kind, &side).map(|host| host.agent_id.to_string())
         };
+
+        // A compaction predecessor left running outranks its rested
+        // continuation on open turn alone; only supersession retires it.
+        newer.compacted_from = Some(predecessor.agent_id.clone());
+        assert!(predecessor.holds_open_turn() && !newer.holds_open_turn());
+        assert_eq!(
+            host(&[predecessor.clone(), newer.clone()]).as_deref(),
+            Some("newer")
+        );
 
         let mut child = newer;
         child.parent_agent_id = Some(crate::ids::AgentSessionId::from("lead"));
