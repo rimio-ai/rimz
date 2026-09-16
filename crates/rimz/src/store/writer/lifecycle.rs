@@ -9,7 +9,7 @@ use crate::agents::{
 use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId, EventId, LoginName, WorkspaceId};
 use crate::store::event::{self, EventEnvelope};
-use crate::store::snapshot;
+use crate::store::{session_death, snapshot};
 use crate::workspace::record;
 
 use super::{Store, debounce};
@@ -41,9 +41,9 @@ pub struct AgentLifecycleReceipt {
     pub side_conversation: Option<SideConversation>,
 }
 
-/// A side conversation's receipt: the root session hosting it, once the
-/// side registration has folded and a root proved the instance, and whether
-/// that host's own turn is running.
+/// A side conversation's receipt: the card owner hosting it, resolved at this
+/// hook when a live root proves the instance, and whether that host's own turn
+/// is running.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SideConversation {
     pub host: Option<AgentSessionId>,
@@ -77,16 +77,13 @@ impl Store {
                 .observation
                 .agent_id
                 .as_ref()
-                .and_then(|agent_id| cache.agent_identity.side_session_host(agent_id))
-                .map(|host| SideConversation {
-                    host_running: host
-                        .and_then(|host| find_agent(&agents, &intent.agent_kind, host))
-                        .is_some_and(|host| host.status == AgentStatus::Running),
-                    host: host.cloned(),
-                });
-            if known_side.is_some()
-                || intent.observation.origin == Some(SessionOrigin::SideConversation)
-            {
+                .is_some_and(|agent_id| cache.agent_identity.is_side_session(agent_id));
+            if known_side || intent.observation.origin == Some(SessionOrigin::SideConversation) {
+                let host = session_death::side_conversation_host(
+                    &agents,
+                    &intent.agent_kind,
+                    intent.observation,
+                );
                 let mut receipt = AgentLifecycleReceipt {
                     prior_status: None,
                     transition: None,
@@ -94,9 +91,12 @@ impl Store {
                     primary_event_id: None,
                     events: Vec::new(),
                     rotation_due: false,
-                    side_conversation: Some(known_side.clone().unwrap_or_default()),
+                    side_conversation: Some(SideConversation {
+                        host: host.map(|host| host.agent_id.clone()),
+                        host_running: host.is_some_and(|host| host.status == AgentStatus::Running),
+                    }),
                 };
-                if known_side.is_some() {
+                if known_side {
                     return Ok(receipt);
                 }
                 let envelope = EventEnvelope::agent_lifecycle(

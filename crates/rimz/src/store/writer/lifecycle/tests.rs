@@ -191,7 +191,13 @@ fn side_conversation_receipts_append_only_the_registration() {
     ));
     side.origin = Some(SessionOrigin::SideConversation);
     let receipt = append("SessionStart", &side, 0);
-    assert_eq!(receipt.side_conversation, Some(SideConversation::default()));
+    assert_eq!(
+        receipt.side_conversation,
+        Some(SideConversation {
+            host: Some(AgentSessionId::from("sess-1")),
+            host_running: true,
+        })
+    );
     assert!(receipt.primary_event_id.is_some());
     assert!(receipt.events.is_empty());
     assert!(receipt.prior_status.is_none());
@@ -220,6 +226,70 @@ fn side_conversation_receipts_append_only_the_registration() {
     );
     assert_eq!(store.read_events().unwrap().len(), 3);
     assert_eq!(agents(), before);
+}
+
+#[test]
+fn side_conversation_host_is_the_pane_card_owner_at_each_hook() {
+    let (_dir, store) = test_store();
+    let append = |event_name, observation: &AgentLifecycleObservation| {
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("codex"),
+                event_name,
+                observation,
+                spawned_subagents: &[],
+            })
+            .expect("append lifecycle")
+    };
+    let in_pane = |id: &str, pid: u32, origin| {
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(id)),
+            LifecycleSignal::Registered,
+        );
+        observation.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+        observation.agent_pid = Some(pid);
+        observation.origin = Some(origin);
+        observation
+    };
+    let pid = std::process::id();
+    append(
+        "SessionStart",
+        &in_pane("primary", pid, SessionOrigin::Fresh),
+    );
+    // `/clear` swaps the conversation in the same process; activity must be
+    // strictly newer for the cleared root to retire its predecessor.
+    std::thread::sleep(Duration::from_millis(5));
+    append(
+        "SessionStart",
+        &in_pane("cleared", pid, SessionOrigin::Fresh),
+    );
+    let rotated = store
+        .rotate_event_log(0, None)
+        .expect("rotate the event log");
+    assert!(rotated.rotation.is_rotated());
+    assert_eq!(rotated.carryover_agents, 2);
+    let host = |observation: &AgentLifecycleObservation, event_name| {
+        append(event_name, observation)
+            .side_conversation
+            .expect("side receipt")
+            .host
+    };
+
+    let mut side = in_pane("side", pid, SessionOrigin::SideConversation);
+    assert_eq!(
+        host(&side, "SessionStart"),
+        Some(AgentSessionId::from("cleared")),
+        "the carried-over post-/clear root owns the card"
+    );
+    side.origin = None;
+    side.signal = LifecycleSignal::TurnStarted { turn_id: None };
+    assert_eq!(
+        host(&side, "UserPromptSubmit"),
+        Some(AgentSessionId::from("cleared"))
+    );
+    side.agent_pid = Some(pid.wrapping_add(1));
+    assert_eq!(host(&side, "Stop"), None, "another process hosts nothing");
 }
 
 #[test]
