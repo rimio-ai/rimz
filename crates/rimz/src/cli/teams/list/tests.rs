@@ -2,6 +2,50 @@ use super::*;
 use rimz::agents::AgentStatus;
 use rimz::config::RoleBinding;
 
+#[test]
+fn team_source_survives_an_unrelated_broken_definition() {
+    let root = tempfile::tempdir().unwrap();
+    for directory in ["agents", "teams"] {
+        std::fs::create_dir(root.path().join(directory)).unwrap();
+    }
+    for (path, text) in [
+        (
+            "agents/claude.md",
+            "---\ndescription: Base\n---\nBase prompt.",
+        ),
+        (
+            "agents/worker.md",
+            "---\ndescription: Worker\nagent: claude\ntools: [Bash, AskUserQuestion]\n---",
+        ),
+        (
+            "agents/broken.md",
+            "---\ndescription: Broken\nfollows: missing\n---",
+        ),
+        (
+            "teams/probe.md",
+            "---\nleader: lead\nstages: [Plan]\nroles:\n  - agent: worker\n    role: lead\n    owns: [Plan]\n---\nPipeline.",
+        ),
+    ] {
+        std::fs::write(root.path().join(path), text).unwrap();
+    }
+    let loaded = rimz::config::definitions::load(
+        root.path(),
+        rimz::config::definitions::SkillLibraryCheck::Skip,
+        &rimz::config::CommandsConfig::default(),
+    );
+    assert!(
+        loaded
+            .errors
+            .iter()
+            .any(|error| error.path == root.path().join("agents/broken.md"))
+    );
+    assert!(loaded.teams.0.contains_key("probe"), "{:?}", loaded.errors);
+    assert_eq!(
+        team_source(root.path(), "probe", &loaded.sources),
+        Some(root.path().join("teams/probe.md").display().to_string()),
+    );
+}
+
 fn snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
     SidebarSnapshot::build_with_agents(
         rimz::WorkspaceId::parse("ws_000000000000000000000000").unwrap(),

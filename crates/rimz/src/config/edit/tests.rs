@@ -826,6 +826,34 @@ fn set_missing_file_uncomments_template_default_in_place() {
 }
 
 #[test]
+fn set_agents_isolation_keeps_gc_template_comments_under_gc() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, Kind::Core.template()).expect("write fresh template");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+
+    editor
+        .set("agents.isolation", "sandbox")
+        .expect("set isolation");
+
+    let rendered = std::fs::read_to_string(path).expect("read config");
+    let gc_body = rendered
+        .split_once("[gc]\n")
+        .expect("gc table")
+        .1
+        .split_once("\n[agents]\n")
+        .expect("agents table follows gc")
+        .0;
+    assert!(gc_body.contains("# auto = true"), "{rendered}");
+    assert!(gc_body.contains("# older_than = \"7d\""), "{rendered}");
+    let parsed: toml::Value = toml::from_str(&rendered).expect("valid config");
+    assert_eq!(parsed["agents"]["isolation"].as_str(), Some("sandbox"));
+}
+
+#[test]
 fn merge_defaults_is_byte_idempotent_with_kept_overrides() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("config.toml");

@@ -378,6 +378,11 @@ fn doctor_reports_ignored_fragments_until_replaced_with_definitions() {
     std::fs::create_dir_all(&profile).expect("mkdir legacy profile");
     std::fs::write(profile.join("agent.toml"), "agent = \"claude\"\n").expect("write fragment");
     std::fs::create_dir_all(legacy.join("skills/own")).expect("mkdir provider skills");
+    let team = env.agents_home().join("teams/forge/team.toml");
+    std::fs::create_dir_all(team.parent().unwrap()).unwrap();
+    std::fs::write(&team, "ignored").unwrap();
+    let config = env.agents_home().join("agents.toml");
+    std::fs::write(&config, "ignored").unwrap();
 
     let report = doctor_json(
         &env.rimz()
@@ -385,11 +390,19 @@ fn doctor_reports_ignored_fragments_until_replaced_with_definitions() {
             .output()
             .expect("spawn doctor"),
     );
-    assert_eq!(
-        report["machine_config"]["legacy_agents_home"]["fix"],
-        "no longer read; move `[agents]` keys to config.toml and definitions to the Markdown trees",
-        "{report:#}"
-    );
+    let notices = report["machine_config"]["legacy_agents_home"]
+        .as_array()
+        .expect("legacy list");
+    assert_eq!(notices.len(), 3, "{report:#}");
+    for path in [&config, &team, &profile.join("agent.toml")] {
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice["path"] == path.display().to_string()),
+            "{report:#}"
+        );
+    }
+    assert_eq!(report["machine_config"]["broken_files"], json!([]));
 
     crate::common::write_definition(
         &env,
@@ -399,6 +412,8 @@ fn doctor_reports_ignored_fragments_until_replaced_with_definitions() {
         "",
     );
     std::fs::remove_dir_all(legacy.join("profiles")).expect("remove ignored fragments");
+    std::fs::remove_file(config).unwrap();
+    std::fs::remove_file(team).unwrap();
     let report = doctor_json(
         &env.rimz()
             .args(["doctor", "--json"])
@@ -406,7 +421,7 @@ fn doctor_reports_ignored_fragments_until_replaced_with_definitions() {
             .expect("spawn doctor"),
     );
     assert!(
-        report["machine_config"].get("legacy_agents_home").is_none(),
+        report["machine_config"]["legacy_agents_home"] == json!([]),
         "{report:#}"
     );
 }

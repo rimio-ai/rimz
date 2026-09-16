@@ -125,6 +125,39 @@ fn config_set_host_never_probes_bwrap() {
 }
 
 #[test]
+fn agents_validate_refuses_what_launch_refuses() {
+    let env = Env::new();
+    write_machine_file(
+        &env.config_root().join("rimz/config.toml"),
+        "[agents.commands]\nprobe = \"echo\"\n",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nmodel: opus\ntools: [Bash]",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "probe",
+        "leader: lead\nstages: [Plan]\nroles:\n  - agent: worker\n    role: lead\n    owns: [Plan]",
+        "Pipeline.",
+    );
+    env.rimz()
+        .args(["agents", "explain", "worker"])
+        .assert()
+        .failure()
+        .stderr(contains("probe"));
+    env.rimz()
+        .args(["agents", "validate"])
+        .assert()
+        .failure()
+        .stdout(contains("probe"));
+}
+
+#[test]
 fn agents_home_definitions_feed_both_profile_catalogues_without_kind_rows() {
     let env = Env::new();
     crate::common::write_kind_base(&env, "claude");

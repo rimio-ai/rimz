@@ -206,20 +206,16 @@ fn render_machine_config(
     tally: &mut Tally,
 ) -> io::Result<()> {
     section(w, tally, "MACHINE CONFIG")?;
-    if let Some(legacy) = &config.legacy_agents_home {
+    for legacy in &config.legacy_agents_home {
         let mut kv = KeyVals::new().indent(2);
         kv.push(
-            "legacy root",
+            "legacy file",
             verdict(
                 tally,
                 Health::Info,
-                format!(
-                    "{} holds legacy TOML RimZ no longer reads",
-                    home_relative(&legacy.path)
-                ),
+                format!("{}: {}", home_relative(&legacy.path), legacy.fix),
             ),
         );
-        kv.push("fix", verdict(tally, Health::Info, &legacy.fix));
         kv.render(w)?;
     }
     if config.broken_files.is_empty() {

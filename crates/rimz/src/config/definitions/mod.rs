@@ -11,7 +11,7 @@ mod tests;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use super::{AgentSpecSources, Profile, ProfilesConfig, PromptSource, TeamsConfig};
+use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
 #[derive(Clone, Copy, Debug)]
@@ -112,7 +112,12 @@ pub fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
     paths
 }
 
-pub fn load(agents_home: &Path, skills: SkillLibraryCheck<'_>) -> LoadedDefinitions {
+/// `commands` are the `[agents.commands]` names a `subagents:` list may also allow.
+pub fn load(
+    agents_home: &Path,
+    skills: SkillLibraryCheck<'_>,
+    commands: &CommandsConfig,
+) -> LoadedDefinitions {
     let mut loaded = LoadedDefinitions::default();
     let mut agents = Namespace::default();
     let mut subagents = Namespace::default();
@@ -222,8 +227,16 @@ pub fn load(agents_home: &Path, skills: SkillLibraryCheck<'_>) -> LoadedDefiniti
         &agents,
         &bases,
         skills,
+        &BTreeSet::new(),
         &mut loaded,
     );
+    let children: BTreeSet<String> = loaded
+        .subagent_profiles
+        .0
+        .keys()
+        .chain(commands.0.keys())
+        .cloned()
+        .collect();
     agent::resolve_namespace(
         agents_home,
         "agents",
@@ -231,6 +244,7 @@ pub fn load(agents_home: &Path, skills: SkillLibraryCheck<'_>) -> LoadedDefiniti
         &subagents,
         &bases,
         skills,
+        &children,
         &mut loaded,
     );
     team::load(
@@ -239,6 +253,7 @@ pub fn load(agents_home: &Path, skills: SkillLibraryCheck<'_>) -> LoadedDefiniti
         &subagents,
         &bases,
         skills,
+        &children,
         &mut loaded,
     );
     loaded

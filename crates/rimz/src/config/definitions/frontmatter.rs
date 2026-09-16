@@ -91,7 +91,7 @@ pub(super) struct RoleFrontmatter {
     pub effort: Option<String>,
     #[serde(default, deserialize_with = "token_count")]
     pub auto_compact: Option<String>,
-    #[serde(default, deserialize_with = "token_count")]
+    #[serde(default, deserialize_with = "flip_compact")]
     pub flip_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
@@ -104,6 +104,7 @@ pub(super) struct RoleFrontmatter {
     pub subagents: Option<Vec<String>>,
     #[serde(default, deserialize_with = "list")]
     pub skills: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
     pub signals: Option<Vec<SignalFrontmatter>>,
     #[serde(rename = "meka", default, deserialize_with = "retired_role_meka")]
     _meka: (),
@@ -149,9 +150,34 @@ pub(super) struct SignalBindingFrontmatter {
     pub prompt: Option<String>,
 }
 
-fn list<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<String>>, D::Error> {
+fn list<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<T>>, D::Error> {
     Ok(Some(
-        Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default(),
+        Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default(),
+    ))
+}
+
+fn flip_compact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Count {
+        Boolean(bool),
+        Text(String),
+        Integer(u64),
+    }
+    let invalid = || {
+        serde::de::Error::custom(
+            "flip-compact takes a token count such as '120k', a percentage such as '70%', or 'off'",
+        )
+    };
+    Ok(Some(
+        match Count::deserialize(deserializer).map_err(|_| invalid())? {
+            Count::Boolean(false) => "off".to_owned(),
+            Count::Boolean(true) => return Err(invalid()),
+            Count::Text(text) => text,
+            Count::Integer(count) => count.to_string(),
+        },
     ))
 }
 

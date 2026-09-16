@@ -28,7 +28,7 @@ pub(super) fn resume_lane(
         rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
     let mux = rimz::room::require_live_mux(globals.mux, &workspace)?;
-    let machine_config = crate::cli::machine_config();
+    let machine_config = crate::cli::launch_machine_config()?;
     let room = RoomContext::from_resolved(
         &workspace,
         machine_config.clone(),

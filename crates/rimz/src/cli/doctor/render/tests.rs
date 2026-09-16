@@ -67,7 +67,7 @@ fn machine_config_section_keeps_the_classified_problem_compact() {
             error: "line 144: `auto_continue` is defined more than once in the same table; fix: remove the extra `auto_continue` at /home/eddie/.config/rimz/config.toml:144, then re-run".to_owned(),
             kind: MachineConfigProblemKind::Parse,
         }],
-        legacy_agents_home: None,
+        legacy_agents_home: Vec::new(),
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -97,7 +97,7 @@ fn machine_config_definition_problem_names_launch_precondition() {
             error: "empty layout cell in `claude,,codex`".to_owned(),
             kind: MachineConfigProblemKind::Definition,
         }],
-        legacy_agents_home: None,
+        legacy_agents_home: Vec::new(),
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -112,24 +112,57 @@ fn machine_config_definition_problem_names_launch_precondition() {
 
 #[test]
 fn machine_config_legacy_agents_home_is_informational() {
+    let home = tempfile::tempdir().expect("home");
+    let leftovers = [
+        "agents.toml",
+        "profiles/reviewer/agent.toml",
+        "teams/forge/team.toml",
+    ];
+    for file in leftovers {
+        let path = home.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "ignored").unwrap();
+    }
     let config = MachineConfigHealth {
         broken_files: Vec::new(),
-        legacy_agents_home: Some(super::super::model::LegacyAgentsHome {
-            path: "/home/eddie/.agents".to_owned(),
-            fix: "no longer read; move `[agents]` keys to config.toml and definitions to the Markdown trees".to_owned(),
-        }),
+        legacy_agents_home: super::super::legacy_agents_home(home.path(), home.path()),
     };
     let mut tally = Tally::default();
     let out = strip(|w| render_machine_config(w, &config, &mut tally));
 
-    assert!(out.contains("legacy root"), "{out}");
-    assert!(out.contains("no longer reads"), "{out}");
-    assert!(
-        out.lines().any(
-            |line| line.contains("fix") && line.contains("move `[agents]` keys to config.toml")
-        ),
+    assert_eq!(
+        out.lines()
+            .filter(|line| line.contains("legacy file"))
+            .count(),
+        3,
         "{out}"
     );
+    for file in leftovers {
+        assert_eq!(
+            out.lines()
+                .filter(|line| line.contains(file) && line.contains("no longer read"))
+                .count(),
+            1,
+            "{out}"
+        );
+    }
+    assert!(
+        out.contains("[agents]/[subagents] keys now live in config.toml"),
+        "{out}"
+    );
+    for dir in ["agents", "subagents", "teams"] {
+        assert!(
+            out.contains(
+                &home
+                    .path()
+                    .join(dir)
+                    .join("<name>.md")
+                    .display()
+                    .to_string()
+            ),
+            "{out}"
+        );
+    }
     assert!(out.contains("all present files parse"), "{out}");
     assert!(tally.warns.is_empty() && tally.alarms.is_empty());
 }
@@ -259,7 +292,7 @@ fn report_fixture() -> DoctorReport {
         terminal: terminal_fixture(),
         machine_config: MachineConfigHealth {
             broken_files: Vec::new(),
-            legacy_agents_home: None,
+            legacy_agents_home: Vec::new(),
         },
         sandbox: super::super::model::Sandbox {
             mode: rimz::config::Isolation::Host,

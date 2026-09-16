@@ -66,7 +66,7 @@ Names must match `[A-Za-z0-9_-]+` and be unique across both definition trees. Re
 
 Children inherit `model`, `mode`, `effort`, `auto-compact`, `budget`, `tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
-Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases expand as `astra` → `gpt-6-astra`, `luna` → `gpt-5.6-luna`, and `terra` → `gpt-5.6-terra`. A kind whose adapter declares native auto-compaction support defaults to `258k`; other kinds have no default window. Provider support is checked at launch, including explicit effort and compaction settings.
+Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases expand as `astra` → `gpt-6-astra`, `luna` → `gpt-5.6-luna`, and `terra` → `gpt-5.6-terra`. A kind whose adapter declares native auto-compaction support defaults to `258k`; other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, or `auto-compact` field. Defaults are filled only when supported.
 
 ### Kind bases
 
@@ -108,7 +108,7 @@ Other tool bases do not toggle Codex settings. Markdown definitions do not accep
 
 ## Delegation and skills
 
-Omitting `subagents` leaves RimZ delegation unrestricted; a list replaces that policy with named children, and `[]` denies all. Names are trimmed and deduplicated, must be nonempty, and must name a subagent definition, registered kind, or the built-in `general` fallback. A subagent definition cannot set or inherit this field. A direct profile cannot combine any `subagents` list with the native `Agent` tool: choose the RimZ doorway or native delegation.
+Omitting `subagents` leaves RimZ delegation unrestricted; a list replaces that policy with named children, and `[]` denies all. Names are trimmed and deduplicated, must be nonempty, and must name a subagent definition that loads, an `[agents.commands]` entry, a registered kind, or the built-in `general` fallback. Naming a subagent that failed to load fails the listing definition. A subagent definition cannot set or inherit this field. A direct profile cannot combine any `subagents` list with the native `Agent` tool: choose the RimZ doorway or native delegation.
 
 A `skills` list requires the `Skill` tool except on Pi. Entries are trimmed and deduplicated bare directory names, never paths, whitespace, or `<name>:<mode>` strings. In sandbox mode, each listed skill must have a readable `skills/<name>/SKILL.md`. A skill marked user-only for the selected provider is rejected: frontmatter `disable-model-invocation: true` for frontmatter-based providers, or `policy.allow_implicit_invocation: false` in `agents/openai.yaml` for Codex. Invalid marker metadata or unreadable files also fail.
 
@@ -160,11 +160,17 @@ signals:
     prompt: Read the review and continue the plan.
 ```
 
-A selector is `family.event` or `family.*`: the family begins with a lowercase ASCII letter, and words contain only lowercase ASCII letters, digits, `_`, or `-`. No multi-dot or partial-wildcard selectors are accepted. Mapping entries accept only `signal`, `match`, and `prompt`. `match` maps payload field names to nonempty strings; all fields must match. An `agent.*` binding requires `handle` or `session`. A supplied prompt must be nonblank and is trimmed. An omitted or null signals field has no bindings; `[]` is refused. Launch also validates event scope. See [team signal delivery](../guide/teams.md#send-events-to-the-responsible-role).
+A selector is `family.event` or `family.*`: the family begins with a lowercase ASCII letter, and words contain only lowercase ASCII letters, digits, `_`, or `-`. No multi-dot or partial-wildcard selectors are accepted. Mapping entries accept only `signal`, `match`, and `prompt`. `match` maps payload field names to nonempty strings; all fields must match. An `agent.*` binding requires `handle` or `session`. A supplied prompt must be nonblank and is trimmed. An omitted signals field has no bindings; a supplied field must be a nonempty list, so null and `[]` are refused. Launch also validates event scope. See [team signal delivery](../guide/teams.md#send-events-to-the-responsible-role).
 
 ### Flip compaction
 
 `flip-compact` accepts nonnegative integer token counts, strings such as `120k` or `1m`, percentages from `0%` through `100%`, or case-insensitive `off`; decimals, repeated suffixes, and overflowing counts fail. By default, a seat owning `Plan` gets `120k`; other seats get `180k`. These role defaults override the machine handoff setting. A provider without a manual compact command requires `off`.
+
+```yaml
+flip-compact: off
+```
+
+YAML boolean `false` is also accepted as `off`; `true` is refused.
 
 This is separate from native `auto-compact`. A role leaving its stage for another owner's stage compacts at its next turn boundary only when occupied context reaches the threshold. Flips to `Done`, user flips, same-stage re-fires, and moves between self-owned stages do not compact. See [stage handoff](../guide/teams.md#hand-off-with-one-command).
 
@@ -175,7 +181,7 @@ rimz agents validate
 rimz agents validate --json
 ```
 
-Validation reads the definition trees without launching agents or writing generated files. Human output groups agents, subagents, and teams; team rows include stages and leader, followed by seats. Errors appear last as `path: message`. JSON returns `{rows, errors}`; rows carry namespace, name, kind, model, effort, source, and team-seat metadata where applicable. Any error makes the exit status nonzero. If the skill library is absent, validation warns once and skips library checks; an existing library is checked even under host isolation. It also applies the shared profile, namespace, chain, and team checks.
+Validation reads the definition trees without launching agents or writing generated files. Human output groups agents, subagents, and teams; team rows include stages and leader, followed by seats. Errors appear last as `path: message`. JSON returns `{rows, errors}`; rows carry namespace, name, kind, model, effort, source, and team-seat metadata where applicable. Any error makes the exit status nonzero. If the skill library is absent, validation warns once under host isolation and skips library checks; under sandbox isolation the missing library is an error, as it is at launch. An existing library is checked even under host isolation. It also reports every error the launch path's config load records (commands from `config.toml` included), so a set that passes validation is a set that launches.
 
 The loader collects independent errors rather than stopping at the first file. Read-only machine views retain successful definitions; launch entry points refuse broken definitions instead of silently substituting another profile. `rimz doctor` and startup notices direct you here.
 

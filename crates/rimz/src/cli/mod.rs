@@ -843,7 +843,15 @@ pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -
     Ok(())
 }
 
-pub(crate) fn require_definitions(config: &rimz::config::MachineConfig) -> Result<()> {
+/// The machine config every launch entry uses: one broken definition refuses the
+/// launch with its source file, so no entry can start on a partial set.
+pub(crate) fn launch_machine_config() -> Result<std::sync::Arc<rimz::config::MachineConfig>> {
+    let config = machine_config();
+    require_definitions(&config)?;
+    Ok(config)
+}
+
+fn require_definitions(config: &rimz::config::MachineConfig) -> Result<()> {
     if let Some(message) = config.definition_failure() {
         anyhow::bail!("{message}");
     }
