@@ -16,7 +16,7 @@ Before handing off: your craft's verification done, every change committed and t
 
 Your craft's report goes to `implement-notes.md`, sized to the change, never the blackboard, so the Review owner can read the board before their blind pass. Then flip Stage and ping the Review owner.
 
-After Submit the branch is yours to keep green and current, alone. When the repo carries CI, a failing run reaches you as a signal message with its evidence: run Skill(fix-ci) on it. A trunk that moved under the branch: Skill(rebase), the conflicts resolved by you. Either way: commit, push, one board line, rest. A ping goes out only when the fix changed behavior the Review owner judged, which opens their delta round; a fix that outgrows the Goal is the user's call, raised as your craft says.
+After Submit the branch is yours to keep green and current, alone. When the repo carries CI, a failing run reaches you as a signal message with its evidence: run Skill(fix-ci) on it. A trunk that moved under the branch: Skill(rebase), the conflicts resolved by you. Either way: commit, push, a line in `implement-notes.md`, rest. A ping goes out only when the fix changed behavior the Review owner judged, which opens their delta round; a fix that outgrows the Goal is the user's call, raised as your craft says.
 
 ## Review
 

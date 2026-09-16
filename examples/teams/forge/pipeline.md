@@ -38,7 +38,7 @@ Before handing off: your craft's verification done, every change committed and t
 
 Your craft's report goes to `implement-notes.md`, never the blackboard, so the Review owner can read the board and the upstream files before their blind pass. Then `rimz teams flip Review "implementation committed; report in implement-notes.md"`. When a deviation you took changes the design or the intent, `rimz message` the Plan owner instead and leave the stage where it is, one check for all of them: they record the Decision and flip to Review themselves, or amend the plan and ping you back.
 
-After Submit the branch is yours to keep green and current, alone. When the repo carries CI, a failing run reaches you as a signal message with its evidence: run Skill(fix-ci) on it. A trunk that moved under the branch: Skill(rebase), the conflicts resolved by you. Either way: commit, push, one board line, rest. A ping goes out only when the fix changed what a teammate ruled on: behavior the Review owner judged opens their delta round; a design choice the plan made goes to the Plan owner.
+After Submit the branch is yours to keep green and current, alone. When the repo carries CI, a failing run reaches you as a signal message with its evidence: run Skill(fix-ci) on it. A trunk that moved under the branch: Skill(rebase), the conflicts resolved by you. Either way: commit, push, a line in `implement-notes.md`, rest. A ping goes out only when the fix changed what a teammate ruled on: behavior the Review owner judged opens their delta round; a design choice the plan made goes to the Plan owner.
 
 ## Review
 
