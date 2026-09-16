@@ -79,7 +79,7 @@ use super::definition::{
 };
 use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
-use super::observation::payload_total_tokens;
+use super::observation::{SessionOrigin, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr, AnswerStep,
@@ -641,7 +641,16 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
             if (root_identity_event || compact_continuation)
                 && let Some(agent_id) = observation.agent_id.as_ref()
             {
-                observation.origin = session_origin(agent_id.as_str());
+                observation.origin = if observation.transcript_path.is_none()
+                    && parts
+                        .session_start
+                        .as_ref()
+                        .is_some_and(|start| start.source == SessionSource::Fork)
+                {
+                    Some(SessionOrigin::SideConversation)
+                } else {
+                    session_origin(agent_id.as_str())
+                };
                 if compact_continuation {
                     observation.compacted_from = session_forked_from(agent_id.as_str());
                 }
