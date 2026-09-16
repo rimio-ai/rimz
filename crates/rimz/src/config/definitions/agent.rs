@@ -49,6 +49,7 @@ pub(super) fn resolve_namespace(
         foreign,
         bases,
         skills,
+        loaded_children: loaded.subagent_profiles.0.keys().cloned().collect(),
         resolved: BTreeMap::new(),
         trail: Vec::new(),
         errors: Vec::new(),
@@ -76,6 +77,7 @@ struct Resolver<'a> {
     foreign: &'a Namespace,
     bases: &'a BTreeSet<String>,
     skills: SkillLibraryCheck<'a>,
+    loaded_children: BTreeSet<String>,
     resolved: BTreeMap<String, Option<Resolved>>,
     trail: Vec<String>,
     errors: Vec<DefinitionErr>,
@@ -217,12 +219,22 @@ impl Resolver<'_> {
                 ));
             }
             let names = names(path, "subagents", listed)?;
+            if let Some(failed) = names.iter().find(|name| {
+                (self.foreign.definitions.contains_key(*name)
+                    || self.foreign.failed.contains(*name))
+                    && !self.loaded_children.contains(*name)
+            }) {
+                return Err(DefinitionErr::new(
+                    path,
+                    format!("allows subagent '{failed}', which failed to load"),
+                ));
+            }
             let unknown: Vec<_> = names
                 .iter()
                 .filter(|name| {
                     name.as_str() != "general"
                         && agents::find_definition(name).is_none()
-                        && !self.foreign.definitions.contains_key(*name)
+                        && !self.loaded_children.contains(*name)
                 })
                 .collect();
             if !unknown.is_empty() {
@@ -280,10 +292,21 @@ impl Resolver<'_> {
                 text: craft,
             });
         }
-        if !profile.append_system_prompt_files.is_empty() && !self.bases.contains(kind) {
+        let replaces_system_prompt = agents::find_definition(kind).is_some_and(|definition| {
+            definition
+                .spec()
+                .launch
+                .preset_arg_matcher(PresetField::SystemPromptFile)
+                .is_some()
+        });
+        // A kind that takes a system prompt always runs on its base; any other kind
+        // needs one only to carry a craft, which its launch then refuses.
+        if (replaces_system_prompt || !profile.append_system_prompt_files.is_empty())
+            && !self.bases.contains(kind)
+        {
             return Err(DefinitionErr::new(
                 path,
-                format!("kind base `agents/{kind}.md` is missing"),
+                format!("runs on {kind}, whose kind base `agents/{kind}.md` is missing"),
             ));
         }
         Ok(Resolved {

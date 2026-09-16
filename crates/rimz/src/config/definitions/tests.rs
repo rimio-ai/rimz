@@ -463,13 +463,13 @@ fn even_a_bodyless_seat_needs_its_runtime_base() {
     std::fs::remove_file(root.path().join("agents/pi.md")).unwrap();
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
     let loaded = load(root.path(), SkillLibraryCheck::Skip);
-    assert!(loaded.agent_profiles.0.contains_key("worker"));
+    assert!(!loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.is_empty());
-    assert_eq!(loaded.errors.len(), 2);
-    assert!(loaded.errors.iter().all(|error| {
-        error
-            .message
-            .contains("kind base `agents/pi.md` is missing")
+    assert!(loaded.errors.iter().any(|error| {
+        error.path.ends_with("agents/worker.md")
+            && error
+                .message
+                .contains("kind base `agents/pi.md` is missing")
     }));
 }
 
@@ -799,12 +799,48 @@ fn names_and_kind_bases_are_validated() {
 }
 
 #[test]
-fn crafts_require_a_kind_base_but_bodyless_profiles_do_not() {
+fn prompt_taking_kinds_require_their_base_body_or_not() {
     let root = tempfile::tempdir().unwrap();
-    definition(root.path(), "agents/probe.md", "agent: pi", "");
-    assert!(clean(root.path()).agent_profiles.0.contains_key("probe"));
-    definition(root.path(), "agents/probe.md", "agent: pi", "Craft.");
-    error(root.path(), "kind base `agents/pi.md` is missing");
+    assert!(clean(root.path()).errors.is_empty());
+    // amp takes no system prompt, so only a craft would need its base.
+    definition(root.path(), "agents/runner.md", "agent: amp", "");
+    assert!(clean(root.path()).agent_profiles.0.contains_key("runner"));
+    std::fs::remove_file(root.path().join("agents/runner.md")).unwrap();
+    definition(
+        root.path(),
+        "agents/fable.md",
+        "model: fable\ntools: [Bash]",
+        "",
+    );
+    error(
+        root.path(),
+        "runs on claude, whose kind base `agents/claude.md` is missing",
+    );
+    definition(
+        root.path(),
+        "agents/fable.md",
+        "model: fable\ntools: [Bash]",
+        "Craft.",
+    );
+    error(root.path(), "kind base `agents/claude.md` is missing");
+}
+
+#[test]
+fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
+    let root = fixture();
+    definition(root.path(), "subagents/helper.md", "agent: claude", "");
+    definition(
+        root.path(),
+        "agents/planner.md",
+        "agent: claude\ntools: [Bash]\nsubagents: [helper]",
+        "",
+    );
+    let loaded = load(root.path(), SkillLibraryCheck::Skip);
+    assert!(!loaded.agent_profiles.0.contains_key("planner"));
+    assert!(loaded.errors.iter().any(|error| {
+        error.path.ends_with("agents/planner.md")
+            && error.message == "allows subagent 'helper', which failed to load"
+    }));
 }
 
 #[test]

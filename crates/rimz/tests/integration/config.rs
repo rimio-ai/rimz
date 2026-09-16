@@ -127,6 +127,8 @@ fn config_set_host_never_probes_bwrap() {
 #[test]
 fn agents_home_definitions_feed_both_profile_catalogues_without_kind_rows() {
     let env = Env::new();
+    crate::common::write_kind_base(&env, "claude");
+    crate::common::write_kind_base(&env, "codex");
     write_machine_file(
         &env.agents_home().join("agents/explorer.md"),
         "---\nagent: claude\ntools: []\ndescription: Maps the main workspace\n---\n",

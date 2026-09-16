@@ -255,7 +255,7 @@ impl SeatLoader<'_> {
         if !self.bases.contains(kind) {
             return Err(DefinitionErr::new(
                 path,
-                format!("kind base `agents/{kind}.md` is missing"),
+                format!("seats {kind}, whose kind base `agents/{kind}.md` is missing"),
             ));
         }
         fm.agent = Some(kind.to_owned());

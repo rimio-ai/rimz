@@ -46,11 +46,47 @@ pub fn write_definition(
     frontmatter: &str,
     body: &str,
 ) -> std::path::PathBuf {
+    if matches!(namespace, "agents" | "subagents") {
+        let fields: serde_json::Value =
+            serde_saphyr::from_str(frontmatter).expect("definition YAML");
+        let kind = fields["agent"]
+            .as_str()
+            .filter(|kind| rimz::agents::find_definition(kind).is_some())
+            .or_else(|| {
+                fields["model"]
+                    .as_str()
+                    .and_then(rimz::agents::definition_model_kind)
+            });
+        let replaces_system_prompt = |kind: &str| {
+            rimz::agents::find_definition(kind).is_some_and(|definition| {
+                definition
+                    .spec()
+                    .launch
+                    .preset_arg_matcher(rimz::agents::PresetField::SystemPromptFile)
+                    .is_some()
+            })
+        };
+        if let Some(kind) = kind.filter(|kind| replaces_system_prompt(kind)) {
+            write_kind_base(env, kind);
+        }
+    }
     let directory = env.agents_home().join(namespace);
     std::fs::create_dir_all(&directory).expect("create definitions directory");
     let path = directory.join(format!("{name}.md"));
     std::fs::write(&path, format!("---\n{frontmatter}\n---\n{body}\n")).expect("write definition");
     path
+}
+
+pub fn write_kind_base(env: &Env, kind: &str) {
+    if !env.agents_home().join(format!("agents/{kind}.md")).exists() {
+        write_definition(
+            env,
+            "agents",
+            kind,
+            &format!("description: {kind} base"),
+            &format!("{kind} base."),
+        );
+    }
 }
 
 #[cfg(unix)]

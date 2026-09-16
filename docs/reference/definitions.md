@@ -64,13 +64,13 @@ Names must match `[A-Za-z0-9_-]+` and be unique across both definition trees. Re
 
 `agent:` follows only definitions in its own namespace: an agent cannot inherit a subagent or vice versa. The chain must end at a registered kind. Without `agent:`, a recognized model alias, model ID, or prefix determines the kind: Claude's roster and `claude-` prefix, and Codex's roster and `gpt-` prefix. Unknown models need an explicit kind. A model implying a different kind from the chain is an error.
 
-Children inherit `model`, `mode`, `effort`, `auto-compact`, `budget`, `tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset.
+Children inherit `model`, `mode`, `effort`, `auto-compact`, `budget`, `tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
 Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases expand as `astra` → `gpt-6-astra`, `luna` → `gpt-5.6-luna`, and `terra` → `gpt-5.6-terra`. A kind whose adapter declares native auto-compaction support defaults to `258k`; other kinds have no default window. Provider support is checked at launch, including explicit effort and compaction settings.
 
 ### Kind bases
 
-`agents/<registered-kind>.md` is a special base, not an ordinary definition. It accepts only `description`, requires a nonempty body, and supplies the replacement system prompt in both namespaces. It cannot pin a model or tools. Any profile with prompt fragments, and every team seat, requires the corresponding kind base. A bodyless standalone definition with no inherited craft needs none.
+`agents/<registered-kind>.md` is a special base, not an ordinary definition. It accepts only `description`, requires a nonempty body, and supplies the replacement system prompt in both namespaces. It cannot pin a model or tools. Every team seat, every definition with a craft, and every definition of a kind that takes a system prompt (claude, codex, pi, qwen, and plugins that declare one) requires the base of the kind it runs on, body or not; a home with no definitions needs no base.
 
 ### Traits
 
