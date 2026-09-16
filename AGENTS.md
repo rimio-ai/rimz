@@ -91,6 +91,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 ## Testing
 
 - While iterating, the per-commit signal is `cargo xtask check` (singular; `checks` is the non-test gate composite) followed by `cargo xtask lint`. Run `cargo xtask gate` before a PR or hand-off.
+- Compile tests with `cargo xtask check`; a bare `cargo check --tests` misses the `testkit` feature and fails.
 - A change that adds, moves, or widens a `pub` item in a module `refactor-target.toml` budgets runs `cargo xtask atlas conform --ratchet` alongside `check`; the surface ratchet costs seconds there and is a full `gate` away otherwise.
 - Batch focused tests with `cargo xtask test --name <test> [--name <test>...]`, exact names only. Run a whole module through a bare nextest filter: `cargo xtask test 'sidebar_pane::app::width_control'`.
 - `cargo xtask sandbox -- <command>` drives a real multiplexer from disposable roots.
