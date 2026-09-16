@@ -543,6 +543,9 @@ fn prepare_supervised(
     launch_invocation
         .append_system_prompt_files
         .clone_from(&agent_cell.append_system_prompt_files);
+    launch_invocation
+        .team_prompt
+        .clone_from(&agent_cell.team_prompt);
     launch_invocation.subagent = request.subagent;
     launch_invocation.identity.params = preflight_launch;
     let (process, managed_launch) = rimz::harness::launch::compile_managed_agent_process(
@@ -689,6 +692,7 @@ fn execute_attempt(
         permission_args: &agent_cell.args,
         system_prompt_file: agent_cell.system_prompt_file.as_deref(),
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
+        team_prompt: agent_cell.team_prompt.as_ref(),
         skills: agent_cell.skills.as_deref(),
         self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
         subagent: request.subagent,

@@ -581,6 +581,10 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     let run_id = rimz::RunId::new();
     let launch = rimz::agents::LaunchParams::default();
     let launch_id = rimz::ids::AgentSessionId::from("child-id");
+    let team_prompt = rimz::harness::team_prompt::TeamPrompt {
+        consensus: rimz::harness::team_prompt::Consensus::BuiltIn,
+        files: vec![PathBuf::from("/team/pipeline.md")],
+    };
     let pane = run_pane_cmd(RunPaneCmdArgs {
         runtime: &runtime,
         adapter: rimz::agents::definition_by_kind("codex").unwrap(),
@@ -595,6 +599,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         permission_args: &[],
         system_prompt_file: None,
         append_system_prompt_files: &[],
+        team_prompt: Some(&team_prompt),
         skills: None,
         self_cleanup_on_completion: true,
         subagent: true,
@@ -610,6 +615,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     assert!(request.close_pane_on_exit);
     assert!(request.exit_on_run_completion);
     assert!(request.subagent);
+    assert_eq!(request.team_prompt, Some(team_prompt));
 }
 
 struct RunFixture {
