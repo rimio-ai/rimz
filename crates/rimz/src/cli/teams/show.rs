@@ -169,9 +169,11 @@ fn write_spec(w: &mut impl Write, report: &TeamReport) -> Result<()> {
     )
     .indent(2)
     .render(w)?;
-    if report.roles.iter().any(|role| {
-        role.system_prompt_file.is_some() || !role.append_system_prompt_files.is_empty()
-    }) {
+    if report.consensus.is_some()
+        || report.roles.iter().any(|role| {
+            role.system_prompt_file.is_some() || !role.append_system_prompt_files.is_empty()
+        })
+    {
         writeln!(
             w,
             "  {}",
@@ -502,8 +504,10 @@ mod tests {
                 effort: Some("high".to_owned()),
                 mode: Some("auto".to_owned()),
                 system_prompt_file: Some("planner.md".into()),
-                append_system_prompt_files: vec!["consensus.md".into()],
+                append_system_prompt_files: Vec::new(),
             }],
+            consensus: Some("builtin".to_owned()),
+            append_system_prompt_files: vec!["pipeline.md".into()],
             valid: true,
             error: None,
             instances,

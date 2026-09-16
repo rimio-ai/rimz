@@ -401,6 +401,8 @@ fn hash_covers_every_documented_surface_field() {
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nappend-system-prompt-files = [\"prompts/a.md\"]\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
+        "[agents.teams.review]\nconsensus-file = \"prompts/consensus.md\"\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
+        "[agents.teams.review]\nappend-system-prompt-files = [\"prompts/pipeline.md\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[tasks.x]\nagent = \"codex\"\n",
         "[tasks.y]\nagent = \"codex\"\n",
         "[tasks.x]\nprompt = \"repair CI\"\n",

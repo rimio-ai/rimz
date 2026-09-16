@@ -159,7 +159,9 @@ fn team(roles: Vec<RoleBinding>) -> Team {
         roles,
         leader: None,
         layout: None,
-        scratch_files: Vec::new(),
+        scratch_files: None,
+        consensus_file: None,
+        append_system_prompt_files: Vec::new(),
         stages: Vec::new(),
     }
 }
@@ -169,7 +171,9 @@ fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
         roles,
         leader: None,
         layout: Some(layout.to_owned()),
-        scratch_files: Vec::new(),
+        scratch_files: None,
+        consensus_file: None,
+        append_system_prompt_files: Vec::new(),
         stages: Vec::new(),
     }
 }
@@ -1753,11 +1757,80 @@ fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
 }
 
 #[test]
+fn staged_team_roles_with_a_base_prompt_carry_the_team_layer() {
+    let profiles = profiles([(
+        "planner",
+        Profile {
+            system_prompt_file: Some("/prompts/planner.md".into()),
+            ..profile("claude")
+        },
+    )]);
+    let resolve = |team: &Team, spec: &str, agent: Option<&str>| {
+        resolve_spec_with_agent_override(
+            Some(spec),
+            &profiles,
+            &profiles,
+            &no_commands(),
+            &TeamsConfig(BTreeMap::from([("review".to_owned(), team.clone())])),
+            agent,
+        )
+    };
+    let layer = |spec: &LayoutSpec, column| agent_at(spec, column, 0).team_prompt.clone();
+    let built_in = Some(TeamPrompt {
+        consensus: crate::harness::team_prompt::Consensus::BuiltIn,
+        files: Vec::new(),
+    });
+
+    let mut staged = team(vec![role("planner", "planner"), role("coder", "codex")]);
+    staged.roles[0].owns = vec!["Plan".to_owned()];
+    let spec = resolve(&staged, "review", None).expect("staged team");
+    assert_eq!(layer(&spec, 0), built_in);
+    assert_eq!(layer(&spec, 1), None, "a role without a base gets no layer");
+    let role_spec = resolve(&staged, "review.coder", Some("planner")).expect("rebased role");
+    assert_eq!(
+        layer(&role_spec, 0),
+        built_in,
+        "an --agent base that supplies the prompt brings the layer"
+    );
+
+    let mut unstaged = staged.clone();
+    unstaged.roles[0].owns.clear();
+    assert_eq!(
+        layer(&resolve(&unstaged, "review", None).expect("unstaged"), 0),
+        None
+    );
+    unstaged.append_system_prompt_files = vec!["/prompts/pipeline.md".into()];
+    assert!(matches!(
+        resolve(&unstaged, "review", None),
+        Err(LayoutErr::TeamPromptWithoutStages { team }) if team == "review"
+    ));
+
+    let mut explicit = staged;
+    explicit.consensus_file = Some("/prompts/consensus.md".into());
+    assert!(matches!(
+        resolve(&explicit, "review", None),
+        Err(LayoutErr::TeamPromptWithoutBase { team, role }) if team == "review" && role == "coder"
+    ));
+    explicit.roles.truncate(1);
+    explicit.append_system_prompt_files = vec!["/prompts/pipeline.md".into()];
+    assert_eq!(
+        layer(
+            &resolve(&explicit, "review", None).expect("explicit layer"),
+            0
+        ),
+        Some(TeamPrompt {
+            consensus: crate::harness::team_prompt::Consensus::File("/prompts/consensus.md".into()),
+            files: vec!["/prompts/pipeline.md".into()],
+        })
+    );
+}
+
+#[test]
 fn team_validation_rejects_unsafe_scratch_patterns() {
     let profiles = profiles([("planner", profile("claude"))]);
     let error = |pattern: &str| {
         let mut candidate = team(vec![role("planner", "planner")]);
-        candidate.scratch_files = vec![pattern.to_owned()];
+        candidate.scratch_files = Some(vec![pattern.to_owned()]);
         validate_config(
             &profiles,
             &no_commands(),
@@ -1790,7 +1863,7 @@ fn team_validation_rejects_unsafe_scratch_patterns() {
     }
 
     let mut anchored = team(vec![role("planner", "planner")]);
-    anchored.scratch_files = vec!["/plan.md".to_owned(), "/*-notes.md".to_owned()];
+    anchored.scratch_files = Some(vec!["/plan.md".to_owned(), "/*-notes.md".to_owned()]);
     validate_config(
         &profiles,
         &no_commands(),
@@ -1874,7 +1947,9 @@ fn team_leader_validation_accepts_one_target() {
         roles: Vec::new(),
         leader: Some(leader.to_owned()),
         layout: Some(layout.to_owned()),
-        scratch_files: Vec::new(),
+        scratch_files: None,
+        consensus_file: None,
+        append_system_prompt_files: Vec::new(),
         stages: Vec::new(),
     };
     validate(layout_only("claude", "claude,codex")).expect("unique layout leader");

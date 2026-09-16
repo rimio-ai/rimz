@@ -14,6 +14,7 @@ use rimz::config::{SkillName, effective::LaunchAgents};
 use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
+use rimz::harness::team_prompt::{BUILT_IN_CONSENSUS, Consensus};
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
 
 use super::{LaunchOverrideArgs, launch_resolve, restart};
@@ -287,7 +288,11 @@ struct SkillsReport<'a> {
 }
 #[derive(Serialize)]
 struct PromptSource<'a> {
-    path: &'a Path,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<&'a Path>,
+    /// Names text compiled into RimZ, which has no path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    builtin: Option<&'static str>,
     bytes: u64,
 }
 #[derive(Serialize)]
@@ -352,21 +357,35 @@ impl<'a> ExplainReport<'a> {
                 *value = launch::REDACTED_ENV_VALUE.to_owned();
             }
         }
-        let sources = plan
-            .prompt
-            .sources
+        let prompt_sources = &plan.prompt.sources;
+        let file_source = |path: &'a Path| -> Result<PromptSource<'a>> {
+            Ok(PromptSource {
+                path: Some(path),
+                builtin: None,
+                bytes: std::fs::metadata(path)
+                    .with_context(|| format!("reading prompt source {}", path.display()))?
+                    .len(),
+            })
+        };
+        let mut sources = prompt_sources
             .system_prompt_file
             .iter()
-            .chain(&plan.prompt.sources.append_system_prompt_files)
-            .map(|path| {
-                Ok(PromptSource {
-                    path,
-                    bytes: std::fs::metadata(path)
-                        .with_context(|| format!("reading prompt source {}", path.display()))?
-                        .len(),
-                })
-            })
+            .chain(&prompt_sources.append_system_prompt_files)
+            .map(|path| file_source(path))
             .collect::<Result<Vec<_>>>()?;
+        if let Some(team_prompt) = &prompt_sources.team_prompt {
+            sources.push(match &team_prompt.consensus {
+                Consensus::BuiltIn => PromptSource {
+                    path: None,
+                    builtin: Some("team consensus"),
+                    bytes: BUILT_IN_CONSENSUS.len() as u64,
+                },
+                Consensus::File(path) => file_source(path)?,
+            });
+            for path in &team_prompt.files {
+                sources.push(file_source(path)?);
+            }
+        }
         let sandbox = plan.sandbox.as_ref().zip(bwrap).map(|(sandbox, bwrap)| {
             warnings.extend(sandbox.skipped.iter().map(ToString::to_string));
             let mut pins = sandbox.pins.clone();
@@ -675,12 +694,11 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     }
     writeln!(output, "\nSystem prompt")?;
     for source in &report.prompt.sources {
-        writeln!(
-            output,
-            "  source: {} ({} bytes)",
-            source.path.display(),
-            source.bytes
-        )?;
+        let label = source.path.map_or_else(
+            || format!("built-in {}", source.builtin.unwrap_or_default()),
+            |path| path.display().to_string(),
+        );
+        writeln!(output, "  source: {label} ({} bytes)", source.bytes)?;
     }
     if let Some(composed) = report.prompt.composed {
         writeln!(

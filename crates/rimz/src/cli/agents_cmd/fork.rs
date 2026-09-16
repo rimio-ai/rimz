@@ -97,6 +97,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             },
             system_prompt_file: posture.launch.system_prompt_file.clone(),
             append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+            team_prompt: posture.launch.team_prompt.clone(),
             skills: posture.launch.skills.clone(),
             ..rimz::harness::launch::ExecRequest::bare_launch(seed.kind.clone(), Vec::new())
         },
@@ -144,6 +145,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             },
             system_prompt_file: posture.launch.system_prompt_file.clone(),
             append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+            team_prompt: posture.launch.team_prompt.clone(),
             skills: posture.launch.skills.clone(),
             close_pane_on_exit: placement != Placement::SamePane,
             identity: rimz::harness::launch::ExecIdentity {

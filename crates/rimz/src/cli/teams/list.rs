@@ -31,6 +31,12 @@ pub(super) struct TeamReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leader: Option<String>,
     pub roles: Vec<RoleReport>,
+    /// `builtin` or the replacement file; present only on a staged team.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consensus: Option<String>,
+    /// The team layer's files, composed after the consensus.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub append_system_prompt_files: Vec<PathBuf>,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -255,6 +261,8 @@ fn build_catalog(
             layout: None,
             leader: None,
             roles: Vec::new(),
+            consensus: None,
+            append_system_prompt_files: Vec::new(),
             valid: false,
             error: None,
             instances,
@@ -339,6 +347,12 @@ fn definition_report(
         })),
         leader,
         roles,
+        consensus: team.staged().then(|| {
+            team.consensus_file
+                .as_ref()
+                .map_or_else(|| "builtin".to_owned(), |path| path.display().to_string())
+        }),
+        append_system_prompt_files: team.append_system_prompt_files.clone(),
         valid: validation.is_ok(),
         error: validation
             .err()
@@ -499,7 +513,7 @@ fn live_instances(
             .as_deref()
             .zip(team)
             .map(|(root, team)| {
-                rimz::harness::scratch::scan(root, &team.scratch_files)
+                rimz::harness::scratch::scan(root, &team.scratch_patterns())
                     .files
                     .into_iter()
                     .map(|file| MemoryReport {

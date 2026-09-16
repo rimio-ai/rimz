@@ -86,8 +86,10 @@ fn default_machine_teams() -> TeamsConfig {
             roles: Vec::new(),
             leader: None,
             layout: Some("claude,codex".to_owned()),
-            scratch_files: Vec::new(),
+            scratch_files: None,
             stages: Vec::new(),
+            consensus_file: None,
+            append_system_prompt_files: Vec::new(),
         },
     )]))
 }
@@ -225,17 +227,36 @@ pub struct Team {
     pub leader: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<String>,
+    /// Memory-file patterns; unset means the default for the team's shape
+    /// (see [`Team::scratch_patterns`]), `[]` means none.
     #[serde(
         default,
         rename = "scratch-files",
-        skip_serializing_if = "Vec::is_empty"
+        skip_serializing_if = "Option::is_none"
     )]
-    pub scratch_files: Vec<String>,
+    pub scratch_files: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<String>,
+    /// Replaces the built-in team consensus a staged team's prompt layer opens with.
+    #[serde(
+        default,
+        rename = "consensus-file",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub consensus_file: Option<PathBuf>,
+    /// Ordered prompt files composed after the consensus for every role of a staged team.
+    #[serde(
+        default,
+        rename = "append-system-prompt-files",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub append_system_prompt_files: Vec<PathBuf>,
 }
 
 pub const DONE_STAGE: &str = "Done";
+
+/// Memory files a staged team keeps when it declares no `scratch-files`.
+const DEFAULT_SCRATCH_FILES: [&str; 2] = ["/blackboard.md", "/*-notes.md"];
 
 impl Team {
     pub fn flip_compact(&self, role: &str, default: Option<AutoCompact>) -> Option<AutoCompact> {
@@ -271,6 +292,22 @@ impl Team {
             self.owned_stages().map(str::to_owned).collect()
         } else {
             self.stages.clone()
+        }
+    }
+
+    /// A team with a pipeline; only a staged team gets the default memory files
+    /// and the team prompt layer.
+    pub fn staged(&self) -> bool {
+        !self.stages.is_empty() || self.owned_stages().next().is_some()
+    }
+
+    /// The effective memory-file patterns: the declared list, else the defaults
+    /// for a staged team, else none.
+    pub fn scratch_patterns(&self) -> Vec<String> {
+        match &self.scratch_files {
+            Some(patterns) => patterns.clone(),
+            None if self.staged() => DEFAULT_SCRATCH_FILES.map(str::to_owned).to_vec(),
+            None => Vec::new(),
         }
     }
 }

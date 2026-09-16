@@ -11,6 +11,7 @@ use crate::config::RoleBinding;
 use crate::disk::paths::RuntimePaths;
 use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::budget::BudgetSpec;
+use crate::harness::prompt_compose::SystemPromptSources;
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
 use crate::ids::{AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
@@ -111,6 +112,7 @@ pub struct ResumeLaunchPosture {
     pub args: Vec<String>,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
+    pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     pub skills: Option<Vec<crate::config::SkillName>>,
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
@@ -124,6 +126,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             args: cell.args.clone(),
             system_prompt_file: cell.system_prompt_file.clone(),
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
+            team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
             mode: cell.launch.mode,
             model: cell.launch.model.clone(),
@@ -307,6 +310,27 @@ fn validate_agent_prompt_files(
             return Err(ProfilePromptFileError {
                 origin: origin(),
                 field: "append-system-prompt-files entry",
+                path: path.clone(),
+            });
+        }
+    }
+    let Some(team_prompt) = &cell.team_prompt else {
+        return Ok(());
+    };
+    let consensus_file = match &team_prompt.consensus {
+        crate::harness::team_prompt::Consensus::BuiltIn => None,
+        crate::harness::team_prompt::Consensus::File(path) => Some(("team consensus-file", path)),
+    };
+    for (field, path) in consensus_file.into_iter().chain(
+        team_prompt
+            .files
+            .iter()
+            .map(|path| ("team append-system-prompt-files entry", path)),
+    ) {
+        if !std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+            return Err(ProfilePromptFileError {
+                origin: origin(),
+                field,
                 path: path.clone(),
             });
         }
@@ -617,7 +641,7 @@ fn reconcile_preset_args(
         cell.args.extend(canonical);
     }
 
-    if cell.system_prompt_file.is_some() || !cell.append_system_prompt_files.is_empty() {
+    if !SystemPromptSources::from_cell(cell).is_empty() {
         let matcher = adapter
             .spec()
             .launch
@@ -626,7 +650,7 @@ fn reconcile_preset_args(
         let occurrences = matcher.occurrences(&cell.args);
         if !overridden.contains(&PresetField::SystemPromptFile) {
             for occurrence in &occurrences {
-                let matches_declared_path = cell.append_system_prompt_files.is_empty()
+                let matches_declared_path = !SystemPromptSources::from_cell(cell).composes()
                     && cell
                         .system_prompt_file
                         .as_ref()
@@ -648,7 +672,7 @@ fn validate_system_prompt_support(
     cell: &AgentCell,
     adapter: Option<&crate::agents::AgentDefinition>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
-    if cell.system_prompt_file.is_none() && cell.append_system_prompt_files.is_empty() {
+    if SystemPromptSources::from_cell(cell).is_empty() {
         return Ok(());
     }
     let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
@@ -673,16 +697,15 @@ fn validate_system_prompt_support(
 }
 
 fn validate_system_prompt_text(cell: &AgentCell) -> std::result::Result<(), LaunchFinalizeError> {
-    if cell.system_prompt_file.is_none() && cell.append_system_prompt_files.is_empty() {
+    let sources = SystemPromptSources::from_cell(cell);
+    if sources.is_empty() {
         return Ok(());
     }
-    crate::harness::prompt_compose::validate_text_prompt_size(
-        &cell.kind,
-        &crate::harness::prompt_compose::SystemPromptSources::from_cell(cell),
-    )
-    .map_err(|err| LaunchFinalizeError::PromptValidation {
-        reason: err.to_string(),
-    })?;
+    crate::harness::prompt_compose::validate_text_prompt_size(&cell.kind, &sources).map_err(
+        |err| LaunchFinalizeError::PromptValidation {
+            reason: err.to_string(),
+        },
+    )?;
     Ok(())
 }
 
@@ -881,6 +904,7 @@ pub(super) fn resume_command(
             },
             system_prompt_file: posture.system_prompt_file.clone(),
             append_system_prompt_files: posture.append_system_prompt_files.clone(),
+            team_prompt: posture.team_prompt.clone(),
             skills: posture.skills.clone(),
             close_pane_on_exit: true,
             identity: crate::harness::launch::ExecIdentity {

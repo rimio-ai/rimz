@@ -207,6 +207,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
             },
             system_prompt_file: args.system_prompt_file.map(Path::to_path_buf),
             append_system_prompt_files: args.append_system_prompt_files.to_vec(),
+            team_prompt: None,
             skills: args.skills.map(<[_]>::to_vec),
             provider_account: args.provider_account_binding.map_or(
                 rimz::harness::launch::ProviderAccountState::Unbound,

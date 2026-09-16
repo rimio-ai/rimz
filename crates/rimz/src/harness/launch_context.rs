@@ -124,7 +124,8 @@ pub(super) fn team_launch_context(
         .clone()
         .or_else(|| reminder.seats.first().map(|seat| seat.role.clone()))
         .unwrap_or_else(|| role.clone());
-    let scratch = scratch::scan(cwd, &team.scratch_files);
+    let scratch_patterns = team.scratch_patterns();
+    let scratch = scratch::scan(cwd, &scratch_patterns);
     let stage_handoffs = team.owned_stages().next().is_some();
     let board = if stage_handoffs {
         match scratch::board_stage(cwd) {
@@ -149,7 +150,7 @@ pub(super) fn team_launch_context(
         pipeline: team.pipeline_stages(),
         worktree: cwd.to_path_buf(),
         session: action.into(),
-        scratch_patterns: team.scratch_files.clone(),
+        scratch_patterns,
         scratch,
         stage_handoffs,
         board,
@@ -494,11 +495,11 @@ mod tests {
         std::fs::write(worktree.path().join("blackboard.md"), "one\ntwo\n").expect("board");
         let team = Team {
             roles: vec![role("planner"), role("coder")],
-            scratch_files: vec![
+            scratch_files: Some(vec![
                 "/blackboard.md".to_owned(),
                 "missing.md".to_owned(),
                 "[abc.md".to_owned(),
-            ],
+            ]),
             ..Team::default()
         };
 
@@ -511,7 +512,7 @@ mod tests {
         assert!(rendered.contains("could not inspect every pattern, so more run state may exist"));
         let invalid_only = Team {
             roles: vec![role("planner"), role("coder")],
-            scratch_files: vec!["[abc.md".to_owned()],
+            scratch_files: Some(vec!["[abc.md".to_owned()]),
             ..Team::default()
         };
         let context = team_launch_context(
@@ -551,6 +552,8 @@ mod tests {
         // The leader's channel rule lives in its prompt, not the reminder.
         assert!(!rendered.contains("user"));
         assert!(!rendered.contains("rimz teams flip"));
+        // An unstaged team keeps no memory files by default.
+        assert!(rendered.contains("The team declares no memory files."));
 
         team.leader = None;
         team.roles[0].owns = vec!["Plan".to_owned()];
@@ -569,7 +572,8 @@ mod tests {
             ),
             "{rendered}"
         );
-        assert!(rendered.contains("The team declares no memory files. No board yet; the leader's first `rimz teams flip` creates the board."));
+        // A staged team keeps the default memory files without declaring them.
+        assert!(rendered.contains("The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; the leader's first `rimz teams flip` creates the board."), "{rendered}");
         // A fallback leader is a guess, so no seat gets a channel rule.
         assert!(!rendered.contains("user"));
     }

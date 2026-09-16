@@ -76,8 +76,15 @@ layout = "claude,codex"
 ## [agents.teams.review]
 ## leader = "planner"  # role that receives the launch prompt; default: the first role
 ## layout = "planner+reviewer,coder+term"
-## scratch-files = ["/plan.md", "/*-notes.md"]  # gitignore patterns for ephemeral team memory
 ## stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
+## # A staged team (stages or owns) keeps "/blackboard.md" and "/*-notes.md" as
+## # git-excluded memory files; scratch-files replaces that list, [] for none.
+## scratch-files = ["/plan.md", "/*-notes.md"]
+## # Roles with a system-prompt-file get the built-in team consensus, then these
+## # team files, after their own prompt. consensus-file replaces the built-in text;
+## # setting either key requires every role to resolve a system-prompt-file.
+## consensus-file = "consensus.md"
+## append-system-prompt-files = ["pipeline.md"]
 ## [[agents.teams.review.roles]]
 ## role = "planner"
 ## profile = "planner"

@@ -239,7 +239,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Auto-gc: the producer memo and check, the helper's stamp write, and its assist record.
 # The pipeline strip and the one role resolver are shared with `teams show` and `teams flip`.
 # The launch reminder's resolved team travels from the launch plan into the process compiler.
-surface-budget = 529
+# The team prompt layer (built-in consensus, its replacement, team files) rides every launch carrier into composition and `agents explain`.
+surface-budget = 535
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -585,6 +586,7 @@ allowed-dependencies = [
     "harness::launch",
     "harness::prompt_compose",
     "harness::spec",
+    "harness::team_prompt",
     "ids",
     "mux",
     "proc",
@@ -624,6 +626,7 @@ allowed-dependencies = [
     "harness::launch_reminders",
     "harness::prompt_compose",
     "harness::spec",
+    "harness::team_prompt",
     "ids",
     "proc",
     "sandbox",
@@ -698,12 +701,14 @@ allowed-dependencies = [
     "disk::atomic",
     "disk::paths",
     "harness::spec",
+    "harness::team_prompt",
     "ids",
     "proc",
 ]
 # Launch and system prompts share the artifact writer and argv-size limit.
 # Composed prompts can be planned without materializing their artifacts.
-surface-budget = 14
+# Prompt sources carry the team layer that `agents explain` lists.
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

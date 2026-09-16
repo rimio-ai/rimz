@@ -1070,6 +1070,17 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
              system-prompt-file = \"planner.md\"\n\
              append-system-prompt-files = [\"prompts/shared.md\"]\n",
     );
+    let team_fragment_dir = root.path().join(AGENTS_HOME_TEAMS_SUBDIR).join("review");
+    std::fs::write(
+        team_fragment_dir.join(TEAM_FRAGMENT_FILE),
+        std::fs::read_to_string(team_fragment_dir.join(TEAM_FRAGMENT_FILE))
+            .expect("read team fragment")
+            .replace(
+                "[agents.teams.review]\n",
+                "[agents.teams.review]\nstages = [\"Plan\"]\nconsensus-file = \"consensus.md\"\nappend-system-prompt-files = [\"pipeline.md\"]\n",
+            ),
+    )
+    .expect("write team layer");
 
     let mut agents = AgentsConfig::default();
     apply_agents_home(
@@ -1098,6 +1109,15 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
         .join("review")
         .join("prompts/shared.md");
     assert_eq!(role.append_system_prompt_files, [expected_append]);
+    let team = agents.teams.0.get("review").expect("review team");
+    assert_eq!(
+        team.consensus_file.as_deref(),
+        Some(team_fragment_dir.join("consensus.md").as_path())
+    );
+    assert_eq!(
+        team.append_system_prompt_files,
+        [team_fragment_dir.join("pipeline.md")]
+    );
 }
 
 #[test]
@@ -1607,7 +1627,10 @@ fn team_scratch_files_parse_default_and_round_trip() {
          profile = \"claude\"\n",
     )
     .expect("parse team");
-    assert_eq!(team.scratch_files, ["/plan.md", "/*-notes.md"]);
+    assert_eq!(
+        team.scratch_files.as_deref(),
+        Some(&["/plan.md".to_owned(), "/*-notes.md".to_owned()][..])
+    );
 
     let encoded = toml::to_string(&team).expect("serialize team");
     assert!(encoded.contains("scratch-files = ["));
@@ -1617,11 +1640,25 @@ fn team_scratch_files_parse_default_and_round_trip() {
     );
 
     let defaulted: Team = toml::from_str("").expect("parse empty team");
-    assert!(defaulted.scratch_files.is_empty());
+    assert_eq!(defaulted.scratch_files, None);
+    assert!(defaulted.scratch_patterns().is_empty());
     assert!(
         !toml::to_string(&defaulted)
             .expect("serialize default team")
             .contains("scratch-files")
+    );
+
+    let staged: Team = toml::from_str("stages = [\"Build\"]").expect("parse staged team");
+    assert_eq!(staged.scratch_patterns(), ["/blackboard.md", "/*-notes.md"]);
+
+    let none: Team =
+        toml::from_str("stages = [\"Build\"]\nscratch-files = []").expect("parse empty list");
+    assert_eq!(none.scratch_files, Some(Vec::new()));
+    assert!(none.scratch_patterns().is_empty());
+    assert_eq!(
+        toml::from_str::<Team>(&toml::to_string(&none).expect("serialize empty list"))
+            .expect("round-trip empty list"),
+        none
     );
 }
 

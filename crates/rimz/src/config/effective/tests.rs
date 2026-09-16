@@ -701,7 +701,9 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
             roles: vec![role("local", "local-profile")],
             leader: None,
             layout: None,
-            scratch_files: Vec::new(),
+            scratch_files: None,
+            consensus_file: None,
+            append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },
     )]));
@@ -799,7 +801,9 @@ fn untrusted_repo_profile_inside_machine_team_layout_is_blocked() {
             roles: vec![role("coder", "local")],
             leader: None,
             layout: Some("coder,planner".to_owned()),
-            scratch_files: Vec::new(),
+            scratch_files: None,
+            consensus_file: None,
+            append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },
     )]));

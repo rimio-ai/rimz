@@ -104,6 +104,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         &SystemPromptSources {
             system_prompt_file: request.system_prompt_file.clone(),
             append_system_prompt_files: request.append_system_prompt_files.clone(),
+            team_prompt: request.team_prompt.clone(),
         },
         inputs.runtime,
     )?;
