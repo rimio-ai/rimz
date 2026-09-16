@@ -299,11 +299,11 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         .unwrap();
     let row_id = row.id.clone();
     let parent = row.as_agent_mut().unwrap();
-    let mut prior = parent.sub_agents[0].clone();
-    prior.id = "prior-child".to_owned();
-    prior.prior_turn = true;
-    prior.description = Some("previous render audit".to_owned());
-    parent.sub_agents.push(prior);
+    let mut older = parent.sub_agents[0].clone();
+    older.id = "older-child".to_owned();
+    older.last_activity = fixed_now() - Duration::from_secs(3_600);
+    older.description = Some("previous render audit".to_owned());
+    parent.sub_agents.push(older);
     parent.sub_agent_count += 1;
     let turn = parent.user_turn_started_at;
     let mut ui = UiState {
@@ -312,13 +312,12 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     };
     let folded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);
     assert!(folded.contains("map the render path"));
-    assert!(folded.contains("+1 more"));
+    assert!(folded.contains("+1 older"));
     assert!(!folded.contains("previous render audit"));
-    ui.expanded_delegations.insert(row_id, turn);
+    ui.delegation_history.insert(row_id, turn);
     let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);
     assert!(opened.contains("previous render audit"));
-    assert!(!opened.contains("− less"));
-    assert!(!opened.contains("+1 more"));
+    assert!(!opened.contains("+1 older"));
 }
 
 fn density_agent(

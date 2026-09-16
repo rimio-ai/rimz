@@ -522,7 +522,10 @@ fn test_row_ctx<'a>(
         animation_phase,
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
-        expanded_delegations: const { &std::collections::BTreeMap::new() },
+        recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,
+        max_recent_subagents: snapshot.theme.display.max_recent_subagents,
+        delegation_overrides: const { &std::collections::BTreeMap::new() },
+        delegation_history: const { &std::collections::BTreeMap::new() },
     }
 }
 

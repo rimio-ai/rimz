@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn prior_turn_children_expand_without_hiding_running_children() {
+fn delegation_bands_keep_live_children_and_fold_older_ones() {
     let mut parent = agent(
         "parent",
         "claude",
@@ -10,10 +10,14 @@ fn prior_turn_children_expand_without_hiding_running_children() {
         Some("main"),
         Some("delegate"),
     );
-    parent.user_turn_started_at = Some(fixed_now() - Duration::from_secs(10));
+    parent.user_turn_started_at = Some(fixed_now() - Duration::from_secs(3_600));
     let mut agents = vec![parent];
-    for index in 0..7 {
-        let running = index < 2;
+    // Spawn order task-0..task-8. task-1 and task-4 still run; the finished
+    // children landed out of spawn order, six inside the 15m window (the cap
+    // keeps five) and one outside it.
+    let landed_secs_ago = [300, 0, 60, 780, 0, 600, 1_200, 180, 420];
+    for (index, ago) in landed_secs_ago.into_iter().enumerate() {
+        let running = matches!(index, 1 | 4);
         let mut child = agent(
             &format!("child-{index}"),
             "claude",
@@ -27,41 +31,62 @@ fn prior_turn_children_expand_without_hiding_running_children() {
             Some(&format!("task-{index}")),
         );
         child.parent_agent_id = Some("parent".into());
-        child.last_activity = fixed_now() - Duration::from_secs(if running { 5 } else { 60 });
+        child.registered_at = Some(fixed_now() - Duration::from_secs(1_300 - index as u64));
+        child.last_activity = fixed_now() - Duration::from_secs(if running { 5 } else { ago });
         child.last_seen = child.last_activity;
         agents.push(child);
     }
     let snapshot = snapshot_with(agents);
     let row = &snapshot.worktree_groups[0].rows[0];
-    for (selected_index, open, name) in [
-        (0, false, "prior_children_selected"),
-        (0, true, "prior_children_expanded"),
-        (usize::MAX, false, "prior_children_unselected"),
-        (usize::MAX, true, "prior_children_unselected_expanded"),
+    let turn = row.as_agent().unwrap().user_turn_started_at;
+    let entries = |rendered: &str| {
+        rendered
+            .lines()
+            .filter_map(|line| {
+                line.split_whitespace()
+                    .find(|word| word.starts_with("task-"))
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut screens = Vec::new();
+    for (selected_index, open, history, name) in [
+        (0, None, false, "delegation_bands_selected"),
+        (0, None, true, "delegation_bands_history"),
+        (usize::MAX, None, false, "delegation_bands_unselected"),
+        (0, Some(false), false, "delegation_bands_override_closed"),
     ] {
         let mut ui = UiState {
             selected_index,
             ..Default::default()
         };
-        if open {
-            ui.expanded_delegations
-                .insert(row.id.clone(), row.as_agent().unwrap().user_turn_started_at);
+        if let Some(open) = open {
+            ui.delegation_overrides.insert(row.id.clone(), open);
         }
-        let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 38);
-        assert!(rendered.contains("subagents (7)"));
-        assert_eq!(
-            rendered.contains("task-0"),
-            selected_index == 0 || open,
-            "{rendered}"
-        );
-        assert_eq!(rendered.contains("task-6"), open, "{rendered}");
-        assert_eq!(
-            rendered.contains("+5 more"),
-            selected_index == 0 && !open,
-            "{rendered}"
-        );
-        assert!(!rendered.contains("− less"), "{rendered}");
-        assert_snapshot(name, rendered);
+        if history {
+            ui.delegation_history.insert(row.id.clone(), turn);
+        }
+        let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 44);
+        assert!(rendered.contains("subagents (9)"), "{rendered}");
+        assert_snapshot(name, rendered.clone());
+        screens.push(rendered);
+    }
+    let [selected, history, unselected, closed] = screens.as_slice() else {
+        unreachable!("four scenarios");
+    };
+    assert_eq!(
+        entries(selected),
+        [
+            "task-1", "task-4", "task-2", "task-7", "task-0", "task-8", "task-5"
+        ]
+    );
+    assert!(selected.contains("+2 older"), "{selected}");
+    assert!(entries(history).starts_with(&entries(selected)));
+    assert_eq!(&entries(history)[7..], ["task-3", "task-6"]);
+    assert!(!history.contains("older"), "{history}");
+    for screen in [unselected, closed] {
+        assert!(entries(screen).is_empty(), "{screen}");
+        assert!(!screen.contains("older"), "{screen}");
     }
 }
 
@@ -147,8 +172,8 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         .find(|line| line.contains("Explore — locate the render seam"))
         .expect("priced child line");
     assert!(
-        priced_line.contains("$0.42▐"),
-        "the exact child cost pins right on line 1:\n{rendered}"
+        priced_line.ends_with("◔ <1m $0.42▐"),
+        "the landed age and the exact child cost pin right on line 1:\n{rendered}"
     );
     // The running child's leading cell is the thinking orbit (frame 0 at the
     // test's fixed animation phase), the agent-row head vocabulary verbatim.
@@ -333,11 +358,13 @@ fn subagent_stats_line_outlives_the_turn() {
         unselected.join("\n")
     );
 
+    // The child finished before the parent's current turn but landed inside
+    // the recent window, so the selected card still lists it with its age.
     let selected = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert_eq!(selected.len(), 6, "{}", selected.join("\n"));
+    assert_eq!(selected.len(), 7, "{}", selected.join("\n"));
     assert!(selected[5].contains("⧉ subagents (1)"));
-    assert!(!selected.iter().any(|line| line.contains("more")));
-    assert!(!selected.iter().any(|line| line.contains("map sidebar")));
+    assert!(selected[6].contains("map sidebar") && selected[6].contains("1m $0.42"));
+    assert!(!selected.iter().any(|line| line.contains("older")));
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,

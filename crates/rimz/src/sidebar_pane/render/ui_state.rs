@@ -131,8 +131,15 @@ pub struct UiState {
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(crate) expanded_groups: BTreeSet<String>,
-    /// Renderer-local delegation expansion, expiring at the parent's next user turn.
-    pub(crate) expanded_delegations: BTreeMap<String, Option<Timestamp>>,
+    /// Renderer-local open/closed choice for an agent card's delegation
+    /// section (row id → open), set by a header click. It outranks the default
+    /// (open under selection or `expanded` density) in both directions, stays
+    /// for the renderer's life, and drops only when the row leaves the snapshot.
+    pub(crate) delegation_overrides: BTreeMap<String, bool>,
+    /// Delegation sections showing their older children through `+K older`
+    /// (row id → the parent's user turn at the click). Expires at the parent's
+    /// next user-authored prompt.
+    pub(crate) delegation_history: BTreeMap<String, Option<Timestamp>>,
     /// Renderer-local status for a successful fetch that the regression gate is
     /// holding behind the last good frame. It is display-only evidence for the
     /// bottom chrome; the durable record is `gate_hold`/`gate_release`.

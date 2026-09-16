@@ -3,18 +3,22 @@ use crate::mux::WidthAdjust;
 
 fn delegation_snapshot() -> SidebarSnapshot {
     let mut snapshot = clickable_block_snapshot(&workspace());
+    let now = snapshot.now;
     let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
-    card.user_turn_started_at = Some(snapshot.now);
+    card.user_turn_started_at = Some(now);
     card.sub_agent_count = 2;
     card.sub_agents = [
-        ("live-child", "running", false),
-        ("old-child", "success", true),
+        ("live-child", "running", now),
+        (
+            "old-child",
+            "success",
+            now - std::time::Duration::from_secs(3_600),
+        ),
     ]
     .into_iter()
-    .map(|(name, status, prior_turn)| {
+    .map(|(name, status, last_activity)| {
         serde_json::from_value(serde_json::json!({
-            "id": name, "name": name, "status": status, "prior_turn": prior_turn,
-            "last_activity": snapshot.now,
+            "id": name, "name": name, "status": status, "last_activity": last_activity,
         }))
         .unwrap()
     })
@@ -22,116 +26,123 @@ fn delegation_snapshot() -> SidebarSnapshot {
     snapshot
 }
 
-#[test]
-fn delegation_line_click_toggles_entries_without_focus() {
-    let snapshot = delegation_snapshot();
-    let selected = snapshot.worktree_groups[0].rows[1]
+fn pane_of(snapshot: &SidebarSnapshot, row: usize) -> PaneId {
+    snapshot.worktree_groups[0].rows[row]
         .pane
         .as_ref()
         .unwrap()
         .pane_id
-        .clone();
-    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
-    let target = HitTarget::ToggleDelegation(row_id.clone());
-    let mut ui = UiState::default();
-    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
-    let theme = ui.theme(&snapshot.theme);
-    let collapsed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
-    assert!(
-        !collapsed
-            .lines
-            .iter()
-            .any(|line| line.to_string().contains("live-child"))
-    );
-    ui.interactions = collapsed.interactions;
-    let (_, summary) = ui.interactions.line_for_target(&target).unwrap();
+        .clone()
+}
+
+fn shows(lines: &[ratatui::text::Line<'_>], text: &str) -> bool {
+    lines.iter().any(|line| line.to_string().contains(text))
+}
+
+/// Click the delegation header of `row_id`, which must be painted with the
+/// target that sets `open`.
+fn click_delegation_header(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    interactions: render::FrameInteractions,
+    row_id: &str,
+    open: bool,
+) {
+    ui.interactions = interactions;
+    let target = HitTarget::ToggleDelegation {
+        row: row_id.to_owned(),
+        open,
+    };
+    let (_, line) = ui.interactions.line_for_target(&target).unwrap();
     assert_eq!(
-        handle_mouse_click(10, summary, &mut ui, &snapshot),
+        handle_mouse_click(10, line, ui, snapshot),
         InputOutcome::redraw()
     );
-    assert_eq!(ui.selected_pane, Some(selected.clone()));
+}
+
+#[test]
+fn delegation_line_click_toggles_entries_without_focus() {
+    let snapshot = delegation_snapshot();
+    let other = pane_of(&snapshot, 1);
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(other.clone()));
+    let theme = ui.theme(&snapshot.theme);
+    let compose = |ui: &UiState| render::compose_lines(&snapshot, None, ui, theme.as_ref(), 54, 64);
+
+    let collapsed = compose(&ui);
+    assert!(!shows(&collapsed.lines, "live-child"));
+    click_delegation_header(&mut ui, &snapshot, collapsed.interactions, &row_id, true);
+    assert_eq!(ui.selected_pane, Some(other.clone()));
     assert_eq!(ui.selected_index, 1);
     assert_eq!(
         ui.manual_scroll,
         Some(ManualScroll {
-            selection_at_start: Some(selected)
+            selection_at_start: Some(other.clone())
         })
     );
+    let opened = compose(&ui);
+    assert!(shows(&opened.lines, "live-child"));
+    assert!(shows(&opened.lines, "+1 older"));
+    assert!(!shows(&opened.lines, "old-child"));
+    click_delegation_header(&mut ui, &snapshot, opened.interactions, &row_id, false);
+    assert!(!shows(&compose(&ui).lines, "live-child"));
 
-    let expanded = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
-    assert!(
-        expanded
-            .lines
-            .iter()
-            .any(|line| line.to_string().contains("old-child"))
-    );
-    assert!(
-        !expanded
-            .lines
-            .iter()
-            .any(|line| line.to_string().contains("− less"))
-    );
-    ui.interactions = expanded.interactions;
-    let (_, summary) = ui.interactions.line_for_target(&target).unwrap();
-    assert_eq!(
-        handle_mouse_click(10, summary, &mut ui, &snapshot),
-        InputOutcome::redraw()
-    );
-    assert!(!ui.expanded_delegations.contains_key(&row_id));
+    // Selection opens by default, but a header click closes a selected card's
+    // entries too, and the choice survives selection moving away and back.
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(pane_of(&snapshot, 0)));
+    let selected = compose(&ui);
+    assert!(shows(&selected.lines, "live-child"));
+    click_delegation_header(&mut ui, &snapshot, selected.interactions, &row_id, false);
+    assert!(!shows(&compose(&ui).lines, "live-child"));
+    reconcile_selection(&mut ui, &snapshot, Some(other));
+    reconcile_selection(&mut ui, &snapshot, Some(pane_of(&snapshot, 0)));
+    let closed = compose(&ui);
+    assert!(!shows(&closed.lines, "live-child"));
+    assert!(!shows(&closed.lines, "+1 older"));
 
-    let parent_pane = snapshot.worktree_groups[0].rows[0]
-        .pane
-        .as_ref()
-        .unwrap()
-        .pane_id
-        .clone();
-    reconcile_selection(&mut ui, &snapshot, Some(parent_pane));
-    let selected = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
-    assert!(
-        selected
-            .lines
-            .iter()
-            .any(|line| line.to_string().contains("live-child"))
-    );
-    assert!(
-        !selected
-            .lines
-            .iter()
-            .any(|line| line.to_string().contains("old-child"))
-    );
-    let tail = selected
+    click_delegation_header(&mut ui, &snapshot, closed.interactions, &row_id, true);
+    let reopened = compose(&ui);
+    let tail = reopened
         .lines
         .iter()
-        .position(|line| line.to_string().contains("+1 more"))
+        .position(|line| line.to_string().contains("+1 older"))
         .unwrap();
-    ui.interactions = selected.interactions;
+    ui.interactions = reopened.interactions;
+    assert_eq!(
+        ui.interactions.target_at(10, tail as u16),
+        Some(HitTarget::ToggleDelegationHistory(row_id.clone()))
+    );
     assert_eq!(
         handle_mouse_click(10, tail as u16, &mut ui, &snapshot),
         InputOutcome::redraw()
     );
-    let reopened = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
-    assert!(
-        reopened
-            .lines
-            .iter()
-            .any(|line| line.to_string().contains("old-child"))
-    );
-    let mut ordinals = (0..reopened.interactions.line_count())
-        .filter_map(|line| reopened.interactions.row_at_line(line))
+    let history = compose(&ui);
+    assert!(shows(&history.lines, "live-child"));
+    assert!(shows(&history.lines, "old-child"));
+    assert!(!shows(&history.lines, "+1 older"));
+    let mut ordinals = (0..history.interactions.line_count())
+        .filter_map(|line| history.interactions.row_at_line(line))
         .collect::<Vec<_>>();
     ordinals.dedup();
     assert_eq!(ordinals, vec![0, 1]);
+
+    // Closing the section folds the history, so reopening starts from the bands.
+    click_delegation_header(&mut ui, &snapshot, history.interactions, &row_id, false);
+    assert!(!ui.delegation_history.contains_key(&row_id));
 }
 
 #[test]
-fn delegation_toggle_expires_on_the_parents_next_prompt() {
+fn delegation_history_expires_on_the_parents_next_prompt_while_the_override_stays() {
     let mut snapshot = delegation_snapshot();
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
     let mut ui = UiState::default();
-    toggle_delegation_expanded(&mut ui, &snapshot, row_id.clone());
+    set_delegation_open(&mut ui, &snapshot, row_id.clone(), true);
+    toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 64)).unwrap();
     render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
-    assert!(ui.expanded_delegations.contains_key(&row_id));
+    assert!(ui.delegation_history.contains_key(&row_id));
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
         .unwrap()
@@ -143,14 +154,16 @@ fn delegation_toggle_expires_on_the_parents_next_prompt() {
             .lines
             .iter()
             .any(|line| line.to_string().contains("old-child")),
-        "stale expansion is inert before pruning"
+        "stale history is inert before pruning"
     );
     render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
-    assert!(!ui.expanded_delegations.contains_key(&row_id));
-    toggle_delegation_expanded(&mut ui, &snapshot, row_id.clone());
+    assert!(!ui.delegation_history.contains_key(&row_id));
+    assert_eq!(ui.delegation_overrides.get(&row_id), Some(&true));
+    toggle_delegation_history(&mut ui, &snapshot, row_id.clone());
     snapshot.worktree_groups[0].rows.remove(0);
     render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
-    assert!(!ui.expanded_delegations.contains_key(&row_id));
+    assert!(!ui.delegation_history.contains_key(&row_id));
+    assert!(!ui.delegation_overrides.contains_key(&row_id));
 }
 
 #[test]

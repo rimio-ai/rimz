@@ -6,7 +6,7 @@
 
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
-use crate::config::{AnimationRole, ContextMeterConfig, GlyphRole};
+use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::store::snapshot::{AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -28,6 +28,7 @@ use crate::sidebar_pane::render::labels::{
 use crate::sidebar_pane::render::layout::ellipsize;
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
+mod bands;
 mod description;
 mod gauge;
 mod identity;
@@ -82,6 +83,29 @@ pub(in crate::sidebar_pane) fn agent_card_cost_usd(
 
 pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
     matches!(CardStage::of(row), CardStage::Fresh { labeled: false })
+}
+
+/// Whether this card's delegation entries are on screen with something in
+/// motion: a live child or a running shell job.
+pub(in crate::sidebar_pane::render) fn delegation_motion(
+    row: &SidebarRow,
+    density: CardDensityMode,
+    expansion: CardExpansion,
+) -> bool {
+    let Some(agent) = row.as_agent() else {
+        return false;
+    };
+    let status = row.status().unwrap_or(AgentStatus::Idle);
+    template(CardStage::of(row), status, density, expansion).contains(&CardSlot::DelegationEntries)
+        && (agent
+            .sub_agents
+            .iter()
+            .any(|child| !sub_agent_finished(child))
+            || !agent.background_shells.is_empty()
+            || agent
+                .pending_waits
+                .iter()
+                .any(|wait| waits::is_shell_job(&wait.trigger)))
 }
 
 pub(super) fn row_lines(
@@ -144,16 +168,24 @@ pub(super) fn row_lines(
                 CardSlot::Delegation => {
                     inner.extend(delegation_line(ctx, agent).map(|line| CardLine {
                         line,
-                        target: Some(HitTarget::ToggleDelegation(row.id.clone())),
+                        target: Some(HitTarget::ToggleDelegation {
+                            row: row.id.clone(),
+                            open: !expanded.delegation,
+                        }),
                     }));
                 }
                 CardSlot::DelegationEntries => {
-                    let children = agent
-                        .sub_agents
-                        .iter()
-                        .filter(|child| expanded.delegation || !child.prior_turn)
-                        .collect::<Vec<_>>();
-                    let hidden = agent.sub_agents.len() - children.len();
+                    let bands = bands::delegation_bands(
+                        &agent.sub_agents,
+                        ctx.now,
+                        ctx.recent_subagent_secs,
+                        ctx.max_recent_subagents,
+                    );
+                    let mut children = bands.live;
+                    children.extend(bands.recent);
+                    if expanded.history {
+                        children.extend(bands.older);
+                    }
                     inner.extend(
                         sub_agent_entry_lines(ctx, &children)
                             .into_iter()
@@ -168,12 +200,16 @@ pub(super) fn row_lines(
                         .into_iter()
                         .map(CardLine::from),
                     );
-                    // The tail only extends a visible child list; with no child
-                    // shown, the delegation line above is the toggle.
-                    if hidden > 0 && !children.is_empty() {
+                    // The header counts lifetime children, so the rows plus the
+                    // tail add up to it; reaped children count here but have no
+                    // row to reveal.
+                    let folded = usize::try_from(agent.sub_agent_count)
+                        .unwrap_or(usize::MAX)
+                        .saturating_sub(children.len());
+                    if !expanded.history && folded > 0 {
                         inner.push(CardLine {
-                            line: Line::styled(format!("  +{hidden} more"), ctx.theme.muted()),
-                            target: Some(HitTarget::ToggleDelegation(row.id.clone())),
+                            line: Line::styled(format!("  +{folded} older"), ctx.theme.muted()),
+                            target: Some(HitTarget::ToggleDelegationHistory(row.id.clone())),
                         });
                     }
                 }
@@ -250,7 +286,8 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
 /// Up to two indented lines for each visible child. Line 1 leads
 /// with the same live cell an agent row wears — the thinking head while the
 /// child reasons, the working fill while it acts, or the static `✓`/`!` verdict
-/// once it finishes — then its type, description, and known cost. Line 2 carries
+/// once it finishes — then its type and description, with how long ago a
+/// finished child landed and its known cost pinned right. Line 2 carries
 /// the reported token figure `◇`, model, and reasoning effort on a per-card
 /// column grid, with elapsed work pinned right. Children stay at the soft middle
 /// weight and indent past the parent's stats. A pane-backed child's token figure
@@ -307,8 +344,19 @@ fn sub_agent_entry_lines(ctx: &RowCtx<'_>, sub_agents: &[&SidebarSubAgent]) -> V
         if let Some(detail) = detail {
             spans.push(Span::styled(format!(" — {detail}"), theme.body()));
         }
+        // A landed child pins how long ago it finished, ahead of its cost; a
+        // live child's elapsed clock rides line 2 instead.
         let mut right = Vec::new();
+        if sub_agent_finished(sub) {
+            right.push(Span::styled(
+                elapsed_cluster(theme, age_secs(sub.last_activity, ctx.now)),
+                theme.muted(),
+            ));
+        }
         if let Some(usd) = sub.cost_usd.filter(|usd| *usd >= 0.005) {
+            if !right.is_empty() {
+                right.push(Span::raw(" "));
+            }
             right.push(Span::styled(
                 dollars2(usd),
                 theme.money_style(Modifier::empty()),

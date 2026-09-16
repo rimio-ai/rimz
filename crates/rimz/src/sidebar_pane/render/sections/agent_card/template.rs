@@ -45,7 +45,8 @@ pub(super) enum CardSlot {
     /// Standing lifetime child count and cost plus armed one-shot waits; empty
     /// until either exists.
     Delegation,
-    /// Child entries, pending waits, and the prior-turn overflow toggle.
+    /// Live and recent child entries, pending waits, and the `+K older` tail
+    /// that lists the rest.
     DelegationEntries,
 }
 
@@ -78,7 +79,7 @@ pub(super) fn template(
     density: CardDensityMode,
     expansion: CardExpansion,
 ) -> &'static [CardSlot] {
-    let expanded = expansion.by_selection || expansion.delegation;
+    let expanded = expansion.by_selection;
     if density == CardDensityMode::Compact && !expanded {
         return match status {
             AgentStatus::Idle => IDENTITY,
@@ -95,7 +96,7 @@ pub(super) fn template(
         CardStage::Fresh { labeled: true } if !expanded => IDENTITY_DESCRIPTION,
         CardStage::Fresh { labeled: false } => IDENTITY_AWAITING_GAUGE,
         CardStage::Fresh { labeled: true } => IDENTITY_DESCRIPTION_GAUGE,
-        CardStage::Engaged if expanded || density == CardDensityMode::Expanded => ENGAGED_EXPANDED,
+        CardStage::Engaged if expansion.delegation => ENGAGED_EXPANDED,
         CardStage::Engaged => ENGAGED,
     }
 }
@@ -128,9 +129,9 @@ mod tests {
         stage: CardStage,
         status: AgentStatus,
         density: CardDensityMode,
-        expanded: bool,
+        expansion: CardExpansion,
     ) -> &'static [CardSlot] {
-        if density == CardDensityMode::Compact && !expanded {
+        if density == CardDensityMode::Compact && !expansion.by_selection {
             return match status {
                 AgentStatus::Idle => IDENTITY,
                 AgentStatus::Running | AgentStatus::Waiting => IDENTITY_DESCRIPTION_GAUGE,
@@ -140,47 +141,36 @@ mod tests {
                 | AgentStatus::Sleeping => IDENTITY_DESCRIPTION,
             };
         }
-        match (stage, expanded, density) {
+        match (stage, expansion.by_selection, expansion.delegation) {
             (CardStage::Fresh { labeled: false }, false, _) => IDENTITY,
             (CardStage::Fresh { labeled: true }, false, _) => IDENTITY_DESCRIPTION,
             (CardStage::Fresh { labeled: false }, true, _) => IDENTITY_AWAITING_GAUGE,
             (CardStage::Fresh { labeled: true }, true, _) => IDENTITY_DESCRIPTION_GAUGE,
-            (CardStage::Engaged, _, CardDensityMode::Expanded) | (CardStage::Engaged, true, _) => {
-                ENGAGED_EXPANDED
-            }
-            (CardStage::Engaged, false, _) => ENGAGED,
+            (CardStage::Engaged, _, true) => ENGAGED_EXPANDED,
+            (CardStage::Engaged, _, false) => ENGAGED,
         }
     }
 
+    /// The card shape follows selection alone and the delegation entries follow
+    /// the resolved open state alone, so a selected card can close its entries
+    /// and an unselected one can open them.
     #[test]
     fn table_pins_every_state_status_density_and_expansion_combination() {
         assert!(ENGAGED_EXPANDED.starts_with(ENGAGED));
         for stage in STAGES {
             for status in STATUSES {
                 for density in DENSITIES {
-                    for expansion in [
-                        CardExpansion::default(),
-                        CardExpansion {
-                            by_selection: true,
-                            delegation: false,
-                        },
-                        CardExpansion {
-                            by_selection: false,
-                            delegation: true,
-                        },
-                        CardExpansion {
-                            by_selection: true,
-                            delegation: true,
-                        },
-                    ] {
+                    for (by_selection, delegation) in
+                        [(false, false), (true, false), (false, true), (true, true)]
+                    {
+                        let expansion = CardExpansion {
+                            by_selection,
+                            delegation,
+                            history: false,
+                        };
                         assert_eq!(
                             template(stage, status, density, expansion),
-                            expected_template(
-                                stage,
-                                status,
-                                density,
-                                expansion.by_selection || expansion.delegation
-                            ),
+                            expected_template(stage, status, density, expansion),
                             "{stage:?} {status:?} {density:?} {expansion:?}"
                         );
                     }
@@ -204,7 +194,8 @@ mod tests {
                             density,
                             CardExpansion {
                                 by_selection: expanded,
-                                delegation: false,
+                                delegation: expanded,
+                                history: false,
                             },
                         );
                         assert!(!template.contains(&CardSlot::Tokens));

@@ -101,7 +101,7 @@ fn draw_into(
     // draw: store them so the mouse hit-test and the next frame's viewport read
     // the geometry of the frame the user is actually looking at.
     prune_expanded_groups(snapshot, ui);
-    prune_expanded_delegations(snapshot, ui);
+    prune_delegation_state(snapshot, ui);
     let theme = ui.theme(&snapshot.theme);
     let mut meter_pixels = ui.meter_pixels.take();
     let composed = compose_lines_with_meter(
@@ -317,19 +317,20 @@ fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut UiState) {
     });
 }
 
-fn prune_expanded_delegations(snapshot: &SidebarSnapshot, ui: &mut UiState) {
-    ui.expanded_delegations.retain(|id, turn| {
+/// An override lives as long as its row; the `+K older` history also expires
+/// when the parent's user turn moves.
+fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut UiState) {
+    let agent = |id: &str| {
         snapshot
             .worktree_groups
             .iter()
             .flat_map(|group| &group.rows)
-            .any(|row| {
-                row.id == *id
-                    && row
-                        .as_agent()
-                        .is_some_and(|agent| agent.user_turn_started_at == *turn)
-            })
-    });
+            .find(|row| row.id == id)
+            .and_then(SidebarRow::as_agent)
+    };
+    ui.delegation_overrides.retain(|id, _| agent(id).is_some());
+    ui.delegation_history
+        .retain(|id, turn| agent(id).is_some_and(|agent| agent.user_turn_started_at == *turn));
 }
 
 fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a SidebarRow> {
@@ -357,9 +358,42 @@ pub(crate) fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui:
             .range()
             .zip(group.rows(&roster).iter().copied())
             .any(|(row_index, row)| {
-                (sections::row_expanded_by_selection(&roster, group, row_index, ui.selected_index)
-                    || sections::delegation_open(&ui.expanded_delegations, row))
+                sections::row_expanded_by_selection(&roster, group, row_index, ui.selected_index)
                     && sections::awaiting_first_prompt_affordance(row)
+            })
+    })
+}
+
+/// Whether a visible card's open delegation section holds something in motion:
+/// a live child's head or a running shell job's working animation. Either
+/// needs the fast grid whatever the parent's own status, so a sleeping parent
+/// waiting on its children still animates them.
+pub(crate) fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+    let roster = VisibleRoster::new(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    );
+    let density = snapshot.theme.display.card_density;
+    roster.groups().iter().any(|group| {
+        group
+            .range()
+            .zip(group.rows(&roster).iter().copied())
+            .any(|(row_index, row)| {
+                let expansion = sections::CardExpansion::resolve(
+                    &ui.delegation_overrides,
+                    &ui.delegation_history,
+                    density,
+                    row,
+                    sections::row_expanded_by_selection(
+                        &roster,
+                        group,
+                        row_index,
+                        ui.selected_index,
+                    ),
+                );
+                sections::delegation_motion(row, density, expansion)
             })
     })
 }
@@ -573,13 +607,13 @@ pub fn render_expanded_line_ansi<W: Write>(
             .iter()
             .map(|group| group.key.clone())
             .collect(),
-        expanded_delegations: snapshot
+        delegation_history: snapshot
             .worktree_groups
             .iter()
             .flat_map(|group| &group.rows)
             .filter_map(|row| {
                 row.as_agent()
-                    .filter(|agent| agent.sub_agents.iter().any(|child| child.prior_turn))
+                    .filter(|agent| agent.sub_agent_count > 0)
                     .map(|agent| (row.id.clone(), agent.user_turn_started_at))
             })
             .collect(),

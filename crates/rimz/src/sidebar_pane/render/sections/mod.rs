@@ -36,7 +36,9 @@ mod provider;
 mod worktree;
 
 pub(in crate::sidebar_pane) use agent_card::agent_card_cost_usd;
-pub(in crate::sidebar_pane::render) use agent_card::awaiting_first_prompt_affordance;
+pub(in crate::sidebar_pane::render) use agent_card::{
+    awaiting_first_prompt_affordance, delegation_motion,
+};
 pub(super) use cockpit::{CockpitBadges, cockpit_spend_line, cockpit_summary_line};
 pub(super) use fleet::{fleet_header_lines, fleet_size, open_pr_total, open_pr_worst_ci};
 #[cfg(test)]
@@ -74,18 +76,38 @@ pub(super) fn row_expanded_by_selection(
     roster.row(row_index).and_then(SidebarRow::team) == Some(selected_team)
 }
 
+/// What a card opens: the full card shape follows selection alone, while the
+/// delegation section's entries follow the sticky header override when one is
+/// set and otherwise open under selection or `expanded` density.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct CardExpansion {
     pub(super) by_selection: bool,
     pub(super) delegation: bool,
+    /// The open section also lists the children folded behind `+K older`.
+    pub(super) history: bool,
 }
 
-pub(super) fn delegation_open(
-    expanded: &BTreeMap<String, Option<Timestamp>>,
-    row: &SidebarRow,
-) -> bool {
-    row.as_agent()
-        .is_some_and(|agent| expanded.get(&row.id) == Some(&agent.user_turn_started_at))
+impl CardExpansion {
+    pub(super) fn resolve(
+        overrides: &BTreeMap<String, bool>,
+        history: &BTreeMap<String, Option<Timestamp>>,
+        density: CardDensityMode,
+        row: &SidebarRow,
+        by_selection: bool,
+    ) -> Self {
+        let delegation = overrides
+            .get(&row.id)
+            .copied()
+            .unwrap_or(by_selection || density == CardDensityMode::Expanded);
+        let history = row
+            .as_agent()
+            .is_some_and(|agent| history.get(&row.id) == Some(&agent.user_turn_started_at));
+        Self {
+            by_selection,
+            delegation,
+            history,
+        }
+    }
 }
 
 pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
@@ -100,8 +122,10 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) animation_phase: u64,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
     pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,
-    pub(in crate::sidebar_pane::render) expanded_delegations:
-        &'a BTreeMap<String, Option<Timestamp>>,
+    pub(in crate::sidebar_pane::render) recent_subagent_secs: u64,
+    pub(in crate::sidebar_pane::render) max_recent_subagents: usize,
+    pub(in crate::sidebar_pane::render) delegation_overrides: &'a BTreeMap<String, bool>,
+    pub(in crate::sidebar_pane::render) delegation_history: &'a BTreeMap<String, Option<Timestamp>>,
 }
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the

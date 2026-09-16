@@ -38,6 +38,8 @@
 ## max_cols = 72                      # live column cap for sidebar pane width
 ## scrollbar = "auto"                 # "auto", "always", or "never"
 ## card_density = "auto"              # "auto", "expanded", or "compact"
+## recent_subagent_secs = 900         # finished subagents stay listed this long before folding behind +K older
+## max_recent_subagents = 5           # cap on finished subagents listed; running ones are never capped
 ## provider_tabs = "auto"             # "auto", "always", or "never"
 ## provider_list = []                 # explicit provider order; include "all" to expand the rest
 ## max_provider_blocks = 3            # cap stacked provider blocks when provider_list is empty
@@ -208,7 +210,7 @@
 ## subagents = "⧉"
 ## waits = "⧖"
 ## wait_timer = "◷"
-## wait_shell = "❯"
+## wait_shell = "❯"                  # unused: a running shell job wears the working animation
 ## wait_signal = "⌁"
 ## parked_bg = "⋯"
 
@@ -318,7 +320,7 @@
 ## subagents = ""
 ## waits = "󰂠"
 ## wait_timer = "󰔟"
-## wait_shell = "󰞷"
+## wait_shell = "󰞷"                  # unused: a running shell job wears the working animation
 ## wait_signal = "󱜠"
 ## parked_bg = "⋯"
 

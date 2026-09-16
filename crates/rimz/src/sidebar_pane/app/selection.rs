@@ -314,8 +314,12 @@ pub(super) fn handle_mouse_click(
             toggle_group_expanded(ui, snapshot, group_key);
             InputOutcome::redraw()
         }
-        Some(HitTarget::ToggleDelegation(row_id)) => {
-            toggle_delegation_expanded(ui, snapshot, row_id);
+        Some(HitTarget::ToggleDelegation { row, open }) => {
+            set_delegation_open(ui, snapshot, row, open);
+            InputOutcome::redraw()
+        }
+        Some(HitTarget::ToggleDelegationHistory(row_id)) => {
+            toggle_delegation_history(ui, snapshot, row_id);
             InputOutcome::redraw()
         }
         Some(HitTarget::Row(index)) => active_roster(snapshot, ui)
@@ -364,7 +368,20 @@ fn toggle_group_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, group_key
     });
 }
 
-fn toggle_delegation_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: String) {
+/// A header click sets the section open or closed for the renderer's life. A
+/// close also folds the `+K older` history, so reopening starts from the bands.
+fn set_delegation_open(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: String, open: bool) {
+    if !open {
+        ui.delegation_history.remove(&row_id);
+    }
+    ui.delegation_overrides.insert(row_id, open);
+    anchor_selection(ui, snapshot);
+    ui.manual_scroll = Some(ManualScroll {
+        selection_at_start: ui.selected_pane.clone(),
+    });
+}
+
+fn toggle_delegation_history(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: String) {
     let Some(agent) = snapshot
         .worktree_groups
         .iter()
@@ -374,8 +391,8 @@ fn toggle_delegation_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, row_
     else {
         return;
     };
-    if ui.expanded_delegations.remove(&row_id) != Some(agent.user_turn_started_at) {
-        ui.expanded_delegations
+    if ui.delegation_history.remove(&row_id) != Some(agent.user_turn_started_at) {
+        ui.delegation_history
             .insert(row_id, agent.user_turn_started_at);
     }
     anchor_selection(ui, snapshot);
