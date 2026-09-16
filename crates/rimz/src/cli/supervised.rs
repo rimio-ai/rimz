@@ -1,6 +1,6 @@
 //! Command-neutral supervised-run effects and presentation.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -183,8 +183,8 @@ pub(super) struct RunPaneCmdArgs<'a> {
     pub(super) prompt: &'a str,
     pub(super) cleanup_worktree: bool,
     pub(super) permission_args: &'a [String],
-    pub(super) system_prompt_file: Option<&'a Path>,
-    pub(super) append_system_prompt_files: &'a [PathBuf],
+    pub(super) system_prompt_file: Option<&'a rimz::config::PromptSource>,
+    pub(super) append_system_prompt_files: &'a [rimz::config::PromptSource],
     pub(super) team_prompt: Option<&'a rimz::harness::team_prompt::TeamPrompt>,
     pub(super) skills: Option<&'a [rimz::config::SkillName]>,
     pub(super) self_cleanup_on_completion: bool,
@@ -206,7 +206,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
                 prompt: Some(args.prompt.to_owned()),
                 extra_args: args.permission_args.to_vec(),
             },
-            system_prompt_file: args.system_prompt_file.map(Path::to_path_buf),
+            system_prompt_file: args.system_prompt_file.cloned(),
             append_system_prompt_files: args.append_system_prompt_files.to_vec(),
             team_prompt: args.team_prompt.cloned(),
             skills: args.skills.map(<[_]>::to_vec),

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::agents::{PresetArgMatcher, PresetField};
+use crate::config::PromptSource;
 use crate::disk::paths::RuntimePaths;
 use crate::harness::team_prompt::{BUILT_IN_CONSENSUS, Consensus, TeamPrompt};
 use crate::ids::AgentKind;
@@ -14,8 +15,8 @@ pub(super) const TEXT_PROMPT_LIMIT: usize = 120 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SystemPromptSources {
-    pub system_prompt_file: Option<PathBuf>,
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub system_prompt_file: Option<crate::config::PromptSource>,
+    pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub team_prompt: Option<TeamPrompt>,
 }
 
@@ -119,12 +120,18 @@ pub fn plan_system_prompt(
         .ok_or(PromptComposeErr::Unsupported { agent })?;
 
     let composed = read_composed(sources, agent)?;
-    let artifact = sources
-        .composes()
-        .then(|| prompt_artifact_path(runtime, "sys", &composed));
+    let artifact = (sources.composes()
+        || sources
+            .system_prompt_file
+            .as_ref()
+            .is_some_and(|source| source.file().is_none()))
+    .then(|| prompt_artifact_path(runtime, "sys", &composed));
     let path = artifact
         .as_deref()
-        .or(sources.system_prompt_file.as_deref())
+        .or(sources
+            .system_prompt_file
+            .as_ref()
+            .and_then(PromptSource::file))
         .expect("read_composed requires a base prompt");
     let materialized = render(matcher, path, &composed, agent)?;
     Ok(SystemPromptPlan {
@@ -219,14 +226,14 @@ fn read_composed(
 ) -> Result<String, PromptComposeErr> {
     let base = sources
         .system_prompt_file
-        .as_deref()
+        .as_ref()
         .ok_or(PromptComposeErr::MissingBase { agent })?;
     if !sources.composes() {
-        return read_prompt(base);
+        return read_source(base);
     }
-    let mut pieces = vec![read_prompt(base)?];
+    let mut pieces = vec![read_source(base)?];
     for path in &sources.append_system_prompt_files {
-        pieces.push(read_prompt(path)?);
+        pieces.push(read_source(path)?);
     }
     if let Some(team_prompt) = &sources.team_prompt {
         pieces.push(match &team_prompt.consensus {
@@ -234,10 +241,17 @@ fn read_composed(
             Consensus::File(path) => read_prompt(path)?,
         });
         for path in &team_prompt.files {
-            pieces.push(read_prompt(path)?);
+            pieces.push(read_source(path)?);
         }
     }
     Ok(compose(&pieces))
+}
+
+fn read_source(source: &PromptSource) -> Result<String, PromptComposeErr> {
+    match source {
+        PromptSource::File(path) => read_prompt(path),
+        PromptSource::Text { text, .. } => Ok(text.clone()),
+    }
 }
 
 fn compose(pieces: &[String]) -> String {
@@ -322,6 +336,45 @@ mod tests {
     }
 
     #[test]
+    fn text_sources_compose_like_files_and_materialize_a_text_only_base() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let base = dir.path().join("base.md");
+        let fragment = dir.path().join("fragment.md");
+        std::fs::write(&base, "base\r\n\n").expect("base");
+        std::fs::write(&fragment, "fragment\n").expect("fragment");
+        let files = SystemPromptSources {
+            system_prompt_file: Some(base.clone().into()),
+            append_system_prompt_files: vec![fragment.clone().into()],
+            team_prompt: None,
+        };
+        let mut texts = SystemPromptSources {
+            system_prompt_file: Some(PromptSource::Text {
+                origin: base,
+                text: "base\r\n\n".to_owned(),
+            }),
+            append_system_prompt_files: vec![PromptSource::Text {
+                origin: fragment,
+                text: "fragment\n".to_owned(),
+            }],
+            team_prompt: None,
+        };
+        assert_eq!(
+            read_composed(&texts, "claude").unwrap(),
+            read_composed(&files, "claude").unwrap()
+        );
+        texts.append_system_prompt_files.clear();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        let plan =
+            plan_system_prompt(&AgentKind::new_unchecked("claude"), &texts, &runtime).unwrap();
+        apply_system_prompt(&plan).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(plan.artifact.unwrap()).unwrap(),
+            "base\r\n\n"
+        );
+    }
+
+    #[test]
     fn fragments_materialize_once_in_order_for_all_matchers() {
         let dir = tempfile::tempdir().expect("temp dir");
         let base = dir.path().join("base.md");
@@ -334,8 +387,8 @@ mod tests {
         )
         .expect("runtime");
         let sources = SystemPromptSources {
-            system_prompt_file: Some(base),
-            append_system_prompt_files: vec![first],
+            system_prompt_file: Some(base.into()),
+            append_system_prompt_files: vec![first.into()],
             team_prompt: None,
         };
 
@@ -388,11 +441,11 @@ mod tests {
             });
         let runtime = RuntimePaths::shared();
         let mut sources = SystemPromptSources {
-            system_prompt_file: Some(base),
-            append_system_prompt_files: vec![fragment],
+            system_prompt_file: Some(base.into()),
+            append_system_prompt_files: vec![fragment.into()],
             team_prompt: Some(TeamPrompt {
                 consensus: Consensus::BuiltIn,
-                files: vec![pipeline],
+                files: vec![pipeline.into()],
             }),
         };
         let claude = AgentKind::new_unchecked("claude");
@@ -429,7 +482,7 @@ mod tests {
         )
         .expect("base");
         let sources = SystemPromptSources {
-            system_prompt_file: Some(base),
+            system_prompt_file: Some(base.into()),
             append_system_prompt_files: Vec::new(),
             team_prompt: Some(TeamPrompt {
                 consensus: Consensus::BuiltIn,
@@ -447,7 +500,7 @@ mod tests {
         let prompt = dir.path().join("prompt.md");
         std::fs::write(&prompt, "x".repeat(TEXT_PROMPT_LIMIT + 1)).expect("prompt");
         let sources = SystemPromptSources {
-            system_prompt_file: Some(prompt),
+            system_prompt_file: Some(prompt.into()),
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
         };
@@ -458,6 +511,17 @@ mod tests {
         )
         .expect_err("oversized prompt");
         assert!(matches!(err, PromptComposeErr::TooLarge { .. }));
+        let text_sources = SystemPromptSources {
+            system_prompt_file: Some(PromptSource::Text {
+                origin: dir.path().join("missing.md"),
+                text: "x".repeat(TEXT_PROMPT_LIMIT + 1),
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            validate_text_prompt_size(&AgentKind::new_unchecked("pi"), &text_sources),
+            Err(PromptComposeErr::TooLarge { .. })
+        ));
     }
 
     #[test]
@@ -466,7 +530,7 @@ mod tests {
         let prompt = dir.path().join("prompt.md");
         std::fs::write(&prompt, "voice").expect("prompt");
         let sources = SystemPromptSources {
-            system_prompt_file: Some(prompt.clone()),
+            system_prompt_file: Some(prompt.clone().into()),
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
         };
@@ -491,7 +555,7 @@ mod tests {
             &AgentKind::new_unchecked("claude"),
             &SystemPromptSources {
                 system_prompt_file: None,
-                append_system_prompt_files: vec![fragment],
+                append_system_prompt_files: vec![fragment.into()],
                 team_prompt: None,
             },
             &RuntimePaths::shared(),

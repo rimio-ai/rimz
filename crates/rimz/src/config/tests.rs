@@ -921,7 +921,10 @@ fn agents_home_fragments_merge_subagent_profiles_with_paths_and_machine_preceden
         .expect("fragment subagent profile");
     assert_eq!(reviewer.agent, "codex");
     assert_eq!(
-        reviewer.system_prompt_file.as_deref(),
+        reviewer
+            .system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
         Some(
             fragment_path
                 .parent()
@@ -1102,13 +1105,18 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
         .join(AGENTS_HOME_TEAMS_SUBDIR)
         .join("review")
         .join("planner.md");
-    assert_eq!(role.system_prompt_file.as_deref(), Some(expected.as_path()));
+    assert_eq!(
+        role.system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
+        Some(expected.as_path())
+    );
     let expected_append = root
         .path()
         .join(AGENTS_HOME_TEAMS_SUBDIR)
         .join("review")
         .join("prompts/shared.md");
-    assert_eq!(role.append_system_prompt_files, [expected_append]);
+    assert_eq!(role.append_system_prompt_files, [expected_append.into()]);
     let team = agents.teams.0.get("review").expect("review team");
     assert_eq!(
         team.consensus_file.as_deref(),
@@ -1116,7 +1124,7 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
     );
     assert_eq!(
         team.append_system_prompt_files,
-        [team_fragment_dir.join("pipeline.md")]
+        [team_fragment_dir.join("pipeline.md").into()]
     );
 }
 
@@ -1680,7 +1688,7 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
     else {
         panic!("planner profile with a system prompt");
     };
-    assert_eq!(path, &dir.path().join("prompts/planner.md"));
+    assert_eq!(path.origin(), &dir.path().join("prompts/planner.md"));
 
     let absolute = load_no_fragments(&write_named(
         &dir,
@@ -1697,7 +1705,7 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
     else {
         panic!("planner profile with a system prompt");
     };
-    assert_eq!(path, std::path::Path::new("/etc/rimz/planner.md"));
+    assert_eq!(path.origin(), std::path::Path::new("/etc/rimz/planner.md"));
 }
 
 #[test]
@@ -1839,7 +1847,10 @@ fn subagent_profile_prompt_file_resolves_against_the_config_dir() {
         .get("reviewer")
         .expect("subagent profile");
     assert_eq!(
-        profile.system_prompt_file.as_deref(),
+        profile
+            .system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
         Some(dir.path().join("prompts/reviewer.md").as_path())
     );
 }

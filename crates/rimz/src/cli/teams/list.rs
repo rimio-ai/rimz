@@ -36,7 +36,7 @@ pub(super) struct TeamReport {
     pub consensus: Option<String>,
     /// The team layer's files, composed after the consensus.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub append_system_prompt_files: Vec<rimz::config::PromptSource>,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -57,9 +57,9 @@ pub(super) struct RoleReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_prompt_file: Option<PathBuf>,
+    pub system_prompt_file: Option<rimz::config::PromptSource>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub append_system_prompt_files: Vec<rimz::config::PromptSource>,
 }
 
 #[derive(Clone, Debug, Serialize)]

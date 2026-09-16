@@ -583,7 +583,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     let launch_id = rimz::ids::AgentSessionId::from("child-id");
     let team_prompt = rimz::harness::team_prompt::TeamPrompt {
         consensus: rimz::harness::team_prompt::Consensus::BuiltIn,
-        files: vec![PathBuf::from("/team/pipeline.md")],
+        files: vec!["/team/pipeline.md".into()],
     };
     let pane = run_pane_cmd(RunPaneCmdArgs {
         runtime: &runtime,

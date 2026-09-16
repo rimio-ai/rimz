@@ -21,7 +21,7 @@ pub enum Consensus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamPrompt {
     pub consensus: Consensus,
-    pub files: Vec<PathBuf>,
+    pub files: Vec<crate::config::PromptSource>,
 }
 
 impl TeamPrompt {

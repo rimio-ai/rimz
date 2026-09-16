@@ -86,6 +86,73 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
     }
 }
 
+#[test]
+fn text_prompt_sources_spill_before_encoding_the_exec_wire() {
+    use crate::config::PromptSource;
+    use crate::harness::team_prompt::{Consensus, TeamPrompt};
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = runtime(dir.path());
+    let texts = [
+        "private base text",
+        "private craft text",
+        "private pipeline text",
+    ];
+    let source = |index: usize| PromptSource::Text {
+        origin: PathBuf::from(format!("source-{index}.md")),
+        text: texts[index].to_owned(),
+    };
+    let mut input = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: Some("private task text".to_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+    input.system_prompt_file = Some(source(0));
+    input.append_system_prompt_files = vec![source(1)];
+    input.team_prompt = Some(TeamPrompt {
+        consensus: Consensus::BuiltIn,
+        files: vec![source(2)],
+    });
+    assert_eq!(
+        serde_json::from_str::<ExecRequest>(&serde_json::to_string(&input).unwrap()).unwrap(),
+        input
+    );
+    let plan = plan_exec_argv(Path::new("/bin/rimz"), &runtime, &input).unwrap();
+    let payload = plan
+        .argv
+        .windows(2)
+        .find(|pair| pair[0] == "--request")
+        .unwrap()[1]
+        .as_str();
+    assert!(!payload.contains("private"));
+    assert_eq!(plan.artifacts.len(), 4);
+    assert_eq!(plan.artifacts[0].contents, "private task text");
+    for (artifact, text) in plan.artifacts[1..].iter().zip(texts) {
+        assert_eq!(artifact.contents, text);
+        assert_eq!(artifact.path, prompt_artifact_path(&runtime, "frag", text));
+        assert!(!artifact.path.exists());
+    }
+    let wire: ExecWire = serde_json::from_str(payload).unwrap();
+    let decoded = wire.request;
+    let sources = decoded
+        .system_prompt_file
+        .iter()
+        .chain(&decoded.append_system_prompt_files)
+        .chain(&decoded.team_prompt.as_ref().unwrap().files);
+    for (source, artifact) in sources.zip(&plan.artifacts[1..]) {
+        assert_eq!(source, &PromptSource::File(artifact.path.clone()));
+    }
+    exec_argv(Path::new("/bin/rimz"), &runtime, &input).unwrap();
+    for artifact in plan.artifacts {
+        assert_eq!(
+            std::fs::read_to_string(artifact.path).unwrap(),
+            artifact.contents
+        );
+    }
+}
+
 fn team() -> crate::harness::launch_reminders::TeamReminder {
     let role = |role: &str, profile: &str| crate::config::RoleBinding {
         signals: Vec::new(),
@@ -137,7 +204,7 @@ fn round_trip(input: &ExecRequest) -> (Vec<String>, ExecRequest) {
     let dir = tempfile::tempdir().expect("runtime root");
     let runtime = runtime(dir.path());
     let plan = plan_exec_argv(Path::new("/bin/rimz"), &runtime, input).expect("plan exec request");
-    if let Some(artifact) = &plan.prompt_artifact {
+    for artifact in &plan.artifacts {
         assert!(!artifact.path.exists());
         let ExecAction::Launch { prompt, .. } = &input.action else {
             panic!("only launch requests carry prompt artifacts");
@@ -1442,13 +1509,16 @@ fn provider_account_stage_validates_and_reenters_once() {
     .expect("pending stage");
     let AgentProcessStage::LoginShellReentry {
         argv,
-        prompt_artifact,
+        prompt_artifacts,
         ..
     } = stage
     else {
         panic!("pending binding must re-enter");
     };
-    let artifact = prompt_artifact.expect("reentry prompt artifact");
+    let artifact = prompt_artifacts
+        .into_iter()
+        .next()
+        .expect("reentry prompt artifact");
     assert!(!artifact.path.exists());
     write_prompt_artifact(&artifact).expect("apply reentry prompt artifact");
     let payload = argv
@@ -1667,7 +1737,7 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         AgentProcessStage::LoginShellReentry {
             process,
             argv: wrapped,
-            prompt_artifact: None,
+            prompt_artifacts: Vec::new(),
         }
     );
     assert!(!rendered.contains("sk-secret"), "{rendered}");

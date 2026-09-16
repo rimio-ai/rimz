@@ -383,8 +383,8 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         effort: Some("high".to_owned()),
         budget: Some("$1".to_owned()),
         auto_compact: Some("200k".to_owned()),
-        system_prompt_file: Some(PathBuf::from("system.md")),
-        append_system_prompt_files: vec![PathBuf::from("append.md")],
+        system_prompt_file: Some(PathBuf::from("system.md").into()),
+        append_system_prompt_files: vec![PathBuf::from("append.md").into()],
         skills: Some(vec!["merge".parse().unwrap()]),
         args: Some("--flag".to_owned()),
     };
@@ -412,7 +412,7 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         layout: Some("lead".to_owned()),
         scratch_files: Some(vec!["notes/".to_owned()]),
         consensus_file: Some(PathBuf::from("consensus.md")),
-        append_system_prompt_files: vec![PathBuf::from("pipeline.md")],
+        append_system_prompt_files: vec![PathBuf::from("pipeline.md").into()],
         stages: vec!["Explore".to_owned(), "Plan".to_owned()],
     };
 

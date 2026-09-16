@@ -14,7 +14,7 @@ fn resume_replays_the_profile_declared_posture() {
         Profile {
             model: Some("opus".to_owned()),
             effort: Some("high".to_owned()),
-            system_prompt_file: Some(prompt.path().to_path_buf()),
+            system_prompt_file: Some(prompt.path().to_path_buf().into()),
             auto_compact: Some("200k".to_owned()),
             ..profile("claude")
         },
@@ -48,7 +48,13 @@ fn resume_replays_the_profile_declared_posture() {
     );
     assert_eq!(request.identity.params.model.as_deref(), Some("opus"));
     assert_eq!(request.identity.params.effort.as_deref(), Some("high"));
-    assert_eq!(request.system_prompt_file.as_deref(), Some(prompt.path()));
+    assert_eq!(
+        request
+            .system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
+        Some(prompt.path())
+    );
 }
 
 #[test]
@@ -148,7 +154,7 @@ fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
     let profiles = profiles(
         "planner",
         Profile {
-            system_prompt_file: Some(dir.path().join("missing.md")),
+            system_prompt_file: Some(dir.path().join("missing.md").into()),
             ..profile("codex")
         },
     );
@@ -169,8 +175,8 @@ fn a_profile_prompt_fragment_that_vanished_degrades_instead_of_refusing() {
     let profiles = profiles(
         "planner",
         Profile {
-            system_prompt_file: Some(base.path().to_path_buf()),
-            append_system_prompt_files: vec![dir.path().join("missing.md")],
+            system_prompt_file: Some(base.path().to_path_buf().into()),
+            append_system_prompt_files: vec![dir.path().join("missing.md").into()],
             ..profile("codex")
         },
     );
@@ -189,7 +195,7 @@ fn unsupported_prompt_replacement_is_reported_as_a_resume_skip() {
     let profiles = profiles(
         "planner",
         Profile {
-            system_prompt_file: Some(prompt.path().to_path_buf()),
+            system_prompt_file: Some(prompt.path().to_path_buf().into()),
             ..profile("droid")
         },
     );
