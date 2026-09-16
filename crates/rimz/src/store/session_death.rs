@@ -103,7 +103,7 @@ pub(crate) fn same_agent_instance(older: &AgentState, newer: &AgentState) -> boo
 
 /// [`same_agent_instance`] over bare pane and runtime-owner placements, for a
 /// session that is never folded into an `AgentState`.
-pub(crate) fn same_instance_placement(
+pub(in crate::store) fn same_instance_placement(
     older: (Option<&PaneRef>, Option<&RuntimeOwner>),
     newer: (Option<&PaneRef>, Option<&RuntimeOwner>),
 ) -> bool {

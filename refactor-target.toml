@@ -360,7 +360,8 @@ path = "crates/rimz/src/store"
 # Conversation surfaces share sender classification with the CLI binary.
 # Flip and smart compaction share the typed occupied-context threshold predicate.
 # The carryover parse counter is re-exported through testkit beside the event-log byte counters.
-surface-budget = 341
+# A lifecycle receipt names a side conversation's host so the hook credits the host card's clocks.
+surface-budget = 342
 
 [[module]]
 path = "crates/rimz/src/theme"
