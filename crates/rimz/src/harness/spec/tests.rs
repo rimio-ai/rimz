@@ -544,7 +544,7 @@ fn unknown_team_error_groups_and_wraps_valid_choices() {
 
     assert!(rendered.starts_with(
         "unknown team `missing`\n\
-         define it under [agents.teams] or pass an inline profile/command spec\n\
+         define it in <agents_home>/teams/missing.md or pass an inline profile/command spec\n\
          valid teams:\n  peer\n\
          valid cells:\n  "
     ));

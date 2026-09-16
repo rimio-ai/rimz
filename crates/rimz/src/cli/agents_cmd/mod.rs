@@ -1075,7 +1075,7 @@ pub(crate) fn create_on_miss(
             &machine_config.agents.commands,
         )?;
         bail!(
-            "`{target}` names a specific agent that is not running; create one with `@<kind>` or a profile from [agents.profiles]"
+            "`{target}` names a specific agent that is not running; create one with `@<kind>` or a configured profile (`rimz agents profiles`)"
         );
     }
     // `--worktree` keeps the historical worktree create-on-miss path. `--channel`

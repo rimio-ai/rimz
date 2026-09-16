@@ -256,11 +256,11 @@ pub enum LayoutErr {
     #[error("a layout column uses `+` (tile) or `/` (stack), not both: `{column}`")]
     MixedRowOperators { column: String },
     #[error(
-        "unknown layout cell `{cell}`; define it under [agents.profiles] or [agents.commands], install it on PATH, or use one of: {valid}"
+        "unknown layout cell `{cell}`; define it in <agents_home>/agents/{cell}.md, a project [profiles] table, or [agents.commands], install it on PATH, or use one of: {valid}"
     )]
     UnknownCell { cell: String, valid: String },
     #[error(
-        "unknown team `{team}`\ndefine it under [agents.teams] or pass an inline profile/command spec\nvalid teams:\n  {valid_teams}\nvalid cells:\n  {valid_cells}"
+        "unknown team `{team}`\ndefine it in <agents_home>/teams/{team}.md or pass an inline profile/command spec\nvalid teams:\n  {valid_teams}\nvalid cells:\n  {valid_cells}"
     )]
     UnknownTeam {
         team: String,
@@ -299,7 +299,7 @@ pub enum LayoutErr {
     #[error("invalid team name `{name}`; team names cannot contain `.` or `/`")]
     InvalidTeamName { name: String },
     #[error(
-        "team name `{0}` is reserved for an inline profile/command cell; choose another [agents.teams] name"
+        "team name `{0}` is reserved for an inline profile/command cell; choose another team name"
     )]
     ReservedTeamName(String),
     #[error(
@@ -455,7 +455,7 @@ pub enum LayoutErr {
     )]
     SubagentAllowlistOnSubagentProfile { profile: String },
     #[error(
-        "profile `{profile}` allows subagent `{entry}`, which is not a [subagents.profiles] name, a command, or an agent kind; valid: {valid}"
+        "profile `{profile}` allows subagent `{entry}`, which is not a subagent profile, a command, or an agent kind; valid: {valid}"
     )]
     UnknownSubagentAllowlistEntry {
         profile: String,
@@ -463,7 +463,7 @@ pub enum LayoutErr {
         valid: String,
     },
     #[error(
-        "launch refused: profile `{caller_profile}` may only launch subagent profiles {allowed}; `{profile}` is not one of them. Pick an allowed profile or ask the user to widen `[agents.profiles.{caller_profile}] subagents`."
+        "launch refused: profile `{caller_profile}` may only launch subagent profiles {allowed}; `{profile}` is not one of them. Pick an allowed profile or ask the user to widen the `subagents` list of profile `{caller_profile}`."
     )]
     SubagentProfileNotAllowed {
         caller_profile: String,
