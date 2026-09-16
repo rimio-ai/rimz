@@ -368,7 +368,10 @@ pub(crate) fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui:
 /// a live child's head or a running shell job's working animation. Either
 /// needs the fast grid whatever the parent's own status, so a sleeping parent
 /// waiting on its children still animates them.
-pub(crate) fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+pub(in crate::sidebar_pane) fn visible_delegation_motion(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+) -> bool {
     let roster = VisibleRoster::new(
         snapshot,
         ui.make_up_filter,
