@@ -227,6 +227,7 @@ pub(super) fn relaunch_request(
         action,
         system_prompt_file: posture.launch.system_prompt_file.clone(),
         append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+        team_prompt: posture.launch.team_prompt.clone(),
         skills: posture.launch.skills.clone(),
         close_pane_on_exit: true,
         identity: rimz::harness::launch::ExecIdentity {
@@ -287,6 +288,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: posture.launch.skills.clone(),
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
@@ -411,6 +413,7 @@ mod tests {
                 },
                 system_prompt_file: posture.launch.system_prompt_file.clone(),
                 append_system_prompt_files: Vec::new(),
+                team_prompt: None,
                 skills: None,
                 provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
                 run_id: None,

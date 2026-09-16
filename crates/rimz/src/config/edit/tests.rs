@@ -410,7 +410,9 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         }],
         leader: Some("lead".to_owned()),
         layout: Some("lead".to_owned()),
-        scratch_files: vec!["notes/".to_owned()],
+        scratch_files: Some(vec!["notes/".to_owned()]),
+        consensus_file: Some(PathBuf::from("consensus.md")),
+        append_system_prompt_files: vec![PathBuf::from("pipeline.md")],
         stages: vec!["Explore".to_owned(), "Plan".to_owned()],
     };
 

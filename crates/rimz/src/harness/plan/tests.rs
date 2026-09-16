@@ -18,6 +18,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         auto_compact: None,
         system_prompt_file: Some(PathBuf::from("system.md")),
         append_system_prompt_files: vec![PathBuf::from("append.md")],
+        team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap()]),
         launch: LaunchParams {
             mode: Some(PermissionMode::Yolo),
@@ -33,6 +34,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         args,
         system_prompt_file,
         append_system_prompt_files,
+        team_prompt,
         skills,
         launch,
     } = cell.clone();
@@ -43,6 +45,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             args,
             system_prompt_file,
             append_system_prompt_files,
+            team_prompt,
             skills,
             mode: launch.mode,
             model: launch.model,
@@ -81,6 +84,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: None,
         launch: LaunchParams {
             profile: role.map(|role| format!("{role}-profile")),
@@ -158,6 +162,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         args: args.iter().map(|value| (*value).to_owned()).collect(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: None,
         launch: LaunchParams {
             profile: Some(format!("{kind}-coder")),
@@ -397,7 +402,9 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
             }],
             leader: None,
             layout: None,
-            scratch_files: Vec::new(),
+            scratch_files: None,
+            consensus_file: None,
+            append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },
     );
@@ -648,6 +655,42 @@ fn cli_fragments_replace_profile_list_and_require_a_base() {
             .expect("cell")
             .append_system_prompt_files,
         [cli_fragment]
+    );
+
+    let mut layered = resolved.layout.clone();
+    let Some(Cell::Agent(layered_cell)) = layered.columns[0].rows.first_mut() else {
+        unreachable!("a single profile resolves to one agent cell")
+    };
+    let team_file = dir.path().join("pipeline.md");
+    layered_cell.team_prompt = Some(crate::harness::team_prompt::TeamPrompt {
+        consensus: crate::harness::team_prompt::Consensus::BuiltIn,
+        files: vec![team_file.clone()],
+    });
+    let err =
+        finalize(&mut layered.clone(), &Default::default(), &[]).expect_err("missing team file");
+    assert!(
+        err.to_string()
+            .contains("team append-system-prompt-files entry"),
+        "{err}"
+    );
+    std::fs::write(&team_file, "pipeline").expect("write team file");
+    finalize(
+        &mut layered,
+        &crate::agents::LaunchPreset {
+            append_system_prompt_files: vec![dir.path().join("profile.md")],
+            ..Default::default()
+        },
+        &[],
+    )
+    .expect("finalize layered");
+    assert!(
+        layered
+            .agent_cells()
+            .next()
+            .expect("cell")
+            .team_prompt
+            .is_some(),
+        "CLI fragments replace the role's fragments and keep the team layer"
     );
 
     let mut cell = preset_cell("claude", &[], None, None);
@@ -924,6 +967,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             args,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            team_prompt: None,
             skills: None,
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
@@ -1015,6 +1059,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         args: vec!["--model".to_owned(), "gpt-6-astra".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: None,
         launch: LaunchParams {
             model: Some("gpt-6-astra".to_owned()),
@@ -1385,6 +1430,7 @@ fn launch_request_names_and_metadata() {
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: None,
         launch: LaunchParams {
             profile: Some("codex-coder".to_owned()),
@@ -1776,6 +1822,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap()]),
         launch: LaunchParams::default(),
     });
@@ -1878,6 +1925,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         args: vec!["--profile-declared".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: Some(Vec::new()),
         launch: LaunchParams {
             profile: Some("new-profile".to_owned()),

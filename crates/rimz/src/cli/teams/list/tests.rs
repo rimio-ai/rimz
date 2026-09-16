@@ -29,7 +29,9 @@ fn team() -> Team {
         }],
         leader: Some("planner".to_owned()),
         layout: None,
-        scratch_files: Vec::new(),
+        scratch_files: None,
+        consensus_file: None,
+        append_system_prompt_files: Vec::new(),
         stages: Vec::new(),
     }
 }
@@ -116,8 +118,9 @@ fn catalog_projects_cohort_observability_by_worktree() {
     .unwrap();
     std::fs::write(first.join("plan-notes.md"), "one\ntwo\nthree\n").unwrap();
     let mut definition = team();
+    // A staged team keeps the default memory files without declaring them.
     definition.stages = vec!["Plan".into(), "Implement".into()];
-    definition.scratch_files = vec!["/blackboard.md".into(), "/*-notes.md".into()];
+    definition.append_system_prompt_files = vec!["pipeline.md".into()];
     let teams = TeamsConfig(BTreeMap::from([("forge".into(), definition)]));
     let mut agents = Vec::new();
     let mut groups = Vec::new();
@@ -240,6 +243,12 @@ fn catalog_projects_cohort_observability_by_worktree() {
     );
     assert!(json[0]["instances"][0]["members"][0]["phase"].is_string());
     assert!(json[0]["instances"][1]["stage"].is_null());
+    assert_eq!(json[0]["consensus"], "builtin");
+    assert_eq!(json[0]["append_system_prompt_files"][0], "pipeline.md");
+    assert_eq!(
+        json[0]["roles"][0]["append_system_prompt_files"][0],
+        "consensus.md"
+    );
     let mut rendered = anstream::StripStream::new(Vec::new());
     write_catalog(&mut rendered, &reports, &ThemeConfig::default()).unwrap();
     insta::assert_snapshot!(
@@ -678,6 +687,8 @@ fn human_catalog_and_empty_state_teach_the_command() {
             layout: Some("claude,codex".to_owned()),
             leader: Some("claude".to_owned()),
             roles: Vec::new(),
+            consensus: None,
+            append_system_prompt_files: Vec::new(),
             valid: true,
             error: None,
             instances: Vec::new(),

@@ -134,7 +134,9 @@ mod tests {
         let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
         assert_eq!(text.matches("<system_reminder>").count(), 1);
         assert_eq!(text.matches("</system_reminder>").count(), 1);
-        assert!(text.contains("No board yet; your first `rimz teams flip` creates the board."));
+        assert!(text.contains(
+            "no run state and no board; your first `rimz teams flip` creates the board."
+        ));
         request.subagent = true;
         let text = render(&request, &reminders, Path::new("/worktree")).expect("child reminder");
         assert!(!text.contains("rimz teams flip"));

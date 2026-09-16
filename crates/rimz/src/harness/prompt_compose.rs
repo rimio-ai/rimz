@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::agents::{PresetArgMatcher, PresetField};
 use crate::disk::paths::RuntimePaths;
+use crate::harness::team_prompt::{BUILT_IN_CONSENSUS, Consensus, TeamPrompt};
 use crate::ids::AgentKind;
 
 pub(super) const TEXT_PROMPT_LIMIT: usize = 120 * 1024;
@@ -15,6 +16,7 @@ pub(super) const TEXT_PROMPT_LIMIT: usize = 120 * 1024;
 pub struct SystemPromptSources {
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
+    pub team_prompt: Option<TeamPrompt>,
 }
 
 impl SystemPromptSources {
@@ -22,11 +24,17 @@ impl SystemPromptSources {
         Self {
             system_prompt_file: cell.system_prompt_file.clone(),
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
+            team_prompt: cell.team_prompt.clone(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.system_prompt_file.is_none() && self.append_system_prompt_files.is_empty()
+        !self.composes() && self.system_prompt_file.is_none()
+    }
+
+    /// Whether anything composes onto the base, so the prompt is a composed artifact.
+    pub(super) fn composes(&self) -> bool {
+        !self.append_system_prompt_files.is_empty() || self.team_prompt.is_some()
     }
 }
 
@@ -111,7 +119,8 @@ pub fn plan_system_prompt(
         .ok_or(PromptComposeErr::Unsupported { agent })?;
 
     let composed = read_composed(sources, agent)?;
-    let artifact = (!sources.append_system_prompt_files.is_empty())
+    let artifact = sources
+        .composes()
         .then(|| prompt_artifact_path(runtime, "sys", &composed));
     let path = artifact
         .as_deref()
@@ -212,13 +221,21 @@ fn read_composed(
         .system_prompt_file
         .as_deref()
         .ok_or(PromptComposeErr::MissingBase { agent })?;
-    if sources.append_system_prompt_files.is_empty() {
+    if !sources.composes() {
         return read_prompt(base);
     }
-    let mut pieces = Vec::with_capacity(1 + sources.append_system_prompt_files.len());
-    pieces.push(read_prompt(base)?);
+    let mut pieces = vec![read_prompt(base)?];
     for path in &sources.append_system_prompt_files {
         pieces.push(read_prompt(path)?);
+    }
+    if let Some(team_prompt) = &sources.team_prompt {
+        pieces.push(match &team_prompt.consensus {
+            Consensus::BuiltIn => BUILT_IN_CONSENSUS.to_owned(),
+            Consensus::File(path) => read_prompt(path)?,
+        });
+        for path in &team_prompt.files {
+            pieces.push(read_prompt(path)?);
+        }
     }
     Ok(compose(&pieces))
 }
@@ -319,6 +336,7 @@ mod tests {
         let sources = SystemPromptSources {
             system_prompt_file: Some(base),
             append_system_prompt_files: vec![first],
+            team_prompt: None,
         };
 
         let claude = plan_system_prompt(&AgentKind::new_unchecked("claude"), &sources, &runtime)
@@ -360,6 +378,70 @@ mod tests {
     }
 
     #[test]
+    fn team_layer_composes_after_role_fragments_with_the_built_in_consensus() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let [base, fragment, consensus, pipeline] = ["base", "fragment", "consensus", "pipeline"]
+            .map(|name| {
+                let path = dir.path().join(format!("{name}.md"));
+                std::fs::write(&path, name).expect("write prompt");
+                path
+            });
+        let runtime = RuntimePaths::shared();
+        let mut sources = SystemPromptSources {
+            system_prompt_file: Some(base),
+            append_system_prompt_files: vec![fragment],
+            team_prompt: Some(TeamPrompt {
+                consensus: Consensus::BuiltIn,
+                files: vec![pipeline],
+            }),
+        };
+        let claude = AgentKind::new_unchecked("claude");
+
+        let built_in = plan_system_prompt(&claude, &sources, &runtime).expect("built-in layer");
+        assert_eq!(
+            built_in.composed,
+            Some(format!(
+                "base\n\nfragment\n\n{}\n\npipeline\n",
+                BUILT_IN_CONSENSUS.trim_end()
+            ))
+        );
+        assert!(built_in.artifact.is_some());
+
+        sources.append_system_prompt_files.clear();
+        if let Some(layer) = sources.team_prompt.as_mut() {
+            layer.consensus = Consensus::File(consensus);
+        }
+        let replaced = plan_system_prompt(&claude, &sources, &runtime).expect("replaced layer");
+        assert_eq!(
+            replaced.composed.as_deref(),
+            Some("base\n\nconsensus\n\npipeline\n")
+        );
+        assert!(replaced.artifact.is_some());
+    }
+
+    #[test]
+    fn text_prompt_size_counts_the_team_layer() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let base = dir.path().join("base.md");
+        std::fs::write(
+            &base,
+            "x".repeat(TEXT_PROMPT_LIMIT - BUILT_IN_CONSENSUS.len()),
+        )
+        .expect("base");
+        let sources = SystemPromptSources {
+            system_prompt_file: Some(base),
+            append_system_prompt_files: Vec::new(),
+            team_prompt: Some(TeamPrompt {
+                consensus: Consensus::BuiltIn,
+                files: Vec::new(),
+            }),
+        };
+        let err = validate_text_prompt_size(&AgentKind::new_unchecked("pi"), &sources)
+            .expect_err("layer pushes the prompt over the limit");
+        assert!(matches!(err, PromptComposeErr::TooLarge { .. }));
+    }
+
+    #[test]
     fn text_prompt_has_conservative_argv_limit() {
         let dir = tempfile::tempdir().expect("temp dir");
         let prompt = dir.path().join("prompt.md");
@@ -367,6 +449,7 @@ mod tests {
         let sources = SystemPromptSources {
             system_prompt_file: Some(prompt),
             append_system_prompt_files: Vec::new(),
+            team_prompt: None,
         };
         let err = materialize_system_prompt(
             &AgentKind::new_unchecked("pi"),
@@ -385,6 +468,7 @@ mod tests {
         let sources = SystemPromptSources {
             system_prompt_file: Some(prompt.clone()),
             append_system_prompt_files: Vec::new(),
+            team_prompt: None,
         };
         let qwen = materialize_system_prompt(
             &AgentKind::new_unchecked("qwen"),
@@ -408,6 +492,7 @@ mod tests {
             &SystemPromptSources {
                 system_prompt_file: None,
                 append_system_prompt_files: vec![fragment],
+                team_prompt: None,
             },
             &RuntimePaths::shared(),
         )

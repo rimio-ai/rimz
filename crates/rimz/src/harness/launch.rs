@@ -463,6 +463,8 @@ pub struct ExecRequest {
     pub system_prompt_file: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub append_system_prompt_files: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -495,6 +497,7 @@ impl ExecRequest {
         Self {
             system_prompt_file: cell.system_prompt_file.clone(),
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
+            team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
             identity,
             worktree_path,
@@ -512,6 +515,7 @@ impl ExecRequest {
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            team_prompt: None,
             skills: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,

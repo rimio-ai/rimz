@@ -18,6 +18,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         action,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
@@ -162,7 +163,9 @@ fn resolves_team_for_launch_context_from_effective_config() {
             ],
             leader: Some("planner".to_owned()),
             layout: None,
-            scratch_files: vec!["blackboard.md".to_owned()],
+            scratch_files: Some(vec!["blackboard.md".to_owned()]),
+            consensus_file: None,
+            append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },
     );
@@ -191,7 +194,7 @@ fn resolves_team_for_launch_context_from_effective_config() {
             .collect::<Vec<_>>(),
         ["planner", "coder"]
     );
-    assert_eq!(team.team.scratch_files, ["blackboard.md"]);
+    assert_eq!(team.team.scratch_patterns(), ["blackboard.md"]);
     // Every seat's agent is resolved here, where the effective profiles are in hand.
     let context = crate::harness::launch_context::team_launch_context(
         &request.identity.params,

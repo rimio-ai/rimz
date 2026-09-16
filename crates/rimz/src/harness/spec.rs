@@ -17,6 +17,7 @@ use std::str::FromStr;
 use crate::agents::PermissionMode;
 use crate::agents::petname;
 use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
+use crate::harness::team_prompt::TeamPrompt;
 use crate::ids::AgentKind;
 
 const BUILTIN_PEER: &str = "claude,codex";
@@ -98,6 +99,9 @@ pub struct AgentCell {
     pub system_prompt_file: Option<PathBuf>,
     /// Ordered prompt fragments composed into the replacement system prompt.
     pub append_system_prompt_files: Vec<PathBuf>,
+    /// The team layer composed after the role's own prompt; set only on a role
+    /// cell of a staged team whose prompt has a base.
+    pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     pub skills: Option<Vec<crate::config::SkillName>>,
     /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
     pub launch: crate::agents::LaunchParams,
@@ -122,6 +126,7 @@ impl Cell {
             auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            team_prompt: None,
             skills: None,
             launch: crate::agents::LaunchParams::default(),
         })
@@ -341,6 +346,14 @@ pub enum LayoutErr {
     RoleNotPlaced { team: String, role: String },
     #[error("team `{team}` layout places role `{role}` more than once")]
     DuplicateRoleInLayout { team: String, role: String },
+    #[error(
+        "team `{team}` sets consensus-file or append-system-prompt-files but declares no stages; add stages (or owns) or remove the team prompt fields"
+    )]
+    TeamPromptWithoutStages { team: String },
+    #[error(
+        "team `{team}` sets consensus-file or append-system-prompt-files but role `{role}` has no system-prompt-file to compose them onto; add system-prompt-file to role {role} or its profile"
+    )]
+    TeamPromptWithoutBase { team: String, role: String },
     #[error("invalid scratch-files pattern {pattern:?} in team `{team}`: {reason}")]
     InvalidScratchPattern {
         team: String,
@@ -481,6 +494,12 @@ pub(crate) fn resolve_prompt_paths(
             for path in &mut binding.append_system_prompt_files {
                 *path = resolve_prompt_path(path, source_dir);
             }
+        }
+        if let Some(path) = team.consensus_file.as_mut() {
+            *path = resolve_prompt_path(path, source_dir);
+        }
+        for path in &mut team.append_system_prompt_files {
+            *path = resolve_prompt_path(path, source_dir);
         }
     }
 }
@@ -873,13 +892,14 @@ fn compile_team(
     let mut role_cells = BTreeMap::new();
     for mut role in prepared.roles {
         normalize_budget(&mut role.resolved.launch.budget, &role.profile)?;
-        let cell = agent_cell_from(
+        let mut cell = agent_cell_from(
             &role.resolved,
             role.args,
             Some(role.profile),
             Some(role.role.clone()),
             role.resolved.launch.mode,
         );
+        cell.team_prompt = TeamPrompt::for_role(prepared.team, cell.system_prompt_file.is_some());
         role_cells.insert(role.role, cell);
     }
     let layout = if let Some(raw) = prepared.team.layout.as_deref() {
@@ -1419,6 +1439,7 @@ fn agent_cell_from(
         auto_compact: resolved.auto_compact.clone(),
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
+        team_prompt: None,
         skills: resolved.skills.clone(),
         launch: crate::agents::LaunchParams {
             profile,
@@ -1733,7 +1754,13 @@ fn prepare_team<'a>(
     base_override: Option<&ResolvedProfile>,
 ) -> Result<PreparedTeam<'a>> {
     validate_team_stages(name, team)?;
-    for pattern in &team.scratch_files {
+    let team_prompt_declared = crate::harness::team_prompt::declared(team);
+    if team_prompt_declared && !team.staged() {
+        return Err(LayoutErr::TeamPromptWithoutStages {
+            team: name.to_owned(),
+        });
+    }
+    for pattern in &team.scratch_patterns() {
         if let Some(reason) = invalid_scratch_pattern(pattern) {
             return Err(LayoutErr::InvalidScratchPattern {
                 team: name.to_owned(),
@@ -1788,6 +1815,12 @@ fn prepare_team<'a>(
         let mut resolved = resolve_role(binding, profiles)?;
         normalize_auto_compact(&mut resolved.auto_compact, &binding.profile)?;
         let resolved = rebase_onto(resolved, base_override);
+        if team_prompt_declared && resolved.system_prompt_file.is_none() {
+            return Err(LayoutErr::TeamPromptWithoutBase {
+                team: name.to_owned(),
+                role: binding.role.clone(),
+            });
+        }
         let args = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
             role: binding.role.clone(),

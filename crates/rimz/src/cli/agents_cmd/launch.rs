@@ -252,7 +252,7 @@ pub(super) fn launch_layout(
         return Ok(());
     };
     if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
-        rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_files);
+        rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_patterns());
     }
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
@@ -423,7 +423,7 @@ fn launch_resume_layout(
         .clone()
         .context("cohort resume matched no working directory")?;
     if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
-        rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_files);
+        rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_patterns());
     }
     let channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,

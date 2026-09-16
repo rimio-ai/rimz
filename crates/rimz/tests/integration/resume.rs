@@ -93,6 +93,7 @@ fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            team_prompt: None,
             skills: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,

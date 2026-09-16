@@ -357,7 +357,7 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
     let lane = lane.to_string_lossy().into_owned();
 
     let (mut teams, profiles, commands) = team_configs();
-    teams.0.get_mut("forge").expect("forge team").scratch_files = vec!["/plan.md".to_owned()];
+    teams.0.get_mut("forge").expect("forge team").scratch_files = Some(vec!["/plan.md".to_owned()]);
     let agents = [
         team_agent("claude", "planner", "planner", &lane, 1),
         team_agent("codex", "coder", "coder", &lane, 2),

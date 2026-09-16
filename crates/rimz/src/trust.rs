@@ -832,6 +832,12 @@ struct ExecutableTeam<'a> {
     name: &'a str,
     layout: Option<&'a str>,
     roles: Vec<ExecutableRole<'a>>,
+    // The team prompt layer is skipped when absent so configs without it keep
+    // their pinned hash; `scratch-files` is neither a prompt nor a command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consensus_file: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    append_system_prompt_files: Vec<String>,
 }
 
 // `owns` and `flip-compact` deliberately stay outside the executable projection.
@@ -969,6 +975,15 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                             }),
                             args: role.args.as_deref(),
                         })
+                        .collect(),
+                    consensus_file: team
+                        .consensus_file
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                    append_system_prompt_files: team
+                        .append_system_prompt_files
+                        .iter()
+                        .map(|path| path.to_string_lossy().into_owned())
                         .collect(),
                 })
                 .collect(),

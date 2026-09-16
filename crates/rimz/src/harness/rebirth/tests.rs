@@ -802,7 +802,9 @@ fn team_machine() -> MachineConfig {
             ],
             leader: None,
             layout: Some("planner,coder".to_owned()),
-            scratch_files: Vec::new(),
+            scratch_files: None,
+            consensus_file: None,
+            append_system_prompt_files: Vec::new(),
             stages: Vec::new(),
         },
     );

@@ -318,6 +318,7 @@ fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         action,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
@@ -714,6 +715,7 @@ mod parse {
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            team_prompt: None,
             skills: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: Some(
@@ -2166,6 +2168,7 @@ fn bare_exec_args() -> ExecRequest {
         },
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        team_prompt: None,
         skills: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
