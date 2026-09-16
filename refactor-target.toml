@@ -176,13 +176,16 @@ upward-dependencies = [
     "harness::budget",
     "harness::schedule",
     "harness::spec",
+    "harness::team_prompt",
     "store::message",
 ]
+# Team definitions check pipeline handles against the built-in consensus text.
 # Isolation and parsed skill policy cross config, harness and sandbox seams.
 # The compaction seat selects the harness brief.
 # The [gc] section and its span parser feed `rimz gc` and the elder's auto-gc check.
 # Doctor and start notices classify agents-home fragments and find a legacy root through config's fragment walk.
-surface-budget = 179
+# The Markdown definition loader, its rows and errors feed config load and `agents validate`.
+surface-budget = 188
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -700,6 +703,7 @@ surface-budget = 7
 path = "crates/rimz/src/harness/prompt_compose.rs"
 allowed-dependencies = [
     "agents",
+    "config",
     "disk::atomic",
     "disk::paths",
     "harness::spec",
@@ -710,6 +714,7 @@ allowed-dependencies = [
 # Launch and system prompts share the artifact writer and argv-size limit.
 # Composed prompts can be planned without materializing their artifacts.
 # Prompt sources carry the team layer that `agents explain` lists.
+# Prompt pieces are config's PromptSource, a file or a definition's text.
 surface-budget = 15
 
 [[module]]

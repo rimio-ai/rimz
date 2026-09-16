@@ -63,6 +63,92 @@ pub(super) struct BaseFrontmatter {
     pub description: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TeamFrontmatter {
+    pub name: Option<String>,
+    #[serde(rename = "description")]
+    _description: Option<String>,
+    pub layout: Option<String>,
+    pub leader: Option<String>,
+    #[serde(default, deserialize_with = "list")]
+    pub stages: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
+    pub traits: Option<Vec<String>>,
+    #[serde(default)]
+    pub roles: Vec<RoleFrontmatter>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(super) struct RoleFrontmatter {
+    pub agent: String,
+    pub role: Option<String>,
+    #[serde(default, deserialize_with = "list")]
+    pub owns: Option<Vec<String>>,
+    pub model: Option<String>,
+    pub mode: Option<PermissionMode>,
+    pub effort: Option<String>,
+    #[serde(default, deserialize_with = "token_count")]
+    pub auto_compact: Option<String>,
+    #[serde(default, deserialize_with = "token_count")]
+    pub flip_compact: Option<String>,
+    #[serde(default, deserialize_with = "number_text")]
+    pub budget: Option<String>,
+    pub model_reminder: Option<bool>,
+    #[serde(default, deserialize_with = "list")]
+    pub traits: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
+    pub tools: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
+    pub subagents: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "list")]
+    pub skills: Option<Vec<String>>,
+    pub signals: Option<Vec<SignalFrontmatter>>,
+    #[serde(rename = "meka", default, deserialize_with = "retired_role_meka")]
+    _meka: (),
+}
+
+impl RoleFrontmatter {
+    pub(super) fn overlay(&self) -> AgentFrontmatter {
+        AgentFrontmatter {
+            model: self.model.clone(),
+            mode: self.mode,
+            effort: self.effort.clone(),
+            auto_compact: self.auto_compact.clone(),
+            budget: self.budget.clone(),
+            model_reminder: self.model_reminder,
+            tools: self.tools.clone(),
+            subagents: self.subagents.clone(),
+            skills: self.skills.clone(),
+            ..AgentFrontmatter::default()
+        }
+    }
+}
+
+fn retired_role_meka<'de, D: Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
+    IgnoredAny::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "role still sets `meka:`; its model decides the runtime",
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(super) enum SignalFrontmatter {
+    Selector(String),
+    Binding(SignalBindingFrontmatter),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SignalBindingFrontmatter {
+    pub signal: String,
+    #[serde(rename = "match")]
+    pub matches: Option<BTreeMap<String, String>>,
+    pub prompt: Option<String>,
+}
+
 fn list<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<String>>, D::Error> {
     Ok(Some(
         Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default(),

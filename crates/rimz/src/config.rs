@@ -384,10 +384,15 @@ pub struct AgentsFragmentError {
 pub struct AgentSpecSources {
     agent_profiles: BTreeMap<String, PathBuf>,
     subagent_profiles: BTreeMap<String, PathBuf>,
+    teams: BTreeMap<String, PathBuf>,
     commands: BTreeMap<String, PathBuf>,
 }
 
 impl AgentSpecSources {
+    pub fn team(&self, name: &str) -> Option<&Path> {
+        self.teams.get(name).map(PathBuf::as_path)
+    }
+
     pub fn profile(&self, scope: effective::ProfileScope, name: &str) -> Option<&Path> {
         match scope {
             effective::ProfileScope::Agents => self.agent_profiles.get(name),
