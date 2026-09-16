@@ -118,6 +118,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("agents")).unwrap();
         std::fs::write(
+            root.path().join("agents/claude.md"),
+            "---\ndescription: Claude base\n---\nClaude base.",
+        )
+        .unwrap();
+        std::fs::write(
             root.path().join("agents/good.md"),
             "---\ndescription: Good\nmodel: opus\ntools: [Read]\n---\n",
         )
@@ -137,6 +142,11 @@ mod tests {
     fn validation_checks_skills_even_without_sandbox_config() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("agents")).unwrap();
+        std::fs::write(
+            root.path().join("agents/claude.md"),
+            "---\ndescription: Claude base\n---\nClaude base.",
+        )
+        .unwrap();
         std::fs::write(
             root.path().join("agents/worker.md"),
             "---\ndescription: Worker\nmodel: opus\ntools: [Skill]\nskills: [missing]\n---\n",

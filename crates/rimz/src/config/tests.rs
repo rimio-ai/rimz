@@ -1497,6 +1497,21 @@ fn web_auth_users_round_trip() {
 }
 
 fn write_definition(root: &Path, path: &str, fields: &str, body: &str) -> PathBuf {
+    let frontmatter: serde_json::Value = serde_saphyr::from_str(fields).unwrap();
+    if let Some(kind) = frontmatter["agent"]
+        .as_str()
+        .filter(|kind| crate::agents::find_definition(kind).is_some())
+    {
+        let base = format!("agents/{kind}.md");
+        if !root.join(&base).exists() {
+            write_definition(
+                root,
+                &base,
+                &format!("description: {kind} base"),
+                &format!("{kind} base."),
+            );
+        }
+    }
     let path = root.join(path);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, format!("---\n{fields}\n---\n{body}")).unwrap();

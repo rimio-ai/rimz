@@ -214,20 +214,21 @@ pub fn load(agents_home: &Path, skills: SkillLibraryCheck<'_>) -> LoadedDefiniti
             subagents.failed.insert(name.clone());
         }
     }
+    // Children resolve first so an agent's `subagents:` checks against what loaded.
     agent::resolve_namespace(
         agents_home,
-        "agents",
-        &agents,
+        "subagents",
         &subagents,
+        &agents,
         &bases,
         skills,
         &mut loaded,
     );
     agent::resolve_namespace(
         agents_home,
-        "subagents",
-        &subagents,
+        "agents",
         &agents,
+        &subagents,
         &bases,
         skills,
         &mut loaded,
