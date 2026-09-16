@@ -6,6 +6,27 @@ use crate::config::{
 use std::collections::BTreeMap;
 use tempfile::tempdir;
 
+#[test]
+fn project_prompt_fields_reject_inline_text() {
+    for declaration in [
+        "[profiles.planner]\nagent = 'claude'\nsystem-prompt-file = { origin = 'x', text = 'y' }",
+        "[profiles.planner]\nagent = 'claude'\nappend-system-prompt-files = [{ origin = 'x', text = 'y' }]",
+        "[agents.teams.review]\nappend-system-prompt-files = [{ origin = 'x', text = 'y' }]",
+        "[[agents.teams.review.roles]]\nrole = 'planner'\nprofile = 'claude'\nsystem-prompt-file = { origin = 'x', text = 'y' }",
+    ] {
+        assert!(
+            toml::from_str::<crate::trust::ProjectConfig>(declaration).is_err(),
+            "{declaration}"
+        );
+    }
+    for field in [
+        "system-prompt-file = { origin = 'x', text = 'y' }",
+        "append-system-prompt-files = [{ origin = 'x', text = 'y' }]",
+    ] {
+        assert!(toml::from_str::<Profile>(&format!("agent = 'claude'\n{field}")).is_err());
+    }
+}
+
 fn load(machine: &AgentsConfig, project_root: &Path, config_root: &Path) -> Result<LaunchAgents> {
     let config = MachineConfig {
         agents: machine.clone(),
@@ -682,7 +703,9 @@ fn repo_prompt_file_paths_resolve_against_rimz_dir() {
             .0
             .get("planner")
             .and_then(|profile| profile.system_prompt_file.as_ref()),
-        Some(&project.path().join(".rimz/prompts/planner.md"))
+        Some(&crate::config::PromptSource::File(
+            project.path().join(".rimz/prompts/planner.md")
+        ))
     );
 }
 
@@ -715,7 +738,9 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
     assert_eq!(role.profile, "planner");
     assert_eq!(
         role.system_prompt_file.as_ref(),
-        Some(&project.path().join(".rimz/prompts/planner.md"))
+        Some(&crate::config::PromptSource::File(
+            project.path().join(".rimz/prompts/planner.md")
+        ))
     );
 }
 

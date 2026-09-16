@@ -110,8 +110,8 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumeLaunchPosture {
     pub args: Vec<String>,
-    pub system_prompt_file: Option<PathBuf>,
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub system_prompt_file: Option<crate::config::PromptSource>,
+    pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     pub skills: Option<Vec<crate::config::SkillName>>,
     pub mode: Option<PermissionMode>,
@@ -296,21 +296,28 @@ fn validate_agent_prompt_files(
         (None, Some(profile)) => format!("profile `{profile}`"),
         (None, None) => "agent cell".to_owned(),
     };
-    if let Some(path) = cell.system_prompt_file.as_ref()
+    if let Some(path) = cell
+        .system_prompt_file
+        .as_ref()
+        .and_then(crate::config::PromptSource::file)
         && !std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
     {
         return Err(ProfilePromptFileError {
             origin: origin(),
             field: "system-prompt-file",
-            path: path.clone(),
+            path: path.to_path_buf(),
         });
     }
-    for path in &cell.append_system_prompt_files {
+    for path in cell
+        .append_system_prompt_files
+        .iter()
+        .filter_map(crate::config::PromptSource::file)
+    {
         if !std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
             return Err(ProfilePromptFileError {
                 origin: origin(),
                 field: "append-system-prompt-files entry",
-                path: path.clone(),
+                path: path.to_path_buf(),
             });
         }
     }
@@ -319,19 +326,22 @@ fn validate_agent_prompt_files(
     };
     let consensus_file = match &team_prompt.consensus {
         crate::harness::team_prompt::Consensus::BuiltIn => None,
-        crate::harness::team_prompt::Consensus::File(path) => Some(("team consensus-file", path)),
+        crate::harness::team_prompt::Consensus::File(path) => {
+            Some(("team consensus-file", path.as_path()))
+        }
     };
     for (field, path) in consensus_file.into_iter().chain(
         team_prompt
             .files
             .iter()
+            .filter_map(crate::config::PromptSource::file)
             .map(|path| ("team append-system-prompt-files entry", path)),
     ) {
         if !std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
             return Err(ProfilePromptFileError {
                 origin: origin(),
                 field,
-                path: path.clone(),
+                path: path.to_path_buf(),
             });
         }
     }
@@ -513,11 +523,16 @@ fn finalize_agent_cell(
             kind: cell.kind.to_string(),
         })?;
         if let Some(path) = options.preset.system_prompt_file.as_ref() {
-            cell.system_prompt_file = Some(path.clone());
+            cell.system_prompt_file = Some(path.clone().into());
         }
         if !options.preset.append_system_prompt_files.is_empty() {
-            cell.append_system_prompt_files
-                .clone_from(&options.preset.append_system_prompt_files);
+            cell.append_system_prompt_files = options
+                .preset
+                .append_system_prompt_files
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect();
         }
         if options.preset.system_prompt_file.is_some()
             || !options.preset.append_system_prompt_files.is_empty()
@@ -654,6 +669,7 @@ fn reconcile_preset_args(
                     && cell
                         .system_prompt_file
                         .as_ref()
+                        .and_then(crate::config::PromptSource::file)
                         .is_some_and(|path| path.to_string_lossy() == occurrence.value);
                 if !matches_declared_path {
                     warnings.push(LaunchFinalizeWarning::DeclaredPromptWins {

@@ -96,9 +96,9 @@ pub struct AgentCell {
     pub kind: AgentKind,
     pub args: Vec<String>,
     pub auto_compact: Option<String>,
-    pub system_prompt_file: Option<PathBuf>,
+    pub system_prompt_file: Option<crate::config::PromptSource>,
     /// Ordered prompt fragments composed into the replacement system prompt.
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     /// The team layer composed after the role's own prompt; set only on a role
     /// cell of a staged team whose prompt has a base.
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
@@ -163,8 +163,8 @@ pub struct ResolvedProfile {
     pub layers: Vec<String>,
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
-    pub system_prompt_file: Option<PathBuf>,
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub system_prompt_file: Option<crate::config::PromptSource>,
+    pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     pub skills: Option<Vec<crate::config::SkillName>>,
     pub args: Option<String>,
 }
@@ -488,18 +488,24 @@ pub(crate) fn resolve_prompt_paths(
     resolve_profile_prompt_paths(profiles, source_dir);
     for team in teams.0.values_mut() {
         for binding in &mut team.roles {
-            if let Some(path) = binding.system_prompt_file.as_mut() {
+            if let Some(crate::config::PromptSource::File(path)) =
+                binding.system_prompt_file.as_mut()
+            {
                 *path = resolve_prompt_path(path, source_dir);
             }
-            for path in &mut binding.append_system_prompt_files {
-                *path = resolve_prompt_path(path, source_dir);
+            for source in &mut binding.append_system_prompt_files {
+                if let crate::config::PromptSource::File(path) = source {
+                    *path = resolve_prompt_path(path, source_dir);
+                }
             }
         }
         if let Some(path) = team.consensus_file.as_mut() {
             *path = resolve_prompt_path(path, source_dir);
         }
-        for path in &mut team.append_system_prompt_files {
-            *path = resolve_prompt_path(path, source_dir);
+        for source in &mut team.append_system_prompt_files {
+            if let crate::config::PromptSource::File(path) = source {
+                *path = resolve_prompt_path(path, source_dir);
+            }
         }
     }
 }
@@ -507,11 +513,13 @@ pub(crate) fn resolve_prompt_paths(
 /// Resolve prompt files declared by profiles against their config source.
 pub(crate) fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, source_dir: &Path) {
     for profile in profiles.0.values_mut() {
-        if let Some(path) = profile.system_prompt_file.as_mut() {
+        if let Some(crate::config::PromptSource::File(path)) = profile.system_prompt_file.as_mut() {
             *path = resolve_prompt_path(path, source_dir);
         }
-        for path in &mut profile.append_system_prompt_files {
-            *path = resolve_prompt_path(path, source_dir);
+        for source in &mut profile.append_system_prompt_files {
+            if let crate::config::PromptSource::File(path) = source {
+                *path = resolve_prompt_path(path, source_dir);
+            }
         }
     }
 }

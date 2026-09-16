@@ -688,14 +688,17 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
     let prompt = agent_at(&spec, 1, 0);
     assert_eq!(prompt.launch.profile.as_deref(), Some("prompt-child"));
     assert_eq!(
-        prompt.system_prompt_file.as_deref(),
+        prompt
+            .system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
         Some(Path::new("/prompts/base.md"))
     );
     assert_eq!(
         prompt.append_system_prompt_files,
         [
-            PathBuf::from("/prompts/base-fragment.md"),
-            PathBuf::from("/prompts/child-fragment.md")
+            PathBuf::from("/prompts/base-fragment.md").into(),
+            PathBuf::from("/prompts/child-fragment.md").into()
         ]
     );
     assert_eq!(prompt.args, ["--autocompact", "200000"]);
@@ -744,12 +747,14 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
     );
     assert_eq!(cell.launch.mode, Some(PermissionMode::Auto));
     assert_eq!(
-        cell.system_prompt_file.as_deref(),
+        cell.system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
         Some(Path::new("/prompts/system.md"))
     );
     assert_eq!(
         cell.append_system_prompt_files,
-        [PathBuf::from("/prompts/fragment.md")]
+        [PathBuf::from("/prompts/fragment.md").into()]
     );
     assert!(!cell.args.iter().any(|arg| arg == "--strict-mcp-config"));
 }
@@ -870,8 +875,8 @@ fn profile_override_supplies_provider_base_and_orders_prompt_fragments() {
     assert_eq!(
         cell.append_system_prompt_files,
         [
-            PathBuf::from("/prompts/codex.md"),
-            PathBuf::from("/prompts/planner.md")
+            PathBuf::from("/prompts/codex.md").into(),
+            PathBuf::from("/prompts/planner.md").into()
         ]
     );
     assert!(cell.args.ends_with(&["--base-only".to_owned()]));
@@ -1044,7 +1049,10 @@ fn rebase_takes_the_engine_from_the_base_and_keeps_the_role() {
             "{agent_override}"
         );
         assert_eq!(
-            resolved.system_prompt_file.as_deref(),
+            resolved
+                .system_prompt_file
+                .as_ref()
+                .and_then(crate::config::PromptSource::file),
             Some(std::path::Path::new("/prompts/fixer.md"))
         );
         assert_eq!(resolved.into_chain(), chain, "{agent_override}");
@@ -1203,14 +1211,17 @@ fn profile_resolution_rejects_invalid_chains_and_fields() {
         "pi-deep",
         Profile {
             agent: "pi".to_owned(),
-            system_prompt_file: Some(PathBuf::from("/abs/prompt.md")),
+            system_prompt_file: Some(PathBuf::from("/abs/prompt.md").into()),
             ..profile("pi")
         },
     )]);
     let unsupported =
         parse_layout_spec("pi-deep", &unsupported, &no_commands()).expect("prompt stays typed");
     assert_eq!(
-        agent_at(&unsupported, 0, 0).system_prompt_file.as_deref(),
+        agent_at(&unsupported, 0, 0)
+            .system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
         Some(Path::new("/abs/prompt.md"))
     );
 }
@@ -1423,7 +1434,10 @@ fn named_teams_compile_roles_and_apply_overrides() {
     assert_eq!(coder.launch.model.as_deref(), Some("role-model"));
     assert_eq!(coder.launch.effort.as_deref(), Some("high"));
     assert_eq!(
-        coder.system_prompt_file.as_deref(),
+        coder
+            .system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
         Some(Path::new("/prompts/coder.md"))
     );
     assert!(coder.args.contains(&"--role".to_owned()));
@@ -1434,14 +1448,17 @@ fn named_teams_compile_roles_and_apply_overrides() {
     assert_eq!(planner.launch.profile.as_deref(), Some("planner-base"));
     assert_eq!(planner.launch.role.as_deref(), Some("planner"));
     assert_eq!(
-        planner.system_prompt_file.as_deref(),
+        planner
+            .system_prompt_file
+            .as_ref()
+            .and_then(crate::config::PromptSource::file),
         Some(Path::new("/prompts/role.md"))
     );
     assert_eq!(
         planner.append_system_prompt_files,
         [
-            PathBuf::from("/prompts/profile.md"),
-            PathBuf::from("/prompts/role-fragment.md")
+            PathBuf::from("/prompts/profile.md").into(),
+            PathBuf::from("/prompts/role-fragment.md").into()
         ]
     );
     assert!(planner.args.is_empty());

@@ -338,8 +338,8 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
         request.identity.params.model = Some("test-model".to_owned());
         if kind != "amp" {
-            request.system_prompt_file = Some(base.clone());
-            request.append_system_prompt_files = vec![fragment.clone()];
+            request.system_prompt_file = Some(base.clone().into());
+            request.append_system_prompt_files = vec![fragment.clone().into()];
         }
         let plan = compile(LaunchPlanInputs {
             request: &request,

@@ -196,11 +196,12 @@ pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanEr
     plan.runtime.ensure_dirs()?;
     prompt_compose::apply_system_prompt(&plan.prompt)?;
     if let AgentProcessStage::LoginShellReentry {
-        prompt_artifact: Some(artifact),
-        ..
+        prompt_artifacts, ..
     } = &plan.stage
     {
-        launch::write_prompt_artifact(artifact)?;
+        for artifact in prompt_artifacts {
+            launch::write_prompt_artifact(artifact)?;
+        }
     }
     if let Some(sandbox) = &plan.sandbox {
         plan.state.ensure_tmp_dir()?;

@@ -1,11 +1,59 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::{AttentionConfig, WorktreeConfig};
 use crate::agents::PermissionMode;
 use crate::store::message::AutoCompact;
+
+/// A prompt file or an in-memory definition, retaining its source for diagnostics.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum PromptSource {
+    File(PathBuf),
+    Text { origin: PathBuf, text: String },
+}
+
+impl PromptSource {
+    pub fn origin(&self) -> &Path {
+        match self {
+            Self::File(path) | Self::Text { origin: path, .. } => path,
+        }
+    }
+
+    pub fn file(&self) -> Option<&Path> {
+        match self {
+            Self::File(path) => Some(path),
+            Self::Text { .. } => None,
+        }
+    }
+}
+
+impl From<PathBuf> for PromptSource {
+    fn from(path: PathBuf) -> Self {
+        Self::File(path)
+    }
+}
+
+impl From<&str> for PromptSource {
+    fn from(path: &str) -> Self {
+        Self::File(path.into())
+    }
+}
+
+fn deserialize_prompt_file<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<PromptSource>, D::Error> {
+    Option::<PathBuf>::deserialize(deserializer).map(|path| path.map(PromptSource::File))
+}
+
+fn deserialize_prompt_files<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<PromptSource>, D::Error> {
+    Vec::<PathBuf>::deserialize(deserializer)
+        .map(|paths| paths.into_iter().map(PromptSource::File).collect())
+}
 
 /// Agent-launch preferences. Machine-team entries bind role names to profiles
 /// or registered agent kinds; inline launch specs resolve through the same
@@ -192,16 +240,18 @@ pub struct Profile {
     #[serde(
         default,
         rename = "system-prompt-file",
+        deserialize_with = "deserialize_prompt_file",
         skip_serializing_if = "Option::is_none"
     )]
-    pub system_prompt_file: Option<PathBuf>,
+    pub system_prompt_file: Option<PromptSource>,
     /// Prompt fragments composed in order after `system_prompt_file`.
     #[serde(
         default,
         rename = "append-system-prompt-files",
+        deserialize_with = "deserialize_prompt_files",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub append_system_prompt_files: Vec<PromptSource>,
     #[serde(default)]
     pub args: Option<String>,
 }
@@ -248,9 +298,10 @@ pub struct Team {
     #[serde(
         default,
         rename = "append-system-prompt-files",
+        deserialize_with = "deserialize_prompt_files",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub append_system_prompt_files: Vec<PromptSource>,
 }
 
 pub const DONE_STAGE: &str = "Done";
@@ -392,16 +443,18 @@ pub struct RoleBinding {
     #[serde(
         default,
         rename = "system-prompt-file",
+        deserialize_with = "deserialize_prompt_file",
         skip_serializing_if = "Option::is_none"
     )]
-    pub system_prompt_file: Option<PathBuf>,
+    pub system_prompt_file: Option<PromptSource>,
     /// Ordered prompt fragments appended after the resolved profile chain.
     #[serde(
         default,
         rename = "append-system-prompt-files",
+        deserialize_with = "deserialize_prompt_files",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub append_system_prompt_files: Vec<PromptSource>,
     #[serde(default)]
     pub args: Option<String>,
 }

@@ -367,11 +367,21 @@ impl<'a> ExplainReport<'a> {
                     .len(),
             })
         };
+        let prompt_source = |source: &'a rimz::config::PromptSource| -> Result<PromptSource<'a>> {
+            match source {
+                rimz::config::PromptSource::File(path) => file_source(path),
+                rimz::config::PromptSource::Text { origin, text } => Ok(PromptSource {
+                    path: Some(origin),
+                    builtin: None,
+                    bytes: text.len() as u64,
+                }),
+            }
+        };
         let mut sources = prompt_sources
             .system_prompt_file
             .iter()
             .chain(&prompt_sources.append_system_prompt_files)
-            .map(|path| file_source(path))
+            .map(prompt_source)
             .collect::<Result<Vec<_>>>()?;
         if let Some(team_prompt) = &prompt_sources.team_prompt {
             sources.push(match &team_prompt.consensus {
@@ -383,7 +393,7 @@ impl<'a> ExplainReport<'a> {
                 Consensus::File(path) => file_source(path)?,
             });
             for path in &team_prompt.files {
-                sources.push(file_source(path)?);
+                sources.push(prompt_source(path)?);
             }
         }
         let sandbox = plan.sandbox.as_ref().zip(bwrap).map(|(sandbox, bwrap)| {

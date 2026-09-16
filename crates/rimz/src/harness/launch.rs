@@ -245,7 +245,7 @@ pub enum AgentProcessStage {
     LoginShellReentry {
         process: CompiledAgentProcess,
         argv: Vec<String>,
-        prompt_artifact: Option<PromptArtifact>,
+        prompt_artifacts: Vec<PromptArtifact>,
     },
 }
 
@@ -460,9 +460,9 @@ pub struct ExecRequest {
     pub kind: AgentKind,
     pub action: ExecAction,
     #[serde(default)]
-    pub system_prompt_file: Option<PathBuf>,
+    pub system_prompt_file: Option<crate::config::PromptSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub append_system_prompt_files: Vec<PathBuf>,
+    pub append_system_prompt_files: Vec<crate::config::PromptSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_prompt: Option<crate::harness::team_prompt::TeamPrompt>,
     #[serde(
@@ -889,7 +889,7 @@ fn finalize_agent_process_stage(
             Ok(AgentProcessStage::LoginShellReentry {
                 process,
                 argv,
-                prompt_artifact: plan.prompt_artifact,
+                prompt_artifacts: plan.artifacts,
             })
         }
         ProviderAccountState::Finalized { binding } => {
@@ -971,7 +971,7 @@ pub fn exec_argv(
     request: &ExecRequest,
 ) -> Result<Vec<String>, ExecWireErr> {
     let plan = plan_exec_argv(rimz_bin, runtime, request)?;
-    if let Some(artifact) = &plan.prompt_artifact {
+    for artifact in &plan.artifacts {
         write_prompt_artifact(artifact)?;
     }
     Ok(plan.argv)
@@ -979,7 +979,7 @@ pub fn exec_argv(
 
 struct ExecArgvPlan {
     argv: Vec<String>,
-    prompt_artifact: Option<PromptArtifact>,
+    artifacts: Vec<PromptArtifact>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1011,6 +1011,27 @@ fn plan_exec_argv(
     let prompt_file = prompt_artifact
         .as_ref()
         .map(|artifact| artifact.path.clone());
+    let mut artifacts: Vec<_> = prompt_artifact.into_iter().collect();
+    for source in encoded
+        .system_prompt_file
+        .iter_mut()
+        .chain(&mut encoded.append_system_prompt_files)
+        .chain(
+            encoded
+                .team_prompt
+                .iter_mut()
+                .flat_map(|team| &mut team.files),
+        )
+    {
+        if let crate::config::PromptSource::Text { text, .. } = source {
+            let path = prompt_artifact_path(runtime, "frag", text);
+            artifacts.push(PromptArtifact {
+                path: path.clone(),
+                contents: std::mem::take(text),
+            });
+            *source = crate::config::PromptSource::File(path);
+        }
+    }
     let mut argv = vec![
         rimz_bin.to_string_lossy().into_owned(),
         "agents".to_owned(),
@@ -1029,10 +1050,7 @@ fn plan_exec_argv(
     })
     .map_err(ExecWireErr::Serialize)?;
     argv.extend(["--request".to_owned(), payload]);
-    Ok(ExecArgvPlan {
-        argv,
-        prompt_artifact,
-    })
+    Ok(ExecArgvPlan { argv, artifacts })
 }
 
 /// Test-facing reader: check the visible envelope, then restore the launch

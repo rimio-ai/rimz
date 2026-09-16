@@ -358,7 +358,7 @@ mod tests {
                 mode: Some(PermissionMode::Yolo),
                 model: Some("opus".to_owned()),
                 effort: Some("high".to_owned()),
-                system_prompt_file: Some(prompt.path().to_path_buf()),
+                system_prompt_file: Some(prompt.path().to_path_buf().into()),
                 args: Some("--plugin-dir '/tmp/plugin dir'".to_owned()),
                 ..profile("claude")
             },
@@ -380,7 +380,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            posture.launch.system_prompt_file.as_deref(),
+            posture
+                .launch
+                .system_prompt_file
+                .as_ref()
+                .and_then(rimz::config::PromptSource::file),
             Some(prompt.path())
         );
         assert_eq!(posture.launch.mode, Some(PermissionMode::Yolo));

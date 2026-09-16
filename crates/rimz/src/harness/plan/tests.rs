@@ -16,8 +16,8 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
         auto_compact: None,
-        system_prompt_file: Some(PathBuf::from("system.md")),
-        append_system_prompt_files: vec![PathBuf::from("append.md")],
+        system_prompt_file: Some(PathBuf::from("system.md").into()),
+        append_system_prompt_files: vec![PathBuf::from("append.md").into()],
         team_prompt: None,
         skills: Some(vec!["merge".parse().unwrap()]),
         launch: LaunchParams {
@@ -209,7 +209,7 @@ fn configured_profile(
         effort: effort.map(str::to_owned),
         budget: None,
         auto_compact: None,
-        system_prompt_file,
+        system_prompt_file: system_prompt_file.map(Into::into),
         append_system_prompt_files: Vec::new(),
         skills: None,
         args: args.map(str::to_owned),
@@ -516,12 +516,12 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
     let Cell::Agent(cell) = &mut missing_file else {
         unreachable!()
     };
-    cell.system_prompt_file = Some(missing);
+    cell.system_prompt_file = Some(missing.into());
     let mut unsupported = preset_cell("amp", &[], None, None);
     let Cell::Agent(cell) = &mut unsupported else {
         unreachable!()
     };
-    cell.system_prompt_file = Some(PathBuf::from("unsupported.md"));
+    cell.system_prompt_file = Some(PathBuf::from("unsupported.md").into());
     let layout = LayoutSpec {
         columns: vec![Column {
             rows: vec![missing_file, unsupported],
@@ -587,7 +587,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
             .next()
             .unwrap()
             .system_prompt_file,
-        Some(cli_prompt)
+        Some(cli_prompt.into())
     );
 
     machine
@@ -629,7 +629,7 @@ fn cli_fragments_replace_profile_list_and_require_a_base() {
     }
     let mut machine = MachineConfig::default();
     let mut profile = configured_profile("claude", None, None, None, Some(base), None);
-    profile.append_system_prompt_files = vec![profile_fragment];
+    profile.append_system_prompt_files = vec![profile_fragment.into()];
     machine
         .agents
         .profiles
@@ -654,7 +654,7 @@ fn cli_fragments_replace_profile_list_and_require_a_base() {
             .next()
             .expect("cell")
             .append_system_prompt_files,
-        [cli_fragment]
+        [cli_fragment.into()]
     );
 
     let mut layered = resolved.layout.clone();
@@ -664,7 +664,7 @@ fn cli_fragments_replace_profile_list_and_require_a_base() {
     let team_file = dir.path().join("pipeline.md");
     layered_cell.team_prompt = Some(crate::harness::team_prompt::TeamPrompt {
         consensus: crate::harness::team_prompt::Consensus::BuiltIn,
-        files: vec![team_file.clone()],
+        files: vec![team_file.clone().into()],
     });
     let err =
         finalize(&mut layered.clone(), &Default::default(), &[]).expect_err("missing team file");
@@ -697,7 +697,7 @@ fn cli_fragments_replace_profile_list_and_require_a_base() {
     let Cell::Agent(cell) = &mut cell else {
         unreachable!()
     };
-    cell.append_system_prompt_files = vec![dir.path().join("cli.md")];
+    cell.append_system_prompt_files = vec![dir.path().join("cli.md").into()];
     let err = finalize(
         &mut LayoutSpec::single(Cell::Agent(cell.clone())),
         &Default::default(),
@@ -720,7 +720,7 @@ fn prompt_validation_reports_capability_before_base_and_files_before_pi_size() {
     let Cell::Agent(cell) = &mut unsupported else {
         unreachable!()
     };
-    cell.append_system_prompt_files = vec![fragment];
+    cell.append_system_prompt_files = vec![fragment.into()];
     let err = finalize(
         &mut LayoutSpec::single(unsupported),
         &Default::default(),
@@ -737,7 +737,7 @@ fn prompt_validation_reports_capability_before_base_and_files_before_pi_size() {
     let Cell::Agent(cell) = &mut pi else {
         unreachable!()
     };
-    cell.system_prompt_file = Some(missing.clone());
+    cell.system_prompt_file = Some(missing.clone().into());
     let err = finalize(&mut LayoutSpec::single(pi), &Default::default(), &[])
         .expect_err("missing pi prompt is a file error");
     assert!(matches!(&err, LaunchFinalizeError::PromptFile(_)));
@@ -748,6 +748,23 @@ fn prompt_validation_reports_capability_before_base_and_files_before_pi_size() {
             missing.display()
         )
     );
+
+    let mut pi = preset_cell("pi", &[], None, None);
+    let Cell::Agent(cell) = &mut pi else {
+        unreachable!()
+    };
+    let text = crate::config::PromptSource::Text {
+        origin: missing,
+        text: "voice".to_owned(),
+    };
+    cell.system_prompt_file = Some(text.clone());
+    cell.append_system_prompt_files = vec![text.clone()];
+    cell.team_prompt = Some(crate::harness::team_prompt::TeamPrompt {
+        consensus: crate::harness::team_prompt::Consensus::BuiltIn,
+        files: vec![text],
+    });
+    finalize(&mut LayoutSpec::single(pi), &Default::default(), &[])
+        .expect("text origins are not required to exist");
 }
 
 #[test]
@@ -1153,7 +1170,7 @@ fn declared_prompt_removes_raw_replacement_args_before_process_compilation() {
     let Cell::Agent(agent_cell) = &mut cell else {
         unreachable!("preset_cell always returns an agent");
     };
-    agent_cell.system_prompt_file = Some(typed);
+    agent_cell.system_prompt_file = Some(typed.into());
     let mut layout = LayoutSpec::single(cell);
 
     assert_eq!(

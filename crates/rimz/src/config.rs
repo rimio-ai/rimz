@@ -57,8 +57,8 @@ pub use accounts::{AccountBudgetConfigError, AccountsConfig, NamedAccount, Usage
 pub(crate) use agents::retired_agents_key;
 pub use agents::{
     AgentsConfig, CommandsConfig, DONE_STAGE, FlipCompact, Isolation, LaunchPlacement, Profile,
-    ProfilesConfig, RoleBinding, SubagentProfilesConfig, SubagentsConfig, Team, TeamSignalBinding,
-    TeamsConfig,
+    ProfilesConfig, PromptSource, RoleBinding, SubagentProfilesConfig, SubagentsConfig, Team,
+    TeamSignalBinding, TeamsConfig,
 };
 use animation::validate_glyph_cells;
 pub use animation::{

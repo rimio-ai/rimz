@@ -690,7 +690,7 @@ fn execute_attempt(
         prompt,
         cleanup_worktree: prepared.launch.owns_checkout_lifecycle() && retries == 0,
         permission_args: &agent_cell.args,
-        system_prompt_file: agent_cell.system_prompt_file.as_deref(),
+        system_prompt_file: agent_cell.system_prompt_file.as_ref(),
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
         team_prompt: agent_cell.team_prompt.as_ref(),
         skills: agent_cell.skills.as_deref(),

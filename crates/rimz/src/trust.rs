@@ -963,14 +963,14 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                             system_prompt_file: role
                                 .system_prompt_file
                                 .as_ref()
-                                .map(|path| path.to_string_lossy().into_owned()),
+                                .map(|path| path.origin().to_string_lossy().into_owned()),
                             append_system_prompt_files: (!role
                                 .append_system_prompt_files
                                 .is_empty())
                             .then(|| {
                                 role.append_system_prompt_files
                                     .iter()
-                                    .map(|path| path.to_string_lossy().into_owned())
+                                    .map(|path| path.origin().to_string_lossy().into_owned())
                                     .collect()
                             }),
                             args: role.args.as_deref(),
@@ -983,7 +983,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     append_system_prompt_files: team
                         .append_system_prompt_files
                         .iter()
-                        .map(|path| path.to_string_lossy().into_owned())
+                        .map(|path| path.origin().to_string_lossy().into_owned())
                         .collect(),
                 })
                 .collect(),
