@@ -513,6 +513,21 @@ fn root_identity_events_stamp_codex_session_origin() {
         );
         assert_eq!(registered.origin, Some(SessionOrigin::Fresh));
 
+        for (session_id, source, origin) in [
+            ("side", "fork", Some(SessionOrigin::SideConversation)),
+            ("fork", "fork", Some(SessionOrigin::Forked)),
+            ("ephemeral-root", "startup", None),
+        ] {
+            let start = hook_lifecycle(
+                &CodexAdapter,
+                "SessionStart",
+                &json!({"session_id":session_id,"source":source,"transcript_path":null}),
+            );
+            assert_eq!(start.origin, origin, "{session_id}");
+            assert_eq!(start.signal, LifecycleSignal::Registered, "{session_id}");
+            assert_eq!(start.transcript_path.is_some(), session_id == "fork");
+        }
+
         let turn_started = hook_lifecycle(
             &CodexAdapter,
             "UserPromptSubmit",
