@@ -302,13 +302,15 @@ impl SeatLoader<'_> {
         };
         let mut seat = LoadedDefinitions::default();
         agent::resolve_namespace(
-            self.home,
-            "agents",
-            &tree,
-            self.subagents,
-            self.bases,
-            self.skills,
-            self.children,
+            agent::Resolver::new(
+                self.home,
+                "agents",
+                &tree,
+                self.subagents,
+                self.bases,
+                self.skills,
+                self.children,
+            ),
             &mut seat,
         );
         if let Some(error) = seat.errors.into_iter().next() {

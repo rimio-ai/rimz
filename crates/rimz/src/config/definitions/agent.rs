@@ -33,45 +33,50 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
     }
 }
 
-pub(super) fn resolve_namespace(
-    home: &Path,
-    namespace: &str,
-    tree: &Namespace,
-    foreign: &Namespace,
-    bases: &BTreeSet<String>,
-    skills: SkillLibraryCheck<'_>,
-    allowed_children: &BTreeSet<String>,
-    loaded: &mut LoadedDefinitions,
-) {
-    let mut resolver = Resolver {
-        home,
-        namespace,
-        tree,
-        foreign,
-        bases,
-        skills,
-        allowed_children,
-        resolved: BTreeMap::new(),
-        trail: Vec::new(),
-        errors: Vec::new(),
-    };
-    for name in tree.definitions.keys() {
+/// Resolves every definition of one tree into `loaded`.
+pub(super) fn resolve_namespace(mut resolver: Resolver<'_>, loaded: &mut LoadedDefinitions) {
+    for name in resolver.tree.definitions.keys() {
         resolver.resolve(name);
     }
     loaded.errors.extend(resolver.errors);
     for (name, resolved) in resolver.resolved {
         if let Some(resolved) = resolved {
             loaded.insert(
-                namespace,
+                resolver.namespace,
                 &name,
-                &tree.definitions[&name].path,
+                &resolver.tree.definitions[&name].path,
                 resolved.profile,
             );
         }
     }
 }
 
-struct Resolver<'a> {
+impl<'a> Resolver<'a> {
+    pub(super) fn new(
+        home: &'a Path,
+        namespace: &'a str,
+        tree: &'a Namespace,
+        foreign: &'a Namespace,
+        bases: &'a BTreeSet<String>,
+        skills: SkillLibraryCheck<'a>,
+        allowed_children: &'a BTreeSet<String>,
+    ) -> Self {
+        Self {
+            home,
+            namespace,
+            tree,
+            foreign,
+            bases,
+            skills,
+            allowed_children,
+            resolved: BTreeMap::new(),
+            trail: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+}
+
+pub(super) struct Resolver<'a> {
     home: &'a Path,
     namespace: &'a str,
     tree: &'a Namespace,
