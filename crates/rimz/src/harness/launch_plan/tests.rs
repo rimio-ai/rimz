@@ -182,15 +182,29 @@ fn resolves_team_for_launch_context_from_effective_config() {
 
     let reminders = exec_launch_reminders(&request, &machine_config, project.path(), config.path());
     let team = reminders.team.expect("team");
-    assert_eq!(team.leader.as_deref(), Some("planner"));
+    assert_eq!(team.team.leader.as_deref(), Some("planner"));
     assert_eq!(
-        team.roles
+        team.team
+            .roles
             .iter()
             .map(|role| role.role.as_str())
             .collect::<Vec<_>>(),
         ["planner", "coder"]
     );
-    assert_eq!(team.scratch_files, ["blackboard.md"]);
+    assert_eq!(team.team.scratch_files, ["blackboard.md"]);
+    // Every seat's agent is resolved here, where the effective profiles are in hand.
+    let context = crate::harness::launch_context::team_launch_context(
+        &request.identity.params,
+        &request.action,
+        &team,
+        project.path(),
+    )
+    .expect("team context");
+    assert!(
+        crate::harness::launch_context::reminder(&context, Some("Codex GPT 6 Astra")).contains(
+            "Seats: @planner runs on Claude; @coder (you) runs on Codex GPT 6 Astra. Resumed session"
+        )
+    );
 }
 
 #[test]

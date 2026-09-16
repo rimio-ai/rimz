@@ -12,7 +12,7 @@ use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::sandbox::{self, SandboxPlan};
 
 use super::launch::{self, AgentProcessStage, CompiledAgentProcess, ExecRequest};
-use super::launch_reminders::LaunchReminders;
+use super::launch_reminders::{LaunchReminders, TeamReminder};
 use super::prompt_compose::{
     self, MaterializedSystemPrompt, SystemPromptPlan, SystemPromptSources,
 };
@@ -257,7 +257,7 @@ fn reminders(
         if team.is_none() {
             warnings.push(LaunchPlanWarning::MissingTeam(name.to_owned()));
         }
-        team
+        team.map(|team| TeamReminder::new(team, &effective.profiles))
     });
     (
         LaunchReminders {

@@ -85,7 +85,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
     }
 }
 
-fn team() -> crate::config::Team {
+fn team() -> crate::harness::launch_reminders::TeamReminder {
     let role = |role: &str, profile: &str| crate::config::RoleBinding {
         signals: Vec::new(),
         owns: Vec::new(),
@@ -101,13 +101,16 @@ fn team() -> crate::config::Team {
         append_system_prompt_files: Vec::new(),
         args: None,
     };
-    crate::config::Team {
-        roles: vec![role("planner", "claude"), role("coder", "codex")],
-        leader: Some("planner".to_owned()),
-        layout: None,
-        scratch_files: vec!["blackboard.md".to_owned()],
-        stages: Vec::new(),
-    }
+    crate::harness::launch_reminders::TeamReminder::new(
+        crate::config::Team {
+            roles: vec![role("planner", "claude"), role("coder", "codex")],
+            leader: Some("planner".to_owned()),
+            layout: None,
+            scratch_files: vec!["blackboard.md".to_owned()],
+            stages: Vec::new(),
+        },
+        &crate::config::ProfilesConfig::default(),
+    )
 }
 
 fn team_request(kind: &str) -> ExecRequest {
@@ -490,18 +493,22 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
 fn process_compiler_appends_team_context_for_native_adapters() {
     let project = tempfile::tempdir().expect("project");
     let team = team();
-    let invocation = team_request("claude");
-    let context = crate::harness::launch_context::team_launch_context(
-        &invocation.identity.params,
-        &invocation.action,
-        &team,
-        project.path(),
-    )
-    .expect("team context");
-    let reminder = wrap(&crate::harness::launch_context::reminder(&context, None));
+    // Each adapter carries the reminder its own launch renders: the seat runs on this kind.
+    let rendered = |invocation: &ExecRequest| {
+        crate::harness::launch_reminders::render(
+            invocation,
+            &LaunchReminders {
+                team: Some(team.clone()),
+                ..LaunchReminders::default()
+            },
+            project.path(),
+        )
+        .expect("team reminder")
+    };
 
     for kind in ["claude", "qwen", "droid"] {
         let invocation = team_request(kind);
+        let reminder = rendered(&invocation);
         let process = compile_agent_process_with_extra_env(
             project.path(),
             &invocation,
@@ -523,6 +530,11 @@ fn process_compiler_appends_team_context_for_native_adapters() {
     }
 
     let invocation = team_request("codex");
+    let reminder = rendered(&invocation);
+    assert!(
+        reminder.contains("Seats: @planner runs on Claude; @coder (you) runs on Codex."),
+        "{reminder}"
+    );
     let process = compile_agent_process_with_extra_env(
         project.path(),
         &invocation,
@@ -558,30 +570,36 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
     ]);
     let catalog_reminder = crate::harness::subagent_policy::reminder(&catalog);
     let team = team();
-    let invocation = team_request("claude");
-    let context = crate::harness::launch_context::team_launch_context(
-        &invocation.identity.params,
-        &invocation.action,
-        &team,
-        project.path(),
-    )
-    .expect("team context");
-    let team_reminder = crate::harness::launch_context::reminder(&context, Some("on GPT 6 Astra"));
 
     for kind in ["claude", "codex"] {
         let mut invocation = team_request(kind);
         invocation.identity.params.model = Some("gpt-6-astra".to_owned());
         invocation.identity.params.effort = Some("high".to_owned());
+        let reminders = LaunchReminders {
+            subagent_catalog: Some(catalog.clone()),
+            team: Some(team.clone()),
+            ..LaunchReminders::default()
+        };
+        let team_reminder = crate::harness::launch_reminders::render(
+            &invocation,
+            &LaunchReminders {
+                team: Some(team.clone()),
+                ..LaunchReminders::default()
+            },
+            project.path(),
+        )
+        .expect("team reminder");
+        let team_reminder = team_reminder
+            .trim_start_matches("<system_reminder>\n")
+            .trim_end_matches("\n</system_reminder>")
+            .to_owned();
+        assert!(team_reminder.contains("(you) runs on "), "{team_reminder}");
         let process = compile_agent_process_with_extra_env(
             project.path(),
             &invocation,
             project.path(),
             &BTreeMap::new(),
-            &LaunchReminders {
-                subagent_catalog: Some(catalog.clone()),
-                team: Some(team.clone()),
-                ..LaunchReminders::default()
-            },
+            &reminders,
         )
         .expect("process");
         let channel = crate::agents::find_definition(kind)
