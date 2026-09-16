@@ -75,6 +75,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("amp"),
         fixed_args: &[],
         prompt: super::PromptStyle::FlagWithSuffix {

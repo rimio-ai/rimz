@@ -52,6 +52,7 @@ impl std::fmt::Display for PermissionMode {
 /// Static launch shapes shared by built-in and process-plugin adapters.
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchSpec {
+    pub(super) definitions: DefinitionSpec,
     pub program: Option<&'static str>,
     pub fixed_args: &'static [&'static str],
     pub prompt: PromptStyle,
@@ -65,6 +66,7 @@ pub struct LaunchSpec {
 
 impl LaunchSpec {
     pub const EMPTY: Self = Self {
+        definitions: DefinitionSpec::EMPTY,
         program: None,
         fixed_args: &[],
         prompt: PromptStyle::None,
@@ -228,6 +230,39 @@ impl LaunchSpec {
         }
         Some(argv)
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DefinitionModel {
+    pub name: &'static str,
+    pub id: &'static str,
+    pub effort: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum DefinitionTools {
+    Unsupported,
+    Ignored,
+    Required(fn(&super::tools::ToolSet) -> Result<Vec<String>, super::tools::ToolErr>),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DefinitionSpec {
+    pub mode: Option<PermissionMode>,
+    pub effort: Option<&'static str>,
+    pub models: &'static [DefinitionModel],
+    pub prefixes: &'static [&'static str],
+    pub tools: DefinitionTools,
+}
+
+impl DefinitionSpec {
+    pub const EMPTY: Self = Self {
+        mode: None,
+        effort: None,
+        models: &[],
+        prefixes: &[],
+        tools: DefinitionTools::Unsupported,
+    };
 }
 
 #[derive(Clone, Copy, Debug)]

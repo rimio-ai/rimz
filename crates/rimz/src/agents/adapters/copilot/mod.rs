@@ -93,6 +93,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("copilot"),
         fixed_args: &[],
         prompt: super::PromptStyle::Flag("--interactive"),

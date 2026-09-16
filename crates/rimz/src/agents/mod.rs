@@ -44,6 +44,7 @@ pub mod spending;
 pub mod state;
 #[cfg(test)]
 pub(crate) mod testkit;
+mod tools;
 pub mod transcript;
 pub(crate) mod transcript_fs;
 pub mod turns;
@@ -131,6 +132,10 @@ pub use state::{
     single_line_description,
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_description};
+pub use tools::{
+    DefinitionDefaults, ToolErr, ToolSet, definition_defaults, definition_model_kind,
+    expand_model_alias, render_tool_args, tools_required,
+};
 use transcript::TranscriptRole;
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition};
 use transcript_fs::read_transcript_lines;

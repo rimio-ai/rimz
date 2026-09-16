@@ -96,6 +96,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("qwen"),
         fixed_args: &[],
         prompt: super::PromptStyle::Flag("-i"),

@@ -79,6 +79,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("grok"),
         fixed_args: &[],
         prompt: super::PromptStyle::FlagWithSuffix {

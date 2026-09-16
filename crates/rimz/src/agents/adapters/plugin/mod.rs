@@ -377,6 +377,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                 })
             };
             LaunchSpec {
+                definitions: crate::agents::definition::DefinitionSpec::EMPTY,
                 program: Some(leak_string(launch.bin.clone())),
                 fixed_args: leak_strings(&launch.args),
                 prompt: PromptStyle::PositionalAfterDoubleDash,

@@ -113,6 +113,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[".kimi-code/bin"],
     thread_key: ThreadKey::SessionDir,
     launch: super::LaunchSpec {
+        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("kimi"),
         fixed_args: &[],
         prompt: super::PromptStyle::None,
