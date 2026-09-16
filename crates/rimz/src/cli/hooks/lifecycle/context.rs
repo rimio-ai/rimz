@@ -86,7 +86,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     }
 }
 
-fn touch_agent_activity(
+pub(super) fn touch_agent_activity(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &AgentDefinition,

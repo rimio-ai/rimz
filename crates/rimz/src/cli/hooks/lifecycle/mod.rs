@@ -36,8 +36,26 @@ pub(super) fn handle_lifecycle_hook(
     let recorded =
         record_lifecycle_observation(workspace, store, agent, decoded, ingress_owner, globals);
     if let Some(recorded) = recorded.as_ref()
-        && recorded.side_conversation
+        && let Some(side) = recorded.side_conversation.as_ref()
     {
+        if let Some(host) = side.host.as_ref() {
+            touch_agent_activity(
+                workspace,
+                store,
+                agent,
+                decoded.event_name(),
+                host.as_str(),
+                rimz::agent_activity::ToolRun::Reset,
+            );
+            active_time::record_side_conversation(
+                store,
+                agent,
+                &recorded.observation.signal,
+                host.as_str(),
+                side.host_running,
+                decoded.event_name(),
+            );
+        }
         if recorded.rotation_due {
             spawn_auto_rotation(workspace);
         }
@@ -342,7 +360,7 @@ struct RecordedLifecycle {
     primary_event_id: Option<rimz::ids::EventId>,
     events: Vec<rimz::agents::LifecycleEvent>,
     rotation_due: bool,
-    side_conversation: bool,
+    side_conversation: Option<rimz::store::writer::SideConversation>,
     waiting_cleared: bool,
 }
 
@@ -652,7 +670,7 @@ mod tests {
                 primary_event_id: None,
                 events: Vec::new(),
                 rotation_due: false,
-                side_conversation: false,
+                side_conversation: None,
                 waiting_cleared: false,
             },
             "session",
@@ -689,7 +707,7 @@ mod tests {
                 primary_event_id: None,
                 events: Vec::new(),
                 rotation_due: false,
-                side_conversation: false,
+                side_conversation: None,
                 waiting_cleared: false,
             },
             "session",

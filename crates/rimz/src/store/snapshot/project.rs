@@ -352,7 +352,8 @@ impl ReducerState {
         };
         let key = (kind.clone(), agent_id.clone());
         if observation.origin == Some(SessionOrigin::SideConversation) {
-            self.identity.mark_side_session(agent_id.clone());
+            let host = self.side_session_host(&key, observation);
+            self.identity.mark_side_session(agent_id.clone(), host);
             self.map.remove(&key);
             self.launch_identity.remove(&key);
             self.identity.release_key(&key);
@@ -445,6 +446,37 @@ impl ReducerState {
         inherit_compaction_registration(&self.map, &mut state);
         inherit_launch_identity(&self.map, &self.launch_identity, &mut state);
         self.insert(key, state);
+    }
+
+    /// The live root hosting a side conversation: the earliest registered
+    /// same-kind session on the side's pane and agent process.
+    fn side_session_host(
+        &self,
+        side: &AgentKey,
+        observation: &AgentLifecycleObservation,
+    ) -> Option<AgentSessionId> {
+        let pane = pane_projection(observation, None);
+        let owner = runtime_projection(observation, None, &side.1);
+        self.map
+            .values()
+            .filter(|candidate| {
+                candidate.kind == side.0
+                    && candidate.agent_id != side.1
+                    && candidate.ended_at.is_none()
+                    && !candidate.is_provider_subagent()
+                    && crate::store::session_death::same_instance_placement(
+                        (candidate.pane.as_ref(), candidate.runtime_owner.as_ref()),
+                        (pane.as_ref(), owner.as_ref()),
+                    )
+            })
+            .min_by_key(|candidate| {
+                (
+                    candidate.registered_at.is_none(),
+                    candidate.registered_at,
+                    candidate.agent_id.clone(),
+                )
+            })
+            .map(|host| host.agent_id.clone())
     }
 
     fn adopt_provisional(

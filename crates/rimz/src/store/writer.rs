@@ -28,7 +28,9 @@ mod reap;
 mod reset;
 mod signal;
 
-pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES};
+pub use lifecycle::{
+    AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES, SideConversation,
+};
 pub(crate) use queue::DeliverySweepUpdate;
 pub use queue::{DeliveryAck, DeliveryFailureDisposition, EditOutcome, MessageEdit};
 

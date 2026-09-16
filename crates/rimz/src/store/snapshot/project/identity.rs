@@ -19,15 +19,21 @@ pub(crate) struct AgentIdentityState {
     pub(super) next_ordinal: BTreeMap<AgentKind, u32>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(super) consumed_launches: BTreeSet<AgentSessionId>,
-    /// Ephemeral side-conversation ids, one per `/btw`, kept for the log's life
-    /// and not pruned.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(super) side_sessions: BTreeSet<AgentSessionId>,
+    /// Ephemeral side-conversation ids, one per `/btw`, each mapped to the
+    /// root session hosting it when one proved the instance. Kept for the
+    /// log's life and not pruned.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) side_sessions: BTreeMap<AgentSessionId, Option<AgentSessionId>>,
 }
 
 impl AgentIdentityState {
-    pub(crate) fn is_side_session(&self, agent_id: &AgentSessionId) -> bool {
-        self.side_sessions.contains(agent_id)
+    /// `None` for a session that is not a side conversation; `Some(host)` for
+    /// one, where `host` is `None` when no root proved the instance.
+    pub(crate) fn side_session_host(
+        &self,
+        agent_id: &AgentSessionId,
+    ) -> Option<Option<&AgentSessionId>> {
+        self.side_sessions.get(agent_id).map(Option::as_ref)
     }
 
     pub(crate) fn without_consumed_launches(mut self) -> Self {
@@ -93,7 +99,7 @@ pub(super) struct CardIdentityAllocator {
     ordinals: BTreeMap<(AgentKind, u32), AgentSessionId>,
     next_ordinal: BTreeMap<AgentKind, u32>,
     consumed_launches: BTreeSet<AgentSessionId>,
-    side_sessions: BTreeSet<AgentSessionId>,
+    side_sessions: BTreeMap<AgentSessionId, Option<AgentSessionId>>,
 }
 
 impl CardIdentityAllocator {
@@ -152,12 +158,16 @@ impl CardIdentityAllocator {
         }
     }
 
-    pub(super) fn mark_side_session(&mut self, agent_id: AgentSessionId) {
-        self.side_sessions.insert(agent_id);
+    pub(super) fn mark_side_session(
+        &mut self,
+        agent_id: AgentSessionId,
+        host: Option<AgentSessionId>,
+    ) {
+        self.side_sessions.insert(agent_id, host);
     }
 
     pub(super) fn is_side_session(&self, agent_id: &AgentSessionId) -> bool {
-        self.side_sessions.contains(agent_id)
+        self.side_sessions.contains_key(agent_id)
     }
 
     pub(super) fn reset_ordinals(&mut self) {
