@@ -3,7 +3,10 @@
 use std::time::Duration;
 
 use crate::agents::lifecycle::{self, LifecycleEvent, LifecycleSignal, Transition, TransitionKind};
-use crate::agents::{AgentLifecycleObservation, AgentState, AgentStatus, SpawnedSubagent};
+use crate::agents::{
+    AgentLifecycleObservation, AgentState, AgentStatus, SessionOrigin, SpawnedSubagent,
+};
+use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId, EventId, LoginName, WorkspaceId};
 use crate::store::event::{self, EventEnvelope};
 use crate::store::snapshot;
@@ -33,6 +36,7 @@ pub struct AgentLifecycleReceipt {
     pub primary_event_id: Option<EventId>,
     pub events: Vec<LifecycleEvent>,
     pub rotation_due: bool,
+    pub side_conversation: bool,
 }
 
 struct StagedLifecycleEvent {
@@ -57,7 +61,37 @@ impl Store {
         rotation_threshold: u64,
     ) -> Result<AgentLifecycleReceipt> {
         self.commit(|txn| {
-            let (_cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let (cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let known_side = intent
+                .observation
+                .agent_id
+                .as_ref()
+                .is_some_and(|agent_id| cache.agent_identity.is_side_session(agent_id));
+            if known_side || intent.observation.origin == Some(SessionOrigin::SideConversation) {
+                let mut receipt = AgentLifecycleReceipt {
+                    prior_status: None,
+                    transition: None,
+                    waiting_cleared: false,
+                    primary_event_id: None,
+                    events: Vec::new(),
+                    rotation_due: false,
+                    side_conversation: true,
+                };
+                if known_side {
+                    return Ok(receipt);
+                }
+                let envelope = EventEnvelope::agent_lifecycle(
+                    self.inner.paths.workspace_id.clone(),
+                    intent.session_name,
+                    intent.agent_kind.as_str(),
+                    intent.event_name,
+                    &event::observation_for_event(intent.observation),
+                );
+                receipt.primary_event_id = Some(envelope.event_id.clone());
+                txn.append_batch(&[envelope])?;
+                receipt.rotation_due = claim_rotation(txn.paths, rotation_threshold);
+                return Ok(receipt);
+            }
             let prior_status = intent
                 .observation
                 .agent_id
@@ -145,14 +179,8 @@ impl Store {
                 .collect();
 
             let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
-            let stamp = txn.paths.locks_dir.join(AUTO_ROTATE_STAMP);
-            let rotation_due = !envelopes.is_empty()
-                && std::fs::metadata(&txn.paths.events_log)
-                    .is_ok_and(|metadata| metadata.len() >= rotation_threshold)
-                && debounce::stamp_due(&stamp, AUTO_ROTATE_DEBOUNCE);
-            if rotation_due {
-                debounce::touch_stamp(&stamp);
-            }
+            let rotation_due =
+                !envelopes.is_empty() && claim_rotation(txn.paths, rotation_threshold);
             Ok(AgentLifecycleReceipt {
                 prior_status,
                 transition,
@@ -160,9 +188,23 @@ impl Store {
                 primary_event_id,
                 events,
                 rotation_due,
+                side_conversation: false,
             })
         })
     }
+}
+
+/// Whether the event log crossed the rotation threshold, claiming the debounce
+/// stamp when it did.
+fn claim_rotation(paths: &StatePaths, rotation_threshold: u64) -> bool {
+    let stamp = paths.locks_dir.join(AUTO_ROTATE_STAMP);
+    let due = std::fs::metadata(&paths.events_log)
+        .is_ok_and(|metadata| metadata.len() >= rotation_threshold)
+        && debounce::stamp_due(&stamp, AUTO_ROTATE_DEBOUNCE);
+    if due {
+        debounce::touch_stamp(&stamp);
+    }
+    due
 }
 
 fn lifecycle_transition(

@@ -164,10 +164,23 @@ fn record_mapped_lifecycle_observation(
                 primary_event_id: None,
                 events: Vec::new(),
                 rotation_due: false,
+                side_conversation: false,
                 waiting_cleared: false,
             };
         }
     };
+    if receipt.side_conversation {
+        debug!(agent = agent.spec().kind, "lifecycle: side conversation");
+        return RecordedLifecycle {
+            model_hint,
+            observation,
+            primary_event_id: receipt.primary_event_id,
+            events: receipt.events,
+            rotation_due: receipt.rotation_due,
+            waiting_cleared: receipt.waiting_cleared,
+            side_conversation: receipt.side_conversation,
+        };
+    }
     log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
     let audit = store
         .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
@@ -306,6 +319,7 @@ fn record_mapped_lifecycle_observation(
         events: receipt.events,
         rotation_due: receipt.rotation_due,
         waiting_cleared: receipt.waiting_cleared,
+        side_conversation: receipt.side_conversation,
     }
 }
 
