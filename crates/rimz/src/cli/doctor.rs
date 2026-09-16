@@ -98,8 +98,8 @@ fn collect_machine_config() -> model::MachineConfigHealth {
     let broken_files = rimz::config::broken_machine_files()
         .into_iter()
         .map(|err| {
-            let kind = if rimz::config::is_agents_home_fragment(&agents_home, err.path()) {
-                model::MachineConfigProblemKind::Fragment
+            let kind = if matches!(err, rimz::config::ConfigErr::Definition { .. }) {
+                model::MachineConfigProblemKind::Definition
             } else if err.diagnosis().is_some() {
                 model::MachineConfigProblemKind::Parse
             } else {
@@ -112,39 +112,27 @@ fn collect_machine_config() -> model::MachineConfigHealth {
             }
         })
         .collect();
-    let legacy_agents_home = rimz::disk::paths::env_path("HOME")
-        .map(|home| home.join(".agents"))
-        .and_then(|legacy| legacy_agents_home(&legacy, &agents_home));
+    let legacy_agents_home = legacy_agents_home(&agents_home).or_else(|| {
+        rimz::disk::paths::env_path("HOME")
+            .map(|home| home.join(".agents"))
+            .and_then(|legacy| legacy_agents_home(&legacy))
+    });
     model::MachineConfigHealth {
         broken_files,
         legacy_agents_home,
     }
 }
 
-/// Profile and team fragments left at the pre-move root are no longer read.
-fn legacy_agents_home(legacy: &Path, agents_home: &Path) -> Option<model::LegacyAgentsHome> {
-    if legacy == agents_home {
+/// Legacy TOML definitions at either agents-home location are no longer read.
+fn legacy_agents_home(legacy: &Path) -> Option<model::LegacyAgentsHome> {
+    if !legacy.join("agents.toml").is_file()
+        && rimz::config::agents_home_fragment_dirs(legacy).is_empty()
+    {
         return None;
     }
-    let dirs = rimz::config::agents_home_fragment_dirs(legacy);
-    if dirs.is_empty() {
-        return None;
-    }
-    let quote = |path: &Path| {
-        shlex::try_quote(&path.display().to_string())
-            // Paths read from the filesystem and environment cannot contain NUL bytes.
-            .expect("path display string is shell-quotable")
-            .into_owned()
-    };
-    let sources = dirs
-        .iter()
-        .map(|dir| quote(dir))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let dest = quote(agents_home);
     Some(model::LegacyAgentsHome {
         path: legacy.display().to_string(),
-        fix: format!("mkdir -p {dest} && mv {sources} {dest}/"),
+        fix: "no longer read; move `[agents]` keys to config.toml and definitions to the Markdown trees".to_owned(),
     })
 }
 

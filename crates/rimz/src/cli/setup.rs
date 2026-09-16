@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Args;
-use rimz::config::{ConfigEditor, FragmentRepairReport, MergeAction, MergeReport};
+use rimz::config::{ConfigEditor, MergeAction, MergeReport};
 use rimz::ids::MuxName;
 use rimz::trust::TrustState;
 use rimz::workspace::WorkspaceResolver;
@@ -35,7 +35,6 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
         print_report(&report)?;
         let editor = ConfigEditor::machine();
         render_merge_report(&editor.merge_defaults()?)?;
-        render_fragment_repair_report(&editor.repair_agents_home()?)?;
         report_remote_template()?;
         print_line("No hooks or trust grants were changed by --yes.")?;
         print_line("Run `rimz start` when ready.")?;
@@ -57,7 +56,6 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
                 .any(|file| matches!(file.action, MergeAction::LeftUnparseable { .. }));
             render_merge_report(&merge)?;
             if left_unparseable {
-                render_fragment_repair_report(&ConfigEditor::machine().repair_agents_home()?)?;
                 print_line("Fix the unparseable file(s), then rerun `rimz setup`.")?;
                 return Ok(());
             }
@@ -67,7 +65,6 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         write_fresh_config()?;
     }
-    render_fragment_repair_report(&ConfigEditor::machine().repair_agents_home()?)?;
     report_remote_template()?;
     let hook_intro_rendered = hooks::ensure_detected_agent_hooks(interactive)?;
     let config = rimz::config::MachineConfig::load().context("loading per-machine config")?;
@@ -216,26 +213,6 @@ fn render_merge_report(report: &MergeReport) -> Result<()> {
         for skipped in &file.skipped {
             let reason = format!("invalid: {}", render::one_line(&skipped.reason));
             print_line(&format!("  skipped {} ({reason})", skipped.key))?;
-        }
-    }
-    Ok(())
-}
-
-fn render_fragment_repair_report(report: &FragmentRepairReport) -> Result<()> {
-    for file in &report.files {
-        if let Some(error) = &file.error {
-            print_line(&format!(
-                "Left {} untouched - unparseable: {}",
-                file.path.display(),
-                render::one_line(error),
-            ))?;
-            continue;
-        }
-        for key in &file.removed {
-            print_line(&format!(
-                "Removed unknown `{key}` from {}",
-                file.path.display(),
-            ))?;
         }
     }
     Ok(())

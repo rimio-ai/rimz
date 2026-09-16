@@ -1083,14 +1083,13 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
             ][..],
         ),
         (
-            root.join("crates/rimz/src/config/templates/agents.template.toml"),
+            root.join("crates/rimz/src/config/templates/config.template.toml"),
             &[
                 "[agents]",
                 "[agents.worktree]",
                 "[agents.attention]",
-                "[agents.profiles]",
                 "[agents.commands]",
-                "[agents.teams]",
+                "[agents.subagents]",
             ][..],
         ),
         (

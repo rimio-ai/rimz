@@ -68,7 +68,14 @@ impl UninstallFixture {
             fs::create_dir_all(&root).expect("mkdir root");
             fs::write(root.join("marker"), kind.label()).expect("write marker");
         }
-        for name in ["profiles", "teams", "skills"] {
+        for name in [
+            "agents",
+            "subagents",
+            "teams",
+            "traits",
+            "skills",
+            "accounts",
+        ] {
             let dir = self.env.agents_home().join(name);
             fs::create_dir_all(&dir).expect("mkdir library");
             fs::write(dir.join("marker"), name).expect("write library marker");
@@ -86,7 +93,14 @@ impl UninstallFixture {
     fn assert_absent(&self, kind: RootKind) {
         if matches!(kind, RootKind::Config) {
             assert!(!self.root(kind).join("marker").exists());
-            for name in ["profiles", "teams", "skills"] {
+            for name in [
+                "agents",
+                "subagents",
+                "teams",
+                "traits",
+                "skills",
+                "accounts",
+            ] {
                 assert_eq!(
                     fs::read_to_string(self.env.agents_home().join(name).join("marker")).unwrap(),
                     name
@@ -211,7 +225,14 @@ fn uninstall_state_and_config_flags_extend_default_scope_independently() {
     config_only.assert_present(RootKind::State);
     config_only.assert_absent(RootKind::Config);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    for name in ["profiles", "teams", "skills"] {
+    for name in [
+        "agents",
+        "subagents",
+        "teams",
+        "traits",
+        "skills",
+        "accounts",
+    ] {
         assert!(
             stderr.contains(&format!(
                 "kept {}",

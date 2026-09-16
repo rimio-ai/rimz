@@ -1,8 +1,5 @@
 use super::*;
-use crate::config::{
-    AGENT_FRAGMENT_FILE, AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR,
-    MachineConfigFileKind as Kind, TEAM_FRAGMENT_FILE,
-};
+use crate::config::MachineConfigFileKind as Kind;
 
 fn test_files() -> MachineConfigFiles {
     MachineConfigFiles::from_paths("/tmp/rimz/config.toml", "/tmp/rimz/agents-home")
@@ -16,12 +13,11 @@ fn explicit_file_registry_preserves_path_and_template_order() {
         ordered
             .each_ref()
             .map(|file| file.path().file_name().unwrap().to_owned()),
-        ["config.toml", "theme.toml", "agents.toml", "loop.toml"].map(std::ffi::OsString::from)
+        ["config.toml", "theme.toml", "loop.toml"].map(std::ffi::OsString::from)
     );
     assert_eq!(ordered[0].template(), Kind::Core.template());
     assert_eq!(ordered[1].template(), Kind::Theme.template());
-    assert_eq!(ordered[2].template(), Kind::Agents.template());
-    assert_eq!(ordered[3].template(), MachineConfig::template_loop());
+    assert_eq!(ordered[2].template(), MachineConfig::template_loop());
 }
 
 #[test]
@@ -230,23 +226,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "theme.display.budget_bar.burn_rate.red",
         "accounts.usage_limit_usd.codex",
         "accounts.budget.claude",
-        "agents.teams.review.roles",
-        "agents.teams.review.layout",
         "agents.commands.vim",
-        "agents.profiles.codex-slim.agent",
-        "agents.profiles.codex-slim.description",
-        "agents.profiles.codex-slim.model-reminder",
-        "agents.profiles.codex-slim.mode",
-        "agents.profiles.codex-slim.model",
-        "agents.profiles.codex-slim.effort",
-        "agents.profiles.codex-slim.auto-compact",
-        "agents.profiles.codex-slim.args",
-        "agents.profiles.codex-slim.system-prompt-file",
-        "subagents.profiles.codex-review.agent",
-        "subagents.profiles.codex-review.description",
-        "subagents.profiles.codex-review.model-reminder",
-        "subagents.profiles.codex-review.model",
-        "subagents.profiles.codex-review.auto-compact",
         "loop.tasks.watch.agent",
         "loop.default-timeout",
         "loop.tasks.watch.prompt",
@@ -348,13 +328,13 @@ fn validates_config_key_read_and_write_surfaces() {
         ("accounts.usage_limit_usd.codex", true),
         ("accounts.budget", true),
         ("accounts.budget.claude", true),
-        ("agents.profiles.demo.agent", true),
-        ("agents.profiles.demo.auto-compact", true),
+        ("agents.profiles.demo.agent", false),
+        ("agents.profiles.demo.auto-compact", false),
         ("agents.profiles.demo.bogus", false),
-        ("subagents.profiles.demo.effort", true),
-        ("subagents.profiles.demo.auto-compact", true),
+        ("subagents.profiles.demo.effort", false),
+        ("subagents.profiles.demo.auto-compact", false),
         ("subagents.profiles.demo.bogus", false),
-        ("agents.teams.demo.layout", true),
+        ("agents.teams.demo.layout", false),
         ("agents.teams.demo.bogus", false),
         ("agents.pets", false),
         ("loop", true),
@@ -366,87 +346,6 @@ fn validates_config_key_read_and_write_surfaces() {
             "{key}"
         );
     }
-}
-
-#[test]
-fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
-    use crate::agents::PermissionMode;
-    use crate::config::{Profile, RoleBinding, Team};
-
-    let profile = Profile {
-        agent: "claude".to_owned(),
-        description: Some("test".to_owned()),
-        subagents: Some(vec!["explorer".to_owned()]),
-        model_reminder: Some(false),
-        mode: Some(PermissionMode::Yolo),
-        model: Some("model".to_owned()),
-        effort: Some("high".to_owned()),
-        budget: Some("$1".to_owned()),
-        auto_compact: Some("200k".to_owned()),
-        system_prompt_file: Some(PathBuf::from("system.md").into()),
-        append_system_prompt_files: vec![PathBuf::from("append.md").into()],
-        skills: Some(vec!["merge".parse().unwrap()]),
-        args: Some("--flag".to_owned()),
-    };
-    let team = Team {
-        roles: vec![RoleBinding {
-            role: "lead".to_owned(),
-            owns: Vec::new(),
-            flip_compact: None,
-            profile: "claude".to_owned(),
-            signals: vec![crate::config::TeamSignalBinding {
-                signal: "ci.failed".to_owned(),
-                matches: Default::default(),
-                prompt: None,
-            }],
-            mode: None,
-            model: None,
-            effort: None,
-            budget: None,
-            auto_compact: None,
-            system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
-            args: None,
-        }],
-        leader: Some("lead".to_owned()),
-        layout: Some("lead".to_owned()),
-        scratch_files: Some(vec!["notes/".to_owned()]),
-        consensus_file: Some(PathBuf::from("consensus.md")),
-        append_system_prompt_files: vec![PathBuf::from("pipeline.md").into()],
-        stages: vec!["Explore".to_owned(), "Plan".to_owned()],
-    };
-
-    let profile_keys: std::collections::BTreeSet<_> = toml::Value::try_from(profile)
-        .expect("serialize profile")
-        .as_table()
-        .expect("profile table")
-        .keys()
-        .cloned()
-        .collect();
-    let team_keys: std::collections::BTreeSet<_> = toml::Value::try_from(team)
-        .expect("serialize team")
-        .as_table()
-        .expect("team table")
-        .keys()
-        .cloned()
-        .collect();
-
-    assert_eq!(
-        profile_keys,
-        PROFILE_FIELDS
-            .iter()
-            .map(|field| (*field).to_owned())
-            .collect(),
-        "PROFILE_FIELDS drifted from Profile serialization"
-    );
-    assert_eq!(
-        team_keys,
-        TEAM_FIELDS
-            .iter()
-            .map(|field| (*field).to_owned())
-            .collect(),
-        "TEAM_FIELDS drifted from Team serialization"
-    );
 }
 
 #[test]
@@ -471,67 +370,6 @@ fn team_stages_parse_default_and_round_trip() {
         toml::from_str::<Team>(&serialized).expect("round trip"),
         declared
     );
-}
-
-#[test]
-fn set_profile_model_reminder_preserves_boolean_values_in_both_namespaces() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
-        dir.path().join("config.toml"),
-        dir.path().join("agents-home"),
-    ));
-    for namespace in ["agents", "subagents"] {
-        editor
-            .set(&format!("{namespace}.profiles.planner.agent"), "claude")
-            .expect("create profile");
-        let key = format!("{namespace}.profiles.planner.model-reminder");
-        assert!(matches!(
-            editor.get(Some(&key)),
-            Err(ConfigEditErr::UnsetKey { .. })
-        ));
-        for enabled in [false, true] {
-            editor
-                .set(&key, &enabled.to_string())
-                .expect("set model reminder");
-            assert_eq!(
-                editor.get(Some(&key)).expect("get model reminder"),
-                toml::Value::Boolean(enabled)
-            );
-        }
-        editor
-            .set(&key, "disabled")
-            .expect_err("model reminder must be boolean");
-        assert_eq!(
-            editor.get(Some(&key)).expect("unchanged model reminder"),
-            toml::Value::Boolean(true)
-        );
-    }
-}
-
-#[test]
-fn set_profile_auto_compact_round_trips_in_both_namespaces() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
-        dir.path().join("config.toml"),
-        dir.path().join("agents-home"),
-    ));
-    for namespace in ["agents", "subagents"] {
-        editor
-            .set(&format!("{namespace}.profiles.planner.agent"), "claude")
-            .expect("create profile");
-        let key = format!("{namespace}.profiles.planner.auto-compact");
-        assert!(matches!(
-            editor.get(Some(&key)),
-            Err(ConfigEditErr::UnsetKey { .. })
-        ));
-        for value in ["200k", "200000", "1m"] {
-            editor.set(&key, value).expect("set auto-compact");
-            assert_eq!(
-                editor.get(Some(&key)).expect("get auto-compact"),
-                toml::Value::String(value.to_owned())
-            );
-        }
-    }
 }
 
 #[test]
@@ -808,37 +646,54 @@ fn merge_uncomments_optional_example_under_its_section() {
 }
 
 #[test]
-fn merge_skips_keys_inside_commented_table_examples() {
-    let mut doc = Kind::Agents
-        .template()
-        .parse::<DocumentMut>()
-        .expect("template parses");
-    let mut skipped = Vec::new();
-    let kept = apply_merge_keys(
-        std::path::Path::new("agents.toml"),
-        &mut doc,
-        vec![PendingKey {
-            logical: parse_key("agents.teams.peer.leader").expect("key"),
-            value: Value::from("codex"),
-        }],
-        &mut skipped,
-        std::path::Path::new("missing-agents-home"),
-        std::path::Path::new("config.toml"),
-    );
-
-    assert_eq!(kept, 1);
-    assert!(skipped.is_empty());
-    let rendered = doc.to_string();
-    let peer = rendered.find("[agents.teams.peer]").expect("peer team");
-    let leader = rendered.find("leader = \"codex\"").expect("peer leader");
-    let review = rendered
-        .find("## [agents.teams.review]")
-        .expect("review example");
-    assert!(peer < leader && leader < review, "{rendered}");
+fn merge_skips_retired_definition_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[agents.teams.peer]\nleader = 'codex'").unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(&path, dir.path()));
+    let report = editor.merge_defaults().unwrap();
     assert!(
-        rendered.contains("## [agents.teams.review]\n## leader = \"planner\""),
-        "{rendered}"
+        report.files[0]
+            .skipped
+            .iter()
+            .any(|key| key.key == "agents.teams.peer.leader")
     );
+    assert!(!std::fs::read_to_string(path).unwrap().contains("leader ="));
+}
+
+#[test]
+fn set_definition_fields_names_the_markdown_source_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path(),
+    ));
+    for (key, tree) in [
+        ("agents.profiles.worker.model", "agents"),
+        ("subagents.profiles.worker.effort", "subagents"),
+        ("agents.teams.worker.leader", "teams"),
+    ] {
+        let error = editor.set(key, "value").unwrap_err();
+        assert!(
+            error.to_string().contains(&format!("{tree}/worker.md")),
+            "{error}"
+        );
+    }
+    assert!(!dir.path().join("config.toml").exists());
+}
+
+#[test]
+fn setup_merge_leaves_legacy_toml_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy = dir.path().join("profiles/old/agent.toml");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, "not = = toml").unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path(),
+    ));
+    assert_eq!(editor.merge_defaults().unwrap().files.len(), 3);
+    assert_eq!(std::fs::read_to_string(legacy).unwrap(), "not = = toml");
 }
 
 #[test]
@@ -1007,81 +862,6 @@ fn merge_defaults_removes_unknown_machine_keys() {
 }
 
 #[test]
-fn repair_agents_home_removes_unknown_keys_preserves_comments_and_is_idempotent() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let agents_home = dir.path().join("agents-home");
-    let profile_dir = agents_home
-        .join(AGENTS_HOME_PROFILES_SUBDIR)
-        .join("planner");
-    std::fs::create_dir_all(&profile_dir).expect("profile dir");
-    let profile_path = profile_dir.join(AGENT_FRAGMENT_FILE);
-    std::fs::write(
-        &profile_path,
-        "# keep this comment\n[agents.profiles.planner]\nagent = \"claude\"\nfuture = true\n\
-         [subagents.profiles.planner-child]\nagent = \"claude\"\neffort = \"high\"\n",
-    )
-    .expect("profile fragment");
-    let team_dir = agents_home.join(AGENTS_HOME_TEAMS_SUBDIR).join("forge");
-    std::fs::create_dir_all(&team_dir).expect("team dir");
-    let team_path = team_dir.join(TEAM_FRAGMENT_FILE);
-    std::fs::write(
-        &team_path,
-        "[agents.teams.forge]\nfuture = true\n\
-         [[agents.teams.forge.roles]]\nrole = \"planner\"\nprofile = \"planner\"\nextra = 1\n",
-    )
-    .expect("team fragment");
-    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
-        dir.path().join("config.toml"),
-        &agents_home,
-    ));
-
-    let first = editor.repair_agents_home().expect("repair");
-    let profile = std::fs::read_to_string(&profile_path).expect("read profile");
-    let team = std::fs::read_to_string(&team_path).expect("read team");
-    let second = editor.repair_agents_home().expect("repair again");
-
-    assert_eq!(first.files.len(), 2, "{first:?}");
-    assert!(profile.contains("# keep this comment"), "{profile}");
-    assert!(
-        profile.contains("[subagents.profiles.planner-child]"),
-        "{profile}"
-    );
-    assert!(profile.contains("effort = \"high\""), "{profile}");
-    assert!(!profile.contains("future = true"), "{profile}");
-    assert!(!team.contains("future = true"), "{team}");
-    assert!(!team.contains("extra = 1"), "{team}");
-    assert!(second.files.is_empty(), "{second:?}");
-}
-
-#[test]
-fn repair_agents_home_leaves_unparseable_fragments_untouched() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let agents_home = dir.path().join("agents-home");
-    let profile_dir = agents_home.join(AGENTS_HOME_PROFILES_SUBDIR).join("broken");
-    std::fs::create_dir_all(&profile_dir).expect("profile dir");
-    let path = profile_dir.join(AGENT_FRAGMENT_FILE);
-    std::fs::write(&path, "not = = toml").expect("broken fragment");
-    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
-        dir.path().join("config.toml"),
-        &agents_home,
-    ));
-
-    editor
-        .merge_defaults()
-        .expect("broken fragment does not block machine-file refresh");
-    let report = editor.repair_agents_home().expect("repair");
-
-    assert_eq!(report.files.len(), 1);
-    assert_eq!(report.files[0].path, path);
-    assert!(report.files[0].removed.is_empty());
-    assert!(report.files[0].error.is_some());
-    assert_eq!(
-        std::fs::read_to_string(&report.files[0].path).expect("unchanged"),
-        "not = = toml"
-    );
-}
-
-#[test]
 fn set_document_value_renders_inline_table_arrays_as_table_blocks() {
     let mut doc = r#"
 [agents.teams.forge]
@@ -1179,7 +959,7 @@ fn derived_set_keys_keep_legacy_surface() {
         );
     }
 
-    for key in ["nope", "theme.nope", "agents.profiles"] {
+    for key in ["nope", "theme.nope"] {
         let parsed = parse_key(key).expect("key");
         let err = validate_set_key(&test_files(), &parsed)
             .expect_err("legacy-invalid set key should stay rejected")

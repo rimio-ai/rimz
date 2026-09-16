@@ -74,11 +74,11 @@ pub struct AgentsConfig {
     pub attention: AttentionConfig,
     #[serde(default)]
     pub subagents: SubagentsConfig,
-    #[serde(default)]
+    #[serde(default, skip_deserializing)]
     pub profiles: ProfilesConfig,
     #[serde(default)]
     pub commands: CommandsConfig,
-    #[serde(default = "default_machine_teams")]
+    #[serde(default = "default_machine_teams", skip_deserializing)]
     pub teams: TeamsConfig,
 }
 
@@ -123,7 +123,7 @@ impl Default for SubagentsConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SubagentProfilesConfig {
-    #[serde(default)]
+    #[serde(default, skip_deserializing)]
     pub profiles: ProfilesConfig,
 }
 

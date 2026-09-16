@@ -37,11 +37,6 @@ fn template_defaults_deserialize_to_machine_defaults() {
     )
     .expect("write theme template");
     std::fs::write(
-        dir.path().join("agents.toml"),
-        uncomment_default_lines(Kind::Agents.template()),
-    )
-    .expect("write agents template");
-    std::fs::write(
         dir.path().join("loop.toml"),
         uncomment_default_lines(MachineConfig::template_loop()),
     )
@@ -60,8 +55,9 @@ fn template_defaults_deserialize_to_machine_defaults() {
 
 #[test]
 fn template_covers_serialized_default_leaves() {
-    let serialized = toml::to_string(&template_comparison_defaults(MachineConfig::default()))
-        .expect("serialize defaults");
+    let mut defaults = template_comparison_defaults(MachineConfig::default());
+    defaults.agents.teams.0.clear();
+    let serialized = toml::to_string(&defaults).expect("serialize defaults");
     let value: toml::Value = toml::from_str(&serialized).expect("parse serialized defaults");
     let mut expected = BTreeSet::new();
     collect_leaf_paths("", &value, &mut expected);
@@ -144,7 +140,6 @@ fn all_template_default_paths() -> BTreeSet<String> {
                     .unwrap_or(path)
             }),
     );
-    out.extend(template_default_paths(Kind::Agents.template()));
     out.extend(
         template_default_paths(MachineConfig::template_loop())
             .into_iter()
@@ -156,7 +151,7 @@ fn all_template_default_paths() -> BTreeSet<String> {
 fn uncomment_default_lines(template: &str) -> String {
     let mut out = String::new();
     for line in template.lines() {
-        if commented_default_key(line).is_some() {
+        if commented_default_key(line).is_some() || line.trim_start().starts_with("# [") {
             let trimmed = line.trim_start();
             let indent_len = line.len() - trimmed.len();
             out.push_str(&line[..indent_len]);
@@ -174,6 +169,9 @@ fn template_default_paths(template: &str) -> BTreeSet<String> {
     let mut section: Vec<String> = Vec::new();
     for line in template.lines() {
         let trimmed = line.trim();
+        let trimmed = trimmed
+            .strip_prefix("# [")
+            .map_or(trimmed, |_| &trimmed[2..]);
         if let Some(raw) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             section = raw.split('.').map(ToOwned::to_owned).collect();
             continue;

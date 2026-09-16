@@ -816,16 +816,10 @@ fn team_source(project_root: &Path, name: &str) -> Option<String> {
     {
         return Some(repo.display().to_string());
     }
-    let machine = rimz::config::MachineConfig::agents_path();
-    if file_defines_team(&machine, name) {
-        return Some(machine.display().to_string());
-    }
-    let fragment = rimz::disk::paths::agents_home()
-        .join("teams")
-        .join(name)
-        .join("team.toml");
-    if file_defines_team(&fragment, name) {
-        return Some(fragment.display().to_string());
+    if let Ok((_, sources)) = rimz::config::MachineConfig::load_with_agent_spec_sources()
+        && let Some(path) = sources.team(name)
+    {
+        return Some(path.display().to_string());
     }
     (name == "peer").then(|| "built-in".to_owned())
 }

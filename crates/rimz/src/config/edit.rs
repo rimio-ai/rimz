@@ -8,8 +8,8 @@ use crate::disk::atomic::write_bytes_atomically;
 
 use super::{
     AnimationRole, ConfigFileDiagnosis, GlyphRole, MachineConfig, MachineConfigFile,
-    MachineConfigFileKind, MachineConfigFiles, agents_home_fragment_paths, is_named_glyph_set,
-    parse_agents_fragment_unknown_keys, validate_glyph_cells, validate_glyph_source,
+    MachineConfigFileKind, MachineConfigFiles, is_named_glyph_set, validate_glyph_cells,
+    validate_glyph_source,
 };
 
 type Result<T> = std::result::Result<T, ConfigEditErr>;
@@ -233,78 +233,6 @@ impl ConfigEditor {
         Ok(MergeReport { files: outcomes })
     }
 
-    /// Remove ignored keys from every generated `~/.agents` fragment while
-    /// preserving the rest of each document's formatting and comments.
-    pub fn repair_agents_home(&self) -> Result<FragmentRepairReport> {
-        let mut files = Vec::new();
-        let discovered = agents_home_fragment_paths(self.files.agents_home());
-        files.extend(
-            discovered
-                .errors
-                .into_iter()
-                .map(|error| FragmentRepairOutcome {
-                    path: error.path().to_path_buf(),
-                    removed: Vec::new(),
-                    error: Some(error.to_string()),
-                }),
-        );
-        for path in discovered.paths {
-            let text = match std::fs::read_to_string(&path) {
-                Ok(text) => text,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    files.push(FragmentRepairOutcome {
-                        path,
-                        removed: Vec::new(),
-                        error: Some(error.to_string()),
-                    });
-                    continue;
-                }
-            };
-            let mut doc = match text.parse::<DocumentMut>() {
-                Ok(doc) => doc,
-                Err(error) => {
-                    files.push(FragmentRepairOutcome {
-                        path: path.clone(),
-                        removed: Vec::new(),
-                        error: Some(
-                            ConfigFileDiagnosis::from_toml_edit(&path, &text, &error).to_string(),
-                        ),
-                    });
-                    continue;
-                }
-            };
-            let unknown = match parse_agents_fragment_unknown_keys(&path, &text) {
-                Ok(unknown) => unknown,
-                Err(error) => {
-                    files.push(FragmentRepairOutcome {
-                        path: path.clone(),
-                        removed: Vec::new(),
-                        error: Some(error.to_string()),
-                    });
-                    continue;
-                }
-            };
-            let mut removed = Vec::new();
-            for key in unknown {
-                let segments: Vec<_> = key.split('.').collect();
-                if remove_table_path(doc.as_table_mut(), &segments) {
-                    removed.push(key);
-                }
-            }
-            if removed.is_empty() {
-                continue;
-            }
-            write(&path, doc.to_string().as_bytes())?;
-            files.push(FragmentRepairOutcome {
-                path,
-                removed,
-                error: None,
-            });
-        }
-        Ok(FragmentRepairReport { files })
-    }
-
     fn merge_one(&self, kind: MachineConfigFileKind) -> Result<FileMergeOutcome> {
         let file = self.files.file(kind);
         let path = file.path();
@@ -380,102 +308,6 @@ pub enum MergeAction {
 pub struct SkippedKey {
     pub key: String,
     pub reason: String,
-}
-
-#[derive(Debug, Default)]
-pub struct FragmentRepairReport {
-    pub files: Vec<FragmentRepairOutcome>,
-}
-
-#[derive(Debug)]
-pub struct FragmentRepairOutcome {
-    pub path: PathBuf,
-    pub removed: Vec<String>,
-    pub error: Option<String>,
-}
-
-fn remove_table_path(table: &mut Table, path: &[&str]) -> bool {
-    let Some((segment, rest)) = path.split_first() else {
-        return false;
-    };
-    if rest.is_empty() {
-        return table.remove(segment).is_some();
-    }
-    table
-        .get_mut(segment)
-        .is_some_and(|item| remove_item_path(item, rest))
-}
-
-fn remove_item_path(item: &mut Item, path: &[&str]) -> bool {
-    match item {
-        Item::Table(table) => remove_table_path(table, path),
-        Item::ArrayOfTables(tables) => {
-            if let Some(index) = path
-                .first()
-                .and_then(|segment| segment.parse::<usize>().ok())
-            {
-                return tables
-                    .get_mut(index)
-                    .is_some_and(|table| remove_table_path(table, &path[1..]));
-            }
-            let rest = path.strip_prefix(&["?"]).unwrap_or(path);
-            tables
-                .iter_mut()
-                .map(|table| remove_table_path(table, rest))
-                .fold(false, |removed, current| removed | current)
-        }
-        Item::Value(Value::InlineTable(table)) => remove_inline_path(table, path),
-        Item::Value(Value::Array(array)) => {
-            if let Some(index) = path
-                .first()
-                .and_then(|segment| segment.parse::<usize>().ok())
-            {
-                return array
-                    .get_mut(index)
-                    .is_some_and(|value| remove_value_path(value, &path[1..]));
-            }
-            let rest = path.strip_prefix(&["?"]).unwrap_or(path);
-            array
-                .iter_mut()
-                .map(|value| remove_value_path(value, rest))
-                .fold(false, |removed, current| removed | current)
-        }
-        Item::None | Item::Value(_) => false,
-    }
-}
-
-fn remove_inline_path(table: &mut InlineTable, path: &[&str]) -> bool {
-    let Some((segment, rest)) = path.split_first() else {
-        return false;
-    };
-    if rest.is_empty() {
-        return table.remove(segment).is_some();
-    }
-    table
-        .get_mut(segment)
-        .is_some_and(|value| remove_value_path(value, rest))
-}
-
-fn remove_value_path(value: &mut Value, path: &[&str]) -> bool {
-    match value {
-        Value::InlineTable(table) => remove_inline_path(table, path),
-        Value::Array(array) => {
-            if let Some(index) = path
-                .first()
-                .and_then(|segment| segment.parse::<usize>().ok())
-            {
-                return array
-                    .get_mut(index)
-                    .is_some_and(|value| remove_value_path(value, &path[1..]));
-            }
-            let rest = path.strip_prefix(&["?"]).unwrap_or(path);
-            array
-                .iter_mut()
-                .map(|value| remove_value_path(value, rest))
-                .fold(false, |removed, current| removed | current)
-        }
-        _ => false,
-    }
 }
 
 fn validate_merged_text(path: &Path, text: &str, agents_home: &Path) -> Result<()> {
@@ -836,7 +668,7 @@ fn as_toml_value(value: &Value) -> Option<toml::Value> {
 fn file_for_key(files: &MachineConfigFiles, path: &[String]) -> MachineConfigFile {
     let kind = match path.first().map(String::as_str) {
         Some("theme") => MachineConfigFileKind::Theme,
-        Some("agents" | "subagents") => MachineConfigFileKind::Agents,
+        Some("agents" | "subagents") => MachineConfigFileKind::Core,
         Some("loop") => MachineConfigFileKind::Loop,
         _ => MachineConfigFileKind::Core,
     };
@@ -882,6 +714,25 @@ fn parse_key(key: &str) -> Result<Vec<String>> {
 }
 
 fn validate_set_key(files: &MachineConfigFiles, path: &[String]) -> Result<()> {
+    if let [root, table, rest @ ..] = path {
+        let tree = match (root.as_str(), table.as_str()) {
+            ("agents", "profiles") => Some("agents"),
+            ("agents", "teams") => Some("teams"),
+            ("subagents", "profiles") => Some("subagents"),
+            _ => None,
+        };
+        if let Some(tree) = tree {
+            let name = rest.first().map_or("<name>", String::as_str);
+            return Err(ConfigEditErr::InvalidKey(format!(
+                "edit {}",
+                files
+                    .agents_home()
+                    .join(tree)
+                    .join(format!("{name}.md"))
+                    .display()
+            )));
+        }
+    }
     reject_reserved_set_key(path, files.core_path())?;
     let file = file_for_key(files, path);
     let doc_key = document_key_for_set(path);
@@ -959,8 +810,7 @@ fn is_known_get_key(files: &MachineConfigFiles, path: &[String]) -> Result<bool>
 }
 
 fn is_unknown_get_shape(path: &[String]) -> bool {
-    matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && !PROFILE_FIELDS.contains(&field.as_str()))
-        || matches!(path, [root, teams, _, field] if root == "agents" && teams == "teams" && !TEAM_FIELDS.contains(&field.as_str()))
+    matches!(path, [root, child, ..] if (root == "agents" && matches!(child.as_str(), "profiles" | "teams")) || (root == "subagents" && child == "profiles"))
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
         || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && field != "home")
@@ -1029,8 +879,6 @@ fn is_disallowed_set_container(path: &[String]) -> bool {
         || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "teams" | "commands"))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(path, [root, child, _] if root == "agents" && matches!(child.as_str(), "profiles" | "teams"))
-        || matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && !PROFILE_FIELDS.contains(&field.as_str()))
-        || matches!(path, [root, teams, _, field] if root == "agents" && teams == "teams" && !TEAM_FIELDS.contains(&field.as_str()))
         || matches!(path, [root, child] if root == "theme" && matches!(child.as_str(), "display" | "colors" | "providers" | "animations"))
         || matches!(path, [root, display, child] if root == "theme" && display == "display" && matches!(child.as_str(), "context_meter" | "budget_bar" | "highlight_steps"))
         || matches!(path, [root, display, budget, child] if root == "theme" && display == "display" && budget == "budget_bar" && child == "burn_rate")
@@ -1068,31 +916,6 @@ fn is_animation_role(role: &str) -> bool {
 
 const CONTEXT_METER_BANDS: &[&str] = &["green", "yellow", "amber", "red"];
 const ANIMATION_FIELDS: &[&str] = &["frames", "color", "effect", "speed"];
-const PROFILE_FIELDS: &[&str] = &[
-    "agent",
-    "skills",
-    "description",
-    "subagents",
-    "model-reminder",
-    "mode",
-    "model",
-    "effort",
-    "budget",
-    "auto-compact",
-    "system-prompt-file",
-    "append-system-prompt-files",
-    "args",
-];
-const TEAM_FIELDS: &[&str] = &[
-    "roles",
-    "leader",
-    "layout",
-    "scratch-files",
-    "stages",
-    "consensus-file",
-    "append-system-prompt-files",
-];
-
 fn parse_edit_value(raw: &str) -> Value {
     raw.parse::<Value>()
         .unwrap_or_else(|_| Value::from(raw.to_owned()))
