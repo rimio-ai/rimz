@@ -121,7 +121,9 @@ Two rules keep the palette honest: `alarm` red marks danger, and one warm `cauti
 | `width_percent` | optional fixed sidebar share of each view (clamped to 10-90 at use); unset uses 30% above 240 columns or when pets are enabled, and 25% otherwise; applies at the next convergence unless a room-wide `a`/`d` selection is present |
 | `max_cols` | live cap on the configured sidebar share; applies at the next convergence, while room-wide `a`/`d` selections may exceed it |
 | `scrollbar` | `auto` shows the overflow indicator only while the view moves; `always` / `never` pin it |
-| `card_density` | `auto` keeps the standard card; `expanded` shows every card's subagents; `compact` trims resting cards |
+| `card_density` | `auto` keeps the standard card; `expanded` opens every card's subagents and waits; `compact` trims resting cards |
+| `recent_subagent_secs` | how long, in seconds, a finished subagent stays listed in an open card before it folds behind `+K older` (default 900); `0` folds every finished child |
+| `max_recent_subagents` | most finished subagents an open card lists, newest first, before the rest fold behind `+K older` (default 5); running subagents are never capped |
 | `provider_tabs` | how the dashboard stacks vs. tabs provider blocks (`auto` / `always` / `never`) |
 | `provider_list` | which providers appear and in what order; by default usage ranks running, recently used, then recently logged-in providers, while `"all"` expands the rest in that order |
 | `max_provider_blocks` | cap on *stacked* blocks (a tabbed dashboard shows all) |
@@ -134,6 +136,8 @@ width_percent = 30 # optional fixed override; omit for the width-keyed default
 max_cols = 72
 scrollbar = "auto"
 card_density = "auto"
+recent_subagent_secs = 900
+max_recent_subagents = 5
 provider_tabs = "auto"
 ```
 
