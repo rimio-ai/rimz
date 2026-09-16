@@ -175,9 +175,9 @@ fn profile_cards(
     out: &mut impl Write,
 ) -> std::io::Result<()> {
     if reports.is_empty() {
-        let profile_section = match listing {
-            ProfileListing::Agents { .. } => "agents.profiles",
-            ProfileListing::Subagents => "subagents.profiles",
+        let profile_directory = match listing {
+            ProfileListing::Agents { .. } => "agents",
+            ProfileListing::Subagents => "subagents",
             ProfileListing::Teams => {
                 writeln!(out, "No team profiles configured.")?;
                 writeln!(out, "Install a team with `rimz teams install forge`.")?;
@@ -187,7 +187,7 @@ fn profile_cards(
         writeln!(out, "No profiles or commands configured.")?;
         writeln!(
             out,
-            "Add one under [{profile_section}] or [agents.commands]."
+            "Add {profile_directory}/<name>.md in your agents home, or [agents.commands] in config.toml."
         )?;
         if let ProfileListing::Agents {
             team_profiles_hidden: true,
@@ -247,7 +247,7 @@ mod tests {
                 model: Some("gpt-5.6".to_owned()),
                 effort: Some("high".to_owned()),
                 description: Some("Plans the work".to_owned()),
-                path: Some(PathBuf::from("/tmp/rimz/agents.toml")),
+                path: Some(PathBuf::from("/tmp/.agents/agents/planner.md")),
             },
             AgentProfileReport {
                 name: "reviewer".to_owned(),
@@ -277,7 +277,7 @@ mod tests {
                 model: None,
                 effort: None,
                 description: None,
-                path: Some(PathBuf::from("/tmp/.agents/profiles/lint/agent.toml")),
+                path: Some(PathBuf::from("/tmp/rimz/config.toml")),
             },
         ];
         let mut output = Vec::new();
@@ -294,7 +294,7 @@ mod tests {
         insta::assert_snapshot!(String::from_utf8(output).expect("utf-8"), @r"
         planner — codex · gpt-5.6 · high
           Plans the work
-          /tmp/rimz/agents.toml
+          /tmp/.agents/agents/planner.md
 
         reviewer — claude · max
           Reviews the result
@@ -302,7 +302,7 @@ mod tests {
         coder — codex · gpt-5.6
 
         lint — command
-          /tmp/.agents/profiles/lint/agent.toml
+          /tmp/rimz/config.toml
         ");
     }
 
@@ -316,11 +316,11 @@ mod tests {
             model: None,
             effort: None,
             description: None,
-            path: Some(PathBuf::from("/tmp/rimz/agents.toml")),
+            path: Some(PathBuf::from("/tmp/.agents/agents/planner.md")),
         }];
 
         let json = serde_json::to_value(&reports).expect("serialize profile reports with paths");
-        assert_eq!(json[0]["path"], "/tmp/rimz/agents.toml");
+        assert_eq!(json[0]["path"], "/tmp/.agents/agents/planner.md");
 
         apply_path_visibility(&mut reports, false);
 
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(output).expect("utf-8"),
             "No profiles or commands configured.\n\
-             Add one under [subagents.profiles] or [agents.commands].\n"
+             Add subagents/<name>.md in your agents home, or [agents.commands] in config.toml.\n"
         );
     }
 
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(output).expect("utf-8"),
             "No profiles or commands configured.\n\
-             Add one under [agents.profiles] or [agents.commands].\n\
+             Add agents/<name>.md in your agents home, or [agents.commands] in config.toml.\n\
              Team role profiles are hidden; list them with `rimz teams profiles`.\n"
         );
     }

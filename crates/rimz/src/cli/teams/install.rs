@@ -25,7 +25,7 @@ pub(super) struct InstallArgs {
     /// Release tag or branch to fetch.
     #[arg(long = "ref", value_name = "TAG|BRANCH")]
     reference: Option<String>,
-    /// Replace files in an existing bundle directory.
+    /// Replace existing team and agent definition files.
     #[arg(long, requires = "name")]
     force: bool,
 }
@@ -81,8 +81,35 @@ pub(super) fn run(args: InstallArgs) -> Result<()> {
             error.into()
         }
     })?;
-    let files = download_bundle(&agent, entries)?;
-    let dir = rimz::disk::paths::agents_home().join("teams").join(name);
+    let mut files = download_bundle(
+        &agent,
+        entries
+            .into_iter()
+            .filter(|entry| entry.name == format!("{name}.md"))
+            .collect(),
+    )?;
+    let seats = seated_agents(&files[0].1)?;
+    files[0].0 = format!("teams/{name}.md");
+    let mut url = contents_url(Some(name), reference)?;
+    url.path_segments_mut()
+        .map_err(|()| anyhow::anyhow!("invalid bundle URL"))?
+        .push("agents");
+    let agents = download_bundle(&agent, fetch_entries(&agent, url)?)?;
+    for seat in &seats {
+        if !agents.iter().any(|(file, _)| file == &format!("{seat}.md")) {
+            bail!("team bundle is missing agent `{seat}`");
+        }
+    }
+    let dir = rimz::disk::paths::agents_home();
+    // A kind base is the machine's house prompt for every profile of that kind:
+    // the bundle's copy fills a missing one and never replaces an existing one.
+    files.extend(agents.into_iter().filter_map(|(file, text)| {
+        let stem = file.strip_suffix(".md")?;
+        let seated = seats.iter().any(|seat| seat == stem);
+        let missing_base = rimz::agents::find_definition(stem).is_some()
+            && !dir.join("agents").join(&file).exists();
+        (seated || missing_base).then(|| (format!("agents/{file}"), text))
+    }));
     write_bundle(&dir, &files, args.force)?;
 
     let mut out = render::out();
@@ -243,34 +270,61 @@ fn validate_file_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+fn seated_agents(text: &str) -> Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Team {
+        roles: Vec<Role>,
+    }
+    #[derive(Deserialize)]
+    struct Role {
+        agent: String,
+    }
+    let mut lines = text.lines();
+    if lines.next() != Some("---") {
+        bail!("team definition is missing YAML frontmatter");
+    }
+    let mut yaml = String::new();
+    let mut closed = false;
+    for line in lines {
+        if line == "---" {
+            closed = true;
+            break;
+        }
+        yaml.push_str(line);
+        yaml.push('\n');
+    }
+    if !closed {
+        bail!("team definition has unclosed YAML frontmatter");
+    }
+    let team: Team = serde_saphyr::from_str(&yaml).context("parsing team frontmatter")?;
+    for role in &team.roles {
+        validate_bundle_name(&role.agent)?;
+    }
+    Ok(team.roles.into_iter().map(|role| role.agent).collect())
+}
+
 fn write_bundle(dir: &Path, files: &[(String, String)], force: bool) -> Result<()> {
     for (name, _) in files {
-        validate_file_name(name)?;
-    }
-    match std::fs::symlink_metadata(dir) {
-        Ok(_) if !force => {
+        let (namespace, file) = name
+            .split_once('/')
+            .context("bundle file needs a namespace")?;
+        if !matches!(namespace, "teams" | "agents") {
+            bail!("invalid bundle namespace `{namespace}`");
+        }
+        validate_file_name(file)?;
+        if !file.ends_with(".md") {
+            bail!("bundle definition must be Markdown: {file}");
+        }
+        if dir.join(name).symlink_metadata().is_ok() && !force {
             bail!(
-                "team bundle directory {} already exists; pass --force to replace its files",
-                dir.display()
-            )
-        }
-        Ok(metadata) if !metadata.is_dir() => {
-            bail!(
-                "team bundle destination {} is not a directory",
-                dir.display()
-            )
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir_all(dir)
-                .with_context(|| format!("creating team bundle directory {}", dir.display()))?;
-        }
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("checking team bundle directory {}", dir.display()));
+                "{} already exists; pass --force to replace it",
+                dir.join(name).display()
+            );
         }
     }
     for (name, contents) in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().context("bundle file needs a parent")?)?;
         rimz::disk::atomic::write_bytes_atomically(&dir.join(name), contents.as_bytes())
             .with_context(|| format!("writing team bundle file {name}"))?;
     }
@@ -283,8 +337,8 @@ mod tests {
 
     fn files(contents: &str) -> Vec<(String, String)> {
         vec![
-            ("team.toml".to_owned(), contents.to_owned()),
-            ("planner.md".to_owned(), "plan".to_owned()),
+            ("teams/forge.md".to_owned(), contents.to_owned()),
+            ("agents/forge-planner.md".to_owned(), "plan".to_owned()),
         ]
     }
 
@@ -313,20 +367,20 @@ mod tests {
         let dir = root.path().join("forge");
         write_bundle(&dir, &files("one"), false).unwrap();
         assert_eq!(
-            std::fs::read_to_string(dir.join("team.toml")).unwrap(),
+            std::fs::read_to_string(dir.join("teams/forge.md")).unwrap(),
             "one"
         );
 
         let error = write_bundle(&dir, &files("two"), false).unwrap_err();
         assert!(error.to_string().contains("--force"));
         assert_eq!(
-            std::fs::read_to_string(dir.join("team.toml")).unwrap(),
+            std::fs::read_to_string(dir.join("teams/forge.md")).unwrap(),
             "one"
         );
 
         write_bundle(&dir, &files("two"), true).unwrap();
         assert_eq!(
-            std::fs::read_to_string(dir.join("team.toml")).unwrap(),
+            std::fs::read_to_string(dir.join("teams/forge.md")).unwrap(),
             "two"
         );
     }
@@ -348,5 +402,58 @@ mod tests {
             .is_err()
         );
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn existing_agent_refuses_the_entire_bundle_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        std::fs::write(root.path().join("agents/forge-planner.md"), "mine").unwrap();
+        assert!(write_bundle(root.path(), &files("team"), false).is_err());
+        assert!(!root.path().join("teams/forge.md").exists());
+    }
+
+    #[test]
+    fn example_bundles_load_without_external_definitions() {
+        let bundles = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/teams");
+        for entry in std::fs::read_dir(bundles).unwrap() {
+            let entry = entry.unwrap();
+            if !entry.file_type().unwrap().is_dir() {
+                continue;
+            }
+            let name = entry.file_name().into_string().unwrap();
+            let text = std::fs::read_to_string(entry.path().join(format!("{name}.md"))).unwrap();
+            let seats = seated_agents(&text).unwrap();
+            let mut files = vec![(format!("teams/{name}.md"), text)];
+            for agent in std::fs::read_dir(entry.path().join("agents")).unwrap() {
+                let agent = agent.unwrap();
+                files.push((
+                    format!("agents/{}", agent.file_name().to_str().unwrap()),
+                    std::fs::read_to_string(agent.path()).unwrap(),
+                ));
+            }
+            let root = tempfile::tempdir().unwrap();
+            write_bundle(root.path(), &files, false).unwrap();
+            let loaded = rimz::config::definitions::load(
+                root.path(),
+                rimz::config::definitions::SkillLibraryCheck::Check(&root.path().join("skills")),
+            );
+            assert!(loaded.errors.is_empty(), "{name}: {:?}", loaded.errors);
+            assert_eq!(loaded.teams.0[&name].roles.len(), seats.len());
+            for seat in seats {
+                assert!(loaded.agent_profiles.0.contains_key(&seat));
+            }
+        }
+    }
+
+    #[test]
+    fn seats_require_closed_frontmatter_and_safe_agent_names() {
+        assert_eq!(
+            seated_agents("---\nroles: [{agent: forge-coder}]\n---\nbody").unwrap(),
+            ["forge-coder"]
+        );
+        assert!(seated_agents("roles: []").is_err());
+        assert!(seated_agents("---\nroles: []").is_err());
+        assert!(seated_agents("---\nroles: [{agent: '../outside'}]\n---").is_err());
     }
 }

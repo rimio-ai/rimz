@@ -1,6 +1,6 @@
 # Teams
 
-Copy-ready RimZ team fragments: named agent teams you drop into `~/.agents/teams/` and launch with one word. A team gives each role its own context window, model, and system prompt, cooperating over messages in a shared worktree; the concept and the config shape live in the [teams guide](../../docs/guide/teams.md).
+Copy-ready RimZ Markdown bundles: team definitions go in `~/.agents/teams/`, agent definitions in `~/.agents/agents/`. A team gives each role its own context window, model, and system prompt, cooperating over messages in a shared worktree; the concept and the config shape live in the [teams guide](../../docs/guide/teams.md).
 
 Three teams ship, one per shape of work:
 
@@ -16,7 +16,7 @@ Forge is the team RimZ builds itself with; mill and spot are the same machinery 
 
 The three fragments differ in their roles and their pipeline. Everything below is common to all of them, so learning one teaches the others.
 
-**A pipeline of stages.** `team.toml` declares an ordered `stages` list, and each role owns the stages its prompt names. A stage is an obligation to leave specific information behind, not a turn: the owner does the work, writes its product, then hands off. `rimz teams show <team>` displays the pipeline and brackets the current stage.
+**A pipeline of stages.** `<team>.md` declares an ordered `stages` list in its YAML frontmatter, and each role owns the stages its prompt names. A stage is an obligation to leave specific information behind, not a turn: the owner does the work, writes its product, then hands off. `rimz teams show <team>` displays the pipeline and brackets the current stage.
 
 **Memory in files, never in the chat.** Two kinds of file live at the worktree root, both git-excluded by default for a staged team and never committed — no `scratch-files` setting needed:
 
@@ -88,22 +88,20 @@ rimz teams install spot
 From a checkout of this repository, copy a fragment when you want that checkout's version:
 
 ```sh
-mkdir -p ~/.agents/teams
-cp -r examples/teams/spot ~/.agents/teams/
+mkdir -p ~/.agents/{teams,agents}
+cp -n examples/teams/spot/spot.md ~/.agents/teams/
+cp -n examples/teams/spot/agents/*.md ~/.agents/agents/
+rimz agents validate
 ```
 
-The plain install preserves a same-named directory in `~/.agents/teams`; pass `--force` to replace its files. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names. To try a team straight from this checkout without installing anything, point RimZ's agent library at it:
-
-```sh
-RIMZ_AGENTS_HOME="$PWD/examples" rimz teams spot -w fix-x
-```
+The plain install refuses any existing target definition; pass `--force` to replace it. Bundles include `claude.md` and `codex.md` base prompts as well as team-prefixed agent definitions, so review existing bases before replacing them. The copy commands above preserve existing files too.
 
 **Prerequisites:**
 
 - RimZ installed with hooks set up ([installation](../../docs/guide/installation.md) · [setup](../../docs/guide/setup.md)).
 - The `claude` and `codex` CLIs on `PATH`, each logged in. Spot needs both too: its coder runs Codex, its reviewer Claude.
 - The crafts name helper skills for the mechanical steps — `commit`, `rebase`, `fix-ci`, `branch-diff`, `pr`, and `reflect`. They are not shipped here. Each mention states the outcome as well as the skill, so a role without one does the step with plain `git` or `gh`; install your own equivalents to make those steps sharper.
-- Subagent delegation is optional. The prompts ask for exploration, design, and defect-hunting children where the work parallelizes, and `rimz subagents profiles` tells the role what is actually configured — with no `[subagents.profiles]` entries, each role does that reading itself.
+- Subagent delegation is optional. The prompts ask for exploration, design, and defect-hunting children where the work parallelizes, and `rimz subagents profiles` tells the role what is actually configured — with no `subagents/*.md` definitions, each role does that reading itself.
 
 ## Launch and work
 
@@ -120,11 +118,11 @@ The `ci.failed` binding is armed when the coder registers and is scoped to its w
 
 ## Customize
 
-`team.toml` is the tuning surface: swap models, change effort, adjust the Codex feature flags in a role's `args`, or rename the pipeline's stages. The role prompts do the heavy lifting, so renaming a role, dropping one, or adding a fourth means editing the prompts, `pipeline.md`, and the `[[agents.teams.<name>.roles]]` list together — the prompts carry their own roster table, and a role's `owns` column must keep matching `stages`.
+`<team>.md` is the tuning surface: swap models, change effort or tools in a role's frontmatter, or rename the pipeline's stages. The role prompts do the heavy lifting, so renaming a role, dropping one, or adding a fourth means editing the agent bodies, team body, and `roles` list together — the prompts carry their own roster table, and a role's `owns` column must keep matching `stages`.
 
-The team consensus is built into RimZ for staged teams; replace it with `consensus-file = "<path>"` under `[agents.teams.<name>]`. The pipeline lives in `pipeline.md`, declared in the same team table with `append-system-prompt-files = ["pipeline.md"]`, after the consensus. The default memory patterns are `["/blackboard.md", "/*-notes.md"]`; `scratch-files` in that table overrides them, and `scratch-files = []` means none.
+The team consensus is built into RimZ. The pipeline is the team definition's Markdown body, appended after the consensus. The memory patterns are `["/blackboard.md", "/*-notes.md"]`.
 
-Any of the three also makes a solid skeleton for a team of your own: copy the directory under a new name, rename the team in `team.toml`, and reshape the roles to how your work splits. The full config shape is in [configuration → profiles and teams](../../docs/guide/configuration.md#agent-profiles-commands-and-teams).
+Any of the three also makes a solid skeleton for a team of your own: copy the bundle, rename the team and its agent definitions, and reshape the roles to how your work splits. Validate it with `rimz agents validate`.
 
 ## See also
 

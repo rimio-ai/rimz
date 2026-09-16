@@ -1,3 +1,22 @@
+---
+name: forge
+leader: planner
+layout: planner,coder+reviewer
+stages: ["Explore","Plan","Implement","Review","Submit","Reflect"]
+roles:
+  - agent: forge-planner
+    role: planner
+    owns: ["Explore","Plan","Reflect"]
+    flip-compact: 180k
+  - agent: forge-coder
+    role: coder
+    owns: ["Implement"]
+    signals: [ci.failed]
+  - agent: forge-reviewer
+    role: reviewer
+    owns: ["Review","Submit"]
+---
+
 # The pipeline
 
 Explore → Plan → Implement → Review → Submit → Reflect, owners per the roster.

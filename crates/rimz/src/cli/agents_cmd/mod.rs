@@ -32,6 +32,7 @@ mod show;
 mod stop;
 mod subagent_report;
 mod top;
+mod validate;
 mod wait;
 
 use std::collections::BTreeMap;
@@ -318,6 +319,12 @@ impl AgentsArgs {
 
 #[derive(Debug, Subcommand)]
 enum AgentsSubcmd {
+    /// Validate the machine's Markdown agent, subagent, and team definitions.
+    Validate {
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Launch an agent, inline layout, configured profile, or team.
     #[command(
         group = clap::ArgGroup::new("launch-spec")
@@ -596,6 +603,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         json,
     } = args;
     match command {
+        Some(AgentsSubcmd::Validate { json }) => return validate::run(json),
         Some(AgentsSubcmd::Launch(launch)) => {
             // The required `launch-spec` Clap group guarantees an explicit launch spec.
             let spec = launch

@@ -1,3 +1,21 @@
+---
+name: mill
+leader: architect
+layout: architect,coder+reviewer
+stages: ["Explore","Plan","Implement","Review","Submit","Reflect"]
+roles:
+  - agent: mill-architect
+    role: architect
+    owns: ["Explore","Plan","Reflect"]
+  - agent: mill-coder
+    role: coder
+    owns: ["Implement"]
+    signals: [ci.failed]
+  - agent: mill-reviewer
+    role: reviewer
+    owns: ["Review","Submit"]
+---
+
 # The pipeline
 
 Explore → Plan → Implement → Review → Submit → Reflect, owners per the roster.
