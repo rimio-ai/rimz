@@ -267,6 +267,8 @@ fn catalog_merges_definition_and_live_instance() {
     let mut reviewer = definition.roles[0].clone();
     reviewer.role = "reviewer".to_owned();
     definition.roles.push(reviewer);
+    definition.roles[0].owns = vec!["Explore".to_owned(), "Plan".to_owned()];
+    definition.roles[1].owns = vec!["Review".to_owned()];
     definition.roles[0]
         .signals
         .push(rimz::config::TeamSignalBinding {
@@ -314,6 +316,10 @@ fn catalog_merges_definition_and_live_instance() {
     assert!(reports[0].valid);
     assert_eq!(reports[0].roles[0].model.as_deref(), Some("fable"));
     assert_eq!(reports[0].instances[0].channel, "feat-x");
+    assert_eq!(
+        reports[0].instances[0].stages,
+        ["Explore", "Plan", "Review"]
+    );
     assert_eq!(
         reports[0].instances[0]
             .members

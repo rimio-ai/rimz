@@ -631,7 +631,7 @@ fn live_instances(
                     Isolation::Sandbox => catalog.tmp_dir.to_path_buf(),
                     Isolation::Host => PathBuf::from("/tmp"),
                 },
-                stages: team.map(|team| team.stages.clone()).unwrap_or_default(),
+                stages: team.map(Team::pipeline_stages).unwrap_or_default(),
                 stage,
                 pr,
                 memory,

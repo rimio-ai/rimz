@@ -484,6 +484,7 @@ fn flip_bootstraps_a_missing_board_or_stage_without_losing_prose() {
         } else {
             insta::assert_snapshot!(output.replace(fixture.env.project_root.file_name().unwrap().to_str().unwrap(), "<worktree>"), @"
             Opened Review by @user  (forge#feature-team · <worktree>)
+              Build → [Review] → Done
               note     Start the review.
               owner    @reviewer, woken at its next turn boundary
             ");
