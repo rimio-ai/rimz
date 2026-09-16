@@ -18,11 +18,11 @@ expression: strip_sgr(&ansi)
 ▌  ⧉ subagents (2)                              $0.46▐
 ▌    ⠁ Plan — run focused nextest               $0.12▐
 ▌      ◇ 18k · Haiku · xhigh                    ◔  3m▐
-▌  +1 more                                           ▐
+▌    ✓ Explore — audit auth watcher chang ◔ <1m $0.34▐
+▌      ◇ 22k · Haiku · xhigh                         ▐
 
  ⑂ remote-link              ⇡1 ⇣1  +1240 -380  ⑂ main
  ? codex · GPT 5.5 · xhigh · 272k               $3.71
-   approve SSH link retry
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

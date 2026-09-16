@@ -17,12 +17,12 @@ expression: strip_sgr(&ansi)
 ▌   subagents (2)                                   ▐
 ▌    ⠁ Plan — run focused nextest                    ▐
 ▌       18k · Haiku · xhigh                    󰪞  3m▐
-▌  +1 more                                           ▐
+▌     Explore — audit auth watcher changes     󰪞 <1m▐
+▌       22k · Haiku · xhigh                         ▐
 ▎⢄ claude · Opus 4.8 · xhigh · 1m              $12.62🮇
 ▎  audit provider spend                              🮇
 ▎  󰕰 ━━━━━━━━━━━━━━━━━╺━╺──────────────────────   29%🮇
 ▎  󰿦 296k · 󱥸 254k  29k  11k  37k             󰪞 6m🮇
-▎   subagents (2)                              $0.46🮇
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 
