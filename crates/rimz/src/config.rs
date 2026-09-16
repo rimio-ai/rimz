@@ -32,6 +32,7 @@ mod animation;
 mod attention;
 mod color;
 mod daemon;
+pub mod definitions;
 mod diagnosis;
 mod display;
 mod edit;
