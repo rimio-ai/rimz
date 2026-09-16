@@ -128,6 +128,31 @@ fn start_refuses_sandbox_without_bwrap() {
 }
 
 #[test]
+fn start_refuses_a_broken_definition_chain_naming_its_file() {
+    let env = Env::new();
+    let broken = crate::common::write_definition(
+        &env,
+        "agents",
+        "broken",
+        "description: Broken\nagent: missing-parent",
+        "",
+    );
+    let mux_log = env.home_root.join("zellij.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "start", "--no-attach"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
+        .bounded_output()
+        .expect("run start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains(&broken.display().to_string()), "{stderr}");
+    assert!(stderr.contains("missing-parent"), "{stderr}");
+    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
+}
+
+#[test]
 fn singular_agent_is_unknown_subcommand_with_agents_suggestion() {
     let env = Env::new();
 
