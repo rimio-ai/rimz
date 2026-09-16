@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::{PendingWait, PendingWaitTrigger};
 
 #[test]
 fn delegation_bands_keep_live_children_and_fold_older_ones() {
@@ -36,7 +37,21 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
         child.last_seen = child.last_activity;
         agents.push(child);
     }
-    let snapshot = snapshot_with(agents);
+    let mut snapshot = snapshot_with(agents);
+    // A pending wait sits between the recent band and the folded tail, so the
+    // history rows must land after it.
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .pending_waits
+        .push(PendingWait {
+            name: "deploy".to_owned(),
+            trigger: PendingWaitTrigger::Signal {
+                selector: "deploy.done".to_owned(),
+                deadline: None,
+            },
+            armed_at: Some(fixed_now()),
+        });
     let row = &snapshot.worktree_groups[0].rows[0];
     let turn = row.as_agent().unwrap().user_turn_started_at;
     let entries = |rendered: &str| {
@@ -81,7 +96,20 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
         ]
     );
     assert!(selected.contains("+2 older"), "{selected}");
-    assert!(entries(history).starts_with(&entries(selected)));
+    let tail = selected
+        .lines()
+        .position(|line| line.contains("+2 older"))
+        .expect("folded tail");
+    assert!(
+        selected
+            .lines()
+            .take(tail)
+            .any(|line| line.contains("deploy"))
+    );
+    assert!(
+        history.lines().take(tail).eq(selected.lines().take(tail)),
+        "history must only append below the tail:\n{selected}\n{history}"
+    );
     assert_eq!(&entries(history)[7..], ["task-3", "task-6"]);
     assert!(!history.contains("older"), "{history}");
     for screen in [unselected, closed] {

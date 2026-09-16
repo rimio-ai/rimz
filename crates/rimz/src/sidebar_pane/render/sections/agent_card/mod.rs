@@ -86,7 +86,7 @@ pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &Si
 }
 
 /// Whether this card's delegation entries are on screen with something in
-/// motion: a live child or a running shell job.
+/// motion on the fast grid: a running child's head or a running shell job.
 pub(in crate::sidebar_pane::render) fn delegation_motion(
     row: &SidebarRow,
     density: CardDensityMode,
@@ -100,7 +100,7 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
         && (agent
             .sub_agents
             .iter()
-            .any(|child| !sub_agent_finished(child))
+            .any(|child| child.status == AgentStatus::Running)
             || !agent.background_shells.is_empty()
             || agent
                 .pending_waits
@@ -181,13 +181,10 @@ pub(super) fn row_lines(
                         ctx.recent_subagent_secs,
                         ctx.max_recent_subagents,
                     );
-                    let mut children = bands.live;
-                    children.extend(bands.recent);
-                    if expanded.history {
-                        children.extend(bands.older);
-                    }
+                    let mut shown = bands.live;
+                    shown.extend(bands.recent);
                     inner.extend(
-                        sub_agent_entry_lines(ctx, &children)
+                        sub_agent_entry_lines(ctx, &agent.sub_agents, &shown)
                             .into_iter()
                             .map(CardLine::from),
                     );
@@ -200,12 +197,21 @@ pub(super) fn row_lines(
                         .into_iter()
                         .map(CardLine::from),
                     );
+                    // Older rows go last, after the waits, so opening the
+                    // history only appends below what was already on screen.
+                    if expanded.history {
+                        inner.extend(
+                            sub_agent_entry_lines(ctx, &agent.sub_agents, &bands.older)
+                                .into_iter()
+                                .map(CardLine::from),
+                        );
+                    }
                     // The header counts lifetime children, so the rows plus the
                     // tail add up to it; reaped children count here but have no
                     // row to reveal.
                     let folded = usize::try_from(agent.sub_agent_count)
                         .unwrap_or(usize::MAX)
-                        .saturating_sub(children.len());
+                        .saturating_sub(shown.len());
                     if !expanded.history && folded > 0 {
                         inner.push(CardLine {
                             line: Line::styled(format!("  +{folded} older"), ctx.theme.muted()),
@@ -295,7 +301,13 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
 /// `subagentStatusLine` figure and Codex-native children the current rollout
 /// context. A metadata-free child degrades to its bare type line, while a
 /// finished child keeps metadata but drops the elapsed clock.
-fn sub_agent_entry_lines(ctx: &RowCtx<'_>, sub_agents: &[&SidebarSubAgent]) -> Vec<Line<'static>> {
+/// Entry lines for `rows`, laid on the metadata grid of every child in `grid`,
+/// so rows rendered in separate bands share one set of columns.
+fn sub_agent_entry_lines(
+    ctx: &RowCtx<'_>,
+    grid: &[SidebarSubAgent],
+    rows: &[&SidebarSubAgent],
+) -> Vec<Line<'static>> {
     let theme = ctx.theme;
     let width = content_width(ctx.width);
     let animation_phase = ctx.animation_phase;
@@ -307,19 +319,19 @@ fn sub_agent_entry_lines(ctx: &RowCtx<'_>, sub_agents: &[&SidebarSubAgent]) -> V
     // fixed right-pinned slot). A column exists only while some child carries
     // the field; a child missing a carried field blank-fills the slot. Finished
     // metadata-free children render no second row.
-    let token_col = sub_agents
+    let token_col = grid
         .iter()
-        .filter_map(|sub| sub_agent_tokens(sub))
+        .filter_map(sub_agent_tokens)
         .map(|total| tokens_int(total).chars().count())
         .max()
         .unwrap_or(0);
-    let model_col = sub_agents
+    let model_col = grid
         .iter()
         .filter_map(|sub| sub.model.as_deref())
         .map(|model| model_label(model).chars().count())
         .max()
         .unwrap_or(0);
-    for sub in sub_agents {
+    for sub in rows {
         // The leading cell is the agent-row vocabulary verbatim: a running
         // child thinks (reasoning) or fills (acting) in the live clay, a
         // finished one holds its static `✓`/`!` verdict — one head grammar
