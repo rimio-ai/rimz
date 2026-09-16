@@ -54,6 +54,47 @@ pub(super) fn even_column_heights(total_height: u64, pane_count: usize) -> Vec<u
         .collect()
 }
 
+/// The `-l` sizes for a run of `pane_count - 1` splits that each target the
+/// pane the previous split created, so the run leaves `pane_count` even panes
+/// (one cell of rounding) across `total`. Split `k` hands the new pane every
+/// cell the panes after it still need, separators included.
+pub(super) fn even_split_sizes(total: u64, pane_count: usize) -> Vec<u64> {
+    if pane_count < 2 {
+        return Vec::new();
+    }
+    // A run too large for the extent is tmux's error to raise, not a panic
+    // here: clamp to the one-cell-per-pane floor `even_column_heights` asserts.
+    let cells = even_column_heights(total.max(pane_count as u64), pane_count);
+    (1..pane_count)
+        .map(|index| cells[index..].iter().sum::<u64>() + (pane_count - 1 - index) as u64)
+        .collect()
+}
+
+/// The axis a run of layout splits divides.
+#[derive(Clone, Copy)]
+pub(super) enum SplitAxis {
+    /// Side-by-side columns, dividing the anchor's width.
+    Columns,
+    /// Stacked rows, dividing the anchor's height.
+    Rows,
+}
+
+impl SplitAxis {
+    fn direction(self) -> &'static str {
+        match self {
+            Self::Columns => "-h",
+            Self::Rows => "-v",
+        }
+    }
+
+    fn extent_format(self) -> &'static str {
+        match self {
+            Self::Columns => "#{pane_width}",
+            Self::Rows => "#{pane_height}",
+        }
+    }
+}
+
 /// A tmux window name with its reserved separators neutralized. tmux parses a
 /// colon as the `session:window` boundary and a dot as the `window.pane`
 /// boundary in a target spec, so a name carrying either cannot be targeted by
@@ -890,12 +931,9 @@ impl TmuxBackend {
                     // sidebar: `select-layout` retiles every pane in the window,
                     // including the managed left sidebar. Additional agents split
                     // the active work area and preserve the sidebar's fixed width.
-                    if let Err(err) = self.split_layout_columns(
-                        &opened.window_id,
-                        &opened.first_pane,
-                        &tab.cwd,
-                        &tab.layout,
-                    ) {
+                    if let Err(err) =
+                        self.split_layout_columns(&opened.first_pane, &tab.cwd, &tab.layout)
+                    {
                         tracing::warn!(
                             session = %opts.session_name,
                             tab = %tab.label,
@@ -942,6 +980,53 @@ impl TmuxBackend {
             self.set_pane_rimz_title(&pane_id, name);
         }
         Ok(pane_id)
+    }
+
+    /// Split `panes` off `anchor` along `axis`, each split chained onto the
+    /// pane the previous one created and sized in cells, so the anchor's
+    /// extent ends up evenly divided at creation with no resize pass. Returns
+    /// the new pane ids in `panes` order, which is also their on-screen order:
+    /// tmux inserts each new pane immediately after its target.
+    pub(super) fn split_even_run(
+        &self,
+        axis: SplitAxis,
+        anchor: &str,
+        cwd: &Path,
+        panes: &[&crate::mux::PaneCmd],
+    ) -> Result<Vec<String>> {
+        if panes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sizes = even_split_sizes(self.pane_extent(axis, anchor)?, panes.len() + 1);
+        let mut created = Vec::with_capacity(panes.len());
+        let mut previous = anchor.to_owned();
+        for (pane, size) in panes.iter().zip(sizes) {
+            previous = self.split_named_printed(
+                axis.direction(),
+                &previous,
+                Some(&size.to_string()),
+                cwd,
+                pane,
+            )?;
+            created.push(previous.clone());
+        }
+        Ok(created)
+    }
+
+    /// The pane's live extent along `axis`, in cells.
+    fn pane_extent(&self, axis: SplitAxis, pane: &str) -> Result<u64> {
+        let output = self
+            .cmd()
+            .args(["display-message", "-p", "-t", pane, axis.extent_format()])
+            .run()?;
+        let raw = String::from_utf8_lossy(&output.stdout);
+        raw.trim().parse().map_err(|_| MuxErr::Output {
+            program: "tmux".to_owned(),
+            reason: format!(
+                "display-message returned an invalid pane extent `{}`",
+                raw.trim()
+            ),
+        })
     }
 
     /// Resize every pane sharing the target's column to an even height.

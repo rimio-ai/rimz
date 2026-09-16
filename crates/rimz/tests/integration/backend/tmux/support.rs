@@ -182,6 +182,77 @@ pub(super) struct PaneGeom {
     pub(super) path: String,
 }
 
+/// Assert a hook-docked tab's live rectangles: the sidebar alone at the left
+/// edge at `sidebar_width`, then one work column per entry of `rows_per_column`
+/// in left-to-right layout order, each column full height and divided into that
+/// many rows. Columns are even across the work area and rows even within a
+/// column, to the one cell even splits round by.
+pub(super) fn assert_grid(
+    panes: &[PaneGeom],
+    window_height: u64,
+    sidebar_width: u64,
+    rows_per_column: &[usize],
+) {
+    let work_panes = rows_per_column.iter().sum::<usize>();
+    assert_eq!(
+        panes.len(),
+        work_panes + 1,
+        "expected a sidebar and {work_panes} work panes: {panes:?}",
+    );
+    let sidebar = panes
+        .iter()
+        .filter(|pane| pane.left == 0)
+        .collect::<Vec<_>>();
+    let [sidebar] = sidebar.as_slice() else {
+        panic!("exactly one pane (the hook-docked sidebar) sits at the left edge: {panes:?}");
+    };
+    assert_eq!(
+        sidebar.width, sidebar_width,
+        "the layout splits leave the sidebar at its target width: {panes:?}",
+    );
+    let mut columns: BTreeMap<u64, Vec<&PaneGeom>> = BTreeMap::new();
+    for pane in panes.iter().filter(|pane| pane.left > 0) {
+        columns.entry(pane.left).or_default().push(pane);
+    }
+    assert_eq!(
+        columns.len(),
+        rows_per_column.len(),
+        "work panes form one column per layout column: {panes:?}",
+    );
+    let mut widths = Vec::new();
+    for ((left, mut column), want_rows) in columns.into_iter().zip(rows_per_column) {
+        column.sort_by_key(|pane| pane.top);
+        assert_eq!(
+            column.len(),
+            *want_rows,
+            "the column at {left} holds {want_rows} rows: {panes:?}",
+        );
+        assert_eq!(
+            column[0].top, 0,
+            "the column at {left} starts at the top of the window: {panes:?}",
+        );
+        let spanned = column.iter().map(|pane| pane.height).sum::<u64>() + column.len() as u64 - 1;
+        assert_eq!(
+            spanned, window_height,
+            "the column at {left} spans the full window height: {panes:?}",
+        );
+        assert!(
+            column.iter().all(|pane| pane.width == column[0].width),
+            "every row of the column at {left} shares its width: {panes:?}",
+        );
+        let heights = column.iter().map(|pane| pane.height);
+        assert!(
+            heights.clone().max().unwrap_or(0) - heights.min().unwrap_or(0) <= 1,
+            "the rows of the column at {left} are even: {panes:?}",
+        );
+        widths.push(column[0].width);
+    }
+    assert!(
+        widths.iter().max().copied().unwrap_or(0) - widths.iter().min().copied().unwrap_or(0) <= 1,
+        "the work columns are even: {panes:?}",
+    );
+}
+
 /// Owns an isolated tmux server for the duration of one test. The server
 /// listens on the managed socket derived from a private runtime root, so it is
 /// the endpoint a `rimz` subprocess given the same `XDG_RUNTIME_DIR` resolves

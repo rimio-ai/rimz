@@ -272,6 +272,20 @@ fn even_column_heights_reserve_separators_and_distribute_remainder_last() {
 }
 
 #[test]
+fn even_split_sizes_hand_each_split_the_cells_its_remaining_panes_need() {
+    // A chain of splits leaves panes of `even_column_heights`, separators
+    // included: 3 columns over 181 cells are 59/60/60, 2 rows over 66 are
+    // 32/33, and a run with nothing to split needs no size.
+    assert_eq!(window::even_split_sizes(181, 3), [121, 60]);
+    assert_eq!(window::even_split_sizes(66, 2), [33]);
+    assert_eq!(window::even_split_sizes(50, 3), [33, 16]);
+    assert!(window::even_split_sizes(50, 1).is_empty());
+    // Too small for its panes: sized down to the floor, and tmux rejects the
+    // split itself rather than this panicking on the way in.
+    assert_eq!(window::even_split_sizes(1, 3), [2, 1]);
+}
+
+#[test]
 fn version_parser_and_floor_hold() {
     assert_eq!(parse_version("tmux 3.5a"), Some((3, 5, 0)));
     assert_eq!(parse_version("tmux 3.2"), Some((3, 2, 0)));

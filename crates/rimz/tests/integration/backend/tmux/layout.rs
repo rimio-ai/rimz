@@ -510,78 +510,58 @@ fn open_tab_builds_multi_column_layout() {
         argv: vec!["sleep".to_owned(), "600".to_owned()],
         name: None,
     };
-    server
-        .backend
-        .open_tab(&TabOptions {
-            title: "work".to_owned(),
-            panes: LayoutPanes {
-                columns: vec![
-                    // Column 0: two tiled rows — the `new-window` pane plus a
-                    // `-v` split, exercising the in-column anchor tracking.
-                    tiled_column(vec![work_pane(), work_pane()]),
-                    // Column 1: one pane to the right — the `-h` split path.
-                    tiled_column(vec![work_pane()]),
-                ],
-            },
-            focus: true,
-            dock_sidebar: true,
-            after: None,
-            sidebar: sidebar.clone(),
-        })
-        .expect("open_tab");
-    // The hook-docked sidebar plus three work panes.
-    let panes = server.wait_for_panes("rimz-tab:work", 4);
-    assert_eq!(
-        panes.len(),
-        4,
-        "tab should be born with a sidebar and three work panes: {panes:?}",
+    let sidebar_width = u64::from(
+        sidebar
+            .target
+            .cols(sidebar.detected_view_size.map(|(cols, _)| cols))
+            .get(),
     );
-    // The hook-docked sidebar is the sole pane at the left edge.
-    assert_eq!(
-        panes.iter().filter(|p| p.left == 0).count(),
-        1,
-        "exactly one pane (the hook-docked sidebar) sits at the left edge: {panes:?}",
-    );
-    // The three work panes form two columns: column 0 stacked into two rows
-    // (same left edge, different top edge), column 1 a single pane to the right.
-    let work: Vec<_> = panes.iter().filter(|p| p.left > 0).collect();
-    assert_eq!(
-        work.len(),
-        3,
-        "three work panes sit right of the sidebar: {work:?}"
-    );
-    let column_left = work.iter().map(|p| p.left).min().expect("a work pane");
-    let column0: Vec<_> = work.iter().filter(|p| p.left == column_left).collect();
-    let column1: Vec<_> = work.iter().filter(|p| p.left > column_left).collect();
-    assert_eq!(
-        column0.len(),
-        2,
-        "column 0 splits into two tiled rows: {work:?}"
-    );
-    assert_ne!(
-        column0[0].top, column0[1].top,
-        "column 0's rows tile vertically — same left, different top: {work:?}",
-    );
-    assert_eq!(
-        column1.len(),
-        1,
-        "column 1 is a single pane to the right of column 0: {work:?}",
-    );
-    // Every work pane runs in the requested cwd.
     let want_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
-    for pane in &work {
+    // Each shape is born as full-height columns of even rows: the reported
+    // two-by-two team layout, a ragged pair, and a three-column mix.
+    for (title, rows_per_column) in [
+        ("work", &[2_usize, 2][..]),
+        ("ragged", &[2, 1][..]),
+        ("mixed", &[1, 2, 3][..]),
+    ] {
+        server
+            .backend
+            .open_tab(&TabOptions {
+                title: title.to_owned(),
+                panes: LayoutPanes {
+                    columns: rows_per_column
+                        .iter()
+                        .map(|rows| tiled_column((0..*rows).map(|_| work_pane()).collect()))
+                        .collect(),
+                },
+                focus: true,
+                dock_sidebar: true,
+                after: None,
+                sidebar: sidebar.clone(),
+            })
+            .expect("open_tab");
+        let target = format!("rimz-tab:{title}");
+        let panes = server.wait_for_panes(&target, rows_per_column.iter().sum::<usize>() + 1);
+        let window_height: u64 = server
+            .display(&target, "#{window_height}")
+            .parse()
+            .expect("window height");
+        assert_grid(&panes, window_height, sidebar_width, rows_per_column);
+        // Every work pane runs in the requested cwd.
+        for pane in panes.iter().filter(|pane| pane.left > 0) {
+            assert_eq!(
+                Path::new(&pane.path).canonicalize().ok().as_deref(),
+                Some(want_cwd.as_path()),
+                "each work pane runs in the tab cwd: {pane:?}",
+            );
+        }
+        // `focus: true` made the new tab the session's current window.
         assert_eq!(
-            Path::new(&pane.path).canonicalize().ok().as_deref(),
-            Some(want_cwd.as_path()),
-            "each work pane runs in the tab cwd: {pane:?}",
+            server.display("rimz-tab", "#{window_name}"),
+            title,
+            "focus: true should select the new window",
         );
     }
-    // `focus: true` made the new tab the session's current window.
-    assert_eq!(
-        server.display("rimz-tab", "#{window_name}"),
-        "work",
-        "focus: true should select the new window",
-    );
     server
         .backend
         .open_tab(&TabOptions {
@@ -617,7 +597,7 @@ fn open_tab_builds_multi_column_layout() {
     );
     assert_eq!(
         server.display("rimz-tab", "#{window_name}"),
-        "work",
+        "mixed",
         "focus: false should leave the session on its previous window",
     );
 }
