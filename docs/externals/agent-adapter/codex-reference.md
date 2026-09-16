@@ -433,7 +433,7 @@ The header is the first line. `SessionMeta` (`protocol.rs:3040`) carries `id`, `
 
 | Field | Meaning |
 | --- | --- |
-| `forked_from_id` | Source thread of a user fork (`/fork`, `/side`, `/btw`, `codex fork`); absent on a fresh root such as `/new` or `/clear`. |
+| `forked_from_id` | Source thread of a user fork (`/fork`, `codex fork`; an ephemeral `/side` or `/btw` thread writes no rollout); absent on a fresh root such as `/new` or `/clear`. |
 | `forked_from_ordinal_exclusive` | Ordinal in the source where the copy stops; new since 0.150.1. |
 | `thread_source` | `user`, `subagent`, `guardian_review`, `memory_consolidation`, or a feature string (`protocol.rs:2760`). `subagent` identifies a child; `forked_from_id` alone does not. |
 | `parent_thread_id` | Immediate parent of a child. |

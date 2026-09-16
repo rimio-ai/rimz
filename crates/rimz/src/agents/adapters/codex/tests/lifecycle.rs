@@ -513,19 +513,26 @@ fn root_identity_events_stamp_codex_session_origin() {
         );
         assert_eq!(registered.origin, Some(SessionOrigin::Fresh));
 
-        for (session_id, source, origin) in [
-            ("side", "fork", Some(SessionOrigin::SideConversation)),
-            ("fork", "fork", Some(SessionOrigin::Forked)),
-            ("ephemeral-root", "startup", None),
+        let unflushed = dir.path().join("unflushed.jsonl");
+        for (case, source, path, origin) in [
+            ("side", "fork", None, Some(SessionOrigin::SideConversation)),
+            ("fork", "fork", None, Some(SessionOrigin::Forked)),
+            ("ephemeral-root", "startup", None, None),
+            (
+                "unflushed-fork",
+                "fork",
+                Some(unflushed.to_str().unwrap()),
+                None,
+            ),
         ] {
             let start = hook_lifecycle(
                 &CodexAdapter,
                 "SessionStart",
-                &json!({"session_id":session_id,"source":source,"transcript_path":null}),
+                &json!({"session_id":case,"source":source,"transcript_path":path}),
             );
-            assert_eq!(start.origin, origin, "{session_id}");
-            assert_eq!(start.signal, LifecycleSignal::Registered, "{session_id}");
-            assert_eq!(start.transcript_path.is_some(), session_id == "fork");
+            assert_eq!(start.origin, origin, "{case}");
+            assert_eq!(start.signal, LifecycleSignal::Registered, "{case}");
+            assert_eq!(start.transcript_path.is_some(), case == "fork");
         }
 
         let turn_started = hook_lifecycle(
