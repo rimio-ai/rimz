@@ -6,7 +6,8 @@
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentState, SamePaneSessionPolicy, SessionOrigin};
+use crate::agents::{AgentLifecycleObservation, AgentState, SamePaneSessionPolicy, SessionOrigin};
+use crate::ids::AgentKind;
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 /// Age in seconds after which a pidless agent session is reaped as a ghost.
@@ -101,9 +102,46 @@ pub(crate) fn same_agent_instance(older: &AgentState, newer: &AgentState) -> boo
     )
 }
 
-/// [`same_agent_instance`] over bare pane and runtime-owner placements, for a
-/// session that is never folded into an `AgentState`.
-pub(in crate::store) fn same_instance_placement(
+/// The card owner a side conversation's hook credits: among the live roots on
+/// the hook's pane and agent process that no sibling supersedes (a `/clear`
+/// retires its predecessor here, as the view reap does), the one the pane
+/// binds. `agents` is the carryover-merged rollup, so a host silent since the
+/// last log rotation is still found.
+pub(in crate::store) fn side_conversation_host<'a>(
+    agents: &'a [AgentState],
+    kind: &AgentKind,
+    observation: &AgentLifecycleObservation,
+) -> Option<&'a AgentState> {
+    let pane = observation
+        .pane_stamp
+        .clone()
+        .or_else(|| observation.pane_id.clone().map(PaneRef::from_id));
+    let owner = observation.runtime_owner.clone().or_else(|| {
+        observation.agent_pid.map(|pid| {
+            RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "",
+                pid,
+                observation.agent_process_start.clone(),
+            )
+        })
+    });
+    let roots = || agents.iter().filter(|agent| !agent.is_provider_subagent());
+    roots()
+        .filter(|candidate| {
+            &candidate.kind == kind
+                && candidate.ended_at.is_none()
+                && observation.agent_id.as_ref() != Some(&candidate.agent_id)
+                && same_instance_placement(
+                    (candidate.pane.as_ref(), candidate.runtime_owner.as_ref()),
+                    (pane.as_ref(), owner.as_ref()),
+                )
+                && !roots().any(|sibling| supersedes(candidate, sibling))
+        })
+        .min_by(|left, right| left.compare_same_pane_owner(right))
+}
+
+fn same_instance_placement(
     older: (Option<&PaneRef>, Option<&RuntimeOwner>),
     newer: (Option<&PaneRef>, Option<&RuntimeOwner>),
 ) -> bool {
@@ -228,6 +266,29 @@ mod tests {
         newer.runtime_owner = Some(owner);
         newer.origin = newer_origin;
         (older, newer)
+    }
+
+    #[test]
+    fn side_conversation_host_is_a_launched_child_but_never_a_provider_subagent() {
+        let (_, newer) =
+            conversation_pair("codex", AgentStatus::Success, Some(SessionOrigin::Fresh));
+        let mut side = AgentLifecycleObservation::new(
+            Some(crate::ids::AgentSessionId::from("side")),
+            crate::agents::lifecycle::LifecycleSignal::Registered,
+        );
+        side.pane_id = newer.pane.as_ref().map(|pane| pane.pane_id.clone());
+        side.agent_pid = Some(42);
+        let kind = AgentKind::new_unchecked("codex");
+        let host = |agents: &[AgentState]| {
+            side_conversation_host(agents, &kind, &side).map(|host| host.agent_id.to_string())
+        };
+
+        let mut child = newer;
+        child.parent_agent_id = Some(crate::ids::AgentSessionId::from("lead"));
+        child.launch_depth = Some(1);
+        assert_eq!(host(std::slice::from_ref(&child)).as_deref(), Some("newer"));
+        child.launch_depth = None;
+        assert_eq!(host(&[child]), None, "a provider subagent never hosts");
     }
 
     #[test]
