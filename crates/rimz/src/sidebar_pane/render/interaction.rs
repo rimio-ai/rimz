@@ -12,7 +12,13 @@ pub(crate) enum HitTarget {
     ProviderTab(String),
     BodyFilter(BodyFilter),
     ToggleGroup(String),
-    ToggleDelegation(String),
+    /// A delegation header click; `open` is the state the click sets.
+    ToggleDelegation {
+        row: String,
+        open: bool,
+    },
+    /// The `+K older` tail of an open delegation section.
+    ToggleDelegationHistory(String),
     UnreadBanner,
     Hyperlink(String),
 }
@@ -170,7 +176,9 @@ fn target_precedence(target: &HitTarget) -> u8 {
         HitTarget::ProviderTab(_) => 0,
         HitTarget::BodyFilter(_) => 1,
         HitTarget::UnreadBanner => 2,
-        HitTarget::ToggleGroup(_) | HitTarget::ToggleDelegation(_) => 3,
+        HitTarget::ToggleGroup(_)
+        | HitTarget::ToggleDelegation { .. }
+        | HitTarget::ToggleDelegationHistory(_) => 3,
         HitTarget::Row(_) => 4,
         HitTarget::Hyperlink(_) => 5,
     }

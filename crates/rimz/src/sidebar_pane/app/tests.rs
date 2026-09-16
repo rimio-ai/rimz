@@ -6,7 +6,7 @@ use super::notify::{
 };
 use super::selection::InputOutcome;
 use super::socket::heartbeat_write_due;
-use super::timing::{frame_interval, is_animating, next_frame_after, tick_for};
+use super::timing::{animation_frame, frame_interval, is_animating, next_frame_after, tick_for};
 use super::*;
 use crate::ids::PaneId;
 use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
@@ -131,10 +131,14 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     );
 }
 
+/// Shell jobs and live children animate inside an open delegation section
+/// whatever the parent's status; timers and signals stay static, and a closed
+/// or resting section holds nothing in motion.
 #[test]
-fn selected_wait_entries_never_hold_the_animation_gate() {
+fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
     let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
     agent.status = crate::agents::AgentStatus::Sleeping;
     agent.user_turn_started_at = Some(snapshot.now);
@@ -150,21 +154,50 @@ fn selected_wait_entries_never_hold_the_animation_gate() {
         selected_index: 0,
         ..Default::default()
     };
-    snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
     ui.theme(&snapshot.theme);
-    for trigger in [
-        crate::agents::PendingWaitTrigger::Command {
-            command: "cargo test".to_owned(),
-        },
-        crate::agents::PendingWaitTrigger::Pid { pid: 16776 },
-        crate::agents::PendingWaitTrigger::Timer {
-            due: snapshot.now,
-            delay: None,
-        },
-        crate::agents::PendingWaitTrigger::Signal {
-            selector: "pr.merged".to_owned(),
-            deadline: None,
-        },
+    let fast = frame_interval(&snapshot, &ui, false);
+    assert_eq!(
+        render::animation_cadence(
+            &snapshot,
+            &ui.cached_theme(&snapshot.theme).unwrap().animations
+        ),
+        render::AnimationCadence::None
+    );
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    assert_eq!(fast, animation_frame(&snapshot));
+
+    ui.delegation_overrides.insert(row_id.clone(), false);
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+    ui.delegation_overrides.clear();
+    ui.selected_index = usize::MAX;
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+    ui.delegation_overrides.insert(row_id, true);
+    assert!(is_animating(&snapshot, &ui, 0, false));
+
+    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    agent.background_shells.clear();
+    for (trigger, moves) in [
+        (
+            crate::agents::PendingWaitTrigger::Command {
+                command: "cargo test".to_owned(),
+            },
+            true,
+        ),
+        (crate::agents::PendingWaitTrigger::Pid { pid: 16776 }, true),
+        (
+            crate::agents::PendingWaitTrigger::Timer {
+                due: snapshot.now,
+                delay: None,
+            },
+            false,
+        ),
+        (
+            crate::agents::PendingWaitTrigger::Signal {
+                selector: "pr.merged".to_owned(),
+                deadline: None,
+            },
+            false,
+        ),
     ] {
         let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
         agent.pending_waits = vec![crate::agents::PendingWait {
@@ -172,15 +205,26 @@ fn selected_wait_entries_never_hold_the_animation_gate() {
             trigger,
             armed_at: None,
         }];
-        assert_eq!(
-            render::animation_cadence(
-                &snapshot,
-                &ui.cached_theme(&snapshot.theme).unwrap().animations
-            ),
-            render::AnimationCadence::None
-        );
-        assert!(!is_animating(&snapshot, &ui, 0, false));
+        assert_eq!(is_animating(&snapshot, &ui, 0, false), moves);
     }
+
+    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    agent.pending_waits.clear();
+    agent.sub_agent_count = 1;
+    agent.sub_agents = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "child", "name": "child", "status": "running",
+            "last_activity": snapshot.now,
+        }))
+        .unwrap(),
+    ];
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents[0]
+        .status = crate::agents::AgentStatus::Success;
+    assert!(!is_animating(&snapshot, &ui, 0, false));
 }
 
 #[test]

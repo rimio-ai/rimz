@@ -14,12 +14,18 @@ expression: screen
 ▌  delegate                                          ▐
 ▌  ▢ ──────────────────────────────────────────    0%▐
 ▌  ▤ 0                                               ▐
-▌  ⧉ subagents (7)                                   ▐
-▌    ⣾ task-0                                        ▐
-▌                                               ◔ <1m▐
+▌  ⧉ subagents (9)                                   ▐
 ▌    ⣾ task-1                                        ▐
-▌                                               ◔ <1m▐
-▌  +5 more                                           ▐
+▌                                               ◑ <t>▐
+▌    ⣾ task-4                                        ▐
+▌                                               ◑ <t>▐
+▌    ✓ task-2                                   ◔  1m▐
+▌    ✓ task-7                                   ◔  3m▐
+▌    ✓ task-0                                   ◔  5m▐
+▌    ✓ task-8                                   ◔  7m▐
+▌    ✓ task-5                                   ◔ <t>▐
+▌  +2 older                                          ▐
+
 
 
 

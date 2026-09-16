@@ -16,8 +16,8 @@ expression: screen
 ▌  ▤ 0                                               ▐
 ▌  ⧖ waits (4)                                       ▐
 ▌    ◷ in 12m                                   ◑ <t>▐
-▌    ❯ pid 16776                                ◔  3m▐
-▌    ❯ cargo xtask gate --name foo_test         ◔  4m▐
+▌    ⣾ pid 16776                                ◔  3m▐
+▌    ⣾ cargo xtask gate --name foo_test         ◔  4m▐
 ▌    ⌁ pr.merged · 2h left                      ●  1h▐
 
  ────────────────────────────────────────────────────

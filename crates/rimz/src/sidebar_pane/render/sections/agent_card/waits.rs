@@ -1,9 +1,12 @@
-//! Wait entries share the subagent grammar: the lead glyph is the kind (`◷`
-//! timer, `❯` shell job, `⌁` signal), line 1 is the wait itself with the
-//! elapsed clock pinned right, and line 2 appears only for a described
-//! background shell, carrying its command. Timers come first, then shell jobs
-//! (command and pid waits, then background shells), then signals. The words
-//! come from `PendingWaitTrigger::summary`; this module adds glyphs and layout.
+//! Wait entries share the subagent grammar: the lead shows liveness, line 1 is
+//! the wait itself with the elapsed clock pinned right, and line 2 appears only
+//! for a described background shell, carrying its command. A shell job (a
+//! command or pid wait, or a background shell) wears the working animation in
+//! the subordinate wait tone while it runs; a timer or a signal holds its static
+//! kind glyph, since nothing runs until it fires. The parent's own status head
+//! carries sleeping. Timers come first, then shell jobs (command and pid waits,
+//! then background shells), then signals. The words come from
+//! `PendingWaitTrigger::summary`; this module adds leads and layout.
 
 use jiff::Timestamp;
 
@@ -14,11 +17,24 @@ use crate::proc::command::command_program_basename;
 
 use super::*;
 
+enum WaitLead {
+    Kind(GlyphRole),
+    Working,
+}
+
 struct WaitEntry {
-    lead: GlyphRole,
+    lead: WaitLead,
     text: String,
     detail: Option<String>,
     since: Option<Timestamp>,
+}
+
+/// A wait on a running process: it animates while armed.
+pub(super) fn is_shell_job(trigger: &PendingWaitTrigger) -> bool {
+    matches!(
+        trigger,
+        PendingWaitTrigger::Pid { .. } | PendingWaitTrigger::Command { .. }
+    )
 }
 
 pub(super) fn wait_entry_lines(
@@ -28,11 +44,11 @@ pub(super) fn wait_entry_lines(
 ) -> Vec<Line<'static>> {
     let wait_entry = |wait: &PendingWait| WaitEntry {
         lead: match wait.trigger {
-            PendingWaitTrigger::Timer { .. } => GlyphRole::CardWaitTimer,
+            PendingWaitTrigger::Timer { .. } => WaitLead::Kind(GlyphRole::CardWaitTimer),
             PendingWaitTrigger::Pid { .. } | PendingWaitTrigger::Command { .. } => {
-                GlyphRole::CardWaitShell
+                WaitLead::Working
             }
-            PendingWaitTrigger::Signal { .. } => GlyphRole::CardWaitSignal,
+            PendingWaitTrigger::Signal { .. } => WaitLead::Kind(GlyphRole::CardWaitSignal),
         },
         text: wait.trigger.summary(ctx.now),
         detail: None,
@@ -71,7 +87,7 @@ fn shell_entry(shell: &BackgroundShell) -> WaitEntry {
         (None, None) => ("background job".to_owned(), None),
     };
     WaitEntry {
-        lead: GlyphRole::CardWaitShell,
+        lead: WaitLead::Working,
         text,
         detail,
         since: Some(shell.started_at),
@@ -84,7 +100,10 @@ fn push_entry(ctx: &RowCtx<'_>, lines: &mut Vec<Line<'static>>, entry: WaitEntry
     let left = vec![
         Span::raw("    "),
         Span::styled(
-            theme.glyph(entry.lead).to_owned(),
+            match entry.lead {
+                WaitLead::Kind(role) => theme.glyph(role).to_owned(),
+                WaitLead::Working => role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
+            },
             theme.styled(Component::WaitHeader, Modifier::empty()),
         ),
         Span::raw(" "),

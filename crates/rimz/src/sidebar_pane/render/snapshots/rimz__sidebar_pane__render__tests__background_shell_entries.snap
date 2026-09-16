@@ -16,11 +16,11 @@ expression: screen
 ▌  ▤ 0                                               ▐
 ▌  ⧖ waits (6)                                       ▐
 ▌    ◷ in 12m                                   ◔ <1m▐
-▌    ❯ make check                               ◔ <1m▐
-▌    ❯ Run the test suite                       ◔  5m▐
+▌    ⣾ make check                               ◔ <1m▐
+▌    ⣾ Run the test suite                       ◔  5m▐
 ▌      cargo test --workspace                        ▐
-▌    ❯ cat <<'EOF' > notes foo EOF              ◔  2m▐
-▌    ❯ background job                           ◔  1m▐
+▌    ⣾ cat <<'EOF' > notes foo EOF              ◔  2m▐
+▌    ⣾ background job                           ◔  1m▐
 ▌    ⌁ pr.merged                                ◔ <1m▐
 
  ────────────────────────────────────────────────────

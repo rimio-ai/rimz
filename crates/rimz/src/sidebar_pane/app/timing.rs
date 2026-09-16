@@ -16,6 +16,7 @@ pub(super) fn is_animating(
     };
     render::animation_cadence(snapshot, &theme.animations) != render::AnimationCadence::None
         || render::expanded_row_awaiting_first_prompt(snapshot, ui)
+        || render::visible_delegation_motion(snapshot, ui)
         || ui.help_visible
         || pet_frame_interval(snapshot, ui, alert_active).is_some()
         || ui.tally.any_rolling(phase)
@@ -72,7 +73,11 @@ pub(super) fn frame_interval(
     if ui.scrollbar.fading(ui.animation_phase) {
         return base;
     }
-    let cadence = render::animation_cadence(snapshot, &theme.animations);
+    let cadence = if render::visible_delegation_motion(snapshot, ui) {
+        render::AnimationCadence::Fast
+    } else {
+        render::animation_cadence(snapshot, &theme.animations)
+    };
     let cadence = if cadence == render::AnimationCadence::None
         && render::expanded_row_awaiting_first_prompt(snapshot, ui)
     {

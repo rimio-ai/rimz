@@ -104,15 +104,13 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     );
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
-        let expanded = CardExpansion {
-            by_selection: super::row_expanded_by_selection(
-                roster,
-                visible_group,
-                this_row,
-                ctx.selected_index,
-            ),
-            delegation: super::delegation_open(ctx.expanded_delegations, row),
-        };
+        let expanded = CardExpansion::resolve(
+            ctx.delegation_overrides,
+            ctx.delegation_history,
+            ctx.card_density,
+            row,
+            super::row_expanded_by_selection(roster, visible_group, this_row, ctx.selected_index),
+        );
         let gutter = if selected { Gutter::Selected } else { lane };
         let cost_usd = super::agent_card::agent_card_cost_usd(group, row);
         for line in row_lines(
