@@ -843,8 +843,8 @@ pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -
     Ok(())
 }
 
-pub(crate) fn require_agents_fragments(config: &rimz::config::MachineConfig) -> Result<()> {
-    if let Some(message) = config.agents_fragment_failure() {
+pub(crate) fn require_definitions(config: &rimz::config::MachineConfig) -> Result<()> {
+    if let Some(message) = config.definition_failure() {
         anyhow::bail!("{message}");
     }
     Ok(())
@@ -1057,19 +1057,22 @@ mod tests {
     }
 
     #[test]
-    fn agent_launch_precondition_surfaces_fragment_error() {
+    fn agent_launch_precondition_surfaces_definition_error() {
         let mut config = rimz::config::MachineConfig::default();
         config
             .notices
-            .fragment_errors
-            .push(rimz::config::AgentsFragmentError {
-                path: PathBuf::from("/tmp/.agents/profiles/broken/agent.toml"),
-                message: "cannot load fragment: syntax error".to_owned(),
+            .definition_errors
+            .push(rimz::config::DefinitionError {
+                path: PathBuf::from("/tmp/.agents/agents/broken.md"),
+                message: "invalid frontmatter".to_owned(),
             });
 
-        let error = require_agents_fragments(&config).expect_err("broken fragment");
+        let error = require_definitions(&config).expect_err("broken definition");
 
-        assert_eq!(error.to_string(), "cannot load fragment: syntax error");
+        assert_eq!(
+            error.to_string(),
+            "/tmp/.agents/agents/broken.md: invalid frontmatter"
+        );
         assert!(!error.to_string().contains("unknown team"));
     }
 

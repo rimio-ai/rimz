@@ -90,12 +90,12 @@ fn machine_config_section_keeps_the_classified_problem_compact() {
 }
 
 #[test]
-fn machine_config_fragment_problem_names_launch_precondition() {
+fn machine_config_definition_problem_names_launch_precondition() {
     let config = MachineConfigHealth {
         broken_files: vec![MachineConfigProblem {
-            path: "/home/eddie/.agents/teams/bad/team.toml".to_owned(),
+            path: "/home/eddie/.agents/teams/bad.md".to_owned(),
             error: "empty layout cell in `claude,,codex`".to_owned(),
-            kind: MachineConfigProblemKind::Fragment,
+            kind: MachineConfigProblemKind::Definition,
         }],
         legacy_agents_home: None,
     };
@@ -111,12 +111,12 @@ fn machine_config_fragment_problem_names_launch_precondition() {
 }
 
 #[test]
-fn machine_config_legacy_agents_home_warns_with_the_move() {
+fn machine_config_legacy_agents_home_is_informational() {
     let config = MachineConfigHealth {
         broken_files: Vec::new(),
         legacy_agents_home: Some(super::super::model::LegacyAgentsHome {
             path: "/home/eddie/.agents".to_owned(),
-            fix: "mkdir -p /home/eddie/.config/rimz && mv /home/eddie/.agents/teams /home/eddie/.config/rimz/".to_owned(),
+            fix: "no longer read; move `[agents]` keys to config.toml and definitions to the Markdown trees".to_owned(),
         }),
     };
     let mut tally = Tally::default();
@@ -125,11 +125,13 @@ fn machine_config_legacy_agents_home_warns_with_the_move() {
     assert!(out.contains("legacy root"), "{out}");
     assert!(out.contains("no longer reads"), "{out}");
     assert!(
-        out.lines()
-            .any(|line| line.contains("fix") && line.contains("mkdir -p /home/eddie/.config/rimz")),
+        out.lines().any(
+            |line| line.contains("fix") && line.contains("move `[agents]` keys to config.toml")
+        ),
         "{out}"
     );
     assert!(out.contains("all present files parse"), "{out}");
+    assert!(tally.warns.is_empty() && tally.alarms.is_empty());
 }
 
 fn mux_fixture() -> Mux {

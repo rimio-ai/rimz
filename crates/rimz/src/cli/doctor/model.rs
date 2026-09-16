@@ -88,7 +88,7 @@ pub(super) struct MachineConfigProblem {
 
 #[derive(Debug)]
 pub(super) enum MachineConfigProblemKind {
-    Fragment,
+    Definition,
     Parse,
     Semantic,
 }

@@ -66,7 +66,7 @@ pub fn catalog(
 pub fn reminder(catalog: &SubagentCatalog) -> String {
     match catalog {
         SubagentCatalog::Disabled => "Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.".to_owned(),
-        SubagentCatalog::Available(specs) if specs.is_empty() => "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml.".to_owned(),
+        SubagentCatalog::Available(specs) if specs.is_empty() => "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `subagents/<name>.md` definitions.".to_owned(),
         SubagentCatalog::Available(specs) => {
             let list = specs
                 .iter()
@@ -293,7 +293,7 @@ mod tests {
         );
         assert_eq!(
             reminder(&SubagentCatalog::Available(Vec::new())),
-            "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml."
+            "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `subagents/<name>.md` definitions."
         );
     }
 }

@@ -188,7 +188,17 @@ mod tests {
         fs::create_dir_all(root.join("pets")).unwrap();
         fs::write(root.join("room.bin"), b"data").unwrap();
 
-        let outcomes = remove_root_keeping(&root, &["accounts", "skills", "profiles"]);
+        let outcomes = remove_root_keeping(
+            &root,
+            &[
+                "agents",
+                "subagents",
+                "teams",
+                "traits",
+                "skills",
+                "accounts",
+            ],
+        );
 
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));

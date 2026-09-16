@@ -1,6 +1,6 @@
-//! Per-machine settings, loaded from `~/.config/rimz/config.toml`, `theme.toml`, `agents.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
+//! Per-machine settings, loaded from `~/.config/rimz/config.toml`, `theme.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
 //!
-//! Agent and team fragments discovered under `~/.config/rimz/{profiles,teams}` are the base layer for both profile namespaces in `agents.toml`, whose entries take precedence on name clashes. Strict and lenient load paths merge fragments before validating the agents view.
+//! Markdown definitions under the agents home populate profiles and teams at every config load; config.toml owns machine launch preferences.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in
@@ -11,8 +11,7 @@
 //! A missing file is the default config, and unknown keys are ignored with a
 //! visible warning so an older binary tolerates a newer file. Runtime entry
 //! points use [`MachineConfig::load_lenient`], which degrades a broken machine
-//! file to built-in defaults. A broken `~/.config/rimz` fragment drops only that
-//! fragment from read-only views and blocks launches with its source error.
+//! file to built-in defaults. A broken Markdown definition drops only that definition from read-only views and blocks launches with its source error.
 //! Strict [`MachineConfig::load`] backs config inspection and reports precise errors.
 
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
@@ -78,8 +77,7 @@ pub use display::{
     DisplayConfig, HighlightStepsConfig, PixelMode, ProviderTabsMode, ScrollbarMode,
 };
 pub use edit::{
-    ConfigEditErr, ConfigEditor, FileMergeOutcome, FragmentRepairOutcome, FragmentRepairReport,
-    MergeAction, MergeReport, SkippedKey,
+    ConfigEditErr, ConfigEditor, FileMergeOutcome, MergeAction, MergeReport, SkippedKey,
 };
 pub use gc::{GcConfig, parse_older_than};
 pub use glyphs::{GlyphOverrides, GlyphRole, ThemeGlyphsConfig};
@@ -130,34 +128,26 @@ const MAX_REFRESH_MS: u16 = 1_000;
 
 const CONFIG_FILE: &str = "config.toml";
 const THEME_FILE: &str = "theme.toml";
-const AGENTS_FILE: &str = "agents.toml";
 const LOOP_FILE: &str = "loop.toml";
 const RIMZ_CONFIG_SUBDIR: &str = "rimz";
-const AGENTS_HOME_PROFILES_SUBDIR: &str = "profiles";
-const AGENTS_HOME_TEAMS_SUBDIR: &str = "teams";
-const AGENT_FRAGMENT_FILE: &str = "agent.toml";
-const TEAM_FRAGMENT_FILE: &str = "team.toml";
 const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config/templates/config.template.toml");
 const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.template.toml");
-const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.template.toml");
 const MACHINE_LOOP_TEMPLATE: &str = include_str!("config/templates/loop.template.toml");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MachineConfigFileKind {
     Core,
     Theme,
-    Agents,
     Loop,
 }
 
 impl MachineConfigFileKind {
-    const ALL: [Self; 4] = [Self::Core, Self::Theme, Self::Agents, Self::Loop];
+    const ALL: [Self; 3] = [Self::Core, Self::Theme, Self::Loop];
 
     fn file_name(self) -> &'static str {
         match self {
             Self::Core => CONFIG_FILE,
             Self::Theme => THEME_FILE,
-            Self::Agents => AGENTS_FILE,
             Self::Loop => LOOP_FILE,
         }
     }
@@ -166,7 +156,6 @@ impl MachineConfigFileKind {
         match self {
             Self::Core => MACHINE_CONFIG_TEMPLATE,
             Self::Theme => MACHINE_THEME_TEMPLATE,
-            Self::Agents => MACHINE_AGENTS_TEMPLATE,
             Self::Loop => MACHINE_LOOP_TEMPLATE,
         }
     }
@@ -189,7 +178,7 @@ impl MachineConfigFile {
     }
 }
 
-/// Canonical paths and templates for the four per-machine config files.
+/// Canonical paths and templates for the three per-machine config files.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MachineConfigFiles {
     core_path: PathBuf,
@@ -221,8 +210,8 @@ impl MachineConfigFiles {
         &self.agents_home
     }
 
-    /// Files in persistence and display order: core, theme, agents, loop.
-    pub fn ordered(&self) -> [MachineConfigFile; 4] {
+    /// Files in persistence and display order: core, theme, loop.
+    pub fn ordered(&self) -> [MachineConfigFile; 3] {
         MachineConfigFileKind::ALL.map(|kind| MachineConfigFile {
             path: self.path(kind),
             template: kind.template(),
@@ -265,6 +254,8 @@ struct LoadMemo {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigErr {
+    #[error("{path}: {message}")]
+    Definition { path: PathBuf, message: String },
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
@@ -321,6 +312,7 @@ impl ConfigErr {
         match self {
             Self::Io { path, .. }
             | Self::Parse { path, .. }
+            | Self::Definition { path, .. }
             | Self::Agents { path, .. }
             | Self::Notifications { path, .. }
             | Self::Loop { path, .. }
@@ -336,6 +328,7 @@ impl ConfigErr {
     fn validation_message(&self) -> String {
         match self {
             Self::Parse { diagnosis, .. } => diagnosis.raw_message().to_owned(),
+            Self::Definition { message, .. } => message.clone(),
             Self::Agents { source, .. } => source.to_string(),
             Self::Notifications { source, .. } => source.to_string(),
             Self::Loop { source, .. } => source.to_string(),
@@ -362,7 +355,7 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConfigNotices {
     pub unknown_keys: Vec<UnknownConfigKey>,
-    pub fragment_errors: Vec<AgentsFragmentError>,
+    pub definition_errors: Vec<DefinitionError>,
 }
 
 /// A key ignored while loading a per-machine config file.
@@ -372,9 +365,9 @@ pub struct UnknownConfigKey {
     pub key: String,
 }
 
-/// A `~/.agents` fragment that the lenient loader could not use.
+/// A Markdown definition that the lenient loader could not use.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentsFragmentError {
+pub struct DefinitionError {
     pub path: PathBuf,
     pub message: String,
 }
@@ -403,67 +396,6 @@ impl AgentSpecSources {
 
     pub fn command(&self, name: &str) -> Option<&Path> {
         self.commands.get(name).map(PathBuf::as_path)
-    }
-
-    fn from_layers(
-        agents: &AgentsConfig,
-        subagents: &SubagentProfilesConfig,
-        fragments: &[LoadedAgentsFragment],
-        agents_path: &Path,
-    ) -> Self {
-        let mut sources = Self::default();
-        for fragment in fragments {
-            let path = &fragment.path;
-            sources.agent_profiles.extend(
-                fragment
-                    .file
-                    .agents
-                    .profiles
-                    .0
-                    .keys()
-                    .map(|name| (name.clone(), path.clone())),
-            );
-            sources.subagent_profiles.extend(
-                fragment
-                    .file
-                    .subagents
-                    .profiles
-                    .0
-                    .keys()
-                    .map(|name| (name.clone(), path.clone())),
-            );
-            sources.commands.extend(
-                fragment
-                    .file
-                    .agents
-                    .commands
-                    .0
-                    .keys()
-                    .map(|name| (name.clone(), path.clone())),
-            );
-        }
-        sources.agent_profiles.extend(
-            agents
-                .profiles
-                .0
-                .keys()
-                .map(|name| (name.clone(), agents_path.to_path_buf())),
-        );
-        sources.subagent_profiles.extend(
-            subagents
-                .profiles
-                .0
-                .keys()
-                .map(|name| (name.clone(), agents_path.to_path_buf())),
-        );
-        sources.commands.extend(
-            agents
-                .commands
-                .0
-                .keys()
-                .map(|name| (name.clone(), agents_path.to_path_buf())),
-        );
-        sources
     }
 }
 
@@ -521,11 +453,6 @@ impl MachineConfig {
         MachineConfigFiles::machine().path(MachineConfigFileKind::Core)
     }
 
-    /// The agents per-machine config path: `$XDG_CONFIG_HOME/rimz/agents.toml`.
-    pub fn agents_path() -> PathBuf {
-        MachineConfigFiles::machine().path(MachineConfigFileKind::Agents)
-    }
-
     /// The loop per-machine config path: `$XDG_CONFIG_HOME/rimz/loop.toml`.
     pub fn loop_path() -> PathBuf {
         MachineConfigFiles::machine().path(MachineConfigFileKind::Loop)
@@ -560,10 +487,7 @@ impl MachineConfig {
         Self::load_lenient_with_memo(files.core_path(), files.agents_home())
     }
 
-    /// Load from an explicit config.toml path and its sibling theme.toml,
-    /// agents.toml, and loop.toml files, merging fragments from the explicit
-    /// agents-home root before validation — the test and tooling seam. A
-    /// nonexistent fragment root means no fragments.
+    /// Load machine files and Markdown definitions from explicit roots for tests and tooling.
     fn load_from(config_path: &Path, agents_home: &Path) -> Result<Self> {
         Self::load_from_with_agent_spec_sources(config_path, agents_home).map(|(config, _)| config)
     }
@@ -574,29 +498,26 @@ impl MachineConfig {
     ) -> Result<(Self, AgentSpecSources)> {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
-        let agents_path = files.path(MachineConfigFileKind::Agents);
         let loop_path = files.path(MachineConfigFileKind::Loop);
 
         let core = load_parsed_optional(files.core_path(), parse_core_text_collecting)?;
         validate_account_budgets(&core.value.accounts, files.core_path())?;
         let theme = load_parsed_optional(&theme_path, parse_theme_text_collecting)?;
-        let agents = load_parsed_optional(&agents_path, parse_agents_text_collecting)?;
         let loop_ = load_parsed_optional(&loop_path, parse_loop_text_collecting)?;
 
         let mut notices = ConfigNotices::default();
         notices.add_unknown_keys(files.core_path(), core.unknown_keys);
         notices.add_unknown_keys(&theme_path, theme.unknown_keys);
-        notices.add_unknown_keys(&agents_path, agents.unknown_keys);
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
-        let mut config = Self::assemble(core.value, theme.value, agents.value, loop_.value);
+        let mut config = Self::assemble(core.value, theme.value, loop_.value);
         validate_notifications_config(&config.notifications, files.core_path())?;
-        let sources = apply_agents_home_collecting(
-            &mut config.agents,
-            &mut config.subagents,
-            files.agents_home(),
-            &agents_path,
-            &mut notices,
-        )?;
+        let sources = config.load_definitions(agents_home, config_path, &mut notices);
+        if let Some(error) = notices.definition_errors.first() {
+            return Err(ConfigErr::Definition {
+                path: error.path.clone(),
+                message: error.message.clone(),
+            });
+        }
         config.notices = notices;
         Ok((config, sources))
     }
@@ -604,20 +525,17 @@ impl MachineConfig {
     fn load_lenient_from(config_path: &Path, agents_home: &Path) -> Self {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
-        let agents_path = files.path(MachineConfigFileKind::Agents);
         let loop_path = files.path(MachineConfigFileKind::Loop);
 
         let core = recover_parsed(files.core_path(), parse_core_text_collecting);
         let theme = recover_parsed(&theme_path, parse_theme_text_collecting);
-        let agents = recover_parsed(&agents_path, parse_agents_text_collecting);
         let loop_ = recover_parsed(&loop_path, parse_loop_text_collecting);
 
         let mut notices = ConfigNotices::default();
         notices.add_unknown_keys(files.core_path(), core.unknown_keys);
         notices.add_unknown_keys(&theme_path, theme.unknown_keys);
-        notices.add_unknown_keys(&agents_path, agents.unknown_keys);
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
-        let mut config = Self::assemble(core.value, theme.value, agents.value, loop_.value);
+        let mut config = Self::assemble(core.value, theme.value, loop_.value);
         if let Err(err) = validate_notifications_config(&config.notifications, files.core_path()) {
             tracing::warn!(
                 error = %err,
@@ -625,37 +543,7 @@ impl MachineConfig {
             );
             config.notifications = NotificationsPrefs::default();
         }
-        let mut discovered = discover_agents_home_lenient(files.agents_home());
-        notices.unknown_keys.append(&mut discovered.unknown_keys);
-        notices
-            .fragment_errors
-            .extend(discovered.errors.drain(..).map(fragment_error_notice));
-        let folded = fold_agents_fragments_with_fallback(
-            &config.agents,
-            &config.subagents,
-            &discovered.fragments,
-            &agents_path,
-        );
-        for err in folded.base_errors {
-            match err {
-                InvalidAgentsLayer::Agents(err) => tracing::warn!(
-                    error = %err,
-                    "per-machine agents config invalid; using built-in defaults",
-                ),
-                InvalidAgentsLayer::Subagents(err) => tracing::warn!(
-                    error = %err,
-                    "per-machine subagent profiles config invalid; using built-in defaults",
-                ),
-            }
-        }
-        config.agents = folded.agents;
-        config.subagents = folded.subagents;
-        notices.fragment_errors.extend(
-            folded
-                .deferred_errors
-                .into_iter()
-                .map(fragment_error_notice),
-        );
+        config.load_definitions(agents_home, config_path, &mut notices);
         config.notices = notices;
         config
     }
@@ -672,61 +560,37 @@ impl MachineConfig {
         path: &Path,
         text: &str,
         agents_home: &Path,
-        ignore_broken_fragments: bool,
+        ignore_broken_definitions: bool,
     ) -> Result<Self> {
         match path.file_name().and_then(|name| name.to_str()) {
             Some(THEME_FILE) => Ok(Self::assemble(
                 CoreConfig::default(),
                 parse_theme_text(path, text)?,
-                AgentsFile::default(),
                 LoopConfig::default(),
             )),
-            Some(AGENTS_FILE) => {
-                let mut file = parse_agents_text(path, text)?;
-                if ignore_broken_fragments {
-                    let discovered = discover_agents_home_lenient(agents_home);
-                    let mut merged = file.agents.clone();
-                    let mut merged_subagents = file.subagents.clone();
-                    overlay_agents_fragment_under(&mut merged, &discovered.fragment);
-                    overlay_under(
-                        &mut merged_subagents.profiles.0,
-                        discovered.subagents.profiles.0,
-                    );
-                    validate_agents_file(&merged, &merged_subagents, path)?;
-                    file.agents = merged;
-                    file.subagents = merged_subagents;
-                } else {
-                    let _ = apply_agents_home_collecting(
-                        &mut file.agents,
-                        &mut file.subagents,
-                        agents_home,
-                        path,
-                        &mut ConfigNotices::default(),
-                    )?;
-                }
-                Ok(Self::assemble(
-                    CoreConfig::default(),
-                    ThemeConfig::default(),
-                    file,
-                    LoopConfig::default(),
-                ))
-            }
             Some(LOOP_FILE) => Ok(Self::assemble(
                 CoreConfig::default(),
                 ThemeConfig::default(),
-                AgentsFile::default(),
                 parse_loop_text(path, text)?,
             )),
             _ => {
                 let core = parse_core_text(path, text)?;
                 validate_notifications_config(&core.notifications, path)?;
                 validate_account_budgets(&core.accounts, path)?;
-                Ok(Self::assemble(
-                    core,
-                    ThemeConfig::default(),
-                    AgentsFile::default(),
-                    LoopConfig::default(),
-                ))
+                let mut config =
+                    Self::assemble(core, ThemeConfig::default(), LoopConfig::default());
+                let mut notices = ConfigNotices::default();
+                config.load_definitions(agents_home, path, &mut notices);
+                if !ignore_broken_definitions && let Some(error) = notices.definition_errors.first()
+                {
+                    return Err(ConfigErr::Definition {
+                        path: error.path.clone(),
+                        message: error.message.clone(),
+                    });
+                }
+                validate_agents_file(&config.agents, &config.subagents, agents_home)?;
+                config.notices = notices;
+                Ok(config)
             }
         }
     }
@@ -736,18 +600,12 @@ impl MachineConfig {
     fn parse_text_unknown_keys(path: &Path, text: &str) -> Result<Vec<String>> {
         match path.file_name().and_then(|name| name.to_str()) {
             Some(THEME_FILE) => parse_unknown_keys::<ThemeFile>(path, text),
-            Some(AGENTS_FILE) => parse_unknown_keys::<AgentsFile>(path, text),
             Some(LOOP_FILE) => parse_unknown_keys::<LoopConfig>(path, text),
             _ => parse_unknown_keys::<CoreConfig>(path, text),
         }
     }
 
-    fn assemble(
-        core: CoreConfig,
-        theme: ThemeConfig,
-        agents_file: AgentsFile,
-        loop_: LoopConfig,
-    ) -> Self {
+    fn assemble(core: CoreConfig, theme: ThemeConfig, loop_: LoopConfig) -> Self {
         Self {
             timezone: core.timezone,
             mux: core.mux,
@@ -764,25 +622,63 @@ impl MachineConfig {
             sentry: core.sentry,
             web: core.web,
             theme,
-            agents: agents_file.agents,
-            subagents: agents_file.subagents,
+            agents: core.agents,
+            subagents: core.subagents,
             r#loop: loop_,
             notices: ConfigNotices::default(),
         }
+    }
+
+    fn load_definitions(
+        &mut self,
+        agents_home: &Path,
+        config_path: &Path,
+        notices: &mut ConfigNotices,
+    ) -> AgentSpecSources {
+        let skills = agents_home.join("skills");
+        let check = if self.agents.isolation == Isolation::Sandbox {
+            definitions::SkillLibraryCheck::Check(&skills)
+        } else {
+            definitions::SkillLibraryCheck::Skip
+        };
+        let loaded = definitions::load(agents_home, check);
+        self.agents.profiles = loaded.agent_profiles;
+        self.subagents.profiles = loaded.subagent_profiles;
+        self.agents.teams.0.extend(loaded.teams.0);
+        notices
+            .definition_errors
+            .extend(loaded.errors.into_iter().map(|error| DefinitionError {
+                path: error.path,
+                message: error.message,
+            }));
+        if let Err(error) = validate_agents_file(&self.agents, &self.subagents, agents_home) {
+            notices.definition_errors.push(DefinitionError {
+                path: agents_home.to_path_buf(),
+                message: error.validation_message(),
+            });
+        }
+        let mut sources = loaded.sources;
+        sources.commands.extend(
+            self.agents
+                .commands
+                .0
+                .keys()
+                .map(|name| (name.clone(), config_path.to_path_buf())),
+        );
+        sources
     }
 
     pub fn time_zone(&self) -> jiff::tz::TimeZone {
         resolve_time_zone(self.timezone.as_deref())
     }
 
-    /// All unusable `~/.agents` fragments, rendered for a launch precondition
-    /// failure. An empty result means every discovered fragment loaded.
-    pub fn agents_fragment_failure(&self) -> Option<String> {
-        (!self.notices.fragment_errors.is_empty()).then(|| {
+    /// Definition failures that block launches, including each source path.
+    pub fn definition_failure(&self) -> Option<String> {
+        (!self.notices.definition_errors.is_empty()).then(|| {
             self.notices
-                .fragment_errors
+                .definition_errors
                 .iter()
-                .map(|notice| notice.message.as_str())
+                .map(|notice| format!("{}: {}", notice.path.display(), notice.message))
                 .collect::<Vec<_>>()
                 .join("\n\n")
         })
@@ -811,11 +707,7 @@ impl MachineConfig {
             return cached.config.clone();
         }
 
-        let Ok(mut stamp) = ConfigStamp::from_inputs(config_path, agents_home) else {
-            // A fragment dir can vanish mid-scan. Read without caching so the
-            // next tick re-derives from a settled tree.
-            return Arc::new(Self::load_lenient_from(config_path, agents_home));
-        };
+        let mut stamp = ConfigStamp::from_inputs(config_path, agents_home);
 
         if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
             && let Some(cached) = memo.as_mut()
@@ -833,32 +725,23 @@ impl MachineConfig {
         for _ in 0..STABLE_READ_ATTEMPTS {
             if stamp.modified_within(STABLE_READ_QUIET) {
                 std::thread::sleep(STABLE_READ_QUIET);
-                match ConfigStamp::from_inputs(config_path, agents_home) {
-                    Ok(after) => {
-                        stamp = after;
-                        continue;
-                    }
-                    Err(_) => {
-                        return Arc::new(Self::load_lenient_from(config_path, agents_home));
-                    }
-                }
+                stamp = ConfigStamp::from_inputs(config_path, agents_home);
+                continue;
             }
 
             let config = Arc::new(Self::load_lenient_from(config_path, agents_home));
-            match ConfigStamp::from_inputs(config_path, agents_home) {
-                Ok(after) if after == stamp => {
-                    if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
-                        *memo = Some(LoadMemo {
-                            stamp,
-                            config: config.clone(),
-                            last_verified: now,
-                        });
-                    }
-                    return config;
+            let after = ConfigStamp::from_inputs(config_path, agents_home);
+            if after == stamp {
+                if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
+                    *memo = Some(LoadMemo {
+                        stamp,
+                        config: config.clone(),
+                        last_verified: now,
+                    });
                 }
-                Ok(after) => stamp = after,
-                Err(_) => return config,
+                return config;
             }
+            stamp = after;
         }
 
         if let Ok(memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock()
@@ -876,50 +759,34 @@ impl MachineConfig {
         {
             return hash_config_stamp(&cached.stamp);
         }
-        ConfigStamp::from_inputs(&Self::config_path(), &paths::agents_home())
-            .map(|stamp| hash_config_stamp(&stamp))
-            .unwrap_or(0)
+        hash_config_stamp(&ConfigStamp::from_inputs(
+            &Self::config_path(),
+            &paths::agents_home(),
+        ))
     }
 }
 
 /// Diagnose parse, I/O, and semantic failures across the per-machine config
-/// files and `~/.agents` fragments. Runtime loading remains lenient; this feeds
+/// files and Markdown definitions. Runtime loading remains lenient; this feeds
 /// the start notice and `rimz doctor`.
 pub fn broken_machine_files() -> Vec<ConfigErr> {
     broken_machine_files_in(&MachineConfigFiles::machine())
 }
 
 fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
-    let agents_path = files.path(MachineConfigFileKind::Agents);
     let checks = [
         load_optional(files.core_path(), parse_core_text_strict).map(|_| ()),
         load_optional(&files.path(MachineConfigFileKind::Theme), parse_theme_text).map(|_| ()),
         load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text).map(|_| ()),
     ];
     let mut errors: Vec<_> = checks.into_iter().filter_map(Result::err).collect();
-    let (agents, subagents) = match load_optional(&agents_path, parse_agents_text) {
-        Ok(Some(file)) => (file.agents, file.subagents),
-        Ok(None) => (AgentsConfig::default(), SubagentProfilesConfig::default()),
-        Err(err) => {
-            errors.push(err);
-            (AgentsConfig::default(), SubagentProfilesConfig::default())
+    let config = MachineConfig::load_lenient_from(files.core_path(), files.agents_home());
+    errors.extend(config.notices.definition_errors.into_iter().map(|error| {
+        ConfigErr::Definition {
+            path: error.path,
+            message: error.message,
         }
-    };
-    let mut discovered = discover_agents_home_lenient(files.agents_home());
-    errors.append(&mut discovered.errors);
-    let folded = fold_agents_fragments_with_fallback(
-        &agents,
-        &subagents,
-        &discovered.fragments,
-        &agents_path,
-    );
-    errors.extend(
-        folded
-            .base_errors
-            .into_iter()
-            .map(InvalidAgentsLayer::into_error),
-    );
-    errors.extend(folded.deferred_errors);
+    }));
     errors
 }
 
@@ -933,39 +800,32 @@ fn hash_config_stamp(stamp: &ConfigStamp) -> u64 {
 struct ConfigStamp {
     core: StampedPath,
     theme: StampedPath,
-    agents: StampedPath,
     loop_: StampedPath,
-    fragments: Vec<StampedPath>,
+    definitions: Vec<StampedPath>,
 }
 
 impl ConfigStamp {
-    fn from_inputs(config_path: &Path, agents_home: &Path) -> Result<Self> {
+    fn from_inputs(config_path: &Path, agents_home: &Path) -> Self {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
-        let discovered = agents_home_fragment_paths(agents_home);
-        if let Some(err) = discovered.errors.into_iter().next() {
-            return Err(err);
-        }
-        let fragments = discovered
-            .paths
+        let definitions = definitions::source_paths(agents_home)
             .iter()
             .map(|path| StampedPath::of(path))
             .collect();
-        Ok(Self {
+        Self {
             core: StampedPath::of(files.core_path()),
             theme: StampedPath::of(&files.path(MachineConfigFileKind::Theme)),
-            agents: StampedPath::of(&files.path(MachineConfigFileKind::Agents)),
             loop_: StampedPath::of(&files.path(MachineConfigFileKind::Loop)),
-            fragments,
-        })
+            definitions,
+        }
     }
 
     fn modified_within(&self, quiet: Duration) -> bool {
         let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
             return true;
         };
-        [&self.core, &self.theme, &self.agents, &self.loop_]
+        [&self.core, &self.theme, &self.loop_]
             .into_iter()
-            .chain(self.fragments.iter())
+            .chain(self.definitions.iter())
             .any(|path| stamped_path_modified_within(path, now, quiet))
     }
 }
@@ -993,6 +853,8 @@ pub fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct CoreConfig {
+    agents: AgentsConfig,
+    subagents: SubagentProfilesConfig,
     timezone: Option<String>,
     mux: MuxConfig,
     accounts: AccountsConfig,
@@ -1016,28 +878,6 @@ struct ThemeFile {
     colors: Option<InlinePalette>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct AgentsFile {
-    agents: AgentsConfig,
-    subagents: SubagentProfilesConfig,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct AgentsFragmentFile {
-    agents: AgentsFragment,
-    subagents: SubagentProfilesConfig,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct AgentsFragment {
-    profiles: ProfilesConfig,
-    teams: TeamsConfig,
-    commands: CommandsConfig,
-}
-
 #[derive(Debug)]
 struct Parsed<T> {
     value: T,
@@ -1050,36 +890,6 @@ impl<T: Default> Default for Parsed<T> {
             value: T::default(),
             unknown_keys: Vec::new(),
         }
-    }
-}
-
-#[derive(Default)]
-struct DiscoveredAgentsHome {
-    fragment: AgentsFragment,
-    subagents: SubagentProfilesConfig,
-    fragments: Vec<LoadedAgentsFragment>,
-    unknown_keys: Vec<UnknownConfigKey>,
-    errors: Vec<ConfigErr>,
-}
-
-struct LoadedAgentsFragment {
-    order: usize,
-    path: PathBuf,
-    file: AgentsFragmentFile,
-}
-
-impl DiscoveredAgentsHome {
-    fn merge(&mut self, path: PathBuf, file: AgentsFragmentFile) {
-        merge_agents_fragment(&mut self.fragment, file.agents.clone());
-        self.subagents
-            .profiles
-            .0
-            .extend(file.subagents.profiles.0.clone());
-        self.fragments.push(LoadedAgentsFragment {
-            order: self.fragments.len(),
-            path,
-            file,
-        });
     }
 }
 
@@ -1132,6 +942,7 @@ fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
 }
 
 fn parse_core_text_collecting(path: &Path, text: &str) -> Result<Parsed<CoreConfig>> {
+    check_removed_agents_tables(path, text)?;
     parse_toml_collecting(path, text)
 }
 
@@ -1201,24 +1012,6 @@ fn parse_theme_text_collecting(path: &Path, text: &str) -> Result<Parsed<ThemeCo
     })
 }
 
-fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsFile> {
-    parse_agents_text_collecting(path, text).map(|parsed| parsed.value)
-}
-
-fn parse_agents_text_collecting(path: &Path, text: &str) -> Result<Parsed<AgentsFile>> {
-    check_removed_agents_tables(path, text)?;
-    let Parsed {
-        mut value,
-        unknown_keys,
-    } = parse_toml_collecting::<AgentsFile>(path, text)?;
-    resolve_agents_prompt_paths(&mut value.agents.profiles, &mut value.agents.teams, path);
-    resolve_profile_prompt_paths(&mut value.subagents.profiles, path);
-    Ok(Parsed {
-        value,
-        unknown_keys,
-    })
-}
-
 fn parse_loop_text(path: &Path, text: &str) -> Result<LoopConfig> {
     parse_loop_text_collecting(path, text).map(|parsed| parsed.value)
 }
@@ -1248,20 +1041,37 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
         path: path.to_path_buf(),
         detail: detail.to_owned(),
     };
+    let value = toml::Value::Table(doc.clone());
+    for (table, tree) in [
+        ("agents.profiles", "agents"),
+        ("agents.teams", "teams"),
+        ("subagents.profiles", "subagents"),
+        ("profiles", "agents"),
+    ] {
+        if table
+            .split('.')
+            .try_fold(&value, |value, key| value.get(key))
+            .is_some()
+        {
+            return Err(removed(&format!(
+                "`[{table}]` is no longer read; edit <agents_home>/{tree}/<name>.md"
+            )));
+        }
+    }
     if doc.contains_key("tab") {
         return Err(removed(
-            "`[tab]` (with `[tab.keywords]`/`[tab.layouts]`) was removed — set `placement` under `[agents]` and declare layouts as `[agents.teams]`",
+            "`[tab]` (with `[tab.keywords]`/`[tab.layouts]`) was removed — set `placement` under `[agents]` and declare teams in <agents_home>/teams/<name>.md",
         ));
     }
     if let Some(agents) = doc.get("agents").and_then(toml::Value::as_table) {
         if agents.contains_key("aliases") {
             return Err(removed(
-                "`[agents.aliases]` was split into `[agents.profiles]` (agent presets) and `[agents.commands]` (raw command panes)",
+                "`[agents.aliases]` was removed — declare agents in <agents_home>/agents/<name>.md and raw command panes under `[agents.commands]`",
             ));
         }
         if agents.contains_key("layouts") {
             return Err(removed(
-                "`[agents.layouts]` was renamed to `[agents.teams]`",
+                "`[agents.layouts]` was removed — declare teams in <agents_home>/teams/<name>.md",
             ));
         }
         if agents.contains_key("loop") {
@@ -1279,431 +1089,26 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_agents_fragment_text_collecting(
-    path: &Path,
-    text: &str,
-) -> Result<Parsed<AgentsFragmentFile>> {
-    check_removed_agents_tables(path, text)?;
-    let Parsed {
-        mut value,
-        unknown_keys,
-    } = parse_toml_collecting::<AgentsFragmentFile>(path, text)?;
-    resolve_agents_prompt_paths(&mut value.agents.profiles, &mut value.agents.teams, path);
-    resolve_profile_prompt_paths(&mut value.subagents.profiles, path);
-    Ok(Parsed {
-        value,
-        unknown_keys,
-    })
-}
-
-fn parse_agents_fragment_unknown_keys(path: &Path, text: &str) -> Result<Vec<String>> {
-    parse_agents_fragment_text_collecting(path, text).map(|parsed| parsed.unknown_keys)
-}
-
-fn resolve_agents_prompt_paths(
-    profiles: &mut ProfilesConfig,
-    teams: &mut TeamsConfig,
-    source_path: &Path,
-) {
-    let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
-    crate::harness::spec::resolve_prompt_paths(profiles, teams, source_dir);
-}
-
-fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, source_path: &Path) {
-    let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
-    crate::harness::spec::resolve_profile_prompt_paths(profiles, source_dir);
-}
-
-#[cfg(test)]
-fn discover_agents_home(root: &Path) -> Result<AgentsFragment> {
-    discover_agents_home_collecting(root).map(|discovered| discovered.fragment)
-}
-
-fn discover_agents_home_collecting(root: &Path) -> Result<DiscoveredAgentsHome> {
-    let mut discovered = DiscoveredAgentsHome::default();
-    let paths = agents_home_fragment_paths(root);
-    if let Some(err) = paths.errors.into_iter().next() {
-        return Err(err);
-    }
-    for path in paths.paths {
-        let Some(parsed) = load_optional(&path, parse_agents_fragment_text_collecting)? else {
-            continue;
-        };
-        discovered
-            .unknown_keys
-            .extend(parsed.unknown_keys.into_iter().map(|key| UnknownConfigKey {
-                path: path.clone(),
-                key,
-            }));
-        discovered.merge(path, parsed.value);
-    }
-    Ok(discovered)
-}
-
-fn discover_agents_home_lenient(root: &Path) -> DiscoveredAgentsHome {
-    let mut discovered = DiscoveredAgentsHome::default();
-    let paths = agents_home_fragment_paths(root);
-    for err in paths.errors {
-        discovered.errors.push(err);
-    }
-    for path in paths.paths {
-        match load_optional(&path, parse_agents_fragment_text_collecting) {
-            Ok(Some(parsed)) => {
-                discovered
-                    .unknown_keys
-                    .extend(parsed.unknown_keys.into_iter().map(|key| UnknownConfigKey {
-                        path: path.clone(),
-                        key,
-                    }));
-                discovered.merge(path, parsed.value);
-            }
-            Ok(None) => {}
-            Err(err) => {
-                discovered.errors.push(err);
-            }
-        }
-    }
-    discovered
-}
-
-fn fragment_error_notice(err: ConfigErr) -> AgentsFragmentError {
-    match err {
-        ConfigErr::Parse { path, diagnosis } => AgentsFragmentError {
-            message: format!(
-                "cannot load {} — the file has a TOML error\n{diagnosis}",
-                path.display()
-            ),
-            path,
-        },
-        other => AgentsFragmentError {
-            path: other.path().to_path_buf(),
-            message: other.to_string(),
-        },
-    }
-}
-
-fn merge_agents_fragment(out: &mut AgentsFragment, fragment: AgentsFragment) {
-    out.profiles.0.extend(fragment.profiles.0);
-    out.teams.0.extend(fragment.teams.0);
-    out.commands.0.extend(fragment.commands.0);
-}
-
-fn child_dirs(path: &Path) -> Result<Vec<PathBuf>> {
-    let entries = match std::fs::read_dir(path) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => {
-            return Err(ConfigErr::Io {
-                path: path.to_path_buf(),
-                source,
-            });
-        }
-    };
-    let mut dirs = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|source| ConfigErr::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let entry_path = entry.path();
-        let file_type = entry.file_type().map_err(|source| ConfigErr::Io {
-            path: entry_path.clone(),
-            source,
-        })?;
-        if file_type.is_dir() {
-            dirs.push(entry_path);
-        }
-    }
-    Ok(dirs)
-}
-
-/// Whether `path` lies in the profile or team fragment tree under `agents_home`.
-/// The root itself also holds machine files, so a bare prefix test misfiles them.
-pub fn is_agents_home_fragment(agents_home: &Path, path: &Path) -> bool {
-    [AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR]
+/// Whether a path belongs to one of the Markdown definition trees.
+pub fn is_definition_source(agents_home: &Path, path: &Path) -> bool {
+    ["agents", "subagents", "teams", "traits"]
         .iter()
-        .any(|subdir| path.starts_with(agents_home.join(subdir)))
+        .any(|dir| path.starts_with(agents_home.join(dir)))
 }
 
-/// The fragment subdirectories under `root` that hold at least one fragment file.
+/// Legacy TOML trees retained only for migration diagnostics.
 pub fn agents_home_fragment_dirs(root: &Path) -> Vec<PathBuf> {
-    let fragments = agents_home_fragment_paths(root).paths;
-    [AGENTS_HOME_PROFILES_SUBDIR, AGENTS_HOME_TEAMS_SUBDIR]
-        .iter()
-        .map(|subdir| root.join(subdir))
-        .filter(|dir| {
-            fragments
-                .iter()
-                .any(|path| path.starts_with(dir) && path.is_file())
+    [("profiles", "agent.toml"), ("teams", "team.toml")]
+        .into_iter()
+        .filter_map(|(dir, file)| {
+            let path = root.join(dir);
+            let found = std::fs::read_dir(&path)
+                .ok()?
+                .filter_map(std::result::Result::ok)
+                .any(|entry| entry.path().join(file).is_file());
+            found.then_some(path)
         })
         .collect()
-}
-
-struct AgentsHomeFragmentPaths {
-    paths: Vec<PathBuf>,
-    errors: Vec<ConfigErr>,
-}
-
-fn agents_home_fragment_paths(root: &Path) -> AgentsHomeFragmentPaths {
-    let mut paths = Vec::new();
-    let mut errors = Vec::new();
-    for (subdir, fragment_file) in [
-        (AGENTS_HOME_PROFILES_SUBDIR, AGENT_FRAGMENT_FILE),
-        (AGENTS_HOME_TEAMS_SUBDIR, TEAM_FRAGMENT_FILE),
-    ] {
-        match child_dirs(&root.join(subdir)) {
-            Ok(dirs) => paths.extend(dirs.into_iter().map(|dir| dir.join(fragment_file))),
-            Err(err) => errors.push(err),
-        }
-    }
-    paths.sort();
-    AgentsHomeFragmentPaths { paths, errors }
-}
-
-#[cfg(test)]
-fn apply_agents_home(
-    agents: &mut AgentsConfig,
-    subagents: &SubagentProfilesConfig,
-    root: &Path,
-    agents_path: &Path,
-) -> Result<()> {
-    let mut subagents = subagents.clone();
-    apply_agents_home_collecting(
-        agents,
-        &mut subagents,
-        root,
-        agents_path,
-        &mut ConfigNotices::default(),
-    )
-    .map(|_| ())
-}
-
-fn apply_agents_home_collecting(
-    agents: &mut AgentsConfig,
-    subagents: &mut SubagentProfilesConfig,
-    root: &Path,
-    agents_path: &Path,
-    notices: &mut ConfigNotices,
-) -> Result<AgentSpecSources> {
-    let discovered = discover_agents_home_collecting(root)?;
-    notices.unknown_keys.extend(discovered.unknown_keys);
-    let sources =
-        AgentSpecSources::from_layers(agents, subagents, &discovered.fragments, agents_path);
-    match fold_agents_fragments(agents, subagents, &discovered.fragments, agents_path) {
-        FragmentFoldOutcome::Applied {
-            agents: merged,
-            subagents: merged_subagents,
-            deferred_errors,
-        } => {
-            if let Some(err) = deferred_errors.into_iter().next() {
-                return Err(err);
-            }
-            *agents = merged;
-            *subagents = merged_subagents;
-            Ok(sources)
-        }
-        FragmentFoldOutcome::InvalidBase(err) => Err(err.into_error()),
-    }
-}
-
-fn overlay_agents_fragment_under(agents: &mut AgentsConfig, fragment: &AgentsFragment) {
-    overlay_under(&mut agents.profiles.0, fragment.profiles.0.clone());
-    overlay_under(&mut agents.teams.0, fragment.teams.0.clone());
-    overlay_under(&mut agents.commands.0, fragment.commands.0.clone());
-}
-
-enum FragmentFoldOutcome {
-    Applied {
-        agents: AgentsConfig,
-        subagents: SubagentProfilesConfig,
-        deferred_errors: Vec<ConfigErr>,
-    },
-    InvalidBase(InvalidAgentsLayer),
-}
-
-fn fold_agents_fragments(
-    base_agents: &AgentsConfig,
-    base_subagents: &SubagentProfilesConfig,
-    fragments: &[LoadedAgentsFragment],
-    agents_path: &Path,
-) -> FragmentFoldOutcome {
-    let mut agents = base_agents.clone();
-    let mut subagents = base_subagents.clone();
-    let mut accepted = Vec::new();
-    let mut pending: Vec<_> = fragments.iter().collect();
-    loop {
-        let mut deferred = Vec::new();
-        let mut progressed = false;
-        for fragment in pending {
-            let (candidate_agents, candidate_subagents) = effective_with_fragments(
-                base_agents,
-                base_subagents,
-                accepted.iter().copied().chain(std::iter::once(fragment)),
-            );
-            match validate_agents_file(&candidate_agents, &candidate_subagents, &fragment.path) {
-                Ok(()) => {
-                    agents = candidate_agents;
-                    subagents = candidate_subagents;
-                    accepted.push(fragment);
-                    progressed = true;
-                }
-                Err(err) => deferred.push((fragment, err)),
-            }
-        }
-        if deferred.is_empty() {
-            if accepted.is_empty()
-                && let Err(err) = validate_agents_base(base_agents, base_subagents, agents_path)
-            {
-                return FragmentFoldOutcome::InvalidBase(err);
-            }
-            return FragmentFoldOutcome::Applied {
-                agents,
-                subagents,
-                deferred_errors: Vec::new(),
-            };
-        }
-        if progressed {
-            pending = deferred.into_iter().map(|(fragment, _)| fragment).collect();
-            continue;
-        }
-        let (group_agents, group_subagents) = effective_with_fragments(
-            base_agents,
-            base_subagents,
-            accepted
-                .iter()
-                .copied()
-                .chain(deferred.iter().map(|(fragment, _)| *fragment)),
-        );
-        if validate_agents_file(&group_agents, &group_subagents, agents_path).is_ok() {
-            return FragmentFoldOutcome::Applied {
-                agents: group_agents,
-                subagents: group_subagents,
-                deferred_errors: Vec::new(),
-            };
-        }
-        if accepted.is_empty()
-            && let Err(err) = validate_agents_base(base_agents, base_subagents, agents_path)
-        {
-            return FragmentFoldOutcome::InvalidBase(err);
-        }
-        return FragmentFoldOutcome::Applied {
-            agents,
-            subagents,
-            deferred_errors: deferred.into_iter().map(|(_, err)| err).collect(),
-        };
-    }
-}
-
-struct FragmentFoldWithFallback {
-    agents: AgentsConfig,
-    subagents: SubagentProfilesConfig,
-    base_errors: Vec<InvalidAgentsLayer>,
-    deferred_errors: Vec<ConfigErr>,
-}
-
-fn fold_agents_fragments_with_fallback(
-    base_agents: &AgentsConfig,
-    base_subagents: &SubagentProfilesConfig,
-    fragments: &[LoadedAgentsFragment],
-    agents_path: &Path,
-) -> FragmentFoldWithFallback {
-    let mut agents = base_agents.clone();
-    let mut subagents = base_subagents.clone();
-    let mut base_errors = Vec::new();
-    let mut reset_agents = false;
-    let mut reset_subagents = false;
-    loop {
-        match fold_agents_fragments(&agents, &subagents, fragments, agents_path) {
-            FragmentFoldOutcome::Applied {
-                agents,
-                subagents,
-                deferred_errors,
-            } => {
-                return FragmentFoldWithFallback {
-                    agents,
-                    subagents,
-                    base_errors,
-                    deferred_errors,
-                };
-            }
-            FragmentFoldOutcome::InvalidBase(err @ InvalidAgentsLayer::Agents(_))
-                if !reset_agents =>
-            {
-                base_errors.push(err);
-                agents = AgentsConfig::default();
-                reset_agents = true;
-            }
-            FragmentFoldOutcome::InvalidBase(err @ InvalidAgentsLayer::Subagents(_))
-                if !reset_subagents =>
-            {
-                base_errors.push(err);
-                subagents = SubagentProfilesConfig::default();
-                reset_subagents = true;
-            }
-            FragmentFoldOutcome::InvalidBase(err) => {
-                base_errors.push(err);
-                return FragmentFoldWithFallback {
-                    agents,
-                    subagents,
-                    base_errors,
-                    deferred_errors: Vec::new(),
-                };
-            }
-        }
-    }
-}
-
-impl InvalidAgentsLayer {
-    fn into_error(self) -> ConfigErr {
-        match self {
-            Self::Agents(err) | Self::Subagents(err) => err,
-        }
-    }
-}
-
-enum InvalidAgentsLayer {
-    Agents(ConfigErr),
-    Subagents(ConfigErr),
-}
-
-fn validate_agents_base(
-    agents: &AgentsConfig,
-    subagents: &SubagentProfilesConfig,
-    path: &Path,
-) -> std::result::Result<(), InvalidAgentsLayer> {
-    validate_agents_config(agents, path).map_err(InvalidAgentsLayer::Agents)?;
-    validate_subagent_profiles_config(subagents, agents, path)
-        .map_err(InvalidAgentsLayer::Subagents)?;
-    validate_subagent_allowlists_config(agents, subagents, path).map_err(InvalidAgentsLayer::Agents)
-}
-
-fn effective_with_fragments<'a>(
-    base_agents: &AgentsConfig,
-    base_subagents: &SubagentProfilesConfig,
-    fragments: impl Iterator<Item = &'a LoadedAgentsFragment>,
-) -> (AgentsConfig, SubagentProfilesConfig) {
-    let mut ordered: Vec<_> = fragments.collect();
-    ordered.sort_by_key(|fragment| fragment.order);
-    let mut fragment_agents = AgentsFragment::default();
-    let mut fragment_subagents = SubagentProfilesConfig::default();
-    for fragment in ordered {
-        merge_agents_fragment(&mut fragment_agents, fragment.file.agents.clone());
-        fragment_subagents
-            .profiles
-            .0
-            .extend(fragment.file.subagents.profiles.0.clone());
-    }
-    let mut agents = base_agents.clone();
-    let mut subagents = base_subagents.clone();
-    overlay_agents_fragment_under(&mut agents, &fragment_agents);
-    overlay_under(&mut subagents.profiles.0, fragment_subagents.profiles.0);
-    (agents, subagents)
-}
-
-fn overlay_under<V>(file: &mut BTreeMap<String, V>, fragment: BTreeMap<String, V>) {
-    for (key, value) in fragment {
-        file.entry(key).or_insert(value);
-    }
 }
 
 fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {

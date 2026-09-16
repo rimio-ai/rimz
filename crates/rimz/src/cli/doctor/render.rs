@@ -212,14 +212,14 @@ fn render_machine_config(
             "legacy root",
             verdict(
                 tally,
-                Health::Warn,
+                Health::Info,
                 format!(
-                    "{} holds profiles or teams RimZ no longer reads",
+                    "{} holds legacy TOML RimZ no longer reads",
                     home_relative(&legacy.path)
                 ),
             ),
         );
-        kv.push("fix", verdict(tally, Health::Warn, &legacy.fix));
+        kv.push("fix", verdict(tally, Health::Info, &legacy.fix));
         kv.render(w)?;
     }
     if config.broken_files.is_empty() {
@@ -232,8 +232,8 @@ fn render_machine_config(
     }
     for problem in &config.broken_files {
         let detail = match problem.kind {
-            MachineConfigProblemKind::Fragment => format!(
-                "{} cannot be used: {}; `rimz agents` and `rimz teams` refuse launches until this fragment is fixed",
+            MachineConfigProblemKind::Definition => format!(
+                "{} cannot be used: {}; `rimz agents` and `rimz teams` refuse launches until this definition is fixed; run `rimz agents validate`",
                 home_relative(&problem.path),
                 problem.error,
             ),

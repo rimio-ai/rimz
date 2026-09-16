@@ -12,7 +12,7 @@ use crate::cli::render;
 fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
     broken_config_notice_for(
         err,
-        rimz::config::is_agents_home_fragment(&rimz::disk::paths::agents_home(), err.path()),
+        matches!(err, rimz::config::ConfigErr::Definition { .. }),
     )
 }
 
@@ -24,7 +24,7 @@ fn broken_config_notice_for(err: &rimz::config::ConfigErr, fragment: bool) -> St
         .unwrap_or_else(|| render::one_line_error(err));
     if fragment {
         format!(
-            "{path} cannot be used: {detail}; `rimz agents` and `rimz teams` refuse launches until this fragment is fixed"
+            "{path} cannot be used: {detail}; `rimz agents` and `rimz teams` refuse launches until this definition is fixed; run `rimz agents validate`"
         )
     } else if err.diagnosis().is_some() {
         format!(

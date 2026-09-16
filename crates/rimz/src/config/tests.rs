@@ -1,5 +1,4 @@
 use super::*;
-use crate::agents::PermissionMode;
 use crate::ids::MuxName;
 use std::num::NonZeroU16;
 use tempfile::tempdir;
@@ -58,24 +57,9 @@ fn set_modified_time(path: &Path, modified: std::time::SystemTime) {
         .expect("set modified time");
 }
 
-fn write_agents_home_fragment(
-    root: &Path,
-    subdir: &str,
-    name: &str,
-    file: &str,
-    text: &str,
-) -> PathBuf {
-    let dir = root.join(subdir).join(name);
-    std::fs::create_dir_all(&dir).expect("create fragment dir");
-    let path = dir.join(file);
-    std::fs::write(&path, text).expect("write fragment");
-    path
-}
-
 #[derive(Clone, Copy, Debug)]
 enum ExpectedErr {
     Parse,
-    Agents,
     Notifications,
     Loop,
     AccountBudget,
@@ -89,7 +73,6 @@ fn expect_err(file: &str, text: &str) -> ConfigErr {
 fn assert_config_err(err: ConfigErr, expected: ExpectedErr) {
     match (&err, expected) {
         (ConfigErr::Parse { .. }, ExpectedErr::Parse)
-        | (ConfigErr::Agents { .. }, ExpectedErr::Agents)
         | (ConfigErr::Notifications { .. }, ExpectedErr::Notifications) => {}
         (ConfigErr::Loop { .. }, ExpectedErr::Loop) => {}
         (ConfigErr::AccountBudget { .. }, ExpectedErr::AccountBudget) => {}
@@ -166,7 +149,6 @@ fn broken_machine_files_reports_only_the_unparseable_file() {
         "[theme.display]\nmax_cols = 64\nmax_cols = 72\n",
     )
     .expect("write broken theme config");
-    std::fs::write(dir.path().join(AGENTS_FILE), "").expect("write agents config");
 
     let errors = broken_machine_files_in(&MachineConfigFiles::from_paths(
         dir.path().join(CONFIG_FILE),
@@ -188,98 +170,18 @@ fn broken_machine_files_reports_only_the_unparseable_file() {
 }
 
 #[test]
-fn broken_machine_files_reports_each_broken_agents_home_fragment() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    let broken = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "broken",
-        TEAM_FRAGMENT_FILE,
-        "not = = toml",
-    );
-
-    let errors = broken_machine_files_in(&MachineConfigFiles::from_paths(
-        dir.path().join(CONFIG_FILE),
-        agents_home.path(),
-    ));
-
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(errors[0].path(), broken);
-}
-
-#[test]
-fn broken_machine_files_reports_semantically_invalid_agents_home_fragment() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    let broken = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "broken",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.broken]\nlayout = \"claude,,codex\"\n",
-    );
-
-    let errors = broken_machine_files_in(&MachineConfigFiles::from_paths(
-        dir.path().join(CONFIG_FILE),
-        agents_home.path(),
-    ));
-
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(errors[0].path(), broken);
-    assert!(errors[0].to_string().contains("empty layout cell"));
-}
-
-#[test]
-fn broken_machine_files_reports_fragment_semantics_after_invalid_machine_base() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    write_named(
-        &dir,
-        AGENTS_FILE,
-        "[agents.teams.machine-broken]\nlayout = \"missing-cell\"\n",
-    );
-    let agents_path = dir.path().join(AGENTS_FILE);
-    let fragment = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "fragment-broken",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.fragment-broken]\nlayout = \"claude,,codex\"\n",
-    );
-
-    let errors = broken_machine_files_in(&MachineConfigFiles::from_paths(
-        dir.path().join(CONFIG_FILE),
-        agents_home.path(),
-    ));
-
-    assert_eq!(errors.len(), 2, "{errors:?}");
-    assert!(errors.iter().any(|err| err.path() == agents_path));
-    assert!(errors.iter().any(|err| err.path() == fragment));
-}
-
-#[test]
 fn lenient_load_falls_back_only_for_the_broken_file() {
-    let dir = tempdir().expect("tempdir");
-    let config_path = write(&dir, "not = = toml");
-    write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.planner]\nagent = \"claude\"\n",
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "not = = toml");
+    write_definition(
+        dir.path(),
+        "agents/planner.md",
+        "description: Planner\nagent: codex\ntools: []",
+        "",
     );
-
-    let config = load_lenient_no_fragments(&config_path);
+    let config = MachineConfig::load_lenient_from(&path, dir.path());
     assert_eq!(config.accounts, AccountsConfig::default());
-    assert_eq!(config.sidebar, SidebarConfig::default());
-    assert_eq!(
-        config
-            .agents
-            .profiles
-            .0
-            .get("planner")
-            .map(|profile| profile.agent.as_str()),
-        Some("claude"),
-    );
+    assert_eq!(config.agents.profiles.0["planner"].agent, "codex");
 }
 
 #[test]
@@ -325,302 +227,6 @@ fn core_parse_accepts_supported_budget_and_cursor_display_limit() {
 }
 
 #[test]
-fn lenient_load_resets_invalid_agents_but_keeps_core_config() {
-    let dir = tempdir().expect("tempdir");
-    let config_path = write(&dir, "[remote_control]\nclaude = true\n");
-    write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.term]\nagent = \"claude\"\n",
-    );
-
-    let config = load_lenient_no_fragments(&config_path);
-    assert!(config.remote_control.enabled_for("claude"));
-    assert_eq!(config.agents, AgentsConfig::default());
-}
-
-#[test]
-fn lenient_load_falls_back_to_defaults_plus_agents_home() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "claude-planner",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.claude-planner]\nagent = \"claude\"\n",
-    );
-    let config_path = write_named(
-        &dir,
-        "agents.toml",
-        "[agents.teams.review]\nlayout = \"missing-profile,codex\"\n",
-    );
-
-    let config = MachineConfig::load_lenient_from(&config_path, agents_home.path());
-
-    assert!(!config.agents.teams.0.contains_key("review"));
-    assert_eq!(
-        config
-            .agents
-            .teams
-            .0
-            .get("peer")
-            .and_then(|team| team.layout.as_deref()),
-        Some("claude,codex")
-    );
-    assert_eq!(
-        config
-            .agents
-            .profiles
-            .0
-            .get("claude-planner")
-            .map(|profile| profile.agent.as_str()),
-        Some("claude")
-    );
-}
-
-#[test]
-fn lenient_load_keeps_surviving_fragments_and_records_each_problem() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    let good = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "good",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.good]\nagent = \"claude\"\nfuture = true\n",
-    );
-    let broken = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "broken",
-        AGENT_FRAGMENT_FILE,
-        "not = = toml",
-    );
-    let config_path = write(&dir, "");
-
-    let config = MachineConfig::load_lenient_from(&config_path, agents_home.path());
-
-    assert!(config.agents.profiles.0.contains_key("good"));
-    assert_eq!(
-        config.notices.unknown_keys,
-        [UnknownConfigKey {
-            path: good,
-            key: "agents.profiles.good.future".to_owned(),
-        }]
-    );
-    assert_eq!(config.notices.fragment_errors.len(), 1);
-    assert_eq!(config.notices.fragment_errors[0].path, broken);
-    assert!(
-        config.notices.fragment_errors[0]
-            .message
-            .contains("TOML error")
-    );
-    assert!(
-        config.notices.fragment_errors[0].message.contains("\n1 |"),
-        "{}",
-        config.notices.fragment_errors[0].message
-    );
-}
-
-#[test]
-fn invalid_fragment_reference_has_the_same_source_error_in_both_loaders() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    let config_path = write(&dir, "");
-    let bad_profile = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "broken",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.broken]\nagent = \"missing-kind\"\n\
-         [agents.teams.broken-team]\nlayout = \"broken\"\n",
-    );
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "good",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.good]\nagent = \"claude\"\n",
-    );
-    let bad_empty = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "bad-empty",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.bad-empty]\nlayout = \"claude,,codex\"\n",
-    );
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "bad-layout",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.bad-layout]\nlayout = \"missing-cell\"\n",
-    );
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "good-team",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.good-team]\nlayout = \"claude,codex\"\n",
-    );
-
-    let strict =
-        MachineConfig::load_from(&config_path, agents_home.path()).expect_err("strict failure");
-    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
-    let launch_failure = lenient
-        .agents_fragment_failure()
-        .expect("lenient launch precondition");
-
-    assert_eq!(strict.path(), bad_profile);
-    assert_eq!(lenient.notices.fragment_errors[0].path, bad_profile);
-    assert!(
-        strict
-            .to_string()
-            .contains("invalid per-machine agents config")
-    );
-    assert!(
-        launch_failure.contains("invalid per-machine agents config"),
-        "strict: {strict}\nlenient: {launch_failure}"
-    );
-    assert!(launch_failure.contains("missing-kind"), "{launch_failure}");
-    assert!(launch_failure.contains("missing-cell"), "{launch_failure}");
-    assert_eq!(launch_failure.matches("missing-kind").count(), 1);
-    assert_eq!(launch_failure.matches("missing-cell").count(), 1);
-    assert!(
-        launch_failure.contains("empty layout cell"),
-        "{launch_failure}"
-    );
-    assert_eq!(lenient.notices.fragment_errors.len(), 3);
-    assert!(
-        lenient
-            .notices
-            .fragment_errors
-            .iter()
-            .any(|notice| notice.path == bad_empty)
-    );
-    assert!(lenient.agents.profiles.0.contains_key("good"));
-    assert!(!lenient.agents.profiles.0.contains_key("broken"));
-    assert!(!lenient.agents.teams.0.contains_key("bad-layout"));
-    assert!(lenient.agents.teams.0.contains_key("good-team"));
-}
-
-#[test]
-fn invalid_machine_definition_does_not_blame_shadowed_fragment() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    let config_path = write_named(
-        &dir,
-        AGENTS_FILE,
-        "[agents.teams.demo]\n\
-         [[agents.teams.demo.roles]]\nrole = \"lead\"\nprofile = \"missing-profile\"\n",
-    );
-    let fragment = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "demo",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.demo]\nlayout = \"claude,codex\"\n",
-    );
-
-    let strict =
-        MachineConfig::load_from(&config_path, agents_home.path()).expect_err("strict failure");
-    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
-
-    assert_eq!(strict.path(), dir.path().join(AGENTS_FILE));
-    assert!(
-        lenient.notices.fragment_errors.is_empty(),
-        "healthy shadowed fragment was blamed: {:?}",
-        lenient.notices.fragment_errors
-    );
-    assert_eq!(
-        lenient
-            .agents
-            .teams
-            .0
-            .get("demo")
-            .and_then(|team| team.layout.as_deref()),
-        Some("claude,codex")
-    );
-    assert!(fragment.exists());
-}
-
-#[test]
-fn lenient_load_validates_machine_definitions_after_fragment_dependencies_merge() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    let config_path = write_named(
-        &dir,
-        AGENTS_FILE,
-        "[agents.teams.demo]\n\
-         [[agents.teams.demo.roles]]\nrole = \"lead\"\nprofile = \"fragment-profile\"\n\
-         [subagents.profiles.machine-child]\nagent = \"fragment-parent\"\n",
-    );
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "fragment-profile",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.fragment-profile]\nagent = \"claude\"\n\
-         [subagents.profiles.fragment-parent]\nagent = \"claude\"\n",
-    );
-
-    let strict = MachineConfig::load_from(&config_path, agents_home.path()).expect("strict load");
-    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
-
-    for config in [&strict, &lenient] {
-        assert!(config.agents.teams.0.contains_key("demo"));
-        assert!(config.agents.profiles.0.contains_key("fragment-profile"));
-        assert!(config.subagents.profiles.0.contains_key("machine-child"));
-        assert!(config.subagents.profiles.0.contains_key("fragment-parent"));
-        assert!(config.notices.fragment_errors.is_empty());
-    }
-}
-
-#[test]
-fn peer_fragments_with_mutual_dependencies_validate_as_a_group() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    let config_path = write(&dir, "");
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "t1",
-        TEAM_FRAGMENT_FILE,
-        "[agents.profiles.p1]\nagent = \"claude\"\n\
-         [agents.teams.t1]\n\
-         [[agents.teams.t1.roles]]\nrole = \"lead\"\nprofile = \"p2\"\n\
-         [subagents.profiles.sa]\nagent = \"sb\"\n",
-    );
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "t2",
-        TEAM_FRAGMENT_FILE,
-        "[agents.profiles.p2]\nagent = \"codex\"\n\
-         [agents.teams.t2]\n\
-         [[agents.teams.t2.roles]]\nrole = \"lead\"\nprofile = \"p1\"\n\
-         [subagents.profiles.sb]\nagent = \"claude\"\n",
-    );
-
-    let strict = MachineConfig::load_from(&config_path, agents_home.path()).expect("strict load");
-    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
-    let broken = broken_machine_files_in(&MachineConfigFiles::from_paths(
-        config_path,
-        agents_home.path(),
-    ));
-
-    for config in [&strict, &lenient] {
-        assert!(config.agents.teams.0.contains_key("t1"));
-        assert!(config.agents.teams.0.contains_key("t2"));
-        assert!(config.subagents.profiles.0.contains_key("sa"));
-        assert!(config.subagents.profiles.0.contains_key("sb"));
-        assert!(config.notices.fragment_errors.is_empty());
-    }
-    assert!(broken.is_empty(), "{broken:?}");
-}
-
-#[test]
 fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
     let dir = tempdir().expect("tempdir");
     let agents_home = tempdir().expect("agents home");
@@ -630,12 +236,6 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
     );
     write_named(&dir, THEME_FILE, "[theme.glyphs]\nfuture = true\n");
     let theme_path = dir.path().join(THEME_FILE);
-    write_named(
-        &dir,
-        AGENTS_FILE,
-        "[agents.profiles.planner]\nagent = \"claude\"\nfuture = true\n",
-    );
-    let agents_path = dir.path().join(AGENTS_FILE);
     write_named(
         &dir,
         LOOP_FILE,
@@ -657,47 +257,11 @@ fn strict_load_ignores_unknown_keys_and_records_their_source_files() {
                 key: "theme.glyphs.future".to_owned(),
             },
             UnknownConfigKey {
-                path: agents_path,
-                key: "agents.profiles.planner.future".to_owned(),
-            },
-            UnknownConfigKey {
                 path: loop_path,
                 key: "tasks.nightly.future".to_owned(),
             },
         ]
     );
-}
-
-#[test]
-fn agents_home_fragment_subagent_profiles_merge_without_warning() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    let fragment = write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "planner",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.planner]\nagent = \"claude\"\n\
-         [subagents.profiles.planner-child]\nagent = \"claude\"\neffort = \"high\"\n",
-    );
-    let config_path = write(&dir, "");
-
-    let strict = MachineConfig::load_from(&config_path, agents_home.path()).expect("strict load");
-    let lenient = MachineConfig::load_lenient_from(&config_path, agents_home.path());
-
-    for config in [&strict, &lenient] {
-        assert!(config.agents.profiles.0.contains_key("planner"));
-        assert!(config.subagents.profiles.0.contains_key("planner-child"));
-        assert!(
-            config
-                .notices
-                .unknown_keys
-                .iter()
-                .all(|notice| notice.path != fragment || notice.key != "subagents"),
-            "{:?}",
-            config.notices
-        );
-    }
 }
 
 #[test]
@@ -765,497 +329,6 @@ fn load_memo_skips_torn_theme_pet_rewrite() {
 }
 
 #[test]
-fn agents_home_fragments_merge_profiles_commands_and_teams() {
-    let root = tempdir().expect("tempdir");
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "codex-coder",
-        AGENT_FRAGMENT_FILE,
-        "[agents.commands]\n\
-             lint = \"cargo clippy\"\n\
-             [agents.profiles.codex-coder]\n\
-             agent = \"codex\"\n",
-    );
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "review",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.review]\n\
-             layout = \"coder\"\n\
-             [[agents.teams.review.roles]]\n\
-             role = \"coder\"\n\
-             profile = \"codex-coder\"\n",
-    );
-
-    let mut agents = AgentsConfig::default();
-    apply_agents_home(
-        &mut agents,
-        &SubagentProfilesConfig::default(),
-        root.path(),
-        &root.path().join("agents.toml"),
-    )
-    .expect("merge");
-
-    assert_eq!(
-        agents
-            .profiles
-            .0
-            .get("codex-coder")
-            .map(|profile| profile.agent.as_str()),
-        Some("codex"),
-    );
-    assert_eq!(
-        agents.commands.0.get("lint").map(String::as_str),
-        Some("cargo clippy"),
-    );
-    assert_eq!(
-        agents
-            .teams
-            .0
-            .get("review")
-            .and_then(|team| team.layout.as_deref()),
-        Some("coder"),
-    );
-}
-
-#[test]
-fn agent_spec_sources_follow_fragment_and_machine_precedence() {
-    let root = tempdir().expect("agents home");
-    let fragment_path = write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "base",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.fragment]\n\
-             agent = \"codex\"\n\
-         [agents.profiles.shared]\n\
-             agent = \"codex\"\n\
-         [agents.commands]\n\
-             lint = \"cargo check\"\n\
-         [subagents.profiles.child]\n\
-             agent = \"codex\"\n",
-    );
-    let overriding_fragment_path = write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "override",
-        AGENT_FRAGMENT_FILE,
-        "[agents.commands]\n\
-             lint = \"cargo clippy\"\n",
-    );
-    let config_dir = tempdir().expect("config dir");
-    let config_path = write_named(
-        &config_dir,
-        AGENTS_FILE,
-        "[agents.profiles.shared]\n\
-             agent = \"claude\"\n\
-         [agents.commands]\n\
-             shell = \"bash\"\n\
-         [subagents.profiles.local]\n\
-             agent = \"claude\"\n",
-    );
-    let agents_path = config_dir.path().join(AGENTS_FILE);
-
-    let (config, sources) =
-        MachineConfig::load_from_with_agent_spec_sources(&config_path, root.path())
-            .expect("load config with sources");
-
-    assert_eq!(
-        config.agents.commands.0.get("lint"),
-        Some(&"cargo clippy".to_owned())
-    );
-    assert_eq!(
-        sources.profile(effective::ProfileScope::Agents, "fragment"),
-        Some(fragment_path.as_path())
-    );
-    assert_eq!(
-        sources.profile(effective::ProfileScope::Subagents, "child"),
-        Some(fragment_path.as_path())
-    );
-    assert_eq!(
-        sources.command("lint"),
-        Some(overriding_fragment_path.as_path())
-    );
-    assert_eq!(
-        sources.profile(effective::ProfileScope::Agents, "shared"),
-        Some(agents_path.as_path())
-    );
-    assert_eq!(
-        sources.profile(effective::ProfileScope::Subagents, "local"),
-        Some(agents_path.as_path())
-    );
-    assert_eq!(sources.command("shell"), Some(agents_path.as_path()));
-}
-
-#[test]
-fn agents_home_fragments_merge_subagent_profiles_with_paths_and_machine_precedence() {
-    let root = tempdir().expect("tempdir");
-    let fragment_path = write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "reviewer",
-        AGENT_FRAGMENT_FILE,
-        "[subagents.profiles.reviewer]\n\
-             agent = \"codex\"\n\
-             system-prompt-file = \"prompts/reviewer.md\"\n\
-         [subagents.profiles.shared]\n\
-             agent = \"codex\"\n",
-    );
-    let config_dir = tempdir().expect("config dir");
-    let config_path = write_named(
-        &config_dir,
-        AGENTS_FILE,
-        "[subagents.profiles.shared]\n\
-             agent = \"claude\"\n",
-    );
-
-    let config = MachineConfig::load_from(&config_path, root.path()).expect("load fragments");
-
-    let reviewer = config
-        .subagents
-        .profiles
-        .0
-        .get("reviewer")
-        .expect("fragment subagent profile");
-    assert_eq!(reviewer.agent, "codex");
-    assert_eq!(
-        reviewer
-            .system_prompt_file
-            .as_ref()
-            .and_then(crate::config::PromptSource::file),
-        Some(
-            fragment_path
-                .parent()
-                .expect("fragment dir")
-                .join("prompts/reviewer.md")
-                .as_path()
-        )
-    );
-    assert_eq!(
-        config
-            .subagents
-            .profiles
-            .0
-            .get("shared")
-            .map(|profile| profile.agent.as_str()),
-        Some("claude"),
-        "machine agents.toml must override a same-named fragment profile"
-    );
-}
-
-#[test]
-fn agents_home_teams_can_bind_implicit_builtin_profiles() {
-    let root = tempdir().expect("tempdir");
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "forge",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.forge]\n\
-             [[agents.teams.forge.roles]]\n\
-             role = \"planner\"\n\
-             profile = \"claude\"\n\
-             [[agents.teams.forge.roles]]\n\
-             role = \"coder\"\n\
-             profile = \"codex\"\n",
-    );
-
-    let mut agents = AgentsConfig::default();
-    apply_agents_home(
-        &mut agents,
-        &SubagentProfilesConfig::default(),
-        root.path(),
-        &root.path().join("agents.toml"),
-    )
-    .expect("built-in profiles resolve after fragment merge");
-
-    assert_eq!(
-        agents.teams.0.get("forge").map(|team| team.roles.len()),
-        Some(2)
-    );
-    assert!(agents.profiles.0.is_empty());
-}
-
-#[test]
-fn agents_toml_entries_override_agents_home_fragments() {
-    let root = tempdir().expect("tempdir");
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "planner",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.planner]\nagent = \"codex\"\n",
-    );
-    let mut agents = AgentsConfig::default();
-    agents.profiles.0.insert(
-        "planner".to_owned(),
-        Profile {
-            agent: "claude".to_owned(),
-            description: None,
-            subagents: None,
-            model_reminder: None,
-            mode: None,
-            model: Some("opus".to_owned()),
-            effort: None,
-            budget: None,
-            auto_compact: None,
-            system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
-            skills: None,
-            args: None,
-        },
-    );
-
-    apply_agents_home(
-        &mut agents,
-        &SubagentProfilesConfig::default(),
-        root.path(),
-        &root.path().join("agents.toml"),
-    )
-    .expect("merge");
-
-    let profile = agents.profiles.0.get("planner").expect("planner profile");
-    assert_eq!(profile.agent, "claude");
-    assert_eq!(profile.model.as_deref(), Some("opus"));
-}
-
-#[test]
-fn agents_home_fragment_name_clashes_are_sorted_last_wins() {
-    let root = tempdir().expect("tempdir");
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "alpha",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.shared]\nagent = \"claude\"\n",
-    );
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "zulu",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.shared]\nagent = \"codex\"\n",
-    );
-
-    let fragment = discover_agents_home(root.path()).expect("discover");
-
-    assert_eq!(
-        fragment
-            .profiles
-            .0
-            .get("shared")
-            .map(|profile| profile.agent.as_str()),
-        Some("codex"),
-    );
-}
-
-#[test]
-fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
-    let root = tempdir().expect("tempdir");
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "planner",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.planner]\nagent = \"claude\"\n",
-    );
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "review",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.review]\n\
-             [[agents.teams.review.roles]]\n\
-             role = \"planner\"\n\
-             profile = \"planner\"\n\
-             system-prompt-file = \"planner.md\"\n\
-             append-system-prompt-files = [\"prompts/shared.md\"]\n",
-    );
-    let team_fragment_dir = root.path().join(AGENTS_HOME_TEAMS_SUBDIR).join("review");
-    std::fs::write(
-        team_fragment_dir.join(TEAM_FRAGMENT_FILE),
-        std::fs::read_to_string(team_fragment_dir.join(TEAM_FRAGMENT_FILE))
-            .expect("read team fragment")
-            .replace(
-                "[agents.teams.review]\n",
-                "[agents.teams.review]\nstages = [\"Plan\"]\nconsensus-file = \"consensus.md\"\nappend-system-prompt-files = [\"pipeline.md\"]\n",
-            ),
-    )
-    .expect("write team layer");
-
-    let mut agents = AgentsConfig::default();
-    apply_agents_home(
-        &mut agents,
-        &SubagentProfilesConfig::default(),
-        root.path(),
-        &root.path().join("agents.toml"),
-    )
-    .expect("merge");
-
-    let role = agents
-        .teams
-        .0
-        .get("review")
-        .and_then(|team| team.roles.first())
-        .expect("review role");
-    let expected = root
-        .path()
-        .join(AGENTS_HOME_TEAMS_SUBDIR)
-        .join("review")
-        .join("planner.md");
-    assert_eq!(
-        role.system_prompt_file
-            .as_ref()
-            .and_then(crate::config::PromptSource::file),
-        Some(expected.as_path())
-    );
-    let expected_append = root
-        .path()
-        .join(AGENTS_HOME_TEAMS_SUBDIR)
-        .join("review")
-        .join("prompts/shared.md");
-    assert_eq!(role.append_system_prompt_files, [expected_append.into()]);
-    let team = agents.teams.0.get("review").expect("review team");
-    assert_eq!(
-        team.consensus_file.as_deref(),
-        Some(team_fragment_dir.join("consensus.md").as_path())
-    );
-    assert_eq!(
-        team.append_system_prompt_files,
-        [team_fragment_dir.join("pipeline.md").into()]
-    );
-}
-
-#[test]
-fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
-    let root = tempdir().expect("tempdir");
-    let mut agents = AgentsConfig::default();
-    let before = agents.clone();
-
-    apply_agents_home(
-        &mut agents,
-        &SubagentProfilesConfig::default(),
-        &root.path().join("missing"),
-        &root.path().join("agents.toml"),
-    )
-    .expect("absent agents home");
-
-    assert_eq!(agents, before);
-
-    write_agents_home_fragment(
-        root.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "broken",
-        AGENT_FRAGMENT_FILE,
-        "not = = toml",
-    );
-    agents.profiles.0.insert(
-        "planner".to_owned(),
-        Profile {
-            agent: "claude".to_owned(),
-            description: None,
-            subagents: None,
-            model_reminder: None,
-            mode: None,
-            model: None,
-            effort: None,
-            budget: None,
-            auto_compact: None,
-            system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
-            skills: None,
-            args: None,
-        },
-    );
-    let before = agents.clone();
-
-    assert!(matches!(
-        apply_agents_home(
-            &mut agents,
-            &SubagentProfilesConfig::default(),
-            root.path(),
-            &root.path().join("agents.toml"),
-        ),
-        Err(ConfigErr::Parse { .. })
-    ));
-    assert_eq!(agents, before);
-}
-
-#[test]
-fn strict_load_validates_teams_after_agents_home_profiles_merge() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = tempdir().expect("agents home");
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_PROFILES_SUBDIR,
-        "claude-planner",
-        AGENT_FRAGMENT_FILE,
-        "[agents.profiles.claude-planner]\nagent = \"claude\"\n",
-    );
-    write_agents_home_fragment(
-        agents_home.path(),
-        AGENTS_HOME_TEAMS_SUBDIR,
-        "plan-code-review",
-        TEAM_FRAGMENT_FILE,
-        "[agents.teams.plan-code-review]\n\
-             [[agents.teams.plan-code-review.roles]]\n\
-             role = \"planner\"\n\
-             profile = \"claude-planner\"\n",
-    );
-    let config_path = write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.codex-reviewer]\n\
-             agent = \"codex\"\n\
-             [agents.teams.peer]\n\
-             layout = \"claude-planner,codex-reviewer\"\n",
-    );
-
-    // Regression guard for cd200739: validation runs after ~/.agents fragments merge.
-    let config = MachineConfig::load_from(&config_path, agents_home.path()).expect("load");
-
-    assert_eq!(
-        config
-            .agents
-            .teams
-            .0
-            .get("peer")
-            .and_then(|team| team.layout.as_deref()),
-        Some("claude-planner,codex-reviewer")
-    );
-    assert_eq!(
-        config
-            .agents
-            .profiles
-            .0
-            .get("claude-planner")
-            .map(|profile| profile.agent.as_str()),
-        Some("claude")
-    );
-    assert_eq!(
-        config
-            .agents
-            .profiles
-            .0
-            .get("codex-reviewer")
-            .map(|profile| profile.agent.as_str()),
-        Some("codex")
-    );
-    assert_eq!(
-        config
-            .agents
-            .teams
-            .0
-            .get("plan-code-review")
-            .and_then(|team| team.roles.first())
-            .map(|role| role.profile.as_str()),
-        Some("claude-planner")
-    );
-}
-
-#[test]
 fn removed_agents_tables_fail_fast_with_the_rename() {
     let dir = tempdir().expect("tempdir");
     for (legacy, expected_detail) in [
@@ -1263,7 +336,7 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
         ("[agents.aliases]\nvim = \"nvim\"\n", "[agents.aliases]"),
         (
             "[agents.layouts]\nreview = \"claude,codex\"\n",
-            "[agents.teams]",
+            "teams/<name>.md",
         ),
         (
             "[agents.loop.tasks.old]\n\
@@ -1274,7 +347,7 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
             "loop.toml",
         ),
     ] {
-        match load_no_fragments(&write_named(&dir, "agents.toml", legacy)) {
+        match load_no_fragments(&write_named(&dir, "config.toml", legacy)) {
             Err(ConfigErr::RemovedTable { detail, .. }) => {
                 assert!(detail.contains(expected_detail), "{detail}");
             }
@@ -1284,39 +357,22 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
 
     load_no_fragments(&write_named(
         &dir,
-        "agents.toml",
+        "config.toml",
         "[agents]\nplacement = \"tab\"\n\n[agents.commands]\nvim = \"nvim\"\n",
     ))
     .expect("current agents config loads");
 }
 
 #[test]
-fn singular_append_prompt_key_fails_with_plural_rename() {
-    let dir = tempdir().expect("tempdir");
-    for legacy in [
-        "[agents.profiles.planner]\nagent = \"claude\"\nappend-system-prompt-file = \"planner.md\"\n",
-        "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"claude\"\nappend-system-prompt-file = \"planner.md\"\n",
-    ] {
-        match load_no_fragments(&write_named(&dir, "agents.toml", legacy)) {
-            Err(ConfigErr::RemovedKey { detail, .. }) => {
-                assert!(detail.contains("append-system-prompt-files"), "{detail}");
-                assert!(detail.contains("use an array of paths"), "{detail}");
-            }
-            other => panic!("expected RemovedKey for {legacy:?}, got {other:?}"),
-        }
-    }
-}
-
-#[test]
 fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
     let dir = tempdir().expect("tempdir");
-    let defaulted = load_no_fragments(&write_named(&dir, "agents.toml", ""))
+    let defaulted = load_no_fragments(&write_named(&dir, "config.toml", ""))
         .expect("load default agents config");
     assert_eq!(defaulted.agents.max_chain_length, 3);
 
     let tuned = load_no_fragments(&write_named(
         &dir,
-        "agents.toml",
+        "config.toml",
         "[agents]\nmax-chain-length = 5\n",
     ))
     .expect("load chain length override");
@@ -1324,7 +380,7 @@ fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
 
     match load_no_fragments(&write_named(
         &dir,
-        "agents.toml",
+        "config.toml",
         "[agents]\nmax-launch-depth = 1\n",
     )) {
         Err(ConfigErr::RemovedKey { detail, .. }) => {
@@ -1385,96 +441,6 @@ fn forward_compat_keys_and_retired_sections_are_ignored() {
     assert_eq!(config.sidebar.focus_key, "Alt+x");
     assert_eq!(config.zellij, ZellijConfig::default());
     assert_eq!(config.agents.worktree, WorktreeConfig::default());
-}
-
-#[test]
-fn agent_profiles_commands_and_teams_parse() {
-    let dir = tempdir().expect("tempdir");
-    let config = load_no_fragments(&write_named(
-        &dir,
-        "agents.toml",
-        "[agents.commands]\n\
-             vim = \"nvim -p\"\n\
-             htop = \"htop\"\n\
-             [agents.profiles.codex-yolo]\n\
-             agent = \"codex\"\n\
-             mode = \"yolo\"\n\
-             model = \"gpt-5-codex\"\n\
-             effort = \"high\"\n\
-             auto-compact = \"200k\"\n\
-             args = \"--model gpt-5-codex -c model_reasoning_effort=high\"\n\
-             [agents.profiles.planner]\n\
-             agent = \"claude\"\n\
-             system-prompt-file = \"/prompts/planner.md\"\n\
-             [agents.teams.stacked]\n\
-             layout = \"planner+coder\"\n\
-             [[agents.teams.stacked.roles]]\n\
-             role = \"planner\"\n\
-             profile = \"planner\"\n\
-             auto-compact = \"200k\"\n\
-             [[agents.teams.stacked.roles]]\n\
-             role = \"coder\"\n\
-             profile = \"codex-yolo\"\n\
-             [subagents.profiles.reviewer]\n\
-             agent = \"codex\"\n\
-             auto-compact = \"200k\"\n",
-    ))
-    .expect("load");
-    let commands = &config.agents.commands.0;
-    assert_eq!(commands.get("vim").map(String::as_str), Some("nvim -p"));
-    assert_eq!(commands.get("htop").map(String::as_str), Some("htop"));
-    let profiles = &config.agents.profiles.0;
-    assert_eq!(
-        profiles.get("codex-yolo"),
-        Some(&Profile {
-            agent: "codex".to_owned(),
-            description: None,
-            subagents: None,
-            model_reminder: None,
-            mode: Some(PermissionMode::Yolo),
-            model: Some("gpt-5-codex".to_owned()),
-            effort: Some("high".to_owned()),
-            budget: None,
-            auto_compact: Some("200k".to_owned()),
-            system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
-            skills: None,
-            args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned())
-        })
-    );
-    assert_eq!(
-        profiles.get("planner"),
-        Some(&Profile {
-            agent: "claude".to_owned(),
-            description: None,
-            subagents: None,
-            model_reminder: None,
-            mode: None,
-            model: None,
-            effort: None,
-            budget: None,
-            auto_compact: None,
-            system_prompt_file: Some("/prompts/planner.md".into()),
-            append_system_prompt_files: Vec::new(),
-            skills: None,
-            args: None,
-        })
-    );
-    let team = config.agents.teams.0.get("stacked").expect("team");
-    assert_eq!(team.layout.as_deref(), Some("planner+coder"));
-    let roles = &team.roles;
-    assert_eq!(roles[0].role, "planner");
-    assert_eq!(roles[0].profile, "planner");
-    assert_eq!(roles[0].auto_compact.as_deref(), Some("200k"));
-    assert_eq!(roles[1].role, "coder");
-    assert_eq!(roles[1].profile, "codex-yolo");
-    assert_eq!(roles[1].auto_compact, None);
-    assert_eq!(
-        config.subagents.profiles.0["reviewer"]
-            .auto_compact
-            .as_deref(),
-        Some("200k")
-    );
 }
 
 #[test]
@@ -1557,22 +523,21 @@ fn team_owns_and_flip_compact_parse_default_and_round_trip() {
 
 #[test]
 fn team_signal_bindings_parse_default_and_round_trip() {
-    let config: AgentsConfig = toml::from_str(
+    let team: Team = toml::from_str(
         r#"
-        [[teams.forge.roles]]
+        [[roles]]
         role = "coder"
         profile = "codex"
         signals = [
             { signal = "ci.failed" },
             { signal = "agent.idle", match = { handle = "reviewer" }, prompt = "Review the result" },
         ]
-        [[teams.forge.roles]]
+        [[roles]]
         role = "reviewer"
         profile = "claude"
         "#,
     )
     .expect("parse bindings");
-    let team = &config.teams.0["forge"];
     let signals = &team.roles[0].signals;
     assert_eq!(signals.len(), 2);
     assert_eq!(signals[0].signal, "ci.failed");
@@ -1581,8 +546,8 @@ fn team_signal_bindings_parse_default_and_round_trip() {
     assert_eq!(signals[1].matches["handle"], "reviewer");
     assert_eq!(signals[1].prompt.as_deref(), Some("Review the result"));
     assert!(team.roles[1].signals.is_empty());
-    let encoded = toml::to_string(team).expect("serialize bindings");
-    assert_eq!(toml::from_str::<Team>(&encoded).expect("round trip"), *team);
+    let encoded = toml::to_string(&team).expect("serialize bindings");
+    assert_eq!(toml::from_str::<Team>(&encoded).expect("round trip"), team);
     for raw in ["", "signals = []"] {
         let empty: RoleBinding =
             toml::from_str(&format!("role = \"coder\"\nprofile = \"codex\"\n{raw}"))
@@ -1605,23 +570,6 @@ fn team_signal_bindings_parse_default_and_round_trip() {
             ))
             .is_err()
         );
-    }
-}
-
-#[test]
-fn team_level_signals_are_rejected_with_role_migration_guidance() {
-    let dir = tempdir().expect("tempdir");
-    let path = write_named(
-        &dir,
-        "agents.toml",
-        "[[agents.teams.forge.signals]]\nsignal = \"ci.failed\"\nrole = \"coder\"\n",
-    );
-    match load_no_fragments(&path) {
-        Err(ConfigErr::RemovedKey { detail, .. }) => {
-            assert!(detail.contains("team `forge`"), "{detail}");
-            assert!(detail.contains("each receiving role"), "{detail}");
-        }
-        other => panic!("expected RemovedKey for team-level signals, got {other:?}"),
     }
 }
 
@@ -1671,264 +619,6 @@ fn team_scratch_files_parse_default_and_round_trip() {
 }
 
 #[test]
-fn profile_system_prompt_file_resolves_against_the_config_dir() {
-    let dir = tempdir().expect("tempdir");
-    let config = load_no_fragments(&write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.planner]\n\
-             agent = \"claude\"\n\
-             system-prompt-file = \"prompts/planner.md\"\n",
-    ))
-    .expect("load");
-    let Some(Profile {
-        system_prompt_file: Some(path),
-        ..
-    }) = config.agents.profiles.0.get("planner")
-    else {
-        panic!("planner profile with a system prompt");
-    };
-    assert_eq!(path.origin(), &dir.path().join("prompts/planner.md"));
-
-    let absolute = load_no_fragments(&write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.planner]\n\
-             agent = \"claude\"\n\
-             system-prompt-file = \"/etc/rimz/planner.md\"\n",
-    ))
-    .expect("load");
-    let Some(Profile {
-        system_prompt_file: Some(path),
-        ..
-    }) = absolute.agents.profiles.0.get("planner")
-    else {
-        panic!("planner profile with a system prompt");
-    };
-    assert_eq!(path.origin(), std::path::Path::new("/etc/rimz/planner.md"));
-}
-
-#[test]
-fn agent_and_subagent_profiles_parse_in_separate_namespaces_with_descriptions() {
-    let dir = tempdir().expect("tempdir");
-    let config = load_no_fragments(&write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.opus]\n\
-             agent = \"claude\"\n\
-             description = \"Main planning profile\"\n\
-         [subagents.profiles.opus]\n\
-             agent = \"codex\"\n\
-             description = \"Supervised implementation profile\"\n",
-    ))
-    .expect("load");
-
-    let agent = config.agents.profiles.0.get("opus").expect("agent profile");
-    assert_eq!(agent.agent, "claude");
-    assert_eq!(agent.description.as_deref(), Some("Main planning profile"));
-    let subagent = config
-        .subagents
-        .profiles
-        .0
-        .get("opus")
-        .expect("subagent profile");
-    assert_eq!(subagent.agent, "codex");
-    assert_eq!(
-        subagent.description.as_deref(),
-        Some("Supervised implementation profile")
-    );
-
-    let encoded = toml::to_string(subagent).expect("serialize profile");
-    assert!(encoded.contains("description = \"Supervised implementation profile\""));
-    assert_eq!(
-        toml::from_str::<Profile>(&encoded).expect("round-trip profile"),
-        *subagent
-    );
-}
-
-#[test]
-fn profile_model_reminder_parses_and_round_trips_in_both_namespaces() {
-    let dir = tempdir().expect("tempdir");
-    for namespace in ["agents", "subagents"] {
-        for (field, expected) in [
-            ("", None),
-            ("model-reminder = true\n", Some(true)),
-            ("model-reminder = false\n", Some(false)),
-        ] {
-            let config = load_no_fragments(&write_named(
-                &dir,
-                "agents.toml",
-                &format!("[{namespace}.profiles.planner]\nagent = \"claude\"\n{field}"),
-            ))
-            .expect("load model reminder");
-            let profiles = if namespace == "agents" {
-                &config.agents.profiles
-            } else {
-                &config.subagents.profiles
-            };
-            let profile = profiles.0.get("planner").expect("profile");
-            assert_eq!(profile.model_reminder, expected);
-            let encoded = toml::to_string(profile).expect("serialize profile");
-            let serialized: toml::Value = toml::from_str(&encoded).expect("profile table");
-            assert_eq!(
-                serialized
-                    .get("model-reminder")
-                    .and_then(toml::Value::as_bool),
-                expected
-            );
-            assert_eq!(
-                toml::from_str::<Profile>(&encoded).expect("round-trip profile"),
-                *profile
-            );
-        }
-    }
-}
-
-#[test]
-fn agent_profile_subagent_allowlist_parses_round_trips_and_validates() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = dir.path().join("missing-agents-home");
-    let path = write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.planner]\nagent = \"claude\"\nsubagents = [\"explorer\"]\n\
-         [subagents.profiles.explorer]\nagent = \"codex\"\n",
-    );
-    let config = MachineConfig::load_from(&path, &agents_home).expect("valid allowlist");
-    let planner = config
-        .agents
-        .profiles
-        .0
-        .get("planner")
-        .expect("planner profile");
-    assert_eq!(
-        planner.subagents.as_deref(),
-        Some(["explorer".to_owned()].as_slice())
-    );
-    let encoded = toml::to_string(planner).expect("serialize profile");
-    assert_eq!(
-        toml::from_str::<Profile>(&encoded).expect("round-trip profile"),
-        *planner
-    );
-
-    let cases = [
-        (
-            "[agents.profiles.planner]\nagent = \"claude\"\nsubagents = [\"typo\"]\n",
-            "allows subagent `typo`",
-        ),
-        (
-            "[subagents.profiles.explorer]\nagent = \"claude\"\nsubagents = []\n",
-            "a subagent cannot launch",
-        ),
-    ];
-    for (text, expected) in cases {
-        let path = write_named(&dir, "agents.toml", text);
-        let error = MachineConfig::load_from(&path, &agents_home).expect_err("invalid config");
-        assert!(error.to_string().contains(expected), "{error:#}");
-    }
-}
-
-#[test]
-fn subagent_profile_prompt_file_resolves_against_the_config_dir() {
-    let dir = tempdir().expect("tempdir");
-    let config = load_no_fragments(&write_named(
-        &dir,
-        "agents.toml",
-        "[subagents.profiles.reviewer]\n\
-             agent = \"codex\"\n\
-             system-prompt-file = \"prompts/reviewer.md\"\n",
-    ))
-    .expect("load");
-
-    let profile = config
-        .subagents
-        .profiles
-        .0
-        .get("reviewer")
-        .expect("subagent profile");
-    assert_eq!(
-        profile
-            .system_prompt_file
-            .as_ref()
-            .and_then(crate::config::PromptSource::file),
-        Some(dir.path().join("prompts/reviewer.md").as_path())
-    );
-}
-
-#[test]
-fn strict_load_validates_subagent_profile_chains_and_team_collisions() {
-    let dir = tempdir().expect("tempdir");
-    let agents_home = dir.path().join("missing-agents-home");
-    let unknown_base = write_named(
-        &dir,
-        "agents.toml",
-        "[subagents.profiles.child]\nagent = \"missing\"\n",
-    );
-    let err = MachineConfig::load_from(&unknown_base, &agents_home)
-        .expect_err("unknown subagent base must fail");
-    assert!(matches!(
-        err,
-        ConfigErr::Agents {
-            source: crate::harness::spec::LayoutErr::UnknownProfileBase { profile, base },
-            ..
-        } if profile == "child" && base == "missing"
-    ));
-
-    let collision = write_named(
-        &dir,
-        "agents.toml",
-        "[subagents.profiles.peer]\nagent = \"claude\"\n",
-    );
-    let err =
-        MachineConfig::load_from(&collision, &agents_home).expect_err("team collision must fail");
-    assert!(matches!(
-        err,
-        ConfigErr::Agents {
-            source: crate::harness::spec::LayoutErr::ReservedTeamName(name),
-            ..
-        } if name == "peer"
-    ));
-}
-
-#[test]
-fn unused_invalid_agent_profile_stays_lazy_and_does_not_hide_siblings() {
-    let dir = tempdir().expect("tempdir");
-    let config_path = write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.good]\n\
-             agent = \"claude\"\n\
-         [agents.profiles.bad]\n\
-             agent = \"missing\"\n",
-    );
-
-    let strict = load_no_fragments(&config_path).expect("unused profile resolves at launch");
-    assert!(strict.agents.profiles.0.contains_key("good"));
-    assert!(strict.agents.profiles.0.contains_key("bad"));
-
-    let lenient = load_lenient_no_fragments(&config_path);
-    assert!(lenient.agents.profiles.0.contains_key("good"));
-    assert!(lenient.agents.profiles.0.contains_key("bad"));
-}
-
-#[test]
-fn lenient_invalid_subagent_profile_does_not_reset_agent_config() {
-    let dir = tempdir().expect("tempdir");
-    let config_path = write_named(
-        &dir,
-        "agents.toml",
-        "[agents.profiles.good]\n\
-             agent = \"claude\"\n\
-         [subagents.profiles.bad]\n\
-             agent = \"missing\"\n",
-    );
-
-    let config = load_lenient_no_fragments(&config_path);
-    assert!(config.agents.profiles.0.contains_key("good"));
-    assert!(config.subagents.profiles.0.is_empty());
-}
-
-#[test]
 fn worktree_config_defaults_and_parses() {
     let dir = tempdir().expect("tempdir");
     let defaults_dir = tempdir().expect("tempdir");
@@ -1938,7 +628,7 @@ fn worktree_config_defaults_and_parses() {
 
     let config = load_no_fragments(&write_named(
         &dir,
-        "agents.toml",
+        "config.toml",
         "[agents.worktree]\n\
              dir = \"../wt-{repo}\"\n\
              base = \"fresh\"\n",
@@ -1949,7 +639,7 @@ fn worktree_config_defaults_and_parses() {
 
     let explicit = load_no_fragments(&write_named(
         &dir,
-        "agents.toml",
+        "config.toml",
         "[agents.worktree]\nbase = \"main\"\n",
     ))
     .expect("load");
@@ -1960,7 +650,7 @@ fn worktree_config_defaults_and_parses() {
     assert!(
         load_no_fragments(&write_named(
             &dir,
-            "agents.toml",
+            "config.toml",
             "[agents.worktree]\nbase = \"\"\n",
         ))
         .is_err()
@@ -2108,22 +798,7 @@ fn load_from_surfaces_typed_config_errors() {
             ExpectedErr::Parse,
         ),
         (
-            "agents.toml",
-            "[agents.profiles.missing_agent]\nmode = \"yolo\"\n",
-            ExpectedErr::Parse,
-        ),
-        (
-            "agents.toml",
-            "[agents.profiles.term]\nagent = \"claude\"\n",
-            ExpectedErr::Agents,
-        ),
-        (
-            "agents.toml",
-            "[agents.profiles.claude-2]\nagent = \"claude\"\n",
-            ExpectedErr::Agents,
-        ),
-        (
-            "agents.toml",
+            "config.toml",
             "[agents.worktree]\nbase = \"\"\n",
             ExpectedErr::Parse,
         ),
@@ -2566,7 +1241,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
 
     let tuned = load_no_fragments(&write_named(
         &dir,
-        "agents.toml",
+        "config.toml",
         "[agents.attention]\nactive_grace_secs = 60\nstalled_after_secs = 2700\ntool_repeat_warn_after = 4\ntool_repeat_attention_after = 30\narchive_after_secs = 7200\n",
     ))
     .expect("load");
@@ -2577,13 +1252,13 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     assert_eq!(tuned.agents.attention.archive_after_secs.get(), 7200);
 
     let partial =
-        load_no_fragments(&write_named(&dir, "agents.toml", "[agents.attention]\n")).expect("load");
+        load_no_fragments(&write_named(&dir, "config.toml", "[agents.attention]\n")).expect("load");
     assert_eq!(partial.agents.attention, AttentionConfig::default());
 
     assert!(
         load_no_fragments(&write_named(
             &dir,
-            "agents.toml",
+            "config.toml",
             "[agents.attention]\nactive_grace_secs = 0\n",
         ))
         .is_err()
@@ -2591,7 +1266,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     assert!(
         load_no_fragments(&write_named(
             &dir,
-            "agents.toml",
+            "config.toml",
             "[agents.attention]\nstalled_after_secs = 0\n",
         ))
         .is_err()
@@ -2599,7 +1274,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     assert!(
         load_no_fragments(&write_named(
             &dir,
-            "agents.toml",
+            "config.toml",
             "[agents.attention]\ntool_repeat_warn_after = 0\n",
         ))
         .is_err()
@@ -2607,7 +1282,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     assert!(
         load_no_fragments(&write_named(
             &dir,
-            "agents.toml",
+            "config.toml",
             "[agents.attention]\ntool_repeat_attention_after = 0\n",
         ))
         .is_err()
@@ -2615,7 +1290,7 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     assert!(
         load_no_fragments(&write_named(
             &dir,
-            "agents.toml",
+            "config.toml",
             "[agents.attention]\narchive_after_secs = 0\n",
         ))
         .is_err()
@@ -2819,4 +1494,229 @@ fn web_auth_users_round_trip() {
 
     assert_eq!(round_tripped, prefs);
     assert_eq!(round_tripped.auth_users, ["alice", "bob"]);
+}
+
+fn write_definition(root: &Path, path: &str, fields: &str, body: &str) -> PathBuf {
+    let path = root.join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, format!("---\n{fields}\n---\n{body}")).unwrap();
+    path
+}
+
+#[test]
+fn definitions_load_namespaces_chains_and_sources_and_ignore_legacy_toml() {
+    let dir = tempdir().unwrap();
+    let path = write(
+        &dir,
+        "[agents]\nplacement = 'tab'\n[agents.commands]\nvim = 'nvim'\n",
+    );
+    std::fs::write(dir.path().join("agents.toml"), "not = = toml").unwrap();
+    std::fs::create_dir_all(dir.path().join("profiles/old")).unwrap();
+    std::fs::write(dir.path().join("profiles/old/agent.toml"), "not = = toml").unwrap();
+    let base = write_definition(dir.path(), "agents/codex.md", "description: Base", "Base.");
+    write_definition(dir.path(), "traits/craft.md", "", "Care.");
+    write_definition(
+        dir.path(),
+        "agents/parent.md",
+        "description: Parent\nagent: codex\ntools: []\neffort: high\ntraits: [craft]",
+        "Parent. ${traits}",
+    );
+    let child = write_definition(
+        dir.path(),
+        "agents/child.md",
+        "description: Child\nagent: parent",
+        "Child.",
+    );
+    let subagent = write_definition(
+        dir.path(),
+        "subagents/reviewer.md",
+        "description: Reviewer\nagent: codex\ntools: []",
+        "",
+    );
+    let (config, sources) =
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path()).unwrap();
+    assert_eq!(config.agents.placement, LaunchPlacement::Tab);
+    assert_eq!(
+        config.agents.profiles.0["child"].effort.as_deref(),
+        Some("high")
+    );
+    assert_eq!(
+        config.agents.profiles.0["child"]
+            .append_system_prompt_files
+            .len(),
+        2
+    );
+    assert_eq!(
+        sources.profile(effective::ProfileScope::Agents, "child"),
+        Some(child.as_path())
+    );
+    assert_eq!(
+        sources.profile(effective::ProfileScope::Agents, "codex"),
+        Some(base.as_path())
+    );
+    assert_eq!(
+        sources.profile(effective::ProfileScope::Subagents, "reviewer"),
+        Some(subagent.as_path())
+    );
+    assert_eq!(sources.command("vim"), Some(path.as_path()));
+    assert!(config.agents.teams.0.contains_key("peer"));
+    assert!(!config.agents.profiles.0.contains_key("reviewer"));
+    assert!(config.notices.definition_errors.is_empty());
+}
+
+#[test]
+fn definition_failures_keep_good_siblings_and_match_doctor_and_launch_preconditions() {
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "");
+    write_definition(
+        dir.path(),
+        "agents/good.md",
+        "description: Good\nagent: codex\ntools: []",
+        "",
+    );
+    let bad = write_definition(
+        dir.path(),
+        "agents/bad.md",
+        "description: Bad\nagent: missing",
+        "",
+    );
+    let strict = MachineConfig::load_from(&path, dir.path()).unwrap_err();
+    assert!(matches!(strict, ConfigErr::Definition { .. }));
+    assert_eq!(strict.path(), bad);
+    let config = MachineConfig::load_lenient_from(&path, dir.path());
+    assert!(config.agents.profiles.0.contains_key("good"));
+    assert!(!config.agents.profiles.0.contains_key("bad"));
+    assert_eq!(config.notices.definition_errors.len(), 1);
+    assert_eq!(config.notices.definition_errors[0].path, bad);
+    assert!(
+        config
+            .definition_failure()
+            .unwrap()
+            .contains(bad.to_str().unwrap())
+    );
+    let broken = broken_machine_files_in(&MachineConfigFiles::from_paths(path, dir.path()));
+    assert_eq!(broken.len(), 1);
+    assert_eq!(broken[0].to_string(), strict.to_string());
+}
+
+#[test]
+fn definition_stamp_tracks_add_edit_remove_and_trait_changes() {
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "");
+    let before = ConfigStamp::from_inputs(&path, dir.path());
+    let source = write_definition(
+        dir.path(),
+        "agents/worker.md",
+        "description: Worker\nagent: codex\ntools: []",
+        "",
+    );
+    let added = ConfigStamp::from_inputs(&path, dir.path());
+    assert_ne!(before, added);
+    std::fs::write(
+        &source,
+        "---\ndescription: Changed\nagent: codex\ntools: []\n---\n",
+    )
+    .unwrap();
+    let edited = ConfigStamp::from_inputs(&path, dir.path());
+    assert_ne!(added, edited);
+    write_definition(dir.path(), "traits/check.md", "", "Check.");
+    let trait_added = ConfigStamp::from_inputs(&path, dir.path());
+    assert_ne!(edited, trait_added);
+    std::fs::remove_file(source).unwrap();
+    assert_ne!(trait_added, ConfigStamp::from_inputs(&path, dir.path()));
+}
+
+#[test]
+fn machine_definition_tables_are_removed_and_agents_preferences_stay_toml() {
+    let dir = tempdir().unwrap();
+    for (table, tree) in [
+        ("agents.profiles", "agents"),
+        ("agents.teams", "teams"),
+        ("subagents.profiles", "subagents"),
+        ("profiles", "agents"),
+    ] {
+        let path = write(&dir, &format!("[{table}]"));
+        let ConfigErr::RemovedTable { detail, .. } = load_no_fragments(&path).unwrap_err() else {
+            panic!("expected removed table")
+        };
+        assert!(detail.contains(&format!("<agents_home>/{tree}/<name>.md")));
+    }
+}
+
+#[test]
+fn sandbox_config_enables_definition_skill_library_checks() {
+    let dir = tempdir().unwrap();
+    write_definition(
+        dir.path(),
+        "agents/worker.md",
+        "description: Worker\nagent: codex\ntools: [Skill]\nskills: [missing]",
+        "",
+    );
+    let path = write(&dir, "[agents]\nisolation = 'host'\n");
+    MachineConfig::load_from(&path, dir.path()).unwrap();
+    write(&dir, "[agents]\nisolation = 'sandbox'\n");
+    let error = MachineConfig::load_from(&path, dir.path()).unwrap_err();
+    assert!(matches!(error, ConfigErr::Definition { .. }));
+    assert!(error.to_string().contains("missing"));
+}
+
+#[test]
+fn loaded_team_replaces_peer_and_retains_its_source() {
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "");
+    write_definition(dir.path(), "agents/codex.md", "description: Base", "Base.");
+    write_definition(
+        dir.path(),
+        "agents/worker.md",
+        "description: Worker\nagent: codex\ntools: []",
+        "",
+    );
+    let team_path = write_definition(
+        dir.path(),
+        "teams/peer.md",
+        "leader: lead\nstages: [Plan]\nroles:\n  - agent: worker\n    role: lead\n    owns: [Plan]",
+        "Pipeline.",
+    );
+    let (config, sources) =
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path()).unwrap();
+    assert_eq!(config.agents.teams.0["peer"].roles[0].profile, "peer.lead");
+    assert_eq!(sources.team("peer"), Some(team_path.as_path()));
+    assert_eq!(
+        sources.profile(effective::ProfileScope::Agents, "peer.lead"),
+        Some(team_path.as_path())
+    );
+    assert_eq!(config.agents.profiles.0["peer.lead"].agent, "codex");
+}
+
+#[test]
+fn lenient_definitions_collect_all_errors_and_post_load_validation_failure() {
+    let dir = tempdir().unwrap();
+    let path = write(&dir, "[agents.commands]\n'bad/name' = 'echo invalid'\n");
+    write_definition(
+        dir.path(),
+        "agents/worker.md",
+        "description: Worker\nagent: codex\ntools: []",
+        "",
+    );
+    write_definition(
+        dir.path(),
+        "agents/bad.md",
+        "description: Bad\nagent: unknown",
+        "",
+    );
+    write_definition(
+        dir.path(),
+        "subagents/bad-child.md",
+        "description: Bad child\nagent: unknown",
+        "",
+    );
+    let config = MachineConfig::load_lenient_from(&path, dir.path());
+    assert!(config.agents.profiles.0.contains_key("worker"));
+    assert_eq!(
+        config.notices.definition_errors.len(),
+        3,
+        "{:?}",
+        config.notices.definition_errors
+    );
+    assert_eq!(config.notices.definition_errors[2].path, dir.path());
 }

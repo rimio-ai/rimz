@@ -166,3 +166,34 @@ aggressive_resize = true
 [gc]
 # auto = true                         # sweep stale state once a day from every open room
 # older_than = "7d"                   # age cutoff for `rimz gc` (s/m/h/d)
+
+# [agents]
+# isolation = "host"                  # "sandbox": Linux bubblewrap mount view, per-room /tmp, and skill views
+# Definitions live in <agents_home>/{agents,subagents,teams,traits}/*.md.
+# placement = "auto"                    # launch placement: "auto" (single agent → current pane; team/worktree → new tab), "pane" (split a new pane), or "tab" (always new tab)
+# max-chain-length = 3                  # successive agent-to-agent launches allowed from a human-started root
+# `rimz agents <spec>` names a team or uses inline cells made from profiles,
+# commands, or built-ins. Built-ins include `term`, agent kinds, and
+# adapter-supported `<kind>-<mode>` variants such as `claude-auto` or
+# `codex-yolo`. `peer` (claude,codex) is a built-in team.
+
+# [agents.worktree]
+# dir = "../{repo}-worktrees"          # where RimZ-owned Git worktrees live; {repo} is the root basename
+# base = "head"                        # "head", "fresh", or any Git ref for new worktrees
+# Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
+
+# [agents.attention]
+# active_grace_secs = 180              # silence credited to active time before the estimate pauses
+# stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
+# tool_repeat_warn_after = 3            # identical calls before the card gains a warning marker
+# tool_repeat_attention_after = 20      # identical calls before the agent becomes actionable
+# inactive_after_secs = 3600           # a card idle this many seconds sinks below live work (the prompt-cache window)
+# archive_after_secs = 86400           # a card idle this many seconds parks below hot and warm work
+
+# [agents.subagents]
+# timeout = "30m"                      # wall-clock deadline for supervised child runs
+
+# [agents.commands]
+# Commands are shell-split raw command panes. They are not addressable agents.
+## vim = "nvim -p"
+## htop = "htop"

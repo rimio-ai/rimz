@@ -23,7 +23,7 @@ fn theme_config_path(env: &Env) -> std::path::PathBuf {
     env.config_root().join("rimz").join("theme.toml")
 }
 
-fn agents_config_path(env: &Env) -> std::path::PathBuf {
+fn legacy_agents_config_path(env: &Env) -> std::path::PathBuf {
     env.config_root().join("rimz").join("agents.toml")
 }
 
@@ -40,7 +40,7 @@ fn write_machine_file(path: &std::path::Path, text: &str) {
 #[cfg(target_os = "linux")]
 fn config_set_sandbox_probes_bwrap_before_writing() {
     let env = Env::new();
-    let path = agents_config_path(&env);
+    let path = machine_config_path(&env);
     let seed = "[agents]\nisolation = \"host\"\n";
     write_machine_file(&path, seed);
     let empty_bin = env.home_root.join("empty-bin");
@@ -74,15 +74,15 @@ fn config_set_sandbox_probes_bwrap_before_writing() {
     let config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(config["agents"]["isolation"].as_str(), Some("sandbox"));
     assert!(
-        !machine_config_path(&env).exists(),
-        "isolation belongs in agents.toml"
+        !legacy_agents_config_path(&env).exists(),
+        "isolation belongs in config.toml"
     );
 }
 
 #[test]
 fn config_set_host_never_probes_bwrap() {
     let env = Env::new();
-    let path = agents_config_path(&env);
+    let path = machine_config_path(&env);
     write_machine_file(&path, "[agents]\nisolation = \"sandbox\"\n");
     let bin = env.home_root.join("sandbox-bin");
     std::fs::create_dir(&bin).expect("mkdir bwrap PATH");
@@ -125,27 +125,25 @@ fn config_set_host_never_probes_bwrap() {
 }
 
 #[test]
-fn agents_home_profile_fragment_feeds_both_profile_catalogues_without_kind_rows() {
+fn agents_home_definitions_feed_both_profile_catalogues_without_kind_rows() {
     let env = Env::new();
     write_machine_file(
-        &env.agents_home()
-            .join("profiles")
-            .join("explorer")
-            .join("agent.toml"),
-        r#"
-[agents.profiles.explorer]
-agent = "claude"
-description = "Maps the main workspace"
-
-[subagents.profiles.explorer]
-agent = "codex"
-description = "Maps a delegated workspace"
-"#,
+        &env.agents_home().join("agents/explorer.md"),
+        "---\nagent: claude\ntools: []\ndescription: Maps the main workspace\n---\n",
+    );
+    write_machine_file(
+        &env.agents_home().join("subagents/explorer-child.md"),
+        "---\nagent: codex\ntools: []\ndescription: Maps a delegated workspace\n---\n",
     );
 
-    for (doorway, expected_agent, expected_description) in [
-        ("agents", "claude", "Maps the main workspace"),
-        ("subagents", "codex", "Maps a delegated workspace"),
+    for (doorway, expected_name, expected_agent, expected_description) in [
+        ("agents", "explorer", "claude", "Maps the main workspace"),
+        (
+            "subagents",
+            "explorer-child",
+            "codex",
+            "Maps a delegated workspace",
+        ),
     ] {
         let output = env
             .rimz()
@@ -165,12 +163,12 @@ description = "Maps a delegated workspace"
         );
         assert!(
             entries.iter().any(|entry| {
-                entry["name"] == "explorer"
+                entry["name"] == expected_name
                     && entry["source"] == "profile"
                     && entry["agent"] == expected_agent
                     && entry["description"] == expected_description
             }),
-            "{doorway} profiles must include its fragment profile: {entries:?}"
+            "{doorway} profiles must include its Markdown definition: {entries:?}"
         );
         assert!(
             entries.iter().all(|entry| entry.get("path").is_none()),
@@ -309,7 +307,7 @@ fn config_init_prints_and_writes_the_template() {
         .success()
         .stdout(contains("# === config.toml ==="))
         .stdout(contains("# === theme.toml ==="))
-        .stdout(contains("# === agents.toml ==="))
+        .stdout(contains("# === agents.toml ===").not())
         .stdout(contains("# === loop.toml ==="))
         .stdout(contains("[agents.worktree]"))
         .stdout(contains("# [tasks]"))
@@ -328,9 +326,8 @@ fn config_init_prints_and_writes_the_template() {
     let theme_text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(theme_text.contains("[theme]"));
     assert!(theme_text.contains("## [colors.primary]"));
-    let agents_text =
-        std::fs::read_to_string(agents_config_path(&env)).expect("read agents config");
-    assert!(agents_text.contains("[agents.worktree]"));
+    assert!(!legacy_agents_config_path(&env).exists());
+    assert!(text.contains("[agents.worktree]"));
     let loop_text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(loop_text.contains("# [tasks]"));
 
@@ -800,7 +797,7 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
         "--yes should not opt into auto-continue:\n{text}"
     );
     assert!(theme_config_path(&env).exists());
-    assert!(agents_config_path(&env).exists());
+    assert!(!legacy_agents_config_path(&env).exists());
     assert!(loop_config_path(&env).exists());
     for path in [&pi_extension, &opencode_plugin] {
         assert_eq!(
@@ -1036,7 +1033,7 @@ on_force_close = "explode"
         "invalid key should be dropped:\n{text}"
     );
     assert!(theme_config_path(&env).exists());
-    assert!(agents_config_path(&env).exists());
+    assert!(!legacy_agents_config_path(&env).exists());
     assert!(loop_config_path(&env).exists());
 }
 
@@ -1121,60 +1118,36 @@ dsn = "https://k@o0.ingest.sentry.io/0"
 }
 
 #[test]
-fn setup_yes_merges_agents_team_layout_before_roles() {
+fn setup_yes_keeps_markdown_team_and_launch_preferences() {
     let env = Env::new();
+    let team_path = env.agents_home().join("teams/duo.md");
+    let source = "---\nleader: lead\nstages: [Plan]\nroles:\n  - agent: worker\n    role: lead\n    owns: [Plan]\n---\nPipeline.";
     write_machine_file(
-        &agents_config_path(&env),
-        r#"
-[agents.profiles.lead]
-agent = "claude"
-
-[agents.profiles.helper]
-agent = "codex"
-
-[agents.teams.duo]
-layout = "lead+helper"
-[[agents.teams.duo.roles]]
-role = "lead"
-profile = "lead"
-[[agents.teams.duo.roles]]
-role = "helper"
-profile = "helper"
-"#,
+        &env.agents_home().join("agents/codex.md"),
+        "---\ndescription: Base\n---\nBase.",
     );
-
+    write_machine_file(
+        &env.agents_home().join("agents/worker.md"),
+        "---\ndescription: Worker\nagent: codex\ntools: []\n---\n",
+    );
+    write_machine_file(&team_path, source);
+    write_machine_file(&machine_config_path(&env), "[agents]\nplacement = 'tab'\n");
     env.rimz()
         .args(["setup", "--yes"])
         .assert()
         .success()
-        .stdout(contains("Merged"))
-        .stdout(contains("No hooks or trust grants were changed"));
-
-    let text = std::fs::read_to_string(agents_config_path(&env)).expect("read merged agents");
-    assert!(
-        text.contains("layout = \"lead+helper\""),
-        "custom layout should survive:\n{text}"
-    );
-    assert!(
-        text.contains("[[agents.teams.duo.roles]]"),
-        "roles should render as array-of-tables:\n{text}"
-    );
-    assert!(
-        !text.contains("roles = ["),
-        "roles should not collapse to an inline array:\n{text}"
-    );
-    assert!(
-        text.find("layout = \"lead+helper\"")
-            .expect("layout survives")
-            < text
-                .find("[[agents.teams.duo.roles]]")
-                .expect("roles block renders"),
-        "layout should stay in the team table before roles:\n{text}"
-    );
-    assert!(
-        text.contains("role = \"lead\"") && text.contains("profile = \"helper\""),
-        "roles should survive:\n{text}"
-    );
+        .stdout(contains("Merged"));
+    assert_eq!(std::fs::read_to_string(team_path).unwrap(), source);
+    env.rimz()
+        .args(["config", "get", "agents.teams.duo.roles", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("duo.lead"));
+    env.rimz()
+        .args(["config", "get", "agents.placement", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("tab"));
 }
 
 #[test]
@@ -1229,125 +1202,55 @@ every = "15m"
 }
 
 #[test]
-fn setup_yes_merges_agents_team_referencing_later_profile() {
+fn setup_yes_keeps_legacy_agents_file_byte_for_byte() {
     let env = Env::new();
-    write_machine_file(
-        &agents_config_path(&env),
-        r#"
-[agents.teams.duo]
-[[agents.teams.duo.roles]]
-role = "lead"
-profile = "late"
-
-[agents.profiles.late]
-agent = "claude"
-"#,
-    );
-
+    let source = "# legacy, ignored\n[agents.teams.duo]\nlayout = 'missing'\n";
+    write_machine_file(&legacy_agents_config_path(&env), source);
     env.rimz().args(["setup", "--yes"]).assert().success();
-
-    let text = std::fs::read_to_string(agents_config_path(&env)).expect("read merged agents");
-    assert!(
-        text.contains("role = \"lead\"") && text.contains("profile = \"late\""),
-        "team role should survive after its profile is replayed:\n{text}"
+    assert_eq!(
+        std::fs::read_to_string(legacy_agents_config_path(&env)).unwrap(),
+        source
     );
-    assert!(
-        text.contains("[agents.profiles.late]") && text.contains("agent = \"claude\""),
-        "later profile should survive:\n{text}"
-    );
+    env.rimz()
+        .args(["config", "get", "agents.teams", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("duo").not());
 }
 
 #[test]
-fn setup_yes_preserves_kind_profiles_required_by_agents_home_team() {
+fn setup_yes_preserves_kind_base_definitions() {
     let env = Env::new();
-    write_machine_file(
-        &env.agents_home()
-            .join("teams")
-            .join("forge")
-            .join("team.toml"),
-        r#"
-[agents.teams.forge]
-[[agents.teams.forge.roles]]
-role = "planner"
-profile = "claude"
-[[agents.teams.forge.roles]]
-role = "coder"
-profile = "codex"
-"#,
-    );
-    write_machine_file(
-        &agents_config_path(&env),
-        r#"
-[agents.profiles.claude]
-agent = "claude"
-mode = "auto"
-effort = "high"
-args = "--strict-mcp-config"
-
-[agents.profiles.codex]
-agent = "codex"
-effort = "high"
-args = "--search"
-"#,
-    );
-
+    let path = env.agents_home().join("agents/codex.md");
+    let source = "---\ndescription: Base\n---\nBase instructions.";
+    write_machine_file(&path, source);
+    env.rimz().args(["setup", "--yes"]).assert().success();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), source);
     env.rimz()
-        .args(["setup", "--yes"])
+        .args(["config", "get", "agents.profiles.codex", "--json"])
         .assert()
         .success()
-        .stdout(contains(format!(
-            "Merged {} - kept 7 setting(s)",
-            agents_config_path(&env).display()
-        )));
+        .stdout(contains("Base instructions."));
+}
 
-    let text = std::fs::read_to_string(agents_config_path(&env)).expect("read merged agents");
-    assert!(
-        text.contains("[agents.profiles.claude]")
-            && text.contains("[agents.profiles.codex]")
-            && text.contains("args = \"--strict-mcp-config\"")
-            && text.contains("args = \"--search\""),
-        "kind profile overrides should survive:\n{text}"
+#[test]
+fn setup_yes_ignores_broken_legacy_fragments_and_preserves_broken_markdown() {
+    let env = Env::new();
+    let legacy = env.agents_home().join("teams/broken/team.toml");
+    let definition = env.agents_home().join("teams/broken.md");
+    write_machine_file(&legacy, "not = = toml");
+    write_machine_file(&definition, "not frontmatter");
+    env.rimz().args(["setup", "--yes"]).assert().success();
+    assert_eq!(std::fs::read_to_string(legacy).unwrap(), "not = = toml");
+    assert_eq!(
+        std::fs::read_to_string(&definition).unwrap(),
+        "not frontmatter"
     );
     env.rimz()
         .args(["config", "get", "agents", "--json"])
         .assert()
-        .success();
-}
-
-#[test]
-fn setup_yes_leaves_agents_file_when_fragments_keep_merge_invalid() {
-    let env = Env::new();
-    write_machine_file(
-        &env.agents_home()
-            .join("teams")
-            .join("broken")
-            .join("team.toml"),
-        r#"
-[agents.teams.broken]
-[[agents.teams.broken.roles]]
-role = "planner"
-profile = "missing"
-"#,
-    );
-    let original = "# keep this file byte-for-byte\n[agents]\n";
-    write_machine_file(&agents_config_path(&env), original);
-
-    env.rimz()
-        .args(["setup", "--yes"])
-        .assert()
         .failure()
-        .stderr(contains(format!(
-            "validating merged {}",
-            agents_config_path(&env).display()
-        )))
-        .stderr(contains(
-            "team `broken` role `planner` references unknown profile `missing`",
-        ));
-
-    assert_eq!(
-        std::fs::read_to_string(agents_config_path(&env)).expect("read untouched agents"),
-        original
-    );
+        .stderr(contains(definition.display().to_string()));
 }
 
 #[test]

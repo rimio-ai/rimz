@@ -164,7 +164,7 @@ pub fn resolve_single_agent_launch(
     workspace: &crate::workspace::ResolvedWorkspace,
 ) -> Result<ResolvedSingleAgentLaunch> {
     let machine_config = crate::config::MachineConfig::load_lenient();
-    if let Some(message) = machine_config.agents_fragment_failure() {
+    if let Some(message) = machine_config.definition_failure() {
         bail!("{message}");
     }
     let launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
