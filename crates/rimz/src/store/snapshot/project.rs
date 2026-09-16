@@ -10,7 +10,7 @@ use tracing::debug;
 use crate::agents::lifecycle::{self, Transition};
 use crate::agents::petname::valid_agent_name;
 use crate::agents::state::{append_recent_prompt, usable_description};
-use crate::agents::{AgentLifecycleObservation, LaunchParams};
+use crate::agents::{AgentLifecycleObservation, LaunchParams, SessionOrigin};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
@@ -351,6 +351,24 @@ impl ReducerState {
             return;
         };
         let key = (kind.clone(), agent_id.clone());
+        if observation.origin == Some(SessionOrigin::SideConversation) {
+            self.identity.mark_side_session(agent_id.clone());
+            self.map.remove(&key);
+            self.launch_identity.remove(&key);
+            self.identity.release_key(&key);
+        }
+        if self.identity.is_side_session(&agent_id) {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                event_id = %event.event_id,
+                workspace = %event.workspace_id,
+                kind = %kind,
+                agent_id = %agent_id,
+                reason = "side conversation",
+                "agent.lifecycle event quarantined",
+            );
+            return;
+        }
         let event_is_child = observation.parent_agent_id.is_some();
         let provisional_prior = if event_is_child {
             // Exact child IDs are authoritative. A child may share its type label

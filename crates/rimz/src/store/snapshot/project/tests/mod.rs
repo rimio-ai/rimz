@@ -1018,6 +1018,136 @@ fn launched_child_successor_stays_nested_under_its_parent() {
 }
 
 #[test]
+fn side_conversations_never_become_launched_children() {
+    let mut events = Vec::new();
+    for (id, name, pane, pid) in [
+        ("child-a", "reviewer", "tmux:%2", 84),
+        ("child-b", "coder", "tmux:%3", 85),
+        ("child-c", "tester", "tmux:%4", 86),
+    ] {
+        let launch_id = format!("launch_{id}");
+        events.push(launch_event(
+            "codex",
+            AgentLaunchPayload {
+                launch_id: Some(AgentSessionId::from(launch_id.as_str())),
+                launch: LaunchParams {
+                    parent_agent_id: Some(AgentSessionId::from("root-session")),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("codex")),
+                    launch_depth: Some(1),
+                    profile: Some("implementer".to_owned()),
+                    ..LaunchParams::default()
+                },
+                pane_id: Some(PaneId::parse(pane).unwrap()),
+                runtime_owner: Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    launch_id.as_str(),
+                    pid,
+                    Some("agent-start".to_owned()),
+                )),
+                ..launch_payload(&launch_id, name)
+            },
+        ));
+        events.push(same_process_registration(id, name, 2, pane, pid));
+    }
+    let mut side = same_process_registration("side", "reviewer", 3, "tmux:%2", 84);
+    let mut params = side.params_value();
+    params["origin"] = json!("side_conversation");
+    side.params = serde_json::value::to_raw_value(&params).unwrap();
+    let side_events = [
+        side,
+        raw_lifecycle_at(
+            "codex",
+            4,
+            json!({
+                "agent_id": "side", "task": "side question",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "codex",
+            5,
+            json!({
+                "agent_id": "side",
+                "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false },
+            }),
+        ),
+    ];
+
+    let child_events = [&events[..2], &side_events].concat();
+    let (agents, identity) = reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        AgentIdentityState::default(),
+        &decode_events(&child_events),
+    );
+    assert_eq!(agents.len(), 1);
+    assert_eq!(
+        agents.values().next().unwrap(),
+        &reduce_agent_states(&events[..2])[0]
+    );
+    assert!(identity.is_side_session(&AgentSessionId::from("side")));
+    let identity: AgentIdentityState =
+        serde_json::from_value(serde_json::to_value(identity.without_consumed_launches()).unwrap())
+            .unwrap();
+    let (agents, identity) = reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        identity,
+        &decode_events(&side_events[1..2]),
+    );
+    assert!(agents.is_empty());
+    assert!(identity.is_side_session(&AgentSessionId::from("side")));
+
+    events.insert(
+        0,
+        same_process_registration("root-session", "parent", 1, "tmux:%1", 83),
+    );
+    let baseline = SidebarSnapshot::build(workspace(), events.clone(), epoch())
+        .with_live_panes(vec![pane("%1", "codex", "/tmp/x")], None);
+    events.extend(side_events);
+    let snapshot = SidebarSnapshot::build(workspace(), events, epoch())
+        .with_live_panes(vec![pane("%1", "codex", "/tmp/x")], None);
+    assert_eq!(snapshot.agents, baseline.agents);
+    let parent = row(&snapshot, "root-session").as_agent().unwrap();
+    assert_eq!(parent.sub_agent_count, 3);
+    assert_eq!(
+        parent
+            .sub_agents
+            .iter()
+            .map(|child| child.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["child-a", "child-b", "child-c"]),
+    );
+}
+
+#[test]
+fn side_registration_removes_preexisting_state_and_launch_index() {
+    let mut side = same_process_registration("side", "reviewer", 3, "tmux:%2", 84);
+    let mut params = side.params_value();
+    params["origin"] = json!("side_conversation");
+    side.params = serde_json::value::to_raw_value(&params).unwrap();
+    let key = (
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("side"),
+    );
+    let mut reducer = ReducerState {
+        map: BTreeMap::from([(
+            key.clone(),
+            indexed_launch_agent("side", "tmux:%2", 84, Some("launch_side")),
+        )]),
+        identity: CardIdentityAllocator::default(),
+        launch_identity: LaunchIdentityIndex::default(),
+    };
+    reducer.launch_identity = LaunchIdentityIndex::from_map(&reducer.map);
+    assert!(reducer.launch_identity.by_agent.contains_key(&key));
+    let EventKind::AgentLifecycle(payload) = side.kind() else {
+        panic!("lifecycle")
+    };
+    reducer.reduce_lifecycle_event(&side, &payload);
+    assert!(reducer.map.is_empty());
+    assert!(reducer.launch_identity.by_agent.is_empty());
+    assert!(reducer.launch_identity.by_instance.is_empty());
+}
+
+#[test]
 fn same_process_fork_inherits_launch_identity_and_owns_the_role() {
     let pane_id = "tmux:%3";
     let owner_pid = 126;
@@ -1609,6 +1739,7 @@ fn late_launch_event_does_not_recreate_provisional_when_name_is_owned() {
         names: BTreeMap::from([("lucid-atlas".to_owned(), (kind.clone(), real_id))]),
         next_ordinal: BTreeMap::from([(kind, 2)]),
         consumed_launches: BTreeSet::new(),
+        side_sessions: BTreeSet::new(),
     };
 
     let events = [raw_launch(
@@ -1743,6 +1874,7 @@ fn stale_identity_state_does_not_block_reused_launch_name() {
         )]),
         next_ordinal: BTreeMap::new(),
         consumed_launches: BTreeSet::new(),
+        side_sessions: BTreeSet::new(),
     };
     let events = [raw_launch(
         AgentLaunchState::Bound,
