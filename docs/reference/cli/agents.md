@@ -127,7 +127,7 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 | `--effort <LEVEL>` | Reasoning effort, passed to the provider's effort flag without validation, so levels are whatever the provider accepts. Kinds with no effort flag refuse the launch; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
 | `--budget <AMOUNT[/day]>` | Dollar cap per agent: a bare amount caps the session, `/day` resets at the local day boundary. Inspect or change it later with [`rimz agents budget`](./budget.md#cap-one-agent). |
 | `--system-prompt-file <PATH>` | Replace each agent's base system prompt with the file. |
-| `--append-system-prompt-file <PATH>` | Repeatable. Replaces the inherited fragment list with these files, in command-line order. |
+| `--append-system-prompt-file <PATH>` | Repeatable. Replaces the inherited profile and role fragment list with these files, in command-line order; the team layer stays intact. |
 | `--ask`, `--yolo` | Permission posture; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
 | `--agent <PROFILE\|KIND>` | Re-base every agent cell onto another profile or provider (below). |
 | `--isolation host\|sandbox` | Isolation for this launch instead of the machine's `agents.isolation` (below). |
@@ -344,6 +344,8 @@ The default report shows:
 - sandbox mounts, pins, skill copies, and omissions.
 
 `--json` emits the same plan with the fields `target`, `kind`, `action`, `action_note`, `name`, `launch_id`, `account`, `cwd`, `profile`, `overrides`, `mode`, `model`, `effort`, `budget`, `skills`, `program`, `provider_argv`, `argv`, `env`, `unset`, `redacted_keys`, `prompt`, `sandbox`, and `warnings`.
+
+`prompt.sources` lists sources in composition order. File sources have `path` and `bytes`; the embedded team consensus has `builtin: "team consensus"` and `bytes`, with no `path`. A configured `consensus-file` is an ordinary file source. The human report labels the embedded source `source: built-in team consensus (N bytes)`.
 
 `--prompt` prints only the composed configured system prompt, then two newlines and the RimZ reminder. It cannot show a provider's built-in instructions or prompt options passed as raw provider arguments (those appear in the argv report). When the provider has no channel for appended system text, it still prints the reminder and notes on stderr that the reminder is not delivered. `--prompt` and `--json` conflict; warnings go to stderr.
 

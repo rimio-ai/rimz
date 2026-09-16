@@ -28,13 +28,13 @@ The pin is on the surface itself because agents in the room can write `.rimz/con
 | `[[agents]]` | `name`, `launch_command`, `env` |
 | `[profiles.<name>]` | `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[subagents.profiles.<name>]` | the same keys as `[profiles.<name>]`, in the child-launch namespace |
-| `[agents.teams.<name>]` | `layout`; per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
+| `[agents.teams.<name>]` | `layout`, `consensus-file`, `append-system-prompt-files`; per role: `role`, `profile`, `signals`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args` |
 | `[tasks.<name>]` | `agent`, `prompt`, `prompt-file`, `check`, `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`, `signal`, `match` |
 | `[[hooks]]` | `event`, `command` |
 | `[env]` | every key and value |
 | `[accounts]` | every `<kind> = "<name>"` selection, because it redirects every agent's credentials |
 
-The hash input is canonical JSON, and the wire format is `sha256:<hex>`. Struct field order is fixed, `BTreeMap` keys sort, and an unset `Option` serializes as `null`, so the same config always hashes to the same bytes. A few fields are omitted instead of written empty, so that grants made before the field existed keep their hash: empty `subagent_profiles`, empty `accounts`, empty role `signals`, and unset `skills` and `auto_compact` on profiles and roles. `append-system-prompt-files` serializes under the key `append_system_prompt_file` for the same reason.
+The hash input is canonical JSON, and the wire format is `sha256:<hex>`. Struct field order is fixed, `BTreeMap` keys sort, and an unset `Option` serializes as `null`, so the same config always hashes to the same bytes. A few fields are omitted instead of written empty, so that grants made before the field existed keep their hash: empty `subagent_profiles`, empty `accounts`, empty role `signals`, unset `skills` and `auto_compact` on profiles and roles, and a team's unset `consensus_file` and empty `append_system_prompt_files`. `append-system-prompt-files` serializes under the key `append_system_prompt_file` for the same reason.
 
 Everything else in the file deserializes leniently and never touches the hash. That covers display keys such as `display_name` and `sidebar_width`, team `leader`, `owns`, `flip-compact`, `scratch-files`, and `stages`, and task `team`, `max-strikes`, `budget`, `budget-per-day`, `surplus`, and `surplus-after`.
 

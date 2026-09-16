@@ -2,7 +2,7 @@
 
 `rimz teams` lists, inspects, launches, resumes, and drives named teams, hands a team's board from stage to stage, and installs team bundles.
 
-A team is a configured set of roles and a layout. Each role keeps its own model, prompt, and `@role` handle, and every member of one launch shares one lane; that group of live members is a cohort, addressed as `team#lane` (for example `forge#feat-rate-limits`). The [teams guide](../../guide/teams.md) explains how to design and run a team, and [configuration → teams](../../guide/configuration.md#teams) owns the definition fields (`roles`, `leader`, `layout`, `stages`, `scratch-files`, and each role's `owns`, `signals`, and `flip-compact`). This page owns the command forms.
+A team is a configured set of roles and a layout. Each role keeps its own model, prompt, and `@role` handle, and every member of one launch shares one lane; that group of live members is a cohort, addressed as `team#lane` (for example `forge#feat-rate-limits`). The [teams guide](../../guide/teams.md) explains how to design and run a team, and [configuration → teams](../../guide/configuration.md#teams) owns the definition fields (`roles`, `leader`, `layout`, `stages`, `scratch-files`, `consensus-file`, `append-system-prompt-files`, and each role's `owns`, `signals`, and `flip-compact`). This page owns the command forms.
 
 | Command | Does |
 | --- | --- |
@@ -135,9 +135,11 @@ A lane block reads top to bottom:
 | `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `never fired`, `fired <age> ago` when the last firing delivered, `skipped <age> ago` when it matched the family but not the subscription, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` gives the total run count once it has run more than once. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
 | `isolation` | `host · tmp /tmp`, or `sandbox · tmp <room tmp dir> (as /tmp)`: the `--isolation` recorded at launch, else the machine's `agents.isolation`. Members that disagree show the machine setting. |
-| `memory` | Files matching the team's `scratch-files`, relative to the worktree, with line counts and modification ages. Omitted when none exist. |
+| `memory` | Files matching the team's effective scratch patterns (defaults or explicit `scratch-files`), relative to the worktree, with line counts and modification ages. Omitted when none exist. |
 
 A script that blocks until the work is done runs [`rimz teams wait`](#wait-for-a-cohort-to-finish) rather than polling `.stage.name` from `--json`. The report ends with the definition, with no launch, resume, or focus hints.
+
+The definition includes a `(prompt stack: rimz teams show <team> --json)` hint when roles have prompt files or the team has a consensus.
 
 ### Cohort state
 
@@ -165,7 +167,10 @@ PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` neve
 | --- | --- |
 | `name`, `defined`, `valid` | Team name; whether a definition exists; whether it resolves and validates. |
 | `source`, `layout`, `leader`, `error` | Optional. Definition file (`built-in` for `peer`), layout spec, effective leader role, validation error. |
+| `consensus` | Staged teams only: `"builtin"` or the absolute replacement-file path. |
+| `append_system_prompt_files` | Team-level files composed after the consensus, as absolute paths. Omitted when empty. |
 | `roles[]` | `role`, `profile`, and `signals`, plus optional `kind`, `model`, `effort`, `mode`, `system_prompt_file`, and `append_system_prompt_files`. |
+| `roles[].append_system_prompt_files` | The role's own resolved profile-chain and role fragments, excluding the team layer. Omitted when empty. |
 | `roles[].signals[]` | Declared bindings: `signal`, `match` (an object), and `prompt` (nullable). |
 | `instances[]` | One record per live cohort, below. |
 

@@ -194,7 +194,9 @@ Keeping the prompt body out of the pane command avoids tmux's command-frame ceil
 
 #### System prompt composition
 
-A profile's system prompt is a base file plus ordered fragments. When fragments exist, the wrapper reads the base, then the fragments in declaration order, normalizes trailing newlines, and joins the pieces with a blank line. Path adapters receive a content-addressed `prompt/sys.<digest>.md` beneath the private runtime root; without fragments they receive the user's resolved base path directly.
+A profile's system prompt is a base file plus ordered fragments. For a staged team role with a resolved base, composition is base → profile-chain fragments → role fragments → consensus → team-level `append-system-prompt-files`. `team_prompt.rs` owns the embedded `team_consensus.md` and the layer's derivation; `spec` attaches it once per role cell at team compile, after rebasing. `consensus-file` replaces the embedded text, and team paths resolve relative to the declaring config file. A CLI `--append-system-prompt-file` override replaces only the profile and role fragments, not the team layer.
+
+A team is staged when `stages` is nonempty or any role has `owns`. Unstaged teams and roles without a base get no default layer. Explicit `consensus-file` or nonempty team `append-system-prompt-files` requires a staged team and a base on every role; preparation refuses otherwise. `prompt_compose` normalizes trailing newlines and joins pieces with one blank line and one trailing newline. With fragments or a team layer, path adapters receive a content-addressed `prompt/sys.<digest>.md` beneath the private runtime root; with neither, they receive the user's resolved base path directly.
 
 | Adapter | Channel |
 | --- | --- |
