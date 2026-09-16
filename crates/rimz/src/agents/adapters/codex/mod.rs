@@ -641,12 +641,18 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
             if (root_identity_event || compact_continuation)
                 && let Some(agent_id) = observation.agent_id.as_ref()
             {
+                // Only an ephemeral fork starts with a null payload path; a
+                // persistent fork's path may still be flushing, so it also
+                // needs the payload null before it is quarantined for good.
                 observation.origin = if observation.transcript_path.is_none()
-                    && parts
-                        .session_start
-                        .as_ref()
-                        .is_some_and(|start| start.source == SessionSource::Fork)
-                {
+                    && parts.session_start.as_ref().is_some_and(|start| {
+                        start.source == SessionSource::Fork
+                            && start
+                                .common
+                                .transcript_path
+                                .as_deref()
+                                .is_none_or(str::is_empty)
+                    }) {
                     Some(SessionOrigin::SideConversation)
                 } else {
                     session_origin(agent_id.as_str())
