@@ -23,7 +23,7 @@ rimz subagents launch reviewer --prompt-file /tmp/review-brief.md
 rimz subagents codex "find the smallest safe fix" --wait=10m
 ```
 
-The bare form and `launch` are the same command. `PROFILE` is a `[subagents.profiles]` profile, an agent kind (`claude`, `codex`, ...), or an `[agents.commands]` command. The launch prints the child's petname on stdout and returns at once, with a receipt on stderr that names the coming fleet report, its response file, and the `wait` command that blocks instead, so a parent can start several children in a row and keep working. A later `rimz subagents wait <petname>` or the [fleet report](#the-fleet-report) delivers the result.
+The bare form and `launch` are the same command. `PROFILE` is a `subagents/<name>.md` profile (or trusted project child profile), an agent kind (`claude`, `codex`, ...), or an `[agents.commands]` command. The launch prints the child's petname on stdout and returns at once, with a receipt on stderr that names the coming fleet report, its response file, and the `wait` command that blocks instead, so a parent can start several children in a row and keep working. A later `rimz subagents wait <petname>` or the [fleet report](#the-fleet-report) delivers the result.
 
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
@@ -51,7 +51,7 @@ The child works in the parent's checkout, the directory the parent itself was la
 A launch refuses before it writes a run record or opens a pane when:
 
 - the caller is not an identifiable agent, or is itself a subagent;
-- the profile or `--agent` re-base is outside the caller's [allowlist](#discover-profiles), or names an `[agents.profiles]` profile (the error names both sections);
+- the profile or `--agent` re-base is outside the caller's [allowlist](#discover-profiles), or names a direct profile from `agents/` (the error names both namespaces);
 - the [supervised-run requirements](./agents.md#supervised-runs--p) fail: RimZ's hooks for the agent are not installed and trusted, or a Codex child's checkout has no recorded Codex trust decision;
 - the room or provider-account daily cap has no headroom, or a fresh Qwen run's account has an exhausted quota window. This refusal exits `125` ([What a cap blocks](./budget.md#what-a-cap-blocks)).
 
@@ -90,7 +90,7 @@ JSON
 | `effort` | no | Reasoning effort |
 | `max_turns` | no | Maximum agentic turns |
 
-A task's `timeout` wins over the fanout's `--timeout`, which wins over `[agents.subagents] timeout`. `--keep` applies to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's isolation, and profiles in `[subagents.profiles]` carry provider arguments. Use separate single launches when children need different lifecycle controls.
+A task's `timeout` wins over the fanout's `--timeout`, which wins over `[agents.subagents] timeout`. `--keep` applies to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's isolation, and child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
 
 | Mode | stdout |
 | --- | --- |
@@ -211,13 +211,13 @@ rimz subagents profiles --path
 rimz subagents profiles --json --path
 ```
 
-`profiles` lists what a child can launch from as compact cards: `[subagents.profiles]` profiles with their agent, model, effort, and description, and `[agents.commands]` commands. It works from any shell. `--path` adds each entry's defining file.
+`profiles` lists what a child can launch from as compact cards: child definitions with their agent, model, effort, and description, and `[agents.commands]` commands. It works from any shell. `--path` adds each entry's defining file.
 
-Agent kinds are launchable directly but are not listed. `[agents.profiles]` entries belong to `rimz agents` and are not listed either, and neither are teams, because a launch creates one agent.
+Agent kinds are launchable directly but are not listed. Direct profiles belong to `rimz agents` and are not listed either, and neither are teams, because a launch creates one agent.
 
 `--json` prints an array of objects with `name` and `source` (`profile` or `command`), plus `agent`, `model`, `effort`, and `description` when set, and the absolute `path` only with `--path`.
 
-An `[agents.profiles]` entry can restrict what its agents launch with `subagents = [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents = []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and an `Add one under [subagents.profiles] or [agents.commands].` line.
+A direct definition can restrict what its agents launch with `subagents: [...]` ([configuration guide](../../guide/configuration.md)). Inside such an agent, `profiles` lists only the named entries, and a launch whose `PROFILE` or `--agent` is not in the list is refused before any run or pane exists. `subagents: []` disables delegation for that agent. An empty catalog, including one disabled this way, prints `No profiles or commands configured.` and a configuration hint.
 
 At launch, RimZ also gives each agent this same filtered catalog in its appended system prompt, on providers that support one. The catalog says so when delegation is disabled or nothing is configured.
 
@@ -255,4 +255,4 @@ In the sidebar a child appears only under its direct parent's card, never as a d
 timeout = "45m"
 ```
 
-`[agents.subagents]` in `agents.toml` holds one key, `timeout`: the deadline for every child that sets no `--timeout` or task `timeout`, in the duration syntax `s`, `m`, `h`, `d`. It defaults to `30m`. The room enforces the deadline even when no one waits on the child.
+`[agents.subagents]` in `config.toml` holds one key, `timeout`: the deadline for every child that sets no `--timeout` or task `timeout`, in the duration syntax `s`, `m`, `h`, `d`. It defaults to `30m`. The room enforces the deadline even when no one waits on the child.

@@ -54,7 +54,7 @@ Each adapter is a private unit struct under [`adapters/<kind>/`](../../../crates
 | Defaults | `default_model`, `default_context_window`, `sub_providers`, `thread_key` |
 | Launch | `launch`: program, fixed args, prompt style, resume and fork argv, per-mode permission args, max-turn flag, compact command, preset matchers |
 
-The launch block is data so that one registry entry is enough to light up `<kind>-auto`, `<kind>-ask`, `<kind>-plan`, `<kind>-yolo`, `rimz agents restart`, and `agents.toml` profile rendering for a new agent. Permission argv, resume shape, and preset flag spellings need no code elsewhere.
+The launch block is data so that one registry entry is enough to light up `<kind>-auto`, `<kind>-ask`, `<kind>-plan`, `<kind>-yolo`, `rimz agents restart`, and resolved profile rendering for a new agent. Permission argv, resume shape, and preset flag spellings need no code elsewhere.
 
 `capabilities` is operational policy that no coverage claim can derive:
 

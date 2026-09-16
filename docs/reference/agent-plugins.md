@@ -96,6 +96,8 @@ Replay differs from a live room in two places. A live room drops the rejected en
 
 RimZ reads every `agents.d/*/agent.toml` once per process. The directory name must equal the manifest's `kind`.
 
+These plugin manifests remain TOML. They register provider kinds and are separate from the [Markdown definitions](./definitions.md) that select models, tools, crafts, and team seats.
+
 RimZ installs no hooks for a plugin: `rimz hooks install` has no installer for an unknown agent, so wiring the agent's native hooks to the shim is the bundle's job, documented in its `setup-doc`.
 
 ## Manifest

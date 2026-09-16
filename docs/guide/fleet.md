@@ -53,7 +53,7 @@ Launching three agents by hand is three pane splits and three commands typed. On
 
 ```sh
 rimz agents claude,codex                     # two agents, side by side
-rimz agents claude:planner,codex:coder -w feat-x   # ad-hoc role handles, no agents.toml
+rimz agents claude:planner,codex:coder -w feat-x   # ad-hoc role handles, no saved team
 rimz agents claude,codex+term                # Claude | Codex tiled over a shell
 rimz agents claude/codex/term                # one stack of three rows
 rimz agents 'vim,codex+term'                 # your editor beside an agent stacked over a shell
@@ -251,7 +251,7 @@ rimz agents stop @claude --all  # close every Claude in scope
 
 **Restore a lane by place.** `rimz agents resume '#auth-refresh'` focuses the lane when every member is live, adds only closed members when part of it remains live, and rebuilds the saved team and stray panes when all are closed. Use `--from-pr 42` for a locally developed pull-request lane; bare `resume` targets the current worktree or lists resumable lanes at the project root.
 
-**Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current `agents.toml`, so edits take effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the allocated replacement handle instead of hiding a possible rename.
+**Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current Markdown definitions, so edits take effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the allocated replacement handle instead of hiding a possible rename.
 
 **Fork an agent to try another approach.** `rimz agents fork @coder` takes over the launching pane with the full conversation under a new provider-assigned session id in the source worktree, leaving the original session untouched and preserving its permission mode. Pass `--new-pane` to keep the launching pane, or `--new-tab` for a separate view. RimZ gives the fork a fresh pet name; use `rimz agents fork @coder --name twin` to pin `@twin` when you want both approaches to have memorable handles.
 
@@ -285,57 +285,27 @@ That is the whole daily workflow. The two sections below are the detail it names
 
 ## Profiles: shape an agent for one job
 
-A **profile** is a named preset in `agents.toml`: the base CLI plus the fields that shape it — model, reasoning effort, system prompt, permission mode, and raw flags. Define it once, launch it by name.
+A **profile** saves the shaping you would otherwise repeat at the CLI: model, reasoning effort, permission mode, tools, and optional craft. Store it as `~/.config/rimz/agents/claude-planner.md`:
 
-Before launching a changed preset, [`rimz agents explain <profile>`](../reference/cli/agents.md#explain-a-launch) shows the resolved profile chain and final launch settings. For example:
-
-```toml
-[agents.profiles.claude]                                   # named for the kind, so it becomes the tuned default
-agent = "claude"                                           # the base CLI, or another profile
-mode = "auto"
-effort = "xhigh"
-system-prompt-file = "~/.config/rimz/prompts/claude-slim.md"    # a trimmed house prompt
-args = "--strict-mcp-config --tools 'Agent,AskUserQuestion,Bash,Edit,EnterPlanMode,ExitPlanMode,LSP,Read,Skill,TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,WebFetch,WebSearch,Write'"
-
-[agents.profiles.claude-planner]                           # a specialist off the same base CLI
-agent = "claude"
-model = "fable"
-mode = "auto"
-effort = "high"
-system-prompt-file = "~/.config/rimz/prompts/claude-planner.md"  # its role, craft, and boundaries
-append-system-prompt-files = [                             # composed after the base, in this order
-  "~/.config/rimz/prompts/review-policy.md",
-  "~/.config/rimz/prompts/rust-style.md",
-]
-args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,AskUserQuestion,WebFetch,WebSearch,Skill,Agent(Explore,Plan)'"  # plan and explore, nothing that ships
+```markdown
+---
+description: Read code and propose a plan
+agent: claude
+model: fable
+tools: [Bash, Read, Grep, Glob, AskUserQuestion]
+subagents: []
+---
 ```
 
 ```sh
-rimz agents claude            # the tuned default, as @claude
-rimz agents claude-planner    # the planning specialist, as @claude-planner
+rimz agents validate
+rimz agents explain claude-planner
+rimz agents claude-planner
 ```
 
-For Codex, leaving `model` unset preserves your Codex configuration; if no model is configured there either, Codex chooses its own default. RimZ does not pin a fallback model.
+This bodyless preset needs no custom prompt. To add a craft body, supply a shared kind base in `agents/claude.md` first; the base and craft then compose in order. The [Markdown definition reference](../reference/definitions.md) covers the frontmatter, inheritance, tool translation, and defaults. Edit the source to change future launches; remove it to retire the profile.
 
-Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't. Two fields are RimZ's own: `budget`, which it enforces itself, and `model-reminder`, which shapes what it tells the agent at launch.
-
-| Field | What it sets | Renders as (Claude) |
-| --- | --- | --- |
-| `model` | the model to run | `--model opus` |
-| `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
-| `budget` | dollar cap for the session, or per local day with `/day` | kept and enforced by RimZ ([budgets](./budget.md)) |
-| `auto-compact` | the agent's own auto-compaction window, in tokens ([supported agents and limits](./configuration.md#profiles)) | `--autocompact 200000` |
-| `system-prompt-file` | first prompt piece; replaces the provider's system prompt | `--system-prompt-file …` |
-| `append-system-prompt-files` | ordered pieces composed after the base | repeat `--append-system-prompt-file …` |
-| `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
-| `args` | raw flags handed to the stock CLI | verbatim |
-| `model-reminder` | whether RimZ's launch reminder names the model the agent runs on; default on | reminder text inside `--append-system-prompt` |
-
-The system prompt and `args` are what make a profile targeted. RimZ separates prompt pieces with blank lines and sends the complete composition through the adapter's single replacement mechanism. Parent fragments come first, child fragments follow, and team-role fragments come last. Claude, Codex, Qwen, and Pi support this typed surface; other agents fail fast rather than silently ignoring it.
-
-Raw `args` remain the provider-specific escape hatch — including Droid's native append flag — and there is no RimZ-specific tools setting: narrow the toolset with the agent's own flags through `args` (`--tools` for Claude, `--sandbox` for Codex).
-
-When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
+For Codex, leaving `model` unset preserves its own configured model. Markdown `tools:` is translated to provider flags; it is not a raw `args` field. Presets that require unsupported provider capabilities fail at launch rather than silently dropping the setting.
 
 Override a field for one launch with its matching launch flag, which wins over the profile; `auto-compact` is profile-only:
 
@@ -352,7 +322,7 @@ To try a profile on a different provider without changing it, add `--agent`:
 rimz agents claude-planner --agent codex --model gpt-5.3-codex
 ```
 
-The launched handle is still `@claude-planner`. The selected base supplies the engine: its provider, and its model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer role on the `opus` profile's model and effort. Mode, budget, `auto-compact`, skills, and prompt files carry from the original profile, and so does its effort wherever the base leaves effort unset. Its model carries only when a same-provider base leaves the model unset. Because model names and raw `args` belong to a provider, a provider change silently replaces their old values with those from the selected base; a profile such as `[agents.profiles.codex]` can hold those Codex defaults. `--agent` accepts any profile name as that base as well as a registered kind, and command-line overrides still win. This override is fresh-launch only and is not written back to the profile; a later interactive restart refuses the provider mismatch and points to an explicit fresh `--agent` launch.
+The launched handle is still `@claude-planner`. The selected base supplies the engine: its provider, and its model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer role on the `opus` profile's model and effort. Mode, budget, `auto-compact`, skills, and prompt files carry from the original profile, and so does its effort wherever the base leaves effort unset. Its model carries only when a same-provider base leaves the model unset. Because model names and raw `args` belong to a provider, a provider change silently replaces their old values with those from the selected base; a named Codex definition can hold those defaults. `--agent` accepts any profile name as that base as well as a registered kind, and command-line overrides still win. This override is fresh-launch only and is not written back to the profile; a later interactive restart refuses the provider mismatch and points to an explicit fresh `--agent` launch.
 
 On budgets specifically: `--budget 5` parks the agent when its session cost reaches $5, `--budget 20/day` caps each local calendar day instead, and `rimz agents budget @coder` inspects or changes the cap while the agent runs. The same dollar-cap model scales up to loop tasks, the room, and a provider login: the [budgets guide](./budget.md) owns it.
 
@@ -386,6 +356,6 @@ Not every provider defines every mode: the built-in set is `claude-{auto,ask,pla
 - [Token Insight](./insight.md) — fleet-wide token and dollar insight: the cockpit, the provider dashboard, and `rimz stats`.
 - [Budgets](./budget.md) — dollar caps on an agent, a task, a room, or a provider login, and what a park means.
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
-- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
+- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — where reusable profiles and teams live.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents` surface.
 - [Agent support](../reference/agent-support.md) — which agents RimZ drives and what each integration adds.

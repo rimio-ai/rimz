@@ -1,6 +1,6 @@
 # Config CLI
 
-`rimz config` reads and edits the per-machine config: four commented TOML files under `~/.config/rimz/` that you own and can edit by hand. `rimz list-themes` and `rimz list-pets` print the choices for the two settings with many values, `theme.scheme` and `theme.pets.pet`. What each key means, the merge order, and the project config tier are in the [configuration guide](../../guide/configuration.md).
+`rimz config` reads and edits the per-machine config: three commented TOML files under `~/.config/rimz/` that you own and can edit by hand. `rimz list-themes` and `rimz list-pets` print the choices for the two settings with many values, `theme.scheme` and `theme.pets.pet`. What each key means, the merge order, and the project config tier are in the [configuration guide](../../guide/configuration.md).
 
 ```sh
 rimz config init [--force] [--print]
@@ -19,29 +19,28 @@ The directory is `$XDG_CONFIG_HOME/rimz/`, or `~/.config/rimz/` when `XDG_CONFIG
 
 | File | Keys routed to it | What it holds |
 | --- | --- | --- |
-| `config.toml` | every key not listed below (`resume.*`, `harness.*`, `sidebar.*`, `remote_control.*`, `timezone`, ...) | room behaviour: accounts, notifications, remote control, multiplexer options, resume, compaction |
+| `config.toml` | every key not listed below (`agents.*` preferences and commands, `resume.*`, `harness.*`, `sidebar.*`, `remote_control.*`, `timezone`, ...) | room behaviour: accounts, notifications, remote control, multiplexer options, resume, compaction |
 | `theme.toml` | `theme.*` | sidebar appearance and pets |
-| `agents.toml` | `agents.*`, `subagents.*` | profiles, commands, teams, isolation, worktree defaults |
 | `loop.toml` | `loop.*` | loop defaults and task definitions |
 
 Two key families land under a different table than their dotted name suggests. `theme.colors.*` lands in the root `[colors.*]` tables of `theme.toml`, so an Alacritty palette pasted there keeps working. `loop.*` drops the `loop.` prefix inside `loop.toml`, so `loop.default-timeout` is the file's top-level `default-timeout`.
 
-The same directory holds `remote.toml` (SSH room aliases, managed by [`rimz remote`](./remote.md)) and `profiles/`, `teams/`, and `skills/` (drop-in fragments and the shared [skill library](../../guide/configuration.md#skills)). `rimz config` reads and writes none of them.
+The same directory holds `remote.toml` (SSH room aliases, managed by [`rimz remote`](./remote.md)) and `agents/`, `subagents/`, `teams/`, `traits/`, and `skills/` ([Markdown definitions](../definitions.md) and the shared [skill library](../../guide/configuration.md#skills)). `rimz config get` includes loaded definitions; `set` does not edit their source files.
 
 ## Write the templates
 
 ```sh
-rimz config init           # write all four files
+rimz config init           # write all three files
 rimz config init --print   # print the templates, write nothing
 ```
 
-`init` writes the shipped template for each of the four files and prints `wrote <path>` for each. Every template line is commented, so a fresh file follows the defaults; `rimz config init --print` is the complete, current list of keys and defaults.
+`init` writes the shipped template for each of the three files and prints `wrote <path>` for each. Every template line is commented, so a fresh file follows the defaults; `rimz config init --print` is the complete, current list of keys and defaults.
 
 | Flag | Effect |
 | --- | --- |
-| (none) | Refuses when any of the four files exists: `` <path> already exists; pass --force to replace the per-machine config set ``. Nothing is written. |
-| `--force` | Overwrites all four files with fresh templates. Every value and comment you added is lost. |
-| `--print` | Prints the four templates to stdout, each under a `# === <file> ===` header, and touches no file. `--force` has no effect alongside it. |
+| (none) | Refuses when any of the three files exists: `` <path> already exists; pass --force to replace the per-machine config set ``. Nothing is written. |
+| `--force` | Overwrites all three files with fresh templates. Every value and comment you added is lost. |
+| `--print` | Prints the three templates to stdout, each under a `# === <file> ===` header, and touches no file. `--force` has no effect alongside it. |
 
 `init --force` is the clean reset. To refresh existing files against newer templates and keep your values, run [`rimz setup`](./getting-started.md#set-up-the-machine), which merges instead.
 
@@ -56,7 +55,7 @@ $ rimz config path
 
 ## Read a value
 
-`rimz config get` loads the effective config (the four files layered over built-in defaults, plus profiles and teams from `~/.config/rimz/`) and prints it. It reads strictly: a file with a TOML or validation error fails the command with that error instead of falling back to defaults.
+`rimz config get` loads the effective config (the three files layered over built-in defaults, plus profiles and teams from `~/.config/rimz/`) and prints it. It reads strictly: a file with a TOML or validation error fails the command with that error instead of falling back to defaults.
 
 | Form | Prints |
 | --- | --- |
@@ -111,7 +110,6 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `harness.turn_budget` | a dollar amount such as `3` or `$2.50` |
 | `resume.auto_redeem_min_gain` | a duration |
 | `gc.older_than` | a duration such as `8h` or `3d` |
-| `agents.profiles.<name>.auto-compact`, `subagents.profiles.<name>.auto-compact` | a compaction threshold |
 
 The two shorthands write the full key: `rimz config set theme <name>` sets `theme.scheme`, and `rimz config set theme.glyphs <set>` sets `theme.glyphs.set`.
 
@@ -119,8 +117,9 @@ The two shorthands write the full key: `rimz config set theme <name>` sets `them
 
 | Attempt | Error |
 | --- | --- |
+| Profile or team definition keys | Refused with the Markdown source path; edit that file and run `rimz agents validate`. |
 | A key RimZ does not know | `` unknown config key `KEY` `` |
-| A whole table, such as `theme.display`, `agents.profiles`, `agents.profiles.<name>`, or `loop.tasks.<name>` | `` unknown config key `KEY` ``. Set one field inside it, or edit the table in the file. |
+| A whole table, such as `theme.display` or `loop.tasks.<name>` | `` unknown config key `KEY` ``. Set one field inside it, or edit the table in the file. |
 | `notifications.handler` and its fields | `` config key `KEY` is an array of tables; edit <path to config.toml> `` |
 | A value of the wrong type or format | `` invalid value VALUE for `KEY`: ... ``, or a key-specific message such as `harness.idle_compact must be one of off, auto, or always` |
 | Any key, when the owning file already has a TOML or validation error | `` cannot set `KEY`: the existing config is invalid `` (or `cannot edit <path> — the file has a TOML error`). Fix the file first. |
@@ -129,7 +128,7 @@ The two shorthands write the full key: `rimz config set theme <name>` sets `them
 
 Three keys check or change the machine beyond the file.
 
-`agents.isolation sandbox` probes bubblewrap before writing. On Linux it looks for `bwrap` on `PATH` and runs a trivial command inside a bubblewrap mount view; on any other OS, with `bwrap` missing, or when the probe fails (commonly unprivileged user namespaces disabled by sysctl or AppArmor), the command prints the reason and leaves `agents.toml` unchanged. `host`, the default, runs no probe. The setting applies to later launches, restarts included; running panes keep the isolation they started with. The per-launch `--isolation` flag on [`rimz agents`](./agents.md), [`rimz teams`](./teams.md), [`rimz subagents`](./subagents.md), and `rimz agents fork` takes precedence, and what isolation changes is in [security](../../guide/security.md#sandbox-isolation).
+`agents.isolation sandbox` probes bubblewrap before writing. On Linux it looks for `bwrap` on `PATH` and runs a trivial command inside a bubblewrap mount view; on any other OS, with `bwrap` missing, or when the probe fails (commonly unprivileged user namespaces disabled by sysctl or AppArmor), the command prints the reason and leaves `config.toml` unchanged. `host`, the default, runs no probe. The setting applies to later launches, restarts included; running panes keep the isolation they started with. The per-launch `--isolation` flag on [`rimz agents`](./agents.md), [`rimz teams`](./teams.md), [`rimz subagents`](./subagents.md), and `rimz agents fork` takes precedence, and what isolation changes is in [security](../../guide/security.md#sandbox-isolation).
 
 `remote_control.claude` and `remote_control.codex` switch the provider's remote-control host on the running machine. Setting either to `true` checks the host's preconditions first and refuses with the fix when they fail. After the write, `claude` adds or closes the `claude remote-control` pane in every running room's `rimzd` view, and `codex` starts or stops the shared Codex remote-control daemon. A hand edit reaches Claude hosts on the `rimzd` view's next repair pass, but for Codex it changes only what later room starts do, so use `set` to start or stop a running daemon. What each host runs is in the [remote guide](../../guide/remote.md#answer-asks-from-your-phone).
 
