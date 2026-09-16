@@ -1119,7 +1119,8 @@ fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {
         })
 }
 
-fn validate_agents_file(
+/// Validate materialized definitions using the machine configuration's launch rules.
+pub fn validate_agents_file(
     agents: &AgentsConfig,
     subagents: &SubagentProfilesConfig,
     path: &Path,

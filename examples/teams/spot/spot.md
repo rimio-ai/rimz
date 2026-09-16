@@ -1,3 +1,18 @@
+---
+name: spot
+leader: coder
+layout: coder,reviewer
+stages: ["Implement","Review","Submit","Reflect"]
+roles:
+  - agent: spot-coder
+    role: coder
+    owns: ["Implement","Reflect"]
+    signals: [ci.failed]
+  - agent: spot-reviewer
+    role: reviewer
+    owns: ["Review","Submit"]
+---
+
 # The pipeline
 
 Implement → Review → Submit → Reflect, owners per the roster.

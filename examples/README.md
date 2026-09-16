@@ -45,21 +45,19 @@ rimz teams install spot
 From a repository checkout, copying remains the local-edit alternative:
 
 ```sh
-mkdir -p ~/.agents/teams
-cp -r examples/teams/forge ~/.agents/teams/
+mkdir -p ~/.agents/{teams,agents}
+cp -n examples/teams/forge/forge.md ~/.agents/teams/
+cp -n examples/teams/forge/agents/*.md ~/.agents/agents/
+rimz agents validate
 ```
 
-`rimz teams install forge --force` replaces files in a same-named installed directory; the plain install preserves it. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
+`rimz teams install forge --force` replaces existing target definitions; the plain install refuses them. Each bundle includes team-prefixed agent definitions and shared `claude.md` and `codex.md` base prompts.
 
 Launch with `rimz teams forge -w feat-x`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to its role handle — `@planner`, `@architect`, `@coder`, `@reviewer`. The signal binding is armed when the coder registers, scoped to its worktree, and retired with that session. Failed CI delivers a `Type: SIGNAL` message directly to the coder, not whoever pushed. Without an explicit branch/path match, launching this binding on the root checkout is refused; use `-w` or launch from a linked worktree. `rimz teams show forge#feat-x` separates declared bindings from live subscriptions.
 
-The `claude` and `codex` CLIs must be on `PATH`, for all three teams. Each `team.toml` pins its models (`fable`, `opus`, the current GPT) and Codex feature flags; adjust them there to taste. The prompts also name helper skills that are not shipped here, `pr` among them, and state the outcome alongside each, so a role without one falls back to plain `git` or `gh`.
+The `claude` and `codex` CLIs must be on `PATH`, for all three teams. Agent Markdown frontmatter pins models (`fable`, `opus`, the current GPT) and tools; adjust them there to taste. The prompts also name helper skills that are not shipped here, `pr` among them, and state the outcome alongside each, so a role without one falls back to plain `git` or `gh`.
 
-Try a team before installing by pointing RimZ at this checkout:
-
-```sh
-RIMZ_AGENTS_HOME="$PWD/examples" rimz teams forge -w feat-x
-```
+The team definition's Markdown body carries its pipeline; see the [bundle guide](./teams/README.md) for customization.
 
 ## Third-party agent plugin — `agent-plugin/`
 
