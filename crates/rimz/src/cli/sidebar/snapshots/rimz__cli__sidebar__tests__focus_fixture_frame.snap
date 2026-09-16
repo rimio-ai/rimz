@@ -13,7 +13,7 @@ expression: strip_sgr(&ansi)
 ▎ feature/auth-router ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +1520 -470🮇
 ▌ planner · Opus 4.8 · xhigh · 1m             $14.72▐
 ▌  plan router cutover                               ▐
-▌  󰕰 ━━━━━━━━━━━━━╺━╺──────────────────────────   18%▐
+▌  󰕰 ━━━━━━━━━━━╺━╺────────────────────────────   18%▐
 ▌  󰿦 183k · 󱥸 157k  18k  7k  22k             󰪠 22m▐
 ▌   subagents (5)                              $1.05▐
 ▌     Explore — trace handler graph            $0.34▐

@@ -18,7 +18,7 @@ expression: strip_sgr(&ansi)
   main                     ⇡3 ⇣1  +1840 -620   main
  ⢄ claude · Opus 4.8 · xhigh · 1m               $8.64
    stabilize render diff
-   󰕰 ━━━━━━━━━━━━━━━━╺━╺───────────────────────   24%
+   󰕰 ━━━━━━━━━━━━━━━╺━╺────────────────────────   24%
    󰿦 247k · 󱥸 212k  24k  9k  30k
     subagents (2)                              $0.46
       Explore — audit auth watcher changes     $0.34
@@ -27,7 +27,7 @@ expression: strip_sgr(&ansi)
         18k · Haiku · xhigh                    󰪞  3m
  ▁ claude · Opus 4.8 · xhigh · 1m              $28.90
    compact provider trace
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━────   79%
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━─────   79%
    󰿦 797k · 󱥸 685k  79k  31k  99k ·  3       󰪟 8m
  ⣾ cargo nextest               37%   402M     8M/s
    integration::backend
@@ -39,7 +39,7 @@ expression: strip_sgr(&ansi)
    󰿦 853k · 󱥸 734k  85k  34k  106k            ◉ 1h
  ⠁ opencode · GPT 5.5 · xhigh · 272k            $3.07
    trace tmux layout parity
-   󰕰 ━━━━━━━━━━━━━━━━╺─────────────────────────   38%
+   󰕰 ━━━━━━━━━━━━━━━╺──────────────────────────   38%
    󰿦 103k · 󱥸 99k  4k  12k ·  1
   pi · GPT 5.5 · xhigh
  ⢄ codex · GPT 5.5 · xhigh · 272k               $3.83
@@ -66,7 +66,7 @@ expression: strip_sgr(&ansi)
    󰿦 42k · 󱥸 40k  1k  5k                       󰪥 1h
  ⢄ claude · Opus 4.8 · xhigh · 1m               $6.95
    verify 256-color fallback
-   󰕰 ━━━━━━━━━━━━━━━━━━━╺━━╺───────────────────   31%
+   󰕰 ━━━━━━━━━━━━━━━━━╺━━╺─────────────────────   31%
    󰿦 314k · 󱥸 270k  31k  12k  39k             󰪞 6m
     subagents (2)                              $0.46
       Explore — audit auth watcher changes     $0.34
@@ -77,11 +77,11 @@ expression: strip_sgr(&ansi)
   mux-merge #91                                main
   claude · Opus 4.8 · xhigh · 1m              $15.38
    API Error: Overloaded
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺━━╺━─────────────   46%
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━╺━━╺━───────────────   46%
    󰿦 469k · 󱥸 403k  46k  18k  58k             ◉ 1h
   claude · Opus 4.8 · xhigh · 1m               $2.41
    land tmux hook fix
-   󰕰 ━━━━━━━━━╺━╺──────────────────────────────   13%
+   󰕰 ━━━━━━━━╺━╺───────────────────────────────   13%
    󰿦 132k · 󱥸 114k  13k  5k  16k              ◉ 2h
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
