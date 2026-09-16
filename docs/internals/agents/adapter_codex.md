@@ -28,7 +28,7 @@ Every hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex`, and 
 
 | Event | Matcher | Signal |
 | --- | --- | --- |
-| `SessionStart` | `startup\|resume\|clear\|compact` | `Registered`; source `compact` gives `CompactionEnded` with no trigger |
+| `SessionStart` | `startup\|resume\|clear\|compact\|fork` | `Registered`; source `compact` gives `CompactionEnded` with no trigger |
 | `UserPromptSubmit` | none | `TurnStarted` |
 | `SubagentStart` | `.*` | `SubagentStarted` |
 | `SubagentStop` | `.*` | `SubagentStopped { errored }` |
@@ -117,11 +117,12 @@ Codex hooks are daemon-routed: they fire from the shared per-user app-server wit
 
 Several roots can share one Codex pane, and the rollout header tells them apart. [`session_origin`](../../../crates/rimz/src/agents/adapters/codex/transcript.rs) reads each root's `session_meta` on identity events:
 
-| Rollout header | Meaning | Rule in instances.md |
+| Rollout header or hook source | Meaning | Rule in instances.md |
 | --- | --- | --- |
 | `forked_from_id` null | a fresh `/clear` or `/new` conversation (Codex also fires `SessionStart` for it) | [fresh conversation](./instances.md#supersession) retires the rested predecessor |
 | `forked_from_id` set, continuation of a compaction | the same conversation under a new id; RimZ stamps `compacted_from` | [compaction continuation](./instances.md#supersession), and the successor inherits `registered_at` |
-| `forked_from_id` set, anything else | `/side`, `/btw`, `/fork`, or a provider-death retry, which Codex does not distinguish | [forked retry](./instances.md#supersession) retires only an errored predecessor; otherwise [`KeepPrimary`](./instances.md#same-pane-ownership) decides |
+| `forked_from_id` set, anything else | a persistent fork (`/fork`, `codex fork`) or a provider-death retry, which Codex does not distinguish | [forked retry](./instances.md#supersession) retires only an errored predecessor; otherwise [`KeepPrimary`](./instances.md#same-pane-ownership) decides |
+| `SessionStart` source `fork`, no resolved rollout | an ephemeral side conversation (`/side`, `/btw`) | quarantined at ingestion, never an agent session |
 | unreadable | lineage unknown | no lineage rule applies |
 
 Every same-instance root carries the [launch identity](./instances.md#launch-identity-across-conversations), and launched children keep their parent link across forks and continuations ([subagents.md](../harness/subagents.md#launch-generations-and-parentage)). On the first prompt after `/clear`, daemon-routed recovery stamps the new root onto the focused Codex pane, or without focus evidence onto the sole occupied pane whose owner is at rest, so the fresh-conversation rule can fire.

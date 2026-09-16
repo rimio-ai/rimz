@@ -63,11 +63,11 @@ fn stamped_codex_returned_to_shell_without_hosted_process_renders_process_row() 
 
 #[test]
 fn forked_side_session_does_not_repaint_primary_card() {
-    // Codex `/side` / `/btw` forks the conversation into a fresh session id in
-    // the same pane and process. Both sessions stamp `%1` as root agents, but
-    // the fork registered later and just posted the side question, so it holds
-    // the newer `last_activity`. The card must stay on the primary (earliest-
-    // registered) session — never flip to the fork.
+    // A persistent in-process fork has a fresh session id in the same pane and
+    // process. Both sessions stamp `%1` as root agents, but the fork registered
+    // later and just posted a prompt, so it holds the newer `last_activity`.
+    // The card must stay on the primary (earliest-registered) session — never
+    // flip to the fork.
     let mut main = agent("codex", "main-sess", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1")
@@ -334,10 +334,11 @@ fn shared_pane_primary_is_stable_when_registration_ties() {
 #[test]
 fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
     // Production shape: the ghost reaper runs before the live-pane fold
-    // (`assemble.rs`). A `/side` / `/btw` fork shares the primary's daemon owner
-    // pid, so the same-pane supersession reaper must spare the primary instead
-    // of collapsing it as a relaunch — otherwise `stamped_agent_for_pane` never
-    // sees the primary and the card flips to the fork.
+    // (`assemble.rs`). A persistent in-process fork shares the primary's daemon
+    // owner pid, so the same-pane supersession reaper must spare the primary
+    // instead of collapsing it as a relaunch — otherwise
+    // `stamped_agent_for_pane` never sees the primary and the card flips to the
+    // fork.
     let mut main = agent("codex", "main-sess", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1")

@@ -103,7 +103,7 @@ Codex 0.154.0 has twelve hook events (`HookEventName`, `protocol/src/protocol.rs
 
 | Event | Fires | Event-specific input |
 | --- | --- | --- |
-| `SessionStart` | a root session starts, resumes, clears, or compacts; dispatched at the start of the next turn (`run_pending_session_start_hooks`, `core/src/hook_runtime.rs:124`) | `source`: `startup`, `resume`, `clear`, or `compact` |
+| `SessionStart` | a root session starts, resumes, clears, compacts, or forks; dispatched at the start of the next turn (`run_pending_session_start_hooks`, `core/src/hook_runtime.rs:124`) | `source`: `startup`, `resume`, `clear`, `compact`, or `fork` |
 | `UserPromptSubmit` | the user submits a prompt | `turn_id`, `prompt` |
 | `SubagentStart` | a spawned child thread starts | `turn_id`, `agent_id`, `agent_type`, `permission_mode` |
 | `PreToolUse` | before a hooked tool call ([tool names](#tool-names)) | `turn_id`, `tool_name`, `tool_use_id`, `tool_input` |
@@ -119,6 +119,8 @@ Codex 0.154.0 has twelve hook events (`HookEventName`, `protocol/src/protocol.rs
 `Interrupt` and `SessionEnd` fire only for root threads, each after Codex flushes the rollout (`hook_runtime.rs:455` to `:526`). `Interrupt` fires before the `turn_aborted` record is emitted (`core/src/tasks/mod.rs:807`, `:965`). `SessionEnd` runs from the shutdown handler, which the app-server also reaches when it unloads an idle thread (`unload_thread_without_subscribers`, `app-server/src/request_processors/thread_lifecycle.rs:422`), so the event does not prove the interactive session ended. Codex 0.152.0 added executor-plugin `Interrupt` hooks (#41432); they run async and leave the command-hook payload unchanged.
 
 Compaction runs in place: Codex writes a `compacted` record into the same rollout, keeps the session id, and queues `SessionStart` with `source = "compact"` for the next turn (`core/src/session/mod.rs:3831` to `:3847`). Local 0.154.0 rollouts confirm it: sessions with several compactions keep one file and a parentless header.
+
+`/btw` (alias `/side`) forks an ephemeral side thread: `side_fork_config` sets `ephemeral = true` ([`tui/src/app/side.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/tui/src/app/side.rs)). No rollout is persisted, so `hook_transcript_path` yields a null `transcript_path` ([`core/src/hook_runtime.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/hook_runtime.rs)). Its `SessionStart` carries `source: "fork"`; later `UserPromptSubmit` and `Stop` hooks carry the new session id and null transcript path, but no source or ephemeral marker. A persistent fork has a materialized rollout; an ephemeral root instead starts with `source: "startup"`.
 
 ### Tool names
 

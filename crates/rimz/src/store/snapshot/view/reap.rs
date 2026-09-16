@@ -151,8 +151,8 @@ impl SidebarSnapshot {
     ///     (`session_death::older_yields_pane`) — or, for two paneless remnants, its
     ///     `(worktree_path, worktree_branch)`. This collapses relaunch-in-place
     ///     and shared-pid ghosts to the newest while never dropping a concurrent
-    ///     agent that owns its own pane, nor an in-pane thread fork (Codex
-    ///     `/side` / `/btw`) that shares the primary's live process.
+    ///     agent that owns its own pane, nor a persistent in-process fork that
+    ///     shares the primary's live process.
     /// (c) an older **fresh-lineage** conversation superseded by a strictly-newer
     ///     fresh-lineage conversation of the same kind on the same stamped pane.
     ///     Codex `/clear` / `/new` changes the session id inside one terminal
