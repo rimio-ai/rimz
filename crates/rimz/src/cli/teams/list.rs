@@ -9,8 +9,8 @@ use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
 use rimz::agents::attribution::LaneLifetimes;
 use rimz::agents::{AgentState, AgentStatus, TurnPhase};
 use rimz::config::{
-    CommandsConfig, Isolation, MachineConfig, ProfilesConfig, TaskEntry, Team, TeamsConfig,
-    ThemeConfig,
+    CommandsConfig, Isolation, MachineConfig, ProfilesConfig, PromptSource, TaskEntry, Team,
+    TeamsConfig, ThemeConfig,
 };
 use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
 use rimz::harness::schedule::run_log::{self, LoopRunResult, LoopRunStats};
@@ -36,7 +36,7 @@ pub(super) struct TeamReport {
     pub consensus: Option<String>,
     /// The team layer's files, composed after the consensus.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub append_system_prompt_files: Vec<rimz::config::PromptSource>,
+    pub append_system_prompt_files: Vec<PathBuf>,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -57,9 +57,9 @@ pub(super) struct RoleReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_prompt_file: Option<rimz::config::PromptSource>,
+    pub system_prompt_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub append_system_prompt_files: Vec<rimz::config::PromptSource>,
+    pub append_system_prompt_files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -352,7 +352,7 @@ fn definition_report(
                 .as_ref()
                 .map_or_else(|| "builtin".to_owned(), |path| path.display().to_string())
         }),
-        append_system_prompt_files: team.append_system_prompt_files.clone(),
+        append_system_prompt_files: origins(&team.append_system_prompt_files),
         valid: validation.is_ok(),
         error: validation
             .err()
@@ -381,6 +381,14 @@ fn resolved_roles(team: &Team, layout: &LayoutSpec) -> Vec<RoleReport> {
         .collect()
 }
 
+/// Reports name each prompt piece by its source path; the text stays out of JSON.
+fn origins(sources: &[PromptSource]) -> Vec<PathBuf> {
+    sources
+        .iter()
+        .map(|source| source.origin().to_owned())
+        .collect()
+}
+
 fn role_report(role: String, cell: &AgentCell) -> RoleReport {
     RoleReport {
         signals: Vec::new(),
@@ -394,8 +402,11 @@ fn role_report(role: String, cell: &AgentCell) -> RoleReport {
         model: cell.launch.model.clone(),
         effort: cell.launch.effort.clone(),
         mode: cell.launch.mode.map(|mode| mode.to_string()),
-        system_prompt_file: cell.system_prompt_file.clone(),
-        append_system_prompt_files: cell.append_system_prompt_files.clone(),
+        system_prompt_file: cell
+            .system_prompt_file
+            .as_ref()
+            .map(|source| source.origin().to_owned()),
+        append_system_prompt_files: origins(&cell.append_system_prompt_files),
     }
 }
 
@@ -425,12 +436,16 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
                     .map(|mode| mode.to_string()),
                 system_prompt_file: resolved
                     .as_ref()
-                    .and_then(|profile| profile.system_prompt_file.clone())
-                    .or_else(|| binding.system_prompt_file.clone()),
-                append_system_prompt_files: resolved
-                    .as_ref()
-                    .map(|profile| profile.append_system_prompt_files.clone())
-                    .unwrap_or_else(|| binding.append_system_prompt_files.clone()),
+                    .and_then(|profile| profile.system_prompt_file.as_ref())
+                    .or(binding.system_prompt_file.as_ref())
+                    .map(|source| source.origin().to_owned()),
+                append_system_prompt_files: origins(
+                    resolved
+                        .as_ref()
+                        .map_or(&binding.append_system_prompt_files, |profile| {
+                            &profile.append_system_prompt_files
+                        }),
+                ),
             }
         })
         .collect()

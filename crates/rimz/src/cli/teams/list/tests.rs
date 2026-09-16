@@ -120,7 +120,11 @@ fn catalog_projects_cohort_observability_by_worktree() {
     let mut definition = team();
     // A staged team keeps the default memory files without declaring them.
     definition.stages = vec!["Plan".into(), "Implement".into()];
-    definition.append_system_prompt_files = vec!["pipeline.md".into()];
+    // A Markdown team's pipeline is text; JSON names its source file only.
+    definition.append_system_prompt_files = vec![rimz::config::PromptSource::Text {
+        origin: "pipeline.md".into(),
+        text: "Pipeline body.".into(),
+    }];
     let teams = TeamsConfig(BTreeMap::from([("forge".into(), definition)]));
     let mut agents = Vec::new();
     let mut groups = Vec::new();
@@ -245,6 +249,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
     assert!(json[0]["instances"][1]["stage"].is_null());
     assert_eq!(json[0]["consensus"], "builtin");
     assert_eq!(json[0]["append_system_prompt_files"][0], "pipeline.md");
+    assert!(!json.to_string().contains("Pipeline body."));
     assert_eq!(
         json[0]["roles"][0]["append_system_prompt_files"][0],
         "consensus.md"
