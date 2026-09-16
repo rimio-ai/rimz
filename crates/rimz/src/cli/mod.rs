@@ -209,7 +209,7 @@ where
                 "`rimz feed` has been removed; blocking agent prompts now surface as Waiting state in the agent pane"
             ),
             Some("tab") => anyhow::bail!(
-                "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `[agents.teams]`"
+                "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `<agents_home>/teams/<name>.md`"
             ),
             _ => {}
         }
