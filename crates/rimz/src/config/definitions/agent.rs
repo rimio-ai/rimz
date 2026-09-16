@@ -40,6 +40,7 @@ pub(super) fn resolve_namespace(
     foreign: &Namespace,
     bases: &BTreeSet<String>,
     skills: SkillLibraryCheck<'_>,
+    allowed_children: &BTreeSet<String>,
     loaded: &mut LoadedDefinitions,
 ) {
     let mut resolver = Resolver {
@@ -49,7 +50,7 @@ pub(super) fn resolve_namespace(
         foreign,
         bases,
         skills,
-        loaded_children: loaded.subagent_profiles.0.keys().cloned().collect(),
+        allowed_children,
         resolved: BTreeMap::new(),
         trail: Vec::new(),
         errors: Vec::new(),
@@ -77,7 +78,7 @@ struct Resolver<'a> {
     foreign: &'a Namespace,
     bases: &'a BTreeSet<String>,
     skills: SkillLibraryCheck<'a>,
-    loaded_children: BTreeSet<String>,
+    allowed_children: &'a BTreeSet<String>,
     resolved: BTreeMap<String, Option<Resolved>>,
     trail: Vec<String>,
     errors: Vec<DefinitionErr>,
@@ -174,6 +175,24 @@ impl Resolver<'_> {
             ));
         };
         let kind = profile.agent.as_str();
+        if let Some(definition) = agents::find_definition(kind) {
+            for (field, name, value) in [
+                (PresetField::Model, "model", &fm.model),
+                (PresetField::Effort, "effort", &fm.effort),
+                (PresetField::AutoCompact, "auto-compact", &fm.auto_compact),
+            ] {
+                if value.is_some() && definition.spec().launch.preset_arg_matcher(field).is_none() {
+                    return Err(DefinitionErr::new(
+                        path,
+                        agents::PresetErr::UnsupportedField {
+                            agent: definition.spec().kind,
+                            field: name,
+                        }
+                        .to_string(),
+                    ));
+                }
+            }
+        }
         if let Some(model) = fm.model.as_deref()
             && let Some(implied) = agents::definition_model_kind(model)
             && implied != kind
@@ -222,7 +241,7 @@ impl Resolver<'_> {
             if let Some(failed) = names.iter().find(|name| {
                 (self.foreign.definitions.contains_key(*name)
                     || self.foreign.failed.contains(*name))
-                    && !self.loaded_children.contains(*name)
+                    && !self.allowed_children.contains(*name)
             }) {
                 return Err(DefinitionErr::new(
                     path,
@@ -234,7 +253,7 @@ impl Resolver<'_> {
                 .filter(|name| {
                     name.as_str() != "general"
                         && agents::find_definition(name).is_none()
-                        && !self.loaded_children.contains(*name)
+                        && !self.allowed_children.contains(*name)
                 })
                 .collect();
             if !unknown.is_empty() {
@@ -258,10 +277,17 @@ impl Resolver<'_> {
             .model
             .as_ref()
             .map(|model| agents::expand_model_alias(kind, model));
-        profile.effort = fm
-            .effort
-            .clone()
-            .or_else(|| defaults.effort.map(str::to_owned));
+        profile.effort = fm.effort.clone().or_else(|| {
+            agents::find_definition(kind)
+                .and_then(|definition| {
+                    definition
+                        .spec()
+                        .launch
+                        .preset_arg_matcher(PresetField::Effort)
+                })
+                .and(defaults.effort)
+                .map(str::to_owned)
+        });
         profile.auto_compact = fm
             .auto_compact
             .clone()

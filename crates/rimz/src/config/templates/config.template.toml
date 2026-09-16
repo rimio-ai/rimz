@@ -154,15 +154,6 @@ aggressive_resize = true
 # auto_redeem = false                 # spend a Codex reset credit automatically when a usage window is spent
 # auto_redeem_min_gain = "12h"        # redeem only when it buys at least this much blocked time (doomed credits redeem regardless)
 
-[harness]
-## budget = "50/day"             # turn on the whole-room local-day cap; adjust the live cap with `rimz budget`
-## turn_budget = "3"              # cap every agent turn at this dollar amount
-## smart_compact = "70%"          # default for messages/waits ("70%", "120000", or "180k"); unset = off
-## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's brief for the seat (solo or team member), "" = bare command
-## idle_compact = "auto"           # compact idle agents before the provider cache expires; auto = while another same-channel agent is running
-## idle_compact_after = "59m"      # idle span before compaction
-## flip_compact = "180k"          # compact on stage hand-off at this context threshold; unset = off
-
 [gc]
 # auto = true                         # sweep stale state once a day from every open room
 # older_than = "7d"                   # age cutoff for `rimz gc` (s/m/h/d)
@@ -197,3 +188,12 @@ aggressive_resize = true
 # Commands are shell-split raw command panes. They are not addressable agents.
 ## vim = "nvim -p"
 ## htop = "htop"
+
+[harness]
+## budget = "50/day"             # turn on the whole-room local-day cap; adjust the live cap with `rimz budget`
+## turn_budget = "3"              # cap every agent turn at this dollar amount
+## smart_compact = "70%"          # default for messages/waits ("70%", "120000", or "180k"); unset = off
+## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's brief for the seat (solo or team member), "" = bare command
+## idle_compact = "auto"           # compact idle agents before the provider cache expires; auto = while another same-channel agent is running
+## idle_compact_after = "59m"      # idle span before compaction
+## flip_compact = "180k"          # compact on stage hand-off at this context threshold; unset = off

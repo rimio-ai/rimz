@@ -233,18 +233,16 @@ mod tests {
     }
 
     #[test]
-    fn broken_fragment_notice_names_launch_precondition_not_fallback() {
-        let err = rimz::config::MachineConfig::parse_text(
-            std::path::Path::new("/tmp/agents.toml"),
-            "[agents.teams.bad]\nlayout = \"claude,,codex\"\n",
-            std::path::Path::new("/tmp/missing-agents-home"),
-        )
-        .expect_err("invalid layout fails");
+    fn broken_definition_notice_names_launch_precondition_not_fallback() {
+        let err = rimz::config::ConfigErr::Definition {
+            path: PathBuf::from("/tmp/agents/bad.md"),
+            message: "follows unknown profile 'x'".to_owned(),
+        };
 
-        let notice = broken_config_notice_for(&err, true);
+        let notice = broken_config_notice(&err);
 
         assert!(
-            notice.contains("/tmp/agents.toml cannot be used"),
+            notice.contains("/tmp/agents/bad.md cannot be used"),
             "{notice}"
         );
         assert!(notice.contains("refuse launches"), "{notice}");

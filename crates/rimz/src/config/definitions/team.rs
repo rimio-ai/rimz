@@ -20,6 +20,7 @@ struct SeatLoader<'a> {
     subagents: &'a Namespace,
     bases: &'a BTreeSet<String>,
     skills: SkillLibraryCheck<'a>,
+    children: &'a BTreeSet<String>,
 }
 
 pub(super) fn load(
@@ -28,6 +29,7 @@ pub(super) fn load(
     subagents: &Namespace,
     bases: &BTreeSet<String>,
     skills: SkillLibraryCheck<'_>,
+    children: &BTreeSet<String>,
     loaded: &mut LoadedDefinitions,
 ) {
     let seats = SeatLoader {
@@ -36,6 +38,7 @@ pub(super) fn load(
         subagents,
         bases,
         skills,
+        children,
     };
     let paths = match files(&home.join("teams")) {
         Ok(paths) => paths,
@@ -305,6 +308,7 @@ impl SeatLoader<'_> {
             self.subagents,
             self.bases,
             self.skills,
+            self.children,
             &mut seat,
         );
         if let Some(error) = seat.errors.into_iter().next() {

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::cli::ctx::Ctx;
-use crate::cli::{machine_config, render, report_unknown_config_keys, require_definitions};
+use crate::cli::{launch_machine_config, render, report_unknown_config_keys};
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -26,8 +26,7 @@ pub(super) fn launch_layout(
     let ctx = Ctx::open(globals)?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
-    let machine_config = machine_config();
-    require_definitions(&machine_config)?;
+    let machine_config = launch_machine_config()?;
     report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
     let lane = args

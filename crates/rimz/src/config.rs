@@ -652,7 +652,7 @@ impl MachineConfig {
         } else {
             definitions::SkillLibraryCheck::Skip
         };
-        let loaded = definitions::load(agents_home, check);
+        let loaded = definitions::load(agents_home, check, &self.agents.commands);
         self.agents.profiles = loaded.agent_profiles;
         self.subagents.profiles = loaded.subagent_profiles;
         self.agents.teams.0.extend(loaded.teams.0);
@@ -819,8 +819,9 @@ impl ConfigStamp {
     fn from_inputs(config_path: &Path, agents_home: &Path) -> Self {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let definitions = definitions::source_paths(agents_home)
-            .iter()
-            .map(|path| StampedPath::of(path))
+            .into_iter()
+            .chain(skill_library_paths(&agents_home.join("skills")))
+            .map(|path| StampedPath::of(&path))
             .collect();
         Self {
             core: StampedPath::of(files.core_path()),
@@ -839,6 +840,25 @@ impl ConfigStamp {
             .chain(self.definitions.iter())
             .any(|path| stamped_path_modified_within(path, now, quiet))
     }
+}
+
+/// The skill files a sandboxed load reads for `skills:` checks, plus the
+/// directories whose listing changes when a skill is added or removed.
+fn skill_library_paths(skills: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![skills.to_path_buf()];
+    let Ok(entries) = std::fs::read_dir(skills) else {
+        return paths;
+    };
+    let mut skills: Vec<_> = entries
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .collect();
+    skills.sort();
+    for skill in skills {
+        paths.push(skill.join("SKILL.md"));
+        paths.push(skill.join("agents/openai.yaml"));
+        paths.push(skill);
+    }
+    paths
 }
 
 fn stamped_path_modified_within(path: &StampedPath, now: Duration, quiet: Duration) -> bool {
@@ -1131,7 +1151,7 @@ fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {
 }
 
 /// Validate materialized definitions using the machine configuration's launch rules.
-pub fn validate_agents_file(
+fn validate_agents_file(
     agents: &AgentsConfig,
     subagents: &SubagentProfilesConfig,
     path: &Path,

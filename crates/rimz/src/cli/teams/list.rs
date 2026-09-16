@@ -9,8 +9,8 @@ use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
 use rimz::agents::attribution::LaneLifetimes;
 use rimz::agents::{AgentState, AgentStatus, TurnPhase};
 use rimz::config::{
-    CommandsConfig, Isolation, MachineConfig, ProfilesConfig, PromptSource, TaskEntry, Team,
-    TeamsConfig, ThemeConfig,
+    AgentSpecSources, CommandsConfig, Isolation, MachineConfig, ProfilesConfig, PromptSource,
+    TaskEntry, Team, TeamsConfig, ThemeConfig,
 };
 use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
 use rimz::harness::schedule::run_log::{self, LoopRunResult, LoopRunStats};
@@ -200,6 +200,12 @@ pub(super) fn load_catalog(
         &jiff::Timestamp::now().to_zoned(machine.time_zone()),
         Some(&ctx.workspace.project_root),
     );
+    let sources = rimz::config::definitions::load(
+        &rimz::disk::paths::agents_home(),
+        rimz::config::definitions::SkillLibraryCheck::Skip,
+        &machine.agents.commands,
+    )
+    .sources;
     Ok(build_catalog(
         &effective.teams,
         &effective.profiles,
@@ -216,7 +222,7 @@ pub(super) fn load_catalog(
             isolation: machine.agents.isolation,
             tmp_dir: &ctx.store.paths().tmp_dir,
         },
-        |name| team_source(&ctx.workspace.project_root, name),
+        |name| team_source(&ctx.workspace.project_root, name, &sources),
     ))
 }
 
@@ -822,7 +828,7 @@ pub(super) fn ci_style(ci: WorktreePrCi) -> anstyle::Style {
     }
 }
 
-fn team_source(project_root: &Path, name: &str) -> Option<String> {
+fn team_source(project_root: &Path, name: &str, sources: &AgentSpecSources) -> Option<String> {
     let config_root = rimz::disk::paths::config_home();
     let repo = project_root.join(".rimz/config.toml");
     if rimz::trust::status_with_roots(project_root, &config_root)
@@ -831,9 +837,7 @@ fn team_source(project_root: &Path, name: &str) -> Option<String> {
     {
         return Some(repo.display().to_string());
     }
-    if let Ok((_, sources)) = rimz::config::MachineConfig::load_with_agent_spec_sources()
-        && let Some(path) = sources.team(name)
-    {
+    if let Some(path) = sources.team(name) {
         return Some(path.display().to_string());
     }
     (name == "peer").then(|| "built-in".to_owned())

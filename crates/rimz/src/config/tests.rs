@@ -1615,7 +1615,7 @@ fn definition_failures_keep_good_siblings_and_match_doctor_and_launch_preconditi
 }
 
 #[test]
-fn definition_stamp_tracks_add_edit_remove_and_trait_changes() {
+fn definition_stamp_tracks_definitions_traits_and_skill_files() {
     let dir = tempdir().unwrap();
     let path = write(&dir, "");
     let before = ConfigStamp::from_inputs(&path, dir.path());
@@ -1638,7 +1638,19 @@ fn definition_stamp_tracks_add_edit_remove_and_trait_changes() {
     let trait_added = ConfigStamp::from_inputs(&path, dir.path());
     assert_ne!(edited, trait_added);
     std::fs::remove_file(source).unwrap();
-    assert_ne!(trait_added, ConfigStamp::from_inputs(&path, dir.path()));
+    let removed = ConfigStamp::from_inputs(&path, dir.path());
+    assert_ne!(trait_added, removed);
+    let skill = dir.path().join("skills/one");
+    std::fs::create_dir_all(skill.join("agents")).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "---\nname: one\n---\n").unwrap();
+    let skill_added = ConfigStamp::from_inputs(&path, dir.path());
+    assert_ne!(removed, skill_added);
+    std::fs::write(
+        skill.join("agents/openai.yaml"),
+        "policy:\n  allow_implicit_invocation: false\n",
+    )
+    .unwrap();
+    assert_ne!(skill_added, ConfigStamp::from_inputs(&path, dir.path()));
 }
 
 #[test]

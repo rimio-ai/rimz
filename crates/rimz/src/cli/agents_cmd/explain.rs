@@ -47,8 +47,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         .as_ref()
         .map(rimz::Store::snapshot_cached)
         .transpose()?;
-    let machine = cli::machine_config();
-    cli::require_definitions(&machine)?;
+    let machine = cli::launch_machine_config()?;
     cli::report_unknown_config_keys(&machine)?;
     let effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;

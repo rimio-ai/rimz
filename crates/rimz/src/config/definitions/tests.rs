@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::SkillName;
+use crate::config::{CommandsConfig, SkillName};
 
 fn team_fixture() -> tempfile::TempDir {
     let root = fixture();
@@ -321,7 +321,11 @@ fn invalid_teams_publish_neither_roster_nor_seats() {
         let root = team_fixture();
         team_definition(root.path(), fields, &roles, body);
         error(root.path(), needle);
-        let loaded = load(root.path(), SkillLibraryCheck::Skip);
+        let loaded = load(
+            root.path(),
+            SkillLibraryCheck::Skip,
+            &CommandsConfig::default(),
+        );
         assert!(loaded.teams.0.is_empty(), "{needle}");
         assert!(
             !loaded
@@ -358,6 +362,9 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
         ),
         ("[{signal: ci.failed, prompt: ' '}]", "empty `prompt:`"),
         ("[]", "non-empty list"),
+        ("null", "non-empty list"),
+        ("", "non-empty list"),
+        ("{}", "malformed frontmatter"),
         ("ci.failed", "malformed frontmatter"),
     ] {
         let root = team_fixture();
@@ -369,11 +376,93 @@ fn malformed_signals_fail_before_the_team_can_be_published() {
         );
         error(root.path(), needle);
         assert!(
-            load(root.path(), SkillLibraryCheck::Skip)
-                .teams
-                .0
-                .is_empty()
+            load(
+                root.path(),
+                SkillLibraryCheck::Skip,
+                &CommandsConfig::default()
+            )
+            .errors
+            .iter()
+            .any(|error| error.path == root.path().join("teams/probe.md"))
         );
+        assert!(
+            load(
+                root.path(),
+                SkillLibraryCheck::Skip,
+                &CommandsConfig::default()
+            )
+            .teams
+            .0
+            .is_empty()
+        );
+    }
+}
+
+#[test]
+fn flip_compact_accepts_yaml_off_and_rejects_other_shapes() {
+    for value in ["off", "false", "'OFF'", "120000", "120k", "70%"] {
+        let root = team_fixture();
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    flip-compact: {value}"),
+            "Pipeline.",
+        );
+        let loaded = clean(root.path());
+        if matches!(value, "off" | "false" | "'OFF'") {
+            assert_eq!(
+                loaded.teams.0["probe"].roles[1].flip_compact,
+                Some(crate::config::FlipCompact::Off)
+            );
+        }
+    }
+    for value in ["true", "soon", "[]", "{}", "null", "-1"] {
+        let root = team_fixture();
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    flip-compact: {value}"),
+            "Pipeline.",
+        );
+        error(
+            root.path(),
+            "a token count such as '120k', a percentage such as '70%', or 'off'",
+        );
+    }
+}
+
+#[test]
+fn unsupported_preset_fields_fail_at_the_definition() {
+    for (kind, field, value) in [
+        ("pi", "auto-compact", "200k"),
+        ("amp", "effort", "high"),
+        ("droid", "model", "custom"),
+    ] {
+        let root = fixture();
+        definition(
+            root.path(),
+            "agents/parent.md",
+            &format!("agent: {kind}\n{field}: {value}"),
+            "",
+        );
+        definition(root.path(), "agents/child.md", "agent: parent", "");
+        let loaded = load(
+            root.path(),
+            SkillLibraryCheck::Skip,
+            &CommandsConfig::default(),
+        );
+        let expected =
+            crate::agents::PresetErr::UnsupportedField { agent: kind, field }.to_string();
+        assert!(
+            loaded
+                .errors
+                .iter()
+                .any(|error| error.path == root.path().join("agents/parent.md")
+                    && error.message == expected)
+        );
+        assert!(!loaded.agent_profiles.0.contains_key("parent"));
+        assert!(!loaded.agent_profiles.0.contains_key("child"));
+        error(root.path(), "follows `parent`, which failed to load");
     }
 }
 
@@ -387,7 +476,11 @@ fn duplicate_team_names_remove_all_seats_and_sources() {
         &format!("---\nname: probe\n{TEAM_STAGES}\nroles:\n{TEAM_ROLES}\n---\nPipeline."),
     );
     error(root.path(), "declared twice");
-    let loaded = load(root.path(), SkillLibraryCheck::Skip);
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Skip,
+        &CommandsConfig::default(),
+    );
     assert!(loaded.teams.0.is_empty());
     assert!(loaded.sources.team("probe").is_none());
     assert!(
@@ -430,6 +523,7 @@ fn team_skills_check_reflect_and_the_overridden_runtime() {
     let loaded = load(
         root.path(),
         SkillLibraryCheck::Check(&root.path().join("skills")),
+        &CommandsConfig::default(),
     );
     assert!(loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.is_empty());
@@ -445,6 +539,7 @@ fn team_skills_check_reflect_and_the_overridden_runtime() {
     let loaded = load(
         root.path(),
         SkillLibraryCheck::Check(&root.path().join("skills")),
+        &CommandsConfig::default(),
     );
     assert_eq!(loaded.errors.len(), 2);
     assert!(
@@ -462,7 +557,11 @@ fn even_a_bodyless_seat_needs_its_runtime_base() {
     definition(root.path(), "agents/worker.md", "agent: pi", "");
     std::fs::remove_file(root.path().join("agents/pi.md")).unwrap();
     team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
-    let loaded = load(root.path(), SkillLibraryCheck::Skip);
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Skip,
+        &CommandsConfig::default(),
+    );
     assert!(!loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.is_empty());
     assert!(loaded.errors.iter().any(|error| {
@@ -500,13 +599,13 @@ fn definition(root: &Path, name: &str, fields: &str, body: &str) {
 }
 
 fn clean(root: &Path) -> LoadedDefinitions {
-    let loaded = load(root, SkillLibraryCheck::Skip);
+    let loaded = load(root, SkillLibraryCheck::Skip, &CommandsConfig::default());
     assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
     loaded
 }
 
 fn error(root: &Path, needle: &str) {
-    let loaded = load(root, SkillLibraryCheck::Skip);
+    let loaded = load(root, SkillLibraryCheck::Skip, &CommandsConfig::default());
     assert!(
         loaded
             .errors
@@ -672,7 +771,11 @@ fn failed_parents_exclude_dependents_and_keep_independent_profiles() {
     );
     definition(root.path(), "agents/child.md", "agent: parent", "Child.");
     definition(root.path(), "agents/independent.md", "agent: pi", "");
-    let loaded = load(root.path(), SkillLibraryCheck::Skip);
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Skip,
+        &CommandsConfig::default(),
+    );
     assert_eq!(loaded.errors.len(), 2);
     assert!(
         loaded
@@ -761,7 +864,15 @@ fn names_and_kind_bases_are_validated() {
             &format!("name: '{name}'\nagent: pi"),
             "",
         );
-        assert!(!load(root.path(), SkillLibraryCheck::Skip).errors.is_empty());
+        assert!(
+            !load(
+                root.path(),
+                SkillLibraryCheck::Skip,
+                &CommandsConfig::default()
+            )
+            .errors
+            .is_empty()
+        );
     }
     definition(
         root.path(),
@@ -775,7 +886,11 @@ fn names_and_kind_bases_are_validated() {
         "name: duplicate\nagent: pi",
         "",
     );
-    let loaded = load(root.path(), SkillLibraryCheck::Skip);
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Skip,
+        &CommandsConfig::default(),
+    );
     assert!(
         loaded
             .errors
@@ -826,6 +941,30 @@ fn prompt_taking_kinds_require_their_base_body_or_not() {
 }
 
 #[test]
+fn agents_and_seats_allow_loaded_subagents_and_commands() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "subagents/explorer.md",
+        "model: opus\ntools: [Read]",
+        "",
+    );
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "model: opus\ntools: [Bash]\nsubagents: [explorer, vim]",
+        "Craft.",
+    );
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let commands: CommandsConfig = toml::from_str("vim = \"nvim\"").unwrap();
+    let loaded = load(root.path(), SkillLibraryCheck::Skip, &commands);
+    assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
+    assert!(loaded.agent_profiles.0.contains_key("worker"));
+    assert!(loaded.teams.0.contains_key("probe"));
+    error(root.path(), "allows unknown subagent profile(s) [\"vim\"]");
+}
+
+#[test]
 fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
     let root = fixture();
     definition(root.path(), "subagents/helper.md", "agent: claude", "");
@@ -835,7 +974,11 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
         "agent: claude\ntools: [Bash]\nsubagents: [helper]",
         "",
     );
-    let loaded = load(root.path(), SkillLibraryCheck::Skip);
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Skip,
+        &CommandsConfig::default(),
+    );
     assert!(!loaded.agent_profiles.0.contains_key("planner"));
     assert!(loaded.errors.iter().any(|error| {
         error.path.ends_with("agents/planner.md")
@@ -1024,7 +1167,11 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
             "",
         );
     }
-    let loaded = load(root.path(), SkillLibraryCheck::Check(&library));
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Check(&library),
+        &CommandsConfig::default(),
+    );
     assert_eq!(loaded.errors.len(), 3);
     assert!(
         loaded
@@ -1037,7 +1184,11 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
         "skills/one/SKILL.md",
         "---\ndescription: colons: are accepted\ndisable-model-invocation: true\n---\nSkill.",
     );
-    let loaded = load(root.path(), SkillLibraryCheck::Check(&library));
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Check(&library),
+        &CommandsConfig::default(),
+    );
     assert_eq!(loaded.errors.len(), 2);
     assert!(loaded.agent_profiles.0.contains_key("codex-seat"));
     write(
@@ -1046,9 +1197,13 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
         "policy:\n  allow_implicit_invocation: false\n",
     );
     assert_eq!(
-        load(root.path(), SkillLibraryCheck::Check(&library))
-            .errors
-            .len(),
+        load(
+            root.path(),
+            SkillLibraryCheck::Check(&library),
+            &CommandsConfig::default()
+        )
+        .errors
+        .len(),
         3
     );
     write(
@@ -1062,9 +1217,13 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
         "policy:\n  allow_implicit_invocation: true\n",
     );
     assert!(
-        load(root.path(), SkillLibraryCheck::Check(&library))
-            .errors
-            .is_empty()
+        load(
+            root.path(),
+            SkillLibraryCheck::Check(&library),
+            &CommandsConfig::default()
+        )
+        .errors
+        .is_empty()
     );
 }
 

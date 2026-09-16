@@ -112,11 +112,13 @@ fn collect_machine_config() -> model::MachineConfigHealth {
             }
         })
         .collect();
-    let legacy_agents_home = legacy_agents_home(&agents_home).or_else(|| {
-        rimz::disk::paths::env_path("HOME")
-            .map(|home| home.join(".agents"))
-            .and_then(|legacy| legacy_agents_home(&legacy))
-    });
+    let mut legacy_agents_home = legacy_agents_home(&agents_home, &agents_home);
+    if let Some(legacy) = rimz::disk::paths::env_path("HOME")
+        .map(|home| home.join(".agents"))
+        .filter(|legacy| legacy != &agents_home)
+    {
+        legacy_agents_home.extend(self::legacy_agents_home(&legacy, &agents_home));
+    }
     model::MachineConfigHealth {
         broken_files,
         legacy_agents_home,
@@ -124,16 +126,46 @@ fn collect_machine_config() -> model::MachineConfigHealth {
 }
 
 /// Legacy TOML definitions at either agents-home location are no longer read.
-fn legacy_agents_home(legacy: &Path) -> Option<model::LegacyAgentsHome> {
-    if !legacy.join("agents.toml").is_file()
-        && rimz::config::agents_home_fragment_dirs(legacy).is_empty()
-    {
-        return None;
+fn legacy_agents_home(legacy: &Path, agents_home: &Path) -> Vec<model::LegacyAgentsHome> {
+    let mut files = Vec::new();
+    let config = legacy.join("agents.toml");
+    if config.is_file() {
+        files.push(model::LegacyAgentsHome {
+            path: config.display().to_string(),
+            fix: "keys are no longer read; [agents]/[subagents] keys now live in config.toml"
+                .to_owned(),
+        });
     }
-    Some(model::LegacyAgentsHome {
-        path: legacy.display().to_string(),
-        fix: "no longer read; move `[agents]` keys to config.toml and definitions to the Markdown trees".to_owned(),
-    })
+    for (dir, file, destinations) in [
+        ("profiles", "agent.toml", vec!["agents", "subagents"]),
+        ("teams", "team.toml", vec!["teams"]),
+    ] {
+        let Ok(entries) = std::fs::read_dir(legacy.join(dir)) else {
+            continue;
+        };
+        let destinations = destinations
+            .iter()
+            .map(|dir| {
+                agents_home
+                    .join(dir)
+                    .join("<name>.md")
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(" or ");
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path().join(file);
+            if path.is_file() {
+                files.push(model::LegacyAgentsHome {
+                    path: path.display().to_string(),
+                    fix: format!("no longer read; definitions now live in {destinations}"),
+                });
+            }
+        }
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    files
 }
 
 fn config_file_error_detail(

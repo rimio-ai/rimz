@@ -437,6 +437,7 @@ mod tests {
             let loaded = rimz::config::definitions::load(
                 root.path(),
                 rimz::config::definitions::SkillLibraryCheck::Check(&root.path().join("skills")),
+                &rimz::config::CommandsConfig::default(),
             );
             assert!(loaded.errors.is_empty(), "{name}: {:?}", loaded.errors);
             assert_eq!(loaded.teams.0[&name].roles.len(), seats.len());

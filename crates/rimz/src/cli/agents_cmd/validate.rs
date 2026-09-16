@@ -8,18 +8,21 @@ use crate::cli::render;
 
 pub(super) fn run(json: bool) -> Result<()> {
     let home = rimz::disk::paths::agents_home();
+    let machine = crate::cli::machine_config();
     let skills = home.join("skills");
     let check = if skills.is_dir() {
         SkillLibraryCheck::Check(&skills)
     } else {
-        writeln!(
-            std::io::stderr(),
-            "warning: skill library {} is missing; skipping skill checks",
-            skills.display()
-        )?;
+        if machine.agents.isolation != rimz::config::Isolation::Sandbox {
+            writeln!(
+                std::io::stderr(),
+                "warning: skill library {} is missing; skipping skill checks",
+                skills.display()
+            )?;
+        }
         SkillLibraryCheck::Skip
     };
-    let loaded = load(&home, check);
+    let loaded = load(&home, check, &machine);
     if json {
         render::json_pretty(&serde_json::json!({
             "rows": loaded.rows,
@@ -72,21 +75,25 @@ pub(super) fn run(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn load(home: &Path, check: SkillLibraryCheck<'_>) -> LoadedDefinitions {
-    let mut loaded = definitions::load(home, check);
-    let agents = rimz::config::AgentsConfig {
-        profiles: loaded.agent_profiles.clone(),
-        teams: loaded.teams.clone(),
-        ..Default::default()
-    };
-    let subagents = rimz::config::SubagentProfilesConfig {
-        profiles: loaded.subagent_profiles.clone(),
-    };
-    if let Err(error) = rimz::config::validate_agents_file(&agents, &subagents, home) {
-        loaded.errors.push(DefinitionErr {
-            path: home.to_owned(),
-            message: error.to_string(),
-        });
+/// The definitions as `validate` prints them, plus every error the launch path's
+/// own config load recorded, so validate never passes a set a launch refuses.
+fn load(
+    home: &Path,
+    check: SkillLibraryCheck<'_>,
+    machine: &rimz::config::MachineConfig,
+) -> LoadedDefinitions {
+    let mut loaded = definitions::load(home, check, &machine.agents.commands);
+    for error in &machine.notices.definition_errors {
+        if !loaded
+            .errors
+            .iter()
+            .any(|seen| seen.path == error.path && seen.message == error.message)
+        {
+            loaded.errors.push(DefinitionErr {
+                path: error.path.clone(),
+                message: error.message.clone(),
+            });
+        }
     }
     loaded
 }
@@ -128,7 +135,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.path().join("agents/bad.md"), "no frontmatter").unwrap();
-        let loaded = load(root.path(), SkillLibraryCheck::Skip);
+        let loaded = load(root.path(), SkillLibraryCheck::Skip, &Default::default());
         assert!(loaded.rows.iter().any(|row| row.name == "good"));
         assert!(
             loaded
@@ -152,10 +159,15 @@ mod tests {
             "---\ndescription: Worker\nmodel: opus\ntools: [Skill]\nskills: [missing]\n---\n",
         )
         .unwrap();
-        assert!(load(root.path(), SkillLibraryCheck::Skip).errors.is_empty());
+        assert!(
+            load(root.path(), SkillLibraryCheck::Skip, &Default::default())
+                .errors
+                .is_empty()
+        );
         let checked = load(
             root.path(),
             SkillLibraryCheck::Check(&root.path().join("skills")),
+            &Default::default(),
         );
         assert!(
             checked
