@@ -153,6 +153,61 @@ fn lifecycle_receipt_carries_appended_event_and_suppressed_diagnostics() {
 }
 
 #[test]
+fn side_conversation_receipts_append_only_the_registration() {
+    let (_dir, store) = test_store();
+    let append = |event_name, observation: &AgentLifecycleObservation, threshold| {
+        store
+            .append_agent_lifecycle_with_threshold(
+                AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("codex"),
+                    event_name,
+                    observation,
+                    spawned_subagents: &[],
+                },
+                threshold,
+            )
+            .expect("append lifecycle")
+    };
+    let root = observation(LifecycleSignal::Registered);
+    assert!(!append("SessionStart", &root, u64::MAX).side_conversation);
+    let before = store.snapshot().unwrap().agents;
+    assert_eq!(before.len(), 1);
+    let mut side = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("side")),
+        LifecycleSignal::Registered,
+    );
+    side.origin = Some(SessionOrigin::SideConversation);
+    let receipt = append("SessionStart", &side, 0);
+    assert!(receipt.side_conversation);
+    assert!(receipt.primary_event_id.is_some());
+    assert!(receipt.events.is_empty());
+    assert!(receipt.prior_status.is_none());
+    assert!(receipt.transition.is_none());
+    assert!(!receipt.waiting_cleared);
+    assert!(receipt.rotation_due);
+    assert_eq!(store.read_events().unwrap().len(), 2);
+
+    side.origin = None;
+    side.signal = LifecycleSignal::TurnStarted { turn_id: None };
+    let receipt = append("UserPromptSubmit", &side, 0);
+    assert_eq!(
+        receipt,
+        AgentLifecycleReceipt {
+            prior_status: None,
+            transition: None,
+            waiting_cleared: false,
+            primary_event_id: None,
+            events: Vec::new(),
+            rotation_due: false,
+            side_conversation: true,
+        }
+    );
+    assert_eq!(store.read_events().unwrap().len(), 2);
+    assert_eq!(store.snapshot().unwrap().agents, before);
+}
+
+#[test]
 fn late_turn_reports_leave_the_started_turn_on_ingest_and_replay() {
     let (_dir, store) = test_store();
     let append = |event_name, signal| {

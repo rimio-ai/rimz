@@ -367,6 +367,51 @@ fn session_start_hooks_write_lifecycle_rows() {
 }
 
 #[test]
+fn codex_side_conversation_hooks_leave_the_root_unchanged() {
+    let env = Env::new();
+    assert_hook_succeeded_neutral(
+        "codex",
+        env.run_hook(
+            "codex",
+            &json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "codex-root",
+                "source": "startup",
+            })
+            .to_string(),
+        ),
+    );
+    let before = env.snapshot_json()["agents"].clone();
+    assert_eq!(before.as_array().unwrap().len(), 1);
+    assert_eq!(before[0]["agent_id"], "codex-root");
+    let count = lifecycle_event_count(&env);
+    for payload in [
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "codex-side",
+            "source": "fork",
+            "transcript_path": null,
+        }),
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "codex-side",
+            "transcript_path": null,
+            "prompt": "a side question",
+        }),
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "codex-side",
+            "transcript_path": null,
+            "last_assistant_message": "a side answer",
+        }),
+    ] {
+        assert_hook_succeeded_neutral("codex", env.run_hook("codex", &payload.to_string()));
+        assert_eq!(lifecycle_event_count(&env), count + 1);
+        assert_eq!(env.snapshot_json()["agents"], before);
+    }
+}
+
+#[test]
 fn claude_price_book_capacity_does_not_replace_an_established_window() {
     let env = Env::new();
     let pricing = env.runtime_paths().shared_pricing_cache_path();
