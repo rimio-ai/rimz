@@ -67,6 +67,8 @@ With machine `agents.isolation = "sandbox"`, the agent exec wrapper launches its
 
 ### State on disk
 
+Machine preferences live in `config.toml`, `theme.toml`, and `loop.toml` under `$XDG_CONFIG_HOME/rimz` (default `~/.config/rimz`). The same root holds `agents/`, `subagents/`, `teams/`, and `traits/`: Markdown definitions resolved on config load, plus the shared `skills/` library. `RIMZ_AGENTS_HOME` relocates those trees and the library without moving machine preferences or plugin manifests. [Definitions](./docs/reference/definitions.md) documents the source format; project `.rimz/config.toml` remains TOML and trust-tracked.
+
 State is five tiers of plain files, scoped by what each one outlives. [`disk/paths.rs`](./crates/rimz/src/disk/paths.rs) (`StatePaths`, `RuntimePaths`) owns the path constants, and [store.md → What is on disk](./docs/internals/store.md#what-is-on-disk) is the file-by-file catalog; this is the map.
 
 ```text

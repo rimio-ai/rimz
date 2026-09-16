@@ -44,6 +44,7 @@ Addresses are `@handle[#channel]`; the full grammar lives in [agents.md](./docs/
 ```sh
 rimz agents                          # agent cards, current channel
 rimz agents profiles                 # configured profiles, commands, and descriptions
+rimz agents validate                 # check Markdown definitions and the skill library
 rimz agents '#auth'                  # one lane's cards
 rimz agents show @coder              # card: activity, context, messages, transcript
 rimz agents logs @coder -n 20        # transcript tail (-f follows)

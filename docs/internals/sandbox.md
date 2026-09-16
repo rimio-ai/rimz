@@ -1,6 +1,6 @@
 # Agent sandbox mount views
 
-Sandbox isolation runs each agent's provider process inside Linux bubblewrap with a rearranged filesystem view. It is machine policy, `agents.isolation = "sandbox"` in `agents.toml`, and the default is `host`. The view gives every agent in a room a private shared `/tmp` ([room tmp](#room-tmp)) and lets a profile decide which skills the model may call ([profile skill views](#profile-skill-views)). Raw command panes and the room's multiplexer stay on the host.
+Sandbox isolation runs each agent's provider process inside Linux bubblewrap with a rearranged filesystem view. It is machine policy, `agents.isolation = "sandbox"` in `config.toml`, and the default is `host`. The view gives every agent in a room a private shared `/tmp` ([room tmp](#room-tmp)) and lets a profile decide which skills the model may call ([profile skill views](#profile-skill-views)). Raw command panes and the room's multiplexer stay on the host.
 
 The view is not containment. The host root stays bound read-write, credentials stay visible, the PID, network, and IPC namespaces are shared, and provider approval flags apply unchanged while provider command sandboxes are switched off, so an approval policy stops prompting for sandbox escalations ([provider command sandboxes](#provider-command-sandboxes)). Trust decides what a repository may run; a sandbox does not make an untrusted command safe ([trust.md](./harness/trust.md#the-executable-surface)).
 

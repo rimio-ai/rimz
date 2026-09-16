@@ -137,7 +137,7 @@ claude
 codex
 ```
 
-[`rimz agents`](./docs/guide/fleet.md) earns its keystrokes when you want more than the default. A `-auto` or `-yolo` suffix sets the permission mode, and a profile in `agents.toml` pins a model, effort, system prompt, and launch args behind one word, so a planner that reasons hard and edits nothing is a name you reuse.
+[`rimz agents`](./docs/guide/fleet.md) earns its keystrokes when you want more than the default. A `-auto` or `-yolo` suffix sets the permission mode, and a [Markdown definition](./docs/reference/definitions.md) pins a model, effort, craft, and tools behind one word, so a planner that reasons hard and edits nothing is a name you reuse.
 
 ```sh
 rimz agents claude          # stock agent, own pane
@@ -155,10 +155,10 @@ rimz agents 'claude/codex/gemini' -w feat-d    # three agents in one stacked pan
 rimz agents codex --from-pr 42                 # worktree checked out from a pull request
 ```
 
-**Combine models as teams.** A named [team](./docs/guide/teams.md) in `agents.toml` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. RimZ is built this way; `examples/teams/` ships the `forge` team it uses, plus `mill` for refactors and `spot` for small fixes.
+**Combine models as teams.** A named [team](./docs/guide/teams.md) in `teams/<name>.md` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. RimZ is built this way; `examples/teams/` ships the `forge` team it uses, plus `mill` for refactors and `spot` for small fixes.
 
 ```sh
-rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without agents.toml
+rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without a saved team
 rimz teams install forge                              # release-matched shipped team
 rimz teams forge -w feat-complex                      # planner, coder, reviewer on one feature
 rimz teams spot -w fix-expiry                         # coder and reviewer on a small fix

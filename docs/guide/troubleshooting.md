@@ -85,7 +85,7 @@ The `MULTIPLEXER` section's `log` row names the server log, how far back the sca
 
 A busy room provokes far more log traffic than it has problems, so the scan sorts what it finds. An issue still under investigation gets its own line naming what it means, how often it fired, and how recently; an alarm also keeps the raw record for a bug report. Records with positive evidence of ordinary lifecycle — a client leaving, a pane's terminal closing, a late action acknowledgement on a busy server — are counted and named on one closing line instead of one line each. Incomplete or changed versions of a known benign sequence stay investigative rather than being dismissed on a guess.
 
-The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, `agents.toml`, or `loop.toml` file RimZ cannot parse and includes the precise error. `rimz start` also warns on stderr and opens the room with built-in defaults for every setting in that file; fix it, then restart so RimZ loads the intended values.
+The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, or `loop.toml` file RimZ cannot parse and includes the precise error. `rimz start` also warns on stderr and opens the room with built-in defaults for every setting in that file; fix it, then restart so RimZ loads the intended values. Markdown definition failures are separate: launch refuses the broken source, while read-only views retain valid definitions. Run `rimz agents validate` for the file-by-file errors; setup does not rewrite definitions.
 
 ## The room won't start
 
@@ -304,7 +304,7 @@ A kept worktree carries its reason (`in use`, `not merged yet`), so nothing with
 
 ### Where state lives, and full removal
 
-Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `agents.toml`, `loop.toml`, `remote.toml`), and durable room state lives under `~/.local/state/rimz/`. Both are plain files you can read and edit. To remove RimZ from the machine, `rimz uninstall` takes out installed hooks, running rooms, runtime state, and the binaries it finds; durable stores and per-machine config stay unless you ask for them:
+Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), and durable room state lives under `~/.local/state/rimz/`. Both are plain files you can read and edit. To remove RimZ from the machine, `rimz uninstall` takes out installed hooks, running rooms, runtime state, and the binaries it finds; durable stores and per-machine config stay unless you ask for them:
 
 ```sh
 rimz uninstall            # hooks, rooms, runtime state, binaries; keeps stores and config

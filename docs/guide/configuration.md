@@ -1,6 +1,6 @@
 # Configuration
 
-RimZ runs with zero configuration: start it and you have a working room, nothing to write first. Everything you can tune from there is plain TOML in files you own. There is no config daemon holding your settings, no separate UI, and no bespoke language between you and a value: you already edit dotfiles and keep them under version control, and RimZ asks nothing new of that habit.
+RimZ runs with zero configuration: start it and you have a working room, nothing to write first. Preferences are TOML; reusable agent and team definitions are Markdown with YAML frontmatter, all in files you own. There is no config daemon holding your settings, no separate UI, and no bespoke language between you and a value: you already edit dotfiles and keep them under version control, and RimZ asks nothing new of that habit.
 
 Change something when you have a reason to, one line at a time: pin a theme, save a launch profile, route a notification. This page is the whole model. It opens with the settings most people touch and exactly what changing one does to your disk, then maps where configuration lives and how the layers combine, then gives a section per file so you can jump to the one you are editing. For the guided first pass on a new machine, read [set up your machine](./setup.md) first; this page is the reference it links into.
 
@@ -28,7 +28,7 @@ rimz config set timezone "America/New_York"    # transcript times, scheduling, a
 
 `set` edits a real file, and it is worth knowing exactly which one and how, because that is what makes it safe to run.
 
-It takes a dotted key, routes it to the file that owns the key (`theme.*` to `theme.toml`, `agents.*` to `agents.toml`, `loop.*` to `loop.toml`, everything else to `config.toml`), and edits that file in place. It parses the existing TOML with `toml_edit`, so your comments and formatting survive untouched. It rejects an unknown key rather than writing a typo, re-validates the whole resulting file, then writes it with a temp-file-plus-rename so a crash mid-write never leaves a half-written file. The result is byte-for-byte the file you would have edited by hand, which is what makes undoing a change ordinary: re-run `set` with the old value, or open the file and delete the line to fall back to the default.
+It takes a dotted key, routes it to the file that owns the key (`theme.*` to `theme.toml`, `loop.*` to `loop.toml`, everything else to `config.toml`), and edits that file in place. It parses the existing TOML with `toml_edit`, so your comments and formatting survive untouched. It rejects an unknown key rather than writing a typo, re-validates the whole resulting file, then writes it with a temp-file-plus-rename so a crash mid-write never leaves a half-written file. The result is byte-for-byte the file you would have edited by hand, which is what makes undoing a change ordinary: re-run `set` with the old value, or open the file and delete the line to fall back to the default.
 
 A bare value becomes a TOML value when it parses (`80`, `false`, an array, an inline table) and a string otherwise (`fresh`, `always`). Set a whole color band as an inline table, for example `rimz config set theme.display.context_meter.red '{ percent = 90, tokens = 400000 }'`. Keys under `theme.colors.*` write to the root `[colors.*]` table in `theme.toml`, so an Alacritty palette pasted there stays paste-compatible.
 
@@ -57,14 +57,13 @@ You rarely open these by hand: `rimz config set` writes to them for you, and `ri
 
 | File | What it holds |
 | --- | --- |
-| `config.toml` | room behavior: accounts, notifications, remote control, multiplexer defaults, resume, smart compaction |
+| `config.toml` | room behavior, accounts, notifications, agent launch preferences and commands, worktree defaults, attention timing, resume, smart compaction |
 | `theme.toml` | sidebar appearance: palette, slots, glyphs, animations, provider styling, pets ([theme.md](./theme.md)) |
-| `agents.toml` | agent and subagent profiles, command cells, teams, worktree defaults, attention timing |
 | `loop.toml` | recurring loop task definitions and scheduled command checks |
 
 Two more things share the directory but are managed for you: `remote.toml` (named SSH room aliases, written by `rimz remote`) and a handful of machine-managed sidecars (trust grants, notification state), which you reach through their own commands rather than by hand ([Sidecars and privacy](#sidecars-and-privacy)).
 
-Alongside the four machine files and `remote.toml`, `~/.config/rimz/` holds `agents.d/` for agent plugins, `profiles/` and `teams/` for drop-in fragments, and `skills/` for the shared skill library. `XDG_CONFIG_HOME` changes the config base; `RIMZ_AGENTS_HOME` moves only `profiles/`, `teams/`, and `skills/` together to another root.
+Alongside the three machine files and `remote.toml`, `~/.config/rimz/` holds `agents.d/` for plugins and `agents/`, `subagents/`, `teams/`, and `traits/` for [Markdown definitions](../reference/definitions.md), plus the shared `skills/` library. `XDG_CONFIG_HOME` changes the config base; `RIMZ_AGENTS_HOME` moves the definition trees and skill library together to another root. Edit Markdown definitions directly; `rimz config set` refuses profile and team definition keys.
 
 ### How the layers combine
 
@@ -79,7 +78,7 @@ Today the per-machine layer is live, CLI and env overrides apply where each comm
 
 ### Broken files stay visible
 
-Per-machine settings load leniently. A missing file is the default config, an unknown key is ignored with a warning so an older binary tolerates a newer file, and a machine file RimZ cannot parse falls back to built-in defaults with a startup warning. Files under `~/.config/rimz/{profiles,teams}` may contribute agent profiles, teams, commands, and subagent profiles; entries in `agents.toml` win name collisions. A broken fragment is isolated instead: read-only views keep every surviving fragment, while `rimz agents`, `rimz teams`, and scheduled-loop launches refuse at entry with the fragment's source error rather than pretending a team or profile is unknown. `rimz doctor` reports the same fragment error and fix.
+Per-machine TOML settings load leniently: missing files use defaults, unknown keys warn, and malformed files fall back to defaults with a startup warning. Markdown definitions are strict about keys and types. Read-only views keep surviving definitions, while launch entry points refuse broken ones with their source errors. `rimz doctor` reports these failures and points to `rimz agents validate`; fixing the named source restores the intended launch.
 
 ## Generate and refresh the files
 
@@ -88,13 +87,13 @@ You never have to write these files from scratch. RimZ ships a commented templat
 ```sh
 rimz                       # first start writes any missing config, then opens the room
 rimz setup                 # detect this machine and write or refresh config
-rimz config init           # write config.toml, theme.toml, agents.toml, and loop.toml
+rimz config init           # write config.toml, theme.toml, and loop.toml
 rimz config init --print   # print the commented templates without writing anything
 ```
 
 Most people run `rimz` inside a project once, or `rimz setup` once, then edit the few lines they care about. First start on an interactive terminal writes any missing per-machine config, offers hook install, runs the live glyph probe, and asks whether to enable a pet; a non-interactive first start writes the same defaults without prompting.
 
-**Rerunning is safe: your values are kept.** `rimz setup` and `rimz setup --yes` merge. They write the files that are missing and keep each value on the template's own documented line, uncommented in place, so the refreshed file retains the template's reference structure instead of collecting overrides at the top. They remove unknown keys from the four machine files and from `~/.config/rimz` fragments, naming every removal; comments and recognized settings stay in place. When an existing file is unparseable, setup leaves it byte-for-byte untouched, names the offending line and key when available, and asks you to fix it before rerunning. `rimz config init` is stricter: it refuses to touch an existing file and tells you to pass `--force`, and `--force` is the deliberate clean reset that overwrites with fresh templates. So the routine refresh (`rimz setup`) never overwrites recognized settings, and the destructive path (`init --force`) is the one you have to ask for by name.
+**Rerunning is safe: your values are kept.** `rimz setup` and `rimz setup --yes` merge. They write the files that are missing and keep each value on the template's own documented line, uncommented in place, so the refreshed file retains the template's reference structure instead of collecting overrides at the top. They remove unknown keys from the three machine TOML files, naming every removal; Markdown definitions and retired configuration files are left untouched, and comments and recognized settings stay in place. When an existing file is unparseable, setup leaves it byte-for-byte untouched, names the offending line and key when available, and asks you to fix it before rerunning. `rimz config init` is stricter: it refuses to touch an existing file and tells you to pass `--force`, and `--force` is the deliberate clean reset that overwrites with fresh templates. So the routine refresh (`rimz setup`) never overwrites recognized settings, and the destructive path (`init --force`) is the one you have to ask for by name.
 
 **The template is the field reference.** Every persisted section and default ships as commented TOML with an inline note, so `rimz config init --print` is the authoritative, always-current list of keys and defaults. This page explains the model and the knobs that are easy to misread, and leaves the exhaustive field list to the template. A line left commented keeps following the default that future RimZ versions ship; uncommenting it makes that value this machine's override.
 
@@ -352,9 +351,9 @@ archive_after_secs = 86400
 
 `[sidebar.keys]` rebinds movement and width keys: `narrower`, `wider`, `up`, `down`, `top`, `bottom`, `worktree_up`, `worktree_down`, `page_up`, `page_down`, `screen_top`, and `screen_bottom`. Each value is a space-separated list of alternate chords, and the first chord shows in the `?` help overlay. Chords use optional `ctrl`/`control`/`c` and `alt`/`meta`/`m` modifiers with `+` or `-`, case-sensitive single characters (`H` differs from `h`), or named keys: `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `enter`, and `space`. Defaults use `a`/`d` to step the pane narrower/wider and keep Vim movement plus arrow and page keys: `k/up`, `j/down`, `g/G`, `K/J`, `ctrl+b/pageup`, `ctrl+f/pagedown`, and `H/L`. The sidebar uses an explicit `[theme.display].width_percent`, otherwise 30% on views wider than 240 columns or when pets are enabled, and 25% otherwise, capped at `max_cols`. A width selection persists for the room across launch, reload, and session rebirth until its runtime state is reset, and this explicit selection outranks the configured or width-keyed percentage and `max_cols`. Configured chords resolve before fixed action keys, so a rebind may intentionally shadow a filter or action. Fixed filters use `A` for all and `s` for success/done. tmux's default prefix consumes `Ctrl+b` before the sidebar sees it, so `PageUp` is the portable default page-up key there.
 
-## agents.toml: profiles, teams, and worktrees
+## Agent definitions and launch preferences
 
-This file configures what `rimz agents <spec>` and `rimz subagents <profile>` can launch and how worktrees are cut.
+Markdown definitions configure reusable agents and teams. The `[agents]` tables in `config.toml` hold machine launch preferences, command shortcuts, and worktree defaults.
 
 ### Agent isolation
 
@@ -364,65 +363,41 @@ Your stock agent CLI uses the host's temporary directory and skill directories. 
 rimz config set agents.isolation sandbox
 ```
 
-This writes `isolation = "sandbox"` under `[agents]` in `agents.toml` after probing bubblewrap. The default is `host`; restore it with `rimz config set agents.isolation host` without removing profile `skills` lists. New launches, including restarted agents, use the current setting; existing panes do not change. This is machine-wide policy, not a profile override. To try one launch the other way, pass `--isolation host` or `--isolation sandbox` to `rimz agents`, `rimz teams`, or `rimz subagents`: the agent keeps that choice through restart and resume, and its subagents inherit it. Inside the view a Codex agent runs with its own command sandbox off (`--sandbox danger-full-access`); host mode keeps it. Every launched agent carries `RIMZ_ISOLATION=sandbox` or `RIMZ_ISOLATION=host`, so a script or skill inside the pane can check `[ "$RIMZ_ISOLATION" = sandbox ]` instead of guessing. See [security](./security.md#sandbox-isolation) for what stays accessible and how room temporary files are removed.
+This writes `isolation = "sandbox"` under `[agents]` in `config.toml` after probing bubblewrap. The default is `host`; restore it with `rimz config set agents.isolation host` without removing profile `skills` lists. New launches, including restarted agents, use the current setting; existing panes do not change. This is machine-wide policy, not a profile override. To try one launch the other way, pass `--isolation host` or `--isolation sandbox` to `rimz agents`, `rimz teams`, or `rimz subagents`: the agent keeps that choice through restart and resume, and its subagents inherit it. Inside the view a Codex agent runs with its own command sandbox off (`--sandbox danger-full-access`); host mode keeps it. Every launched agent carries `RIMZ_ISOLATION=sandbox` or `RIMZ_ISOLATION=host`, so a script or skill inside the pane can check `[ "$RIMZ_ISOLATION" = sandbox ]` instead of guessing. See [security](./security.md#sandbox-isolation) for what stays accessible and how room temporary files are removed.
 
 ### Agent profiles, commands, and teams
 
-Reusable main-agent **profiles**, raw **command** panes, and named **teams** live in `agents.toml` under `[agents.profiles]`, `[agents.commands]`, and `[agents.teams]`. Supervised-child profiles use the separate top-level `[subagents.profiles]` namespace.
+When you keep retyping a model and tool selection, save it as `~/.config/rimz/agents/planner.md`. A bodyless preset needs no replacement prompt:
+
+```markdown
+---
+description: Planning without file-edit tools
+agent: claude
+model: fable
+tools: [Read, Grep, Glob, AskUserQuestion]
+subagents: []
+---
+```
+
+```sh
+rimz agents validate
+rimz agents planner
+```
+
+Direct definitions live in `agents/`, supervised children in `subagents/`, team rosters and pipelines in `teams/`, and shared prompt fragments in `traits/`. To add a craft body, first supply the kind base such as `agents/claude.md`. The [definition reference](../reference/definitions.md) owns every frontmatter key, inheritance rule, and error. Delete the file to remove the preset; already-running agents keep their launch posture.
+
+Raw command panes remain TOML in `config.toml`:
 
 ```toml
-[agents]
-placement = "auto"
-
-[agents.profiles.claude-slim]
-agent = "claude"                                       # a built-in kind, or another profile
-description = "Lightweight main-agent profile"
-effort = "low"
-budget = "5"
-auto-compact = "200k"
-system-prompt-file = "~/.config/rimz/prompts/slim.md"
-
-[agents.profiles.planner]
-agent = "claude-slim"                                  # inherit the slim profile, change the voice
-system-prompt-file = "~/.config/rimz/prompts/planner.md"
-
-[agents.profiles.codex-yolo]
-agent = "codex"
-mode = "yolo"
-model = "gpt-5-codex"
-effort = "high"
-
-[subagents.profiles.reviewer]
-agent = "codex"
-description = "Focused supervised reviewer"
-effort = "high"
-
 [agents.commands]
 vim = "nvim -p"
-
-[agents.teams.review]
-leader = "planner"
-layout = "planner/reviewer,coder+term"
-
-[[agents.teams.review.roles]]
-role = "planner"
-profile = "planner"
-
-[[agents.teams.review.roles]]
-role = "coder"
-profile = "codex-yolo"
-
-[[agents.teams.review.roles]]
-role = "reviewer"
-profile = "planner"
-mode = "plan"
 ```
 
 #### Skills
 
-To reserve some skills for your explicit requests in sandbox mode, set `skills = ["merge", "review"]` on a profile. Entries are bare names: listed skills are model-callable, and unlisted skills RimZ can prepare remain visible but are user-invoked only. `skills = []` makes every available skill user-invoked only; it does not disable the view. A child list replaces its parent's list rather than appending, and omitting the field inherits. A child cannot return to unconfigured behaviour after a parent sets a list. With no list anywhere in the profile chain, native invocation behaviour stays unchanged.
+To reserve some skills for your explicit requests in sandbox mode, set `skills: [merge, review]` in a Markdown profile. Entries are bare names: listed skills are model-callable, and unlisted skills RimZ can prepare remain visible but are user-invoked only. `skills: []` makes every available skill user-invoked only; it does not disable the view. A child list replaces its parent's list rather than appending, and omitting the field inherits. A child cannot return to unconfigured behaviour after a parent sets a list. With no list anywhere in the profile chain, native invocation behaviour stays unchanged.
 
-Listing a skill never lifts a user-only marker already set by its author; native invocation restrictions still apply.
+Markdown skill lists require the `Skill` tool except on Pi. Sandbox loading and `rimz agents validate` reject listed skills already marked user-only for that provider; listing one cannot lift its author's restriction.
 
 An unlisted skill RimZ cannot prepare for the user-only view — because its source is unreadable or its metadata cannot be rewritten — is left out of that agent's launch, and the pane says so at startup. The installed skill is untouched, and unaffected skills remain available with their invocation restrictions intact. Listing the skill binds it exactly as installed; see [troubleshooting](./troubleshooting.md) for remedies.
 
@@ -434,51 +409,17 @@ Sandbox launches merge the same library through the skill view, with the provide
 
 Symlinks in the provider's skill directory keep their targets, so skills can still import shared modules beside their canonical location. Only directories containing `SKILL.md` receive user-only markers; shared folders and instruction files are left alone. Rewritten copies also appear read-only at the skill's canonical path when a preserved symlink reaches it there, including paths outside the provider's skill directory. If two names point to the same skill, list both or neither; a mixed policy refuses launch.
 
-Host mode ignores profile `skills` lists, including `[]` and lists for unsupported providers; linked skills use native discovery and invocation. In sandbox mode, every configured list, including `[]`, requires a provider with a skill root and a user-only marker, and installed skills matching every listed name. Antigravity, Amp, OpenCode, Kiro, Grok, and plugins refuse a list in sandbox mode; remove the field to use native invocation behaviour there. Duplicate and invalid names are parsing errors in all modes; the old mode suffixes are no longer accepted. Changing a trusted project's skill list requires trusting the updated config again. Provider roots and markers are detailed in [sandbox internals](../internals/sandbox.md#profile-skill-views).
+Host mode ignores profile `skills` lists, including `[]` and lists for unsupported providers; linked skills use native discovery and invocation. In sandbox mode, every configured list, including `[]`, requires a provider with a skill root and a user-only marker, and installed skills matching every listed name. Antigravity, Amp, OpenCode, Kiro, Grok, and plugins refuse a list in sandbox mode; remove the field to use native invocation behaviour there. Markdown lists deduplicate names; invalid names and old mode suffixes are rejected in all modes. Changing a trusted project's skill list requires trusting the updated config again. Provider roots and markers are detailed in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 
 #### Profiles
 
-A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited, and neither is `model-reminder`, the switch for the launch line described below. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields plus role-only `signals`, `owns`, and `flip-compact`; loop tasks expose the subset relevant to scheduled work.
+A profile is a named agent preset loaded from `agents/<name>.md` or `subagents/<name>.md`. Its `agent:` chain stays within its tree, and explicit child fields replace inherited values. Parent craft bodies precede the child's; descriptions and traits are local, while `model-reminder` is inherited. The [definition reference](../reference/definitions.md#chains-and-defaults) covers defaults, model aliases, tools, and prompt composition.
 
-An `[agents.profiles]` entry may restrict delegation by listing the only profiles its agents may launch through `rimz subagents`:
+To limit RimZ delegation, put `subagents: [explorer, designer]` on a direct definition and omit the native `Agent` tool. Omitting the field leaves delegation unrestricted; `[]` permits none. Child definitions cannot set it. The launch reminder describes the available children and, by default, the selected model; `model-reminder: false` removes only the model line.
 
-```toml
-[agents.profiles.planner]
-agent = "claude"
-subagents = ["explorer", "designer"]
-```
+`auto-compact` sets the provider's native window from `100k` through `1M`, not a percentage. Supporting kinds default to `258k` in Markdown definitions. Role-only `flip-compact` is separate: it compacts an outgoing stage owner at a handoff threshold, defaulting to `120k` for owners of `Plan` and `180k` otherwise; `off` disables it. See [compaction fields](../reference/definitions.md#flip-compaction) and the [provider support table](../reference/agent-support.md#auto-compaction-window).
 
-With no `subagents` field, every subagent profile is allowed; an empty list allows none. Entries are literal profile names and are validated against `[subagents.profiles]`, commands, and agent kinds when config loads. Team roles inherit the policy through their bound profile. The field is invalid on `[subagents.profiles]` because a subagent cannot launch again.
-
-At launch, RimZ tells a supported agent which subagent profiles it may use; an empty list instead tells it that delegation is off. When no subagent profiles or commands are configured, the reminder says that `Skill(rimz-subagents)` has nothing configured to launch and points at `[subagents.profiles]`.
-
-The same reminder tells the agent which model the launch selected: `You are @planner, running on Opus 4.8.` It uses the role or profile handle; a team member reads the same `on …` inside its identity sentence, and when the model is unknown, there is no model line. Effort is never named. To remove only that line:
-
-```toml
-[agents.profiles.planner]
-agent = "claude"
-model-reminder = false
-```
-
-`model-reminder` defaults to on in both `[agents.profiles]` and `[subagents.profiles]`. Set it on the profile you launch: it is not inherited from a base profile, and launches without a profile keep the default. RimZ combines team context, the model line, and delegation guidance into one `<system_reminder>` block. Claude, Codex, Qwen, Droid, Grok, Pi, and OpenCode support this launch reminder; other adapters receive no model line.
-
-Drop-ins under `~/.config/rimz/profiles/<name>/agent.toml` may declare either or both profile namespaces. Their relative prompt paths root at the drop-in directory, and same-named entries in the machine `agents.toml` take precedence.
-
-To give a planner more room for a design or compact a tool-heavy coder sooner, set `auto-compact` on its profile or team role. It sets the agent's own auto-compaction window as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`, never a percentage. RimZ enforces this range before launch for both providers; write `"200k"`, not `"200"`. Claude Code 2.1.221+ receives `--autocompact <tokens>`, capped at the model's context window; Codex receives `-c model_auto_compact_token_limit=<tokens>` and clamps the threshold to 90% of the model window. Other agents refuse the field at launch ([support table](../reference/agent-support.md#auto-compaction-window)). This is separate from [`harness.smart_compact`](#smart-compaction), which sends `/compact` from RimZ before a message or loop wait. Remove the field from the profile chain and role to leave the native window to the agent on subsequent launches; RimZ does not rewrite the agent's saved settings.
-
-When a stage hand-off is a good point to shed accumulated context, set `[harness] flip_compact = "180k"` in machine config; unset keeps flip compaction off. On a team role, `flip-compact = "220k"` overrides that default and `flip-compact = "off"` disables it. Both thresholds accept token counts or percentages such as `"70%"`, unlike native `auto-compact`. A member leaving a stage it owns for one another role owns compacts its own session at the next turn boundary only once occupied context reaches the effective threshold. A hand-off to an owner who is not live still compacts; a flip to `Done` never does, since nothing follows it. User flips, same-stage re-fires, moves between self-owned stages, and flips of someone else's stage never compact. Every eligible flip checks the threshold before checking for a pane; below-threshold flips make no attempt and write no assist record. There is no first-leave state. Launch refuses an effective threshold on adapters without a compact command; set the role to `"off"` or choose a supported adapter. Runtime compaction failures are reported as skipped without failing the flip, and attempts appear in `rimz stats`. Remove the harness field to disable its default; explicit role thresholds still apply. See [teams](./teams.md#hand-off-with-one-command) for the hand-off workflow.
-
-Put the threshold on the profile if it must survive a single-agent `restart` or room rebirth: those paths re-read the profile, not team-role overrides. Restoring the team's layout also reapplies its role overrides.
-
-Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every launch override except prompt fragments**: a child that sets `args` replaces the base `args`, while `append-system-prompt-files` concatenates parent-first through the profile chain, then the team role. The team-wide prompt layer follows those fragments, as described under [Teams](#teams). Fragments require a resolved `system-prompt-file` base. RimZ reads the pieces, separates them with blank lines, materializes one content-addressed replacement, and passes that complete value through the adapter's existing replacement channel. A `~` expands to home and a relative path roots at the declaring config file. Every source file must exist at launch; a missing one fails with the path to fix.
-
-Model, effort, auto-compaction, and adapter-declared system-prompt path flags repeated in raw `args` are reconciled at launch: the typed field or launch flag wins and RimZ warns when its value differs, while a model set only in `args` becomes the launch model and suppresses the adapter default. Qwen's typed replacement is an environment variable rather than an argv flag, so a raw provider `--system-prompt` remains an explicit provider-specific override.
-
-Command-line `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the profile value. Repeated `--append-system-prompt-file` values replace the inherited profile and role fragment list for that launch, leaving the team-wide layer intact. The singular configuration key is rejected; configuration uses the plural array.
-
-A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, for profiles that set `agent = "claude"`, and for virtual cells like `claude-auto`.
-
-At launch, `--agent <PROFILE|KIND>` replaces the base chain: the replacement supplies the engine, and the selected cell keeps its identity and role settings (mode, budget, `auto-compact`, skills, and prompt files). Model and effort come from the replacement whenever it sets them, so `--agent opus` runs any role on the `opus` profile's model and effort; explicit `--model` and `--effort` flags still win. Where the replacement leaves them unset, a same-provider re-base keeps the cell's model and effort. On a provider change the original model and raw `args` are dropped silently because their vocabulary belongs to the old provider, and the replacement profile supplies those fields instead; a same-provider re-base keeps the raw `args`. This makes a profile named for a kind, such as `[agents.profiles.codex]`, the natural place for the Codex model and raw flags used by `--agent codex`.
+Command-line `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile. Repeated `--append-system-prompt-file` values replace its fragment list for that launch, leaving the team layer intact. `--agent <PROFILE|KIND>` changes the engine while keeping the seat identity; see [fleet profiles](./fleet.md#profiles-shape-an-agent-for-one-job). Markdown definitions do not accept raw `args` or prompt-path keys. Trusted project TOML retains its existing profile fields.
 
 #### Commands
 
@@ -486,20 +427,18 @@ At launch, `--agent <PROFILE|KIND>` replaces the base chain: the replacement sup
 
 #### Teams
 
-A team is an ordered `roles` list that feeds `rimz agents <name>`; each role binds a role name to a configured profile or registered agent kind and may set any of the same **override fields** (replacing, like profiles). A same-named machine profile overrides the kind's implicit base, so `profile = "claude"` uses `[agents.profiles.claude]` when present and bare Claude otherwise. Each member answers to `@<role>` in that channel. `leader` names the role that receives a trailing launch prompt and defaults to the first declared role. `rimz agents <team>.<role>` launches one declared role with the same identity it has inside the full team. By default a multi-role team opens left to right as one side-by-side column per role in one tab; a one-role team follows the single-cell placement policy. An optional `layout` uses the inline shape grammar (comma = column, plus = tiled row, slash = Zellij stacked row with tmux tiling), resolving declared role names first and then falling back to roleless cells. `scratch-files` lists gitignore patterns for ephemeral files the team's workflow creates; every launch or resume registers them in the repository's Git exclude file so they never count as uncommitted work. The built-in `peer` team is the roleless `claude,codex`. Building a team from scratch is walked in [teams.md](./teams.md).
+A machine team lives in `teams/<name>.md`: frontmatter declares its roles, stages, leader, and optional layout, and the body is the shared pipeline. Each role selects a direct definition with `agent:` and becomes `<team>.<role>`. Every stage needs one owner; `Done` is implicit. Kind bases, ancestor crafts, seat crafts, built-in consensus, and the pipeline compose in that order.
 
-To make a team's workflow visible at launch and during inspection, set `stages` on `[agents.teams.<name>]`, for example `stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]`. This optional array preserves the declared order; omitting it or setting `[]` leaves the pipeline undeclared. Team validation rejects empty or whitespace-only names and duplicate names. Assign stages to roles with `owns = ["Explore", "Plan", "Reflect"]`, for example on the planner. Ownership names must be nonblank, belong to at most one role, and appear in `stages` when that list is nonempty. `Done` is implicit and always last; declaring it in `stages` or `owns` is refused. A flip out of `Done` can reopen work. A declared stage may be unowned, but `rimz teams flip` refuses it until an owner is assigned. With no declared `stages`, owned names supply the vocabulary; with no ownership at all, `flip` refuses and asks you to add it. Names match exactly, but ordering is not enforced. The first `flip` creates the worktree's `blackboard.md` if absent; later flips update its current step and wake its owner, as described in the [teams guide](./teams.md#hand-off-with-one-command).
+Launch all seats with `rimz teams <name>`, or one with `rimz agents <team>.<role>`. The optional layout uses comma columns, plus tiled rows, and slash stacked rows (tiled on tmux), placing every role once. The built-in roleless `peer` team remains available unless replaced by a definition. See [defining a team](./teams.md#define-your-own-team) and the [complete format](../reference/definitions.md#teams-and-seats).
 
-A team is staged when it declares a nonempty `stages` list or any role has `owns`. For each role with a resolved `system-prompt-file`, RimZ composes the base → profile-chain fragments → role fragments → built-in team consensus → team-level `append-system-prompt-files`, with one blank line between pieces. Put shared workflow instructions in that team-level list, for example `append-system-prompt-files = ["pipeline.md"]`, and use `consensus-file = "consensus.md"` to replace the built-in consensus. Both keys live under `[agents.teams.<name>]`; `~` expands to home and relative paths root at the declaring config file. Without a base prompt, a role silently receives no team layer unless the team sets `consensus-file` or a nonempty `append-system-prompt-files`: then resolution refuses and names the role that needs a base. Those explicit settings also require a staged team. Unstaged teams, including built-in `peer`, get no consensus. Both keys are accepted by `rimz config set` and enter the project trust hash when set; `scratch-files` does not.
-
-With `scratch-files` unset, staged teams use `["/blackboard.md", "/*-notes.md"]` as their memory-file patterns; unstaged teams default to none. Setting `scratch-files` replaces the whole list, and `scratch-files = []` selects no patterns.
+Markdown teams use `/blackboard.md` and `/*-notes.md` as default memory-file patterns. Every launch or resume registers them in the repository's Git exclude file. Project TOML keeps its separate team schema, including its optional consensus and scratch-file settings.
 
 #### Inline specs and cell resolution
 
 An inline spec like `rimz agents "claude,codex+term"` keeps the same shape grammar: commas split columns, plus signs tile rows, and slashes stack rows as a Zellij stack while tmux tiles them. Each cell resolves in this order:
 
 1. `[agents.commands]`,
-2. `[agents.profiles]`,
+2. direct profiles from `agents/` (and trusted project overrides),
 3. built-in `term`,
 4. registered agent kinds,
 5. adapter-supported virtual `<kind>-<mode>` cells (`claude-auto`, `codex-ask`, `codex-yolo`, …).
@@ -507,9 +446,9 @@ An inline spec like `rimz agents "claude,codex+term"` keeps the same shape gramm
 
 The [agents CLI reference](../reference/cli/agents.md#permission-mode-cells) lists which kinds have each permission-mode cell.
 
-`rimz subagents` uses the same resolution order except that step 2 reads `[subagents.profiles]`. If a profile exists only in the other namespace, launch fails with the section to move or copy it to.
+`rimz subagents` uses the same resolution order except that step 2 reads child profiles from `subagents/`. If a profile exists only in the other namespace, launch fails with the namespace to move or copy it to.
 
-Profiles and roles become addressable handles, so they must not shadow `@all`, agent kinds (`@claude`), kind ordinals (`@claude-2`), or the pane and channel sigils (`:`, `#`). Profile, command, and team names also reserve the `agents` subcommand verbs `list`, `ls`, `show`, `profiles`, `stop`, `focus`, `fork`, `wait`, `term`, and `exec`. A config that still uses a removed table fails fast naming the rename rather than silently dropping it: `[tab]` (with its `[tab.keywords]`/`[tab.layouts]` children) → `placement` under `[agents]` plus `[agents.teams]`; `[agents.aliases]` → `[agents.profiles]` and `[agents.commands]`; `[agents.layouts]` → `[agents.teams]`. The room degrades to defaults with a warning while `rimz config` and `rimz doctor` print the precise rename.
+Profiles and roles become addressable handles, so shared validation rejects reserved command names and address collisions. Markdown adds strict filename/frontmatter and chain checks; see [validation failures](../reference/definitions.md#validation-and-failures). Retired machine profile/team tables are not an alternate definition format.
 
 #### Placement
 
@@ -538,7 +477,7 @@ timeout = "30m"
 
 These defaults apply only to the agent-only [`rimz subagents`](../reference/cli/subagents.md) doorway, which is the only launch path that creates a parented child. `timeout` is the wall-clock limit for each supervised child and defaults to 30 minutes; the producer enforces it even when no process is waiting on the result. Per-launch `--timeout` overrides this table. Subagents cannot launch agents or subagents.
 
-Child launch presets live separately under `[subagents.profiles.<name>]`; `[agents.subagents]` continues to hold only doorway defaults such as `timeout`.
+Child launch presets live separately in `subagents/<name>.md`; `[agents.subagents]` continues to hold only doorway defaults such as `timeout`.
 
 ### Worktrees
 
@@ -554,16 +493,18 @@ base = "fresh"
 
 A role's `signals` array declares the events it receives; see [teams](./teams.md#send-events-to-the-responsible-role) for the workflow:
 
-```toml
-[[agents.teams.forge.roles]]
-role = "coder"
-profile = "codex"
-signals = [
-  { signal = "ci.failed", match = { branch = "feat-x" }, prompt = "Read the failed job and repair it." },
-]
+Within a role mapping in `teams/forge.md`:
+
+```yaml
+signals:
+  - signal: ci.failed
+    match: {branch: feat-x}
+    prompt: Read the failed job and repair it.
 ```
 
-Each binding is an inline table requiring a `signal` selector; its containing role is the receiver. Optional `match` is an all-of map of string values against top-level payload fields, and optional `prompt` is appended verbatim after the event evidence. Selectors use an exact name or a family such as `ci.*`. An `agent.*` binding requires `match.handle` or `match.session` naming another agent. Invalid bindings fail team preparation and stay visible in `rimz teams show`.
+
+
+Each binding is a selector string or a mapping requiring a `signal` selector; its containing role is the receiver. Optional `match` is an all-of map of string values against top-level payload fields, and optional `prompt` is appended verbatim after the event evidence. Selectors use an exact name or a family such as `ci.*`. An `agent.*` binding requires `match.handle` or `match.session` naming another agent. Invalid bindings fail team preparation and stay visible in `rimz teams show`.
 
 CI/PR bindings default to the member's worktree; team signals default to its cohort. Fresh root-checkout launches with implicit CI/PR scope are refused before side effects: launch with `-w <worktree>`, work from a linked worktree, or supply an explicit branch/path match. Registration materializes session-pinned workspace rows; end, loss, and stop remove them. `rimz teams show` separates declarations from live rows. Each role's complete ordered binding list, including selectors, matches, and prompts, is trust-hashed; changing a project binding requires a fresh `rimz trust grant`.
 

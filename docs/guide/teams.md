@@ -7,7 +7,7 @@ A team launches several agents as one unit, each in a named role with its own co
   <br/><sub>The loop mid-conversation: <code>@coder</code> finds a gap in the plan and messages <code>@planner</code> with evidence; the planner (center pane) verifies and updates the plan.</sub>
 </p>
 
-Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
+Define the roles once in `teams/<name>.md`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
 
 ```sh
 rimz teams forge -w feat-complex          # planner, coder, reviewer on one feature
@@ -50,11 +50,13 @@ rimz teams install forge
 rimz teams forge -w feat-complex            # the whole team, one isolated worktree
 ```
 
-From a repository checkout, copy the fragment instead when you want to edit that checkout's version directly:
+From a repository checkout, copy the team and its direct definitions when you want to edit that checkout's version directly:
 
 ```sh
-mkdir -p ~/.config/rimz/teams
-cp -r examples/teams/forge ~/.config/rimz/teams/
+mkdir -p ~/.config/rimz/teams ~/.config/rimz/agents
+cp examples/teams/forge/forge.md ~/.config/rimz/teams/
+cp examples/teams/forge/agents/*.md ~/.config/rimz/agents/
+rimz agents validate
 ```
 
 Then hand the task to the planner and let the loop carry it: type into the planner's pane, or message it.
@@ -105,58 +107,33 @@ The full flag surface lives in the [teams CLI reference](../reference/cli/teams.
 
 ## Define your own team
 
-A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a list of roles, each bound to a configured profile or registered agent kind, with an optional `layout` using the same row and column operators as inline specs (commas split columns, plus signs tile rows, slashes stack them). A same-named machine profile overrides the kind's implicit base. Its cells name declared roles or roleless cells, while ad-hoc `cell:role` suffixes stay exclusive to inline specs:
+A team puts a repeatable division of work in one file, `teams/<name>.md`. Its roles select direct definitions from `agents/`; its Markdown body tells the seats how to work together. Start with the installed forge definitions, then adapt the roster and pipeline:
 
-```toml
-# Copy-ready drop-in fragment for ~/.config/rimz/teams/forge/.
-# See examples/README.md for install and launch commands.
-
-[agents.teams.forge]
-layout = "planner,coder+reviewer"
-append-system-prompt-files = ["pipeline.md"]
-stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
-
-[[agents.teams.forge.roles]]
-role = "planner"
-owns = ["Explore", "Plan", "Reflect"]
-flip-compact = "180k"
-profile = "claude"
-mode = "auto"
-model = "fable"
-effort = "high"
-args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,AskUserQuestion,WebFetch,WebSearch,Skill,Agent(Explore,Plan)'"
-system-prompt-file = "planner.md"
-
-[[agents.teams.forge.roles]]
-role = "coder"
-owns = ["Implement"]
-profile = "codex"
-effort = "xhigh"
-args = "--strict-config -c 'web_search=\"cached\"' -c 'features.goals=false' -c 'features.multi_agent=false' -c 'features.shell_snapshot=true' -c 'features.shell_tool=true' -c 'features.skill_mcp_dependency_install=false' -c 'features.tool_call_mcp_elicitation=false' -c 'features.unified_exec=true' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'features.in_app_browser=false' -c 'features.image_generation=false' -c 'features.tool_suggest=false' -c 'features.memories=false' -c 'features.default_mode_request_user_input=false' -c 'skills.include_instructions=true'"
-system-prompt-file = "coder.md"
-
-[[agents.teams.forge.roles]]
-role = "reviewer"
-owns = ["Review", "Submit"]
-profile = "claude"
-mode = "auto"
-model = "opus"
-effort = "xhigh"
-args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,WebFetch,WebSearch,Skill'"
-system-prompt-file = "reviewer.md"
+```markdown
+---
+name: forge
+leader: planner
+layout: planner,coder+reviewer
+stages: [Explore, Plan, Implement, Review, Submit, Reflect]
+roles:
+  - agent: planner
+    owns: [Explore, Plan, Reflect]
+  - agent: coder
+    owns: [Implement]
+  - agent: reviewer
+    owns: [Review, Submit]
+---
+Keep the board current. Route implementation to @coder and independent review to @reviewer.
+Send decisions requiring the user to @planner.
 ```
 
-A staged team gets a built-in consensus after each role's base prompt and fragments, followed by the team's `append-system-prompt-files`. Here, `pipeline.md` carries the shared workflow once instead of repeating it in each role prompt. Set `consensus-file = "consensus.md"` under `[agents.teams.forge]` to replace the built-in consensus. The layer needs a base `system-prompt-file`; roles without one skip the default consensus, and explicitly configuring the team layer requires every role to have a base. See [configuration](./configuration.md#teams) for composition and path rules.
+Each selected definition and its kind base must exist. Put shared provider instructions in `agents/<kind>.md`, role craft in the direct definition's body, and the workflow in the team's body. RimZ composes base → ancestor crafts → seat craft → built-in consensus → pipeline. Role fields can override model, tools, and other settings; the [definition reference](../reference/definitions.md#teams-and-seats) lists the supported keys. Run `rimz agents validate` before launching.
 
-A team with `stages` or any role's `owns` uses `/blackboard.md` and `/*-notes.md` as its ephemeral memory patterns by default. `scratch-files` replaces that list with verbatim gitignore patterns; `scratch-files = []` selects none. Unstaged teams have no default memory patterns. On every launch or resume, RimZ appends missing patterns to the repository's `.git/info/exclude`; the leading `/` anchors these names at the checkout root. Linked worktrees commonly share that exclude file with the main checkout, so a matching name is ignored as untracked everywhere in the repository, not only in this team's worktree. To reverse it, delete those pattern lines from `.git/info/exclude`. Once the branch content has landed, excluded scratch files no longer keep the worktree dirty: post-exit cleanup and `rimz gc` may remove the tree without a dirty-tree prompt, deleting the scratch files with it.
+Every stage needs exactly one owner, and Implement and Review need different owners. `Done` is implicit and never declared or owned. The first `rimz teams flip` creates `blackboard.md` if absent; the leader fills in the goal and the team maintains its notes. The leader receives the initial task and remains the user-facing seat; other seats lose the question tool.
 
-Declare `stages` when the team follows a repeatable pipeline, so `show` can display what lies ahead and mark its current step. `Done` is implicit and always last, never declared or owned. The leader's first `rimz teams flip` creates `blackboard.md` if absent, with a `Stage:` line such as `Stage: Explore (@planner)` and a `## Progress` entry; the leader adds the other sections and the team creates its own notes. The board path is fixed at the worktree root, even if it is not listed in `scratch-files`. Stage ordering and validation are covered in [configuration](./configuration.md#teams).
+The team uses `/blackboard.md` and `/*-notes.md` as ephemeral-memory patterns. Launch and resume add missing patterns to the repository's `.git/info/exclude`, commonly shared by linked worktrees. Remove those lines to undo the exclusions. Excluded scratch files do not keep a worktree dirty and are deleted with it during cleanup.
 
-At launch, adapters with reminder support (currently Claude, Codex, Qwen, Droid, Grok, Pi, and OpenCode) tell each member its worktree, team, role, channel, and leader; the pipeline with `Done` last; every seat with the agent and model it runs on and the stages it owns; whether the session is fresh or resumed; which declared scratch files existed then, with line counts; and, when the team declares a leader, every other seat's channel rule: end turns silently and send anything the user must decide or hear to the leader. `teams show` scans those same patterns again when you inspect the cohort. A member's own model comes from its launch and its teammates' from their configured roles, and [`model-reminder = false`](./configuration.md#profiles) on the launched profile leaves every seat unnamed. On a reused worktree, RimZ reports leftover scratch files as earlier run state rather than touching them, so the member can read them before acting.
-
-Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. A team launched by another agent is still a top-level peer cohort, not a child of the caller. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz teams forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team, and from a pane in the team's own channel the bare `rimz agents reviewer` means the same thing.
-
-Start from one of the three shipped directories — `forge`, `mill`, or `spot` — or from scratch: rename the roles, add or drop some, swap the models and prompts — a pair, a trio, or a whole bench of specialists. The role prompts do the heavy lifting: each one states the role's craft, how the roles hand work to each other, and who owns which decision, which is what turns co-launched agents into a team instead of a row of panes. The full config shape, override fields included, is in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams).
+Launching the team opens every member in its layout. Members answer to `@<role>` within the channel; `rimz agents forge.reviewer` launches or re-adds just that seat. A team launched by another agent is still a top-level peer cohort, not a supervised child. To retire a definition, stop its live cohort and remove its Markdown file; direct definitions shared by other teams can stay.
 
 ### Hand off with one command
 
@@ -170,19 +147,16 @@ RimZ updates the worktree's `blackboard.md` Stage line, appends the required pro
 
 The launch reminder distinguishes three starts: a fresh worktree has no board, so the leader opens it with `rimz teams flip Explore "board opened; sweep aimed at the request"` and adds the Goal and other sections; an unfinished board is a continuation, with its owner woken to reread it while everyone else rests; a board at `Done` belongs to a finished run, so the leader either clears the old board and memory files for a new request or keeps them and flips out of `Done` for a follow-up. On resume or restart, the current owner's registration re-wait says nothing flipped since the last Progress line; it adds no ledger entry.
 
-The example planner's `flip-compact = "180k"` is a role override of the optional `[harness] flip_compact` default. After it leaves a stage it owns for one another role owns, RimZ compacts its own context at the next turn boundary only if occupied context has reached the threshold. The threshold is checked before pane availability; below-threshold flips make no attempt and write no assist record. Moving between stages it owns, or flipping to `Done`, does not compact. Set the role to `"off"` to disable it; removing the override inherits the harness default. A skipped compaction does not fail the hand-off. A team member's compaction uses the [team brief](./configuration.md#smart-compaction), which leaves the board and stage files to carry the run, unless `compact_instruction` is set. See the [command reference](../reference/cli/teams.md#flip-the-board-to-the-next-stage) for selection, delivery, and recovery details.
+Markdown roles default to `flip-compact: 120k` when they own Plan, or `180k` otherwise; a role can override that threshold. After it leaves a stage it owns for one another role owns, RimZ compacts its own context at the next turn boundary only if occupied context has reached the threshold. The threshold is checked before pane availability; below-threshold flips make no attempt and write no assist record. Moving between stages it owns, or flipping to `Done`, does not compact. Set the role to `"off"` to disable it; removing the override restores the Markdown role default. A skipped compaction does not fail the hand-off. A team member's compaction uses the [team brief](./configuration.md#smart-compaction), which leaves the board and stage files to carry the run, unless `compact_instruction` is set. See the [command reference](../reference/cli/teams.md#flip-the-board-to-the-next-stage) for selection, delivery, and recovery details.
 
 ### Send events to the responsible role
 
 A PR script knows who pushed, not who owns the repair. Declare signals on the role that receives them, so a failed check reaches the coder without the reviewer relaying it:
 
-```toml
-[[agents.teams.forge.roles]]
-role = "coder"
-profile = "codex"
-signals = [
-  { signal = "ci.failed" },
-]
+```yaml
+# Within the coder role mapping:
+signals:
+  - ci.failed
 ```
 
 Launch with `rimz teams forge -w feat-x`, or from an existing linked worktree. RimZ refuses a fresh root-checkout launch of this binding because its forge poll watches worktree branches; an explicit branch or worktree-path match is the alternative. When the coder registers, RimZ writes a standing subscription pinned to that session and scoped to its worktree. Failed CI sends the coder a `Type: SIGNAL` message with the branch, PR when known, and event payload. A busy coder takes it at the next turn boundary; this is not a self-alarm interrupt.
@@ -224,7 +198,7 @@ The room treats a team as a single line of work: the sidebar names the active gr
 - [Agents](./fleet.md) — launch agents by name and compose the layout a team fills.
 - [Worktrees](./worktrees.md) — isolate a team on its own branch for parallel work.
 - [Messaging](./messaging.md) — reach a role by handle: park, steer, schedule, and channels.
-- [Examples → forge](../../examples/README.md) — the shipped forge fragment: install, prerequisites, and try-before-install.
-- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
+- [Examples → forge](../../examples/README.md) — the shipped forge definitions: install, prerequisites, and try-before-install.
+- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — where reusable profiles and teams live.
 - [Teams CLI reference](../reference/cli/teams.md) — discover, inspect, install, launch, resume, and drive named teams.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents` surface.

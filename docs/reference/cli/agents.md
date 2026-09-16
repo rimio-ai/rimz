@@ -10,6 +10,7 @@ Why you would launch through RimZ instead of the bare CLI is the [agents guide](
 | Run one scripted, exit-coded turn | `rimz agents <SPEC> <PROMPT> -p` | [Supervised runs](#supervised-runs--p) |
 | Reopen closed agents | `--resume`, `resume` | [Resume agents](#resume-agents) |
 | See what a launch would run | `profiles`, `explain` | [Inspect profiles and launch plans](#inspect-profiles-and-launch-plans) |
+| Check machine definitions | `validate` | [Validate definitions](#validate-definitions) |
 | Add a third-party agent kind | `register`, `check` | [Register a third-party kind](#register-a-third-party-kind) |
 | Read and drive running agents | `list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `fork`, `wait`, `refresh`, `stop`, `restart`, `compact` | [List and manage agents](#list-and-manage-agents) |
 | Cap one agent's spend | `budget` | [Budget CLI](./budget.md#cap-one-agent) |
@@ -98,7 +99,7 @@ Launches refuse before they create any pane or record when:
 
 - the final prompt exceeds 120 KiB (122880 bytes), counting `--stdin` content and any reminder text appended to it, because the provider receives the prompt as one argument (move detail into a file the agent reads);
 - an agent-launched command would exceed `[agents] max-chain-length` successive agent-to-agent launches (default `3`);
-- a discovered `~/.config/rimz` config fragment has a syntax error or invalid value (the error names the file and the fix; unknown fields only warn, and `rimz setup` removes them).
+- a Markdown definition has invalid syntax, an unknown key, or a resolution error (the error names the source; run `rimz agents validate`).
 
 When an agent runs `rimz agents`, each new agent is an independent top-level peer with its own sidebar row. A parented child with one prompt comes only from the agent-only [`rimz subagents`](./subagents.md) command, and a subagent cannot launch agents or subagents.
 
@@ -137,7 +138,7 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 
 The profile fields these flags override are described in the [configuration guide](../../guide/configuration.md#profiles).
 
-`--agent` swaps the engine and keeps the job. The replacement profile or kind supplies the provider, and supplies model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's values, while a provider change drops the cell's model and keeps its effort. Permission mode, budget, `auto-compact`, skills, and prompt files carry over from the original profile, and the replacement fills only what the original left unset. Raw profile `args` carry over on a same-provider re-base; on a provider change they come from the replacement instead, so a profile such as `[agents.profiles.codex]` can hold the Codex model and flags used whenever `--agent codex` swaps a launch to Codex. Command-line flags still win, and typed fields the new adapter cannot express fail before any pane opens. `--agent` applies to this launch only: it conflicts with `--resume`, and a later `restart` refuses when the profile resolves back to a different provider.
+`--agent` swaps the engine and keeps the job. The replacement profile or kind supplies the provider, and supplies model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's values, while a provider change drops the cell's model and keeps its effort. Permission mode, budget, `auto-compact`, skills, and prompt files carry over from the original profile, and the replacement fills only what the original left unset. Raw profile `args` carry over on a same-provider re-base; on a provider change they come from the replacement instead, so a named Codex definition can supply its model and generated tool flags when selected as the replacement. Command-line flags still win, and typed fields the new adapter cannot express fail before any pane opens. `--agent` applies to this launch only: it conflicts with `--resume`, and a later `restart` refuses when the profile resolves back to a different provider.
 
 `--isolation sandbox` runs the bubblewrap preflight and refuses before any pane opens when it fails. The override is recorded on each agent, so `restart`, `fork`, resume, room rebirth, and the agent's `rimz subagents` children keep it. An agent launched without the flag follows the machine setting each time it relaunches.
 
@@ -288,7 +289,7 @@ rimz agents resume                # in a worktree: that lane; at the project roo
 | some members live | Splits only the closed members back into the live tab and reports each live handle it skipped. |
 | every member closed | Rebuilds team layouts in declared order and restores other agents as flat panes. |
 
-Each restored agent keeps its session id, role, team, channel, and working directory from the store, so a lane comes back under the same handles after a soft reset. Profiles and team layouts render from the current `agents.toml`. `--bg` keeps focus where it is.
+Each restored agent keeps its session id, role, team, channel, and working directory from the store, so a lane comes back under the same handles after a soft reset. Profiles and team layouts render from the current Markdown definitions. `--bg` keeps focus where it is.
 
 When RimZ's own records for a lane are gone, Claude and Codex sessions are recovered from the providers' local session stores: the newest concurrent set of sessions comes back, with exact session ids, as flat panes without roles or teams (those exist only in RimZ). Older, non-overlapping sessions stay closed and are reported by kind and session id. At the project root, the bare listing includes worktree lanes found only in those provider stores.
 
@@ -303,9 +304,18 @@ Resume planning is described in [fleet.md → Resume and rebirth](../../internal
 
 ## Inspect profiles and launch plans
 
+### Validate definitions
+
+```sh
+rimz agents validate
+rimz agents validate --json
+```
+
+Reads the machine Markdown definition trees without launching agents or generating files. Human output groups agents, subagents, and teams with their resolved seats, then prints source-attributed errors. JSON emits `{rows, errors}`. Any error exits nonzero. The shared skill library is checked even with host isolation; an absent library produces one warning and skips that check. See [the format and failure classes](../definitions.md#validation-and-failures).
+
 ### Discover agent profiles
 
-`rimz agents profiles` lists the configured `[agents.profiles]` profiles and launch commands as compact cards, with each profile's description. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
+`rimz agents profiles` lists the configured direct definitions and launch commands as compact cards, with each profile's description. Built-in and plugin agent kinds are launchable but not listed, and teams are listed by [`rimz teams`](./teams.md#list-teams). Team role profiles, named `<team>.<role>` for a configured team, appear only with `--teams`; [`rimz teams profiles`](./teams.md#list-team-role-profiles) lists them alone.
 
 ```sh
 rimz agents profiles

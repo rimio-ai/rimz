@@ -29,16 +29,17 @@ cd ~/code/your-project && rimz
 
 The hook summary names every affected file and points to `rimz hooks install --dry-run` for the exact unified diff before you consent. The first `rimz` run on a terminal asks the same hook, color, glyph, pet, and automation questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs, upgrades, trust grants, appearance changes, or automation opt-ins — which suits a server provisioning script.
 
-Four files carry the settings this guide touches:
+Three files carry the settings this guide touches:
 
 | File | Owns |
 | --- | --- |
-| `~/.config/rimz/config.toml` | room behavior: resume, auto-continue, smart compaction, notifications, multiplexer room overrides |
+| `~/.config/rimz/config.toml` | room behavior, agent launch preferences and commands, worktree defaults, attention timing, resume, compaction, notifications |
 | `~/.config/rimz/theme.toml` | sidebar appearance: scheme, color depth, glyphs, pets |
-| `~/.config/rimz/agents.toml` | agent profiles, teams, worktree defaults, attention timing |
 | `~/.config/rimz/loop.toml` | scheduled loop tasks: recurring turns, watchdogs, self-waits |
 
-Every key ships commented with its default and an inline note, so the generated template is the field reference:
+Agent and team definitions live separately in the [Markdown trees](../reference/definitions.md); edit their sources and run `rimz agents validate`.
+
+Every preference key ships commented with its default and an inline note, so the generated template is the field reference:
 
 ```sh
 rimz config init --print                     # every key, its default, and what it does

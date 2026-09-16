@@ -19,7 +19,7 @@ An address is `@handle[#channel]`. The handle names who; the optional `#channel`
 A handle resolves through the shortest unique name for a running agent:
 
 - **`@codex`** — a kind. Reaches the one Codex in your channel; ambiguous only when several share it.
-- **`@planner`** — a profile or team role you defined in `agents.toml`, so `@planner` reaches the right member wherever its pane sits.
+- **`@planner`** — a profile or team role you defined in Markdown, so `@planner` reaches the right member wherever its pane sits.
 - **`@swift-otter`** — a pet name or `@codex-2` ordinal, naming one specific instance when a kind isn't unique enough.
 - **`@all`** — every agent in the channel, except the caller when an agent sends the message.
 

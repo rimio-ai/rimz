@@ -129,7 +129,7 @@ removed feat-a
 3. **Mark it.** Write `rimz-worktree.json` into the worktree's Git admin directory, recording the name, branch, and the base branch and commit that cleanup later measures against. The checkout itself stays free of RimZ metadata, and the marker is the ownership boundary: cleanup, `remove`, and `gc` act only on marked trees, so a checkout you made by hand is never touched.
 4. **Open the layout.** Every pane starts with its working directory in the tree, on a channel named after it.
 
-Two per-machine keys under `[agents.worktree]` in `agents.toml` tune the first step:
+Two per-machine keys under `[agents.worktree]` in `config.toml` tune the first step:
 
 ```sh
 rimz config set agents.worktree.dir "../{repo}-worktrees"   # where sibling trees land
