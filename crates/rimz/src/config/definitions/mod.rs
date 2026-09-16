@@ -2,6 +2,7 @@
 
 mod agent;
 mod frontmatter;
+mod team;
 mod traits;
 
 #[cfg(test)]
@@ -227,6 +228,14 @@ pub fn load(agents_home: &Path, skills: SkillLibraryCheck<'_>) -> LoadedDefiniti
         "subagents",
         &subagents,
         &agents,
+        &bases,
+        skills,
+        &mut loaded,
+    );
+    team::load(
+        agents_home,
+        &agents,
+        &subagents,
         &bases,
         skills,
         &mut loaded,

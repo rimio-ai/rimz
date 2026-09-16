@@ -1,6 +1,478 @@
 use super::*;
 use crate::config::SkillName;
 
+fn team_fixture() -> tempfile::TempDir {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "model: opus\ntools: [Bash, Skill, AskUserQuestion]\nskills: [work]\nsubagents: [general]",
+        "Craft.\n\n${traits}",
+    );
+    root
+}
+
+fn team_definition(root: &Path, fields: &str, roles: &str, body: &str) {
+    write(
+        root,
+        "teams/probe.md",
+        &format!("---\n{fields}\nroles:\n{roles}\n---\n{body}"),
+    );
+}
+
+const TEAM_ROLES: &str = "  - agent: worker\n    role: lead\n    owns: [Plan, Implement]\n  - agent: worker\n    role: judge\n    owns: [Review]";
+const TEAM_STAGES: &str = "leader: lead\nstages: [Plan, Implement, Review]";
+
+#[test]
+fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
+    let root = team_fixture();
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        TEAM_ROLES,
+        "Pipeline. @lead @judge @all @rimz @codex ${literal}",
+    );
+    let loaded = clean(root.path());
+    let team = &loaded.teams.0["probe"];
+    assert!(team.staged());
+    assert!(team.scratch_files.is_none());
+    assert!(team.consensus_file.is_none());
+    assert_eq!(team.leader.as_deref(), Some("lead"));
+    assert_eq!(team.owner_of("Review"), Some("judge"));
+    assert_eq!(
+        team.roles[0].flip_compact,
+        Some(crate::config::FlipCompact::Threshold(
+            crate::store::message::AutoCompact::Tokens(120_000)
+        ))
+    );
+    assert_eq!(
+        team.roles[1].flip_compact,
+        Some(crate::config::FlipCompact::Threshold(
+            crate::store::message::AutoCompact::Tokens(180_000)
+        ))
+    );
+    for role in &team.roles {
+        let profile = &loaded.agent_profiles.0[&role.profile];
+        assert_eq!(profile.agent, "claude");
+        assert_eq!(profile.model.as_deref(), Some("opus"));
+        assert_eq!(profile.auto_compact.as_deref(), Some("258k"));
+        assert_eq!(
+            profile
+                .skills
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(SkillName::as_str)
+                .collect::<Vec<_>>(),
+            ["work", "reflect"]
+        );
+        assert_eq!(profile.subagents.as_ref().unwrap(), &["general"]);
+        assert_eq!(texts(profile), ["Craft."]);
+        assert_eq!(
+            profile.args.as_ref().unwrap().contains("AskUserQuestion"),
+            role.role == "lead"
+        );
+        assert_eq!(
+            loaded.sources.agent_profiles[&role.profile],
+            root.path().join("teams/probe.md")
+        );
+        let row = loaded
+            .rows
+            .iter()
+            .find(|row| row.name == role.profile)
+            .unwrap();
+        assert_eq!(row.namespace, "team");
+        assert_eq!(row.team.as_deref(), Some("probe"));
+        assert_eq!(row.role.as_deref(), Some(role.role.as_str()));
+        assert_eq!(row.owns, role.owns);
+        assert_eq!(row.signals, role.signals);
+    }
+    assert_eq!(
+        loaded.sources.team("probe"),
+        Some(root.path().join("teams/probe.md").as_path())
+    );
+    assert_eq!(
+        team.append_system_prompt_files,
+        [PromptSource::Text {
+            origin: root.path().join("teams/probe.md"),
+            text: "Pipeline. @lead @judge @all @rimz @codex ${literal}".to_owned()
+        }]
+    );
+}
+
+#[test]
+fn team_overlays_keep_ancestor_crafts_and_move_the_base() {
+    let root = team_fixture();
+    definition(
+        root.path(),
+        "agents/parent.md",
+        "model: opus\ntools: [Bash, Skill, AskUserQuestion]\ntraits: [parent]\nskills: [work]",
+        "Parent. ${traits}",
+    );
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "agent: parent\ntraits: [own]\nbudget: 2\nmodel-reminder: false",
+        "Child. ${traits}",
+    );
+    for name in ["parent", "own", "role", "team"] {
+        write(root.path(), &format!("traits/{name}.md"), name);
+    }
+    team_definition(
+        root.path(),
+        &format!("{TEAM_STAGES}\nname: rig\nlayout: lead+judge\ntraits: [team, own]"),
+        &format!(
+            "{TEAM_ROLES}\n    model: astra\n    mode: yolo\n    effort: medium\n    budget: 3/day\n    model-reminder: true\n    auto-compact: 500k\n    traits: [role, own]\n    skills: [replacement, reflect]\n    subagents: []\n    flip-compact: 'OFF'"
+        ),
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let lead = &loaded.agent_profiles.0["rig.lead"];
+    let judge = &loaded.agent_profiles.0["rig.judge"];
+    assert_eq!(texts(lead), ["Parent. parent", "Child. own\n\nteam"]);
+    assert_eq!(
+        texts(judge),
+        ["Parent. parent", "Child. own\n\nrole\n\nteam"]
+    );
+    assert_eq!(judge.agent, "codex");
+    assert_eq!(judge.model.as_deref(), Some("gpt-6-astra"));
+    assert_eq!(judge.mode, Some(crate::agents::PermissionMode::Yolo));
+    assert_eq!(judge.effort.as_deref(), Some("medium"));
+    assert_eq!(judge.budget.as_deref(), Some("3/day"));
+    assert_eq!(judge.model_reminder, Some(true));
+    assert_eq!(judge.auto_compact.as_deref(), Some("500k"));
+    assert_eq!(judge.subagents, Some(Vec::new()));
+    assert_eq!(
+        judge
+            .skills
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(SkillName::as_str)
+            .collect::<Vec<_>>(),
+        ["replacement", "reflect"]
+    );
+    assert!(
+        judge
+            .args
+            .as_ref()
+            .unwrap()
+            .contains("tools.experimental_request_user_input.enabled=false")
+    );
+    assert_eq!(
+        loaded.teams.0["rig"].roles[1].flip_compact,
+        Some(crate::config::FlipCompact::Off)
+    );
+    assert_eq!(lead.budget.as_deref(), Some("2"));
+    assert_eq!(lead.model_reminder, Some(false));
+    assert_eq!(loaded.teams.0["rig"].layout.as_deref(), Some("lead+judge"));
+}
+
+#[test]
+fn team_skill_clear_and_custom_model_keep_the_original_kind() {
+    let root = team_fixture();
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        &format!("{TEAM_ROLES}\n    model: custom\n    skills: []\n    flip-compact: 70%"),
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let judge = &loaded.agent_profiles.0["probe.judge"];
+    assert_eq!(judge.agent, "claude");
+    assert_eq!(judge.model.as_deref(), Some("custom"));
+    assert_eq!(judge.skills, Some(Vec::new()));
+    assert_eq!(
+        loaded.teams.0["probe"].roles[1].flip_compact,
+        Some(crate::config::FlipCompact::Threshold(
+            crate::store::message::AutoCompact::Percent(70)
+        ))
+    );
+}
+
+#[test]
+fn team_signal_bindings_preserve_matches_and_trim_prompts() {
+    let root = team_fixture();
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        &format!(
+            "{TEAM_ROLES}\n    signals:\n      - ci.failed\n      - signal: 'pr.*'\n        match: {{branch: feat-x}}\n        prompt: ' Read it. '\n      - signal: agent.idle\n        match: {{handle: lead}}\n      - signal: agent.*\n        match: {{session: session-id}}"
+        ),
+        "Pipeline.",
+    );
+    let loaded = clean(root.path());
+    let roles = &loaded.teams.0["probe"].roles;
+    assert!(roles[0].signals.is_empty());
+    let signals = &roles[1].signals;
+    assert_eq!(signals.len(), 4);
+    assert_eq!(signals[0].signal, "ci.failed");
+    assert_eq!(signals[1].matches["branch"], "feat-x");
+    assert_eq!(signals[1].prompt.as_deref(), Some("Read it."));
+    assert_eq!(signals[2].matches["handle"], "lead");
+    assert_eq!(signals[3].matches["session"], "session-id");
+}
+
+#[test]
+fn invalid_teams_publish_neither_roster_nor_seats() {
+    let cases = [
+        (
+            "leader: lead",
+            TEAM_ROLES.to_owned(),
+            "Pipeline.",
+            "declares no `stages:`",
+        ),
+        (
+            "stages: [Plan, Implement, Review]",
+            TEAM_ROLES.to_owned(),
+            "Pipeline.",
+            "no `leader:`",
+        ),
+        (
+            "leader: nobody\nstages: [Plan, Implement, Review]",
+            TEAM_ROLES.to_owned(),
+            "Pipeline.",
+            "not a declared role",
+        ),
+        (
+            TEAM_STAGES,
+            TEAM_ROLES.replace("owns: [Review]", "owns: [Unknown]"),
+            "Pipeline.",
+            "unknown stage",
+        ),
+        (
+            TEAM_STAGES,
+            TEAM_ROLES.replace("owns: [Review]", "owns: [Implement]"),
+            "Pipeline.",
+            "owned by both",
+        ),
+        (
+            TEAM_STAGES,
+            TEAM_ROLES.replace("owns: [Review]", "owns: []"),
+            "Pipeline.",
+            "has no owner",
+        ),
+        (
+            TEAM_STAGES,
+            TEAM_ROLES
+                .replace("[Plan, Implement]", "[Implement, Review]")
+                .replace("owns: [Review]", "owns: [Plan]"),
+            "Pipeline.",
+            "producer of a stage never referees",
+        ),
+        (
+            TEAM_STAGES,
+            TEAM_ROLES.replace("role: judge", "role: lead"),
+            "Pipeline.",
+            "twice",
+        ),
+        (
+            TEAM_STAGES,
+            TEAM_ROLES.to_owned(),
+            "Pipeline. @missing",
+            "undeclared handle",
+        ),
+        (TEAM_STAGES, TEAM_ROLES.to_owned(), "", "has no body"),
+        (TEAM_STAGES, String::new(), "Pipeline.", "lists no roles"),
+        (
+            TEAM_STAGES,
+            TEAM_ROLES.replace("agent: worker", "agent: general"),
+            "Pipeline.",
+            "agents only",
+        ),
+        (
+            TEAM_STAGES,
+            format!("{TEAM_ROLES}\n    meka: old"),
+            "Pipeline.",
+            "its model decides the runtime",
+        ),
+        (
+            TEAM_STAGES,
+            format!("{TEAM_ROLES}\n    mystery: true"),
+            "Pipeline.",
+            "unknown field",
+        ),
+        (
+            TEAM_STAGES,
+            format!("{TEAM_ROLES}\n    flip-compact: soon"),
+            "Pipeline.",
+            "flip-compact: soon",
+        ),
+        (
+            TEAM_STAGES,
+            format!("{TEAM_ROLES}\n    subagents: [nosuch]"),
+            "Pipeline.",
+            "unknown subagent",
+        ),
+        (
+            TEAM_STAGES,
+            format!("{TEAM_ROLES}\n    tools: [Agent, Bash]"),
+            "Pipeline.",
+            "lists the Agent tool",
+        ),
+        (
+            TEAM_STAGES,
+            format!("{TEAM_ROLES}\n    traits: [missing]"),
+            "Pipeline.",
+            "cannot read trait",
+        ),
+    ];
+    for (fields, roles, body, needle) in cases {
+        let root = team_fixture();
+        team_definition(root.path(), fields, &roles, body);
+        error(root.path(), needle);
+        let loaded = load(root.path(), SkillLibraryCheck::Skip);
+        assert!(loaded.teams.0.is_empty(), "{needle}");
+        assert!(
+            !loaded
+                .agent_profiles
+                .0
+                .keys()
+                .any(|name| name.starts_with("probe.")),
+            "{needle}"
+        );
+        assert!(
+            !loaded.rows.iter().any(|row| row.team.is_some()),
+            "{needle}"
+        );
+    }
+}
+
+#[test]
+fn malformed_signals_fail_before_the_team_can_be_published() {
+    for (binding, needle) in [
+        ("[cifailed]", "rimz reads one event name or one family"),
+        (
+            "[ci.failed.extra]",
+            "rimz reads one event name or one family",
+        ),
+        ("[{signal: agent.idle}]", "no handle or session match"),
+        (
+            "[{signal: ci.failed, matches: {a: b}}]",
+            "malformed frontmatter",
+        ),
+        ("[{signal: ci.failed, match: [x]}]", "malformed frontmatter"),
+        (
+            "[{signal: ci.failed, match: {branch: ' '}}]",
+            "non-empty string values",
+        ),
+        ("[{signal: ci.failed, prompt: ' '}]", "empty `prompt:`"),
+        ("[]", "non-empty list"),
+        ("ci.failed", "malformed frontmatter"),
+    ] {
+        let root = team_fixture();
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    signals: {binding}"),
+            "Pipeline.",
+        );
+        error(root.path(), needle);
+        assert!(
+            load(root.path(), SkillLibraryCheck::Skip)
+                .teams
+                .0
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn duplicate_team_names_remove_all_seats_and_sources() {
+    let root = team_fixture();
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    write(
+        root.path(),
+        "teams/duplicate.md",
+        &format!("---\nname: probe\n{TEAM_STAGES}\nroles:\n{TEAM_ROLES}\n---\nPipeline."),
+    );
+    error(root.path(), "declared twice");
+    let loaded = load(root.path(), SkillLibraryCheck::Skip);
+    assert!(loaded.teams.0.is_empty());
+    assert!(loaded.sources.team("probe").is_none());
+    assert!(
+        !loaded
+            .agent_profiles
+            .0
+            .keys()
+            .any(|name| name.starts_with("probe."))
+    );
+    assert!(
+        !loaded
+            .sources
+            .agent_profiles
+            .keys()
+            .any(|name| name.starts_with("probe."))
+    );
+}
+
+#[test]
+fn team_skills_check_reflect_and_the_overridden_runtime() {
+    let root = team_fixture();
+    for name in ["work", "reflect"] {
+        write(
+            root.path(),
+            &format!("skills/{name}/SKILL.md"),
+            "---\nname: probe\n---\nSkill.",
+        );
+    }
+    write(
+        root.path(),
+        "skills/work/agents/openai.yaml",
+        "policy:\n  allow_implicit_invocation: false\n",
+    );
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        &format!("{TEAM_ROLES}\n    model: astra"),
+        "Pipeline.",
+    );
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Check(&root.path().join("skills")),
+    );
+    assert!(loaded.agent_profiles.0.contains_key("worker"));
+    assert!(loaded.teams.0.is_empty());
+    assert_eq!(loaded.errors.len(), 1);
+    assert_eq!(loaded.errors[0].path, root.path().join("teams/probe.md"));
+    assert!(
+        loaded.errors[0].message.contains("user-only"),
+        "{:?}",
+        loaded.errors
+    );
+    std::fs::remove_file(root.path().join("skills/work/agents/openai.yaml")).unwrap();
+    std::fs::remove_file(root.path().join("skills/reflect/SKILL.md")).unwrap();
+    let loaded = load(
+        root.path(),
+        SkillLibraryCheck::Check(&root.path().join("skills")),
+    );
+    assert_eq!(loaded.errors.len(), 2);
+    assert!(
+        loaded
+            .errors
+            .iter()
+            .all(|error| error.message.contains("reflect"))
+    );
+    assert!(loaded.teams.0.is_empty());
+}
+
+#[test]
+fn even_a_bodyless_seat_needs_its_runtime_base() {
+    let root = team_fixture();
+    definition(root.path(), "agents/worker.md", "agent: pi", "");
+    std::fs::remove_file(root.path().join("agents/pi.md")).unwrap();
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let loaded = load(root.path(), SkillLibraryCheck::Skip);
+    assert!(loaded.agent_profiles.0.contains_key("worker"));
+    assert!(loaded.teams.0.is_empty());
+    assert_eq!(loaded.errors.len(), 2);
+    assert!(loaded.errors.iter().all(|error| {
+        error
+            .message
+            .contains("kind base `agents/pi.md` is missing")
+    }));
+}
+
 fn fixture() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     for kind in ["claude", "codex", "pi"] {

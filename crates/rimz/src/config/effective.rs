@@ -207,6 +207,7 @@ pub fn load_with_roots(
     )?;
 
     let repo_sources = AgentSpecSources {
+        teams: Default::default(),
         agent_profiles: repo
             .profiles
             .0
