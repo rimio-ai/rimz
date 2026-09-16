@@ -8,7 +8,7 @@
 leader = "coder"
 layout = "coder,reviewer"
 stages = ["Implement", "Review", "Submit", "Reflect"]
-scratch-files = ["/blackboard.md", "/*-notes.md"]
+append-system-prompt-files = ["pipeline.md"]
 
 # Tune the coder's model, effort, or Codex feature flags here.
 [[agents.teams.spot.roles]]

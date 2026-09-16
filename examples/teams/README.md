@@ -18,7 +18,7 @@ The three fragments differ in their roles and their pipeline. Everything below i
 
 **A pipeline of stages.** `team.toml` declares an ordered `stages` list, and each role owns the stages its prompt names. A stage is an obligation to leave specific information behind, not a turn: the owner does the work, writes its product, then hands off. `rimz teams show <team>` displays the pipeline and brackets the current stage.
 
-**Memory in files, never in the chat.** Two kinds of file live at the worktree root, both git-excluded through `scratch-files` and never committed:
+**Memory in files, never in the chat.** Two kinds of file live at the worktree root, both git-excluded by default for a staged team and never committed — no `scratch-files` setting needed:
 
 - `blackboard.md` — the run's state and history, and where you look to see where the run stands. It carries the `Stage:` line, the Goal, an append-only Decisions list, an append-only Progress section, and the Result.
 - `<stage>-notes.md` — one per stage, written only by that stage's owner: `explore-notes.md`, `plan-notes.md`, `implement-notes.md`, `review-notes.md`, `reflect-notes.md`. The narrative lives here; the board carries state.
@@ -120,7 +120,9 @@ The `ci.failed` binding is armed when the coder registers and is scoped to its w
 
 ## Customize
 
-`team.toml` is the tuning surface: swap models, change effort, adjust the Codex feature flags in a role's `args`, or rename the pipeline's stages. The role prompts do the heavy lifting, so renaming a role, dropping one, or adding a fourth means editing the prompts and the `[[agents.teams.<name>.roles]]` list together — the prompts carry their own roster table and pipeline, and a role's `owns` column must keep matching `stages`.
+`team.toml` is the tuning surface: swap models, change effort, adjust the Codex feature flags in a role's `args`, or rename the pipeline's stages. The role prompts do the heavy lifting, so renaming a role, dropping one, or adding a fourth means editing the prompts, `pipeline.md`, and the `[[agents.teams.<name>.roles]]` list together — the prompts carry their own roster table, and a role's `owns` column must keep matching `stages`.
+
+The team consensus is built into RimZ for staged teams; replace it with `consensus-file = "<path>"` under `[agents.teams.<name>]`. The pipeline lives in `pipeline.md`, declared in the same team table with `append-system-prompt-files = ["pipeline.md"]`, after the consensus. The default memory patterns are `["/blackboard.md", "/*-notes.md"]`; `scratch-files` in that table overrides them, and `scratch-files = []` means none.
 
 Any of the three also makes a solid skeleton for a team of your own: copy the directory under a new name, rename the team in `team.toml`, and reshape the roles to how your work splits. The full config shape is in [configuration → profiles and teams](../../docs/guide/configuration.md#agent-profiles-commands-and-teams).
 
