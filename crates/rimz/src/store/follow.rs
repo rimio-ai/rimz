@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 
-use crate::agents::AgentState;
 use crate::agents::lifecycle::{
     LifecycleEvent, LifecycleSignal, LifecycleState, PriorTurnIds, step, turn_ids_after,
 };
+use crate::agents::{AgentState, SessionOrigin};
 use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::ids::{EventId, WorkspaceId};
@@ -179,6 +179,9 @@ impl EventFollower {
                 continue;
             };
             let observation = &payload.observation;
+            if observation.origin == Some(SessionOrigin::SideConversation) {
+                continue;
+            }
             let Some(agent_id) = observation.agent_id.clone() else {
                 continue;
             };
@@ -307,6 +310,26 @@ mod tests {
                 spawned_subagents: &[],
             })
             .unwrap();
+    }
+
+    #[test]
+    fn side_registration_emits_no_lifecycle_or_follow_state() {
+        let (_dir, _store, paths) = fixture();
+        let mut follower = EventFollower::open(paths.clone(), true).unwrap();
+        let mut observation = crate::agents::AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("side")),
+            LifecycleSignal::Registered,
+        );
+        observation.origin = Some(SessionOrigin::SideConversation);
+        let event = crate::store::event::EventEnvelope::agent_lifecycle(
+            paths.workspace_id.clone(),
+            "room",
+            "codex",
+            "SessionStart",
+            &observation,
+        );
+        assert!(follower.fold(vec![event]).is_empty());
+        assert!(follower.states.is_empty());
     }
 
     #[test]

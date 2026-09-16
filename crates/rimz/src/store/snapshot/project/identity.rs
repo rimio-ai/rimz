@@ -19,9 +19,17 @@ pub(crate) struct AgentIdentityState {
     pub(super) next_ordinal: BTreeMap<AgentKind, u32>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(super) consumed_launches: BTreeSet<AgentSessionId>,
+    /// Ephemeral side-conversation ids, one per `/btw`, kept for the log's life
+    /// and not pruned.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(super) side_sessions: BTreeSet<AgentSessionId>,
 }
 
 impl AgentIdentityState {
+    pub(crate) fn is_side_session(&self, agent_id: &AgentSessionId) -> bool {
+        self.side_sessions.contains(agent_id)
+    }
+
     pub(crate) fn without_consumed_launches(mut self) -> Self {
         self.consumed_launches.clear();
         self
@@ -85,6 +93,7 @@ pub(super) struct CardIdentityAllocator {
     ordinals: BTreeMap<(AgentKind, u32), AgentSessionId>,
     next_ordinal: BTreeMap<AgentKind, u32>,
     consumed_launches: BTreeSet<AgentSessionId>,
+    side_sessions: BTreeSet<AgentSessionId>,
 }
 
 impl CardIdentityAllocator {
@@ -96,6 +105,7 @@ impl CardIdentityAllocator {
             names: state.names,
             next_ordinal: state.next_ordinal,
             consumed_launches: state.consumed_launches,
+            side_sessions: state.side_sessions,
             ordinals: BTreeMap::new(),
         };
         allocator.names.retain(|_, owner| {
@@ -138,7 +148,16 @@ impl CardIdentityAllocator {
             names: self.names.clone(),
             next_ordinal: self.next_ordinal.clone(),
             consumed_launches: BTreeSet::new(),
+            side_sessions: self.side_sessions.clone(),
         }
+    }
+
+    pub(super) fn mark_side_session(&mut self, agent_id: AgentSessionId) {
+        self.side_sessions.insert(agent_id);
+    }
+
+    pub(super) fn is_side_session(&self, agent_id: &AgentSessionId) -> bool {
+        self.side_sessions.contains(agent_id)
     }
 
     pub(super) fn reset_ordinals(&mut self) {
