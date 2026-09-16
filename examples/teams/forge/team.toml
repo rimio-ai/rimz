@@ -8,7 +8,7 @@
 leader = "planner"
 layout = "planner,coder+reviewer"
 stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
-scratch-files = ["/blackboard.md", "/*-notes.md"]
+append-system-prompt-files = ["pipeline.md"]
 
 # Tune the planner's model, effort, or tools here.
 [[agents.teams.forge.roles]]

@@ -8,7 +8,7 @@
 leader = "architect"
 layout = "architect,coder+reviewer"
 stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
-scratch-files = ["/blackboard.md", "/*-notes.md"]
+append-system-prompt-files = ["pipeline.md"]
 
 # Tune the architect's model, effort, or tools here.
 [[agents.teams.mill.roles]]
