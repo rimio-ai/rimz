@@ -34,7 +34,7 @@ fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
         primary_event_id: None,
         events: Vec::new(),
         rotation_due: false,
-        side_conversation: false,
+        side_conversation: None,
         waiting_cleared: false,
     }
 }

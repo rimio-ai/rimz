@@ -35,8 +35,32 @@ pub(super) fn record(
         ActiveTimeOp::Progress | ActiveTimeOp::Stop => agent_id,
     };
     let Some(agent_id) = agent_id else { return };
-    let now = jiff::Timestamp::now();
-    let at = active_time_at(op, now, decoded.turn_error());
+    let at = active_time_at(op, jiff::Timestamp::now(), decoded.turn_error());
+    apply(store, agent, op, agent_id, at, event_name);
+}
+
+/// Credit a side conversation's working time to the root session hosting it.
+pub(super) fn record_side_conversation(
+    store: &Store,
+    agent: &AgentDefinition,
+    signal: &LifecycleSignal,
+    host_agent_id: &str,
+    host_running: bool,
+    event_name: &str,
+) {
+    let op = side_conversation_op(signal, host_running);
+    let at = active_time_at(op, jiff::Timestamp::now(), None);
+    apply(store, agent, op, host_agent_id, at, event_name);
+}
+
+fn apply(
+    store: &Store,
+    agent: &AgentDefinition,
+    op: ActiveTimeOp,
+    agent_id: &str,
+    at: jiff::Timestamp,
+    event_name: &str,
+) {
     let grace_secs = rimz::config::MachineConfig::load_lenient()
         .agents
         .attention
@@ -112,6 +136,21 @@ fn active_time_op(
     }
 }
 
+/// A side turn opens or extends the host's span, and its end closes the span
+/// only when the host's own turn is not running; everything else extends an
+/// open span.
+fn side_conversation_op(signal: &LifecycleSignal, host_running: bool) -> ActiveTimeOp {
+    match signal {
+        LifecycleSignal::TurnStarted { .. } => ActiveTimeOp::Progress,
+        LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted { .. }
+            if !host_running =>
+        {
+            ActiveTimeOp::Stop
+        }
+        _ => ActiveTimeOp::Pulse,
+    }
+}
+
 fn active_time_at(
     op: ActiveTimeOp,
     now: jiff::Timestamp,
@@ -127,6 +166,34 @@ fn active_time_at(
 mod tests {
     use super::*;
     use rimz::agents::AskKind;
+
+    #[test]
+    fn side_conversations_credit_their_host_without_closing_its_live_turn() {
+        let started = LifecycleSignal::TurnStarted { turn_id: None };
+        let ended = LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        };
+        let interrupted = LifecycleSignal::TurnInterrupted { turn_id: None };
+        let compacting = LifecycleSignal::Compacting;
+        for (signal, host_running, op) in [
+            (&started, false, ActiveTimeOp::Progress),
+            (&started, true, ActiveTimeOp::Progress),
+            (&ended, false, ActiveTimeOp::Stop),
+            (&ended, true, ActiveTimeOp::Pulse),
+            (&interrupted, false, ActiveTimeOp::Stop),
+            (&interrupted, true, ActiveTimeOp::Pulse),
+            (&compacting, false, ActiveTimeOp::Pulse),
+            (&compacting, true, ActiveTimeOp::Pulse),
+        ] {
+            assert_eq!(
+                side_conversation_op(signal, host_running),
+                op,
+                "{signal:?} host_running={host_running}"
+            );
+        }
+    }
 
     #[test]
     fn mapping_covers_every_lifecycle_signal_and_bare_progress() {

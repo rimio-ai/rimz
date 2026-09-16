@@ -1084,7 +1084,11 @@ fn side_conversations_never_become_launched_children() {
         agents.values().next().unwrap(),
         &reduce_agent_states(&events[..2])[0]
     );
-    assert!(identity.is_side_session(&AgentSessionId::from("side")));
+    let child_a = AgentSessionId::from("child-a");
+    assert_eq!(
+        identity.side_session_host(&AgentSessionId::from("side")),
+        Some(Some(&child_a))
+    );
     let identity: AgentIdentityState =
         serde_json::from_value(serde_json::to_value(identity.without_consumed_launches()).unwrap())
             .unwrap();
@@ -1094,7 +1098,10 @@ fn side_conversations_never_become_launched_children() {
         &decode_events(&side_events[1..2]),
     );
     assert!(agents.is_empty());
-    assert!(identity.is_side_session(&AgentSessionId::from("side")));
+    assert_eq!(
+        identity.side_session_host(&AgentSessionId::from("side")),
+        Some(Some(&child_a))
+    );
 
     events.insert(
         0,
@@ -1116,6 +1123,33 @@ fn side_conversations_never_become_launched_children() {
             .collect::<BTreeSet<_>>(),
         BTreeSet::from(["child-a", "child-b", "child-c"]),
     );
+}
+
+#[test]
+fn side_conversation_host_is_the_earliest_live_root_of_its_process() {
+    let side_on = |pid| {
+        let mut side = same_process_registration("side", "root", 4, "tmux:%1", pid);
+        let mut params = side.params_value();
+        params["origin"] = json!("side_conversation");
+        side.params = serde_json::value::to_raw_value(&params).unwrap();
+        side
+    };
+    let roots = [
+        same_process_registration("primary", "root", 1, "tmux:%1", 83),
+        same_process_registration("cleared", "root", 2, "tmux:%1", 83),
+    ];
+    let side = AgentSessionId::from("side");
+    let primary = AgentSessionId::from("primary");
+    for (pid, host) in [(83, Some(&primary)), (99, None)] {
+        let events = [&roots[..], &[side_on(pid)]].concat();
+        let (agents, identity) = reduce_agent_states_seeded_with_identity(
+            BTreeMap::new(),
+            AgentIdentityState::default(),
+            &decode_events(&events),
+        );
+        assert_eq!(agents.len(), 2, "pid {pid}");
+        assert_eq!(identity.side_session_host(&side), Some(host), "pid {pid}");
+    }
 }
 
 #[test]
@@ -1739,7 +1773,7 @@ fn late_launch_event_does_not_recreate_provisional_when_name_is_owned() {
         names: BTreeMap::from([("lucid-atlas".to_owned(), (kind.clone(), real_id))]),
         next_ordinal: BTreeMap::from([(kind, 2)]),
         consumed_launches: BTreeSet::new(),
-        side_sessions: BTreeSet::new(),
+        side_sessions: BTreeMap::new(),
     };
 
     let events = [raw_launch(
@@ -1874,7 +1908,7 @@ fn stale_identity_state_does_not_block_reused_launch_name() {
         )]),
         next_ordinal: BTreeMap::new(),
         consumed_launches: BTreeSet::new(),
-        side_sessions: BTreeSet::new(),
+        side_sessions: BTreeMap::new(),
     };
     let events = [raw_launch(
         AgentLaunchState::Bound,

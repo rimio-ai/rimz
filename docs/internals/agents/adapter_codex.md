@@ -122,7 +122,7 @@ Several roots can share one Codex pane, and the rollout header tells them apart.
 | `forked_from_id` null | a fresh `/clear` or `/new` conversation (Codex also fires `SessionStart` for it) | [fresh conversation](./instances.md#supersession) retires the rested predecessor |
 | `forked_from_id` set, continuation of a compaction | the same conversation under a new id; RimZ stamps `compacted_from` | [compaction continuation](./instances.md#supersession), and the successor inherits `registered_at` |
 | `forked_from_id` set, anything else | a persistent fork (`/fork`, `codex fork`) or a provider-death retry, which Codex does not distinguish | [forked retry](./instances.md#supersession) retires only an errored predecessor; otherwise [`KeepPrimary`](./instances.md#same-pane-ownership) decides |
-| `SessionStart` source `fork`, no resolved rollout | an ephemeral side conversation (`/side`, `/btw`) | quarantined at ingestion, never an agent session |
+| `SessionStart` source `fork`, null payload `transcript_path`, no resolved rollout | an ephemeral side conversation (`/side`, `/btw`) | quarantined at ingestion, never an agent session; its hooks advance the [host card's clocks](./instances.md#same-pane-ownership) |
 | unreadable | lineage unknown | no lineage rule applies |
 
 Every same-instance root carries the [launch identity](./instances.md#launch-identity-across-conversations), and launched children keep their parent link across forks and continuations ([subagents.md](../harness/subagents.md#launch-generations-and-parentage)). On the first prompt after `/clear`, daemon-routed recovery stamps the new root onto the focused Codex pane, or without focus evidence onto the sole occupied pane whose owner is at rest, so the fresh-conversation rule can fire.

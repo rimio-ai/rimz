@@ -55,13 +55,13 @@ A fallback on directory alone also needs a positive pane-incarnation clock: the 
 
 ## Same-pane ownership
 
-Several root sessions can claim one pane: a persistent in-process fork, a `/clear` conversation, or a provider that switches conversation ids in place. Ephemeral side conversations (`/side`, `/btw`) are quarantined at ingestion and never reach the agent fold. [`compare_same_pane_owner`](../../../crates/rimz/src/agents/state.rs) picks the one that owns the card:
+Several root sessions can claim one pane: a persistent in-process fork, a `/clear` conversation, or a provider that switches conversation ids in place. Ephemeral side conversations (`/side`, `/btw`) are quarantined at ingestion and never reach the agent fold; the fold remembers each one's host, the earliest registered live root of the same pane and agent process, and every later side hook advances that host's activity and estimated active time. A side turn opens the host's span when it is closed, and a side turn end closes it only while the host's own turn is not running. [`compare_same_pane_owner`](../../../crates/rimz/src/agents/state.rs) picks the one that owns the card:
 
 1. A root holding an open turn (`holds_open_turn`) outranks every rested root.
 2. Among open turns, adapter policy decides. `KeepPrimary` picks the earliest registered root, which keeps an open Codex primary ahead of an open persistent in-process fork. `FollowLatest` picks the latest registered root, for providers that switch conversation ids in place.
 3. Among rested roots, the latest `last_activity` wins regardless of policy.
 
-`holds_open_turn` reads the context sidecar's rest certificates, so a `running` row with a budget park, a `parked` phase, an active turn error, or a completion or interruption marker counts as rested. Every other same-pane root's activity and estimated active time fold display-only onto the owning card.
+`holds_open_turn` reads the context sidecar's rest certificates, so a `running` row with a budget park, a `parked` phase, an active turn error, or a completion or interruption marker counts as rested. Every other same-pane root's activity and estimated active time fold display-only onto the owning card; side conversations credit their host directly, as above.
 
 Address resolution enforces the same boundary. While a live pane is bound to one session, a different root stamped on that pane is a shadowed audit record: it resolves for no role, kind, name, broadcast, pane, prefix, or exact-session address. Durable history and message audit surfaces keep it.
 

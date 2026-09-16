@@ -169,24 +169,36 @@ fn side_conversation_receipts_append_only_the_registration() {
             )
             .expect("append lifecycle")
     };
-    let root = observation(LifecycleSignal::Registered);
-    assert!(!append("SessionStart", &root, u64::MAX).side_conversation);
-    let before = store.snapshot().unwrap().agents;
+    let in_root_process = |mut observation: AgentLifecycleObservation| {
+        observation.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+        observation.agent_pid = Some(std::process::id());
+        observation
+    };
+    let mut root = in_root_process(observation(LifecycleSignal::Registered));
+    assert!(
+        append("SessionStart", &root, u64::MAX)
+            .side_conversation
+            .is_none()
+    );
+    root.signal = LifecycleSignal::TurnStarted { turn_id: None };
+    append("UserPromptSubmit", &root, u64::MAX);
+    let agents = || snapshot::catch_up_rollup(store.paths()).expect("rollup").1;
+    let before = agents();
     assert_eq!(before.len(), 1);
-    let mut side = AgentLifecycleObservation::new(
+    let mut side = in_root_process(AgentLifecycleObservation::new(
         Some(AgentSessionId::from("side")),
         LifecycleSignal::Registered,
-    );
+    ));
     side.origin = Some(SessionOrigin::SideConversation);
     let receipt = append("SessionStart", &side, 0);
-    assert!(receipt.side_conversation);
+    assert_eq!(receipt.side_conversation, Some(SideConversation::default()));
     assert!(receipt.primary_event_id.is_some());
     assert!(receipt.events.is_empty());
     assert!(receipt.prior_status.is_none());
     assert!(receipt.transition.is_none());
     assert!(!receipt.waiting_cleared);
     assert!(receipt.rotation_due);
-    assert_eq!(store.read_events().unwrap().len(), 2);
+    assert_eq!(store.read_events().unwrap().len(), 3);
 
     side.origin = None;
     side.signal = LifecycleSignal::TurnStarted { turn_id: None };
@@ -200,11 +212,14 @@ fn side_conversation_receipts_append_only_the_registration() {
             primary_event_id: None,
             events: Vec::new(),
             rotation_due: false,
-            side_conversation: true,
+            side_conversation: Some(SideConversation {
+                host: Some(AgentSessionId::from("sess-1")),
+                host_running: true,
+            }),
         }
     );
-    assert_eq!(store.read_events().unwrap().len(), 2);
-    assert_eq!(store.snapshot().unwrap().agents, before);
+    assert_eq!(store.read_events().unwrap().len(), 3);
+    assert_eq!(agents(), before);
 }
 
 #[test]

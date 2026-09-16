@@ -367,47 +367,94 @@ fn session_start_hooks_write_lifecycle_rows() {
 }
 
 #[test]
-fn codex_side_conversation_hooks_leave_the_root_unchanged() {
-    let env = Env::new();
-    assert_hook_succeeded_neutral(
-        "codex",
-        env.run_hook(
-            "codex",
-            &json!({
-                "hook_event_name": "SessionStart",
-                "session_id": "codex-root",
-                "source": "startup",
-            })
-            .to_string(),
-        ),
-    );
-    let before = env.snapshot_json()["agents"].clone();
-    assert_eq!(before.as_array().unwrap().len(), 1);
-    assert_eq!(before[0]["agent_id"], "codex-root");
-    let count = lifecycle_event_count(&env);
-    for payload in [
-        json!({
+fn codex_side_conversation_hooks_credit_the_host_without_becoming_an_agent() {
+    for host_running in [false, true] {
+        let env = Env::new();
+        let run = |payload: Value| {
+            let output = env.run_installed_hook_in_pane(
+                "codex",
+                &payload.to_string(),
+                &[("TMUX_PANE", "%0")],
+            );
+            assert_hook_succeeded_neutral("codex", output);
+        };
+        let host_clock = || {
+            rimz::store::active_time::read_for_keys(&env.runtime_paths(), [("codex", "codex-root")])
+                .pop()
+        };
+        run(json!({
             "hook_event_name": "SessionStart",
-            "session_id": "codex-side",
-            "source": "fork",
-            "transcript_path": null,
-        }),
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "codex-side",
-            "transcript_path": null,
-            "prompt": "a side question",
-        }),
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "codex-side",
-            "transcript_path": null,
-            "last_assistant_message": "a side answer",
-        }),
-    ] {
-        assert_hook_succeeded_neutral("codex", env.run_hook("codex", &payload.to_string()));
-        assert_eq!(lifecycle_event_count(&env), count + 1);
-        assert_eq!(env.snapshot_json()["agents"], before);
+            "session_id": "codex-root",
+            "source": "startup",
+        }));
+        if host_running {
+            run(json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "codex-root",
+                "prompt": "the host turn",
+            }));
+        }
+        let before = env.snapshot_json()["agents"].clone();
+        assert_eq!(before.as_array().unwrap().len(), 1);
+        assert_eq!(before[0]["agent_id"], "codex-root");
+        let clock_before = host_clock();
+        assert_eq!(clock_before.is_some(), host_running);
+        let count = lifecycle_event_count(&env);
+        for payload in [
+            json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "codex-side",
+                "source": "fork",
+                "transcript_path": null,
+            }),
+            json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "codex-side",
+                "transcript_path": null,
+                "prompt": "a side question",
+            }),
+            json!({
+                "hook_event_name": "Stop",
+                "session_id": "codex-side",
+                "transcript_path": null,
+                "last_assistant_message": "a side answer",
+            }),
+        ] {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            run(payload);
+            assert_eq!(
+                lifecycle_event_count(&env),
+                count + 1,
+                "running={host_running}"
+            );
+            let agents = env.snapshot_json()["agents"].clone();
+            assert_eq!(
+                agents.as_array().unwrap().len(),
+                1,
+                "running={host_running}"
+            );
+            assert_eq!(agents[0]["agent_id"], "codex-root");
+            assert_eq!(agents[0]["status"], before[0]["status"]);
+            assert_eq!(agents[0]["task"], before[0]["task"]);
+        }
+        let clock = host_clock().expect("host active-time record");
+        assert_eq!(clock.active, host_running);
+        if host_running {
+            assert!(clock.last_progress > clock_before.unwrap().last_progress);
+        } else {
+            assert!(clock.credited_ms > 0);
+        }
+        let last_activity = |agents: &Value| {
+            agents[0]["last_activity"]
+                .as_str()
+                .expect("last_activity")
+                .parse::<jiff::Timestamp>()
+                .expect("timestamp")
+        };
+        assert!(
+            last_activity(&env.snapshot_json()["agents"]) > last_activity(&before),
+            "running={host_running}"
+        );
     }
 }
 

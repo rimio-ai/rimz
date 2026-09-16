@@ -36,7 +36,18 @@ pub struct AgentLifecycleReceipt {
     pub primary_event_id: Option<EventId>,
     pub events: Vec<LifecycleEvent>,
     pub rotation_due: bool,
-    pub side_conversation: bool,
+    /// Set when the observation belongs to an ephemeral side conversation,
+    /// which is never an agent session.
+    pub side_conversation: Option<SideConversation>,
+}
+
+/// A side conversation's receipt: the root session hosting it, once the
+/// side registration has folded and a root proved the instance, and whether
+/// that host's own turn is running.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SideConversation {
+    pub host: Option<AgentSessionId>,
+    pub host_running: bool,
 }
 
 struct StagedLifecycleEvent {
@@ -66,8 +77,16 @@ impl Store {
                 .observation
                 .agent_id
                 .as_ref()
-                .is_some_and(|agent_id| cache.agent_identity.is_side_session(agent_id));
-            if known_side || intent.observation.origin == Some(SessionOrigin::SideConversation) {
+                .and_then(|agent_id| cache.agent_identity.side_session_host(agent_id))
+                .map(|host| SideConversation {
+                    host_running: host
+                        .and_then(|host| find_agent(&agents, &intent.agent_kind, host))
+                        .is_some_and(|host| host.status == AgentStatus::Running),
+                    host: host.cloned(),
+                });
+            if known_side.is_some()
+                || intent.observation.origin == Some(SessionOrigin::SideConversation)
+            {
                 let mut receipt = AgentLifecycleReceipt {
                     prior_status: None,
                     transition: None,
@@ -75,9 +94,9 @@ impl Store {
                     primary_event_id: None,
                     events: Vec::new(),
                     rotation_due: false,
-                    side_conversation: true,
+                    side_conversation: Some(known_side.clone().unwrap_or_default()),
                 };
-                if known_side {
+                if known_side.is_some() {
                     return Ok(receipt);
                 }
                 let envelope = EventEnvelope::agent_lifecycle(
@@ -188,7 +207,7 @@ impl Store {
                 primary_event_id,
                 events,
                 rotation_due,
-                side_conversation: false,
+                side_conversation: None,
             })
         })
     }

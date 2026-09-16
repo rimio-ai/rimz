@@ -164,12 +164,12 @@ fn record_mapped_lifecycle_observation(
                 primary_event_id: None,
                 events: Vec::new(),
                 rotation_due: false,
-                side_conversation: false,
+                side_conversation: None,
                 waiting_cleared: false,
             };
         }
     };
-    if receipt.side_conversation {
+    if receipt.side_conversation.is_some() {
         debug!(agent = agent.spec().kind, "lifecycle: side conversation");
         return RecordedLifecycle {
             model_hint,

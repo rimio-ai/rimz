@@ -7,7 +7,7 @@
 use jiff::Timestamp;
 
 use crate::agents::{AgentState, SamePaneSessionPolicy, SessionOrigin};
-use crate::pane::RuntimeOwnerKind;
+use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 /// Age in seconds after which a pidless agent session is reaped as a ghost.
 /// A session that never captured a pid can't be reaped by process liveness, so
@@ -95,8 +95,20 @@ fn rested_by_error(agent: &AgentState) -> bool {
 
 /// Whether two roots name the same pane and agent-process incarnation.
 pub(crate) fn same_agent_instance(older: &AgentState, newer: &AgentState) -> bool {
+    same_instance_placement(
+        (older.pane.as_ref(), older.runtime_owner.as_ref()),
+        (newer.pane.as_ref(), newer.runtime_owner.as_ref()),
+    )
+}
+
+/// [`same_agent_instance`] over bare pane and runtime-owner placements, for a
+/// session that is never folded into an `AgentState`.
+pub(crate) fn same_instance_placement(
+    older: (Option<&PaneRef>, Option<&RuntimeOwner>),
+    newer: (Option<&PaneRef>, Option<&RuntimeOwner>),
+) -> bool {
     let same_pane = matches!(
-        (older.pane.as_ref(), newer.pane.as_ref()),
+        (older.0, newer.0),
         (Some(older_pane), Some(newer_pane))
             if older_pane.pane_id == newer_pane.pane_id
                 && compatible_tokens(
@@ -108,7 +120,7 @@ pub(crate) fn same_agent_instance(older: &AgentState, newer: &AgentState) -> boo
         return false;
     }
     matches!(
-        (older.runtime_owner.as_ref(), newer.runtime_owner.as_ref()),
+        (older.1, newer.1),
         (Some(older_owner), Some(newer_owner))
             if older_owner.kind == RuntimeOwnerKind::Agent
                 && newer_owner.kind == RuntimeOwnerKind::Agent
