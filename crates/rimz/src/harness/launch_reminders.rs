@@ -6,7 +6,8 @@ use super::launch::ExecRequest;
 use super::launch_context::{self, escape_reminder_text};
 use super::subagent_policy::{self, SubagentCatalog};
 use crate::agents::{LaunchParams, model_display::display_model};
-use crate::config::Team;
+
+pub use super::launch_context::TeamReminder;
 
 pub struct LaunchReminders {
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
@@ -15,7 +16,7 @@ pub struct LaunchReminders {
     /// and switches off the provider's native command sandbox.
     pub sandbox: bool,
     pub subagent_catalog: Option<SubagentCatalog>,
-    pub team: Option<Team>,
+    pub team: Option<TeamReminder>,
 }
 
 impl Default for LaunchReminders {
@@ -61,15 +62,19 @@ pub(super) fn render(
 ) -> Option<String> {
     let mut paragraphs = Vec::new();
     let params = &request.identity.params;
-    let model = reminders.model.then(|| model_fragment(params)).flatten();
     if !request.subagent
         && let Some(team) = reminders.team.as_ref()
         && let Some(context) =
             launch_context::team_launch_context(params, &request.action, team, cwd)
     {
-        paragraphs.push(launch_context::reminder(&context, model.as_deref()));
-    } else if let Some(model) = model.as_deref() {
-        paragraphs.push(model_line(params, model));
+        // The member's own seat runs what this process runs, not what config resolves to.
+        let runs_on = reminders
+            .model
+            .then(|| launch_context::runs_on(Some(request.kind.as_str()), params.model.as_deref()))
+            .flatten();
+        paragraphs.push(launch_context::reminder(&context, runs_on.as_deref()));
+    } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
+        paragraphs.push(model_line(params, &model));
     }
     if reminders.sandbox {
         paragraphs.push(SANDBOX_REMINDER_BODY.to_owned());
@@ -107,6 +112,11 @@ fn model_line(params: &LaunchParams, fragment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ProfilesConfig, Team};
+
+    fn team_reminder(team: Team) -> TeamReminder {
+        TeamReminder::new(team, &ProfilesConfig::default())
+    }
 
     #[test]
     fn stage_handoff_reminder_stays_inside_the_single_team_wrapper() {
@@ -118,7 +128,7 @@ mod tests {
             toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'\nowns = ['Implement']")
                 .expect("team");
         let reminders = LaunchReminders {
-            team: Some(team),
+            team: Some(team_reminder(team)),
             ..LaunchReminders::default()
         };
         let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
@@ -143,13 +153,9 @@ mod tests {
             ..LaunchParams::default()
         };
         let mut reminders = LaunchReminders {
-            team: Some(Team {
-                roles: Vec::new(),
-                leader: None,
-                layout: None,
-                scratch_files: Vec::new(),
-                stages: Vec::new(),
-            }),
+            team: Some(team_reminder(
+                toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'").expect("team"),
+            )),
             subagent_catalog: Some(SubagentCatalog::Disabled),
             ..LaunchReminders::default()
         };
@@ -237,28 +243,41 @@ mod tests {
     }
 
     #[test]
-    fn team_paragraph_carries_the_model_fragment() {
+    fn team_paragraph_names_every_seat_and_runs_the_launch_on_its_own() {
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
         request.identity.params = LaunchParams {
             team: Some("forge".to_owned()),
             role: Some("planner".to_owned()),
+            // The launch overrides the profile's model; the seat follows the launch.
             model: Some("claude-fable-5-1".to_owned()),
             effort: Some("high".to_owned()),
             ..LaunchParams::default()
         };
         let team: Team = toml::from_str(
-            "leader = 'planner'\n[[roles]]\nrole = 'planner'\nprofile = 'claude'\n[[roles]]\nrole = 'coder'\nprofile = 'codex'",
+            "leader = 'planner'\n[[roles]]\nrole = 'planner'\nprofile = 'claude'\nmodel = 'claude-opus-4-8'\n[[roles]]\nrole = 'coder'\nprofile = 'codex'",
         )
         .expect("team");
-        let reminders = LaunchReminders {
-            team: Some(team),
+        let mut reminders = LaunchReminders {
+            team: Some(team_reminder(team)),
             ..LaunchReminders::default()
         };
         let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
-        assert!(text.starts_with(
-            "<system_reminder>\nYou are @planner, leader of team `forge`, with teammate @coder, on Fable 5.1. Fresh session in worktree /worktree."
-        ));
+        assert!(
+            text.starts_with(
+                "<system_reminder>\nYou are @planner, leader of team `forge`. Seats: @planner (you) runs on Claude Fable 5.1; @coder runs on Codex. Fresh session in worktree /worktree."
+            ),
+            "{text}"
+        );
         assert_eq!(text.matches("Fable 5.1").count(), 1);
+        assert!(!text.contains("Opus 4.8"));
+
+        // `model-reminder = false` unnames every seat, the member's own and its teammates'.
+        reminders.model = false;
+        let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
+        assert!(
+            text.contains("Seats: @planner (you); @coder. Fresh session"),
+            "{text}"
+        );
     }
 }
