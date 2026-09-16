@@ -62,8 +62,9 @@ pub(super) fn even_split_sizes(total: u64, pane_count: usize) -> Vec<u64> {
     if pane_count < 2 {
         return Vec::new();
     }
-    // A run too large for the extent is tmux's error to raise, not a panic
-    // here: clamp to the one-cell-per-pane floor `even_column_heights` asserts.
+    // An extent too small for its panes stays tmux's business: it clamps an
+    // oversize `-l` and errors only once no space is left. Clamping `total`
+    // here only keeps `even_column_heights`'s debug assertion satisfied.
     let cells = even_column_heights(total.max(pane_count as u64), pane_count);
     (1..pane_count)
         .map(|index| cells[index..].iter().sum::<u64>() + (pane_count - 1 - index) as u64)

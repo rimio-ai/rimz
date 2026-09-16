@@ -280,8 +280,9 @@ fn even_split_sizes_hand_each_split_the_cells_its_remaining_panes_need() {
     assert_eq!(window::even_split_sizes(66, 2), [33]);
     assert_eq!(window::even_split_sizes(50, 3), [33, 16]);
     assert!(window::even_split_sizes(50, 1).is_empty());
-    // Too small for its panes: sized down to the floor, and tmux rejects the
-    // split itself rather than this panicking on the way in.
+    // An extent too small for its panes still returns sizes instead of
+    // tripping `even_column_heights`'s debug assertion; tmux clamps a split it
+    // cannot fit and errors only once no space is left.
     assert_eq!(window::even_split_sizes(1, 3), [2, 1]);
 }
 
