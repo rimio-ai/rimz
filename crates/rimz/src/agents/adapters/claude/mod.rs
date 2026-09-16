@@ -127,6 +127,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
     thread_key: ThreadKey::SessionDir,
     launch: super::LaunchSpec {
+        definitions: DEFINITIONS,
         program: Some("claude"),
         fixed_args: &[],
         prompt: super::PromptStyle::PositionalAfterDoubleDash,
@@ -394,6 +395,68 @@ const SUBAGENT_STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::agents) struct ClaudeAdapter;
+
+const DEFINITIONS: crate::agents::definition::DefinitionSpec =
+    crate::agents::definition::DefinitionSpec {
+        mode: Some(crate::agents::PermissionMode::Auto),
+        effort: Some("xhigh"),
+        models: &[
+            crate::agents::definition::DefinitionModel {
+                name: "opus",
+                id: "opus",
+                effort: None,
+            },
+            crate::agents::definition::DefinitionModel {
+                name: "sonnet",
+                id: "sonnet",
+                effort: None,
+            },
+            crate::agents::definition::DefinitionModel {
+                name: "haiku",
+                id: "haiku",
+                effort: None,
+            },
+            crate::agents::definition::DefinitionModel {
+                name: "fable",
+                id: "fable",
+                effort: Some("high"),
+            },
+        ],
+        prefixes: &["claude-"],
+        tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
+    };
+
+const CLAUDE_AGENT_TYPES: &[&str] = &[
+    "Explore",
+    "Plan",
+    "general-purpose",
+    "statusline-setup",
+    "fork",
+];
+
+fn render_definition_tools(
+    tools: &crate::agents::ToolSet,
+) -> std::result::Result<Vec<String>, crate::agents::ToolErr> {
+    for name in tools.agent_types() {
+        if !CLAUDE_AGENT_TYPES.contains(&name.as_str()) {
+            return Err(crate::agents::ToolErr::UnknownAgent {
+                name: name.clone(),
+                known: CLAUDE_AGENT_TYPES.join(", "),
+            });
+        }
+    }
+    let mut args = vec!["--strict-mcp-config".to_owned()];
+    let denied: Vec<_> = CLAUDE_AGENT_TYPES
+        .iter()
+        .filter(|name| !tools.agent_types().iter().any(|allowed| allowed == **name))
+        .collect();
+    if !tools.agent_types().is_empty() && !denied.is_empty() {
+        args.push("--disallowedTools".to_owned());
+        args.extend(denied.into_iter().map(|name| format!("Agent({name})")));
+    }
+    args.extend(["--tools".to_owned(), tools.bases().join(",")]);
+    Ok(args)
+}
 
 fn hook_ingress_decision(
     pid: Option<u32>,

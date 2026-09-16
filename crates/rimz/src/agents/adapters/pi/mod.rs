@@ -120,6 +120,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: DEFINITIONS,
         program: Some("pi"),
         fixed_args: &[],
         prompt: super::PromptStyle::PositionalAfterDoubleDash,
@@ -310,6 +311,15 @@ const PI_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::agents) struct PiAdapter;
+
+const DEFINITIONS: crate::agents::definition::DefinitionSpec =
+    crate::agents::definition::DefinitionSpec {
+        mode: None,
+        effort: Some("xhigh"),
+        models: &[],
+        prefixes: &[],
+        tools: crate::agents::definition::DefinitionTools::Ignored,
+    };
 
 impl crate::agents::capabilities::CoreCapability for PiAdapter {
     fn spec(&self) -> &'static AgentSpec {

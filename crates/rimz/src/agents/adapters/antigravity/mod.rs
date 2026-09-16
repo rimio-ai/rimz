@@ -196,6 +196,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[".local/bin"],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("agy"),
         fixed_args: &[],
         prompt: super::PromptStyle::Flag("--prompt-interactive"),

@@ -86,6 +86,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("kiro-cli"),
         fixed_args: &["chat", "--v3"],
         // The v3 TUI re-parses argv and treats `--` as an unknown flag that

@@ -92,6 +92,7 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[".opencode/bin"],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("opencode"),
         fixed_args: &[],
         prompt: super::PromptStyle::Flag("--prompt"),

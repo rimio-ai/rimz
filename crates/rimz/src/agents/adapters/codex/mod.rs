@@ -206,6 +206,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        definitions: DEFINITIONS,
         program: Some("codex"),
         fixed_args: &[],
         prompt: super::PromptStyle::PositionalAfterDoubleDash,
@@ -457,6 +458,73 @@ const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source codex";
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::agents) struct CodexAdapter;
+
+const DEFINITIONS: crate::agents::definition::DefinitionSpec =
+    crate::agents::definition::DefinitionSpec {
+        mode: None,
+        effort: Some("xhigh"),
+        models: &[
+            crate::agents::definition::DefinitionModel {
+                name: "astra",
+                id: "gpt-6-astra",
+                effort: None,
+            },
+            crate::agents::definition::DefinitionModel {
+                name: "luna",
+                id: "gpt-5.6-luna",
+                effort: None,
+            },
+            crate::agents::definition::DefinitionModel {
+                name: "terra",
+                id: "gpt-5.6-terra",
+                effort: None,
+            },
+        ],
+        prefixes: &["gpt-"],
+        tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
+    };
+
+fn render_definition_tools(
+    tools: &crate::agents::ToolSet,
+) -> std::result::Result<Vec<String>, crate::agents::ToolErr> {
+    let bash = tools.has("Bash");
+    let agent = tools.has("Agent");
+    let ask = tools.has("AskUserQuestion");
+    let flags = [
+        ("agents.enabled", agent),
+        ("features.goals", false),
+        ("features.multi_agent", agent),
+        ("features.multi_agent_v2", agent),
+        ("features.shell_snapshot", bash),
+        ("features.shell_tool", bash),
+        ("features.skill_mcp_dependency_install", false),
+        ("features.tool_call_mcp_elicitation", false),
+        ("features.browser_use", false),
+        ("features.browser_use_external", false),
+        ("features.computer_use", false),
+        ("features.in_app_browser", false),
+        ("features.image_generation", false),
+        ("features.tool_suggest", false),
+        ("features.memories", false),
+        ("features.default_mode_request_user_input", ask),
+        ("tools.experimental_request_user_input.enabled", ask),
+        ("skills.include_instructions", tools.has("Skill")),
+    ];
+    let web = if tools.has("WebSearch") || tools.has("WebFetch") {
+        "cached"
+    } else {
+        "disabled"
+    };
+    let mut args = vec![
+        "--strict-config".to_owned(),
+        "-c".to_owned(),
+        format!("web_search=\"{web}\""),
+    ];
+    for (key, value) in flags {
+        args.extend(["-c".to_owned(), format!("{key}={value}")]);
+    }
+    Ok(args)
+}
 
 fn hook_ingress_decision(
     pid: Option<u32>,

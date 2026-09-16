@@ -84,7 +84,8 @@ upward-dependencies = ["address"]
 # Providers switch off their native command sandbox inside the RimZ view.
 # One compaction composer picks the brief for the agent's seat.
 # Host-mode skill links: plan/apply, plan accessors and reports are shared by launch_plan, exec, explain and uninstall.
-surface-budget = 994
+# The Markdown definition loader reads model catalog, defaults and tool rendering.
+surface-budget = 1002
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
