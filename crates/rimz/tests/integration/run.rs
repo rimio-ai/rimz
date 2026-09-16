@@ -2980,7 +2980,7 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
             let config = env.config_root().join("rimz");
             std::fs::create_dir_all(&config).unwrap();
             std::fs::write(
-                config.join("agents.toml"),
+                config.join("config.toml"),
                 format!("[agents]\nisolation = \"{isolation}\"\n"),
             )
             .unwrap();

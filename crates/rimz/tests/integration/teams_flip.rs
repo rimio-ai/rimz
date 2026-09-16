@@ -17,18 +17,16 @@ use serde_json::json;
 use crate::common::Env;
 
 const BOARD: &str = "# Work\nStage: Build (@coder)\n\n## Progress log\n- existing entry\n\n## Evidence\nKeep this section.\n";
-const CONFIG: &str = r#"
-[agents.teams.forge]
-stages = ["Build", "Review"]
-[[agents.teams.forge.roles]]
-role = "coder"
-profile = "claude"
-owns = ["Build"]
-flip-compact = "100k"
-[[agents.teams.forge.roles]]
-role = "reviewer"
-profile = "claude"
-owns = ["Review"]
+const CONFIG: &str = r#"leader: coder
+stages: [Build, Review]
+roles:
+  - role: coder
+    agent: worker
+    owns: [Build]
+    flip-compact: 100k
+  - role: reviewer
+    agent: worker
+    owns: [Review]
 "#;
 
 struct Fixture {
@@ -41,9 +39,21 @@ impl Fixture {
     fn new() -> Self {
         let env = Env::new();
         env.install_agent_hooks("claude");
-        let config = env.config_root().join("rimz/agents.toml");
-        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-        std::fs::write(config, CONFIG).unwrap();
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "claude",
+            "description: Claude base",
+            "Follow instructions.",
+        );
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Worker\nagent: claude\ntools: []",
+            "",
+        );
+        crate::common::write_definition(&env, "teams", "forge", CONFIG, "Complete the work.");
         let panes = env.write_pane_fixture(&[]);
         let trace = env.project_root.join("stage-mux.log");
         Self { env, panes, trace }
@@ -292,7 +302,7 @@ fn flip_cli_persists_board_signal_and_owner_note() {
     assert_eq!(
         messages[0].text,
         format!(
-            "@user flipped the stage Build -> Review. Review is yours: pick it up from blackboard.md.\n\nNote: {note}"
+            "@user flipped the stage Build -> Review. Review is yours: pick it up from blackboard.md.\n\nNote: {note}\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
         )
     );
     assert!(!messages[0].text.lines().any(|line| line.starts_with('{')));
@@ -460,29 +470,16 @@ fn flip_requires_a_positional_note_and_rejects_legacy_flags() {
 
 #[test]
 fn flip_bootstraps_a_missing_board_or_stage_without_losing_prose() {
-    for (existing, declared_stages) in [
-        (None, true),
-        (Some("# Work\n\n## Evidence\nKeep this section.\n"), true),
-        (None, false),
-    ] {
+    for existing in [None, Some("# Work\n\n## Evidence\nKeep this section.\n")] {
         let fixture = Fixture::new();
-        if !declared_stages {
-            std::fs::write(
-                fixture.env.config_root().join("rimz/agents.toml"),
-                CONFIG.replace("stages = [\"Build\", \"Review\"]\n", ""),
-            )
-            .unwrap();
-        }
         fixture.running("reviewer", None);
         if let Some(existing) = existing {
             std::fs::write(fixture.board(), existing).unwrap();
         }
         let output = success(fixture.flip("Review", None, Some("Start the review.")));
         assert!(output.contains("Opened Review by @user"), "{output}");
-        if declared_stages {
-            assert!(output.contains("Build → [Review] → Done"), "{output}");
-        } else {
-            insta::assert_snapshot!(output.replace(fixture.env.project_root.file_name().unwrap().to_str().unwrap(), "<worktree>"), @"
+        insta::allow_duplicates! {
+        insta::assert_snapshot!(output.replace(fixture.env.project_root.file_name().unwrap().to_str().unwrap(), "<worktree>"), @"
             Opened Review by @user  (forge#feature-team · <worktree>)
               Build → [Review] → Done
               note     Start the review.
@@ -508,7 +505,7 @@ fn flip_bootstraps_a_missing_board_or_stage_without_losing_prose() {
         assert_eq!(messages.len(), 1);
         assert_eq!(
             messages[0].text,
-            "@user opened the stage Review. Review is yours: pick it up from blackboard.md.\n\nNote: Start the review."
+            "@user opened the stage Review. Review is yours: pick it up from blackboard.md.\n\nNote: Start the review.\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
         );
     }
 }
@@ -710,26 +707,28 @@ fn flip_compaction_threshold_is_checked_before_queuing() {
 }
 
 #[test]
-fn flip_compaction_inherits_harness_threshold_unless_role_overrides_it() {
+fn flip_compaction_uses_definition_default_unless_role_overrides_it() {
     for (role_policy, default, expected_threshold) in [
-        (None, "100k", Some(100_000)),
+        (None, "100k", Some(180_000)),
         (Some("off"), "100k", None),
         (Some("100k"), "200k", Some(100_000)),
-        (None, "70%", Some(140_000)),
+        (None, "70%", Some(180_000)),
         (Some("70%"), "200k", Some(140_000)),
     ] {
         let fixture = Fixture::new();
         let role_config = CONFIG.replace(
-            "flip-compact = \"100k\"",
+            "flip-compact: 100k",
             &role_policy
-                .map(|policy| format!("flip-compact = \"{policy}\""))
+                .map(|policy| format!("flip-compact: '{policy}'"))
                 .unwrap_or_default(),
         );
-        std::fs::write(
-            fixture.env.config_root().join("rimz/agents.toml"),
-            role_config,
-        )
-        .unwrap();
+        crate::common::write_definition(
+            &fixture.env,
+            "teams",
+            "forge",
+            &role_config,
+            "Complete the work.",
+        );
         std::fs::write(
             fixture.env.config_root().join("rimz/config.toml"),
             format!("[harness]\nflip_compact = \"{default}\"\n"),
@@ -737,7 +736,7 @@ fn flip_compaction_inherits_harness_threshold_unless_role_overrides_it() {
         .unwrap();
         fixture.running("coder", Some("terminal_3"));
         fixture.live_panes(&["terminal_3"]);
-        fixture.context_tokens("coder", 150_000);
+        fixture.context_tokens("coder", 190_000);
         std::fs::write(fixture.board(), BOARD).unwrap();
         let output = success(fixture.flip("Review", Some("coder"), Some("Finished.")));
         assert_eq!(
@@ -751,7 +750,7 @@ fn flip_compaction_inherits_harness_threshold_unless_role_overrides_it() {
         );
         if let Some(expected) = expected_threshold {
             assert!(
-                output.contains(&format!("150k tokens, over {}k", expected / 1000)),
+                output.contains(&format!("190k tokens, over {}k", expected / 1000)),
                 "{output}"
             );
             let assists = rimz::harness::assist_log::recent(&fixture.env.state_root(), None);
@@ -897,23 +896,30 @@ fn flip_precondition_errors_leave_board_signals_and_queue_unchanged() {
     for (config, expected) in [
         (
             CONFIG
-                .replace("owns = [\"Build\"]", "owns = []")
-                .replace("owns = [\"Review\"]", "owns = []"),
-            "has no stage owners",
-        ),
-        (
-            CONFIG.replace("owns = [\"Review\"]", "owns = []"),
+                .replace("owns: [Build]", "owns: []")
+                .replace("owns: [Review]", "owns: []"),
             "has no owner",
         ),
+        (CONFIG.replace("owns: [Review]", "owns: []"), "has no owner"),
         (
-            CONFIG.replace("owns = [\"Review\"]", "owns = [\"Build\"]"),
-            "duplicate owner",
+            CONFIG.replace("owns: [Review]", "owns: [Build]"),
+            "owned by both",
         ),
     ] {
-        std::fs::write(fixture.env.config_root().join("rimz/agents.toml"), config).unwrap();
+        crate::common::write_definition(
+            &fixture.env,
+            "teams",
+            "forge",
+            &config,
+            "Complete the work.",
+        );
         let output = fixture.flip("Review", None, Some("handoff"));
         assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
         assert!(fixture.signals().is_empty());
         assert!(fixture.env.store().list_messages().unwrap().is_empty());
@@ -1028,23 +1034,22 @@ fn failed_owner_delivery_reports_partial_flip_and_same_stage_repairs_it() {
     assert_eq!(messages.len(), 1);
     assert_eq!(
         messages[0].text,
-        "@user re-opened Review. It is still yours: pick it up from blackboard.md.\n\nNote: review ready"
+        "@user re-opened Review. It is still yours: pick it up from blackboard.md.\n\nNote: review ready\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
     );
 }
 
 #[test]
 fn same_role_and_foreign_stage_do_not_compact_or_enqueue() {
     let fixture = Fixture::new();
-    std::fs::write(
-        fixture.env.config_root().join("rimz/agents.toml"),
-        CONFIG
-            .replace(
-                "stages = [\"Build\", \"Review\"]",
-                "stages = [\"Build\", \"Polish\", \"Review\"]",
-            )
-            .replace("owns = [\"Build\"]", "owns = [\"Build\", \"Polish\"]"),
-    )
-    .unwrap();
+    crate::common::write_definition(
+        &fixture.env,
+        "teams",
+        "forge",
+        &CONFIG
+            .replace("stages: [Build, Review]", "stages: [Build, Polish, Review]")
+            .replace("owns: [Build]", "owns: [Build, Polish]"),
+        "Complete the work.",
+    );
     fixture.running("coder", Some("terminal_3"));
     fixture.live_panes(&["terminal_3"]);
     fixture.context_tokens("coder", 150_000);

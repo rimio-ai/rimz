@@ -141,24 +141,25 @@ fn team_signal_slug_collisions_preserve_distinct_subscriptions() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     write_team_signal_config(&env);
-    std::fs::write(
-        env.config_root().join("rimz/agents.toml"),
-        r#"
-[agents.teams.forge]
-[[agents.teams.forge.roles]]
-role = "coder"
-profile = "claude"
-signals = [
-  { signal = "deploy.foo-bar" },
-  { signal = "deploy.foo.bar" },
-  { signal = "deploy.done", match = { target = "first" } },
-  { signal = "deploy.done", match = { target = "second" } },
-  { signal = "deploy.done-2" },
-  { signal = "deploy.done-2-2" },
-]
-"#,
-    )
-    .unwrap();
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "forge",
+        r#"leader: coder
+stages: [Build]
+roles:
+  - role: coder
+    agent: worker
+    owns: [Build]
+    signals:
+      - deploy.foo-bar
+      - deploy.foo_bar
+      - {signal: deploy.done, match: {target: first}}
+      - {signal: deploy.done, match: {target: second}}
+      - deploy.done-2
+      - deploy.done-2-2"#,
+        "Complete the work.",
+    );
     seed_team_signal_member(&env, &env.project_root, "slug-session", None);
     team_signal_hook(&env, &env.project_root, "slug-session", "SessionStart");
     let tasks = read_loop_instances(&env);
@@ -178,7 +179,7 @@ signals = [
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([
             ("deploy.foo-bar", None),
-            ("deploy.foo.bar", None),
+            ("deploy.foo_bar", None),
             ("deploy.done", Some("first")),
             ("deploy.done", Some("second")),
             ("deploy.done-2", None),
@@ -335,23 +336,27 @@ fn team_signal_launch_refuses_root_before_side_effects() {
 }
 
 fn write_team_signal_config(env: &Env) {
-    let path = env.config_root().join("rimz/agents.toml");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(
-        path,
-        r#"
-[agents.teams.forge]
-[[agents.teams.forge.roles]]
-role = "coder"
-profile = "claude"
-signals = [{ signal = "ci.failed" }]
-[[agents.teams.forge.roles]]
-role = "reviewer"
-profile = "claude"
-signals = [{ signal = "deploy.done" }]
-"#,
-    )
-    .unwrap();
+    crate::common::write_definition(
+        env,
+        "agents",
+        "claude",
+        "description: Claude base",
+        "Follow instructions.",
+    );
+    crate::common::write_definition(
+        env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        env,
+        "teams",
+        "forge",
+        "leader: coder\nstages: [Build]\nroles:\n  - {role: coder, agent: worker, owns: [Build], signals: [ci.failed]}\n  - {role: reviewer, agent: worker, signals: [deploy.done]}",
+        "Complete the work.",
+    );
 }
 
 fn team_signal_fixture(env: &Env) -> Option<std::path::PathBuf> {

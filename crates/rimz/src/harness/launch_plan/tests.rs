@@ -79,22 +79,47 @@ fn broken_effective_config_skips_launch_reminder() {
 fn profile_model_reminder_flag_reaches_launch_reminders() {
     let project = tempfile::tempdir().expect("project");
     let config = tempfile::tempdir().expect("config");
-    let machine_config: crate::config::MachineConfig = toml::from_str(
-        r#"
-        [agents.profiles.quiet]
-        agent = "claude"
-        model-reminder = false
-        [agents.profiles.loud]
-        agent = "quiet"
-        [subagents.profiles.quiet]
-        agent = "claude"
-        model-reminder = true
-        [subagents.profiles.child]
-        agent = "claude"
-        model-reminder = false
-    "#,
-    )
-    .expect("config");
+    let mut machine_config = crate::config::MachineConfig::default();
+    for (name, agent, model_reminder) in [("quiet", "claude", false), ("loud", "quiet", true)] {
+        machine_config.agents.profiles.0.insert(
+            name.to_owned(),
+            crate::config::Profile {
+                agent: agent.to_owned(),
+                model_reminder: Some(model_reminder),
+                description: None,
+                subagents: None,
+                mode: None,
+                model: None,
+                effort: None,
+                budget: None,
+                auto_compact: None,
+                system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
+                skills: None,
+                args: None,
+            },
+        );
+    }
+    for (name, model_reminder) in [("quiet", true), ("child", false)] {
+        machine_config.subagents.profiles.0.insert(
+            name.to_owned(),
+            crate::config::Profile {
+                agent: "claude".to_owned(),
+                model_reminder: Some(model_reminder),
+                description: None,
+                subagents: None,
+                mode: None,
+                model: None,
+                effort: None,
+                budget: None,
+                auto_compact: None,
+                system_prompt_file: None,
+                append_system_prompt_files: Vec::new(),
+                skills: None,
+                args: None,
+            },
+        );
+    }
     for (profile, subagent, expected) in [
         (Some("quiet"), false, false),
         (Some("loud"), false, true),

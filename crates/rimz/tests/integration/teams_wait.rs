@@ -11,14 +11,8 @@ use serde_json::Value;
 
 use crate::common::Env;
 
-const CONFIG: &str = r#"
-[agents.teams.forge]
-stages = ["Build"]
-[[agents.teams.forge.roles]]
-role = "coder"
-profile = "claude"
-owns = ["Build"]
-"#;
+const CONFIG: &str =
+    "leader: coder\nstages: [Build]\nroles:\n  - {role: coder, agent: worker, owns: [Build]}";
 const DONE_BOARD: &str = "# Blackboard\nStage: Done\n\n## Progress\n- flipped\n\n## Result\nPR: https://example.test/pr/1\n- gate green\n";
 
 struct Fixture {
@@ -28,9 +22,21 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let env = Env::new();
-        let config = env.config_root().join("rimz/agents.toml");
-        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-        std::fs::write(config, CONFIG).unwrap();
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "claude",
+            "description: Claude base",
+            "Follow instructions.",
+        );
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Team worker\nagent: claude\ntools: []",
+            "",
+        );
+        crate::common::write_definition(&env, "teams", "forge", CONFIG, "Complete the work.");
         Self { env }
     }
 

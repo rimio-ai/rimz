@@ -12,26 +12,30 @@ fn flip_and_registration_rewake_reach_receiver_after_done() {
     require_tmux!();
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let config = env.config_root().join("rimz/agents.toml");
+    let config = env.config_root().join("rimz/config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).unwrap();
-    std::fs::write(
-        config,
-        r#"
-[agents]
-isolation = "host"
-[agents.teams.forge]
-stages = ["Build", "Review"]
-[[agents.teams.forge.roles]]
-role = "coder"
-profile = "claude"
-owns = ["Build"]
-[[agents.teams.forge.roles]]
-role = "reviewer"
-profile = "claude"
-owns = ["Review"]
-"#,
-    )
-    .unwrap();
+    std::fs::write(config, "[agents]\nisolation = \"host\"\n").unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base",
+        "Follow instructions.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Team worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "forge",
+        "leader: coder\nstages: [Build, Review]\nroles:\n  - {role: coder, agent: worker, owns: [Build]}\n  - {role: reviewer, agent: worker, owns: [Review]}",
+        "Complete the work.",
+    );
     let received = env.home_root.join("received");
     let ready = env.home_root.join("receiver-pid");
     let shim = env.home_root.join("claude");
@@ -201,7 +205,7 @@ done
     );
     assert_eq!(
         pending[0].text,
-        "@user flipped the stage Build -> Review. Review is yours: pick it up from blackboard.md.\n\nNote: Inspect the receiver."
+        "@user flipped the stage Build -> Review. Review is yours: pick it up from blackboard.md.\n\nNote: Inspect the receiver.\n\nYour report goes in your stage file and anything for the user to @coder; end the turn with the flip and no pane text."
     );
     let message_id = pending[0].message_id.clone();
     command()
