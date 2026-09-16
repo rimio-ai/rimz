@@ -304,7 +304,10 @@ fn write_lane(
         let current = instance.stage.as_ref().map(|stage| stage.name.as_str());
         progress.push(
             "pipeline",
-            render::cell(super::stage_strip(&instance.stages, current)),
+            render::cell(rimz::harness::team_stage::stage_strip(
+                &instance.stages,
+                current,
+            )),
         );
     }
     let pr = instance

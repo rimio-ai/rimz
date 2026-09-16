@@ -353,6 +353,23 @@ fn read_board(board: &Path) -> Result<String, FlipErr> {
     }
 }
 
+/// The pipeline as every human surface prints it: `A → [current] → Done`, terminal stage included.
+pub fn stage_strip(stages: &[String], current: Option<&str>) -> String {
+    stages
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(DONE_STAGE))
+        .map(|stage| {
+            if current == Some(stage) {
+                format!("[{stage}]")
+            } else {
+                stage.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
 fn resolve_owner<'a>(
     team_name: &str,
     team: &'a Team,
@@ -367,11 +384,7 @@ fn resolve_owner<'a>(
     if to == DONE_STAGE {
         return Ok(None);
     }
-    let declared: Vec<_> = if team.stages.is_empty() {
-        team.owned_stages().map(str::to_owned).collect()
-    } else {
-        team.stages.clone()
-    };
+    let declared = team.pipeline_stages();
     if !declared.iter().any(|stage| stage == to) {
         return Err(FlipErr::UnknownStage {
             to: to.to_owned(),
@@ -781,6 +794,23 @@ fn rewrite_board(text: &str, to: &str, owner: Option<&str>, ledger: &str) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_strip_matches_exact_names_and_includes_terminal() {
+        let stages = vec!["Plan".into(), "Plan review".into()];
+        assert_eq!(
+            stage_strip(&stages, Some("Plan review")),
+            "Plan → [Plan review] → Done"
+        );
+        assert_eq!(
+            stage_strip(&stages, Some("Done")),
+            "Plan → Plan review → [Done]"
+        );
+        assert_eq!(
+            stage_strip(&stages, Some("Plan (delta)")),
+            "Plan → Plan review → Done"
+        );
+    }
 
     #[test]
     fn board_rewrite_preserves_freeform_sections_and_appends_inside_ledger() {
