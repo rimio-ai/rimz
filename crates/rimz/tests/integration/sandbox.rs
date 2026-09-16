@@ -26,7 +26,7 @@ fn available() -> bool {
 }
 
 fn enable(env: &Env) {
-    let path = env.config_root().join("rimz/agents.toml");
+    let path = env.config_root().join("rimz/config.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "[agents]\nisolation = \"sandbox\"\n").unwrap();
 }

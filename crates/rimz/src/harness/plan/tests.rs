@@ -1307,10 +1307,16 @@ fn auto_compact_reconciles_declared_fields_without_touching_other_args() {
             ],
         ),
     ] {
-        let machine: crate::config::MachineConfig = toml::from_str(&format!(
-            "[agents.profiles.compact]\nagent = {kind:?}\nauto-compact = '200k'\nargs = {raw:?}\n"
-        ))
-        .expect("profile config");
+        let mut machine = crate::config::MachineConfig::default();
+        machine.agents.profiles.0.insert(
+            "compact".to_owned(),
+            crate::config::Profile {
+                agent: kind.to_owned(),
+                auto_compact: Some("200k".parse().expect("auto compact window")),
+                args: Some(raw.to_owned()),
+                ..configured_profile(kind, None, None, None, None, None)
+            },
+        );
         let cell = crate::harness::spec::profile_cell("compact", &machine.agents.profiles)
             .expect("profile cell");
         let mut layout = LayoutSpec::single(Cell::Agent(cell));

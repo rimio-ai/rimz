@@ -101,7 +101,7 @@ fn start_refuses_sandbox_without_bwrap() {
     let env = Env::new();
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
-    let agents_path = config_dir.join("agents.toml");
+    let agents_path = config_dir.join("config.toml");
     let seed = "[agents]\nisolation = \"sandbox\"\n";
     std::fs::write(&agents_path, seed).expect("write sandbox config");
     let empty_bin = env.home_root.join("empty-bin");
@@ -120,10 +120,6 @@ fn start_refuses_sandbox_without_bwrap() {
     assert!(stderr.contains("bubblewrap"), "{stderr}");
     assert!(stderr.contains("host"), "{stderr}");
     assert_eq!(std::fs::read_to_string(agents_path).unwrap(), seed);
-    assert!(
-        !config_dir.join("config.toml").exists(),
-        "no config bootstrap"
-    );
     assert!(
         !config_dir.join("theme.toml").exists(),
         "no theme bootstrap"

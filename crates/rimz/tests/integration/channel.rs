@@ -225,27 +225,34 @@ fn bare_role_colliding_with_a_cell_word_refuses() {
 /// and `reviewer` shares its name with a global profile that resolves to a
 /// different agent.
 fn write_forge_team_config(env: &Env) {
-    let path = env.config_root().join("rimz").join("agents.toml");
-    std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config");
-    std::fs::write(
-        &path,
-        r#"
-[agents.profiles.claude]
-agent = "claude"
-
-[agents.profiles.reviewer]
-agent = "codex"
-
-[agents.teams.forge]
-[[agents.teams.forge.roles]]
-role = "planner"
-profile = "claude"
-[[agents.teams.forge.roles]]
-role = "reviewer"
-profile = "claude"
-"#,
-    )
-    .expect("write agents config");
+    crate::common::write_definition(
+        env,
+        "agents",
+        "claude",
+        "description: Claude base",
+        "Follow instructions.",
+    );
+    crate::common::write_definition(
+        env,
+        "agents",
+        "worker",
+        "description: Team worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        env,
+        "agents",
+        "reviewer",
+        "description: Global reviewer\nagent: codex\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        env,
+        "teams",
+        "forge",
+        "leader: planner\nstages: [Build]\nroles:\n  - {role: planner, agent: worker, owns: [Build]}\n  - {role: reviewer, agent: worker}",
+        "Complete the work.",
+    );
 }
 
 const TRACE_PANE: &str = "terminal_3";

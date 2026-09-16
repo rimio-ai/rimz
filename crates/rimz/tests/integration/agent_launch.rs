@@ -373,26 +373,67 @@ fn explain_prints_the_plan_without_side_effects() {
     let runtime = env.runtime_paths();
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
-    let base = env.home_root.join("base.md");
-    let more = env.home_root.join("more.md");
-    std::fs::write(&base, "Base instructions.\n").expect("base prompt");
-    std::fs::write(&more, "More instructions.\n").expect("prompt fragment");
     std::fs::write(
-        config_dir.join("agents.toml"),
-        format!(
-            "[agents]\nisolation = \"host\"\n\
-             [agents.profiles.writer]\nagent = \"claude\"\nmodel = \"fable\"\neffort = \"high\"\nmode = \"ask\"\n\
-             system-prompt-file = {base:?}\nappend-system-prompt-files = [{more:?}]\n\
-             [agents.profiles.worker]\nagent = \"writer\"\nskills = []\n\
-             [agents.profiles.fast]\nagent = \"codex\"\n\
-             [agents.profiles.codex]\nagent = \"codex\"\n\
-             [agents.profiles.\"duo.lead\"]\nagent = \"claude\"\n\
-             [agents.teams.duo]\nlayout = \"lead\"\n\
-             [[agents.teams.duo.roles]]\nrole = \"lead\"\nprofile = \"duo.lead\"\n\
-             [subagents.profiles.scout]\nagent = \"codex\"\ndescription = \"Inspect the code\"\n"
-        ),
+        config_dir.join("config.toml"),
+        "[agents]\nisolation = \"host\"\n",
     )
     .expect("write explain profiles");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base",
+        "Base instructions.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "codex",
+        "description: Codex base",
+        "Base instructions.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "writer",
+        "description: Writer\nagent: claude\nmodel: fable\neffort: high\nmode: ask\ntools: [Skill]",
+        "More instructions.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: writer\nskills: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "fast",
+        "description: Fast worker\nagent: codex\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "leader",
+        "description: Team leader\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "duo",
+        "layout: lead\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: leader, owns: [Build]}",
+        "Complete the work.",
+    );
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "scout",
+        "description: Inspect the code\nagent: codex\ntools: []",
+        "",
+    );
     assert!(!state.root.exists());
     assert!(!runtime.prompt_dir().exists());
 
@@ -459,7 +500,7 @@ fn explain_prints_the_plan_without_side_effects() {
         .replace(env.home_root.to_str().unwrap(), "<home>");
     insta::assert_json_snapshot!(
         serde_json::from_str::<serde_json::Value>(&protocol).unwrap(),
-        @r###"
+        @r#"
     {
       "action": "launch",
       "cwd": "<home>/project",
@@ -472,7 +513,6 @@ fn explain_prints_the_plan_without_side_effects() {
       "profile": {
         "chain": [
           "worker",
-          "writer",
           "claude"
         ],
         "name": "worker",
@@ -489,12 +529,12 @@ fn explain_prints_the_plan_without_side_effects() {
         "reminder_delivered": true,
         "sources": [
           {
-            "bytes": 19,
-            "path": "<home>/base.md"
+            "bytes": 18,
+            "path": "<home>/config/rimz/agents/claude.md"
           },
           {
-            "bytes": 19,
-            "path": "<home>/more.md"
+            "bytes": 18,
+            "path": "<home>/config/rimz/agents/writer.md"
           }
         ]
       },
@@ -506,7 +546,7 @@ fn explain_prints_the_plan_without_side_effects() {
       },
       "target": "worker"
     }
-    "###
+    "#
     );
 
     let prompt = env
@@ -566,13 +606,13 @@ fn explain_prints_the_plan_without_side_effects() {
             "worker",
             " codex ",
             "codex",
-            serde_json::json!(["worker", "writer", "codex"]),
+            serde_json::json!(["worker", "claude", "codex"]),
         ),
         (
             "worker",
             "fast",
             "codex",
-            serde_json::json!(["worker", "writer", "fast", "codex"]),
+            serde_json::json!(["worker", "claude", "fast", "codex"]),
         ),
         (
             "codex",
@@ -669,9 +709,17 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(
-        config_dir.join("agents.toml"),
-        "[agents]\nisolation = \"host\"\n[agents.profiles.worker]\nagent = \"claude\"\nmodel = \"opus\"\n",
-    ).expect("write current profile");
+        config_dir.join("config.toml"),
+        "[agents]\nisolation = \"host\"\n",
+    )
+    .expect("write current profile");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\nmodel: opus\ntools: []",
+        "",
+    );
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let store = env.store();
     store
@@ -1413,11 +1461,17 @@ fn unsupported_profile_skills_refuse_before_launch_and_run_records() {
         let config_dir = env.config_root().join("rimz");
         std::fs::create_dir_all(&config_dir).expect("mkdir config");
         std::fs::write(
-            config_dir.join("agents.toml"),
-            "[agents]\nisolation = \"sandbox\"\n\
-             [agents.profiles.worker]\nagent = \"amp\"\nskills = []\n",
+            config_dir.join("config.toml"),
+            "[agents]\nisolation = \"sandbox\"\n",
         )
         .expect("write unsupported skills profile");
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Worker\nagent: amp\nskills: []",
+            "",
+        );
         let mut command = env.rimz();
         command.args(["agents", "worker", "hello"]);
         if supervised {

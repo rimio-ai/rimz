@@ -55,12 +55,17 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         let config_dir = env.config_root().join("rimz");
         std::fs::create_dir_all(&config_dir).expect("config directory");
         std::fs::write(
-            config_dir.join("agents.toml"),
-            format!(
-                "[agents]\nisolation = {isolation:?}\n[agents.profiles.opus]\nagent = \"claude\"\n"
-            ),
+            config_dir.join("config.toml"),
+            format!("[agents]\nisolation = {isolation:?}\n"),
         )
         .expect("profile config");
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "opus",
+            "description: Opus\nagent: claude\ntools: []",
+            "",
+        );
         let agent_bin = write_sleeping_agent_shim(&env, "claude");
         trust_claude_shim_path(&env, &agent_bin);
         let ready = env.home_root.join("agent-ready");
@@ -205,10 +210,17 @@ fn assert_producer_releases_profile_tab(count: usize) {
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("config directory");
     std::fs::write(
-        config_dir.join("agents.toml"),
-        "[agents]\nisolation = \"host\"\n[agents.profiles.opus]\nagent = \"claude\"\n",
+        config_dir.join("config.toml"),
+        "[agents]\nisolation = \"host\"\n",
     )
     .expect("profile config");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "opus",
+        "description: Opus\nagent: claude\ntools: []",
+        "",
+    );
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     trust_claude_shim_path(&env, &agent_bin);
     let ready = env.home_root.join("tab-name-ready");
@@ -973,11 +985,17 @@ fn restart_unsupported_profile_skills_retains_old_pane_and_state() {
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(
-        config_dir.join("agents.toml"),
-        "[agents]\nisolation = \"sandbox\"\n\
-         [agents.profiles.worker]\nagent = \"amp\"\nskills = []\n",
+        config_dir.join("config.toml"),
+        "[agents]\nisolation = \"sandbox\"\n",
     )
     .expect("configure unsupported skills after launch");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: amp\nskills: []",
+        "",
+    );
     let panes_before = server.stdout(&["list-panes", "-a", "-F", "#{pane_id}"]);
     let events_before = serde_json::to_value(store.read_events().expect("events before"))
         .expect("serialize events");
@@ -1029,11 +1047,13 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
     );
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
-    std::fs::write(
-        config_dir.join("agents.toml"),
-        "[agents.profiles.astra]\nagent = \"codex\"\n",
-    )
-    .expect("write astra profile");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "astra",
+        "description: Astra\nagent: codex\ntools: []",
+        "",
+    );
     let agent_bin = write_sleeping_agent_shim(&env, "codex");
     let argv_path = env.home_root.join("resume-argv");
     let ready = env.home_root.join("resume-ready");
@@ -1595,14 +1615,27 @@ fn existing_unmanaged_worktree_launch(doorway: &str, spec: &str) {
     let git_file = std::fs::read(worktree.join(".git")).expect("checkout git pointer");
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
-    std::fs::write(
-        config_dir.join("agents.toml"),
-        "[agents.profiles.worker]\nagent = \"claude\"\n\
-         [agents.teams.duo]\nlayout = \"lead+helper\"\n\
-         [[agents.teams.duo.roles]]\nrole = \"lead\"\nprofile = \"worker\"\n\
-         [[agents.teams.duo.roles]]\nrole = \"helper\"\nprofile = \"worker\"\n",
-    )
-    .expect("write configured team");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base",
+        "Follow instructions.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "duo",
+        "layout: lead+helper\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}\n  - {role: helper, agent: worker}",
+        "Complete the work.",
+    );
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
     let ready = env.home_root.join("existing-ready");

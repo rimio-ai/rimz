@@ -28,6 +28,15 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
         std::fs::create_dir_all(&dir).expect("skill directory");
         std::fs::write(dir.join("SKILL.md"), name).expect("skill content");
     }
+    for name in ["visible", "reflect"] {
+        let dir = env.agents_home().join("skills").join(name);
+        std::fs::create_dir_all(&dir).expect("skill library directory");
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Test skill\n---\n{name}\n"),
+        )
+        .expect("skill library content");
+    }
     let agent_bin = write_hook_firing_agent(&env, "claude");
     let shim = agent_bin.join("claude");
     let mut body = std::fs::read_to_string(&shim).expect("read hook-firing shim");
@@ -40,10 +49,10 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
         r#"set -eu
 test "$TMPDIR" = /tmp
 test -d /tmp/scratchpad
-case "$*" in *'This pane runs under a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
+case "$*" in *'This pane runs in a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
 test ! -e "$RIMZ_TEST_HOST_TMP_FILE"
 grep -q 'disable-model-invocation: true' "$HOME/.claude/skills/hidden/SKILL.md"
-test "$(cat "$HOME/.claude/skills/visible/SKILL.md")" = visible
+grep -qx visible "$HOME/.claude/skills/visible/SKILL.md"
 case "$*" in
     *sandbox-child-task*)
         test "$(cat /tmp/parent-file)" = parent-to-child
@@ -122,35 +131,54 @@ while IFS= read -r line; do :; done
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("create machine config directory");
     std::fs::write(
-        config_dir.join("agents.toml"),
-        r#"[agents]
-isolation = "sandbox"
-[agents.profiles.worker]
-agent = "claude"
-skills = ["visible"]
-[subagents.profiles.worker-child]
-agent = "claude"
-skills = ["visible"]
-[agents.teams.duo]
-layout = "parent+other"
-[[agents.teams.duo.roles]]
-role = "parent"
-profile = "worker"
-[[agents.teams.duo.roles]]
-role = "other"
-profile = "worker"
-"#,
+        config_dir.join("config.toml"),
+        "[agents]\nisolation = \"sandbox\"\n",
     )
     .expect("write sandbox team config");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "claude",
+        "description: Claude base",
+        "Follow instructions.",
+    );
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: [Skill]\nskills: [visible]",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "worker-child",
+        "description: Child\nagent: claude\ntools: [Skill]\nskills: [visible]",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "duo",
+        "layout: parent+other\nleader: parent\nstages: [Build]\nroles:\n  - {role: parent, agent: worker, owns: [Build]}\n  - {role: other, agent: worker}",
+        "Complete the work.",
+    );
 
     env.rimz()
         .env("PATH", path_with_front(&agent_bin))
         .args(["--mux", "tmux", "start", "--no-attach"])
         .assert_success_within_timeout("start sandbox team room");
-    env.rimz()
+    let output = env
+        .rimz()
         .env("PATH", path_with_front(&agent_bin))
         .args(["--mux", "tmux", "teams", "duo", "--bg"])
-        .assert_success_within_timeout("launch sandbox team");
+        .bounded_output()
+        .expect("launch sandbox team");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let store = env.store();
     let tmp = &store.paths().tmp_dir;

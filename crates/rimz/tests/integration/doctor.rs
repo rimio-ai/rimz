@@ -371,7 +371,7 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
 }
 
 #[test]
-fn doctor_prints_the_move_for_fragments_left_under_the_legacy_root() {
+fn doctor_reports_ignored_fragments_until_replaced_with_definitions() {
     let env = Env::new();
     let legacy = env.home_root.join(".agents");
     let profile = legacy.join("profiles/reviewer");
@@ -385,19 +385,20 @@ fn doctor_prints_the_move_for_fragments_left_under_the_legacy_root() {
             .output()
             .expect("spawn doctor"),
     );
-    let fix = format!(
-        "mkdir -p {home} && mv {src} {home}/",
-        home = env.agents_home().display(),
-        src = legacy.join("profiles").display(),
-    );
     assert_eq!(
-        report["machine_config"]["legacy_agents_home"]["fix"], fix,
+        report["machine_config"]["legacy_agents_home"]["fix"],
+        "no longer read; move `[agents]` keys to config.toml and definitions to the Markdown trees",
         "{report:#}"
     );
 
-    std::fs::create_dir_all(env.agents_home()).expect("mkdir agents home");
-    std::fs::rename(legacy.join("profiles"), env.agents_home().join("profiles"))
-        .expect("move profiles");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "reviewer",
+        "description: Reviewer\nagent: claude\ntools: []",
+        "",
+    );
+    std::fs::remove_dir_all(legacy.join("profiles")).expect("remove ignored fragments");
     let report = doctor_json(
         &env.rimz()
             .args(["doctor", "--json"])

@@ -39,6 +39,20 @@ pub use shim::{
 };
 pub use zellij::ZellijNamespace;
 
+pub fn write_definition(
+    env: &Env,
+    namespace: &str,
+    name: &str,
+    frontmatter: &str,
+    body: &str,
+) -> std::path::PathBuf {
+    let directory = env.agents_home().join(namespace);
+    std::fs::create_dir_all(&directory).expect("create definitions directory");
+    let path = directory.join(format!("{name}.md"));
+    std::fs::write(&path, format!("---\n{frontmatter}\n---\n{body}\n")).expect("write definition");
+    path
+}
+
 #[cfg(unix)]
 pub fn daemon_test_guard() -> rimz::disk::lock::WorkspaceLock {
     // Nextest gives every test its own process, so an in-process mutex leaves
