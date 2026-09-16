@@ -237,7 +237,9 @@ upward-dependencies = ["sidebar::refresh"]
 # Turn-completion waits load pending deliveries ahead of the queue and the rollup.
 # `rimz teams wait` reads the board's Result section through the scratch parser.
 # Auto-gc: the producer memo and check, the helper's stamp write, and its assist record.
-surface-budget = 526
+# The pipeline strip and the one role resolver are shared with `teams show` and `teams flip`.
+# The launch reminder's resolved team travels from the launch plan into the process compiler.
+surface-budget = 529
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
