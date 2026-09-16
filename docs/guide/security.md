@@ -33,7 +33,7 @@ The hashed surface is every field that can cause a process to run:
 - `[[agents]]`: `name`, `launch_command`, `env`
 - `[profiles.<name>]`: `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, `args`
 - `[subagents.profiles.<name>]`: the same command-running profile fields, for supervised children
-- `[agents.teams.<name>]`: `layout`, and each role's profile and launch fields
+- `[agents.teams.<name>]`: `layout`, `consensus-file`, `append-system-prompt-files`, and each role's profile and launch fields
 - `[tasks.<name>]`: the loop `agent`, `prompt`, `check` and `verify` commands, and the run and schedule options
 - `[[hooks]]`: `event`, `command`
 - `[env]`: every key and value

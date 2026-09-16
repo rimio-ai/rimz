@@ -6,7 +6,7 @@ A team cooperates through files in its checkout. The members write the content; 
 
 ## Scratch files
 
-A team's `scratch-files` entries are gitignore patterns for the ephemeral records its members keep. Before panes start, the launch registers them in the checkout's `info/exclude`, which keeps them out of `git status` and lets a landed tree holding only those files be reclaimed ([worktrees.md § Team scratch patterns](./worktrees.md#team-scratch-patterns)).
+A team's memory files are gitignore patterns for the ephemeral records its members keep. `Team::scratch_patterns()` returns the explicit `scratch-files` list when set, including `[]` for none. Otherwise a staged team (nonempty `stages` or any role's `owns`) defaults to `["/blackboard.md", "/*-notes.md"]`, and an unstaged team defaults to none. Before panes start, the launch registers the effective patterns in the checkout's `info/exclude`, which keeps them out of `git status` and lets a landed tree holding only those files be reclaimed ([worktrees.md § Team scratch patterns](./worktrees.md#team-scratch-patterns)).
 
 `scratch::scan(root, patterns)` resolves the patterns against the checkout root for two consumers, the member launch reminder and `rimz teams show`, so both see the same files. It strips a leading `/` before rooting each glob, matches files only, and returns absolute paths sorted and deduplicated across patterns. Each file carries its line count (zero when unreadable) and its modification time when metadata allows. An invalid glob or a failed traversal sets `probe_failed` instead of failing the scan.
 

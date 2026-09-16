@@ -113,7 +113,7 @@ A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a li
 
 [agents.teams.forge]
 layout = "planner,coder+reviewer"
-scratch-files = ["/blackboard.md", "/*-notes.md"]
+append-system-prompt-files = ["pipeline.md"]
 stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
 
 [[agents.teams.forge.roles]]
@@ -146,7 +146,9 @@ args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,WebFetch,WebSearch,Ski
 system-prompt-file = "reviewer.md"
 ```
 
-`scratch-files` declares the workflow's ephemeral team memory as verbatim gitignore patterns. On every launch or resume, RimZ appends missing patterns to the repository's `.git/info/exclude`; the leading `/` anchors these names at the checkout root. Linked worktrees commonly share that exclude file with the main checkout, so a declared name is ignored as untracked everywhere in the repository, not only in this team's worktree. To reverse it, delete those pattern lines from `.git/info/exclude`. Once the branch content has landed, excluded scratch files no longer keep the worktree dirty: post-exit cleanup and `rimz gc` may remove the tree without a dirty-tree prompt, deleting the scratch files with it.
+A staged team gets a built-in consensus after each role's base prompt and fragments, followed by the team's `append-system-prompt-files`. Here, `pipeline.md` carries the shared workflow once instead of repeating it in each role prompt. Set `consensus-file = "consensus.md"` under `[agents.teams.forge]` to replace the built-in consensus. The layer needs a base `system-prompt-file`; roles without one skip the default consensus, and explicitly configuring the team layer requires every role to have a base. See [configuration](./configuration.md#teams) for composition and path rules.
+
+A team with `stages` or any role's `owns` uses `/blackboard.md` and `/*-notes.md` as its ephemeral memory patterns by default. `scratch-files` replaces that list with verbatim gitignore patterns; `scratch-files = []` selects none. Unstaged teams have no default memory patterns. On every launch or resume, RimZ appends missing patterns to the repository's `.git/info/exclude`; the leading `/` anchors these names at the checkout root. Linked worktrees commonly share that exclude file with the main checkout, so a matching name is ignored as untracked everywhere in the repository, not only in this team's worktree. To reverse it, delete those pattern lines from `.git/info/exclude`. Once the branch content has landed, excluded scratch files no longer keep the worktree dirty: post-exit cleanup and `rimz gc` may remove the tree without a dirty-tree prompt, deleting the scratch files with it.
 
 Declare `stages` when the team follows a repeatable pipeline, so `show` can display what lies ahead and mark its current step. `Done` is implicit and always last, never declared or owned. The leader's first `rimz teams flip` creates `blackboard.md` if absent, with a `Stage:` line such as `Stage: Explore (@planner)` and a `## Progress` entry; the leader adds the other sections and the team creates its own notes. The board path is fixed at the worktree root, even if it is not listed in `scratch-files`. Stage ordering and validation are covered in [configuration](./configuration.md#teams).
 
