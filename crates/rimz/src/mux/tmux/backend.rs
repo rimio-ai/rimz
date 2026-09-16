@@ -11,7 +11,7 @@ use super::options::{
     sidebar_serve_command, sidebar_width_option_set_cmd,
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
-use super::window::{TmuxPaneGeometry, companion_tmux_layout};
+use super::window::{SplitAxis, TmuxPaneGeometry, companion_tmux_layout};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
 use crate::mux::companion_layout::{balance, plan_append};
@@ -898,8 +898,7 @@ impl MuxBackend for TmuxBackend {
         // the sidebar before the splits so the columns land at full width.
         let normalized = self.normalize_tab_birth_width(&window_id, &first_pane, &opts.sidebar);
 
-        let split_result =
-            self.split_layout_columns(&window_id, &first_pane, &opts.sidebar.cwd, &opts.panes);
+        let split_result = self.split_layout_columns(&first_pane, &opts.sidebar.cwd, &opts.panes);
         if normalized {
             // `resize-window` pins `window-size=manual`; undo it so the tab
             // tracks client size again like every other tab.
@@ -1012,9 +1011,14 @@ impl MuxBackend for TmuxBackend {
 }
 
 impl TmuxBackend {
+    /// Birth a tab's layout inside `first_pane`: every column first, as one
+    /// sized `-h` run while each target is still full height, then each
+    /// column's rows as a sized `-v` run inside it. Splitting rows first would
+    /// leave the next column nested inside column 0's top row, inheriting its
+    /// height; sizing both runs in cells leaves every rectangle even at
+    /// creation, so no resize pass follows.
     pub(super) fn split_layout_columns(
         &self,
-        window_id: &str,
         first_pane: &str,
         cwd: &Path,
         panes: &LayoutPanes,
@@ -1022,31 +1026,21 @@ impl TmuxBackend {
         let Some((first_column, rest_columns)) = panes.columns.split_first() else {
             return Ok(());
         };
-        let (_, first_column_rest) = first_column.split_leading("tmux")?;
-        let mut column_anchors = vec![first_pane.to_owned()];
-        let mut previous_in_column = first_pane.to_owned();
-        for pane in first_column_rest {
-            previous_in_column =
-                self.split_named_printed("-v", &previous_in_column, None, cwd, pane)?;
-            self.even_column_best_effort(
-                &previous_in_column,
-                "tmux.split_layout_columns.even_column",
-            );
-        }
+        // Split every column open before the first tmux command runs, so an
+        // empty column errors out of an untouched window.
+        let mut column_rows = vec![first_column.split_leading("tmux")?.1];
+        let mut column_tops = Vec::with_capacity(rest_columns.len());
         for column in rest_columns {
-            // tmux has no native stack, so stacked columns use tiled rows.
             let (top, rows) = column.split_leading("tmux")?;
-            let target = column_anchors
-                .last()
-                .cloned()
-                .unwrap_or_else(|| window_id.to_owned());
-            let new_column = self.split_named_printed("-h", &target, None, cwd, top)?;
-            column_anchors.push(new_column.clone());
-            let mut previous = new_column;
-            for row in rows {
-                previous = self.split_named_printed("-v", &previous, None, cwd, row)?;
-                self.even_column_best_effort(&previous, "tmux.split_layout_columns.even_column");
-            }
+            column_tops.push(top);
+            column_rows.push(rows);
+        }
+        let mut anchors = vec![first_pane.to_owned()];
+        anchors.extend(self.split_even_run(SplitAxis::Columns, first_pane, cwd, &column_tops)?);
+        for (anchor, rows) in anchors.iter().zip(column_rows) {
+            // tmux has no native stack, so stacked columns use tiled rows.
+            let rows = rows.iter().collect::<Vec<_>>();
+            self.split_even_run(SplitAxis::Rows, anchor, cwd, &rows)?;
         }
         Ok(())
     }

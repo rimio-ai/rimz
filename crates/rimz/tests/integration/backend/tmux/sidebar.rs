@@ -761,15 +761,10 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         resume_tabs: vec![rimz::mux::ResumeTab {
             label: "#feature".to_owned(),
             cwd: std::env::temp_dir(),
+            // A stacked leading column: reborn rows must not swallow the
+            // column beside them, which is what splitting rows first did.
             layout: rimz::mux::LayoutPanes {
                 columns: vec![
-                    rimz::mux::LayoutColumn {
-                        panes: vec![rimz::mux::PaneCmd {
-                            argv: vec!["sleep".to_owned(), "120".to_owned()],
-                            name: None,
-                        }],
-                        stacked: false,
-                    },
                     rimz::mux::LayoutColumn {
                         panes: vec![
                             rimz::mux::PaneCmd {
@@ -781,6 +776,13 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
                                 name: None,
                             },
                         ],
+                        stacked: false,
+                    },
+                    rimz::mux::LayoutColumn {
+                        panes: vec![rimz::mux::PaneCmd {
+                            argv: vec!["sleep".to_owned(), "120".to_owned()],
+                            name: None,
+                        }],
                         stacked: false,
                     },
                 ],
@@ -817,36 +819,22 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         "resumed window should be born sidebar | agents"
     );
     let panes = server.wait_for_panes("rimz-resume:#feature", 4);
-    let work = panes
-        .iter()
-        .filter(|pane| pane.left > 0)
-        .collect::<Vec<_>>();
-    assert_eq!(work.len(), 3, "expected three work panes: {panes:?}");
-    let left_column = work.iter().map(|pane| pane.left).min().expect("work pane");
-    let right_column = work.iter().map(|pane| pane.left).max().expect("work pane");
-    assert_ne!(
-        left_column, right_column,
-        "team restore should create two work columns: {panes:?}"
-    );
-    assert_eq!(
-        work.iter().filter(|pane| pane.left == left_column).count(),
-        1,
-        "planner column stays full-height on the left: {panes:?}"
-    );
-    assert_eq!(
-        work.iter().filter(|pane| pane.left == right_column).count(),
-        2,
-        "coder/reviewer column stays stacked on the right: {panes:?}"
-    );
-    assert_eq!(
-        left_pane_width(&server, "rimz-resume:#feature"),
-        Some(u64::from(
+    // Two full-height work columns of even rows, and resume seeding keeps the
+    // hook-docked sidebar at its birth width.
+    let window_height: u64 = server
+        .display("rimz-resume:#feature", "#{window_height}")
+        .parse()
+        .expect("window height");
+    assert_grid(
+        &panes,
+        window_height,
+        u64::from(
             sidebar
                 .target
                 .cols(sidebar.detected_view_size.map(|(cols, _)| cols))
                 .get(),
-        )),
-        "resume seeding keeps the hook-docked sidebar at the birth width"
+        ),
+        &[2, 1],
     );
     // A re-run finds the window already present and seeds nothing new.
     server
