@@ -26,8 +26,12 @@ use super::optional_payload_string;
 pub enum SessionOrigin {
     /// A fresh `/clear` / `/new` conversation with no fork parent.
     Fresh,
-    /// A `/side` / `/btw` / `/fork` thread carrying a parent id.
+    /// A persistent fork (`/fork`, `codex fork`) or a provider-death retry
+    /// carrying a parent id.
     Forked,
+    /// An ephemeral provider side conversation (`/btw`, `/side`) forked inside
+    /// a live agent process. Never an agent: the store quarantines the id.
+    SideConversation,
 }
 
 /// The agent that launched a top-level peer: its launch id, with session-id
