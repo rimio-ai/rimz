@@ -118,6 +118,8 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "theme.display.max_cols",
     "theme.display.scrollbar",
     "theme.display.card_density",
+    "theme.display.recent_subagent_secs",
+    "theme.display.max_recent_subagents",
     "theme.display.context_meter.log_scale",
     "theme.display.context_meter.green",
     "theme.display.context_meter.yellow",
