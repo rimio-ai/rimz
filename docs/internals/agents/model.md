@@ -265,7 +265,7 @@ A projection to any status other than `running` drops the phase, except `success
 
 ### Sleeping
 
-After the ladder settles, an `idle` or `success` result with `pending_waits` displays `sleeping`; `running`, `waiting`, `failed`, and `paused` never do, and a parent with a live child stays `running`. A parked clean turn can therefore display `sleeping` while keeping its `parked` phase. Enrichment reads pending waits from instance-sourced, one-shot delivery rows in the loop catalog that match the workspace root and the target kind and session, without writing a store event. Timers, watched commands, and one-shot or deadline signal deliveries count; standing subscriptions and recurring clocks do not, even when a recurring row has a deadline.
+After the ladder settles, an `idle` or `success` result with `pending_waits` displays `sleeping`; `running`, `waiting`, `failed`, and `paused` never do, and a parent with a live child stays `running`. A parked clean turn can therefore display `sleeping` while keeping its `parked` phase. Enrichment reads pending waits from instance-sourced, one-shot delivery rows in the loop catalog that match the workspace root and the target kind and session, without writing a store event. Timers, PID waits, watched commands, polled checks, file watches, and one-shot or deadline signal deliveries count; standing subscriptions and recurring clocks do not, even when a recurring row has a deadline.
 
 A pending wait needs a parsed trigger. A self-wait timer's due time anchors at `wait_meta.armed_at`. A human one-shot `loop add --wait --at HH:MM` row has no arm timestamp, so its due time is the next occurrence after the snapshot clock in the configured timezone.
 
