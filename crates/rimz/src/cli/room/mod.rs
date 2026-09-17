@@ -150,19 +150,21 @@ impl RoomEntry<'_> {
     }
 }
 
-/// A host with only pre-home roots would get an empty home here and lose its
-/// config, so start refuses before config bootstrap creates the home.
+/// A host whose config still sits in pre-home roots would get a fresh default
+/// config here and silently lose its own, so every room entry that can bootstrap
+/// config or birth a room refuses first. Keyed on the machine config, not the
+/// home dir: logs, stats, and loop state create the home on their own.
 fn refuse_legacy_only_home() -> Result<()> {
-    let home = rimz::disk::paths::rimz_home();
-    if home.exists() {
+    if rimz::config::MachineConfig::config_path().exists() {
         return Ok(());
     }
     let legacy = rimz::disk::paths::legacy_roots();
     if legacy.is_empty() {
         return Ok(());
     }
+    let home = rimz::disk::paths::rimz_home();
     bail!(
-        "{} does not exist but legacy RimZ roots do. {}",
+        "{} has no config.toml but legacy RimZ roots exist. {}",
         home.display(),
         rimz::disk::paths::legacy_roots_fix(&legacy, &home)
     )
@@ -246,6 +248,7 @@ pub(crate) fn ensure_workspace_room_detached(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<RoomContext> {
+    refuse_legacy_only_home()?;
     let machine = crate::cli::launch_machine_config()?;
     rimz::sandbox::preflight(machine.agents.isolation)?;
     validate_agent_plugins()?;
@@ -406,6 +409,7 @@ pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
             globals,
         ),
         None => {
+            refuse_legacy_only_home()?;
             let workspace = rimz::WorkspaceResolver::resolve(".", globals.root.clone())?;
             enter_room(
                 RoomEntry::AttachCwd {
