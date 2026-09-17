@@ -53,7 +53,7 @@ const CHECK_DRAIN_GRACE: Duration = Duration::from_millis(200);
 const CHECK_INTERRUPT_GRACE: Duration = Duration::from_secs(1);
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
-const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
+pub(super) const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
     DurationUnit::Second,
     DurationUnit::Minute,
     DurationUnit::Hour,
@@ -1547,6 +1547,8 @@ pub fn run_check(
 pub(super) enum WatchDeadline {
     KillAfter(Duration),
     CheckInOnce(Duration),
+    /// Run to exit with no kill and no check-in: one probe of a polled watch.
+    None,
 }
 
 #[cfg(not(test))]
@@ -1602,7 +1604,7 @@ pub(super) fn run_command(
             ])?);
             check_command(cmd)
         }
-        WatchDeadline::CheckInOnce(_) => {
+        WatchDeadline::CheckInOnce(_) | WatchDeadline::None => {
             let mut command = Command::new("sh");
             command.args(["-c", cmd]);
             command
@@ -1640,6 +1642,7 @@ pub(super) fn run_command(
         WatchDeadline::KillAfter(timeout) | WatchDeadline::CheckInOnce(timeout) => {
             Some(started + timeout)
         }
+        WatchDeadline::None => None,
     };
     let mut interrupted = false;
     let (status, timed_out) = loop {

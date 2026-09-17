@@ -338,9 +338,137 @@ fn wait_pid_rejects_invalid_pids_and_conflicting_triggers() {
         assert!(
             stderr.contains("invalid value")
                 || stderr.contains("choose exactly one wait trigger")
-                || stderr.contains("--on requires a command"),
+                || stderr.contains("--on requires --check or a command"),
             "{args:?}: {stderr}"
         );
+    }
+}
+
+#[test]
+fn wait_check_polls_until_the_command_succeeds_then_retires() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let flag = env.home_root.join("check-flag");
+    let check = format!("echo probing; test -e '{}'", flag.display());
+    let receipt: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["wait", "--check", &check, "--json"])).unwrap();
+    assert_eq!(receipt["trigger"], format!("check: {check}"));
+    assert_eq!(receipt["trigger"], receipt["pending"][0]["trigger"]);
+    let tasks = wait_instances(&env);
+    let entry = &tasks.0[receipt["name"].as_str().unwrap()];
+    assert_eq!(
+        entry.watch,
+        Some(rimz::config::WatchSpec::Check {
+            check: check.clone(),
+            every: "1s".to_owned(),
+            on: rimz::config::CheckOn::Success,
+        })
+    );
+    assert_eq!(entry.on, Some(rimz::config::CheckOn::Any));
+    let report: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
+            .expect("agent report");
+    assert_eq!(
+        report["agent"]["pending_waits"][0]["trigger"],
+        serde_json::json!({"kind": "check", "command": check})
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1_500));
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    assert_eq!(wait_instances(&env).0.len(), 1);
+
+    std::fs::write(&flag, "").unwrap();
+    let messages = wait_for_wait_messages(&env, 1);
+    let text = &messages[0].text;
+    assert!(
+        text.contains(&format!("waited on check `{check}`\nmet after ")),
+        "{text}"
+    );
+    assert!(text.contains(" · output: "), "{text}");
+    assert!(text.contains("(<1k tokens, 1 line)"), "{text}");
+    wait_for_no_wait_instances(&env);
+    assert_eq!(env.store().list_pending_messages().unwrap().len(), 1);
+}
+
+#[test]
+fn wait_check_on_fail_checks_in_with_still_not_met() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let flag = env.home_root.join("check-flag");
+    std::fs::write(&flag, "").unwrap();
+    let check = format!("test -e '{}'", flag.display());
+    let receipt = wait_ok(
+        &env,
+        &["wait", "--check", &check, "--on", "fail", "--timeout", "1s"],
+    );
+    assert!(
+        receipt.contains(&format!(": check: {check} on fail →")),
+        "{receipt}"
+    );
+    let checkin = wait_for_wait_messages(&env, 1);
+    let text = &checkin[0].text;
+    assert!(text.contains("\nstill not met after "), "{text}");
+    assert!(text.contains("Stop it: rimz wait cancel wait-"), "{text}");
+    assert!(!text.contains("output"), "{text}");
+    assert_eq!(wait_instances(&env).0.len(), 1);
+
+    std::fs::remove_file(&flag).unwrap();
+    let messages = wait_for_wait_messages(&env, 2);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.text.contains("\nmet after ")),
+        "{messages:?}"
+    );
+    wait_for_no_wait_instances(&env);
+}
+
+#[test]
+fn wait_check_reports_a_command_it_cannot_run() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    wait_ok(&env, &["wait", "--check", "definitely-not-a-rimz-command"]);
+    let messages = wait_for_wait_messages(&env, 1);
+    assert!(
+        messages[0].text.contains("\nexit 127 after "),
+        "{}",
+        messages[0].text
+    );
+    wait_for_no_wait_instances(&env);
+}
+
+#[test]
+fn wait_check_rejects_shapes_without_a_meaning() {
+    let env = Env::new();
+    for (args, expected) in [
+        (
+            vec!["wait", "--check", "true", "--on", "any"],
+            "--on any has no meaning with --check",
+        ),
+        (
+            vec!["wait", "--every", "5s", "--", "true"],
+            "--every requires --check",
+        ),
+        (
+            vec!["wait", "--check", "true", "--pid", "123"],
+            "choose exactly one wait trigger: --in, --pid, --check, or a command after --",
+        ),
+        (vec!["wait", "--check", " "], "--check needs a command"),
+        (
+            vec!["wait", "--in", "5m", "--timeout", "1m"],
+            "--timeout requires --pid, --check, or a command after --",
+        ),
+        (
+            vec!["wait", "--check", "true", "--every", "24h"],
+            "--every must be less than 24h",
+        ),
+    ] {
+        let output = agent_wait(&env).args(&args).output().unwrap();
+        assert!(!output.status.success(), "accepted {args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
     }
 }
 

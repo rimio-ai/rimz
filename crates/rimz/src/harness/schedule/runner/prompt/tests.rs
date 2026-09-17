@@ -117,49 +117,77 @@ fn watch_killed_by_signal_keeps_output_summary_path_and_note() {
 }
 
 #[test]
-fn pid_wait_never_claims_no_output_for_the_process() {
-    let task = TaskEntry {
-        watch: Some(crate::config::WatchSpec::Pid { pid: 42 }),
-        ..task()
-    };
-    let pid_meta = meta("@coder#feat-x");
-    for (bytes, segment) in [
-        (0, ""),
+fn polled_waits_name_their_spec_and_never_claim_no_output() {
+    let meta = meta("@coder#feat-x");
+    for (spec, headline) in [
         (
-            20,
-            " · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 1 line)",
+            crate::config::WatchSpec::Pid { pid: 42 },
+            "waited on pid 42",
+        ),
+        (
+            crate::config::WatchSpec::Check {
+                check: "nc -z localhost 3000".to_owned(),
+                every: "1s".to_owned(),
+                on: crate::config::CheckOn::Success,
+            },
+            "waited on check `nc -z localhost 3000`",
         ),
     ] {
-        let signal = Signal {
-            watch: Some(WatchOutcome {
-                verdict: WatchVerdict::Met {
+        let task = TaskEntry {
+            watch: Some(spec),
+            timeout: Some("5m".to_owned()),
+            ..task()
+        };
+        for (verdict, label, footer) in [
+            (
+                WatchVerdict::Met {
                     elapsed_ms: 3_000,
                     line: None,
                 },
-                output: String::new(),
-                output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
-                summary: FileSummary {
-                    bytes,
-                    lines: bytes.min(1),
-                    tokens: bytes / 4,
+                "met after 3s",
+                "",
+            ),
+            (
+                WatchVerdict::NotMet {
+                    elapsed_ms: 300_000,
                 },
-            }),
-            ..signal("wait.test", serde_json::json!({}))
-        };
-        let body = compose_wait(
-            "wait-test",
-            &task,
-            Some(&pid_meta),
-            Evidence::Signal(&signal),
-            "",
-            now(),
-        );
-        assert!(
-            body.starts_with(&format!(
-                "waited on pid 42\nmet after 3s{segment} [wait-test]"
-            )),
-            "{body}"
-        );
+                "still not met after 5m",
+                "\n\nStop it: rimz wait cancel wait-test\nAnother check-in: rimz wait --in 5m",
+            ),
+        ] {
+            for (bytes, segment) in [
+                (0, ""),
+                (
+                    20,
+                    " · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 1 line)",
+                ),
+            ] {
+                let signal = Signal {
+                    watch: Some(WatchOutcome {
+                        verdict: verdict.clone(),
+                        output: String::new(),
+                        output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
+                        summary: FileSummary {
+                            bytes,
+                            lines: bytes.min(1),
+                            tokens: bytes / 4,
+                        },
+                    }),
+                    ..signal("wait.test", serde_json::json!({}))
+                };
+                assert_eq!(
+                    compose_wait(
+                        "wait-test",
+                        &task,
+                        Some(&meta),
+                        Evidence::Signal(&signal),
+                        "",
+                        now(),
+                    ),
+                    format!("{headline}\n{label}{segment} [wait-test]{footer}")
+                );
+            }
+        }
     }
 }
 

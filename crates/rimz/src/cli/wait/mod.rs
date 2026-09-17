@@ -1,4 +1,4 @@
-//! `rimz wait` — self-only timer, process, and command waits over the loop scheduler.
+//! `rimz wait` — self-only timer, process, check, and command waits over the loop scheduler.
 
 use std::time::Duration;
 
@@ -57,10 +57,16 @@ struct WaitArgs {
     /// Wait for this existing process to disappear; its exit status is not available.
     #[arg(long, value_name = "PID", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64))]
     pid: Option<u32>,
-    /// Deliver for a failed, successful, or any command outcome (default: any).
+    /// Run this shell command repeatedly until it succeeds (or fails, with --on fail).
+    #[arg(long, value_name = "COMMAND")]
+    check: Option<String>,
+    /// Sleep this long between --check runs (default: 1s).
+    #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
+    every: Option<Duration>,
+    /// Deliver for a failed, successful, or any command outcome (default: any; --check: success).
     #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
     on: Option<String>,
-    /// Send one still-running notice after this duration; do not stop the command (default: 30m).
+    /// Send one still-running notice after this duration; do not stop the wait (default: 30m).
     #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     timeout: Option<Duration>,
     #[arg(long)]
@@ -84,6 +90,8 @@ impl WaitArgs {
     fn is_empty(&self) -> bool {
         self.in_after.is_none()
             && self.pid.is_none()
+            && self.check.is_none()
+            && self.every.is_none()
             && self.on.is_none()
             && self.timeout.is_none()
             && self.command.is_empty()

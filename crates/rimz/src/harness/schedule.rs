@@ -166,6 +166,10 @@ pub enum ScheduleErr {
     ObsoleteCiSignal { name: String },
     #[error("schedule `{name}` has an empty watched command")]
     BadWatch { name: String },
+    #[error(
+        "schedule `{name}` has an invalid check watch: `every` must be a positive duration like `1s` and `on` must be `success` or `fail`"
+    )]
+    BadCheckWatch { name: String },
     #[error("schedule `{name}` sets a calendar `every` value without `at`; add `at = \"HH:MM\"`")]
     EveryNeedsAt { name: String },
     #[error("schedule `{name}` has an invalid time `{value}`; use 24-hour `HH:MM`")]
@@ -679,13 +683,7 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             matches: entry.matches.clone().unwrap_or_default(),
         }
     } else if let Some(spec) = &entry.watch {
-        if let crate::config::WatchSpec::Command(command) = spec
-            && command.trim().is_empty()
-        {
-            return Err(ScheduleErr::BadWatch {
-                name: name.to_owned(),
-            });
-        }
+        validate_watch(name, spec)?;
         Trigger::Watch(spec.clone())
     } else {
         Trigger::Schedule(parse_schedule(name, entry)?)
@@ -694,6 +692,38 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
         once: matches!(trigger, Trigger::Watch(_)) || entry.once == Some(true),
         trigger,
     })
+}
+
+fn validate_watch(name: &str, spec: &crate::config::WatchSpec) -> Result<(), ScheduleErr> {
+    use crate::config::{CheckOn, WatchSpec};
+    let name = name.to_owned();
+    match spec {
+        WatchSpec::Command(command) | WatchSpec::Check { check: command, .. }
+            if command.trim().is_empty() =>
+        {
+            Err(ScheduleErr::BadWatch { name })
+        }
+        WatchSpec::Check {
+            on: CheckOn::Any, ..
+        } => Err(ScheduleErr::BadCheckWatch { name }),
+        WatchSpec::Check { .. } if watch_interval(spec).is_none_or(|every| every.is_zero()) => {
+            Err(ScheduleErr::BadCheckWatch { name })
+        }
+        WatchSpec::Command(_) | WatchSpec::Pid { .. } | WatchSpec::Check { .. } => Ok(()),
+    }
+}
+
+/// How long a polled watch sleeps between probes; `None` for a run-once
+/// command or an unparseable `every`.
+pub(super) fn watch_interval(spec: &crate::config::WatchSpec) -> Option<std::time::Duration> {
+    use crate::config::WatchSpec;
+    match spec {
+        WatchSpec::Command(_) => None,
+        WatchSpec::Pid { .. } => Some(std::time::Duration::from_secs(1)),
+        WatchSpec::Check { every, .. } => {
+            parse_duration_units(every, runner::TASK_TIMEOUT_UNITS).ok()
+        }
+    }
 }
 
 pub fn parse_signal_selector(

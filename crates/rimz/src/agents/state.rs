@@ -130,6 +130,10 @@ pub enum PendingWaitTrigger {
     Command {
         command: String,
     },
+    /// A polled `--check` predicate.
+    Check {
+        command: String,
+    },
     Signal {
         selector: String,
         deadline: Option<Timestamp>,
@@ -144,9 +148,9 @@ impl PendingWait {
         match &self.trigger {
             PendingWaitTrigger::Timer { due, .. } if *due <= now => "wakes now".to_owned(),
             PendingWaitTrigger::Timer { .. } => format!("wakes {summary}"),
-            PendingWaitTrigger::Pid { .. } | PendingWaitTrigger::Command { .. } => {
-                format!("wakes after {summary}")
-            }
+            PendingWaitTrigger::Pid { .. }
+            | PendingWaitTrigger::Command { .. }
+            | PendingWaitTrigger::Check { .. } => format!("wakes after {summary}"),
             PendingWaitTrigger::Signal { .. } => format!("wakes on {summary}"),
         }
     }
@@ -171,7 +175,7 @@ impl PendingWaitTrigger {
                 }
             }
             Self::Pid { pid } => format!("pid {pid}"),
-            Self::Command { command } => {
+            Self::Command { command } | Self::Check { command } => {
                 single_line_description(&crate::proc::command::command_program_basename(command))
                     .unwrap_or_default()
             }

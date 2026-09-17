@@ -55,6 +55,9 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
                 command: command.clone(),
             },
             WatchSpec::Pid { pid } => PendingWaitTrigger::Pid { pid: *pid },
+            WatchSpec::Check { check, .. } => PendingWaitTrigger::Check {
+                command: check.clone(),
+            },
         },
         Trigger::Signal { selector, .. } => PendingWaitTrigger::Signal {
             selector: selector.to_string(),
@@ -90,7 +93,9 @@ pub fn pending_waits_by_session(
         waits.sort_by_key(|wait| {
             let (kind, due) = match wait.trigger {
                 PendingWaitTrigger::Timer { due, .. } => (0, Some(due)),
-                PendingWaitTrigger::Pid { .. } | PendingWaitTrigger::Command { .. } => (1, None),
+                PendingWaitTrigger::Pid { .. }
+                | PendingWaitTrigger::Command { .. }
+                | PendingWaitTrigger::Check { .. } => (1, None),
                 PendingWaitTrigger::Signal { .. } => (2, None),
             };
             (kind, due, wait.name.clone())
@@ -229,6 +234,16 @@ mod tests {
             (
                 WatchSpec::Pid { pid: 16776 },
                 PendingWaitTrigger::Pid { pid: 16776 },
+            ),
+            (
+                WatchSpec::Check {
+                    check: "nc -z localhost 3000".into(),
+                    every: "1s".into(),
+                    on: crate::config::CheckOn::Success,
+                },
+                PendingWaitTrigger::Check {
+                    command: "nc -z localhost 3000".into(),
+                },
             ),
         ] {
             let task = LoadedTask::new(

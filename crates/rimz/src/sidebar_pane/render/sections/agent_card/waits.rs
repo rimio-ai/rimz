@@ -1,11 +1,11 @@
 //! Wait entries share the subagent grammar: the lead shows liveness, line 1 is
 //! the wait itself with the elapsed clock pinned right, and line 2 appears only
-//! for a described background shell, carrying its command. A shell job (a
-//! command or pid wait, or a background shell) wears the working animation in
+//! for a described background shell, carrying its command. A live watch (a
+//! command, pid, or check wait, or a background shell) wears the working animation in
 //! the subordinate wait tone while it runs; a timer or a signal holds its static
 //! kind glyph, since nothing runs until it fires. The parent's own status head
-//! carries sleeping. Timers come first, then shell jobs (command and pid waits,
-//! then background shells), then signals. The words come from
+//! carries sleeping. Timers come first, then live watches (command, pid, and
+//! check waits, then background shells), then signals. The words come from
 //! `PendingWaitTrigger::summary`; this module adds leads and layout.
 
 use jiff::Timestamp;
@@ -29,11 +29,13 @@ struct WaitEntry {
     since: Option<Timestamp>,
 }
 
-/// A wait on a running process: it animates while armed.
-pub(super) fn is_shell_job(trigger: &PendingWaitTrigger) -> bool {
+/// A wait its watcher is actively working on: it animates while armed.
+pub(super) fn is_live_watch(trigger: &PendingWaitTrigger) -> bool {
     matches!(
         trigger,
-        PendingWaitTrigger::Pid { .. } | PendingWaitTrigger::Command { .. }
+        PendingWaitTrigger::Pid { .. }
+            | PendingWaitTrigger::Command { .. }
+            | PendingWaitTrigger::Check { .. }
     )
 }
 
@@ -45,9 +47,9 @@ pub(super) fn wait_entry_lines(
     let wait_entry = |wait: &PendingWait| WaitEntry {
         lead: match wait.trigger {
             PendingWaitTrigger::Timer { .. } => WaitLead::Kind(GlyphRole::CardWaitTimer),
-            PendingWaitTrigger::Pid { .. } | PendingWaitTrigger::Command { .. } => {
-                WaitLead::Working
-            }
+            PendingWaitTrigger::Pid { .. }
+            | PendingWaitTrigger::Command { .. }
+            | PendingWaitTrigger::Check { .. } => WaitLead::Working,
             PendingWaitTrigger::Signal { .. } => WaitLead::Kind(GlyphRole::CardWaitSignal),
         },
         text: wait.trigger.summary(ctx.now),

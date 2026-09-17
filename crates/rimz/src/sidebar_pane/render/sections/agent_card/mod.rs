@@ -105,7 +105,7 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
             || agent
                 .pending_waits
                 .iter()
-                .any(|wait| waits::is_shell_job(&wait.trigger)))
+                .any(|wait| waits::is_live_watch(&wait.trigger)))
 }
 
 pub(super) fn row_lines(

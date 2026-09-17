@@ -227,6 +227,13 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             "wakes after cargo test \\ --workspace",
         ),
         (
+            PendingWaitTrigger::Check {
+                command: "/usr/bin/nc -z localhost 3000".into(),
+            },
+            "nc -z localhost 3000",
+            "wakes after nc -z localhost 3000",
+        ),
+        (
             PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: None,
@@ -256,6 +263,12 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             assert_eq!(
                 serde_json::to_value(&trigger).unwrap(),
                 serde_json::json!({"kind": "pid", "pid": 16776})
+            );
+        }
+        if matches!(trigger, PendingWaitTrigger::Check { .. }) {
+            assert_eq!(
+                serde_json::to_value(&trigger).unwrap(),
+                serde_json::json!({"kind": "check", "command": "/usr/bin/nc -z localhost 3000"})
             );
         }
         let wait = PendingWait {
