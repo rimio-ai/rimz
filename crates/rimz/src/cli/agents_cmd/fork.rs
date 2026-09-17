@@ -165,6 +165,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             }],
             stacked: false,
         }],
+        focused_pane: 0,
     };
     let title = channel
         .as_deref()

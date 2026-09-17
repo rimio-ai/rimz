@@ -112,6 +112,8 @@ Everything correctness-critical stays above the trait and is identical across ba
 
 `TabOptions::after` opens a new view immediately after the view containing an anchor pane; `None` appends. tmux resolves the pane to its window id and runs `new-window -a`. Zellij appends, focuses the new tab long enough to move it left past the required neighbours, then restores an unfocused launch by re-resolving the original pane's tab position. Placement is best-effort on both backends: a failure leaves the view appended and the launch continues.
 
+`LayoutPanes::focused_pane` names the pane that holds focus inside the new view, counted in layout order; `0`, or an index past the last pane, keeps the leading pane. Zellij marks that pane `focus=true` in the tab layout. tmux splits every pane with `-d`, then runs `select-pane` on it. Team launches and resumes set it to the leader's pane.
+
 ### Command discipline
 
 Every control command runs through [`CommandSpec`](../../crates/rimz/src/mux/command.rs) under a deadline. At the bound the child is SIGKILLed and the caller gets `MuxErr::Timeout`.

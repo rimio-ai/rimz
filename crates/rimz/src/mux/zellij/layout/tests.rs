@@ -174,6 +174,7 @@ fn resume_tab_with_columns(label: &str, columns: &[&[&[&str]]], cwd: &str) -> Re
                     stacked: false,
                 })
                 .collect(),
+            focused_pane: 0,
         },
     }
 }
@@ -364,6 +365,7 @@ fn tab_layout_derives_percent_from_an_explicit_live_width() {
                 layout_column(&[&["/bin/sh"]], false),
                 layout_column(&[&["codex"], &["/bin/sh", "-l"]], false),
             ],
+            focused_pane: 0,
         },
         focus: true,
         dock_sidebar: true,
@@ -384,6 +386,15 @@ fn tab_layout_derives_percent_from_an_explicit_live_width() {
     assert!(layout.contains(r#"command "codex""#), "{layout}");
     assert!(layout.contains(r#"name="codex""#), "{layout}");
     assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
+
+    let mut focused = opts.clone();
+    focused.panes.focused_pane = 2;
+    let layout = render_tab_layout(&focused, 21).expect("render tab layout");
+    assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
+    assert!(
+        pane_header_before(&layout, r#"args "-l""#).contains("focus=true"),
+        "focused_pane focuses the third layout pane:\n{layout}",
+    );
 
     let layout = render_tab_layout(&opts, 25).expect("render tab layout");
     assert!(
@@ -409,6 +420,7 @@ fn tab_layout_prefers_the_callers_pane_name_over_the_argv_wrapper() {
                 }],
                 stacked: false,
             }],
+            focused_pane: 0,
         },
         focus: true,
         dock_sidebar: true,
@@ -432,6 +444,7 @@ fn tab_layout_renders_tiled_and_stacked_columns() {
                 layout_column(&[&["planner"], &["logs"]], false),
                 layout_column(&[&["coder"], &["reviewer"]], true),
             ],
+            focused_pane: 0,
         },
         focus: true,
         dock_sidebar: true,
@@ -464,6 +477,7 @@ fn undocked_tab_layout_renders_stacked_columns() {
         title: "review".to_owned(),
         panes: crate::mux::LayoutPanes {
             columns: vec![layout_column(&[&["coder"], &["reviewer"]], true)],
+            focused_pane: 0,
         },
         focus: true,
         dock_sidebar: false,
@@ -489,6 +503,7 @@ fn tab_layout_can_omit_sidebar_for_gallery_columns() {
         title: "sidebar gallery".to_owned(),
         panes: crate::mux::LayoutPanes {
             columns: vec![layout_column(&[&["rimz", "sidebar"]], false)],
+            focused_pane: 0,
         },
         focus: true,
         dock_sidebar: false,

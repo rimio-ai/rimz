@@ -319,6 +319,7 @@ pub(super) fn split_into_subagent_zone(
                 panes: vec![pane.clone()],
                 stacked: false,
             }],
+            focused_pane: 0,
         },
         focus: false,
         dock_sidebar: true,

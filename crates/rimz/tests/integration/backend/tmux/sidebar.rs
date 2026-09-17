@@ -786,6 +786,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
                         stacked: false,
                     },
                 ],
+                focused_pane: 0,
             },
         }],
         ..sidebar_opts("rimz-resume", stub, Some(80))

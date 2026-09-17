@@ -199,7 +199,7 @@ rimz teams peer --channel triage
 rimz teams launch forge -w feat-rate-limits
 ```
 
-`rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree) (a live cohort is focused; a closed one prompts to resume, start fresh, or remove). A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
+`rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. The team's tab opens with the leader's pane focused. Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree) (a live cohort is focused; a closed one prompts to resume, start fresh, or remove). A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
 
 | Flag | Effect |
 | --- | --- |

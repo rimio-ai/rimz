@@ -317,6 +317,7 @@ fn open_attempt_pane(
                         panes: vec![pane.clone()],
                         stacked: false,
                     }],
+                    focused_pane: 0,
                 },
                 focus: false,
                 dock_sidebar: true,
