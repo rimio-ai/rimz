@@ -86,7 +86,9 @@ pub use harness::{
     CompactSeat, DayCap, DayCapParseError, HarnessConfig, IdleCompactMode, TurnCap,
     TurnCapParseError,
 };
-pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WaitMeta};
+pub use loop_::{
+    CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WaitMeta, WatchSpec,
+};
 pub use mux::{
     MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,

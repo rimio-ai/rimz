@@ -18,6 +18,7 @@ use super::runner::{
     CheckEcho, CheckOutcome, WatchDeadline, check_record, run_command, task_timeout,
 };
 use crate::RuntimePaths;
+use crate::config::WatchSpec;
 use crate::disk::paths::StatePaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::schedule::runner::RunLockInfo;
@@ -101,21 +102,49 @@ pub(super) const WAIT_TAIL_CAP: usize = 4 * 1024;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum WatchVerdict {
-    Running { elapsed_ms: u64 },
-    Exited { code: Option<i32>, elapsed_ms: u64 },
-    TimedOut { elapsed_ms: u64 },
-    Lost { detail: String, elapsed_ms: u64 },
+    Running {
+        elapsed_ms: u64,
+    },
+    /// A polled watch saw its condition; `line` is the `--grep` match.
+    Met {
+        elapsed_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<String>,
+    },
+    /// A polled watch's check-in: the condition has not held yet.
+    NotMet {
+        elapsed_ms: u64,
+    },
+    Exited {
+        code: Option<i32>,
+        elapsed_ms: u64,
+    },
+    TimedOut {
+        elapsed_ms: u64,
+    },
+    Lost {
+        detail: String,
+        elapsed_ms: u64,
+    },
 }
 
 impl WatchVerdict {
     pub(super) fn is_terminal(&self) -> bool {
-        !matches!(self, Self::Running { .. })
+        !matches!(self, Self::Running { .. } | Self::NotMet { .. })
     }
 
     pub fn label(&self) -> String {
         let elapsed = elapsed_label(self.elapsed_ms());
         match self {
             Self::Running { .. } => format!("still running after {elapsed}"),
+            Self::Met { line: None, .. } => format!("met after {elapsed}"),
+            Self::Met {
+                line: Some(line), ..
+            } => format!(
+                "met after {elapsed}: `{}`",
+                crate::theme::fmt::command_preview(line.trim())
+            ),
+            Self::NotMet { .. } => format!("still not met after {elapsed}"),
             Self::Exited {
                 code: Some(code), ..
             } => format!("exit {code} after {elapsed}"),
@@ -130,6 +159,8 @@ impl WatchVerdict {
     pub fn elapsed_ms(&self) -> u64 {
         match self {
             Self::Running { elapsed_ms }
+            | Self::Met { elapsed_ms, .. }
+            | Self::NotMet { elapsed_ms }
             | Self::Exited { elapsed_ms, .. }
             | Self::TimedOut { elapsed_ms }
             | Self::Lost { elapsed_ms, .. } => *elapsed_ms,
@@ -137,7 +168,7 @@ impl WatchVerdict {
     }
 
     fn passed(&self) -> bool {
-        matches!(self, Self::Exited { code: Some(0), .. })
+        matches!(self, Self::Exited { code: Some(0), .. } | Self::Met { .. })
     }
 }
 
@@ -397,8 +428,8 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
             workspace.project_root.display()
         );
     }
-    let Some(command) = task.entry().watch.as_deref() else {
-        anyhow::bail!("wait {name} has no watched command");
+    let Some(spec) = &task.entry().watch else {
+        anyhow::bail!("wait {name} has no watch");
     };
     let timeout = task_timeout(task.entry())?.unwrap_or(std::time::Duration::from_secs(30 * 60));
     let output_path = wait_output_path(store.paths(), name);
@@ -429,6 +460,9 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
             tracing::warn!(task = name, error = %err, "firing watched wait");
         }
     };
+    let WatchSpec::Command(command) = spec else {
+        return poll_watch(spec, timeout, started, emit);
+    };
     let outcome = run_command(
         &task.entry().run_dir(),
         command,
@@ -437,16 +471,73 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         &std::collections::BTreeMap::new(),
         |elapsed_ms, output| emit(WatchVerdict::Running { elapsed_ms }, output),
     )?;
-    let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let check = check_record(&outcome);
     emit(
         WatchVerdict::Exited {
             code: check.code,
-            elapsed_ms,
+            elapsed_ms: elapsed_millis(started),
         },
         check.output,
     );
     Ok(())
+}
+
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// One look at a polled watch's condition.
+enum Probe {
+    Pending,
+    Met,
+}
+
+/// Probe a polled watch until its condition holds, sleeping between probes and
+/// checking in once, between probes, when `timeout` passes.
+fn poll_watch(
+    spec: &WatchSpec,
+    timeout: std::time::Duration,
+    started: std::time::Instant,
+    emit: impl Fn(WatchVerdict, String),
+) -> anyhow::Result<()> {
+    let mut checked_in = false;
+    loop {
+        let probe = match spec {
+            WatchSpec::Command(_) => unreachable!("a watched command runs once, not polled"),
+            WatchSpec::Pid { pid } => probe_pid(*pid)?,
+        };
+        if let Probe::Met = probe {
+            let elapsed_ms = elapsed_millis(started);
+            emit(
+                WatchVerdict::Met {
+                    elapsed_ms,
+                    line: None,
+                },
+                String::new(),
+            );
+            return Ok(());
+        }
+        if !checked_in && started.elapsed() >= timeout {
+            checked_in = true;
+            emit(
+                WatchVerdict::NotMet {
+                    elapsed_ms: elapsed_millis(started),
+                },
+                String::new(),
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn probe_pid(pid: u32) -> anyhow::Result<Probe> {
+    let process = nix::unistd::Pid::from_raw(i32::try_from(pid)?);
+    Ok(match nix::sys::signal::kill(process, None) {
+        Err(nix::errno::Errno::ESRCH) => Probe::Met,
+        Ok(()) | Err(_) => Probe::Pending,
+    })
+}
+
+fn elapsed_millis(started: std::time::Instant) -> u64 {
+    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 /// Fire matching tasks in the emitter process. Signal events are never replayed.
@@ -498,7 +589,7 @@ fn fire_signal_with_wait(
             super::run_log::record_transition(&task, &record);
             continue;
         }
-        if wait && matches!(parsed.trigger, super::Trigger::Watch { .. }) {
+        if wait && matches!(parsed.trigger, super::Trigger::Watch(_)) {
             super::fire::wait_loop_run(runtime, Some(project_root), &name, &encoded);
         } else {
             super::fire::spawn_loop_run(
@@ -621,6 +712,35 @@ mod tests {
                 None,
             ),
             (
+                WatchVerdict::NotMet {
+                    elapsed_ms: 1_800_000,
+                },
+                "still not met after 30m",
+                false,
+                false,
+                None,
+            ),
+            (
+                WatchVerdict::Met {
+                    elapsed_ms: 3_000,
+                    line: None,
+                },
+                "met after 3s",
+                true,
+                false,
+                None,
+            ),
+            (
+                WatchVerdict::Met {
+                    elapsed_ms: 3_000,
+                    line: Some("  listening on :3000\n".to_owned()),
+                },
+                "met after 3s: `listening on :3000`",
+                true,
+                false,
+                None,
+            ),
+            (
                 WatchVerdict::Exited {
                     code: Some(0),
                     elapsed_ms: 3_000,
@@ -673,7 +793,10 @@ mod tests {
             assert_eq!(verdict.label(), label);
             assert_eq!(
                 verdict.is_terminal(),
-                !matches!(verdict, WatchVerdict::Running { .. })
+                !matches!(
+                    verdict,
+                    WatchVerdict::Running { .. } | WatchVerdict::NotMet { .. }
+                )
             );
             assert_eq!(verdict.passed(), passed);
             let outcome = WatchOutcome {

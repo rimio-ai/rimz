@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use rimz::config::{CheckOn, TaskTarget};
+use rimz::config::{CheckOn, TaskTarget, WatchSpec};
 use rimz::harness::ancestry::CallerIdentity;
 use rimz::harness::schedule::arm::TaskName;
 use rimz::ids::{AgentKind, AgentSessionId};

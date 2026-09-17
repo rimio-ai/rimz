@@ -516,7 +516,7 @@ impl<'a> TaskFire<'a> {
                 .as_ref()
                 .ok()
                 .and_then(|parsed| match &parsed.trigger {
-                    Trigger::Watch { command } => Some(command.clone()),
+                    Trigger::Watch(spec) => Some(spec.describe()),
                     Trigger::Schedule(_) | Trigger::Signal { .. } => None,
                 });
         let supplied_watch = watch_command.as_ref().zip(
@@ -611,7 +611,7 @@ impl<'a> TaskFire<'a> {
                     .task
                     .trigger()
                     .as_ref()
-                    .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch { .. }))
+                    .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch(_)))
             {
                 self.remove_schedule()?;
             }
@@ -776,7 +776,7 @@ impl<'a> TaskFire<'a> {
             .task
             .trigger()
             .as_ref()
-            .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch { .. }))
+            .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch(_)))
             && self
                 .signal
                 .as_ref()

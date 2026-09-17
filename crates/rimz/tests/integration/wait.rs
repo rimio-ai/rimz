@@ -225,7 +225,10 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
     assert_eq!(listed[0]["trigger"], receipt["trigger"]);
     let tasks = wait_instances(&env);
     let entry = &tasks.0[receipt["name"].as_str().unwrap()];
-    assert_eq!(entry.wait_meta.as_ref().unwrap().pid, Some(process.id()));
+    assert_eq!(
+        entry.watch,
+        Some(rimz::config::WatchSpec::Pid { pid: process.id() })
+    );
     assert_eq!(entry.on, Some(rimz::config::CheckOn::Any));
     let report: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
@@ -235,7 +238,13 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
         serde_json::json!({"kind": "pid", "pid": process.id()})
     );
     let checkin = wait_for_wait_messages(&env, 1);
-    assert!(checkin[0].text.contains("still running after"));
+    assert!(
+        checkin[0]
+            .text
+            .contains(&format!("waited on pid {pid}\nstill not met after")),
+        "{}",
+        checkin[0].text
+    );
     assert!(!checkin[0].text.contains("output"), "{}", checkin[0].text);
     assert!(process.try_wait().unwrap().is_none());
     assert_eq!(wait_instances(&env).0.len(), 1);
@@ -244,7 +253,7 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
     let messages = wait_for_wait_messages(&env, 2);
     let completed = messages
         .iter()
-        .find(|message| message.text.contains("exit 0 after"))
+        .find(|message| message.text.contains("\nmet after"))
         .expect("process disappearance delivered");
     assert!(completed.text.contains(&pid));
     assert!(!completed.text.contains("output"), "{}", completed.text);
@@ -970,7 +979,9 @@ fn wait_cancel_before_watcher_start_prevents_command() {
     let mut tasks = wait_instances(&env);
     let entry = tasks.0.get_mut(name).unwrap();
     entry.at = None;
-    entry.watch = Some("touch command-started".to_owned());
+    entry.watch = Some(rimz::config::WatchSpec::Command(
+        "touch command-started".to_owned(),
+    ));
     std::fs::write(
         loop_instances_path(&env),
         serde_json::to_vec(&tasks).unwrap(),

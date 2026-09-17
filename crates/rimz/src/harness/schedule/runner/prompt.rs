@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 use serde_json::{Map, Value};
 
-use crate::config::{TaskEntry, WaitMeta};
+use crate::config::{TaskEntry, WaitMeta, WatchSpec};
 use crate::harness::schedule::signal::{Signal, elapsed_label};
 
 pub(super) enum Evidence<'a> {
@@ -22,7 +22,7 @@ pub(super) fn compose_wait(
 ) -> String {
     let mut body = String::new();
     body.push_str(&wait_line(task, meta, &evidence));
-    if let Some(verdict) = verdict_line(&evidence, meta, now, name) {
+    if let Some(verdict) = verdict_line(task, &evidence, meta, now, name) {
         body.push('\n');
         body.push_str(&verdict);
     } else {
@@ -55,11 +55,8 @@ pub(super) fn compose_wait(
 }
 
 fn wait_line(task: &TaskEntry, meta: Option<&WaitMeta>, evidence: &Evidence<'_>) -> String {
-    if let Some(command) = &task.watch {
-        return format!(
-            "waited on `{}`",
-            crate::theme::fmt::command_preview(command)
-        );
+    if let Some(spec) = &task.watch {
+        return spec.headline();
     }
     if let Evidence::Signal(signal) = evidence {
         return format!("waited on {}", signal_headline(signal));
@@ -74,6 +71,7 @@ fn wait_line(task: &TaskEntry, meta: Option<&WaitMeta>, evidence: &Evidence<'_>)
 }
 
 fn verdict_line(
+    task: &TaskEntry,
     evidence: &Evidence<'_>,
     meta: Option<&WaitMeta>,
     now: Timestamp,
@@ -107,9 +105,9 @@ fn verdict_line(
                 path.display(),
                 watch.summary.label()
             ));
-        } else if meta.is_none_or(|meta| meta.pid.is_none()) {
-            // A `--pid` wait captures no process output; its file only holds
-            // watcher startup errors, so empty says nothing about the process.
+        } else if matches!(task.watch, Some(WatchSpec::Command(_))) {
+            // Only a watched command's output is the thing waited on; a polled
+            // watch's empty file says nothing about its condition.
             verdict.push_str(" · no output");
         }
     }

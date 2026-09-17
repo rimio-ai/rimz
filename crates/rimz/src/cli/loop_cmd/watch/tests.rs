@@ -396,7 +396,7 @@ fn signal_and_watch_timing_map_to_live_watch_labels() {
         ),
         (
             TaskEntry {
-                watch: Some("cargo test".to_owned()),
+                watch: Some(rimz::config::WatchSpec::Command("cargo test".to_owned())),
                 ..TaskEntry::default()
             },
             RowState::Watching,

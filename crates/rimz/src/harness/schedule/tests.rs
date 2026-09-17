@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::WatchSpec;
 use jiff::civil::date;
 
 use jiff::civil::Weekday::{Friday, Monday, Wednesday};
@@ -348,14 +349,12 @@ fn parse_trigger_accepts_signal_and_watch_forms() {
         parse_trigger(
             "watch",
             &TaskEntry {
-                watch: Some("cargo test".to_owned()),
+                watch: Some(WatchSpec::Command("cargo test".to_owned())),
                 ..spawn_entry()
             }
         ),
         Ok(ParsedTrigger {
-            trigger: Trigger::Watch {
-                command: "cargo test".to_owned(),
-            },
+            trigger: Trigger::Watch(WatchSpec::Command("cargo test".to_owned())),
             once: true,
         })
     );
@@ -396,7 +395,7 @@ fn parse_trigger_rejects_conflicting_fields() {
         ),
         (
             TaskEntry {
-                watch: Some("true".to_owned()),
+                watch: Some(WatchSpec::Command("true".to_owned())),
                 check: Some("true".to_owned()),
                 ..spawn_entry()
             },
@@ -416,7 +415,7 @@ fn parse_trigger_rejects_conflicting_fields() {
         ),
         (
             TaskEntry {
-                watch: Some("  ".to_owned()),
+                watch: Some(WatchSpec::Command("  ".to_owned())),
                 ..spawn_entry()
             },
             ScheduleErr::BadWatch {
@@ -453,9 +452,7 @@ fn triggers_match_names_and_top_level_payload_values() {
             .resolve("task", &signal),
         Ignore
     );
-    let watch = Trigger::Watch {
-        command: "true".to_owned(),
-    };
+    let watch = Trigger::Watch(WatchSpec::Command("true".to_owned()));
     assert_eq!(watch.resolve("task", &signal), Ignore);
     assert_eq!(
         watch.resolve(
@@ -803,13 +800,13 @@ fn task_timing_state_precedence_and_classification() {
     assert_eq!(
         Timing::default().state(
             &TaskEntry {
-                watch: Some("cargo test".to_owned()),
+                watch: Some(WatchSpec::Command("cargo test".to_owned())),
                 ..spawn_entry()
             },
             &now
         ),
         Watching {
-            command: "cargo test".to_owned()
+            spec: WatchSpec::Command("cargo test".to_owned())
         }
     );
     assert_eq!(
