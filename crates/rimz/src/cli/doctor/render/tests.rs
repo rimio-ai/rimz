@@ -290,6 +290,13 @@ fn report_fixture() -> DoctorReport {
             error: "test".to_owned(),
         },
         terminal: terminal_fixture(),
+        home: super::super::model::Home {
+            path: "/home/u/.rimz".to_owned(),
+            from_env: false,
+            agents_home_override: None,
+            legacy_roots: Vec::new(),
+            fix: None,
+        },
         machine_config: MachineConfigHealth {
             broken_files: Vec::new(),
             legacy_agents_home: Vec::new(),

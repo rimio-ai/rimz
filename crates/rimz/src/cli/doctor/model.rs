@@ -33,6 +33,7 @@ pub(super) struct DoctorReport {
     pub(super) workspace: Probe<Workspace>,
     pub(super) mux: Probe<Mux>,
     pub(super) terminal: Terminal,
+    pub(super) home: Home,
     pub(super) machine_config: MachineConfigHealth,
     pub(super) sandbox: Sandbox,
     pub(super) hooks: Vec<HookRow>,
@@ -63,6 +64,20 @@ pub(super) struct Sandbox {
     pub(super) path: Option<std::path::PathBuf>,
     pub(super) version: Option<String>,
     pub(super) error: Option<String>,
+}
+
+/// Where RimZ keeps its files, and the pre-home roots it no longer reads.
+#[derive(Debug, Serialize)]
+pub(super) struct Home {
+    pub(super) path: String,
+    pub(super) from_env: bool,
+    /// `RIMZ_AGENTS_HOME`, when set: it still narrows where definitions are
+    /// read, but `RIMZ_HOME` is the supported override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) agents_home_override: Option<String>,
+    pub(super) legacy_roots: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fix: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -16,11 +16,11 @@ use rimz::trust::TrustState;
 
 use super::model::{
     Accounts, AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport,
-    DoctorState, DuplicateSessions, HookStatus, Host, LogScope, LoopTasks, MachineConfigHealth,
-    MachineConfigProblemKind, MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow,
-    Presence, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry, PresencePlugins,
-    Probe, Protocols, RemoteAgent, RemoteControl, Room, RoomState, SessionHealth, Storage,
-    Terminal, TopologyWriterHealth, Trust, Version, Workspace, ZellijKittyGraphics,
+    DoctorState, DuplicateSessions, Home, HookStatus, Host, LogScope, LoopTasks,
+    MachineConfigHealth, MachineConfigProblemKind, MessageProblemRow, Messages, Mux, MuxBinaryRow,
+    MuxLog, PluginRow, Presence, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
+    PresencePlugins, Probe, Protocols, RemoteAgent, RemoteControl, Room, RoomState, SessionHealth,
+    Storage, Terminal, TopologyWriterHealth, Trust, Version, Workspace, ZellijKittyGraphics,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -176,6 +176,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_workspace(w, &report.workspace, &mut tally)?;
     render_mux(w, &report.mux, &mut tally)?;
     render_terminal(w, &report.terminal, &mut tally)?;
+    render_home(w, &report.home, &mut tally)?;
     render_machine_config(w, &report.machine_config, &mut tally)?;
     render_sandbox(w, &report.sandbox, &mut tally)?;
     render_hooks(w, report, &mut tally)?;
@@ -197,6 +198,50 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_diagnostics(w, report, &mut tally)?;
     render_last_incident(w, report, &mut tally)?;
     render_tally(w, &tally)?;
+    Ok(())
+}
+
+fn render_home(w: &mut impl Write, home: &Home, tally: &mut Tally) -> io::Result<()> {
+    section(w, tally, "HOME")?;
+    let source = if home.from_env {
+        "RIMZ_HOME"
+    } else {
+        "default"
+    };
+    let mut kv = KeyVals::new().indent(2);
+    kv.push(
+        "home",
+        cell(format!("{} ({source})", home_relative(&home.path))),
+    );
+    if let Some(agents_home) = &home.agents_home_override {
+        kv.push(
+            "RIMZ_AGENTS_HOME",
+            verdict(
+                tally,
+                Health::Info,
+                format!(
+                    "superseded by RIMZ_HOME; profiles, teams, and skills read from {}",
+                    home_relative(agents_home)
+                ),
+            ),
+        );
+    }
+    let legacy = if home.legacy_roots.is_empty() {
+        verdict(tally, Health::Ok, "none")
+    } else {
+        let roots = home
+            .legacy_roots
+            .iter()
+            .map(|root| home_relative(root))
+            .collect::<Vec<_>>()
+            .join(", ");
+        verdict(tally, Health::Warn, format!("{roots} (not read)"))
+    };
+    kv.push("legacy roots", legacy);
+    kv.render(w)?;
+    if let Some(fix) = &home.fix {
+        detail(w, style_of(Health::Neutral), &format!("fix: {fix}"))?;
+    }
     Ok(())
 }
 

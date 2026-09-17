@@ -48,7 +48,7 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
     if args.clear {
         let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
             .context("resolving workspace to clear doctor history")?;
-        let paths = rimz::StatePaths::for_workspace(workspace.workspace_id)
+        let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
             .context("resolving workspace state to clear doctor history")?;
         watermark::stamp(&paths, jiff::Timestamp::now())?;
     }
@@ -60,7 +60,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
     let ws = workspace.as_ref().ok();
     let history_cleared_at = ws
-        .and_then(|ws| rimz::StatePaths::for_workspace(ws.workspace_id.clone()).ok())
+        .and_then(|ws| rimz::StatePaths::for_project_root(&ws.project_root).ok())
         .as_ref()
         .and_then(watermark::read);
     DoctorReport {
@@ -75,6 +75,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         },
         mux: runtime::collect_mux(globals.mux, ws, history_cleared_at),
         terminal: runtime::collect_terminal(),
+        home: collect_home(),
         machine_config: collect_machine_config(),
         sandbox: runtime::collect_sandbox(),
         hooks: agents::collect_hooks(),
@@ -90,6 +91,23 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         messages: ws.map(|ws| messages::collect_messages(ws, history_cleared_at)),
         diagnostics: ws.map(|ws| runtime::collect_diagnostics(ws, history_cleared_at)),
         last_incident: ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at)),
+    }
+}
+
+fn collect_home() -> model::Home {
+    use rimz::disk::paths;
+    let home = paths::rimz_home();
+    let legacy = paths::legacy_roots();
+    model::Home {
+        path: home.display().to_string(),
+        from_env: paths::env_path("RIMZ_HOME").is_some(),
+        agents_home_override: paths::env_path("RIMZ_AGENTS_HOME")
+            .map(|path| path.display().to_string()),
+        fix: (!legacy.is_empty()).then(|| paths::legacy_roots_fix(&legacy, &home)),
+        legacy_roots: legacy
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect(),
     }
 }
 
