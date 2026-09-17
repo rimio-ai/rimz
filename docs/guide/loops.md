@@ -71,7 +71,7 @@ rimz wait -- gh run watch --exit-status
 rimz wait --on fail -- cargo test
 ```
 
-The timer must be shorter than 24 hours and uses the room's clock or the [loop timer](#who-keeps-time). A command runs in a detached watcher with stdin closed, at the root of the checkout it was armed from (including linked worktrees). Its final message names the command, exit status, and elapsed time, with a path to the complete output, its estimated token count, and its line count rather than inline output. A silent command's message says `no output`; a `--pid` wait, which cannot see its process's output, says nothing about output. Open the file to read it: `/tmp/rimz-waits/<name>.output` inside a sandbox, or `~/.local/state/rimz/workspaces/<workspace-id>/tmp/rimz-waits/<name>.output` in host mode. The file is removed when the room closes; `rimz loop logs <name>` keeps the last 4 KiB in durable history.
+The timer must be shorter than 24 hours and uses the room's clock or the [loop timer](#who-keeps-time). A command runs in a detached watcher with stdin closed, at the root of the checkout it was armed from (including linked worktrees). Its final message names the command, exit status, and elapsed time, with a path to the complete output, its estimated token count, and its line count rather than inline output. A silent command's message says `no output`; a `--pid` wait, which cannot see its process's output, says nothing about output. Open the file to read it: `/tmp/rimz-waits/<name>.output` inside a sandbox, or `~/.rimz/ws/<workspace-dir>/tmp/rimz-waits/<name>.output` in host mode. The file is removed when the room closes; `rimz loop logs <name>` keeps the last 4 KiB in durable history.
 
 The [polled check](../reference/cli/wait.md#polled-check---check) runs until success, sleeping one second between runs by default; its output file holds the latest run. The [file watch](../reference/cli/wait.md#file---file) polls once per second: without `--grep`, it waits for a change; with it, for a new complete line containing that literal pattern after the arm point. Its message includes the matched line. Both report `met after …` when ready and `still not met after …` at a check-in.
 
@@ -186,7 +186,7 @@ Repeated failures disable the task. Three consecutive failed fires auto-disable 
 
 `rimz loop add` writes a task definition and starts no process.
 
-A standing task appends a `[tasks.<name>]` entry to `~/.config/rimz/loop.toml`: per-machine automation, like your crontab, never inherited by a cloned repository. The file is plain TOML you can edit by hand, and the `deps` task above lands as:
+A standing task appends a `[tasks.<name>]` entry to `~/.rimz/loop.toml`: per-machine automation, like your crontab, never inherited by a cloned repository. The file is plain TOML you can edit by hand, and the `deps` task above lands as:
 
 ```toml
 [tasks.deps]
@@ -198,7 +198,7 @@ at = "09:00"
 every = "mon"
 ```
 
-Every session delivery, including recurring clocks and standing signals, lives in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`, alongside generated one-shots and poll-until tasks. One-shots retire after their terminal outcome; standing deliveries last until removed or their pinned session retires. A watched-command check-in leaves its row intact. Names and enable/strike state are isolated per room. `rimz loop list` labels these rows `state`, or `team <instance>` for team bindings; outside a room it shows machine tasks only.
+Every session delivery, including recurring clocks and standing signals, lives in `~/.rimz/ws/<workspace-dir>/loop-instances.json`, alongside generated one-shots and poll-until tasks. One-shots retire after their terminal outcome; standing deliveries last until removed or their pinned session retires. A watched-command check-in leaves its row intact. Names and enable/strike state are isolated per room. `rimz loop list` labels these rows `state`, or `team <instance>` for team bindings; outside a room it shows machine tasks only.
 
 `--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a standing task (`--every`, `--cron`, or `--signal`), cannot use `--wait` (a session pinned on your machine means nothing on someone else's), and always runs commands at the project root. A committed task runs commands on whoever pulls it, so it enters the [project trust hash](./security.md) and stays inert until each user approves it. Trust and enablement answer different questions: trust says the project config contains commands you accept as yours to run, and `rimz loop enable <name>` says this particular task may run unattended on this machine. A project task pulled from a repo starts disabled even after trust is granted; a task you create with `rimz loop add --project` starts enabled on your machine. A trusted project task wins over a same-named machine task without double-firing.
 
@@ -228,7 +228,7 @@ Loop-owned agent panes close on every terminal outcome, including failure and ti
 
 ### What a fire leaves behind
 
-A fire leaves two things: whatever the task did (one transient supervised pane for `--agent`, one delivered message for `--wait`), and one line of run history in `~/.local/state/rimz/loop-runs.log.jsonl`. `rimz loop show <name>` gives that history a health verdict; `rimz loop logs <name>` prints the complete stored forensics. Take a check-only task that runs `cargo test` hourly, fired once by hand in a repository with no `Cargo.toml`:
+A fire leaves two things: whatever the task did (one transient supervised pane for `--agent`, one delivered message for `--wait`), and one line of run history in `~/.rimz/logs/loop-runs.log.jsonl`. `rimz loop show <name>` gives that history a health verdict; `rimz loop logs <name>` prints the complete stored forensics. Take a check-only task that runs `cargo test` hourly, fired once by hand in a repository with no `Cargo.toml`:
 
 ```console
 $ rimz loop fire suite
@@ -242,7 +242,7 @@ suite — every 1h
   task:    check
   check:   cargo test
   root:    /home/you/code/app · no room
-  source:  machine — ~/.config/rimz/loop.toml
+  source:  machine — ~/.rimz/loop.toml
   strikes: 1/3
 …
 LAST RUN — ✗ failed (exit 101) · 0s ago · manual

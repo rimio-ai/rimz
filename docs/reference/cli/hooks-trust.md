@@ -61,7 +61,7 @@ A merge adds RimZ's entries and keeps your own hooks and every other value. Rewr
 
 A whole file belongs to RimZ, and its first line carries the `_rimz_managed` marker. Install replaces a marked file with the copy embedded in the running build, and refuses a file at that path without the marker. Pi and OpenCode report `refreshed` when the marked file differs from the build's copy, and `rimz start` offers that refresh in the same prompt as missing hooks; Amp and Copilot are rewritten the same way but report `hooks up to date`.
 
-Where the table says the statusline is wrapped, install puts RimZ's command in place of yours and runs yours inside it, so the sidebar reads live context and your statusline still shows. Uninstall restores the original value. Cursor keeps the displaced `statusLine` value in `${XDG_CONFIG_HOME:-~/.config}/rimz/cursor-statusline.json` and deletes that file on uninstall; if the `cli-config.json` write fails, the `hooks.json` write is rolled back.
+Where the table says the statusline is wrapped, install puts RimZ's command in place of yours and runs yours inside it, so the sidebar reads live context and your statusline still shows. Uninstall restores the original value. Cursor keeps the displaced `statusLine` value in `~/.rimz/cursor-statusline.json` and deletes that file on uninstall; if the `cli-config.json` write fails, the `hooks.json` write is rolled back.
 
 ### Preview with `--dry-run`
 
@@ -143,7 +143,7 @@ trust: stale — executable surface changed since last grant
   workspace id: ws_f89e49906df0621ad2765112
   project root: /home/me/code/query-engine
   config path:  /home/me/code/query-engine/.rimz/config.toml
-  record path:  /home/me/.config/rimz/projects/ws_f89e49906df0621ad2765112/trust.toml
+  record path:  /home/me/.rimz/projects/ws_f89e49906df0621ad2765112/trust.toml
   current hash: sha256:5c1d…
   granted hash: sha256:979e…
   granted at:   2026-09-08T09:21:53.057781717Z
@@ -159,7 +159,7 @@ The hash and grant lines appear only when they have a value. `--json` prints one
 | --- | --- |
 | `state` | `no_config`, `untrusted`, `trusted`, or `stale` |
 | `workspace_id` | The workspace id |
-| `project_root`, `config_path`, `record_path` | Absolute paths; `record_path` is the grant file under `$XDG_CONFIG_HOME/rimz/projects/` |
+| `project_root`, `config_path`, `record_path` | Absolute paths; `record_path` is the grant file under `~/.rimz/projects/` |
 | `current_hash` | `sha256:<hex>` of the live surface, or `null` with no config |
 | `granted_hash`, `granted_at` | The grant's hash and RFC 3339 time, or `null` with no grant |
 | `surface_diff` | `null`, or an array of `{kind, path, granted, current}` where `kind` is `added`, `removed`, or `changed`, `path` is an array of segments, and `granted` or `current` is omitted when that side has no value |

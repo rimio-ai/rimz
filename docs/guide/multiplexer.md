@@ -28,7 +28,7 @@ RimZ also binds `Alt+g` as a room-only smart zoom on both backends: it toggles f
 
 ### Room overrides in RimZ config
 
-The `[zellij]` and `[tmux]` tables in `~/.config/rimz/config.toml` tune the room-scoped settings, and `[mux] default` picks the backend when both are installed:
+The `[zellij]` and `[tmux]` tables in `~/.rimz/config.toml` tune the room-scoped settings, and `[mux] default` picks the backend when both are installed:
 
 ```toml
 [mux]

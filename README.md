@@ -296,7 +296,7 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 
 ## Configuration
 
-RimZ runs with zero configuration, and everything you can tune is plain TOML in files you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.config/rimz/` (config, theme, agents, loop, remote), so the files are their own reference; after that, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
+RimZ runs with zero configuration, and everything you can tune is plain TOML in files you own: no config daemon, no bespoke language. `rimz setup` detects the machine and writes commented defaults under `~/.rimz/` (config, theme, agents, loop, remote), so the files are their own reference; after that, [`rimz config set`](./docs/guide/configuration.md) routes any dotted key to the owning file, validates the value, and writes it durably.
 
 For the best experience, we recommend one pass of these:
 

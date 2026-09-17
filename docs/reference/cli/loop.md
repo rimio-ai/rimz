@@ -115,8 +115,8 @@ Each task lives in one of three stores, which `rimz loop list` names in its SOUR
 
 | Store | File | Holds | SOURCE |
 | --- | --- | --- | --- |
-| Machine | `~/.config/rimz/loop.toml` | Repeating `--agent` and check-only tasks added without `--project`. | `machine` |
-| State | `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json` | Every `--wait` task, plus one-shots (`--at`, `--in`), `--until`, and `--once` tasks. Rows retire themselves. | `state`, or `team <instance>` for a team binding |
+| Machine | `~/.rimz/loop.toml` | Repeating `--agent` and check-only tasks added without `--project`. | `machine` |
+| State | `~/.rimz/ws/<workspace-dir>/loop-instances.json` | Every `--wait` task, plus one-shots (`--at`, `--in`), `--until`, and `--once` tasks. Rows retire themselves. | `state`, or `team <instance>` for a team binding |
 | Project | `<root>/.rimz/config.toml`, `[tasks.<name>]` | Tasks added with `--project`. | `project`, or `project · untrusted` / `project · stale` while trust is missing |
 
 `loop list`, `enable --all`, and `disable --all` cover machine tasks plus the state and project tasks of the project resolved from the current directory or `--root`. Enable, disable, pause, and strike state belong to this machine: machine-wide for machine tasks, per project for state and project tasks.
@@ -275,7 +275,7 @@ A task whose previous run is still active records `overlapped` and does not star
 
 ## Read run history
 
-Every fire appends one record to `~/.local/state/rimz/loop-runs.log.jsonl`. `show` and `logs` read records for the current project, and keep reading a task's history after the task is removed.
+Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and `logs` read records for the current project, and keep reading a task's history after the task is removed.
 
 ### `loop list`
 

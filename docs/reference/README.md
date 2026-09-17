@@ -31,6 +31,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [loop.md](./cli/loop.md) | `rimz loop`: clock, signal, and watch tasks; project tasks; waits and checks; budgets, the surplus gate, and strikes; run forensics; and the timer. |
 | [hooks-trust.md](./cli/hooks-trust.md) | `rimz hooks` and `rimz trust`: installing and removing agent hooks, and granting or revoking project trust. |
 | [config.md](./cli/config.md) | `rimz config`, `list-themes`, and `list-pets`: the config files and key routing, `init`, `path`, `get`, `set` value parsing and refusals, and the theme and pet pickers. |
+| [paths.md](./cli/paths.md) | `rimz paths`: the RimZ home, the room's state and runtime directories, and every account-global directory, as a table or JSON. |
 | [maintenance.md](./cli/maintenance.md) | `coverage`, `workspace`, `update`, `reload`, `sidebar repair`, `reset`, `gc`, `uninstall`, and `ping`: checking adapter coverage, moving a store, rotating the event log, upgrading, repairing a room, sweeping stale state, and removing RimZ. |
 
 ## Agents

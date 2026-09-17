@@ -368,7 +368,7 @@ Secrets from trusted project `[[agents]]` `env` values print as `<redacted>` in 
 `rimz agents register` scaffolds a machine-tier agent plugin, and `rimz agents check` validates one:
 
 ```sh
-rimz agents register mybot                       # scaffold $XDG_CONFIG_HOME/rimz/agents.d/mybot
+rimz agents register mybot                       # scaffold ~/.rimz/agents.d/mybot
 rimz agents register --check                     # validate every configured plugin, creating nothing
 rimz agents check mybot --replay events.jsonl    # validate one plugin and replay canonical envelopes
 rimz agents check mybot --spend-file session.jsonl   # also run the spend probe on a transcript

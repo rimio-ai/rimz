@@ -16,7 +16,7 @@ Two caveats are worth knowing up front. Zellij currently drops desktop notificat
 
 ## Handlers: your command on the room's cue
 
-A handler is one table in `~/.config/rimz/config.toml`. When a matching cue fires, the room's sidebar process runs your command:
+A handler is one table in `~/.rimz/config.toml`. When a matching cue fires, the room's sidebar process runs your command:
 
 ```toml
 [[notifications.handler]]

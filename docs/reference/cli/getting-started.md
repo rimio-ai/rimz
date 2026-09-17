@@ -180,8 +180,8 @@ rimz setup [--yes]
 
 | Run | What it changes |
 | --- | --- |
-| From a terminal | If config exists, asks `Keep your current config?` (default yes): yes merges it against the current templates, no overwrites it with fresh templates. Then repairs `~/.config/rimz` fragments, writes a missing `remote.toml` template, offers one hook install or refresh for detected agents, and asks the truecolor, Nerd Font, pet, and hands-off automation questions. |
-| `--yes` | Merges config against the templates, repairs `~/.config/rimz` fragments, and writes missing files. Installs no hooks, grants no trust, and changes no appearance or automation setting. |
+| From a terminal | If config exists, asks `Keep your current config?` (default yes): yes merges it against the current templates, no overwrites it with fresh templates. Then repairs `~/.rimz` fragments, writes a missing `remote.toml` template, offers one hook install or refresh for detected agents, and asks the truecolor, Nerd Font, pet, and hands-off automation questions. |
+| `--yes` | Merges config against the templates, repairs `~/.rimz` fragments, and writes missing files. Installs no hooks, grants no trust, and changes no appearance or automation setting. |
 | Without a terminal and without `--yes` | Nothing. Prints the report and `No terminal input is available; setup changed nothing.` |
 
 A merge names every file it wrote, merged, or left untouched. An unparseable file is left as it is, and interactive setup stops at that point until you fix it. What a merge keeps and removes is defined in the [configuration guide](../../guide/configuration.md#generate-and-refresh-the-files). The hook summary points at `rimz hooks install --dry-run` for the exact diffs. [`rimz config init --force`](./config.md#write-the-templates) is the clean reset. The walkthrough is the [setup guide](../../guide/setup.md).
@@ -208,7 +208,8 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `WORKSPACE` | Workspace id, project root and root class, worktree root and branch, session name, socket-path headroom. |
 | `MULTIPLEXER` | Backend and version against the floor, binary, server log scan and its scope, sockets, room ownership, session health, Zellij presence and plugins, ttyd. |
 | `TERMINAL` | Color depth. |
-| `MACHINE CONFIG` | Parse and validation errors in the machine config files and `~/.config/rimz` fragments, with paths and fixes. |
+| `HOME` | The RimZ home and whether `RIMZ_HOME` set it, a superseded `RIMZ_AGENTS_HOME`, and any legacy XDG roots still on disk with the [move steps](../../guide/configuration.md#moving-from-the-xdg-roots). |
+| `MACHINE CONFIG` | Parse and validation errors in the machine config files and `~/.rimz` fragments, with paths and fixes. |
 | `SANDBOX` | Isolation mode, bubblewrap path and version, mount probe result. |
 | `HOOKS` | Agents reporting to RimZ, a row with the fix for each agent whose hooks need a command, agents not found on the machine. |
 | `ACCOUNTS` | Conditional. Each named account's home and status, marking this room's account. |

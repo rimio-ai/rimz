@@ -304,7 +304,7 @@ A kept worktree carries its reason (`in use`, `not merged yet`), so nothing with
 
 ### Where state lives, and full removal
 
-Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), and durable room state lives under `~/.local/state/rimz/`. Both are plain files you can read and edit. To remove RimZ from the machine, `rimz uninstall` takes out installed hooks, running rooms, runtime state, and the binaries it finds; durable stores and per-machine config stay unless you ask for them:
+Per-machine config lives under `~/.rimz/` (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`), and durable room state lives in the same home, one directory per project under `~/.rimz/ws/`. Both are plain files you can read and edit, and [`rimz paths`](../reference/cli/paths.md) prints every location. To remove RimZ from the machine, `rimz uninstall` takes out installed hooks, running rooms, runtime state, and the binaries it finds; durable stores and per-machine config stay unless you ask for them:
 
 ```sh
 rimz uninstall            # hooks, rooms, runtime state, binaries; keeps stores and config

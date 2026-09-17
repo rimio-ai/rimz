@@ -19,7 +19,7 @@ cd ~/code/your-project && rimz
 
 ## Initialize the config
 
-`rimz setup` prints a first-run report — the selected multiplexer, workspace root, trust state, config path, detected agent binaries, and hook install status — and writes any missing per-machine config under `~/.config/rimz/`. On an interactive terminal it also:
+`rimz setup` prints a first-run report — the selected multiplexer, workspace root, trust state, config path, detected agent binaries, and hook install status — and writes any missing per-machine config under `~/.rimz/`. On an interactive terminal it also:
 
 - offers to keep an existing config and refresh it against the current templates,
 - offers one summarized install or refresh for every detected agent with missing hooks or a stale RimZ-owned whole-file integration,
@@ -33,9 +33,9 @@ Three files carry the settings this guide touches:
 
 | File | Owns |
 | --- | --- |
-| `~/.config/rimz/config.toml` | room behavior, agent launch preferences and commands, worktree defaults, attention timing, resume, compaction, notifications |
-| `~/.config/rimz/theme.toml` | sidebar appearance: scheme, color depth, glyphs, pets |
-| `~/.config/rimz/loop.toml` | scheduled loop tasks: recurring turns, watchdogs, self-waits |
+| `~/.rimz/config.toml` | room behavior, agent launch preferences and commands, worktree defaults, attention timing, resume, compaction, notifications |
+| `~/.rimz/theme.toml` | sidebar appearance: scheme, color depth, glyphs, pets |
+| `~/.rimz/loop.toml` | scheduled loop tasks: recurring turns, watchdogs, self-waits |
 
 Agent and team definitions live separately in the [Markdown trees](../reference/definitions.md); edit their sources and run `rimz agents validate`.
 
@@ -152,7 +152,7 @@ smart_compact = "200k"   # occupied-token count; a percentage of the window such
 
 ### Put a turn on a schedule
 
-Scheduled work lives in its own file, `~/.config/rimz/loop.toml`, one `[tasks.<name>]` entry per job:
+Scheduled work lives in its own file, `~/.rimz/loop.toml`, one `[tasks.<name>]` entry per job:
 
 ```toml
 [tasks.nightly-audit]

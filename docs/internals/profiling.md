@@ -10,11 +10,11 @@ The producer writes its caches with freshness stamps in them, so a stale or loop
 
 | File | Question it answers |
 | --- | --- |
-| `$XDG_RUNTIME_DIR/rimz/<ws>/pr-state.json` | Is the forge probe looping? Each origin repository has a `repos` entry; one with `"ok": false`, a rising `consecutive_failures`, and an advancing `refreshed_at_ms` is climbing its failure backoff. Which links are pinned instead of re-probed is [state.md → PR state](./sidebar/state.md#pr-state). |
-| `$XDG_RUNTIME_DIR/rimz/<ws>/diff-stats.json` | How big is the git sweep? The root count is its input size, and the per-root `refreshed_at_ms` stamps show which roots are on the hot TTL and which on the idle one. |
-| `~/.local/state/rimz/shared/credits.json` | Is an account probe failing? The file-level `refreshed_at_ms` and each login entry's `observed_at_ms` give the usage cadence. An entry at `"ok": false` with `auth_settled: false` retries on `OAUTH_USAGE_TTL` (5 minutes); with `auth_settled: true` it waits `OAUTH_USAGE_SETTLED_TTL` (1 hour) and is not looping ([providers.md → Refresh cadences](./agents/providers.md#refresh-cadences)). |
-| `~/.local/state/rimz/shared/pricing-cache.json` | Is the pricing fetch or the unpriced-model chase busy? `fetched_at_secs` shows the weekly baseline; `unknown_backoff_secs` and `unknown_seen` show the chase. |
-| `~/.local/state/rimz/workspaces/<ws>/diag.log.jsonl` | Did RimZ already notice? A `tick_budget_breach` record separates `mux_wait_ms` from in-process time ([diagnostics.md](./diagnostics.md)). |
+| `$XDG_RUNTIME_DIR/rimz/ws/<name>/pr-state.json` | Is the forge probe looping? Each origin repository has a `repos` entry; one with `"ok": false`, a rising `consecutive_failures`, and an advancing `refreshed_at_ms` is climbing its failure backoff. Which links are pinned instead of re-probed is [state.md → PR state](./sidebar/state.md#pr-state). |
+| `$XDG_RUNTIME_DIR/rimz/ws/<name>/diff-stats.json` | How big is the git sweep? The root count is its input size, and the per-root `refreshed_at_ms` stamps show which roots are on the hot TTL and which on the idle one. |
+| `~/.rimz/shared/credits.json` | Is an account probe failing? The file-level `refreshed_at_ms` and each login entry's `observed_at_ms` give the usage cadence. An entry at `"ok": false` with `auth_settled: false` retries on `OAUTH_USAGE_TTL` (5 minutes); with `auth_settled: true` it waits `OAUTH_USAGE_SETTLED_TTL` (1 hour) and is not looping ([providers.md → Refresh cadences](./agents/providers.md#refresh-cadences)). |
+| `~/.rimz/shared/pricing-cache.json` | Is the pricing fetch or the unpriced-model chase busy? `fetched_at_secs` shows the weekly baseline; `unknown_backoff_secs` and `unknown_seen` show the chase. |
+| `~/.rimz/ws/<name>/diag.log.jsonl` | Did RimZ already notice? A `tick_budget_breach` record separates `mux_wait_ms` from in-process time ([diagnostics.md](./diagnostics.md)). |
 
 `rimz sidebar snapshot --json --no-produce` prints the live folded view and the room's shape. `--no-produce` reads the published frame and forks neither the multiplexer nor git, so the inspection does not perturb the room:
 
@@ -35,13 +35,13 @@ Establish which renderer is the producer before measuring anything. One renderer
 The producer is the renderer with the lexically smallest instance id among fresh heartbeats. Ids are `sb_` plus a UUIDv7, so the smallest is the eldest. The election (`ProducerElection::full_scan` in `sidebar/mod.rs`) counts a heartbeat as fresh when its file mtime is within `SIDEBAR_HEARTBEAT_TTL` (5 s) and its protocol version is current; the script below approximates mtime with the `last_seen` field the same write stamps:
 
 ```console
-$ ws=$(rimz workspace resolve . | jq -r .workspace_id)
+$ rt=$(rimz paths --json | jq -r .runtime_dir)
 $ jq -rs --argjson ttl 5 '
     (now - $ttl) as $cut
     | map(select((.last_seen | sub("\\.[0-9]+Z$"; "Z") | fromdate) > $cut))
     | sort_by(.instance_id) | to_entries[]
     | "\(if .key == 0 then "producer" else "consumer" end)\t\(.value.instance_id)\t\(.value.pane_id)"
-  ' "${XDG_RUNTIME_DIR:-/run/user/$UID}"/rimz/"$ws"/heartbeat/sidebar.*.json | column -t
+  ' "$rt"/heartbeat/sidebar.*.json | column -t
 producer  sb_019f7646c9c6772389da7c8a72ea01f1  zellij:terminal_0
 consumer  sb_019f7646c9f47b93a712941e4a0979c0  zellij:terminal_5
 consumer  sb_019f7df9052477e2a65be240d9d4d554  zellij:terminal_345
@@ -125,7 +125,7 @@ Start with `strace -f -c -p <pid>` when a process is busy for no clear reason. I
 | Which allocations churn? | `heaptrack` or DHAT for ownership. The `malloc`, `memmove`, and `clone` share of a `perf` profile is the first-pass signal. |
 | What goes out on the network? | `strace -f -e trace=%network -p <pid>` for the producer's own calls, `ss -tanp` for established peers, and the published cache stamps for cadence. |
 | How much does each pane render, and what does SSH carry? | `rimz pane bandwidth`, run on the host serving the room. Its per-pane rows are each pane's write rate; its `WIRE(ssh)` row is the payload on the room's SSH socket, usually far below the per-pane sum, and is absent for a local room. |
-| What does an account refresh cost? | Set `RIMZ_ACCOUNT_REFRESH_TRACE` to a file path, or to `1` or `true` for `account_refresh_trace.jsonl` in `~/.local/state/rimz/shared/`. The trace (`sidebar/refresh/trace.rs`) appends one JSON line per provider probe, probe batch, cache contention, claim, helper spawn, and usage-helper run, with outcomes and durations and no commands, paths, identities, tokens, URLs, or bodies. It rotates at 1 MiB. |
+| What does an account refresh cost? | Set `RIMZ_ACCOUNT_REFRESH_TRACE` to a file path, or to `1` or `true` for `account_refresh_trace.jsonl` in `~/.rimz/shared/`. The trace (`sidebar/refresh/trace.rs`) appends one JSON line per provider probe, probe batch, cache contention, claim, helper spawn, and usage-helper run, with outcomes and durations and no commands, paths, identities, tokens, URLs, or bodies. It rotates at 1 MiB. |
 
 To profile without a live room, run the profiling binary on the path under test: `samply record target/profiling/rimz sidebar snapshot --json`, with `--no-produce` added when the question is the read-only path. `samply record -- cargo xtask perf` covers the benchmarks.
 

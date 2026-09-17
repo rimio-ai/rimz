@@ -21,7 +21,7 @@ A bare `claude` is a general-purpose agent, and most work is not general: a plan
 
 ```sh
 claude --permission-mode auto --effort xhigh \
-       --system-prompt-file ~/.config/rimz/prompts/claude-slim.md \
+       --system-prompt-file ~/.rimz/prompts/claude-slim.md \
        --strict-mcp-config \
        --tools 'Agent,AskUserQuestion,Bash,Edit,EnterPlanMode,ExitPlanMode,LSP,Read,Skill,TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,WebFetch,WebSearch,Write'
 ```
@@ -285,7 +285,7 @@ That is the whole daily workflow. The two sections below are the detail it names
 
 ## Profiles: shape an agent for one job
 
-A **profile** saves the shaping you would otherwise repeat at the CLI: model, reasoning effort, permission mode, tools, and optional craft. Store it as `~/.config/rimz/agents/claude-planner.md`:
+A **profile** saves the shaping you would otherwise repeat at the CLI: model, reasoning effort, permission mode, tools, and optional craft. Store it as `~/.rimz/agents/claude-planner.md`:
 
 ```markdown
 ---

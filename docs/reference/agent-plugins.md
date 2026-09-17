@@ -8,11 +8,11 @@ A plugin is machine configuration: RimZ runs the launch, resume, and probe comma
 
 ## Register a bundle
 
-`rimz agents register <kind>` creates a working skeleton under `$XDG_CONFIG_HOME/rimz/agents.d/<kind>/` (`~/.config/rimz/agents.d/<kind>/` by default):
+`rimz agents register <kind>` creates a working skeleton under `~/.rimz/agents.d/<kind>/` (`$RIMZ_HOME/agents.d/<kind>/` when `RIMZ_HOME` is set):
 
 ```console
 $ rimz agents register mybot
-registered `mybot` at /home/me/.config/rimz/agents.d/mybot
+registered `mybot` at /home/me/.rimz/agents.d/mybot
 edit agent.toml and README.md, then run `rimz agents register --check`
 ```
 
@@ -52,7 +52,7 @@ The report names the manifest, counts the [coverage](#coverage-and-doctor) the m
 ```console
 $ rimz agents check mybot --spend-file sess.jsonl --replay events.jsonl
 plugin `mybot`
-manifest: valid (/home/me/.config/rimz/agents.d/mybot/agent.toml)
+manifest: valid (/home/me/.rimz/agents.d/mybot/agent.toml)
 coverage: 5 wired, 1 partial, 12 unsupported
 lifecycle: 4 native, 1 derived, 6 absent
 probes:
@@ -85,7 +85,7 @@ Replay differs from a live room in two places. A live room drops the rejected en
 ## Bundle layout
 
 ```text
-~/.config/rimz/agents.d/mybot/
+~/.rimz/agents.d/mybot/
 ├── agent.toml        manifest
 ├── README.md         setup-doc: how to install the agent's hooks
 ├── shim.sh           called by the agent's hooks

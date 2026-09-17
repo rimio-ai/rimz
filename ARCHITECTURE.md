@@ -67,30 +67,31 @@ With machine `agents.isolation = "sandbox"`, the agent exec wrapper launches its
 
 ### State on disk
 
-Machine preferences live in `config.toml`, `theme.toml`, and `loop.toml` under `$XDG_CONFIG_HOME/rimz` (default `~/.config/rimz`). The same root holds `agents/`, `subagents/`, `teams/`, and `traits/`: Markdown definitions resolved on config load, plus the shared `skills/` library. `RIMZ_AGENTS_HOME` relocates those trees and the library without moving machine preferences or plugin manifests. [Definitions](./docs/reference/definitions.md) documents the source format; project `.rimz/config.toml` remains TOML and trust-tracked.
+Everything durable lives under one home, `~/.rimz` (`RIMZ_HOME` relocates it), and `rimz paths` prints each location for the current project. Machine preferences are `config.toml`, `theme.toml`, `loop.toml`, and `remote.toml` at its top. The same root holds `agents/`, `subagents/`, `teams/`, and `traits/`: Markdown definitions resolved on config load, plus the shared `skills/` library. `RIMZ_AGENTS_HOME` still relocates those trees and the library alone, superseded by `RIMZ_HOME`. The home is never a project marker: a `.rimz/` that is the home is not read as project config. [Definitions](./docs/reference/definitions.md) documents the source format; project `.rimz/config.toml` remains TOML and trust-tracked.
 
 State is five tiers of plain files, scoped by what each one outlives. [`disk/paths.rs`](./crates/rimz/src/disk/paths.rs) (`StatePaths`, `RuntimePaths`) owns the path constants, and [store.md → What is on disk](./docs/internals/store.md#what-is-on-disk) is the file-by-file catalog; this is the map.
 
 ```text
-workspace store         ~/.local/state/rimz/workspaces/<workspace_id>/
+workspace store         ~/.rimz/ws/<basename>-<hex>/
   one room's durable truth: the framed event log and the records beside it,
   plus the producer caches that survive a reboot
   tmp/ and skills/ hold room-owned temporary files and rewritten skill copies,
   not durable records; teardown removes both
 
-per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<workspace_id>/  (or /tmp/rimz-<uid>/…)
+per-workspace runtime   $XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/  (or /tmp/rimz-<uid>/…)
   one room's disposable tier: wakeup sockets, heartbeats, read receipts,
   enrichment sidecars, wait watcher locks, and active-time accumulators
 
-shared persistent       ~/.local/state/rimz/shared/
+shared persistent       ~/.rimz/shared/
   account-global provider state: accounts, rate limits, credits, spend, pricing
 
 shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
   the account-global election locks and the spending service's versioned socket
 
-user-global persistent  ~/.local/state/rimz/
+user-global persistent  ~/.rimz/{builds,loops,logs,web,data,cache}/
   builds/<build_id>/rimz immutable executable generations, the loop registry,
-  the browser daemon pid/port records and credential, and the broadcast room allowlist
+  append-only logs, the browser daemon pid/port records and credential, the
+  broadcast room allowlist, named account homes, and downloaded assets
 ```
 
 One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent. The store tier's durability contract (temp-file-plus-rename, the framed log, and the write classes) is [store.md](./docs/internals/store.md); the provider files are [providers.md](./docs/internals/agents/providers.md) and [spending.md](./docs/internals/agents/spending.md); the loop registry is [loops.md](./docs/internals/harness/loops.md); executable staging is [sidebar.md → Build promotion](./docs/internals/sidebar/sidebar.md#build-promotion).
