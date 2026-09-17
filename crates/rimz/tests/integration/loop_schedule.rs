@@ -1096,6 +1096,21 @@ fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
 }
 
 #[test]
+fn malformed_instances_fail_reads_and_survive_adds() {
+    let env = Env::new();
+    let path = loop_instances_path(&env);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("workspace dir");
+    std::fs::write(&path, b"not json").expect("instances");
+    let (_, error) = loop_fail(&env, &["loop", "list"]);
+    assert!(error.contains("loop-instances.json"), "{error}");
+    loop_fail(
+        &env,
+        &["loop", "add", "new", "--check", "true", "--at", "07:00"],
+    );
+    assert_eq!(std::fs::read(&path).expect("unchanged"), b"not json");
+}
+
+#[test]
 fn instance_task_in_a_project_without_a_room_reaches_machine_wide_readers() {
     let env = Env::new();
     loop_ok(
