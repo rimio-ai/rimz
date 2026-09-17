@@ -58,6 +58,8 @@ pub struct StatePaths {
     pub root: PathBuf,
     pub tmp_dir: PathBuf,
     pub scratchpad_dir: PathBuf,
+    pub agents_dir: PathBuf,
+    pub shared_dir: PathBuf,
     pub subagents_dir: PathBuf,
     pub skills_dir: PathBuf,
     pub events_log: PathBuf,
@@ -106,6 +108,8 @@ impl StatePaths {
         Ok(Self {
             workspace_id,
             scratchpad_dir: tmp_dir.join("scratchpad"),
+            agents_dir: tmp_dir.join("agents"),
+            shared_dir: tmp_dir.join("shared"),
             subagents_dir: tmp_dir.join("rimz-subagents"),
             waits_dir: tmp_dir.join("rimz-waits"),
             tmp_dir,
@@ -146,8 +150,28 @@ impl StatePaths {
     pub fn ensure_tmp_dir(&self) -> Result<()> {
         ensure_private_runtime_dir(&self.tmp_dir)?;
         mkdir_p(&self.scratchpad_dir)?;
+        mkdir_p(&self.agents_dir)?;
+        mkdir_p(&self.shared_dir)?;
         mkdir_p(&self.waits_dir)?;
         mkdir_p(&self.subagents_dir)
+    }
+
+    /// The launch's private scratch dir, bound at `/tmp/scratchpad` under
+    /// sandbox isolation: `agents/<handle>` for a named agent, the shared
+    /// `scratchpad` for a launch without a handle. Handles are path-safe
+    /// (`petname::valid_agent_name`).
+    pub fn scratch_dir(&self, handle: Option<&str>) -> PathBuf {
+        handle.map_or_else(
+            || self.scratchpad_dir.clone(),
+            |handle| self.agents_dir.join(handle),
+        )
+    }
+
+    pub fn ensure_scratch_dir(&self, handle: Option<&str>) -> Result<PathBuf> {
+        self.ensure_tmp_dir()?;
+        let dir = self.scratch_dir(handle);
+        mkdir_p(&dir)?;
+        Ok(dir)
     }
 
     pub fn remove_tmp_dir(&self) -> Result<()> {
@@ -1004,6 +1028,13 @@ mod tests {
         assert_eq!(paths.waits_dir, paths.tmp_dir.join("rimz-waits"));
         assert_eq!(paths.subagents_dir, paths.tmp_dir.join("rimz-subagents"));
         assert_eq!(paths.scratchpad_dir, paths.tmp_dir.join("scratchpad"));
+        assert_eq!(paths.agents_dir, paths.tmp_dir.join("agents"));
+        assert_eq!(paths.shared_dir, paths.tmp_dir.join("shared"));
+        assert_eq!(
+            paths.scratch_dir(Some("otter")),
+            paths.agents_dir.join("otter")
+        );
+        assert_eq!(paths.scratch_dir(None), paths.scratchpad_dir);
         assert_eq!(paths.transcript_dir.file_name().unwrap(), "transcript");
         assert_eq!(
             paths.workspace_record.file_name().unwrap(),
