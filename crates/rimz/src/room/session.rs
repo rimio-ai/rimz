@@ -371,6 +371,7 @@ fn workspace_record_for_session_under(
     Ok(Some(prefer_live_session_record(
         session,
         matches,
+        state_root,
         runtime_root,
     )))
 }
@@ -378,6 +379,7 @@ fn workspace_record_for_session_under(
 fn prefer_live_session_record(
     session: &str,
     records: Vec<WorkspaceRecord>,
+    state_root: &Path,
     runtime_root: &Path,
 ) -> WorkspaceRecord {
     let mut fallback = None;
@@ -386,7 +388,8 @@ fn prefer_live_session_record(
         if fallback.is_none() {
             fallback = Some(record.clone());
         }
-        if let Some(last_seen) = freshest_matching_sidebar_heartbeat(session, &record, runtime_root)
+        if let Some(last_seen) =
+            freshest_matching_sidebar_heartbeat(session, &record, state_root, runtime_root)
         {
             let replace = live
                 .as_ref()
@@ -404,9 +407,12 @@ fn prefer_live_session_record(
 fn freshest_matching_sidebar_heartbeat(
     session: &str,
     record: &WorkspaceRecord,
+    state_root: &Path,
     runtime_root: &Path,
 ) -> Option<SystemTime> {
-    let runtime = RuntimePaths::under(record.workspace_id.clone(), runtime_root).ok()?;
+    // The runtime tree holds no records, so the dir name comes from the state tree.
+    let state = StatePaths::under(record.workspace_id.clone(), state_root).ok()?;
+    let runtime = RuntimePaths::under_named(state.workspace_id, state.dir_name, runtime_root);
     let heartbeats =
         crate::wakeup::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir).ok()?;
     heartbeats
