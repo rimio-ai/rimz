@@ -88,7 +88,7 @@ doctor-cleared.json                           the watermark `rimz doctor` clears
 auto-gc.json                                  when `rimz gc --unattended` last swept, pacing the elder's daily sweep
 crashes/<utc-ts>/                             mux forensics from a crash birth, newest five kept
 diag.log.jsonl, diag-frames/                  typed anomaly records and captured frames
-tmp/                                          room tmp (scratchpad, rimz-subagents, rimz-waits/<name>.output)
+tmp/                                          room tmp (agents/<handle>, scratchpad, shared, rimz-subagents, rimz-waits/<name>.output)
 skills/<sha256>/                              content-addressed rewritten skill copies
 locks/workspace.lock, locks/publish.lock      the write and publish flocks
 locks/{publish,log-sync,dead-reap}.stamp      debounce stamps for the off-lock tail

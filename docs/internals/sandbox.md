@@ -31,9 +31,9 @@ Every entry point that can start a sandboxed agent probes bubblewrap first and r
 
 ## The launch plan
 
-`sandbox::plan` reads the environment, paths, skill directories, and skill source bytes into a `SandboxPlan` without creating anything. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the rewritten `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private tmp directory; `sandbox::prepare` runs both.
+`sandbox::plan` reads the environment, paths, skill directories, and skill source bytes into a `SandboxPlan` without creating anything. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the rewritten `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private tmp directory and the launch's scratch dir; `sandbox::prepare` runs both.
 
-The exec wrapper uses the shared [launch plan](./harness/fleet.md#the-exec-wrapper). `launch_plan::compile` plans a view only for a ready provider process (`AgentProcessStage::Ready`), pins its environment into the compiled process, and lowers the mounts with `sandbox::bwrap_argv`. `launch_plan::apply` ensures the room tmp layout and then calls `sandbox::apply`, so a launch in a room whose birth never created room tmp (a host-policy birth, for example) still gets it. Qwen's login-shell reentry stage runs on the host without a view; its finalized exec is the ready stage that builds one.
+The exec wrapper uses the shared [launch plan](./harness/fleet.md#the-exec-wrapper). `launch_plan::compile` plans a view only for a ready provider process (`AgentProcessStage::Ready`), pins its environment into the compiled process, and lowers the mounts with `sandbox::bwrap_argv`. `launch_plan::apply` ensures the room tmp layout and the launch's scratch dir in both isolation modes, then calls `sandbox::apply` on a sandbox launch, so a launch in a room whose birth never created room tmp (a host-policy birth, for example) still gets it. Qwen's login-shell reentry stage runs on the host without a view; its finalized exec is the ready stage that builds one.
 
 [`rimz agents explain`](../reference/cli/agents.md#explain-a-launch) prints the mounts, pins, copy targets, and omissions without applying them. It plans from its own invoking environment plus the launch overrides, which can differ from the target pane's environment.
 
@@ -55,8 +55,9 @@ Codex replaces every `--sandbox`/`-s` flag and `sandbox_mode` override with `--s
 
 1. The adapter's provider config home (`config_home`), bound at its own path, when it exists. Built-ins resolve it from the effective launch environment, and a room's named account carries its home override there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account. Plugins declare no config home.
 2. `StatePaths.tmp_dir` bound at `/tmp`.
-3. Host paths beneath `/tmp` that must stay reachable, rebound at their original paths ([reachable host paths](#reachable-host-paths)).
-4. The skill view, when one is needed: a tmpfs over the resolved skill root, one entry per skill, and read-only shadows of rewritten skills at their canonical paths ([building the view](#building-the-view)).
+3. The launch's scratch dir (`StatePaths::scratch_dir`) bound at `/tmp/scratchpad`, over the room's own `scratchpad/`.
+4. Host paths beneath `/tmp` that must stay reachable, rebound at their original paths ([reachable host paths](#reachable-host-paths)).
+5. The skill view, when one is needed: a tmpfs over the resolved skill root, one entry per skill, and read-only shadows of rewritten skills at their canonical paths ([building the view](#building-the-view)).
 
 The command has no `--unshare-*` flag, no replacement `/proc`, and no cleared environment. `/dev` takes `--dev-bind` because an ordinary bind breaks device files such as `/dev/null`.
 
@@ -87,8 +88,9 @@ The plan pins every environment variable it consulted, so shell startup files ca
 | `TMUX`, `ZELLIJ_SOCKET_DIR` | Same. |
 | The adapter's native override keys (`config_home_env_keys`: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `QWEN_HOME`, `KIRO_HOME`, and others) | Same, so a room account's home key is among them. |
 | `TMPDIR` | Always `/tmp`. |
+| `RIMZ_SCRATCH` | Always `/tmp/scratchpad`. |
 
-Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host` ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces.
+Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host` and `RIMZ_SCRATCH` to the host path of its scratch dir ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces and find its scratch dir in either mode; the pin above replaces the host path under the sandbox.
 
 A key present with an empty value is pinned to the empty value. To move a root, export it before launching RimZ or set it in trusted launch environment config; changing it only in the pane's startup files does not change the planned mounts. Finalized provider-account launches keep their raw argv and get the same pins without another shell.
 
@@ -98,17 +100,19 @@ Room tmp is one directory per workspace, `${XDG_STATE_HOME:-~/.local/state}/rimz
 
 | Path | Holds |
 | --- | --- |
-| `scratchpad/` | Agent scratch files, as the [launch reminder](#launch-reminder) instructs. |
+| `agents/<handle>/` | One agent's private scratch files, bound over `/tmp/scratchpad` in that agent's view, as the [launch reminder](#launch-reminder) instructs. |
+| `scratchpad/` | Scratch files of a launch without a handle (a bare `rimz agents exec`, a pre-launch-id resume). |
+| `shared/` | Files agents in the room exchange on purpose. |
 | `rimz-waits/` | Watched-command output ([loops.md](./harness/loops.md#watched-commands)). |
 | `rimz-subagents/` | Settled child responses ([subagents.md](./harness/subagents.md)). |
 
-Three callers ensure the layout. Room birth does so under sandbox policy, `launch_plan::apply` on every sandbox launch, and the output writers (wait arming in `harness/schedule/arm.rs`, subagent reports in `cli/agents_cmd/subagent_report.rs`) on demand in either isolation mode. Host mode therefore has room tmp too, for RimZ's own output files.
+Three callers ensure the layout. Room birth does so under sandbox policy, `launch_plan::apply` on every launch (with the launch's scratch dir), and the output writers (wait arming in `harness/schedule/arm.rs`, subagent reports in `cli/agents_cmd/subagent_report.rs`) on demand in either isolation mode. Host mode therefore has room tmp too, for RimZ's own output files.
 
-`sandbox::TmpView` maps host paths to agent paths for output records and messages. Under sandbox isolation a path inside room tmp becomes `/tmp/<relative path>`; every other path, and every path under host isolation, stays a host path. `TmpView::current` takes the recipient's recorded override and falls back to machine policy. Subagent reports pass the parent's override. Wait watchers and signal firing pass none, so a wait armed by an agent whose override differs from machine policy names its output path as machine policy maps it.
+`sandbox::TmpView` maps host paths to agent paths for output records and messages. Under sandbox isolation a path inside the recipient's own scratch dir becomes `/tmp/scratchpad/<relative path>`, and any other path inside room tmp becomes `/tmp/<relative path>`, so another agent's `agents/<handle>/f` stays `/tmp/agents/<handle>/f`; every other path, and every path under host isolation, stays a host path. `TmpView::current` takes the recipient's recorded override, falling back to machine policy, and its handle, falling back to the shared `scratchpad/`. Subagent reports pass the parent's override and handle. Wait watchers and signal firing pass neither, so a wait armed by an agent whose override differs from machine policy names its output path as machine policy maps it.
 
-Room tmp is separate from host `/tmp`, not hidden from the host. The host state path stays reachable inside and outside the sandbox, and host processes can read the directory directly. `rimz agents show` prints the host path when the directory exists.
+Room tmp is separate from host `/tmp`, not hidden from the host. The host state path stays reachable inside and outside the sandbox, and host processes can read the directory directly. `rimz agents show` prints the host path when the directory exists, and the agent's scratch dir host path when that exists.
 
-Every sandboxed agent and subagent in the room sees the same files. Room tmp survives agent restart but is not a store record and carries no fsync guarantee. `room::teardown::teardown_room` removes it after the process sweep, which covers `rimz reset`, the auto-reset in `rimz start`, and `rimz uninstall`; dead-workspace GC removes it with the state root. A plain session exit leaves it in place, and a reset followed by rebirth can create a fresh empty one straight away. Team scratch files are a different mechanism that lives in the worktree ([teams.md](./harness/teams.md#scratch-files)).
+Every sandboxed agent and subagent in the room sees the same `shared/`, `rimz-waits/`, and `rimz-subagents/`; `/tmp/scratchpad` is each agent's own `agents/<handle>/`, keyed by handle, so it survives restart with the handle. Room tmp survives agent restart but is not a store record and carries no fsync guarantee. `room::teardown::teardown_room` removes it after the process sweep, which covers `rimz reset`, the auto-reset in `rimz start`, and `rimz uninstall`; dead-workspace GC removes it with the state root. A plain session exit leaves it in place, and a reset followed by rebirth can create a fresh empty one straight away. Team scratch files are a different mechanism that lives in the worktree ([teams.md](./harness/teams.md#scratch-files)).
 
 ### Rewritten skill copies
 
@@ -124,7 +128,11 @@ A sandbox launch adds one paragraph to the agent's launch reminder. `launch_plan
 
 The paragraph gives the agent one scratch path. A harness such as Claude Code injects its own environment block that names a session-specific scratchpad and reserves `/tmp` for an explicit request. The reminder supplies that request and replaces the private path outright, so the agent never has to reconcile two rules from two sources.
 
-The paragraph does not name `rimz-waits/` or `rimz-subagents/`, because every wait message and subagent report carries its own file path. Host launches omit it. Its position among the reminder paragraphs and the providers that receive it (Claude, Qwen, Droid, and Codex, on every launch kind including subagents) are owned by [fleet.md](./harness/fleet.md#launch-reminders).
+The paragraph does not name `rimz-waits/` or `rimz-subagents/`, because every wait message and subagent report carries its own file path. Host launches carry one sentence in its place, naming the variable rather than the path:
+
+> Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room closes; every temporary file you make goes there.
+
+Every launch therefore carries a reminder. Its position among the reminder paragraphs and the providers that receive it (Claude, Qwen, Droid, and Codex, on every launch kind including subagents) are owned by [fleet.md](./harness/fleet.md#launch-reminders).
 
 ## Profile skill views
 
