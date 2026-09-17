@@ -1043,7 +1043,9 @@ impl From<&gc::WorkspacePruneReport> for JsonWorkspaces {
 
 #[derive(Serialize)]
 struct JsonRemovedWorkspace {
-    workspace_id: String,
+    /// `null` for a dir that never recorded its workspace.
+    workspace_id: Option<String>,
+    dir_name: String,
     reason: &'static str,
     project_root: Option<String>,
     bytes: u64,
@@ -1052,10 +1054,8 @@ struct JsonRemovedWorkspace {
 impl From<&gc::RemovedWorkspace> for JsonRemovedWorkspace {
     fn from(workspace: &gc::RemovedWorkspace) -> Self {
         Self {
-            workspace_id: workspace
-                .workspace_id
-                .as_ref()
-                .map_or_else(|| workspace.dir_name.clone(), ToString::to_string),
+            workspace_id: workspace.workspace_id.as_ref().map(ToString::to_string),
+            dir_name: workspace.dir_name.clone(),
             reason: prune_reason_json(workspace.reason),
             project_root: workspace.project_root.as_deref().map(path_string),
             bytes: workspace.bytes,
@@ -1396,7 +1396,8 @@ mod tests {
         };
         assert!(removed_workspace_detail(&removed).starts_with("unfinished — abandoned setup"));
         let json = serde_json::to_value(JsonRemovedWorkspace::from(&removed)).unwrap();
-        assert_eq!(json["workspace_id"], "unfinished");
+        assert!(json["workspace_id"].is_null());
+        assert_eq!(json["dir_name"], "unfinished");
     }
 
     fn clean_outcome() -> GcOutcome {
