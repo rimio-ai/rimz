@@ -1219,6 +1219,30 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
     assert!(loaded.agent_profiles.0.contains_key("claude-seat"));
     assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
     assert!(loaded.errors[0].path.ends_with("agents/pi-seat.md"));
+
+    std::fs::remove_file(root.path().join(".claude/skills/one/SKILL.md")).unwrap();
+    std::fs::create_dir(root.path().join(".claude/skills/one/SKILL.md")).unwrap();
+    write(
+        root.path(),
+        "skills/one/SKILL.md",
+        "---\ndescription: library copy\n---\nSkill.",
+    );
+    let loaded = load_checked(root.path());
+    assert!(!loaded.agent_profiles.0.contains_key("claude-seat"));
+    assert_eq!(loaded.errors.len(), 1, "{:?}", loaded.errors);
+    assert!(loaded.errors[0].path.ends_with("agents/claude-seat.md"));
+    assert!(
+        loaded.errors[0].message.contains("unreadable at")
+            && loaded.errors[0].message.contains(
+                &root
+                    .path()
+                    .join(".claude/skills/one/SKILL.md")
+                    .display()
+                    .to_string()
+            ),
+        "{}",
+        loaded.errors[0].message
+    );
 }
 
 #[test]
