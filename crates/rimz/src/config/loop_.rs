@@ -160,11 +160,14 @@ pub enum WatchSpec {
     },
 }
 
-/// The stat of a watched file that a later stat compares against.
+/// The stat of a watched file that a later stat compares against. `dev` and
+/// `ino` identify the file, so a replacement at the same path is a change.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct FileMark {
     pub size: u64,
     pub modified: Timestamp,
+    pub dev: u64,
+    pub ino: u64,
 }
 
 impl FileMark {
@@ -179,6 +182,8 @@ impl FileMark {
         Ok(Some(Self {
             size: metadata.len(),
             modified,
+            dev: std::os::unix::fs::MetadataExt::dev(&metadata),
+            ino: std::os::unix::fs::MetadataExt::ino(&metadata),
         }))
     }
 }
@@ -403,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn file_mark_tracks_absence_size_and_mtime() {
+    fn file_mark_tracks_absence_size_mtime_and_identity() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.log");
         assert_eq!(FileMark::read(&path).unwrap(), None);
@@ -419,6 +424,22 @@ mod tests {
         let rewritten = FileMark::read(&path).unwrap().unwrap();
         assert_eq!(rewritten.size, first.size);
         assert_ne!(rewritten, first);
+
+        let replacement = dir.path().join("app.log.new");
+        std::fs::write(&replacement, "one").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let replaced = FileMark::read(&path).unwrap().unwrap();
+        assert_eq!(
+            (replaced.size, replaced.modified),
+            (rewritten.size, rewritten.modified)
+        );
+        assert_ne!(replaced, rewritten);
     }
 
     #[test]
@@ -588,6 +609,8 @@ mod tests {
                 mark: Some(FileMark {
                     size: 12,
                     modified: deadline,
+                    dev: 2049,
+                    ino: 131_074,
                 }),
             },
             WatchSpec::File {
