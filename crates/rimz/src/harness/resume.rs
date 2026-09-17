@@ -1772,6 +1772,7 @@ fn plan_resume_candidates_detailed(
                             }],
                             stacked: false,
                         }],
+                        focused_pane: 0,
                     },
                 },
                 freshest: candidate.last_activity,

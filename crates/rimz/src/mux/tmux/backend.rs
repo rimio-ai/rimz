@@ -1037,10 +1037,19 @@ impl TmuxBackend {
         }
         let mut anchors = vec![first_pane.to_owned()];
         anchors.extend(self.split_even_run(SplitAxis::Columns, first_pane, cwd, &column_tops)?);
+        let mut layout_order = Vec::new();
         for (anchor, rows) in anchors.iter().zip(column_rows) {
             // tmux has no native stack, so stacked columns use tiled rows.
             let rows = rows.iter().collect::<Vec<_>>();
-            self.split_even_run(SplitAxis::Rows, anchor, cwd, &rows)?;
+            layout_order.push(anchor.clone());
+            layout_order.extend(self.split_even_run(SplitAxis::Rows, anchor, cwd, &rows)?);
+        }
+        // Every split ran with `-d`, so the leading pane is already active.
+        let focus_position = panes.focus_position();
+        if focus_position > 0 {
+            self.cmd()
+                .args(["select-pane", "-t", &layout_order[focus_position]])
+                .run()?;
         }
         Ok(())
     }

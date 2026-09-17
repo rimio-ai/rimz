@@ -987,6 +987,7 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
                     panes: vec![gallery_pane],
                     stacked: false,
                 }],
+                focused_pane: 0,
             },
             focus: true,
             dock_sidebar: false,

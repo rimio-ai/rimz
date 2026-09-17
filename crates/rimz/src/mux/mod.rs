@@ -513,7 +513,10 @@ impl ResumeTab {
         Self {
             label,
             cwd,
-            layout: LayoutPanes { columns },
+            layout: LayoutPanes {
+                columns,
+                focused_pane: 0,
+            },
         }
     }
 
@@ -723,6 +726,10 @@ impl LayoutColumn {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutPanes {
     pub columns: Vec<LayoutColumn>,
+    /// The pane holding focus inside the tab once it opens, counted in layout
+    /// order (columns left to right, rows top to bottom). `0` is the leading
+    /// pane; an index past the last pane leaves focus on the leading pane.
+    pub focused_pane: usize,
 }
 
 impl LayoutPanes {
@@ -732,6 +739,16 @@ impl LayoutPanes {
             reason: "tab layout has no columns".to_owned(),
         })?;
         column.split_leading(program).map(|(pane, _)| pane)
+    }
+
+    /// `focused_pane` when it names a pane in this layout, else the leading pane.
+    fn focus_position(&self) -> usize {
+        let pane_count = self.columns.iter().map(|column| column.panes.len()).sum();
+        if self.focused_pane < pane_count {
+            self.focused_pane
+        } else {
+            0
+        }
     }
 }
 

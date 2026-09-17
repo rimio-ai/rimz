@@ -1037,7 +1037,10 @@ pub fn compile_layout_panes(
     if launches.next().is_some() {
         bail!("launch plan has more identities than fresh agent cells");
     }
-    Ok(LayoutPanes { columns })
+    Ok(LayoutPanes {
+        columns,
+        focused_pane: 0,
+    })
 }
 
 fn fresh_agent_argv(

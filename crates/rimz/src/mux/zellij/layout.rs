@@ -156,10 +156,17 @@ pub(super) fn render_session_layout(
             );
             render_named_command_pane(&argv, &tab.cwd, true, 16, None, Some(&tab.label))?
         } else {
-            let mut focused = false;
+            let mut position = 0;
+            let focus_position = tab.layout.focus_position();
             let mut columns = String::new();
             for column in &tab.layout.columns {
-                columns.push_str(&render_tab_column(column, &tab.cwd, &mut focused, 16)?);
+                columns.push_str(&render_tab_column(
+                    column,
+                    &tab.cwd,
+                    &mut position,
+                    focus_position,
+                    16,
+                )?);
             }
             columns
         };
@@ -255,13 +262,15 @@ pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Resu
         return render_undocked_tab_layout(opts);
     }
     let sidebar = sidebar_pane_kdl(&opts.sidebar, Some(&opts.sidebar.cwd), sidebar_percent)?;
-    let mut focused = false;
+    let mut position = 0;
+    let focus_position = opts.panes.focus_position();
     let mut columns = String::new();
     for column in &opts.panes.columns {
         columns.push_str(&render_tab_column(
             column,
             &opts.sidebar.cwd,
-            &mut focused,
+            &mut position,
+            focus_position,
             12,
         )?);
     }
@@ -276,13 +285,15 @@ pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Resu
 }
 
 fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
-    let mut focused = false;
+    let mut position = 0;
+    let focus_position = opts.panes.focus_position();
     let mut columns = String::new();
     for column in &opts.panes.columns {
         columns.push_str(&render_tab_column(
             column,
             &opts.sidebar.cwd,
-            &mut focused,
+            &mut position,
+            focus_position,
             8,
         )?);
     }
@@ -413,20 +424,22 @@ fn render_plain_terminal_pane() -> Result<String> {
 fn render_tab_column(
     column: &LayoutColumn,
     cwd: &Path,
-    focused: &mut bool,
+    position: &mut usize,
+    focus_position: usize,
     indent: usize,
 ) -> Result<String> {
     let (first, rows) = column.split_leading("zellij")?;
+    let mut take_focus = || {
+        let focus = *position == focus_position;
+        *position += 1;
+        focus
+    };
     if rows.is_empty() {
-        let focus = !*focused;
-        *focused = true;
-        return render_command_pane(first, cwd, focus, indent);
+        return render_command_pane(first, cwd, take_focus(), indent);
     }
     let mut rendered = String::new();
     for pane in std::iter::once(first).chain(rows) {
-        let focus = !*focused;
-        *focused = true;
-        rendered.push_str(&render_command_pane(pane, cwd, focus, indent + 4)?);
+        rendered.push_str(&render_command_pane(pane, cwd, take_focus(), indent + 4)?);
     }
     let base = " ".repeat(indent);
     let container = if column.stacked {

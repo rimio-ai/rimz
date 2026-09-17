@@ -26,6 +26,7 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
                     name: None,
                 }])],
+                focused_pane: 0,
             },
             focus: false,
             dock_sidebar: true,
@@ -533,6 +534,7 @@ fn open_tab_builds_multi_column_layout() {
                         .iter()
                         .map(|rows| tiled_column((0..*rows).map(|_| work_pane()).collect()))
                         .collect(),
+                    focused_pane: rows_per_column.iter().sum::<usize>() - 1,
                 },
                 focus: true,
                 dock_sidebar: true,
@@ -547,6 +549,15 @@ fn open_tab_builds_multi_column_layout() {
             .parse()
             .expect("window height");
         assert_grid(&panes, window_height, sidebar_width, rows_per_column);
+        let last_pane = panes
+            .iter()
+            .max_by_key(|pane| (pane.left, pane.top))
+            .expect("a work pane");
+        assert_eq!(
+            server.display(&target, "#{pane_left},#{pane_top}"),
+            format!("{},{}", last_pane.left, last_pane.top),
+            "focused_pane selects the last layout pane: {panes:?}",
+        );
         // Every work pane runs in the requested cwd.
         for pane in panes.iter().filter(|pane| pane.left > 0) {
             assert_eq!(
@@ -568,6 +579,7 @@ fn open_tab_builds_multi_column_layout() {
             title: "solo".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![work_pane()])],
+                focused_pane: 0,
             },
             focus: false,
             dock_sidebar: true,
@@ -637,6 +649,7 @@ fn stacked_splits_tile_the_column_evenly() {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
                     name: None,
                 }])],
+                focused_pane: 0,
             },
             focus: true,
             dock_sidebar: true,
@@ -762,6 +775,7 @@ fn open_tab_after_anchor_inserts_next_to_it() {
                     argv: vec!["sleep".to_owned(), "600".to_owned()],
                     name: None,
                 }])],
+                focused_pane: 0,
             },
             focus: false,
             dock_sidebar: true,
@@ -822,6 +836,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
             title: "gallery".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![work_pane()])],
+                focused_pane: 0,
             },
             focus: true,
             dock_sidebar: false,
@@ -918,6 +933,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
                     tiled_column(vec![work_pane()]),
                     tiled_column(vec![work_pane()]),
                 ],
+                focused_pane: 0,
             },
             focus: false,
             dock_sidebar: true,

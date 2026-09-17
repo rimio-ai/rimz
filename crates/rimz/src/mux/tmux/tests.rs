@@ -437,6 +437,7 @@ fn open_tab_rejects_an_empty_layout() {
                     stacked: false,
                 })
                 .collect(),
+            focused_pane: 0,
         },
         focus: true,
         dock_sidebar: true,

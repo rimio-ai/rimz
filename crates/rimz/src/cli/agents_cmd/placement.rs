@@ -275,6 +275,7 @@ mod tests {
                     }],
                     stacked: false,
                 }],
+                focused_pane: 0,
             },
             sidebar: SidebarPaneOptions {
                 session_name: "room".to_owned(),

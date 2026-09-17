@@ -313,7 +313,7 @@ pub(super) fn launch_layout(
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
-    let panes = compile_layout_panes(
+    let mut panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
             runtime: store.runtime_paths(),
@@ -328,6 +328,10 @@ pub(super) fn launch_layout(
     .inspect_err(|_| {
         let _ = store.fail_agent_launch_batch(&launch_batch);
     })?;
+    panes.focused_pane = team_leader_pane(
+        &layout,
+        team_name.as_deref().and_then(|name| teams.0.get(name)),
+    );
     super::placement::execute(
         backend,
         store,
@@ -494,7 +498,7 @@ fn launch_resume_layout(
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
-    let panes = compile_layout_panes(
+    let mut panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
             runtime: store.runtime_paths(),
@@ -506,10 +510,9 @@ fn launch_resume_layout(
             fallback_channel: channel.as_deref(),
         },
     )?;
-    let leader = team_name
-        .as_deref()
-        .and_then(|name| teams.0.get(name))
-        .and_then(|team| team.leader.as_deref());
+    let team = team_name.as_deref().and_then(|name| teams.0.get(name));
+    panes.focused_pane = team_leader_pane(&layout, team);
+    let leader = team.and_then(|team| team.leader.as_deref());
     if in_place {
         write_resume_receipt(
             &mut render::out(),
@@ -551,6 +554,25 @@ fn launch_resume_layout(
         )?;
     }
     Ok(())
+}
+
+/// A team tab opens focused on its leader's pane; any other layout keeps the
+/// leading pane. The leader is an agent-cell index, so command cells before it
+/// still count toward its pane position.
+fn team_leader_pane(layout: &LayoutSpec, team: Option<&rimz::config::Team>) -> usize {
+    let Some(leader) =
+        team.and_then(|team| rimz::harness::spec::prompt_leader(layout, Some(team)).ok())
+    else {
+        return 0;
+    };
+    layout
+        .columns
+        .iter()
+        .flat_map(|column| column.rows.iter())
+        .enumerate()
+        .filter(|(_, cell)| matches!(cell, Cell::Agent(_)))
+        .nth(leader)
+        .map_or(0, |(position, _)| position)
 }
 
 fn agent_matches_worktree_filter(agent: &AgentState, target: &Path) -> bool {
@@ -1041,6 +1063,23 @@ mod tests {
         <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
         assert!(!output.contains("leader"));
         assert!(!output.contains("prompt"));
+    }
+
+    #[test]
+    fn team_tab_focuses_the_leader_pane_past_command_cells() {
+        let team = toml::from_str::<rimz::config::Team>(
+            r#"leader = "planner"
+roles = [{role = "coder", profile = "codex"}, {role = "planner", profile = "claude"}]"#,
+        )
+        .unwrap();
+        let layout = rimz::harness::spec::parse_layout_spec(
+            "codex:coder+term,claude:planner",
+            &Default::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(team_leader_pane(&layout, Some(&team)), 2);
+        assert_eq!(team_leader_pane(&layout, None), 0);
     }
 
     #[test]
