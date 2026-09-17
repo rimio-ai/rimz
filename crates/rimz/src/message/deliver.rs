@@ -207,7 +207,7 @@ pub fn deliver_one(
 ) -> Result<bool> {
     let pending = store.list_pending_messages()?;
     let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
-    if let Ok(runtime) = RuntimePaths::for_workspace(workspace.workspace_id.clone()) {
+    if let Ok(runtime) = RuntimePaths::for_project_root(&workspace.project_root) {
         snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime));
     }
     attempt_delivery(workspace, store, message_id, policy, &pending, &snapshot)
@@ -429,7 +429,7 @@ pub(super) fn execute_attempt(
 }
 
 pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>) -> Result<()> {
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
     let Some(_guard) = try_start_sweep(&runtime)? else {
         return Ok(());
     };
@@ -976,7 +976,7 @@ fn delivery_candidate<'a>(
 }
 
 pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) -> Result<()> {
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
     refresh_wake_stamp(&runtime, store, Timestamp::now())
 }
 

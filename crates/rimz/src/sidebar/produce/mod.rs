@@ -240,8 +240,8 @@ pub fn resolution_snapshot(
     let Some(mux) = mux else {
         return rollup_resolution_snapshot(store);
     };
-    let state = StatePaths::for_workspace(workspace.workspace_id.clone())?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    let state = StatePaths::for_project_root(&workspace.project_root)?;
+    let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
     let opts = ProduceOptions {
         mux,
         session_name: workspace.session_name.clone(),

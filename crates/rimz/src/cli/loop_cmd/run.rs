@@ -230,8 +230,7 @@ fn notify_loop_disabled(name: &str, entry: &TaskEntry, count: u32) {
     let prefs = MachineConfig::load_lenient().notifications.clone();
     rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
 
-    let workspace_id = WorkspaceId::from_project_root(&entry.resolved_root());
-    let runtime = match RuntimePaths::for_workspace(workspace_id) {
+    let runtime = match RuntimePaths::for_project_root(&entry.resolved_root()) {
         Ok(runtime) => runtime,
         Err(err) => {
             tracing::debug!(task = name, error = %err, "loop auto-disable runtime unavailable");

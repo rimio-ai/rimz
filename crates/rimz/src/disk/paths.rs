@@ -392,6 +392,14 @@ impl RuntimePaths {
         Self::validated(workspace_id, dir_name, &runtime_home())
     }
 
+    /// Runtime paths for the workspace born at `project_root`, under the same
+    /// name [`StatePaths::for_project_root`] resolves.
+    pub fn for_project_root(project_root: &Path) -> Result<Self> {
+        let workspace_id = WorkspaceId::from_project_root(project_root);
+        let dir_name = workspace_dir_name_for_root(&workspaces_dir(), &workspace_id, project_root)?;
+        Self::validated(workspace_id, dir_name, &runtime_home())
+    }
+
     /// Runtime paths paired with state paths already in hand.
     pub fn for_state(state: &StatePaths) -> Result<Self> {
         Self::validated(
@@ -869,6 +877,19 @@ pub(crate) fn rimz_home_from(
         .map(Path::to_path_buf)
         .or_else(|| home.map(|home| home.join(".rimz")))
         .unwrap_or_else(|| tmpdir.join("rimz-home"))
+}
+
+/// Whether `dir`'s `.rimz` is the RimZ home `home` itself. The default home
+/// `~/.rimz` shares its name with a project's `.rimz/`, so a directory holding
+/// the home is no project marker, and its `config.toml` is the machine config,
+/// never a project layer.
+pub fn holds_rimz_home(dir: &Path, home: &Path) -> bool {
+    let dot_rimz = dir.join(".rimz");
+    dot_rimz == home
+        || matches!(
+            (dot_rimz.canonicalize(), home.canonicalize()),
+            (Ok(a), Ok(b)) if a == b
+        )
 }
 
 /// Under `cfg(test)`, the lib crate resolves the implicit home to a

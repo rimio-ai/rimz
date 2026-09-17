@@ -297,7 +297,7 @@ pub fn ensure_loop_panel(
     let machine = crate::config::MachineConfig::load_lenient();
     let rimz_bin = crate::proc::rimz_exe();
     // One gate decides whether a host launches. A cheaper local check would spawn a host that stalls on its first-run prompt or a version it cannot serve from, in the one path no operator watches.
-    let envs = match StatePaths::for_workspace(workspace.workspace_id.clone()) {
+    let envs = match StatePaths::for_project_root(&workspace.project_root) {
         Ok(state) => match crate::remote_control::HostLoginEnvs::for_room(
             &state.workspace_record,
             &machine.accounts,

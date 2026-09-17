@@ -29,7 +29,7 @@ pub(super) fn reconcile_cohort_launch(
         rimz::harness::resume::CohortRelaunchState::Absent => Ok(Reconciled::Continue),
         rimz::harness::resume::CohortRelaunchState::Present { focus_pane } => {
             if let Some(pane_id) = focus_pane {
-                let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+                let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
                 rimz::mux::focus_anchor::execute_action(
                     backend,
                     &runtime,

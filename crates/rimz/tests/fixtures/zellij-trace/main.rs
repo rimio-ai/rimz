@@ -356,13 +356,16 @@ fn configuration_value<'a>(configuration: &'a str, key: &str) -> Option<&'a str>
 }
 
 fn write_topology_cache(session: &str, workspace_id: &str) {
-    let Some(runtime_root) = env::var_os("XDG_RUNTIME_DIR") else {
+    if env::var_os("XDG_RUNTIME_DIR").is_none() {
+        return;
+    }
+    let Ok(workspace_id) = rimz::WorkspaceId::parse(workspace_id) else {
         return;
     };
-    let path = std::path::PathBuf::from(runtime_root)
-        .join("rimz")
-        .join(workspace_id)
-        .join("pane-topology.json");
+    let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace_id) else {
+        return;
+    };
+    let path = runtime.root.join("pane-topology.json");
     let panes = match env::var("RIMZ_TEST_ZELLIJ_TOPOLOGY_PANES")
         .or_else(|_| env::var("RIMZ_TEST_ZELLIJ_LIST_PANES"))
     {

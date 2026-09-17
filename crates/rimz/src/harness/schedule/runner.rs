@@ -230,7 +230,7 @@ impl FireContext {
         let scope = match &action {
             TaskAction::Spawn(spec) => {
                 let workspace = WorkspaceResolver::resolve(&root, None)?;
-                let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+                let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
                 let resolved = crate::harness::plan::resolve_single_agent_launch(spec, &workspace)?;
                 let managed_launch = resolve_managed_spawn_state(entry, &workspace, &resolved)?;
                 let mut scope = FireScope::new(
@@ -242,8 +242,8 @@ impl FireContext {
                 scope
             }
             TaskAction::Deliver(target) => {
-                let workspace_id = WorkspaceResolver::persisted_workspace_id(&root)?;
-                let runtime = RuntimePaths::for_workspace(workspace_id)?;
+                let project_root = WorkspaceResolver::persisted_project_root(&root)?;
+                let runtime = RuntimePaths::for_project_root(&project_root)?;
                 let mut scope = FireScope::new(target.kind.clone(), runtime, None);
                 scope.managed_launch = unresolved_managed_state(entry, &target.kind);
                 scope
@@ -1166,9 +1166,9 @@ fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRecord>
 /// Resolve the task workspace before selecting its newest active run.
 pub fn newest_active_run_for_entry(name: &str, entry: &TaskEntry) -> Result<Option<RunRecord>> {
     let root = entry.resolved_root();
-    let workspace_id = WorkspaceResolver::persisted_workspace_id(&root)
+    let project_root = WorkspaceResolver::persisted_project_root(&root)
         .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
-    let paths = StatePaths::for_workspace(workspace_id)?;
+    let paths = StatePaths::for_project_root(&project_root)?;
     newest_active_run(&paths, name)
 }
 
@@ -1204,8 +1204,9 @@ pub fn stop_task(
     };
 
     let root = entry.resolved_root();
-    let (workspace, workspace_id) = stop_workspace(&root)?;
-    let paths = StatePaths::for_workspace(workspace_id.clone())?;
+    let (workspace, project_root) = stop_workspace(&root)?;
+    let paths = StatePaths::for_project_root(&project_root)?;
+    let workspace_id = paths.workspace_id.clone();
     let run = newest_active_run(&paths, name);
     cancel(
         workspace.as_ref(),
@@ -1247,17 +1248,17 @@ pub fn stop_task(
     )
 }
 
-fn stop_workspace(root: &Path) -> Result<(Option<ResolvedWorkspace>, WorkspaceId)> {
+fn stop_workspace(root: &Path) -> Result<(Option<ResolvedWorkspace>, PathBuf)> {
     let workspace = root
         .exists()
         .then(|| WorkspaceResolver::resolve(root, None))
         .transpose()
         .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let workspace_id = match &workspace {
-        Some(workspace) => workspace.workspace_id.clone(),
-        None => WorkspaceResolver::persisted_workspace_id(root)?,
+    let project_root = match &workspace {
+        Some(workspace) => workspace.project_root.clone(),
+        None => WorkspaceResolver::persisted_project_root(root)?,
     };
-    Ok((workspace, workspace_id))
+    Ok((workspace, project_root))
 }
 
 fn append_stopped_record(

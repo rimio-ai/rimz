@@ -2977,7 +2977,7 @@ fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
             let (mut record, _, parent_id) = create_finished_subagent(&env, &store);
             record.last_message = message.map(str::to_owned);
             rimz::harness::run::create(store.paths(), &record).expect("seed response");
-            let config = env.config_root().join("rimz");
+            let config = env.rimz_home();
             std::fs::create_dir_all(&config).unwrap();
             std::fs::write(
                 config.join("config.toml"),

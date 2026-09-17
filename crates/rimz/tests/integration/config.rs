@@ -16,19 +16,19 @@ const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/adapters/ope
 const STALE_MANAGED_SOURCE: &str = "// old _rimz_managed source\n";
 
 fn machine_config_path(env: &Env) -> std::path::PathBuf {
-    env.config_root().join("rimz").join("config.toml")
+    env.rimz_home().join("config.toml")
 }
 
 fn theme_config_path(env: &Env) -> std::path::PathBuf {
-    env.config_root().join("rimz").join("theme.toml")
+    env.rimz_home().join("theme.toml")
 }
 
 fn legacy_agents_config_path(env: &Env) -> std::path::PathBuf {
-    env.config_root().join("rimz").join("agents.toml")
+    env.rimz_home().join("agents.toml")
 }
 
 fn loop_config_path(env: &Env) -> std::path::PathBuf {
-    env.config_root().join("rimz").join("loop.toml")
+    env.rimz_home().join("loop.toml")
 }
 
 fn write_machine_file(path: &std::path::Path, text: &str) {
@@ -128,7 +128,7 @@ fn config_set_host_never_probes_bwrap() {
 fn agents_validate_refuses_what_launch_refuses() {
     let env = Env::new();
     write_machine_file(
-        &env.config_root().join("rimz/config.toml"),
+        &env.rimz_home().join("config.toml"),
         "[agents.commands]\nprobe = \"echo\"\n",
     );
     crate::common::write_definition(
@@ -1123,7 +1123,7 @@ fn interactive_setup_stops_cleanly_before_partial_setup_for_unparseable_config()
         "first-run prompts do not start:\n{output}",
     );
     assert!(
-        !env.config_root().join("rimz/remote.toml").exists(),
+        !env.rimz_home().join("remote.toml").exists(),
         "remote setup does not partially run",
     );
     assert_eq!(

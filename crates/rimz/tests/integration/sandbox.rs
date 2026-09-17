@@ -26,7 +26,7 @@ fn available() -> bool {
 }
 
 fn enable(env: &Env) {
-    let path = env.config_root().join("rimz/config.toml");
+    let path = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "[agents]\nisolation = \"sandbox\"\n").unwrap();
 }
@@ -36,6 +36,7 @@ fn environment(env: &Env) -> BTreeMap<String, String> {
         ("HOME", env.home_root.clone()),
         ("XDG_CONFIG_HOME", env.config_root()),
         ("XDG_RUNTIME_DIR", env.runtime_root.clone()),
+        ("RIMZ_HOME", env.rimz_home()),
         ("XDG_STATE_HOME", env.state_root()),
         ("TMPDIR", "/tmp".into()),
     ]
@@ -92,7 +93,7 @@ fn sandbox_unconfigured_skills_without_library_add_no_mounts() {
     let root = env.home_root.join(".agents/skills");
     std::fs::create_dir_all(root.join("native")).unwrap();
     // Even a shadowed library entry leaves the native view unchanged.
-    let library = env.config_root().join("rimz/skills/native");
+    let library = env.rimz_home().join("skills/native");
     for shadowed in [false, true] {
         if shadowed {
             std::fs::create_dir_all(&library).unwrap();
@@ -202,7 +203,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
     let bad = root.join("bad/SKILL.md");
     std::fs::write(&bad, metadata).unwrap();
     std::os::unix::fs::symlink("bad", root.join("alias")).unwrap();
-    let library = env.config_root().join("rimz/skills");
+    let library = env.rimz_home().join("skills");
     std::fs::create_dir_all(&library).unwrap();
     std::os::unix::fs::symlink(root.join("bad"), library.join("library-alias")).unwrap();
     std::fs::write(root.join("listed/SKILL.md"), metadata).unwrap();
@@ -367,7 +368,7 @@ fn sandboxed_exec_merges_library_without_native_skill_root() {
     let env = Env::new();
     enable(&env);
     let root = env.home_root.join(".agents/skills");
-    let library = env.config_root().join("rimz/skills/library-only");
+    let library = env.rimz_home().join("skills/library-only");
     std::fs::create_dir_all(&library).unwrap();
     std::fs::write(library.join("SKILL.md"), "library body").unwrap();
     assert!(!root.exists());
@@ -406,13 +407,13 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
     let root = env.home_root.join(".claude/skills");
     std::fs::create_dir_all(root.join("shared")).unwrap();
     std::fs::write(root.join("shared/SKILL.md"), "provider\n").unwrap();
-    for source in ["xdg", "home", "override"] {
+    for source in ["rimz_home", "home", "override"] {
         let mut vars = environment(&env);
         let library = match source {
-            "xdg" => env.agents_home().join("skills"),
+            "rimz_home" => env.rimz_home().join("skills"),
             "home" => {
-                vars.remove("XDG_CONFIG_HOME");
-                env.home_root.join(".config/rimz/skills")
+                vars.remove("RIMZ_HOME");
+                env.home_root.join(".rimz/skills")
             }
             _ => {
                 let root = env.home_root.join("relocated");
@@ -460,7 +461,7 @@ fn sandbox_merges_rimz_library_and_provider_root_wins() {
 fn sandbox_empty_skill_list_makes_every_skill_manual() {
     let env = Env::new();
     let root = env.home_root.join(".claude/skills");
-    let library = env.config_root().join("rimz/skills");
+    let library = env.rimz_home().join("skills");
     for (source, name) in [(&root, "native"), (&library, "library-only")] {
         std::fs::create_dir_all(source.join(name)).unwrap();
         std::fs::write(source.join(name).join("SKILL.md"), format!("{name}\n")).unwrap();
@@ -922,7 +923,7 @@ fn sandbox_non_skill_entries_are_never_materialized() {
     std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
     for overlay in [false, true] {
         if overlay {
-            let library = env.config_root().join("rimz/skills/library-only");
+            let library = env.rimz_home().join("skills/library-only");
             std::fs::create_dir_all(&library).unwrap();
             std::fs::write(library.join("SKILL.md"), "library\n").unwrap();
         }
@@ -1046,7 +1047,7 @@ test "${CODEX_HOME+x}" != x
 test ! -e "$HOME/.agents/skills/b/agents/openai.yaml"
 test "$(cat "$HOME/.agents/skills/c/agents/openai.yaml")" = 'policy:
   allow_implicit_invocation: false'
-test -d "$XDG_RUNTIME_DIR/rimz/$RIMZ_TEST_WORKSPACE_ID"
+test -d "$XDG_RUNTIME_DIR/rimz/ws/$RIMZ_TEST_WORKSPACE_DIR"
 test -c /dev/null
 test "$RIMZ_SCRATCH" = /tmp/scratchpad
 test -d /tmp/shared
@@ -1073,7 +1074,10 @@ printf '%s\n' shared > /tmp/team-file
         .env("PATH", path_with_front(&shim_dir))
         .env("SHELL", shell)
         .env("RIMZ_TEST_HOST_TMP_FILE", host_tmp.path())
-        .env("RIMZ_TEST_WORKSPACE_ID", env.workspace_id.as_str())
+        .env(
+            "RIMZ_TEST_WORKSPACE_DIR",
+            env.state_path_for(&env.project_root).dir_name.as_str(),
+        )
         .env(
             "RIMZ_TEST_NON_UTF8",
             std::ffi::OsString::from_vec(vec![0xff, 0xfe]),

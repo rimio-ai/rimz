@@ -833,7 +833,7 @@ fn free_loopback_port() -> u16 {
 }
 
 fn write_machine_config(env: &Env, text: &str) {
-    let path = env.config_root().join("rimz").join("config.toml");
+    let path = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config parent");
     std::fs::write(path, text).expect("write machine config");
 }

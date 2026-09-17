@@ -127,20 +127,20 @@ fn remove_stats_if_owned(path: &Path, client: &str) {
 }
 
 fn link_stats_runtime(args: LinkStatsIngestArgs) -> Result<(rimz::RuntimePaths, String)> {
-    let workspace_id = match (args.session, args.dir) {
+    let project_root = match (args.session, args.dir) {
         (Some(session), None) => {
             workspace_record_for_session(&session)?
                 .with_context(|| format!("no RimZ workspace record for session `{session}`"))?
-                .workspace_id
+                .project_root
         }
         (None, Some(dir)) => {
             rimz::WorkspaceResolver::resolve(&dir, None)
                 .with_context(|| format!("resolving remote room dir {}", dir.display()))?
-                .workspace_id
+                .project_root
         }
         _ => bail!("give exactly one of --session or --dir"),
     };
-    let runtime = rimz::RuntimePaths::for_workspace(workspace_id)?;
+    let runtime = rimz::RuntimePaths::for_project_root(&project_root)?;
     Ok((runtime, link_client_id()))
 }
 

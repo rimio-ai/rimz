@@ -39,7 +39,7 @@ fn standalone_sidebar_repair_does_not_stage_a_build() {
         "No running sidebars to repair.\n"
     );
     assert!(
-        !env.state_root().join("rimz/builds").exists(),
+        !env.rimz_home().join("builds").exists(),
         "standalone structural repair must not publish an upgrade generation",
     );
 }
@@ -53,7 +53,7 @@ fn reload_restarts_an_online_web_daemon_and_leaves_an_offline_one_offline() {
         .local_addr()
         .expect("web address")
         .port();
-    let config = env.config_root().join("rimz/config.toml");
+    let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).expect("mkdir config");
     std::fs::write(
         &config,
@@ -69,7 +69,7 @@ fn reload_restarts_an_online_web_daemon_and_leaves_an_offline_one_offline() {
     )
     .expect("link ttyd shim");
     let log = env.project_root.join("reload-web.log");
-    let daemon_path = env.state_root().join("rimz/web-ttyd.json");
+    let daemon_path = env.rimz_home().join("web/web-ttyd.json");
     let command = || web_command(&env, &bin_dir, &ttyd, &log);
 
     let offline = command().arg("reload").output().expect("reload offline");

@@ -25,13 +25,13 @@ pub(super) fn collect_protocols(ws: &rimz::ResolvedWorkspace) -> Protocols {
 }
 
 fn collect_build_drift(ws: &rimz::ResolvedWorkspace) -> Option<model::BuildDrift> {
-    let runtime = RuntimePaths::for_workspace(ws.workspace_id.clone()).ok()?;
+    let runtime = RuntimePaths::for_project_root(&ws.project_root).ok()?;
     let heartbeats = super::runtime::fresh_sidebar_heartbeats_for_doctor(&runtime).ok()?;
     build_drift(&heartbeats, rimz::build_id::current())
 }
 
 fn collect_event_schema_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<String>) {
-    let paths = match StatePaths::for_workspace(ws.workspace_id.clone()) {
+    let paths = match StatePaths::for_project_root(&ws.project_root) {
         Ok(paths) => paths,
         Err(err) => {
             warnings.push(format!("event log unavailable ({err})"));
@@ -66,7 +66,7 @@ fn collect_event_schema_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Ve
 }
 
 fn collect_heartbeat_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<String>) {
-    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+    let runtime = match RuntimePaths::for_project_root(&ws.project_root) {
         Ok(runtime) => runtime,
         Err(err) => {
             warnings.push(format!("heartbeat dir unavailable ({err})"));

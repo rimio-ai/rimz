@@ -20,7 +20,7 @@ fn plugin_scaffold_registry_doctor_and_start_validation_work_end_to_end() {
         "register failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let plugin_dir = env.config_root().join("rimz/agents.d/testbot");
+    let plugin_dir = env.rimz_home().join("agents.d/testbot");
     for path in [
         "agent.toml",
         "README.md",
@@ -123,7 +123,7 @@ fn plugin_scaffold_registry_doctor_and_start_validation_work_end_to_end() {
 fn plugin_check_replays_example_envelopes_and_rejects_bad_input() {
     let env = Env::new();
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/agent-plugin");
-    let plugin_dir = env.config_root().join("rimz/agents.d/scriptbot");
+    let plugin_dir = env.rimz_home().join("agents.d/scriptbot");
     fs::create_dir_all(plugin_dir.join("fixtures")).expect("create plugin fixture directory");
     fs::copy(source.join("README.md"), plugin_dir.join("README.md")).expect("copy setup doc");
     fs::copy(

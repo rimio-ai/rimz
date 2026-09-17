@@ -669,7 +669,8 @@ fn flip_compaction_threshold_is_checked_before_queuing() {
                 usize::from(reached && live_pane),
                 "{used:?}: {output}"
             );
-            let assists = rimz::harness::assist_log::recent(&fixture.env.state_root(), None);
+            let assists =
+                rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None);
             assert_eq!(assists.len(), usize::from(reached));
             if reached && live_pane {
                 assert!(output.contains("compact  queued"), "{output}");
@@ -730,7 +731,7 @@ fn flip_compaction_uses_definition_default_unless_role_overrides_it() {
             "Complete the work.",
         );
         std::fs::write(
-            fixture.env.config_root().join("rimz/config.toml"),
+            fixture.env.rimz_home().join("config.toml"),
             format!("[harness]\nflip_compact = \"{default}\"\n"),
         )
         .unwrap();
@@ -753,7 +754,8 @@ fn flip_compaction_uses_definition_default_unless_role_overrides_it() {
                 output.contains(&format!("190k tokens, over {}k", expected / 1000)),
                 "{output}"
             );
-            let assists = rimz::harness::assist_log::recent(&fixture.env.state_root(), None);
+            let assists =
+                rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None);
             assert!(
                 matches!(&assists[0].assist, rimz::harness::assist_log::Assist::FlipCompact { threshold, .. } if *threshold == expected)
             );
@@ -771,7 +773,9 @@ fn flipping_own_stage_to_done_never_compacts() {
     let output = success(fixture.flip("Done", Some("coder"), Some("Finished.")));
     assert!(!output.contains("compact"), "{output}");
     assert!(fixture.env.store().list_messages().unwrap().is_empty());
-    assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).is_empty());
+    assert!(
+        rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None).is_empty()
+    );
     assert!(
         std::fs::read_to_string(fixture.board())
             .unwrap()
@@ -823,7 +827,7 @@ fn missing_pane_skips_compaction_without_failing_the_flip() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].agent_id.as_str(), "reviewer");
     assert_ne!(messages[0].body, MessageBody::Command);
-    assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).iter().any(|record| matches!(
+    assert!(rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None).iter().any(|record| matches!(
         &record.assist,
         rimz::harness::assist_log::Assist::FlipCompact { error: Some(error), .. } if error == "no bound pane"
     )));
@@ -875,7 +879,7 @@ fn compaction_delivery_error_does_not_fail_a_completed_flip() {
             trace.contains("\taction\twrite-chars\t--pane-id\tterminal_3\t--\t/compact"),
             "compaction must attempt a pane write: {trace}"
         );
-        assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).iter().any(|record| matches!(
+        assert!(rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None).iter().any(|record| matches!(
         &record.assist,
         rimz::harness::assist_log::Assist::FlipCompact { message_id: Some(id), delivered: false, error, .. } if id == messages[0].message_id.as_str() && error.is_some() == broken_wait_stamp
     )));
@@ -1070,7 +1074,10 @@ fn same_role_and_foreign_stage_do_not_compact_or_enqueue() {
         assert!(output.contains(expected), "{output}");
         assert!(!output.contains("compact"), "{output}");
         assert!(fixture.env.store().list_messages().unwrap().is_empty());
-        assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).is_empty());
+        assert!(
+            rimz::harness::assist_log::recent(&fixture.env.rimz_home().join("logs"), None)
+                .is_empty()
+        );
     }
     let board = std::fs::read_to_string(fixture.board()).unwrap();
     assert!(board.contains("Stage: Done\n"));

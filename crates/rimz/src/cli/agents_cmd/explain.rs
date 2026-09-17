@@ -50,8 +50,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let machine = cli::launch_machine_config()?;
     cli::report_unknown_config_keys(&machine)?;
     let effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
-    let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())?;
+    let state = rimz::StatePaths::for_project_root(&workspace.project_root)?;
+    let runtime = rimz::RuntimePaths::for_state(&state)?;
     let channel = cli::current_channel(&workspace);
     let mut warnings = Vec::new();
     let (request, cwd, action_note) = if args.target.starts_with('@') {

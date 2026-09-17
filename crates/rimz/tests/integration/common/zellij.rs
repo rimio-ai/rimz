@@ -75,6 +75,7 @@ impl ZellijNamespace {
     pub(crate) fn pin_pty_at(path: &Path, command: &mut CommandBuilder) {
         command.scrub_session_env();
         command.env("XDG_RUNTIME_DIR", path);
+        command.env("RIMZ_HOME", path);
         command.env("XDG_STATE_HOME", path);
         command.env("XDG_CONFIG_HOME", path);
         command.env("XDG_CACHE_HOME", path);
@@ -94,6 +95,7 @@ impl ZellijNamespace {
     fn pin_command_at(path: &Path, command: &mut Command) {
         command
             .env("XDG_RUNTIME_DIR", path)
+            .env("RIMZ_HOME", path)
             .env("XDG_STATE_HOME", path)
             .env("XDG_CONFIG_HOME", path)
             .env("XDG_CACHE_HOME", path)

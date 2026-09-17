@@ -392,6 +392,7 @@ impl ZellijRoom {
         let mut cmd = Command::new("zellij");
         cmd.scrub_session_env()
             .env("XDG_RUNTIME_DIR", &self.env.runtime_root)
+            .env("RIMZ_HOME", self.env.rimz_home())
             .env("XDG_STATE_HOME", self.env.state_root())
             .env("XDG_CONFIG_HOME", self.env.config_root())
             .env("XDG_CACHE_HOME", &self.env.home_root)

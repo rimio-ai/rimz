@@ -160,6 +160,7 @@ impl StatsRefreshHarness {
         cmd.args(["stats", "--refresh"]);
         for key in [
             "HOME",
+            "RIMZ_HOME",
             "TMPDIR",
             "TMUX_TMPDIR",
             "XDG_CACHE_HOME",

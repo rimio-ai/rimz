@@ -230,6 +230,7 @@ fn pin_zellij_env(command: &mut Command, spec: &SandboxSpec) {
         .env("XDG_RUNTIME_DIR", &spec.runtime_root);
     if spec.home_root == spec.runtime_root {
         command
+            .env("RIMZ_HOME", &spec.home_root)
             .env("XDG_STATE_HOME", &spec.home_root)
             .env("XDG_CONFIG_HOME", &spec.home_root)
             .env("XDG_CACHE_HOME", &spec.home_root)
@@ -239,6 +240,7 @@ fn pin_zellij_env(command: &mut Command, spec: &SandboxSpec) {
     } else {
         let config = spec.home_root.join("config");
         command
+            .env("RIMZ_HOME", spec.home_root.join(".rimz"))
             .env("XDG_STATE_HOME", spec.home_root.join("state"))
             .env("XDG_CONFIG_HOME", &config)
             .env("XDG_CACHE_HOME", spec.home_root.join("cache"))

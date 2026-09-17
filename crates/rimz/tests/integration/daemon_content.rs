@@ -14,7 +14,7 @@ use crate::common::Env;
 #[test]
 fn content_supervisor_restarts_child_when_config_is_saved() {
     let env = Env::new();
-    let config_path = env.config_root().join("rimz").join("config.toml");
+    let config_path = env.rimz_home().join("config.toml");
     let sentinels = env.home_root.join("daemon-content");
     std::fs::create_dir_all(&sentinels).expect("mkdir sentinels");
 

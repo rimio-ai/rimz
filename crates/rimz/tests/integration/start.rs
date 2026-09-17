@@ -99,7 +99,7 @@ fn assert_health_before_presence(trace: &str) {
 #[cfg(target_os = "linux")]
 fn start_refuses_sandbox_without_bwrap() {
     let env = Env::new();
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let agents_path = config_dir.join("config.toml");
     let seed = "[agents]\nisolation = \"sandbox\"\n";
@@ -123,6 +123,31 @@ fn start_refuses_sandbox_without_bwrap() {
     assert!(
         !config_dir.join("theme.toml").exists(),
         "no theme bootstrap"
+    );
+    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
+}
+
+#[test]
+fn start_refuses_a_legacy_only_host_without_creating_the_home() {
+    let env = Env::new();
+    std::fs::remove_dir_all(env.rimz_home()).expect("remove fixture home");
+    let legacy = env.state_root().join("rimz");
+    std::fs::create_dir_all(&legacy).expect("seed legacy root");
+    let mux_log = env.home_root.join("zellij.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "start", "--no-attach"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
+        .bounded_output()
+        .expect("run start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains(&legacy.display().to_string()), "{stderr}");
+    assert!(stderr.contains("moving-from-the-xdg-roots"), "{stderr}");
+    assert!(
+        !env.rimz_home().exists(),
+        "no empty home beside legacy roots"
     );
     assert!(!mux_log.exists(), "no multiplexer calls before refusal");
 }
@@ -243,14 +268,11 @@ fn start_inside_selected_mux_reports_and_skips_launch() {
 #[test]
 fn start_rejects_unsupported_account_budget_before_room_state() {
     let env = Env::new();
-    let config = env.config_root().join("rimz/config.toml");
+    let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
     std::fs::write(config, "[accounts.budget]\nantigravity = \"50/day\"\n")
         .expect("machine config");
-    let workspace_state = env
-        .state_root()
-        .join("rimz/workspaces")
-        .join(env.workspace_id.as_str());
+    let workspace_state = env.state_path_for(&env.project_root).root;
 
     let output = env
         .rimz()
@@ -445,11 +467,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
 }
 
 fn room_logins(env: &Env) -> Option<serde_json::Value> {
-    let record = env
-        .state_root()
-        .join("rimz/workspaces")
-        .join(env.workspace_id.as_str())
-        .join("workspace.json");
+    let record = env.state_path_for(&env.project_root).workspace_record;
     let text = std::fs::read_to_string(record).ok()?;
     let record: serde_json::Value = serde_json::from_str(&text).expect("workspace record json");
     record.get("logins").cloned()
@@ -469,7 +487,7 @@ fn start_with_accounts(env: &Env, sessions: &str, accounts: &[&str]) -> std::pro
 }
 
 fn write_machine_config(env: &Env, text: &str) {
-    let config = env.config_root().join("rimz/config.toml");
+    let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
     std::fs::write(config, text).expect("machine config");
 }

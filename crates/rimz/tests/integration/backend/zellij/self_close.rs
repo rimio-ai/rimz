@@ -314,7 +314,7 @@ fn sidebar_serve_command_with_tick(
     tick_seconds: u64,
 ) -> String {
     format!(
-        "HOME={xdg} XDG_CONFIG_HOME={xdg} XDG_STATE_HOME={xdg} XDG_RUNTIME_DIR={xdg} \
+        "HOME={xdg} RIMZ_HOME={xdg} XDG_CONFIG_HOME={xdg} XDG_STATE_HOME={xdg} XDG_RUNTIME_DIR={xdg} \
          RIMZ_BIN={rimz} \
          exec {rimz} sidebar serve --mux zellij --workspace-id {workspace_id} \
          --session-name {session} --tick-seconds {tick_seconds}",

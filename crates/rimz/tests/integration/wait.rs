@@ -1422,7 +1422,7 @@ fn loop_instances_path(env: &Env) -> std::path::PathBuf {
 }
 
 fn loop_runs_path(env: &Env) -> std::path::PathBuf {
-    env.state_root().join("rimz").join("loop-runs.log.jsonl")
+    env.rimz_home().join("logs/loop-runs.log.jsonl")
 }
 
 fn wait_instances(env: &Env) -> Tasks {

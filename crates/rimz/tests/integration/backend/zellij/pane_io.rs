@@ -45,12 +45,7 @@ fn sidebar_focus_command_targets_session_from_outside_room() {
 
     let env = Env::new();
     let workspace_root = std::path::PathBuf::from(format!("/tmp/rimz-{name}"));
-    record_known_workspace_session(
-        &env.state_root(),
-        &opts.workspace_id,
-        &workspace_root,
-        &name,
-    );
+    record_known_workspace_session(&env.rimz_home(), &opts.workspace_id, &workspace_root, &name);
     write_topology_cache_from_list_panes(xdg, &opts.workspace_id, &name);
     let trace = TempDir::new().expect("zellij trace tempdir");
     let trace_log = trace.path().join("zellij.log");

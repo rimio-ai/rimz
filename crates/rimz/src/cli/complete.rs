@@ -20,8 +20,8 @@ fn candidate(value: impl Into<std::ffi::OsString>, help: impl Into<String>) -> C
 
 fn room_context() -> Option<RoomContext> {
     let workspace = WorkspaceResolver::resolve_participant(".", None).ok()?;
-    let paths = StatePaths::for_workspace(workspace.workspace_id.clone()).ok()?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone()).ok()?;
+    let paths = StatePaths::for_project_root(&workspace.project_root).ok()?;
+    let runtime = RuntimePaths::for_project_root(&workspace.project_root).ok()?;
     room_context_from(workspace, paths, runtime)
 }
 

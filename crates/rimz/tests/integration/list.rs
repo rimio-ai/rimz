@@ -3,8 +3,6 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use rimz::WorkspaceId;
-
 use crate::common::Env;
 
 #[test]
@@ -39,10 +37,7 @@ fn list_skips_workspaces_with_unreadable_record() {
     env.record(&env.project_root.join("query-engine"));
 
     // Add a sibling dir under workspaces with a garbled workspace.json.
-    let mut bogus_dir = env.state_root();
-    bogus_dir.push("rimz");
-    bogus_dir.push("workspaces");
-    bogus_dir.push(WorkspaceId::from_project_root(Path::new("/nope")).as_str());
+    let bogus_dir = env.rimz_home().join("ws").join("nope-abcd");
     std::fs::create_dir_all(&bogus_dir).expect("mkdir bogus");
     std::fs::write(bogus_dir.join("workspace.json"), b"{ not json").expect("write bogus");
 
@@ -70,7 +65,7 @@ fn list_hides_dormant_workspaces_unless_all() {
 
     // Backdate the workspace's files past the 24h recency window so it counts
     // as dormant. It is not running, so the default view should drop it.
-    let workspaces = env.state_root().join("rimz").join("workspaces");
+    let workspaces = env.rimz_home().join("ws");
     let ws_dir = std::fs::read_dir(&workspaces)
         .expect("read workspaces")
         .next()

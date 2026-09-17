@@ -23,6 +23,7 @@ use crate::common::Env;
 #[test]
 fn sidebar_supervisor_records_worker_abort_and_respawns() {
     let env = Env::new();
+    env.record(&env.project_root);
     let mut cmd = env.rimz();
     cmd.args([
         "sidebar",
@@ -93,6 +94,7 @@ fn sidebar_supervisor_records_worker_abort_and_respawns() {
 #[cfg(target_os = "linux")]
 fn sidebar_supervisor_reaps_stray_children_while_worker_runs() {
     let env = Env::new();
+    env.record(&env.project_root);
     let stray_pid_path = env.home_root.join("stray.pid");
     let worker_exit_path = env.home_root.join("worker.exit");
     std::fs::write(&stray_pid_path, b"").expect("seed empty stray pid file");
@@ -142,6 +144,7 @@ fn sidebar_supervisor_reaps_stray_children_while_worker_runs() {
 fn sidebar_supervisor_pulls_a_record_update_without_external_wakeup() {
     let env = Env::new();
     env.record(&env.project_root);
+    env.record(&env.project_root);
     let worker_exit_path = env.home_root.join("worker-never-exits");
     let starts = env.home_root.join("worker-starts.log");
     let proxy = proxy_rimz(&env, "next-rimz");
@@ -164,6 +167,7 @@ fn sidebar_supervisor_pulls_a_record_update_without_external_wakeup() {
 #[cfg(target_os = "linux")]
 fn sidebar_supervisor_breaks_respawn_backoff_on_a_record_update() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.record(&env.project_root);
     let starts = env.home_root.join("backoff-worker-starts.log");
     let proxy = proxy_rimz(&env, "fixed-rimz");
@@ -189,6 +193,7 @@ fn sidebar_supervisor_breaks_respawn_backoff_on_a_record_update() {
 #[cfg(target_os = "linux")]
 fn crashing_recorded_build_keeps_old_supervisor_and_recovers_on_next_record() {
     let env = Env::new();
+    env.record(&env.project_root);
     env.record(&env.project_root);
     let worker_exit_path = env.home_root.join("worker-never-exits");
     let starts = env.home_root.join("recovery-worker-starts.log");
@@ -217,6 +222,7 @@ fn crashing_recorded_build_keeps_old_supervisor_and_recovers_on_next_record() {
 #[cfg(target_os = "linux")]
 fn self_close_request_with_authoritative_siblings_respawns_worker() {
     let env = Env::new();
+    env.record(&env.project_root);
     let starts = env.home_root.join("self-close-rejected-starts.log");
     let worker_exit_path = env.home_root.join("unused-exit-file");
     let mut cmd = supervisor_command(&env, &worker_exit_path, &starts, "self_close");
@@ -239,6 +245,7 @@ fn self_close_request_with_authoritative_siblings_respawns_worker() {
 #[cfg(target_os = "linux")]
 fn self_close_request_with_authoritative_empty_view_exits_supervisor() {
     let env = Env::new();
+    env.record(&env.project_root);
     let starts = env.home_root.join("self-close-confirmed-starts.log");
     let worker_exit_path = env.home_root.join("unused-exit-file");
     let mut cmd = supervisor_command(&env, &worker_exit_path, &starts, "self_close");
@@ -257,6 +264,7 @@ fn self_close_request_with_authoritative_empty_view_exits_supervisor() {
 #[cfg(target_os = "linux")]
 fn sidebar_supervisor_reaps_worker_when_its_pane_disappears() {
     let env = Env::new();
+    env.record(&env.project_root);
     let instance =
         rimz::SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").expect("instance id");
     let runtime = env.runtime_paths();
@@ -324,6 +332,7 @@ fn sidebar_supervisor_reaps_worker_when_its_pane_disappears() {
 #[cfg(target_os = "linux")]
 fn sidebar_supervisor_keeps_pane_watchdog_across_worker_respawns() {
     let env = Env::new();
+    env.record(&env.project_root);
     let instance =
         rimz::SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da05").expect("instance id");
     let starts = env.home_root.join("watchdog-worker-starts.log");

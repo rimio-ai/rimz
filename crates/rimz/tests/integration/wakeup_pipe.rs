@@ -27,7 +27,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use rimz::disk::paths::RuntimePaths;
+use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
@@ -97,8 +97,9 @@ fn wakeup_fixture() -> Option<WakeupFixture> {
     std::fs::create_dir_all(&runtime_root).expect("mkdir runtime");
     let project_root = project_root.canonicalize().expect("canonical project");
     let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let runtime =
-        RuntimePaths::under(workspace_id.clone(), &runtime_root).expect("RuntimePaths::under");
+    let state =
+        StatePaths::for_project_root_under(&project_root, &state_root).expect("state paths");
+    let runtime = RuntimePaths::under_named(workspace_id.clone(), state.dir_name, &runtime_root);
     runtime.ensure_dirs().expect("ensure runtime dirs");
     if crate::common::af_unix_bind_sandboxed(&runtime.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
@@ -166,6 +167,7 @@ fn run_wakeup_trigger(rimz_bin: &Path, trace_bin: &Path, fixture: &WakeupFixture
         .scrub_session_env()
         .args(["hooks", "feed", "--source", "claude"])
         .current_dir(&fixture.project_root)
+        .env("RIMZ_HOME", &fixture.state_root)
         .env("XDG_STATE_HOME", &fixture.state_root)
         .env("XDG_RUNTIME_DIR", &fixture.runtime_root)
         .env("RIMZ_ZELLIJ_BIN", trace_bin)

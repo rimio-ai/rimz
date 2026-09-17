@@ -87,6 +87,7 @@ fn sidebar_redraws_at_new_size_on_resize() {
     ]);
     for key in [
         "HOME",
+        "RIMZ_HOME",
         "TMPDIR",
         "TMUX_TMPDIR",
         "XDG_CACHE_HOME",

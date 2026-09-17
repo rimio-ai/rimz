@@ -246,13 +246,13 @@ fn stats_for_room(
     readers: &mut BTreeMap<String, PublishedSnapshotReader>,
 ) -> Option<RoomStats> {
     if !readers.contains_key(&room.session_name) {
-        let runtime = RuntimePaths::for_workspace(room.workspace_id.clone()).ok()?;
+        let runtime = RuntimePaths::for_project_root(&room.project_root).ok()?;
         readers.insert(
             room.session_name.clone(),
             PublishedSnapshotReader::new(runtime, room.session_name.clone(), None),
         );
     }
-    let state = StatePaths::for_workspace(room.workspace_id.clone()).ok()?;
+    let state = StatePaths::for_project_root(&room.project_root).ok()?;
     let snapshot = readers.get_mut(&room.session_name)?.read(&state).ok()?;
     Some(RoomStats::from_snapshot(&snapshot))
 }

@@ -539,7 +539,7 @@ fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static s
         "handoffs",
     ];
     if !remove_state {
-        keep.extend(["ws", "shared", "logs", "loops", "builds"]);
+        keep.extend(["ws", "shared", "logs", "loops", "web", "builds"]);
     }
     if !remove_config {
         keep.extend([
@@ -548,6 +548,7 @@ fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static s
             "loop.toml",
             "remote.toml",
             "projects",
+            "agents.d",
         ]);
     }
     keep
@@ -577,8 +578,10 @@ fn system_bin_dir() -> PathBuf {
 }
 
 fn project_local_dirs(workspaces: &[KnownWorkspace]) -> Vec<PathBuf> {
+    let home = paths::rimz_home();
     workspaces
         .iter()
+        .filter(|workspace| !paths::holds_rimz_home(&workspace.project_root, &home))
         .map(|workspace| workspace.project_root.join(".rimz"))
         .filter(|path| path.is_dir())
         .collect::<BTreeSet<_>>()

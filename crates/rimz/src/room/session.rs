@@ -299,7 +299,7 @@ fn renamed_session_to_retire<'a>(
 /// overwrites the stored name — that record is the only breadcrumb to the old
 /// session. Best-effort: any lookup failure leaves the launch to proceed.
 pub fn retire_renamed_session(backend: &dyn MuxBackend, workspace: &crate::ResolvedWorkspace) {
-    let Ok(paths) = StatePaths::for_workspace(workspace.workspace_id.clone()) else {
+    let Ok(paths) = StatePaths::for_project_root(&workspace.project_root) else {
         return;
     };
     let recorded = match record::read(&paths.workspace_record) {

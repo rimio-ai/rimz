@@ -44,9 +44,10 @@ fn sidebar_serve_line(
         .map(|(key, value)| format!("{key}={value} "))
         .collect::<String>();
     format!(
-        "XDG_STATE_HOME={state} XDG_CONFIG_HOME={config} XDG_RUNTIME_DIR={runtime} HOME={home} \
+        "RIMZ_HOME={rimz_home} XDG_STATE_HOME={state} XDG_CONFIG_HOME={config} XDG_RUNTIME_DIR={runtime} HOME={home} \
          {extra_env}RIMZ_BIN={rimz} exec {rimz} sidebar serve --mux {mux} --workspace-id {ws} \
          --session-name {session} --tick-seconds 1",
+        rimz_home = env.rimz_home().display(),
         state = env.state_root().display(),
         config = env.config_root().display(),
         runtime = runtime.display(),

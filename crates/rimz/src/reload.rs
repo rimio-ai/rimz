@@ -368,7 +368,7 @@ fn live_targets(sweep_dead: bool) -> (Vec<LiveTarget>, usize) {
     let mut targets = Vec::new();
     let mut dead_swept = 0;
     for ws in workspaces {
-        let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+        let runtime = match RuntimePaths::for_project_root(&ws.project_root) {
             Ok(runtime) => runtime,
             Err(err) => {
                 tracing::warn!(
@@ -536,7 +536,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
                 &ws.session_name,
                 &ws.workspace_id,
                 wasm,
-                StatePaths::for_workspace(ws.workspace_id.clone())
+                StatePaths::for_project_root(&ws.project_root)
                     .map(|paths| paths.room_bin)
                     .unwrap_or_else(|_| rimz_bin.clone()),
                 &machine_config.sidebar,
@@ -632,7 +632,7 @@ fn record_live_room_bin(
     runtime: &RuntimePaths,
     staged: &StagedBuild,
 ) -> Option<PathBuf> {
-    let Ok(paths) = StatePaths::for_workspace(ws.workspace_id.clone()) else {
+    let Ok(paths) = StatePaths::for_project_root(&ws.project_root) else {
         return None;
     };
     record_live_room_bin_at(ws, staged, &paths, runtime)

@@ -52,7 +52,7 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         let env = Env::new();
         std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
         env.install_agent_hooks("claude");
-        let config_dir = env.config_root().join("rimz");
+        let config_dir = env.rimz_home();
         std::fs::create_dir_all(&config_dir).expect("config directory");
         std::fs::write(
             config_dir.join("config.toml"),
@@ -207,7 +207,7 @@ fn producer_keeps_profile_tab_until_both_agents_exit() {
 fn assert_producer_releases_profile_tab(count: usize) {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("config directory");
     std::fs::write(
         config_dir.join("config.toml"),
@@ -398,6 +398,7 @@ fn tmux_agent_exec_command(
         .expect("exec argv");
     let mut argv = vec![
         "/usr/bin/env".to_owned(),
+        format!("RIMZ_HOME={}", env.rimz_home().display()),
         format!("XDG_STATE_HOME={}", env.state_root().display()),
         format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
         format!("XDG_CONFIG_HOME={}", env.config_root().display()),
@@ -443,6 +444,7 @@ fn tmux_direct_resume_command(
         .expect("exec argv");
     let mut argv = vec![
         "/usr/bin/env".to_owned(),
+        format!("RIMZ_HOME={}", env.rimz_home().display()),
         format!("XDG_STATE_HOME={}", env.state_root().display()),
         format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
         format!("XDG_CONFIG_HOME={}", env.config_root().display()),
@@ -494,6 +496,7 @@ fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str)
         .expect("exec argv");
     let mut argv = vec![
         "/usr/bin/env".to_owned(),
+        format!("RIMZ_HOME={}", env.rimz_home().display()),
         format!("XDG_STATE_HOME={}", env.state_root().display()),
         format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
         format!("XDG_CONFIG_HOME={}", env.config_root().display()),
@@ -984,7 +987,7 @@ fn restart_unsupported_profile_skills_retains_old_pane_and_state() {
             },
         ))
         .expect("seed live agent");
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(
         config_dir.join("config.toml"),
@@ -1047,7 +1050,7 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
             worktree.to_str().expect("worktree path"),
         ],
     );
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     crate::common::write_definition(
         &env,
@@ -1615,7 +1618,7 @@ fn existing_unmanaged_worktree_launch(doorway: &str, spec: &str) {
         .expect("checkout metadata")
         .ino();
     let git_file = std::fs::read(worktree.join(".git")).expect("checkout git pointer");
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     crate::common::write_definition(
         &env,

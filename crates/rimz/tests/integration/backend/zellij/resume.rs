@@ -331,6 +331,7 @@ fn zellij_agent_exec_command(
         .expect("exec argv");
     let mut argv = vec![
         "/usr/bin/env".to_owned(),
+        format!("RIMZ_HOME={}", env.rimz_home().display()),
         format!("XDG_STATE_HOME={}", env.state_root().display()),
         format!("XDG_RUNTIME_DIR={}", zellij_runtime.display()),
         format!("XDG_CONFIG_HOME={}", env.config_root().display()),
