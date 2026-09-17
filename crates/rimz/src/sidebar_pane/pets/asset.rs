@@ -357,27 +357,9 @@ fn offline() -> bool {
 }
 
 fn asset_path(file: &str) -> PathBuf {
-    cache_home().join("rimz/pets/v1/assets").join(file)
-}
-
-fn cache_home() -> PathBuf {
-    cache_home_from(env_path("XDG_CACHE_HOME"), env_path("HOME"))
-}
-
-fn cache_home_from(xdg_cache_home: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
-    if let Some(value) = xdg_cache_home {
-        return value;
-    }
-    if let Some(home) = home {
-        return home.join(".cache");
-    }
-    env::temp_dir().join("rimz-cache")
-}
-
-fn env_path(key: &str) -> Option<PathBuf> {
-    env::var_os(key)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    crate::disk::paths::cache_dir()
+        .join("pets/v1/assets")
+        .join(file)
 }
 
 /// Expand a leading `~` / `~/` against `HOME` so a local pet path reads the way
@@ -459,19 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_and_petdex_roots_resolve_from_env() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(
-            cache_home_from(
-                Some(dir.path().to_path_buf()),
-                Some(PathBuf::from("/home/a"))
-            ),
-            dir.path()
-        );
-        assert_eq!(
-            cache_home_from(None, Some(PathBuf::from("/home/a"))),
-            PathBuf::from("/home/a/.cache")
-        );
+    fn petdex_root_resolves_from_home() {
         assert_eq!(
             petdex_root_from(Some(PathBuf::from("/home/a"))),
             Some(PathBuf::from("/home/a/.codex/pets"))

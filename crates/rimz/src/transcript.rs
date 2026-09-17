@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::disk::paths::{StatePaths, state_home, workspaces_dir_under};
+use crate::disk::paths::{StatePaths, rimz_home, workspaces_dir_under};
 use crate::disk::{atomic, lock};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::ids::{AskId, compose_channel};
@@ -334,7 +334,7 @@ pub fn channels(paths: &StatePaths) -> Result<BTreeSet<String>> {
 /// `channel`. Best-effort inventory for read commands: transcript evidence
 /// only, unreadable workspaces and logs skipped.
 pub fn workspaces_with_channel(channel: &str) -> Vec<KnownWorkspace> {
-    workspaces_with_channel_under(&state_home(), channel)
+    workspaces_with_channel_under(&rimz_home(), channel)
 }
 
 /// [`workspaces_with_channel`] over an explicit state root, for tests.
@@ -353,9 +353,7 @@ fn workspaces_with_channel_under(state_root: &Path, channel: &str) -> Vec<KnownW
                 tracing::debug!(workspace = %workspace.workspace_id, root = %workspace.project_root.display(), "skipping workspace whose project root is gone");
                 return false;
             }
-            let Ok(paths) = StatePaths::under(workspace.workspace_id.clone(), state_root) else {
-                return false;
-            };
+            let paths = StatePaths::under_named(workspace.workspace_id.clone(), workspace.dir_name.clone(), state_root);
             match channels(&paths) {
                 Ok(channels) => channels.contains(channel),
                 Err(err) => {

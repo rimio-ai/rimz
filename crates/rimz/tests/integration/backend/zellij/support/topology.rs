@@ -69,9 +69,9 @@ fn write_topology_cache(
     snapshot: &PaneSnapshot,
 ) {
     let topology = topology_cache(session, snapshot);
-    let path = xdg
-        .join("rimz")
-        .join(workspace_id.as_str())
+    let path = rimz::RuntimePaths::under(workspace_id.clone(), xdg)
+        .expect("test runtime paths")
+        .root
         .join("pane-topology.json");
     std::fs::create_dir_all(path.parent().expect("topology parent"))
         .expect("create topology parent");

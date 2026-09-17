@@ -6,6 +6,7 @@ fn workspace() -> KnownWorkspace {
         project_root: PathBuf::from("/repo"),
         session_name: "rimz-test".to_owned(),
         root_class: crate::workspace::RootClass::Directory,
+        dir_name: crate::ids::WorkspaceDirName::parse("repo-f89e").unwrap(),
         rimz_bin: None,
         updated_at: jiff::Timestamp::UNIX_EPOCH,
     }

@@ -253,6 +253,9 @@ impl ZellijBackend {
     ) -> Result<KnownWorkspace> {
         if let Some(workspace_id) = workspace_id {
             return Ok(KnownWorkspace {
+                dir_name: self
+                    .runtime_paths_for_workspace(workspace_id.clone())?
+                    .dir_name,
                 workspace_id: workspace_id.clone(),
                 project_root: std::path::PathBuf::new(),
                 session_name: session.to_owned(),
@@ -288,13 +291,19 @@ impl ZellijBackend {
         workspace_id: WorkspaceId,
     ) -> Result<RuntimePaths> {
         match &self.runtime_dir {
-            Some(dir) => RuntimePaths::under(workspace_id, dir),
-            None => RuntimePaths::for_workspace(workspace_id),
+            Some(dir) => {
+                let state = self.state_paths_for_workspace(workspace_id)?;
+                Ok(RuntimePaths::under_named(
+                    state.workspace_id,
+                    state.dir_name,
+                    dir,
+                ))
+            }
+            None => RuntimePaths::for_workspace(workspace_id).map_err(|err| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("resolving RimZ runtime paths: {err}"),
+            }),
         }
-        .map_err(|err| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("resolving RimZ runtime paths: {err}"),
-        })
     }
 
     pub(super) fn state_paths_for_workspace(

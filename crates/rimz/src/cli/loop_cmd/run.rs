@@ -95,7 +95,8 @@ pub(super) fn run_one(
         if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
             return Ok(());
         }
-        let runtime = RuntimePaths::for_workspace(WorkspaceId::from_project_root(root))?;
+        let state = StatePaths::for_project_root(root)?;
+        let runtime = RuntimePaths::for_state(&state)?;
         if fresh_sidebar_present(&runtime) {
             return Ok(());
         }

@@ -24,7 +24,7 @@ use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
-use rimz::disk::paths::{RuntimePaths, StatePaths, state_home};
+use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
@@ -394,7 +394,8 @@ fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {
 }
 
 fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
-    RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
+    let state = StatePaths::for_project_root(root).ok()?;
+    RuntimePaths::for_state(&state).ok()
 }
 
 fn observe_task_timing(

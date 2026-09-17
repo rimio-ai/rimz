@@ -865,10 +865,14 @@ fn worktree_removal_detail(removed: &SweptWorktree) -> &'static str {
 }
 
 fn removed_workspace_detail(removed: &gc::RemovedWorkspace) -> String {
+    let name = removed
+        .workspace_id
+        .as_ref()
+        .map_or(removed.dir_name.as_str(), rimz::WorkspaceId::as_str);
     match removed.reason {
         gc::PruneReason::ProjectRootGone => format!(
             "{} — project folder gone: {} ({})",
-            removed.workspace_id,
+            name,
             removed
                 .project_root
                 .as_deref()
@@ -878,7 +882,7 @@ fn removed_workspace_detail(removed: &gc::RemovedWorkspace) -> String {
         ),
         gc::PruneReason::AbandonedScaffold => format!(
             "{} — abandoned setup, never used ({})",
-            removed.workspace_id,
+            name,
             fmt_bytes(removed.bytes)
         ),
     }
@@ -1048,7 +1052,10 @@ struct JsonRemovedWorkspace {
 impl From<&gc::RemovedWorkspace> for JsonRemovedWorkspace {
     fn from(workspace: &gc::RemovedWorkspace) -> Self {
         Self {
-            workspace_id: workspace.workspace_id.to_string(),
+            workspace_id: workspace
+                .workspace_id
+                .as_ref()
+                .map_or_else(|| workspace.dir_name.clone(), ToString::to_string),
             reason: prune_reason_json(workspace.reason),
             project_root: workspace.project_root.as_deref().map(path_string),
             bytes: workspace.bytes,
@@ -1062,8 +1069,8 @@ struct JsonRetainedWorkspace {
     error: String,
 }
 
-impl From<&(rimz::WorkspaceId, String)> for JsonRetainedWorkspace {
-    fn from((workspace_id, error): &(rimz::WorkspaceId, String)) -> Self {
+impl From<&(String, String)> for JsonRetainedWorkspace {
+    fn from((workspace_id, error): &(String, String)) -> Self {
         Self {
             workspace_id: workspace_id.to_string(),
             error: error.clone(),
@@ -1378,6 +1385,20 @@ mod tests {
         assert_eq!(no_store["worktrees"]["skipped"], "no_store");
     }
 
+    #[test]
+    fn workspace_reports_use_directory_name_without_a_record() {
+        let removed = gc::RemovedWorkspace {
+            workspace_id: None,
+            dir_name: "unfinished".to_owned(),
+            reason: gc::PruneReason::AbandonedScaffold,
+            bytes: 0,
+            project_root: None,
+        };
+        assert!(removed_workspace_detail(&removed).starts_with("unfinished — abandoned setup"));
+        let json = serde_json::to_value(JsonRemovedWorkspace::from(&removed)).unwrap();
+        assert_eq!(json["workspace_id"], "unfinished");
+    }
+
     fn clean_outcome() -> GcOutcome {
         GcOutcome {
             older_than: Duration::from_secs(3600),
@@ -1431,7 +1452,10 @@ mod tests {
             wait_logs_pruned: usize::from(!dry_run),
             prune: gc::WorkspacePruneReport {
                 removed: vec![gc::RemovedWorkspace {
-                    workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                    workspace_id: Some(
+                        rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                    ),
+                    dir_name: "gone-0123".to_owned(),
                     reason: gc::PruneReason::ProjectRootGone,
                     bytes: 2048,
                     project_root: Some(PathBuf::from("/gone")),

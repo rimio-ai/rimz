@@ -72,7 +72,14 @@ pub(in crate::backend::zellij) fn sidebar_opts(
 /// Zellij birth. Presence topology must use this pointer rather than falling
 /// back to an unrelated `rimz` installed on the test runner's PATH.
 pub(in crate::backend::zellij) fn publish_room_bin(state_root: &Path, opts: &SidebarPaneOptions) {
-    let state = rimz::StatePaths::under(opts.workspace_id.clone(), state_root)
+    // Birth names a room's dir from its project root; a fixture whose id is
+    // not that root's keeps the id-only name.
+    let state =
+        if opts.workspace_id == rimz::ids::WorkspaceId::from_project_root(&opts.project_root) {
+            rimz::StatePaths::for_project_root_under(&opts.project_root, state_root)
+        } else {
+            rimz::StatePaths::under(opts.workspace_id.clone(), state_root)
+        }
         .expect("test room state paths");
     state.ensure_dirs().expect("test room state dirs");
     std::fs::copy(&opts.rimz_bin, &state.room_bin).expect("publish test room binary");

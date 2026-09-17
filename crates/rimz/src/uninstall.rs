@@ -87,17 +87,17 @@ pub fn remove_root_keeping(root: &Path, keep: &[&str]) -> Vec<RemovalOutcome> {
 
 pub fn remove_runtime_root() -> Vec<RemovalOutcome> {
     remove_runtime_root_at(
-        &paths::runtime_home(),
+        &paths::runtime_rimz_root(),
         paths::env_path("XDG_RUNTIME_DIR").is_none(),
     )
 }
 
 pub fn remove_runtime_root_at(
-    runtime_home: &Path,
+    runtime_root: &Path,
     cleanup_fallback_parent: bool,
 ) -> Vec<RemovalOutcome> {
-    let mut outcomes = vec![remove_root(&runtime_home.join("rimz"))];
-    if cleanup_fallback_parent {
+    let mut outcomes = vec![remove_root(runtime_root)];
+    if cleanup_fallback_parent && let Some(runtime_home) = runtime_root.parent() {
         match dir_is_empty(runtime_home) {
             Ok(true) => outcomes.push(remove_empty_dir(runtime_home)),
             Ok(false) => {}
@@ -247,7 +247,7 @@ mod tests {
         let runtime = tempdir().unwrap();
         fs::create_dir_all(runtime.path().join("rimz/ws")).unwrap();
 
-        let outcomes = remove_runtime_root_at(runtime.path(), true);
+        let outcomes = remove_runtime_root_at(&runtime.path().join("rimz"), true);
 
         assert!(
             outcomes
@@ -255,5 +255,19 @@ mod tests {
                 .any(|outcome| outcome.path == runtime.path() && outcome.result.is_ok())
         );
         assert!(!runtime.path().exists());
+    }
+
+    #[test]
+    fn remove_runtime_root_preserves_nonempty_fallback_parent() {
+        let runtime = tempdir().unwrap();
+        let root = runtime.path().join("rimz");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(runtime.path().join("unrelated"), b"keep").unwrap();
+
+        let outcomes = remove_runtime_root_at(&root, true);
+
+        assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
+        assert!(!root.exists());
+        assert!(runtime.path().join("unrelated").exists());
     }
 }

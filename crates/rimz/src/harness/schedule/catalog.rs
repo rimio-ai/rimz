@@ -13,8 +13,7 @@ use super::{
 };
 use crate::Store;
 use crate::config::{MachineConfig, TaskEntry, Tasks};
-use crate::disk::paths::{RuntimePaths, StatePaths, config_home, state_home, workspaces_dir};
-use crate::ids::WorkspaceId;
+use crate::disk::paths::{RuntimePaths, StatePaths, rimz_home, workspaces_dir};
 use crate::trust::TrustState;
 use crate::workspace::WorkspaceResolver;
 
@@ -22,17 +21,24 @@ pub fn project_config_path(project_root: &Path) -> PathBuf {
     config_edit::TaskStore::Project(project_root).path()
 }
 
-fn instance_root(project_root: &Path) -> PathBuf {
-    workspaces_dir().join(WorkspaceId::from_project_root(project_root).as_str())
+/// The state dir holding `project_root`'s instance tasks, minted when unborn.
+fn instance_root(project_root: &Path) -> Result<PathBuf> {
+    StatePaths::for_project_root(project_root)
+        .map(|paths| paths.root)
+        .with_context(|| format!("locating state for {}", project_root.display()))
 }
 
 pub fn workspace_instance_roots() -> BTreeSet<PathBuf> {
-    let Ok(workspaces) = std::fs::read_dir(workspaces_dir()) else {
+    let Ok(workspaces) = crate::workspace::known_workspaces() else {
         return BTreeSet::new();
     };
     workspaces
-        .flatten()
-        .flat_map(|workspace| instances::load_from(&workspace.path()).0.into_values())
+        .into_iter()
+        .flat_map(|workspace| {
+            let paths =
+                StatePaths::under_named(workspace.workspace_id, workspace.dir_name, &rimz_home());
+            instances::load_from(&paths.root).0.into_values()
+        })
         .map(|entry| entry.resolved_root())
         .collect()
 }
@@ -63,7 +69,10 @@ impl TaskSource {
     pub fn path(self, entry: &TaskEntry) -> PathBuf {
         match self {
             Self::Config => MachineConfig::loop_path(),
-            Self::Instance => instances::path(&instance_root(&entry.resolved_root())),
+            // A display path: an unreadable state tree still names where the
+            // tasks would live.
+            Self::Instance => instance_root(&entry.resolved_root())
+                .map_or_else(|_| workspaces_dir(), |root| instances::path(&root)),
             Self::Project { .. } => config_edit::TaskStore::Project(&entry.root).path(),
         }
     }
@@ -141,15 +150,14 @@ impl TaskCatalog {
     /// Strict interactive load. Malformed machine, instance, or project state
     /// fails at command entry.
     pub fn load(project_root: Option<&Path>) -> Result<Self> {
-        instances::migrate_legacy(&state_home())?;
         let instances = project_root
-            .map(|root| instances::load_strict_from(&instance_root(root)))
+            .map(|root| anyhow::Ok(instances::load_strict_from(&instance_root(root)?)?))
             .transpose()?
             .unwrap_or_default();
         let machine = MachineConfig::load_loop().context("reading per-machine loop.toml")?;
         let machine_tasks = machine.tasks;
         let project = project_root
-            .map(|root| crate::config::effective::project_tasks(root, &config_home()))
+            .map(|root| crate::config::effective::project_tasks(root, &rimz_home()))
             .transpose()?
             .flatten()
             .map(|project| (project.tasks, project.state));
@@ -164,11 +172,12 @@ impl TaskCatalog {
     /// Best-effort load for elder, doctor, and maintenance reads.
     pub fn load_lenient(project_root: Option<&Path>) -> Self {
         let instances = project_root
-            .map(|root| instances::load_from(&instance_root(root)))
+            .and_then(|root| instance_root(root).ok())
+            .map(|root| instances::load_from(&root))
             .unwrap_or_default();
         let machine = MachineConfig::load_lenient().r#loop.clone();
         let project = project_root.and_then(|root| {
-            crate::config::effective::project_tasks(root, &config_home())
+            crate::config::effective::project_tasks(root, &rimz_home())
                 .ok()
                 .flatten()
                 .map(|project| (project.tasks, project.state))
@@ -251,7 +260,7 @@ impl TaskCatalog {
                     .display()
             );
         }
-        let instance_root = instance_root(&entry.resolved_root());
+        let instance_root = instance_root(&entry.resolved_root())?;
         if entry.wait.is_some() || super::ephemeral_lifetime(entry) {
             instances::insert(&instance_root, name, entry)?;
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
@@ -305,7 +314,7 @@ impl TaskCatalog {
                 config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?
             }
             TaskSource::Instance => instances::rename(
-                &instance_root(&task.entry().resolved_root()),
+                &instance_root(&task.entry().resolved_root())?,
                 name,
                 new_name,
             )?,
@@ -341,8 +350,7 @@ impl TaskCatalog {
     pub fn prune_orphan_overlays(&self) -> Result<usize> {
         let scopes = TaskKey::known_scopes(self.project_root.as_deref());
         Ok(arming::prune_orphans(&self.overlay_keys, &scopes)?
-            + strikes::prune_orphans(&self.overlay_keys, &scopes)?
-            + arming::remove_legacy_pauses()?)
+            + strikes::prune_orphans(&self.overlay_keys, &scopes)?)
     }
 
     pub fn reap_dead_deliveries() -> Result<usize> {
@@ -350,7 +358,7 @@ impl TaskCatalog {
         let mut reaped = catalog.reap_catalog_deliveries()?;
         for root in workspace_instance_roots() {
             let catalog = Self::from_layers(
-                instances::load_from(&instance_root(&root)),
+                instances::load_from(&instance_root(&root)?),
                 Tasks::default(),
                 None,
                 Some(&root),
@@ -478,7 +486,7 @@ fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
     match task.source() {
         TaskSource::Config => Ok(config_edit::remove(config_edit::TaskStore::Machine, name)?),
         TaskSource::Instance => Ok(instances::remove(
-            &instance_root(&task.entry().resolved_root()),
+            &instance_root(&task.entry().resolved_root())?,
             name,
             Some(task.entry()),
         )?),

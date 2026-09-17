@@ -79,7 +79,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(
-        &state_home(),
+        &rimz::disk::paths::logs_dir(),
         &now_zoned,
         project_root_for_globals(globals).as_deref(),
     );
@@ -521,7 +521,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let timing = observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned);
     let records = run_log::task_records(
-        &state_home(),
+        &rimz::disk::paths::logs_dir(),
         &args.name,
         project_root_for_globals(globals).as_deref(),
     );
@@ -585,7 +585,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     let task = load_task(&args.name, globals)?;
     let entry = task.as_ref().map(|task| task.entry());
     let records = run_log::task_records(
-        &state_home(),
+        &rimz::disk::paths::logs_dir(),
         &args.name,
         project_root_for_globals(globals).as_deref(),
     );

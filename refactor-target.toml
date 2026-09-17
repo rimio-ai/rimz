@@ -219,7 +219,9 @@ allowed-dependencies = [
 # Output-file summaries estimate tokens through `utils::tokens` and expose `is_empty` for the wait and digest renderers.
 # The skill library resolves from process env for uninstall and from a launch env map for sandbox and launch planning.
 # Launches derive and create each agent's private scratch dir under room tmp.
-surface-budget = 137
+# One home: every root resolves through a named `disk::paths` dir function, and
+# workspace dirs through the `for_project_root`/`under_named` constructors.
+surface-budget = 154
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -249,7 +251,8 @@ surface-budget = 535
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
-surface-budget = 57
+# `WorkspaceDirName` names workspace dirs beside the `WorkspaceId` they hold.
+surface-budget = 67
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -534,6 +537,7 @@ surface-budget = 15
 path = "crates/rimz/src/sidebar_pane/pets"
 allowed-dependencies = [
     "config",
+    "disk::paths",
     "sidebar",
     "sidebar_pane",
 ]

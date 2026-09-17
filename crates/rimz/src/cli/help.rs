@@ -47,6 +47,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
             "list-pets",
             "list-themes",
             "workspace",
+            "paths",
             "update",
             "reload",
             "reset",

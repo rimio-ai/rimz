@@ -529,7 +529,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let source_dir = dir.path().join("builds/old");
         let source = source_dir.join("rimz");
-        let destination = dir.path().join("workspaces/ws_test/rimz");
+        let destination = dir.path().join("ws/test-abcd/rimz");
         write_executable_bytes_atomically(&source, b"stable build").unwrap();
         write_executable_bytes_atomically(&destination, b"obsolete build").unwrap();
 

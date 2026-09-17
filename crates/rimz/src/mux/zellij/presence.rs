@@ -52,7 +52,7 @@ pub fn presence_plugin_build() -> &'static str {
 
 /// Locate the presence-plugin wasm without writing: the
 /// `RIMZ_PRESENCE_PLUGIN` override, else an already-materialized embedded
-/// plugin under `$XDG_DATA_HOME/rimz/plugins/`, else a development fallback
+/// plugin under the RimZ home's `data/plugins/`, else a development fallback
 /// beside the running executable. Owner flows call
 /// [`ensure_presence_plugin_artifact`] to create/update the shared artifact.
 ///
@@ -89,7 +89,7 @@ pub fn ensure_presence_plugin_artifact() -> Option<PathBuf> {
             .ok()
             .filter(|path| path.is_file());
     }
-    match materialize_presence_plugin_bytes(EMBEDDED_PRESENCE_PLUGIN, &paths::data_home()) {
+    match materialize_presence_plugin_bytes(EMBEDDED_PRESENCE_PLUGIN, &paths::data_dir()) {
         Ok(Some(path)) => path.canonicalize().ok().filter(|path| path.is_file()),
         Ok(None) => None,
         Err(err) => {
@@ -108,17 +108,14 @@ pub fn ensure_presence_plugin_artifact() -> Option<PathBuf> {
 }
 
 fn materialized_presence_plugin_path() -> Option<PathBuf> {
-    materialized_presence_plugin_path_under(&paths::data_home())
+    materialized_presence_plugin_path_under(&paths::data_dir())
         .canonicalize()
         .ok()
         .filter(|path| path.is_file())
 }
 
 fn materialized_presence_plugin_path_under(data_root: &std::path::Path) -> PathBuf {
-    data_root
-        .join("rimz")
-        .join("plugins")
-        .join(PRESENCE_PLUGIN_FILE)
+    data_root.join("plugins").join(PRESENCE_PLUGIN_FILE)
 }
 
 fn materialize_presence_plugin_bytes(

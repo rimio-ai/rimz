@@ -67,7 +67,7 @@ pub(crate) fn default_server_socket_path_from(tmpdir: &Path, uid: u32) -> PathBu
 }
 
 pub(crate) fn managed_server_socket_dir_under(runtime_root: &Path) -> PathBuf {
-    runtime_root.join("rimz").join("tmux")
+    crate::disk::paths::runtime_rimz_root_under(runtime_root).join("tmux")
 }
 
 /// The one RimZ-owned tmux server endpoint for this runtime domain.
@@ -84,7 +84,9 @@ pub(crate) fn managed_server_socket_dir_under(runtime_root: &Path) -> PathBuf {
 ///
 /// [`RuntimePaths`]: crate::disk::paths::RuntimePaths
 pub fn managed_server_socket_path() -> PathBuf {
-    managed_server_socket_path_under(&crate::disk::paths::runtime_home())
+    crate::disk::paths::runtime_rimz_root()
+        .join("tmux")
+        .join("server")
 }
 
 /// The managed endpoint for an explicit runtime domain. Socket identity and

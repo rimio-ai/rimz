@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::disk::paths::RuntimePaths;
-use crate::disk::paths::state_home;
+use crate::disk::paths::logs_dir;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::pane::ClientPaneView;
 
@@ -39,7 +39,7 @@ pub enum FocusRepairOutcome {
 }
 
 fn log_path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(NAME)
+    state_root.join(NAME)
 }
 
 fn append_to(state_root: &Path, record: &FocusRepairRecord) {
@@ -72,7 +72,7 @@ pub(crate) fn spawn_append(runtime: &RuntimePaths, record: &FocusRepairRecord) {
 }
 
 pub fn append_raw(raw: &str) -> Result<(), FocusRepairParseError> {
-    append_to(&state_home(), &serde_json::from_str(raw)?);
+    append_to(&logs_dir(), &serde_json::from_str(raw)?);
     Ok(())
 }
 
@@ -124,6 +124,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         append_to(dir.path(), &record);
+        assert!(dir.path().join("focus-repairs.log.jsonl").is_file());
         assert_eq!(recent(dir.path()), vec![record]);
     }
 

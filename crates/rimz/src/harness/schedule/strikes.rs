@@ -9,7 +9,7 @@ use std::path::Path;
 
 use super::overlay_store::{OverlayError, OverlayStore};
 use crate::config::TaskEntry;
-use crate::disk::paths::state_home;
+use crate::disk::paths::loops_dir;
 use crate::harness::schedule::run_log::{LoopRunRecord, LoopRunResult};
 
 const STORE: OverlayStore = OverlayStore::new("loop-strikes.json", "loop-strikes.lock");
@@ -84,27 +84,23 @@ fn path(state_root: &Path) -> std::path::PathBuf {
 }
 
 pub fn load() -> BTreeMap<String, u32> {
-    load_from(&state_home())
+    load_from(&loops_dir())
 }
 
 pub(super) fn note(key: &str, signal: Signal) -> Result<u32> {
-    note_in(&state_home(), key, signal)
+    note_in(&loops_dir(), key, signal)
 }
 
 pub(super) fn clear(key: &str) -> Result<bool> {
-    clear_from(&state_home(), key)
+    clear_from(&loops_dir(), key)
 }
 
 pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
-    rename_in(&state_home(), old, new)
-}
-
-pub(super) fn migrate_instance_keys(state_root: &Path, keys: &[(String, String)]) -> Result<()> {
-    Ok(STORE.copy_missing::<u32>(state_root, keys)?)
+    rename_in(&loops_dir(), old, new)
 }
 
 pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
-    prune_orphans_in(&state_home(), known, scopes)
+    prune_orphans_in(&loops_dir(), known, scopes)
 }
 
 fn load_from(state_root: &Path) -> BTreeMap<String, u32> {

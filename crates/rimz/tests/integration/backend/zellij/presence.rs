@@ -308,7 +308,7 @@ fn wait_for_focus_action(
 }
 
 fn accepted_focus_repairs(xdg: &Path, target_pane: &PaneId) -> usize {
-    rimz::diag::focus_repair::recent(xdg)
+    rimz::diag::focus_repair::recent(&xdg.join("logs"))
         .iter()
         .filter(|record| {
             record.target == *target_pane
@@ -325,7 +325,7 @@ fn wait_for_accepted_focus_repair(
 ) -> Vec<rimz::diag::focus_repair::FocusRepairRecord> {
     poll_until(
         Duration::from_secs(10),
-        || Ok(rimz::diag::focus_repair::recent(xdg)),
+        || Ok(rimz::diag::focus_repair::recent(&xdg.join("logs"))),
         |records| {
             records
                 .iter()

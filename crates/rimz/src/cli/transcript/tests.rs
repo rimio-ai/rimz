@@ -944,6 +944,7 @@ fn known_workspace(root: &str) -> rimz::workspace::KnownWorkspace {
         project_root: root.into(),
         session_name: root.to_owned(),
         root_class: rimz::workspace::RootClass::Directory,
+        dir_name: rimz::ids::WorkspaceDirName::parse("repo-f89e").unwrap(),
         rimz_bin: None,
         updated_at: jiff::Timestamp::UNIX_EPOCH,
     }

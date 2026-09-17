@@ -348,7 +348,7 @@ fn derive_subagent_lifecycle(
 fn user_input_state_root(_store: &Store) -> Option<&std::path::Path> {
     #[cfg(test)]
     {
-        _store.paths().root.ancestors().nth(3)
+        _store.paths().root.ancestors().nth(2)
     }
     #[cfg(not(test))]
     None

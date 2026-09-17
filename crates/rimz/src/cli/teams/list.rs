@@ -196,7 +196,7 @@ pub(super) fn load_catalog(
     let flips =
         rimz::harness::team_stage::stage_flips(&ctx.store).context("reading team stage flips")?;
     let runs = run_log::stats(
-        &rimz::disk::paths::state_home(),
+        &rimz::disk::paths::logs_dir(),
         &jiff::Timestamp::now().to_zoned(machine.time_zone()),
         Some(&ctx.workspace.project_root),
     );
@@ -829,7 +829,7 @@ pub(super) fn ci_style(ci: WorktreePrCi) -> anstyle::Style {
 }
 
 fn team_source(project_root: &Path, name: &str, sources: &AgentSpecSources) -> Option<String> {
-    let config_root = rimz::disk::paths::config_home();
+    let config_root = rimz::disk::paths::rimz_home();
     let repo = project_root.join(".rimz/config.toml");
     if rimz::trust::status_with_roots(project_root, &config_root)
         .is_ok_and(|report| report.state == rimz::trust::TrustState::Trusted)

@@ -69,7 +69,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let effective = rimz::config::effective::load_with_roots(
         &machine_config,
         &workspace.project_root,
-        &rimz::disk::paths::config_home(),
+        &rimz::disk::paths::rimz_home(),
     );
     if let Err(err) = &effective {
         let _ = writeln!(crate::cli::render::err(), "rimz: {err}");

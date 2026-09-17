@@ -559,7 +559,6 @@ fn prepare_supervised(
     // Judge the agent's hooks in the account home it will run under before
     // probing the program or touching the multiplexer.
     let logins = rimz::room::resolve_birth_logins(
-        &workspace.workspace_id,
         &workspace.project_root,
         &machine_config,
         &rimz::ids::RoomLogins::new(),
@@ -889,7 +888,6 @@ pub(in crate::cli) fn run_supervised(
     // A live room answers from its record, not the cold-birth resolution.
     let logins = if was_live {
         rimz::room::resolve_birth_logins(
-            &prepared.workspace.workspace_id,
             &prepared.workspace.project_root,
             &prepared.machine_config,
             &rimz::ids::RoomLogins::new(),

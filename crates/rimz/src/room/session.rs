@@ -327,7 +327,7 @@ pub fn retire_renamed_session(backend: &dyn MuxBackend, workspace: &crate::Resol
 pub fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
     workspace_record_for_session_under(
         session,
-        &crate::disk::paths::state_home(),
+        &crate::disk::paths::rimz_home(),
         &crate::disk::paths::runtime_home(),
     )
 }
@@ -442,6 +442,9 @@ mod tests {
 
     fn known(session: &str, root: &str, updated_at: i64) -> KnownWorkspace {
         KnownWorkspace {
+            dir_name: crate::ids::WorkspaceDirName::fallback(&WorkspaceId::from_project_root(
+                Path::new(root),
+            )),
             workspace_id: WorkspaceId::from_project_root(Path::new(root)),
             project_root: PathBuf::from(root),
             session_name: session.to_owned(),

@@ -30,7 +30,7 @@ use crate::agents::{
     find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
-use crate::disk::paths::{RuntimePaths, StatePaths, state_home};
+use crate::disk::paths::{RuntimePaths, StatePaths, logs_dir};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
@@ -373,7 +373,7 @@ impl<'a> TaskFire<'a> {
     fn prepare_scope_gates(&mut self) -> Result<Option<TaskFireFinished>> {
         let zoned_now = self.now.to_zoned(self.config.time_zone());
         if let Some(gate) =
-            run_log::daily_budget_gate(&state_home(), &self.name, &self.entry, &zoned_now)
+            run_log::daily_budget_gate(&logs_dir(), &self.name, &self.entry, &zoned_now)
                 .map_err(anyhow::Error::msg)?
         {
             return Ok(Some(
@@ -1348,9 +1348,9 @@ fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
 }
 
 fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
-    let runtime =
-        RuntimePaths::for_workspace(WorkspaceId::from_project_root(&entry.resolved_root()))
-            .context("locating loop task runtime")?;
+    let state =
+        StatePaths::for_project_root(&entry.resolved_root()).context("locating loop task state")?;
+    let runtime = RuntimePaths::for_state(&state).context("locating loop task runtime")?;
     Ok(runtime.root.join(format!("loop-run-{name}.lock")))
 }
 

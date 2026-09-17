@@ -187,7 +187,7 @@ pub(super) fn cursor_statusline_state_path() -> Result<PathBuf> {
     Ok(std::env::var_os("RIMZ_CURSOR_STATUSLINE_STATE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| crate::disk::paths::config_home().join("rimz/cursor-statusline.json")))
+        .unwrap_or_else(|| crate::disk::paths::rimz_home().join("cursor-statusline.json")))
 }
 
 pub(super) fn install_into(

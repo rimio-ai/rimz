@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::config::{MachineConfig, WatchSpec};
-use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::SidebarSnapshot;
 
 use super::Trigger;
@@ -136,9 +136,10 @@ impl SessionWaits {
         let Some(root) = project_root else {
             return Self(BTreeMap::new());
         };
-        let instance_root = crate::disk::paths::workspaces_dir()
-            .join(WorkspaceId::from_project_root(root).as_str());
-        if super::instances::load_from(&instance_root).0.is_empty() {
+        let Ok(paths) = crate::disk::paths::StatePaths::for_project_root(root) else {
+            return Self(BTreeMap::new());
+        };
+        if super::instances::load_from(&paths.root).0.is_empty() {
             return Self(BTreeMap::new());
         }
         Self(pending_waits_by_session(

@@ -32,7 +32,6 @@ const DAEMON_LOCK_FILE: &str = "web-ttyd.lock";
 const SHARE_ALLOWLIST_FILE: &str = "web-share.json";
 const SHARE_DAEMON_FILE: &str = "web-ttyd-share.json";
 const SHARE_DAEMON_LOCK_FILE: &str = "web-ttyd-share.lock";
-const LEGACY_INSTANCE_DIR: &str = "web-ttyd";
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 const MIN_TTYD_VERSION: TtydVersion = TtydVersion::new(1, 7, 5);
 
@@ -156,13 +155,6 @@ pub(super) struct WritableDaemon {
     pub(super) auth: WebAuth,
     pub(super) credential: WebCredential,
     pub(super) tunnel_port: u16,
-}
-
-#[derive(Debug, Deserialize)]
-struct LegacyTtydInstance {
-    session: String,
-    pid: u32,
-    port: u16,
 }
 
 pub(super) fn preflight() -> Result<()> {
@@ -322,7 +314,6 @@ pub(super) fn ensure_daemon(config: &MachineConfig) -> Result<WritableDaemon> {
     let desired = desired_spec(config)?;
     let (program, version) = required_program_with_version()?;
     let _guard = acquire_lock(DAEMON_LOCK_FILE)?;
-    reap_legacy_instances();
     let daemon = daemon_status_locked()?;
     let prepared = prepare_writable_start(config, &desired, daemon.as_ref(), program, &version)?;
     if let Some(record) = &daemon
@@ -451,104 +442,8 @@ fn gated(desired: &WritableDaemonSpec) -> bool {
     !desired.trusted_proxies.is_empty() || matches!(desired.auth, WebAuth::TrustedHeader { .. })
 }
 
-fn reap_legacy_instances() {
-    let dir = state_path(LEGACY_INSTANCE_DIR);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return,
-        Err(err) => {
-            tracing::debug!(path = %dir.display(), error = %err, "legacy ttyd state directory unreadable");
-            remove_legacy_instance_dir(&dir);
-            return;
-        }
-    };
-    let processes = crate::proc::list_processes();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                tracing::debug!(path = %dir.display(), error = %err, "legacy ttyd state entry unreadable");
-                continue;
-            }
-        };
-        let path = entry.path();
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::debug!(path = %path.display(), error = %err, "legacy ttyd state record unreadable");
-                continue;
-            }
-        };
-        let instance = match serde_json::from_slice::<LegacyTtydInstance>(&bytes) {
-            Ok(instance) => instance,
-            Err(err) => {
-                tracing::debug!(path = %path.display(), error = %err, "legacy ttyd state record invalid");
-                continue;
-            }
-        };
-        let owned = processes
-            .iter()
-            .any(|process| process.pid == instance.pid && is_ttyd_process(process));
-        if owned {
-            terminate_legacy_instance(&instance);
-        } else {
-            tracing::debug!(
-                session = %instance.session,
-                pid = instance.pid,
-                port = instance.port,
-                "legacy ttyd process absent or pid belongs to another program"
-            );
-        }
-    }
-    remove_legacy_instance_dir(&dir);
-}
-
 fn is_ttyd_process(process: &crate::proc::ProcInfo) -> bool {
     crate::proc::command::argv0_label(&process.cmdline) == "ttyd"
-}
-
-fn terminate_legacy_instance(instance: &LegacyTtydInstance) {
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{Signal, kill};
-        use nix::unistd::Pid;
-
-        let result = i32::try_from(instance.pid)
-            .map(Pid::from_raw)
-            .map_err(|err| err.to_string())
-            .and_then(|pid| kill(pid, Signal::SIGTERM).map_err(|err| err.to_string()));
-        match result {
-            Ok(()) => {
-                wait_for_address_close(
-                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), instance.port),
-                    Duration::from_secs(1),
-                );
-                tracing::debug!(
-                    session = %instance.session,
-                    pid = instance.pid,
-                    port = instance.port,
-                    "signalled legacy ttyd process"
-                );
-            }
-            Err(err) => tracing::debug!(
-                session = %instance.session,
-                pid = instance.pid,
-                port = instance.port,
-                error = %err,
-                "signalling legacy ttyd process failed"
-            ),
-        }
-    }
-}
-
-fn remove_legacy_instance_dir(dir: &Path) {
-    match fs::remove_dir_all(dir) {
-        Ok(()) => tracing::debug!(path = %dir.display(), "removed legacy ttyd state directory"),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            tracing::debug!(path = %dir.display(), error = %err, "removing legacy ttyd state directory failed")
-        }
-    }
 }
 
 fn start_daemon_with_profile(
@@ -689,7 +584,6 @@ pub(super) fn restart_daemon(config: &MachineConfig) -> Result<(WritableDaemon, 
     let desired = desired_spec(config)?;
     let (program, version) = required_program_with_version()?;
     let _guard = acquire_lock(DAEMON_LOCK_FILE)?;
-    reap_legacy_instances();
     let daemon = daemon_status_locked()?;
     let was_online = daemon.is_some();
     let prepared = prepare_writable_start(config, &desired, daemon.as_ref(), program, &version)?;
@@ -699,7 +593,6 @@ pub(super) fn restart_daemon(config: &MachineConfig) -> Result<(WritableDaemon, 
 
 pub(super) fn restart_if_online(config: &MachineConfig) -> Result<Option<WritableDaemon>> {
     let _guard = acquire_lock(DAEMON_LOCK_FILE)?;
-    reap_legacy_instances();
     let Some(daemon) = daemon_status_locked()? else {
         return Ok(None);
     };
@@ -1091,7 +984,7 @@ fn default_interface() -> String {
 }
 
 fn state_path(file: &str) -> PathBuf {
-    paths::state_home().join("rimz").join(file)
+    paths::web_dir().join(file)
 }
 
 fn acquire_lock(file: &str) -> Result<crate::disk::lock::WorkspaceLock> {
@@ -1877,7 +1770,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_pid_guard_requires_ttyd_as_the_program() {
+    fn pid_guard_requires_ttyd_as_the_program() {
         let process = |cmdline: &str| crate::proc::ProcInfo {
             pid: 42,
             ppid: 1,

@@ -383,6 +383,7 @@ fn new_session_overlay_filters_navigates_and_confirms_every_row_kind() {
         project_root: PathBuf::from("/repo/recent"),
         session_name: "rimz-recent".to_owned(),
         root_class: rimz::workspace::RootClass::Repo,
+        dir_name: rimz::ids::WorkspaceDirName::parse("repo-f89e").unwrap(),
         rimz_bin: None,
         updated_at: now(),
     };
@@ -431,6 +432,7 @@ fn new_session_overlay_render_snapshot() {
         project_root: PathBuf::from("/repo/recent"),
         session_name: "rimz-recent".to_owned(),
         root_class: rimz::workspace::RootClass::Repo,
+        dir_name: rimz::ids::WorkspaceDirName::parse("repo-f89e").unwrap(),
         rimz_bin: None,
         updated_at: now(),
     };

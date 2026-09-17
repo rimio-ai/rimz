@@ -130,8 +130,19 @@ impl RoomContext {
             }
         }
 
+        #[cfg(unix)]
+        {
+            let home = crate::disk::paths::rimz_home();
+            let link = home.join("run");
+            if let Err(err) = std::fs::create_dir_all(&home).and_then(|()| {
+                std::os::unix::fs::symlink(crate::disk::paths::runtime_rimz_root(), &link)
+            }) && err.kind() != std::io::ErrorKind::AlreadyExists
+            {
+                tracing::debug!(error = %err, "creating home runtime link failed");
+            }
+        }
         if self.machine_config.agents.isolation == crate::config::Isolation::Sandbox {
-            StatePaths::for_workspace(self.workspace.workspace_id.clone())?.ensure_tmp_dir()?;
+            StatePaths::for_project_root(&self.workspace.project_root)?.ensure_tmp_dir()?;
         }
         self.backend.ensure_session(&self.session_options(&cwd))?;
         if supervised && pre_existed {
@@ -194,7 +205,7 @@ impl RoomContext {
     }
 
     fn launch_background_view(&self, options: &BackgroundViewOptions) {
-        match StatePaths::for_workspace(self.workspace.workspace_id.clone()) {
+        match StatePaths::for_project_root(&self.workspace.project_root) {
             Ok(state) => match crate::agents::room_login(
                 &state.workspace_record,
                 &self.machine_config.accounts,
@@ -323,7 +334,7 @@ impl RoomContext {
         )
             -> crate::store::Result<crate::store::writer::ResetRecordsOutcome>,
     ) -> Result<RoomResetReport> {
-        let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
+        let paths = StatePaths::for_project_root(&self.workspace.project_root)
             .context("preparing store paths for reset")?;
         let teardown = crate::room::teardown::teardown_room(
             self.backend.as_ref(),

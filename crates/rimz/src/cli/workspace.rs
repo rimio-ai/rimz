@@ -72,9 +72,9 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
     }
 
     let old_workspace_id = WorkspaceId::from_project_root(&old_project_root);
-    let old_paths = StatePaths::for_workspace(old_workspace_id.clone())
-        .context("preparing old workspace paths")?;
-    let new_paths = StatePaths::for_workspace(new_workspace.workspace_id.clone())
+    let old_paths =
+        StatePaths::for_project_root(&old_project_root).context("preparing old workspace paths")?;
+    let new_paths = StatePaths::for_project_root(&new_workspace.project_root)
         .context("preparing new workspace paths")?;
 
     if !old_paths.root.exists() {
@@ -106,8 +106,7 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
         })?;
     }
 
-    let runtime = RuntimePaths::for_workspace(new_workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
+    let runtime = RuntimePaths::for_state(&new_paths).context("preparing runtime paths")?;
     let store = Store::open(new_paths, runtime).context("opening migrated store")?;
     let outcome = store
         .rewrite_workspace_identity(&new_workspace)
@@ -142,10 +141,9 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
 fn rotate_events(args: RotateEventsArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing store paths")?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
+    let paths =
+        StatePaths::for_project_root(&workspace.project_root).context("preparing store paths")?;
+    let runtime = RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
     let store = Store::open(paths, runtime).context("opening store")?;
     let outcome = store
         .rotate_event_log(args.max_bytes, args.archive_older_than)

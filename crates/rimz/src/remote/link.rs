@@ -358,7 +358,7 @@ pub fn stats_path(runtime: &crate::RuntimePaths) -> PathBuf {
 }
 
 pub fn validated_control_path() -> std::result::Result<PathBuf, sock::SocketPathTooLong> {
-    validated_control_path_under(&crate::disk::paths::runtime_home(), std::process::id())
+    validated_control_path_under(&crate::disk::paths::runtime_rimz_root(), std::process::id())
 }
 
 fn validated_control_path_under(
@@ -371,10 +371,7 @@ fn validated_control_path_under(
 }
 
 fn control_path_under(runtime_root: &Path, pid: u32) -> PathBuf {
-    runtime_root
-        .join("rimz")
-        .join("link")
-        .join(format!("link-{pid}.sock"))
+    runtime_root.join("link").join(format!("link-{pid}.sock"))
 }
 
 /// Check that the interactive attach's ControlMaster socket is already live.

@@ -8,22 +8,23 @@ use super::{
     GcErr, GcReport, Result, SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL,
     read_dir_if_exists,
 };
-use crate::ids::{SidebarInstanceId, WorkspaceId};
+use crate::ids::SidebarInstanceId;
+#[cfg(test)]
+use crate::ids::WorkspaceId;
 use crate::wakeup::heartbeat::SidebarHeartbeat;
 
 #[must_use = "maintenance report; surface it to the caller"]
 pub(crate) fn collect_runtime_under(
     runtime_root: &Path,
+    shared_root: &Path,
     older_than: Duration,
     dry_run: bool,
 ) -> Result<GcReport> {
-    let Some(entries) = read_dir_if_exists(runtime_root)? else {
-        return Ok(GcReport::default());
-    };
+    let entries = read_dir_if_exists(runtime_root)?;
 
     let mut report = GcReport::default();
     let mut sweep = Sweep::new(dry_run);
-    for entry in entries {
+    for entry in entries.into_iter().flatten() {
         let entry = entry.map_err(|source| GcErr::ReadDir {
             path: runtime_root.to_path_buf(),
             source,
@@ -32,24 +33,10 @@ pub(crate) fn collect_runtime_under(
         if !root.is_dir() {
             continue;
         }
-        let Some(name) = root.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if WorkspaceId::parse(name).is_err() {
-            // `shared/` holds election locks and probe markers; probe markers
-            // are collected below, and legacy pre-migration data caches are
-            // swept by RuntimePaths::ensure_dirs at startup.
-            continue;
-        }
         report.runtime_roots_scanned += 1;
         collect_workspace_runtime(&root, older_than, &mut sweep, &mut report)?;
     }
-    collect_stale_probe_markers(
-        &runtime_root.join("shared"),
-        older_than,
-        &mut sweep,
-        &mut report,
-    )?;
+    collect_stale_probe_markers(shared_root, older_than, &mut sweep, &mut report)?;
 
     Ok(report)
 }
@@ -562,9 +549,13 @@ mod tests {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
 
-        let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
-                .unwrap();
+        let report = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            false,
+        )
+        .unwrap();
 
         assert_eq!(report.sidecar_files_removed, 8);
         assert!(
@@ -620,9 +611,13 @@ mod tests {
             .set_modified(SystemTime::now() - Duration::from_secs(7200))
             .unwrap();
 
-        let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
-                .unwrap();
+        let report = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            false,
+        )
+        .unwrap();
 
         assert_eq!(report.sidecar_files_removed, 0);
         assert!(context.exists(), "fresh sidecar is kept");
@@ -643,16 +638,24 @@ mod tests {
             .set_modified(SystemTime::now() - Duration::from_secs(7200))
             .unwrap();
 
-        let preview =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), true)
-                .unwrap();
+        let preview = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            true,
+        )
+        .unwrap();
 
         assert!(stale_activity.exists(), "dry-run keeps stale sidecar");
         assert!(rt.agent_activity_dir.exists(), "dry-run keeps emptied dirs");
 
-        let applied =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
-                .unwrap();
+        let applied = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            false,
+        )
+        .unwrap();
 
         assert_eq!(preview, applied);
         assert!(!stale_activity.exists(), "apply removes stale sidecar");
@@ -678,16 +681,24 @@ mod tests {
             .set_modified(SystemTime::now() - Duration::from_secs(7200))
             .unwrap();
 
-        let preview =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), true)
-                .unwrap();
+        let preview = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            true,
+        )
+        .unwrap();
         assert_eq!(preview.sidecar_files_removed, 1);
         assert!(preview.bytes_removed >= b"stale telemetry\n".len() as u64);
         assert!(stale.exists(), "dry-run keeps stale telemetry");
 
-        let applied =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
-                .unwrap();
+        let applied = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            false,
+        )
+        .unwrap();
         assert_eq!(preview, applied);
         assert!(!stale.exists());
         assert!(fresh.exists());
@@ -718,9 +729,13 @@ mod tests {
         );
         write_json(&rt.sidebar_heartbeat_path(&instance_id), &heartbeat);
 
-        let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
-                .unwrap();
+        let report = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            false,
+        )
+        .unwrap();
 
         assert_eq!(report.sidecar_files_removed, 0);
         assert!(telemetry.exists(), "live exporter inode remains linked");
@@ -758,9 +773,13 @@ mod tests {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
 
-        let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
-                .unwrap();
+        let report = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            false,
+        )
+        .unwrap();
 
         assert_eq!(report.runtime_roots_scanned, 1);
         assert_eq!(report.heartbeat_files_removed, 1);
@@ -799,9 +818,13 @@ mod tests {
         );
         write_json(&rt.sidebar_heartbeat_path(&instance_id), &heartbeat);
 
-        let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
-                .unwrap();
+        let report = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            false,
+        )
+        .unwrap();
 
         assert_eq!(report.sidecar_files_removed, 0);
         assert!(read_marks.exists(), "live owner's read marks are kept");
@@ -833,9 +856,13 @@ mod tests {
             .set_modified(recently_dead)
             .unwrap();
 
-        let report =
-            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
-                .unwrap();
+        let report = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/shared"),
+            Duration::from_secs(3600),
+            false,
+        )
+        .unwrap();
 
         assert_eq!(report.probe_markers_removed, 2);
         assert!(!stale_session.exists());
@@ -843,6 +870,20 @@ mod tests {
         assert!(accounts.exists());
         assert!(lock.exists());
         assert!(trace.exists());
+    }
+
+    #[test]
+    fn runtime_gc_walks_directories_without_parsing_workspace_ids() {
+        let temp = tempdir().unwrap();
+        let workspaces = temp.path().join("rimz/ws");
+        let shared = temp.path().join("rimz/shared");
+        for name in ["project-abcd", "unfinished"] {
+            fs::create_dir_all(workspaces.join(name)).unwrap();
+        }
+        let report = collect_runtime_under(&workspaces, &shared, Duration::ZERO, false).unwrap();
+        assert_eq!(report.runtime_roots_scanned, 2);
+        assert!(!workspaces.join("project-abcd").exists());
+        assert!(!workspaces.join("unfinished").exists());
     }
 
     fn write_json<T: serde::Serialize>(path: &Path, value: &T) {

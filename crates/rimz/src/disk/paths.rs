@@ -392,14 +392,6 @@ impl RuntimePaths {
         Self::validated(workspace_id, dir_name, &runtime_home())
     }
 
-    /// Runtime paths for the workspace born at `project_root`, under the same
-    /// name [`StatePaths::for_project_root`] resolves.
-    pub fn for_project_root(project_root: &Path) -> Result<Self> {
-        let workspace_id = WorkspaceId::from_project_root(project_root);
-        let dir_name = workspace_dir_name_for_root(&workspaces_dir(), &workspace_id, project_root)?;
-        Self::validated(workspace_id, dir_name, &runtime_home())
-    }
-
     /// Runtime paths paired with state paths already in hand.
     pub fn for_state(state: &StatePaths) -> Result<Self> {
         Self::validated(
@@ -443,7 +435,7 @@ impl RuntimePaths {
         dir_name: WorkspaceDirName,
         runtime_root: &Path,
     ) -> Self {
-        let rimz_root = runtime_root.join("rimz");
+        let rimz_root = runtime_rimz_root_under(runtime_root);
         let root = rimz_root.join("ws").join(dir_name.as_str());
         let shared_root = rimz_root.join("shared");
         let persistent_shared_root = shared_root.clone();
@@ -955,11 +947,16 @@ pub(crate) fn runtime_home_from(xdg_runtime: Option<&Path>, uid: u32) -> PathBuf
 
 /// RimZ's runtime tree, `<runtime>/rimz`.
 pub fn runtime_rimz_root() -> PathBuf {
-    runtime_home().join("rimz")
+    runtime_rimz_root_under(&runtime_home())
+}
+
+/// [`runtime_rimz_root`] for an explicit runtime root.
+pub(crate) fn runtime_rimz_root_under(runtime_root: &Path) -> PathBuf {
+    runtime_root.join("rimz")
 }
 
 /// Workspace runtime dirs, `<runtime>/rimz/ws`.
-pub fn runtime_workspaces_dir() -> PathBuf {
+pub(crate) fn runtime_workspaces_dir() -> PathBuf {
     runtime_rimz_root().join("ws")
 }
 
@@ -1006,6 +1003,19 @@ pub fn legacy_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+/// How to move `legacy` roots into `home`; RimZ reads only the home.
+pub fn legacy_roots_fix(legacy: &[PathBuf], home: &Path) -> String {
+    let roots = legacy
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "RimZ now keeps everything under {home} and no longer reads {roots}; move their contents into {home} (see docs/guide/configuration.md#moving-from-the-xdg-roots), or set RIMZ_HOME",
+        home = home.display()
+    )
+}
+
 /// The XDG config root. RimZ's own config lives under [`rimz_home`]; this
 /// locates user-level units RimZ installs for other programs (systemd).
 pub fn config_home() -> PathBuf {
@@ -1013,14 +1023,12 @@ pub fn config_home() -> PathBuf {
 }
 
 /// The XDG state root, stamped for providers and probed for legacy roots.
-pub fn state_home() -> PathBuf {
-    // CHASE: private once callers move
+fn state_home() -> PathBuf {
     xdg_home("XDG_STATE_HOME", ".local/state")
 }
 
 /// The XDG data root, stamped for providers and probed for legacy roots.
-pub(crate) fn data_home() -> PathBuf {
-    // CHASE: private once callers move
+fn data_home() -> PathBuf {
     xdg_home("XDG_DATA_HOME", ".local/share")
 }
 
