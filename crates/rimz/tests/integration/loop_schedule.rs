@@ -1096,6 +1096,31 @@ fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
 }
 
 #[test]
+fn instance_task_in_a_project_without_a_room_reaches_machine_wide_readers() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "nightly", "--at", "07:00", "--check", "true"],
+    );
+    assert!(
+        !env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
+
+    // Doctor reads instance tasks through the same enumeration the external
+    // loop timer fires from.
+    let output = env
+        .rimz()
+        .current_dir("/")
+        .args(["doctor", "--json"])
+        .output()
+        .expect("rimz doctor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"nightly\""), "{stdout}");
+}
+
+#[test]
 fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     let env = Env::new();
     let marker = env.project_root.join("open-root-tick-ran");
@@ -1858,6 +1883,30 @@ fn first_project_task_grants_fresh_config() {
             .is_some_and(|entry| entry.enabled),
         "{arming:?}"
     );
+
+    // A root whose `.rimz` is the RimZ home holds the machine config, never
+    // a project layer, so a project task edit there refuses untouched.
+    let config = env.project_root.join(".rimz/config.toml");
+    let before = std::fs::read_to_string(&config).unwrap();
+    let output = env
+        .rimz()
+        .env("RIMZ_HOME", env.project_root.join(".rimz"))
+        .args([
+            "loop",
+            "add",
+            "home",
+            "--project",
+            "--check",
+            "true",
+            "--every",
+            "1h",
+        ])
+        .output()
+        .expect("rimz loop add");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("holds the RimZ home"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
 }
 
 #[test]
