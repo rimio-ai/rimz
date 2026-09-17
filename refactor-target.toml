@@ -218,7 +218,8 @@ allowed-dependencies = [
 # Stage flips share a canonical-worktree board lock across rooms.
 # Output-file summaries estimate tokens through `utils::tokens` and expose `is_empty` for the wait and digest renderers.
 # The skill library resolves from process env for uninstall and from a launch env map for sandbox and launch planning.
-surface-budget = 135
+# Launches derive and create each agent's private scratch dir under room tmp.
+surface-budget = 137
 
 [[module]]
 path = "crates/rimz/src/forge"
