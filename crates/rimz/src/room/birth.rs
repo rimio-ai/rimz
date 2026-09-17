@@ -134,9 +134,18 @@ impl RoomContext {
         {
             let home = crate::disk::paths::rimz_home();
             let link = home.join("run");
-            if let Err(err) = std::fs::create_dir_all(&home).and_then(|()| {
-                std::os::unix::fs::symlink(crate::disk::paths::runtime_rimz_root(), &link)
-            }) && err.kind() != std::io::ErrorKind::AlreadyExists
+            let target = crate::disk::paths::runtime_rimz_root();
+            // A link left by another runtime root (an SSH login without
+            // XDG_RUNTIME_DIR) is repointed; anything but a link stays put.
+            let linked =
+                std::fs::create_dir_all(&home).and_then(|()| match std::fs::read_link(&link) {
+                    Ok(current) if current == target => Ok(()),
+                    Ok(_) => std::fs::remove_file(&link)
+                        .and_then(|()| std::os::unix::fs::symlink(&target, &link)),
+                    Err(_) => std::os::unix::fs::symlink(&target, &link),
+                });
+            if let Err(err) = linked
+                && err.kind() != std::io::ErrorKind::AlreadyExists
             {
                 tracing::debug!(error = %err, "creating home runtime link failed");
             }
