@@ -5,7 +5,7 @@ pub use team::team_lifecycle_signals;
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, Write};
+use std::io::{BufRead, Read, Seek, Write};
 use std::str::FromStr;
 
 use anyhow::Context;
@@ -18,7 +18,7 @@ use super::runner::{
     CheckEcho, CheckOutcome, WatchDeadline, check_record, run_command, task_timeout,
 };
 use crate::RuntimePaths;
-use crate::config::{CheckOn, WatchSpec};
+use crate::config::{CheckOn, FileMark, WatchSpec};
 use crate::disk::paths::StatePaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::schedule::runner::RunLockInfo;
@@ -485,7 +485,10 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
 /// One look at a polled watch's condition.
 enum Probe {
     Pending,
-    Met,
+    /// `line` is the `--grep` match.
+    Met {
+        line: Option<String>,
+    },
     /// The predicate itself cannot run (exit 126 or 127).
     Broken {
         code: i32,
@@ -504,6 +507,10 @@ fn poll_watch(
 ) -> anyhow::Result<()> {
     let every = super::watch_interval(spec).context("wait has no valid polling interval")?;
     let mut output = String::new();
+    let mut grep_cursor = match spec {
+        WatchSpec::File { mark, .. } => mark.map_or(0, |mark| mark.size),
+        _ => 0,
+    };
     let mut checked_in = false;
     loop {
         let probe = match spec {
@@ -515,18 +522,40 @@ fn poll_watch(
                 output = latest;
                 probe
             }
+            WatchSpec::File {
+                file: path,
+                grep: None,
+                mark,
+            } => {
+                if FileMark::read(path)? == *mark {
+                    Probe::Pending
+                } else {
+                    Probe::Met { line: None }
+                }
+            }
+            WatchSpec::File {
+                file: path,
+                grep: Some(pattern),
+                ..
+            } => match grep_new_line(path, pattern, &mut grep_cursor)? {
+                None => Probe::Pending,
+                Some(line) => {
+                    let mut out = file;
+                    out.write_all(line.as_bytes())
+                        .and_then(|()| out.write_all(b"\n"))
+                        .context("writing matched line to wait output")?;
+                    output = bounded_line(&line);
+                    Probe::Met {
+                        line: Some(output.clone()),
+                    }
+                }
+            },
         };
         let elapsed_ms = elapsed_millis(started);
         match probe {
             Probe::Pending => {}
-            Probe::Met => {
-                emit(
-                    WatchVerdict::Met {
-                        elapsed_ms,
-                        line: None,
-                    },
-                    output,
-                );
+            Probe::Met { line } => {
+                emit(WatchVerdict::Met { elapsed_ms, line }, output);
                 return Ok(());
             }
             Probe::Broken { code } => {
@@ -551,7 +580,7 @@ fn poll_watch(
 fn probe_pid(pid: u32) -> anyhow::Result<Probe> {
     let process = nix::unistd::Pid::from_raw(i32::try_from(pid)?);
     Ok(match nix::sys::signal::kill(process, None) {
-        Err(nix::errno::Errno::ESRCH) => Probe::Met,
+        Err(nix::errno::Errno::ESRCH) => Probe::Met { line: None },
         Ok(()) | Err(_) => Probe::Pending,
     })
 }
@@ -577,10 +606,50 @@ fn probe_check(
     let record = check_record(&outcome);
     let probe = match record.code {
         Some(code @ (126 | 127)) => Probe::Broken { code },
-        _ if outcome.passed() == (on == CheckOn::Success) => Probe::Met,
+        _ if outcome.passed() == (on == CheckOn::Success) => Probe::Met { line: None },
         _ => Probe::Pending,
     };
     Ok((probe, record.output))
+}
+
+/// The first newline-terminated line at or after `cursor` that contains
+/// `pattern`, advancing `cursor` past every complete line read. A file shorter
+/// than `cursor` was truncated and is read from the start; an unterminated last
+/// line waits for its newline.
+fn grep_new_line(path: &Path, pattern: &str, cursor: &mut u64) -> anyhow::Result<Option<String>> {
+    let mut source = match File::open(path) {
+        Ok(source) => source,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("opening {}", path.display())),
+    };
+    let size = source.metadata()?.len();
+    if size < *cursor {
+        *cursor = 0;
+    }
+    source.seek(std::io::SeekFrom::Start(*cursor))?;
+    let mut reader = std::io::BufReader::new(source.take(size - *cursor));
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = reader.read_until(b'\n', &mut line)?;
+        if read == 0 || line.last() != Some(&b'\n') {
+            return Ok(None);
+        }
+        *cursor += read as u64;
+        let text = String::from_utf8_lossy(&line[..read - 1]);
+        if text.contains(pattern) {
+            return Ok(Some(text.trim_end_matches('\r').to_owned()));
+        }
+    }
+}
+
+/// `text` cut to its first `WAIT_TAIL_CAP` bytes on a character boundary.
+fn bounded_line(text: &str) -> String {
+    let mut end = text.len().min(WAIT_TAIL_CAP);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
 }
 
 fn elapsed_millis(started: std::time::Instant) -> u64 {
@@ -888,6 +957,45 @@ mod tests {
             assert_eq!(check.timed_out, timed_out);
             assert_eq!(check.code, code);
         }
+    }
+
+    #[test]
+    fn file_grep_reads_complete_lines_from_the_cursor_and_restarts_on_truncation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        let mut cursor = 0;
+        assert_eq!(grep_new_line(&path, "ready", &mut cursor).unwrap(), None);
+        std::fs::write(&path, "ready before arm\nbooting\n").unwrap();
+        let mut cursor = FileMark::read(&path).unwrap().unwrap().size;
+        let append = |text: &str| {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .write_all(text.as_bytes())
+                .unwrap();
+        };
+        append("still booting\nrea");
+        assert_eq!(grep_new_line(&path, "ready", &mut cursor).unwrap(), None);
+        assert_eq!(
+            cursor,
+            "ready before arm\nbooting\nstill booting\n".len() as u64
+        );
+        append("dy at last\r\n");
+        assert_eq!(
+            grep_new_line(&path, "ready", &mut cursor)
+                .unwrap()
+                .as_deref(),
+            Some("ready at last")
+        );
+        std::fs::write(&path, "ready \u{fffd}again\n").unwrap();
+        assert_eq!(
+            grep_new_line(&path, "ready", &mut cursor)
+                .unwrap()
+                .as_deref(),
+            Some("ready \u{fffd}again")
+        );
+        assert_eq!(grep_new_line(&path, "ready", &mut cursor).unwrap(), None);
     }
 
     #[test]

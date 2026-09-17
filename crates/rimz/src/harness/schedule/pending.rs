@@ -58,6 +58,10 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
             WatchSpec::Check { check, .. } => PendingWaitTrigger::Check {
                 command: check.clone(),
             },
+            WatchSpec::File { file, grep, .. } => PendingWaitTrigger::File {
+                path: file.clone(),
+                grep: grep.clone(),
+            },
         },
         Trigger::Signal { selector, .. } => PendingWaitTrigger::Signal {
             selector: selector.to_string(),
@@ -95,7 +99,8 @@ pub fn pending_waits_by_session(
                 PendingWaitTrigger::Timer { due, .. } => (0, Some(due)),
                 PendingWaitTrigger::Pid { .. }
                 | PendingWaitTrigger::Command { .. }
-                | PendingWaitTrigger::Check { .. } => (1, None),
+                | PendingWaitTrigger::Check { .. }
+                | PendingWaitTrigger::File { .. } => (1, None),
                 PendingWaitTrigger::Signal { .. } => (2, None),
             };
             (kind, due, wait.name.clone())

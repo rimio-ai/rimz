@@ -149,6 +149,38 @@ pub enum WatchSpec {
         every: String,
         on: CheckOn,
     },
+    /// A file's changes from `mark`, its state when armed (`None`: absent);
+    /// with `grep`, only a new line containing the literal pattern counts.
+    File {
+        file: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        grep: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mark: Option<FileMark>,
+    },
+}
+
+/// The stat of a watched file that a later stat compares against.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct FileMark {
+    pub size: u64,
+    pub modified: Timestamp,
+}
+
+impl FileMark {
+    /// The stat a `--file` watch compares against; `None` when the path is absent.
+    pub fn read(path: &Path) -> std::io::Result<Option<Self>> {
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let modified = Timestamp::try_from(metadata.modified()?).map_err(std::io::Error::other)?;
+        Ok(Some(Self {
+            size: metadata.len(),
+            modified,
+        }))
+    }
 }
 
 impl WatchSpec {
@@ -169,6 +201,14 @@ impl WatchSpec {
                 }
                 text
             }
+            Self::File { file, grep, .. } => match grep {
+                Some(grep) => format!(
+                    "file: {} grep: {}",
+                    file.display(),
+                    crate::theme::fmt::command_preview(grep)
+                ),
+                None => format!("file: {}", file.display()),
+            },
         }
     }
 
@@ -184,6 +224,14 @@ impl WatchSpec {
                 "waited on check `{}`",
                 crate::theme::fmt::command_preview(check)
             ),
+            Self::File { file, grep, .. } => match grep {
+                Some(grep) => format!(
+                    "waited on file {} for `{}`",
+                    file.display(),
+                    crate::theme::fmt::command_preview(grep)
+                ),
+                None => format!("waited on file {}", file.display()),
+            },
         }
     }
 }
@@ -355,6 +403,25 @@ mod tests {
     }
 
     #[test]
+    fn file_mark_tracks_absence_size_and_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        assert_eq!(FileMark::read(&path).unwrap(), None);
+        std::fs::write(&path, "one").unwrap();
+        let first = FileMark::read(&path).unwrap().unwrap();
+        assert_eq!(first.size, 3);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+        let rewritten = FileMark::read(&path).unwrap().unwrap();
+        assert_eq!(rewritten.size, first.size);
+        assert_ne!(rewritten, first);
+    }
+
+    #[test]
     fn task_run_dir_defaults_to_root_and_resolves_explicit_directory() {
         let mut entry = TaskEntry {
             root: PathBuf::from("~/repo"),
@@ -509,6 +576,39 @@ mod tests {
             assert_eq!(decoded.0.get("ci"), Some(&entry));
         }
         assert_eq!(legacy["ci"]["watch"], serde_json::json!({"pid": 16776}));
+        for spec in [
+            WatchSpec::Check {
+                check: "nc -z localhost 3000".to_owned(),
+                every: "30s".to_owned(),
+                on: CheckOn::Fail,
+            },
+            WatchSpec::File {
+                file: PathBuf::from("/repo/app.log"),
+                grep: Some("ready".to_owned()),
+                mark: Some(FileMark {
+                    size: 12,
+                    modified: deadline,
+                }),
+            },
+            WatchSpec::File {
+                file: PathBuf::from("/repo/app.log"),
+                grep: None,
+                mark: None,
+            },
+        ] {
+            let json = serde_json::to_string(&spec).unwrap();
+            assert_eq!(serde_json::from_str::<WatchSpec>(&json).unwrap(), spec);
+            let toml = toml::to_string(&TaskEntry {
+                watch: Some(spec.clone()),
+                ..TaskEntry::default()
+            })
+            .unwrap();
+            assert_eq!(
+                toml::from_str::<TaskEntry>(&toml).unwrap().watch,
+                Some(spec),
+                "{toml}"
+            );
+        }
         legacy["ci"]["wait-meta"]["pid"] = serde_json::json!(16776);
         legacy["ci"]["watch"] = serde_json::json!("true");
         let decoded: Tasks = serde_json::from_value(legacy).expect("legacy json with pid");

@@ -58,6 +58,23 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             },
         };
         watch_trigger(spec, CheckOn::Any, &args)
+    } else if let Some(file) = &args.file {
+        let file = rimz::utils::path::normalize_path_lexical(
+            &std::env::current_dir()
+                .context("resolving --file against the current directory")?
+                .join(file),
+        );
+        if file.is_dir() {
+            bail!("--file {} is a directory; watch a file", file.display());
+        }
+        let mark = rimz::config::FileMark::read(&file)
+            .with_context(|| format!("reading --file {}", file.display()))?;
+        let spec = WatchSpec::File {
+            file,
+            grep: args.grep.clone(),
+            mark,
+        };
+        watch_trigger(spec, CheckOn::Any, &args)
     } else {
         let command = command_string(&args.command)?;
         watch_trigger(
@@ -113,10 +130,26 @@ fn validate_shape(args: &WaitArgs) -> Result<()> {
     if usize::from(args.in_after.is_some())
         + usize::from(args.pid.is_some())
         + usize::from(args.check.is_some())
+        + usize::from(args.file.is_some())
         + usize::from(!args.command.is_empty())
         != 1
     {
-        bail!("choose exactly one wait trigger: --in, --pid, --check, or a command after --");
+        bail!(
+            "choose exactly one wait trigger: --in, --pid, --check, --file, or a command after --"
+        );
+    }
+    if args
+        .file
+        .as_ref()
+        .is_some_and(|file| file.as_os_str().is_empty())
+    {
+        bail!("--file needs a path");
+    }
+    if args.grep.is_some() && args.file.is_none() {
+        bail!("--grep requires --file");
+    }
+    if args.grep.as_deref().is_some_and(str::is_empty) {
+        bail!("--grep needs a pattern");
     }
     if args
         .check
@@ -137,7 +170,7 @@ fn validate_shape(args: &WaitArgs) -> Result<()> {
         bail!("--every requires --check");
     }
     if args.timeout.is_some() && args.in_after.is_some() {
-        bail!("--timeout requires --pid, --check, or a command after --");
+        bail!("--timeout requires --pid, --check, --file, or a command after --");
     }
     for (name, duration) in [
         ("--in", args.in_after),

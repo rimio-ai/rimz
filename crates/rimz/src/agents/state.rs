@@ -134,6 +134,12 @@ pub enum PendingWaitTrigger {
     Check {
         command: String,
     },
+    /// A `--file` watch, optionally for a new line matching `grep`.
+    File {
+        path: std::path::PathBuf,
+        #[serde(default)]
+        grep: Option<String>,
+    },
     Signal {
         selector: String,
         deadline: Option<Timestamp>,
@@ -142,7 +148,8 @@ pub enum PendingWaitTrigger {
 
 impl PendingWait {
     /// The sleeping card's sentence: `wakes in 12m`, `wakes now`,
-    /// `wakes after cargo test`, or `wakes on pr.merged · 2h left`.
+    /// `wakes after cargo test`, `wakes when app.log changes`, or
+    /// `wakes on pr.merged · 2h left`.
     pub fn label(&self, now: Timestamp) -> String {
         let summary = self.trigger.summary(now);
         match &self.trigger {
@@ -151,6 +158,7 @@ impl PendingWait {
             PendingWaitTrigger::Pid { .. }
             | PendingWaitTrigger::Command { .. }
             | PendingWaitTrigger::Check { .. } => format!("wakes after {summary}"),
+            PendingWaitTrigger::File { .. } => format!("wakes when {summary}"),
             PendingWaitTrigger::Signal { .. } => format!("wakes on {summary}"),
         }
     }
@@ -159,7 +167,7 @@ impl PendingWait {
 impl PendingWaitTrigger {
     /// The wait itself, without a kind word (a card glyph carries the kind):
     /// `in 12m` or `due`, `pid 16776`, the command on one line with its
-    /// program path trimmed, or `pr.merged · 2h left`. A timer's armed `delay` is not shown.
+    /// program path trimmed, `app.log matches `ready``, or `pr.merged · 2h left`. A timer's armed `delay` is not shown.
     pub(crate) fn summary(&self, now: Timestamp) -> String {
         use crate::theme::fmt::duration_label;
 
@@ -175,6 +183,16 @@ impl PendingWaitTrigger {
                 }
             }
             Self::Pid { pid } => format!("pid {pid}"),
+            Self::File { path, grep } => {
+                let name = path
+                    .file_name()
+                    .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy());
+                let label = match grep {
+                    Some(grep) => format!("{name} matches `{grep}`"),
+                    None => format!("{name} changes"),
+                };
+                single_line_description(&label).unwrap_or_default()
+            }
             Self::Command { command } | Self::Check { command } => {
                 single_line_description(&crate::proc::command::command_program_basename(command))
                     .unwrap_or_default()

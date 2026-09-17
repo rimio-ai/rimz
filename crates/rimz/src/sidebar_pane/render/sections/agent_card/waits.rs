@@ -1,11 +1,11 @@
 //! Wait entries share the subagent grammar: the lead shows liveness, line 1 is
 //! the wait itself with the elapsed clock pinned right, and line 2 appears only
 //! for a described background shell, carrying its command. A live watch (a
-//! command, pid, or check wait, or a background shell) wears the working animation in
+//! command, pid, check, or file wait, or a background shell) wears the working animation in
 //! the subordinate wait tone while it runs; a timer or a signal holds its static
 //! kind glyph, since nothing runs until it fires. The parent's own status head
-//! carries sleeping. Timers come first, then live watches (command, pid, and
-//! check waits, then background shells), then signals. The words come from
+//! carries sleeping. Timers come first, then live watches (command, pid, check,
+//! and file waits, then background shells), then signals. The words come from
 //! `PendingWaitTrigger::summary`; this module adds leads and layout.
 
 use jiff::Timestamp;
@@ -36,6 +36,7 @@ pub(super) fn is_live_watch(trigger: &PendingWaitTrigger) -> bool {
         PendingWaitTrigger::Pid { .. }
             | PendingWaitTrigger::Command { .. }
             | PendingWaitTrigger::Check { .. }
+            | PendingWaitTrigger::File { .. }
     )
 }
 
@@ -49,7 +50,8 @@ pub(super) fn wait_entry_lines(
             PendingWaitTrigger::Timer { .. } => WaitLead::Kind(GlyphRole::CardWaitTimer),
             PendingWaitTrigger::Pid { .. }
             | PendingWaitTrigger::Command { .. }
-            | PendingWaitTrigger::Check { .. } => WaitLead::Working,
+            | PendingWaitTrigger::Check { .. }
+            | PendingWaitTrigger::File { .. } => WaitLead::Working,
             PendingWaitTrigger::Signal { .. } => WaitLead::Kind(GlyphRole::CardWaitSignal),
         },
         text: wait.trigger.summary(ctx.now),

@@ -453,12 +453,24 @@ fn wait_check_rejects_shapes_without_a_meaning() {
         ),
         (
             vec!["wait", "--check", "true", "--pid", "123"],
-            "choose exactly one wait trigger: --in, --pid, --check, or a command after --",
+            "choose exactly one wait trigger: --in, --pid, --check, --file, or a command after --",
         ),
         (vec!["wait", "--check", " "], "--check needs a command"),
         (
+            vec!["wait", "--grep", "ready", "--", "true"],
+            "--grep requires --file",
+        ),
+        (
+            vec!["wait", "--file", "app.log", "--grep", ""],
+            "--grep needs a pattern",
+        ),
+        (
+            vec!["wait", "--file", "app.log", "--in", "5m"],
+            "choose exactly one wait trigger",
+        ),
+        (
             vec!["wait", "--in", "5m", "--timeout", "1m"],
-            "--timeout requires --pid, --check, or a command after --",
+            "--timeout requires --pid, --check, --file, or a command after --",
         ),
         (
             vec!["wait", "--check", "true", "--every", "24h"],
@@ -470,6 +482,123 @@ fn wait_check_rejects_shapes_without_a_meaning() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(expected), "{args:?}: {stderr}");
     }
+}
+
+#[test]
+fn wait_file_fires_on_any_change_including_creation() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let dir = env.project_root.join("logs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let output = agent_wait(&env)
+        .current_dir(&env.project_root)
+        .args(["wait", "--file", "logs/app.log", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let path = canonical(&dir).join("app.log");
+    assert_eq!(receipt["trigger"], format!("file: {}", path.display()));
+    let tasks = wait_instances(&env);
+    assert_eq!(
+        tasks.0[receipt["name"].as_str().unwrap()].watch,
+        Some(rimz::config::WatchSpec::File {
+            file: path.clone(),
+            grep: None,
+            mark: None,
+        })
+    );
+    let report: serde_json::Value =
+        serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
+            .expect("agent report");
+    assert_eq!(
+        report["agent"]["pending_waits"][0]["trigger"],
+        serde_json::json!({"kind": "file", "path": path, "grep": null})
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1_500));
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+
+    std::fs::write(&path, "started\n").unwrap();
+    let messages = wait_for_wait_messages(&env, 1);
+    assert!(
+        messages[0]
+            .text
+            .starts_with(&format!("waited on file {}\nmet after ", path.display())),
+        "{}",
+        messages[0].text
+    );
+    wait_for_no_wait_instances(&env);
+    let refused = agent_wait(&env)
+        .args(["wait", "--file"])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("is a directory"));
+}
+
+#[test]
+fn wait_file_grep_fires_only_on_a_line_after_the_arm_point() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let path = canonical(&env.home_root).join("server.log");
+    std::fs::write(&path, "booting\nlistening on :3000\n").unwrap();
+    let file = path.to_str().unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(&wait_ok(
+        &env,
+        &["wait", "--file", file, "--grep", "listening", "--json"],
+    ))
+    .unwrap();
+    assert_eq!(receipt["trigger"], format!("file: {file} grep: listening"));
+    let append = |text: &str| {
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
+    };
+    append("reloading\nlisten");
+    std::thread::sleep(std::time::Duration::from_millis(1_500));
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    append("ing on :3001\n");
+    let messages = wait_for_wait_messages(&env, 1);
+    let text = &messages[0].text;
+    assert!(
+        text.starts_with(&format!(
+            "waited on file {file} for `listening`\nmet after "
+        )),
+        "{text}"
+    );
+    assert!(text.contains(": `listening on :3001` · output: "), "{text}");
+    wait_for_no_wait_instances(&env);
+    let output_path = text
+        .split(" · output: ")
+        .nth(1)
+        .and_then(|rest| rest.split(" (").next())
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(output_path).unwrap(),
+        "listening on :3001\n"
+    );
+
+    wait_ok(&env, &["wait", "--file", file, "--grep", "listening"]);
+    std::fs::write(&path, "listening again\n").unwrap();
+    let messages = wait_for_wait_messages(&env, 2);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.text.contains(": `listening again`")),
+        "{messages:?}"
+    );
+    wait_for_no_wait_instances(&env);
 }
 
 #[test]

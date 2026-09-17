@@ -234,6 +234,22 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             "wakes after nc -z localhost 3000",
         ),
         (
+            PendingWaitTrigger::File {
+                path: "/repo/logs/app.log".into(),
+                grep: None,
+            },
+            "app.log changes",
+            "wakes when app.log changes",
+        ),
+        (
+            PendingWaitTrigger::File {
+                path: "/repo/logs/app.log".into(),
+                grep: Some("listening on".into()),
+            },
+            "app.log matches `listening on`",
+            "wakes when app.log matches `listening on`",
+        ),
+        (
             PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: None,
@@ -263,6 +279,12 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             assert_eq!(
                 serde_json::to_value(&trigger).unwrap(),
                 serde_json::json!({"kind": "pid", "pid": 16776})
+            );
+        }
+        if let PendingWaitTrigger::File { grep: Some(_), .. } = &trigger {
+            assert_eq!(
+                serde_json::to_value(&trigger).unwrap(),
+                serde_json::json!({"kind": "file", "path": "/repo/logs/app.log", "grep": "listening on"})
             );
         }
         if matches!(trigger, PendingWaitTrigger::Check { .. }) {
