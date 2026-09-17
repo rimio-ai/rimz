@@ -20,11 +20,11 @@ use tempfile::TempDir;
 /// How many trailing diagnostic records an assertion message carries.
 const DIAG_TAIL_RECORDS: usize = 20;
 
+const RIMZ_HOME_DIR: &str = "rimz-home";
+
 /// Canonicalize, falling back to the original path when it does not yet exist
 /// (a project root the test is about to create). Workspace IDs hash the
 /// canonical root, so harness and binary must agree on the same form.
-const RIMZ_HOME_DIR: &str = "rimz-home";
-
 pub fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
