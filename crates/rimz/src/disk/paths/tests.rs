@@ -141,6 +141,15 @@ fn mint_lengthens_past_a_taken_prefix_and_records_decide_lookup() {
         StatePaths::under(first, home.path()).unwrap().dir_name,
         first_name
     );
+
+    // An unrecorded dir under another basename (an unroomed project's loop
+    // instances) is not adopted by a root whose id shares its hex.
+    let other = tempfile::tempdir().unwrap();
+    let neighbour = format!("elsewhere-{}", first_name.hex());
+    fs::create_dir_all(workspaces_dir_under(other.path()).join(&neighbour)).unwrap();
+    let minted = StatePaths::for_project_root_under(&second_root, other.path()).unwrap();
+    assert_ne!(minted.dir_name.as_str(), neighbour);
+    assert_eq!(minted.dir_name.slug(), "repo");
 }
 
 #[test]

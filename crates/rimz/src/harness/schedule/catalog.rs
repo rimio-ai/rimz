@@ -29,16 +29,12 @@ fn instance_root(project_root: &Path) -> Result<PathBuf> {
 }
 
 pub fn workspace_instance_roots() -> BTreeSet<PathBuf> {
-    let Ok(workspaces) = crate::workspace::known_workspaces() else {
+    let Ok(workspaces) = std::fs::read_dir(workspaces_dir()) else {
         return BTreeSet::new();
     };
     workspaces
-        .into_iter()
-        .flat_map(|workspace| {
-            let paths =
-                StatePaths::under_named(workspace.workspace_id, workspace.dir_name, &rimz_home());
-            instances::load_from(&paths.root).0.into_values()
-        })
+        .flatten()
+        .flat_map(|workspace| instances::load_from(&workspace.path()).0.into_values())
         .map(|entry| entry.resolved_root())
         .collect()
 }

@@ -234,7 +234,7 @@ impl StatePaths {
 /// The workspace dir name `workspace_id` resolves to in `ws_dir`, or the
 /// `ws-<24hex>` fallback when it has none.
 fn workspace_dir_name(ws_dir: &Path, workspace_id: &WorkspaceId) -> Result<WorkspaceDirName> {
-    Ok(find_workspace_dir(ws_dir, workspace_id)?
+    Ok(find_workspace_dir(ws_dir, workspace_id, |_| true)?
         .unwrap_or_else(|| WorkspaceDirName::fallback(workspace_id)))
 }
 
@@ -248,11 +248,15 @@ fn workspace_dir_name_for_root(
     workspace_id: &WorkspaceId,
     project_root: &Path,
 ) -> Result<WorkspaceDirName> {
-    if let Some(found) = find_workspace_dir(ws_dir, workspace_id)? {
+    let slug = WorkspaceDirName::basename_slug(project_root, WORKSPACE_DIR_SLUG_MAX);
+    let fallback = WorkspaceDirName::fallback(workspace_id);
+    // An unrecorded dir is this root's only when its name says so: another
+    // project whose id shares the hex prefix must mint its own dir.
+    let owns_unrecorded = |name: &WorkspaceDirName| name.slug() == slug || *name == fallback;
+    if let Some(found) = find_workspace_dir(ws_dir, workspace_id, owns_unrecorded)? {
         return Ok(found);
     }
     let taken: Vec<WorkspaceDirName> = workspace_dir_names(ws_dir)?.collect();
-    let slug = WorkspaceDirName::basename_slug(project_root, WORKSPACE_DIR_SLUG_MAX);
     let hex_len = (WORKSPACE_DIR_HEX_MIN..workspace_id.hex().len())
         .step_by(2)
         .find(|&len| {
@@ -285,17 +289,20 @@ fn workspace_dir_names(ws_dir: &Path) -> Result<impl Iterator<Item = WorkspaceDi
 /// Locate `workspace_id`'s dir in `ws_dir` by hex prefix. A candidate whose
 /// `workspace.json` names the id wins; one naming another id is skipped; a
 /// candidate without a readable record (half-born, or a runtime tree) is
-/// accepted only when it is the sole such candidate.
+/// accepted only when `may_own_unrecorded` admits it and it is the sole such
+/// candidate.
 fn find_workspace_dir(
     ws_dir: &Path,
     workspace_id: &WorkspaceId,
+    may_own_unrecorded: impl Fn(&WorkspaceDirName) -> bool,
 ) -> Result<Option<WorkspaceDirName>> {
     let mut unrecorded = Vec::new();
     for name in workspace_dir_names(ws_dir)?.filter(|name| name.may_name(workspace_id)) {
         match recorded_workspace_id(&ws_dir.join(name.as_str())) {
             Some(recorded) if recorded == workspace_id.as_str() => return Ok(Some(name)),
             Some(_) => {}
-            None => unrecorded.push(name),
+            None if may_own_unrecorded(&name) => unrecorded.push(name),
+            None => {}
         }
     }
     if unrecorded.len() > 1 {
