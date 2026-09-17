@@ -73,6 +73,33 @@ fn doctor_json(output: &Output) -> Value {
 }
 
 #[test]
+fn doctor_json_reports_legacy_roots_and_a_superseded_agents_home() {
+    let env = Env::new();
+    let legacy = env.state_root().join("rimz");
+    std::fs::create_dir_all(&legacy).expect("seed legacy root");
+    let agents_home = env.home_root.join("agents-home");
+    std::fs::create_dir_all(&agents_home).expect("mkdir agents home");
+
+    let report = doctor_json(
+        &env.rimz()
+            .env("RIMZ_AGENTS_HOME", &agents_home)
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+    let home = &report["home"];
+    assert_eq!(home["path"], env.rimz_home().display().to_string());
+    assert_eq!(home["from_env"], true);
+    assert_eq!(
+        home["agents_home_override"],
+        agents_home.display().to_string()
+    );
+    assert_eq!(home["legacy_roots"], json!([legacy.display().to_string()]));
+    let fix = home["fix"].as_str().expect("fix beside legacy roots");
+    assert!(fix.contains("moving-from-the-xdg-roots"), "{fix}");
+}
+
+#[test]
 fn doctor_json_folds_one_row_per_agent() {
     let env = Env::new();
     inject_lifecycle(
@@ -315,7 +342,7 @@ fn doctor_human_report_renders_titled_sections() {
 #[test]
 fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
     let env = Env::new();
-    let path = env.config_root().join("rimz/theme.toml");
+    let path = env.rimz_home().join("theme.toml");
     std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config");
     std::fs::write(&path, "[theme.display]\nmax_cols = 64\nmax_cols = 72\n")
         .expect("write broken theme config");
@@ -1037,7 +1064,7 @@ fn trust_codex_hooks_except(env: &Env, excluded: Option<&str>) {
 }
 
 fn write_machine_config(env: &Env, text: &str) -> PathBuf {
-    let dir = env.config_root().join("rimz");
+    let dir = env.rimz_home();
     std::fs::create_dir_all(&dir).expect("mkdir config");
     let path = dir.join("config.toml");
     std::fs::write(&path, text).expect("write machine config");
