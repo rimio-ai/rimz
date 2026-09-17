@@ -549,6 +549,7 @@ fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static s
             "remote.toml",
             "projects",
             "agents.d",
+            "cursor-statusline.json",
         ]);
     }
     keep
