@@ -4,7 +4,7 @@
 
 ## What the scheduler does
 
-`rimz loop` fires agent work on a trigger. A fire starts a fresh supervised turn, delivers a prompt to an agent that is already running, or runs a shell command that can guard either one. The trigger is a clock, a signal selector, or a watched command. `rimz wait` is the agent-facing front end over the same task rows.
+`rimz loop` fires agent work on a trigger. A fire starts a fresh supervised turn, delivers a prompt to an agent that is already running, or runs a shell command that can guard either one. The trigger is a clock, a signal selector, or a watch spec. `rimz wait` is the agent-facing front end over the same task rows.
 
 There is no RimZ scheduler daemon. The room already elects one process to do shared work, the sidebar producer or elder ([state.md § Renderers, the producer, and consumers](../sidebar/state.md#renderers-the-producer-and-consumers)), and the elder keeps time for loop tasks on its ordinary data tick. For schedules that must run with the room closed, a user can install one OS timer that launches a one-off `rimz loop tick` and exits; it yields every root whose room is open ([The external tick](#the-external-tick)).
 
@@ -92,7 +92,7 @@ An untrusted project row with no same-named base row still enters the runnable m
 | --- | --- | --- |
 | `Schedule` | `at`, `every`, or `cron` | the elder tick or the external tick, when `due` says so |
 | `Signal` | `signal = "<selector>"`, optional `match = { k = "v" }` | the process that emits a matching signal |
-| `Watch` | `watch = "<shell>"` | the detached `rimz wait watch` process that ran the command, or the elder's watch-lost rule |
+| `Watch` | `watch` as a command string or a PID, check, or file spec | the detached `rimz wait watch` process, or the elder's watch-lost rule |
 
 A `SignalSelector` is `Exact(SignalName)` or `Family(String)`, parsed from `a.b` or `a.*` and serialized back to the same string. `*`, `a.b.*`, and `a*` are rejected, and emission refuses wildcards outright.
 
@@ -102,11 +102,12 @@ Validation rejects the shapes that cannot mean anything:
 | --- | --- |
 | `TriggerConflict` | two trigger families on one row |
 | `MatchWithoutSignal`, `OnceWithoutSignal` | `match` or `once` with no `signal` |
-| `WatchWithCheck` | `watch` with `check`; the watched command is the check |
-| `BadSignal`, `BadWatch` | an unparseable selector or an empty command |
+| `WatchWithCheck` | `watch` with a separate `check` guard |
+| `BadSignal`, `BadWatch` | an unparseable selector or an empty watch command, file path, or pattern |
+| `BadCheckWatch` | an invalid or zero check interval, or check polarity `any` |
 | `ObsoleteCiSignal` | `ci.finished`, or a `conclusion` match on a `ci` selector; the message names `ci.passed` and `ci.failed` |
 
-A `Watch` row is always one-shot, and a `Signal` row is one-shot only with `once = true`. `ephemeral_lifetime` names the rows that retire themselves: any row with no repeating trigger, plus any row carrying a `deadline`, `once = true`, or a `watch` command.
+A `Watch` row is always one-shot, and a `Signal` row is one-shot only with `once = true`. `ephemeral_lifetime` names the rows that retire themselves: any row with no repeating trigger, plus any row carrying a `deadline`, `once = true`, or a `watch` spec.
 
 `Trigger::resolve` is the whole matching rule, with three outcomes:
 
@@ -145,7 +146,7 @@ The arming stamp sets the edge each shape reads. A calendar task first seen afte
 | `Due(t)` | the next occurrence is at or before now |
 | `NoOccurrence` | parsed and armed, but the shape yields no next time, such as a cron expression whose fields never match a real date |
 | `Listening { name }` | a signal subscription, which has no next time |
-| `Watching { command }` | a watched command, whose watcher owns the timing |
+| `Watching { spec }` | a watch spec, whose watcher owns the timing |
 
 ## Elder firing
 
@@ -236,7 +237,7 @@ A prompted `rimz agents <cell> "<prompt>"` launched from a check becomes a loop-
 
 A check-only task logs `completed`, `failed`, or `timed out` with the exit code and capped combined output, and recurs unless it is ephemeral. A guarded task logs the check evidence whether it skips or fires.
 
-A terminal `Watch` outcome takes the same path with the command already run: `prepare_check` converts the signal's `WatchOutcome` instead of executing anything, and polarity applies unchanged. A watch defaults to `on = "any"`. A `Lost` outcome converts to a failed check, so `any` still delivers it and `on = "success"` skips it. A polarity skip records `skipped` and consumes the ephemeral wait without delivering a message. A `Running` check-in bypasses polarity and consumption.
+A terminal `Watch` outcome takes the same path with the watch already evaluated: `prepare_check` converts the signal's `WatchOutcome` instead of executing anything, and polarity applies unchanged. A command watch defaults to `on = "any"`; polled watches always use that row polarity, with check polarity applied inside the watcher. A `Lost` outcome converts to a failed check, so `any` still delivers it and `on = "success"` skips it. A polarity skip records `skipped` and consumes the ephemeral wait without delivering a message. A `Running` or `NotMet` check-in bypasses polarity and consumption.
 
 ### The prompt a fire delivers
 
@@ -247,7 +248,7 @@ A delivery, signal, or watch prompt goes through `compose_wait`: the wait line, 
 | Trigger | Wait and evidence lines |
 | --- | --- |
 | timer | `waited <delay> [<name>]` |
-| watch | `WatchVerdict::label`, the name, and `output: <agent-visible path> (<FileSummary::label>)` when a path is present and the file is non-empty, `no output` when it is empty except for a `--pid` wait (`WaitMeta.pid`), whose empty file says nothing about the process; the tail is never inlined |
+| watch | `WatchSpec::headline`, `WatchVerdict::label`, the name, and `output: <agent-visible path> (<FileSummary::label>)` when a path is present and the file is non-empty; only command watches say `no output` for an empty file. The tail is never inlined; a file pattern match includes its matched-line preview. |
 | signal | `waited on <subject>`, `fired [<name>]`, and compact JSON with the fired `signal` name; the subject adds branch and PR for forge signals, the handle for agents, or the instance for teams |
 | manual fire | `fired by hand` |
 
@@ -272,7 +273,7 @@ Two patterns fall out of the guard. A watchdog runs a command on a schedule and 
 
 | Intent | Header | Dispatch |
 | --- | --- | --- |
-| Self timer or command wait (row has `wait_meta`) | `Type: WAIT` | `Steer` |
+| Self timer or watch (row has `wait_meta`) | `Type: WAIT` | `Steer` |
 | Any `Trigger::Signal` delivery, including team bindings | `Type: SIGNAL` | `Boundary { gate: Done }` |
 | Scheduled loop delivery | `Type: WAIT` | `Boundary { gate: Done }` |
 
@@ -328,7 +329,7 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 | `Forge` | the sidebar's PR-state refresh, which spawns `rimz events emit --source forge` on a transition ([state.md § Push channels](../sidebar/state.md#push-channels)) | `ci.passed`, `ci.failed`, `pr.merged`, `pr.closed` |
 | `Lifecycle` | the lifecycle hook, from the events its own store append produced | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended`; `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
 | `Team` | `rimz teams flip` and the stage owner's registration re-wake | `team.stage` |
-| `Watch` | `rimz wait watch <name>` when its command exits, and the elder's watch-lost rule | `wait.<task-name>` |
+| `Watch` | `rimz wait watch <name>` at a check-in or terminal command, PID, check, or file outcome, and the elder's watch-lost rule | `wait.<task-name>` |
 
 ### Agent lifecycle signals
 
@@ -384,23 +385,27 @@ Nothing queues a match. Signal firing leaves `loop-fire.json` untouched, and a s
 
 ### The watch verdict
 
-A watched command's signal carries a `WatchOutcome`: a `WatchVerdict` plus its evidence (the output tail, the agent-visible path of the complete output file, and its byte size, physical line count, and estimated tokens in `summary`). The verdict is the output-free half, one enum with one renderer.
+A watch signal carries a `WatchOutcome`: a `WatchVerdict` plus its evidence (the output tail, the agent-visible path of the output file, and its byte size, physical line count, and estimated tokens in `summary`). The verdict is one enum with one renderer; a file pattern match also carries its matched line.
 
 | Variant | `label()` |
 | --- | --- |
 | `Exited { code: Some(0), elapsed_ms }` | `exit 0 after 4m` |
 | `Exited { code: None, elapsed_ms }` | `killed by signal after 3s` |
 | `Running { elapsed_ms }` | `still running after 30m` |
+| `Met { elapsed_ms, line }` (`met`) | `met after 4m`, adding ``: `<line>` `` when a file pattern matched |
+| `NotMet { elapsed_ms }` (`not_met`) | `still not met after 30m` |
 | `TimedOut { elapsed_ms }` (read from old records only) | `timed out after 59m` |
 | `Lost { detail, elapsed_ms }` | `watcher died after 3m; the command may still be running or may have died with it` |
 
-`WatchVerdict::label` is the only place those words are written; `compose_wait`, `rimz loop logs`, and `rimz loop show` all render through it. `passed()` is `Exited { code: Some(0) }` and nothing else. `elapsed_ms()` is the measured run, rendered in seconds under a minute and through `theme::fmt::duration_label` above it. `is_terminal()` is false only for `Running`, the check-in that bypasses polarity, adds no strike, and does not consume the row.
+`WatchVerdict::label` is the only place those words are written; `compose_wait`, `rimz loop logs`, and `rimz loop show` all render through it. `passed()` is true for `Exited { code: Some(0) }` and `Met`. `elapsed_ms()` is the measured run, rendered in seconds under a minute and through `theme::fmt::duration_label` above it. `is_terminal()` is false for `Running` and `NotMet`, the check-ins that bypass polarity, add no strike, and do not consume the row.
 
 For terminal outcomes, `to_check_outcome` folds the verdict into the check machinery: `passed()` becomes the pass bit, `TimedOut` the timeout flag, and the tail the output. A `Lost` outcome's output is the log file's tail, since the label already states the cause.
 
 `WatchOutcome` travels only in the `rimz loop run` argv and the process memory around it, so reshaping it is not a durable-format change. The verdict becomes durable one level up, in the run record's `watch` field.
 
 ## Watched commands
+
+`TaskEntry.watch` is an untagged `WatchSpec`: a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. A file mark records size and modification time; no mark means absent at arm time. `WatchSpec::describe` owns trigger text and `headline` owns the delivered first line.
 
 `arm_delivery` ensures the private room tmp layout, creates `tmp/rimz-waits/<name>.output`, and spawns a detached `rimz wait watch <name>` with null stdin and stdout, the output file as stderr, and `process_group(0)`. A spawn failure rolls the row back.
 
@@ -410,9 +415,13 @@ The command runs in the task's `dir`, else the linked worktree it was armed from
 
 A watcher-originated fire runs `rimz loop run <name> --signal-json …` and waits for it while still holding the watcher lock, so the check-in delivery cannot overlap the terminal fire. An append or fire failure is logged and the final outcome is still attempted. Every other signal emitter spawns its runs detached.
 
+For PID, check, and file specs, `signal::poll_watch` probes then sleeps: the check's `every` interval, or one second for PID and file. PID uses native `kill(pid, 0)` rather than a shell loop: `ESRCH` meets the condition, while success or `EPERM` keeps watching. A check runs through `run_command` with `WatchDeadline::None`, truncating and rewriting the output file before every run so evidence is the latest run's output. Its spec's `on` chooses success or failure; exit 126/127 emits `Exited` and ends the wait. Otherwise polled specs emit `Met` on completion and one `NotMet` check-in evaluated between probes; a blocking check defers that check-in.
+
+A file watch compares existence, size, and modification time against its arm mark. With `grep`, its byte cursor starts at the arm size (zero if absent), restarts at zero after truncation below the cursor, and tests only newline-terminated lines using literal case-sensitive matching. It trims a trailing carriage return; a straddling line starts at the arm byte. The whole matched line is written to the output file; `Met.line` is capped at 4 KiB, and the label renders a one-line preview. Relative paths are resolved against the arming cwd and stored absolute. The [file reference](../../reference/cli/wait.md#file---file) owns the user-facing contract.
+
 Cancel removes the row first, then `stop_watcher` sends SIGTERM to the lock holder's process group, stopping the watcher and its command together. Non-positive PIDs are rejected, and an absent process counts as stopped. If a watcher dies without firing, the elder's watch-lost rule fires the `Lost` verdict after the 30-second grace, with the output file's tail as evidence.
 
-`signal::wait_output_path` derives `<StatePaths.tmp_dir>/rimz-waits/<name>.output` for arming, watching, and lost-watcher evidence. `WatchOutcome::measured` records the file's byte size, line count, and estimated tokens (`utils::tokens::estimate` over at most the first 1 MiB, scaled by length beyond it), and maps the host path through `sandbox::TmpView::current` (machine policy, since no recipient is known yet) to the agent-visible `output_path`: `/tmp/rimz-waits/<name>.output` under sandbox isolation, the host path otherwise. A failed measurement warns and records a zero summary, which renders as `· no output` like an empty file. Room teardown removes the file; in a long-lived room gc prunes it only when there is no catalog row, no running watcher, and no write in the 14-day retention. The run record keeps the tail for `rimz loop logs`.
+`signal::wait_output_path` derives `<StatePaths.tmp_dir>/rimz-waits/<name>.output` for arming, watching, and lost-watcher evidence. `WatchOutcome::measured` records the file's byte size, line count, and estimated tokens (`utils::tokens::estimate` over at most the first 1 MiB, scaled by length beyond it), and maps the host path through `sandbox::TmpView::current` (machine policy, since no recipient is known yet) to the agent-visible `output_path`: `/tmp/rimz-waits/<name>.output` under sandbox isolation, the host path otherwise. A failed measurement warns and records a zero summary, which renders as `· no output` for command watches and no output segment for polled watches, like an empty file. Room teardown removes the file; in a long-lived room gc prunes it only when there is no catalog row, no running watcher, and no write in the 14-day retention. The run record keeps the tail for `rimz loop logs`.
 
 ## Waits
 
@@ -422,13 +431,13 @@ A wait is a session-pinned delivery row: a `Deliver` task whose target is one li
 
 | Provenance | Accepts | Name |
 | --- | --- | --- |
-| `SelfWait` | a delay, a PID, or a watched command; no prompt, check, surplus gate, or deadline | minted, workspace-unique `wait-<petname>` |
+| `SelfWait` | a delay or a watch spec; no prompt, separate check guard, surplus gate, or deadline | minted, workspace-unique `wait-<petname>` |
 | `Loop` | a named clock or signal delivery | given |
 | `Team(instance)` | a standing signal subscription | generated ([Team bindings](#team-bindings)) |
 
-`SelfWait` is the only provenance that writes `wait_meta`: `armed_at`, and the optional `delay` and `pid`. A name that belongs to a project task, or for a team row to a machine task, is refused as configuration-owned.
+`SelfWait` is the only provenance that writes `wait_meta`: `armed_at` and the optional `delay`. A name that belongs to a project task, or for a team row to a machine task, is refused as configuration-owned.
 
-`rimz wait` accepts a positive delay under 24 hours, a positive `--pid`, or a command after `--`, and resolves the live calling agent through `@me`; a user shell cannot arm or cancel. `DeliveryTrigger::Pid` lowers to the watched shell command `while kill -0 <pid> 2>/dev/null; do sleep 1; done`, reusing check-ins, cancellation, and delivery with no scheduler trigger of its own. It observes whether the PID is accessible, not process identity or exit status, and it rejects `--on`.
+`rimz wait` accepts a positive delay under 24 hours, a positive `--pid`, a polled `--check`, a `--file` with optional `--grep`, or a command after `--`, and resolves the live calling agent through `@me`; a user shell cannot arm or cancel. `DeliveryTrigger::Watch` carries the spec, row polarity, and check-in timeout. PID watches observe existence, not process identity or exit status, and reject `--on`.
 
 For signal deliveries, the builder applies caller-first, target-fallback defaults and the other-agent lifecycle guard ([cli/loop.md § Caller-scoped defaults](../../reference/cli/loop.md#caller-scoped-defaults)). One locked instance mutation then compares live rows by kind and session, parsed selector, normalized matches (absent equals empty), and resolved root. A duplicate returns `AlreadySubscribed` and rewrites nothing: not its name, prompt, provenance, or overlays.
 
@@ -436,7 +445,7 @@ Arming and canceling print the caller's pending rows after the receipt. A list f
 
 `schedule::arm::retire_session` removes every instance row pinned to a kind and session, paused and disabled rows included, stops their watcher groups, and clears their arming and strike overlays, attempting every cleanup and aggregating failures. Lifecycle `Ended` and `Lost` call it after the durable event and before event signals; an explicit agent-tree stop calls it after each successful node stop. `delivery_target_alive` rejects a session with `ended_at` set, and gc is the backstop. An instance row is runnable or it is garbage: gc also reaps any `Instance` row whose action no longer compiles (a target lost to schema drift can never fire or retire), while machine and project `loop.toml` rows with an invalid action stay listed as `<invalid>` for the user to fix. Hook config, arming, and retirement failures are logged as warnings and never reach hook stdout.
 
-`pending::project_pending_waits` projects armed one-shot delivery rows onto their target agents as `pending_waits`, which the sidebar and `rimz agents` read. Timers, PID waits, watched commands, and one-shot or deadline signal deliveries count; standing subscriptions and recurring clocks do not. A watch row whose `wait_meta` has a `pid` projects as a PID wait and any other watch row as a shell watch; no command string is parsed. What a pending wait does to the displayed status is [model.md § Sleeping](../agents/model.md#sleeping), and how a card draws it is [the interface reference](../../interface/sidebar.md). A live member's pending one-shot wait also withholds `team.idle` ([Team signals](#team-signals)).
+`pending::project_pending_waits` projects armed one-shot delivery rows onto their target agents as `pending_waits`, which the sidebar and `rimz agents` read. Timers, PID waits, watched commands, polled checks, file watches, and one-shot or deadline signal deliveries count; standing subscriptions and recurring clocks do not. `WatchSpec` maps directly to pending `command`, `pid`, `check` (`command`), or `file` (`path`, `grep`) kinds; no command string is parsed. What a pending wait does to the displayed status is [model.md § Sleeping](../agents/model.md#sleeping), and how a card draws it is [the interface reference](../../interface/sidebar.md). A live member's pending one-shot wait also withholds `team.idle` ([Team signals](#team-signals)).
 
 ### Team bindings
 

@@ -285,7 +285,7 @@ Every fire appends one record to `~/.local/state/rimz/loop-runs.log.jsonl`. `sho
 | --- | --- |
 | `in 12m` | The next clock fire. |
 | `listening` | A signal subscription. |
-| `watching` | A `rimz wait` command watch. |
+| `watching` | A `rimz wait` command, PID, check, or file watch. |
 | `disabled`, `disabled · N strikes`, `disabled · enable to arm` | Held until enabled; the last is a project task not yet enabled here. |
 | `paused · in 2h` | Paused until then. |
 | `blocked · trust` | A project task whose project is not trusted. |

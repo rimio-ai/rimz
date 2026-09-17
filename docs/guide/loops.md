@@ -58,20 +58,24 @@ That one command stands in for a cron entry, the guard script around it, and the
 
 ## Wake a running agent
 
-An agent's work often ends in a wait. CI has twenty minutes left, a reviewer owes comments, a deploy is baking. The agent has nothing to do until then, and the follow-up falls to you: remember to check CI, then tell the agent to merge. The two habits an agent falls into on its own are worse: a `sleep 900` in its shell tool, which holds the turn open for fifteen minutes of nothing, or a poll loop like `while ! gh run watch --exit-status; do sleep 30; done`, which keeps the pane busy until the command finishes. Both spend a live agent on watching a clock.
+An `until nc -z localhost 3000; do sleep 1; done` loop waits for a service, and `tail -F build.log | grep -m1 READY` waits for a log line. Both observe the right thing, but run in the agent's shell tool and hold its turn open while nothing needs its attention. A deploy is baking, the agent has nothing to do until it is ready, and the follow-up otherwise falls to you.
 
 A wait inverts that. The agent arms its own alarm, ends its turn, and receives the result in the same conversation. Self waits steer a working agent immediately; scheduled and signal loop deliveries instead wait for its next turn boundary.
 
 ```sh
 rimz wait --in 30m
 rimz wait --pid 16776
+rimz wait --check 'nc -z localhost 3000'
+rimz wait --file build.log --grep 'READY'
 rimz wait -- gh run watch --exit-status
 rimz wait --on fail -- cargo test
 ```
 
 The timer must be shorter than 24 hours and uses the room's clock or the [loop timer](#who-keeps-time). A command runs in a detached watcher with stdin closed, at the root of the checkout it was armed from (including linked worktrees). Its final message names the command, exit status, and elapsed time, with a path to the complete output, its estimated token count, and its line count rather than inline output. A silent command's message says `no output`; a `--pid` wait, which cannot see its process's output, says nothing about output. Open the file to read it: `/tmp/rimz-waits/<name>.output` inside a sandbox, or `~/.local/state/rimz/workspaces/<workspace-id>/tmp/rimz-waits/<name>.output` in host mode. The file is removed when the room closes; `rimz loop logs <name>` keeps the last 4 KiB in durable history.
 
-Already started the work elsewhere? `--pid 16776` replaces `tail --pid=16776 -f /dev/null`: it checks once per second until that PID is no longer accessible, without requiring GNU `tail`. It cannot recover the process's output or exit status; `exit 0` reports the wait completing. Canceling the wait leaves the existing process alone.
+The [polled check](../reference/cli/wait.md#polled-check---check) runs until success, sleeping one second between runs by default; its output file holds the latest run. The [file watch](../reference/cli/wait.md#file---file) polls once per second: without `--grep`, it waits for a change; with it, for a new complete line containing that literal pattern after the arm point. Its message includes the matched line. Both report `met after …` when ready and `still not met after …` at a check-in.
+
+Already started the work elsewhere? `--pid 16776` replaces `tail --pid=16776 -f /dev/null`: it probes natively once per second until that PID no longer exists, without requiring GNU `tail`. It cannot recover the process's output or exit status; `met after …` reports the wait completing. Canceling the wait leaves the existing process alone.
 
 A long command checks in once after 30 minutes by default. `--timeout 1h` changes that check-in time: it does not kill the command or stop watching. The notice says `still running after 30m`, includes the output file's current estimated tokens and line count, and offers `rimz wait cancel <name>` to stop it or `rimz wait --in 30m` for another alarm. The final exit verdict follows later. `--on fail|success` filters only the final outcome, never the check-in.
 

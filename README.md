@@ -226,6 +226,9 @@ rimz loop add watchdog --check "cargo test" --on fail \
 # One-shot wait after a delay
 rimz wait --in 30m
 
+# Poll until the service answers
+rimz wait --check 'nc -z localhost 3000'
+
 # Wait for the command to exit, with its output in the message
 rimz wait -- gh run watch --exit-status
 
