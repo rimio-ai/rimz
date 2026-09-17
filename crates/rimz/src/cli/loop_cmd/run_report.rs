@@ -665,10 +665,6 @@ fn write_gutter_line(
 
 fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::store::run::RunRecord> {
     let run_id = rimz::RunId::parse(run_id).ok()?;
-    let paths = StatePaths::under(
-        WorkspaceId::from_project_root(&entry.resolved_root()),
-        &rimz::disk::paths::logs_dir(),
-    )
-    .ok()?;
+    let paths = StatePaths::for_project_root(&entry.resolved_root()).ok()?;
     rimz::harness::run::load(&paths, &run_id).ok()
 }

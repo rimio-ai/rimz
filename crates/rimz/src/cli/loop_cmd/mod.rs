@@ -40,7 +40,6 @@ use rimz::harness::schedule::{
     catalog::{LoadedTask, TaskCatalog, TaskSource},
     strikes,
 };
-use rimz::ids::WorkspaceId;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::message::DeliveryGate;
 use rimz::store::run::RunRecord;
