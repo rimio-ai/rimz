@@ -87,7 +87,8 @@ pub use harness::{
     TurnCapParseError,
 };
 pub use loop_::{
-    CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WaitMeta, WatchSpec,
+    CheckOn, FileMark, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WaitMeta,
+    WatchSpec,
 };
 pub use mux::{
     MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,

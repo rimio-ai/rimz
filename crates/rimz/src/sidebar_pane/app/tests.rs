@@ -191,6 +191,13 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
             true,
         ),
         (
+            crate::agents::PendingWaitTrigger::File {
+                path: "/repo/app.log".into(),
+                grep: None,
+            },
+            true,
+        ),
+        (
             crate::agents::PendingWaitTrigger::Timer {
                 due: snapshot.now,
                 delay: None,

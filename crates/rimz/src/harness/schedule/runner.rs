@@ -53,7 +53,7 @@ const CHECK_DRAIN_GRACE: Duration = Duration::from_millis(200);
 const CHECK_INTERRUPT_GRACE: Duration = Duration::from_secs(1);
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
-pub(super) const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
+const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
     DurationUnit::Second,
     DurationUnit::Minute,
     DurationUnit::Hour,

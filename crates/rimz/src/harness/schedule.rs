@@ -164,7 +164,7 @@ pub enum ScheduleErr {
         "schedule `{name}`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; remove --match conclusion"
     )]
     ObsoleteCiSignal { name: String },
-    #[error("schedule `{name}` has an empty watched command")]
+    #[error("schedule `{name}` has an empty watched command, check, file, or pattern")]
     BadWatch { name: String },
     #[error(
         "schedule `{name}` has an invalid check watch: `every` must be a positive duration like `1s` and `on` must be `success` or `fail`"
@@ -703,15 +703,30 @@ fn validate_watch(name: &str, spec: &crate::config::WatchSpec) -> Result<(), Sch
         {
             Err(ScheduleErr::BadWatch { name })
         }
+        WatchSpec::File { file, grep, .. }
+            if file.as_os_str().is_empty() || grep.as_deref().is_some_and(str::is_empty) =>
+        {
+            Err(ScheduleErr::BadWatch { name })
+        }
         WatchSpec::Check {
             on: CheckOn::Any, ..
         } => Err(ScheduleErr::BadCheckWatch { name }),
         WatchSpec::Check { .. } if watch_interval(spec).is_none_or(|every| every.is_zero()) => {
             Err(ScheduleErr::BadCheckWatch { name })
         }
-        WatchSpec::Command(_) | WatchSpec::Pid { .. } | WatchSpec::Check { .. } => Ok(()),
+        WatchSpec::Command(_)
+        | WatchSpec::Pid { .. }
+        | WatchSpec::Check { .. }
+        | WatchSpec::File { .. } => Ok(()),
     }
 }
+
+/// `rimz wait --every` stays under a day, so its label never needs days.
+const WATCH_EVERY_UNITS: &[DurationUnit] = &[
+    DurationUnit::Second,
+    DurationUnit::Minute,
+    DurationUnit::Hour,
+];
 
 /// How long a polled watch sleeps between probes; `None` for a run-once
 /// command or an unparseable `every`.
@@ -719,10 +734,8 @@ pub(super) fn watch_interval(spec: &crate::config::WatchSpec) -> Option<std::tim
     use crate::config::WatchSpec;
     match spec {
         WatchSpec::Command(_) => None,
-        WatchSpec::Pid { .. } => Some(std::time::Duration::from_secs(1)),
-        WatchSpec::Check { every, .. } => {
-            parse_duration_units(every, runner::TASK_TIMEOUT_UNITS).ok()
-        }
+        WatchSpec::Pid { .. } | WatchSpec::File { .. } => Some(std::time::Duration::from_secs(1)),
+        WatchSpec::Check { every, .. } => parse_duration_units(every, WATCH_EVERY_UNITS).ok(),
     }
 }
 

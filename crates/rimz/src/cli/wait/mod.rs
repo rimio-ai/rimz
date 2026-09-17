@@ -1,4 +1,4 @@
-//! `rimz wait` — self-only timer, process, check, and command waits over the loop scheduler.
+//! `rimz wait` — self-only timer, process, check, file, and command waits over the loop scheduler.
 
 use std::time::Duration;
 
@@ -63,6 +63,12 @@ struct WaitArgs {
     /// Sleep this long between --check runs (default: 1s).
     #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     every: Option<Duration>,
+    /// Wait for this file to change: created, deleted, or written.
+    #[arg(long, value_name = "PATH")]
+    file: Option<std::path::PathBuf>,
+    /// With --file, wait for a new line containing this literal text.
+    #[arg(long, value_name = "PATTERN")]
+    grep: Option<String>,
     /// Deliver for a failed, successful, or any command outcome (default: any; --check: success).
     #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
     on: Option<String>,
@@ -92,6 +98,8 @@ impl WaitArgs {
             && self.pid.is_none()
             && self.check.is_none()
             && self.every.is_none()
+            && self.file.is_none()
+            && self.grep.is_none()
             && self.on.is_none()
             && self.timeout.is_none()
             && self.command.is_empty()

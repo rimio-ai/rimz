@@ -132,6 +132,14 @@ fn polled_waits_name_their_spec_and_never_claim_no_output() {
             },
             "waited on check `nc -z localhost 3000`",
         ),
+        (
+            crate::config::WatchSpec::File {
+                file: "/repo/app.log".into(),
+                grep: None,
+                mark: None,
+            },
+            "waited on file /repo/app.log",
+        ),
     ] {
         let task = TaskEntry {
             watch: Some(spec),
@@ -189,6 +197,45 @@ fn polled_waits_name_their_spec_and_never_claim_no_output() {
             }
         }
     }
+}
+
+#[test]
+fn file_grep_wait_inlines_the_matched_line() {
+    let task = TaskEntry {
+        watch: Some(crate::config::WatchSpec::File {
+            file: "/repo/app.log".into(),
+            grep: Some("listening".to_owned()),
+            mark: None,
+        }),
+        ..task()
+    };
+    let signal = Signal {
+        watch: Some(WatchOutcome {
+            verdict: WatchVerdict::Met {
+                elapsed_ms: 42_000,
+                line: Some("listening on :3000".to_owned()),
+            },
+            output: "listening on :3000".to_owned(),
+            output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
+            summary: FileSummary {
+                bytes: 19,
+                lines: 1,
+                tokens: 5,
+            },
+        }),
+        ..signal("wait.test", serde_json::json!({}))
+    };
+    assert_eq!(
+        compose_wait(
+            "wait-test",
+            &task,
+            None,
+            Evidence::Signal(&signal),
+            "",
+            now()
+        ),
+        "waited on file /repo/app.log for `listening`\nmet after 42s: `listening on :3000` · output: /tmp/rimz-waits/wait-test.output (<1k tokens, 1 line) [wait-test]"
+    );
 }
 
 #[test]
