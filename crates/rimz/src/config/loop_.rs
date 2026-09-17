@@ -139,7 +139,16 @@ pub struct WaitMeta {
 #[serde(untagged)]
 pub enum WatchSpec {
     Command(String),
-    Pid { pid: u32 },
+    Pid {
+        pid: u32,
+    },
+    /// A shell predicate run every `every` (a duration label) until its exit
+    /// matches `on`, `success` or `fail`.
+    Check {
+        check: String,
+        every: String,
+        on: CheckOn,
+    },
 }
 
 impl WatchSpec {
@@ -150,6 +159,16 @@ impl WatchSpec {
                 format!("watch: {}", crate::theme::fmt::command_preview(command))
             }
             Self::Pid { pid } => format!("pid {pid}"),
+            Self::Check { check, every, on } => {
+                let mut text = format!("check: {}", crate::theme::fmt::command_preview(check));
+                if every != "1s" {
+                    text.push_str(&format!(" every {every}"));
+                }
+                if *on == CheckOn::Fail {
+                    text.push_str(" on fail");
+                }
+                text
+            }
         }
     }
 
@@ -161,6 +180,10 @@ impl WatchSpec {
                 crate::theme::fmt::command_preview(command)
             ),
             Self::Pid { pid } => format!("waited on pid {pid}"),
+            Self::Check { check, .. } => format!(
+                "waited on check `{}`",
+                crate::theme::fmt::command_preview(check)
+            ),
         }
     }
 }

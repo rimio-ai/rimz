@@ -48,6 +48,16 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
             bail!("cannot watch PID {pid}: permission denied; choose a process owned by your user");
         }
         watch_trigger(WatchSpec::Pid { pid }, CheckOn::Any, &args)
+    } else if let Some(check) = args.check.clone() {
+        let spec = WatchSpec::Check {
+            check,
+            every: duration_label(args.every.unwrap_or(Duration::from_secs(1))),
+            on: match parse_on(args.on.as_deref()) {
+                CheckOn::Fail => CheckOn::Fail,
+                CheckOn::Success | CheckOn::Any => CheckOn::Success,
+            },
+        };
+        watch_trigger(spec, CheckOn::Any, &args)
     } else {
         let command = command_string(&args.command)?;
         watch_trigger(
@@ -102,18 +112,38 @@ fn watch_trigger(spec: WatchSpec, on: CheckOn, args: &WaitArgs) -> (DeliveryTrig
 fn validate_shape(args: &WaitArgs) -> Result<()> {
     if usize::from(args.in_after.is_some())
         + usize::from(args.pid.is_some())
+        + usize::from(args.check.is_some())
         + usize::from(!args.command.is_empty())
         != 1
     {
-        bail!("choose exactly one wait trigger: --in, --pid, or a command after --");
+        bail!("choose exactly one wait trigger: --in, --pid, --check, or a command after --");
     }
-    if args.on.is_some() && args.command.is_empty() {
-        bail!("--on requires a command after --");
+    if args
+        .check
+        .as_deref()
+        .is_some_and(|check| check.trim().is_empty())
+    {
+        bail!("--check needs a command");
     }
-    if args.timeout.is_some() && args.command.is_empty() && args.pid.is_none() {
-        bail!("--timeout requires --pid or a command after --");
+    if args.on.is_some() && args.command.is_empty() && args.check.is_none() {
+        bail!("--on requires --check or a command after --");
     }
-    for (name, duration) in [("--in", args.in_after), ("--timeout", args.timeout)] {
+    if args.check.is_some() && args.on.as_deref() == Some("any") {
+        bail!(
+            "--on any has no meaning with --check; it polls until the command succeeds (default) or fails"
+        );
+    }
+    if args.every.is_some() && args.check.is_none() {
+        bail!("--every requires --check");
+    }
+    if args.timeout.is_some() && args.in_after.is_some() {
+        bail!("--timeout requires --pid, --check, or a command after --");
+    }
+    for (name, duration) in [
+        ("--in", args.in_after),
+        ("--timeout", args.timeout),
+        ("--every", args.every),
+    ] {
         if duration.is_some_and(|duration| duration.is_zero()) {
             bail!("{name} must be greater than zero");
         }

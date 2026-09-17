@@ -18,7 +18,7 @@ use super::runner::{
     CheckEcho, CheckOutcome, WatchDeadline, check_record, run_command, task_timeout,
 };
 use crate::RuntimePaths;
-use crate::config::WatchSpec;
+use crate::config::{CheckOn, WatchSpec};
 use crate::disk::paths::StatePaths;
 use crate::disk::summary::FileSummary;
 use crate::harness::schedule::runner::RunLockInfo;
@@ -461,7 +461,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         }
     };
     let WatchSpec::Command(command) = spec else {
-        return poll_watch(spec, timeout, started, emit);
+        return poll_watch(spec, &task.entry().run_dir(), &file, timeout, started, emit);
     };
     let outcome = run_command(
         &task.entry().run_dir(),
@@ -482,49 +482,69 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     Ok(())
 }
 
-const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-
 /// One look at a polled watch's condition.
 enum Probe {
     Pending,
     Met,
+    /// The predicate itself cannot run (exit 126 or 127).
+    Broken {
+        code: i32,
+    },
 }
 
 /// Probe a polled watch until its condition holds, sleeping between probes and
 /// checking in once, between probes, when `timeout` passes.
 fn poll_watch(
     spec: &WatchSpec,
+    run_dir: &Path,
+    file: &File,
     timeout: std::time::Duration,
     started: std::time::Instant,
     emit: impl Fn(WatchVerdict, String),
 ) -> anyhow::Result<()> {
+    let every = super::watch_interval(spec).context("wait has no valid polling interval")?;
+    let mut output = String::new();
     let mut checked_in = false;
     loop {
         let probe = match spec {
-            WatchSpec::Command(_) => unreachable!("a watched command runs once, not polled"),
+            // `run_watcher` runs a command watch once and never polls it.
+            WatchSpec::Command(_) => unreachable!("a watched command is not polled"),
             WatchSpec::Pid { pid } => probe_pid(*pid)?,
+            WatchSpec::Check { check, on, .. } => {
+                let (probe, latest) = probe_check(run_dir, check, *on, file)?;
+                output = latest;
+                probe
+            }
         };
-        if let Probe::Met = probe {
-            let elapsed_ms = elapsed_millis(started);
-            emit(
-                WatchVerdict::Met {
-                    elapsed_ms,
-                    line: None,
-                },
-                String::new(),
-            );
-            return Ok(());
+        let elapsed_ms = elapsed_millis(started);
+        match probe {
+            Probe::Pending => {}
+            Probe::Met => {
+                emit(
+                    WatchVerdict::Met {
+                        elapsed_ms,
+                        line: None,
+                    },
+                    output,
+                );
+                return Ok(());
+            }
+            Probe::Broken { code } => {
+                emit(
+                    WatchVerdict::Exited {
+                        code: Some(code),
+                        elapsed_ms,
+                    },
+                    output,
+                );
+                return Ok(());
+            }
         }
         if !checked_in && started.elapsed() >= timeout {
             checked_in = true;
-            emit(
-                WatchVerdict::NotMet {
-                    elapsed_ms: elapsed_millis(started),
-                },
-                String::new(),
-            );
+            emit(WatchVerdict::NotMet { elapsed_ms }, output.clone());
         }
-        std::thread::sleep(POLL_INTERVAL);
+        std::thread::sleep(every);
     }
 }
 
@@ -534,6 +554,33 @@ fn probe_pid(pid: u32) -> anyhow::Result<Probe> {
         Err(nix::errno::Errno::ESRCH) => Probe::Met,
         Ok(()) | Err(_) => Probe::Pending,
     })
+}
+
+/// Run the predicate once, leaving only this run's output in the wait's file.
+fn probe_check(
+    run_dir: &Path,
+    check: &str,
+    on: CheckOn,
+    file: &File,
+) -> anyhow::Result<(Probe, String)> {
+    file.set_len(0).context("truncating wait output")?;
+    let outcome = run_command(
+        run_dir,
+        check,
+        WatchDeadline::None,
+        CheckEcho::Tee {
+            file: file.try_clone()?,
+        },
+        &std::collections::BTreeMap::new(),
+        |_, _| {},
+    )?;
+    let record = check_record(&outcome);
+    let probe = match record.code {
+        Some(code @ (126 | 127)) => Probe::Broken { code },
+        _ if outcome.passed() == (on == CheckOn::Success) => Probe::Met,
+        _ => Probe::Pending,
+    };
+    Ok((probe, record.output))
 }
 
 fn elapsed_millis(started: std::time::Instant) -> u64 {
