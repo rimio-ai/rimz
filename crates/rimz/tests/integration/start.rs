@@ -150,6 +150,25 @@ fn start_refuses_a_legacy_only_host_without_creating_the_home() {
         "no empty home beside legacy roots"
     );
     assert!(!mux_log.exists(), "no multiplexer calls before refusal");
+
+    // A home that other commands created (stats, hook logs) holds no config
+    // yet, so start and a cwd attach still refuse.
+    std::fs::create_dir_all(env.rimz_home().join("shared")).expect("seed home");
+    for args in [&["start", "--no-attach"][..], &["attach"][..]] {
+        let output = env
+            .rimz()
+            .args(["--mux", "zellij"])
+            .args(args)
+            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
+            .bounded_output()
+            .expect("run room entry");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{args:?}: {stderr}");
+        assert!(stderr.contains("moving-from-the-xdg-roots"), "{stderr}");
+    }
+    assert!(!env.rimz_home().join("config.toml").exists());
+    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
 }
 
 #[test]
