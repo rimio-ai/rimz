@@ -434,9 +434,16 @@ mod tests {
             }
             let root = tempfile::tempdir().unwrap();
             write_bundle(root.path(), &files, false).unwrap();
+            let env = std::collections::BTreeMap::from([(
+                "HOME".to_owned(),
+                root.path().display().to_string(),
+            )]);
             let loaded = rimz::config::definitions::load(
                 root.path(),
-                rimz::config::definitions::SkillLibraryCheck::Check(&root.path().join("skills")),
+                rimz::config::definitions::SkillCheck::Check {
+                    env: &env,
+                    library: &root.path().join("skills"),
+                },
                 &rimz::config::CommandsConfig::default(),
             );
             assert!(loaded.errors.is_empty(), "{name}: {:?}", loaded.errors);

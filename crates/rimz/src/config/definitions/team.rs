@@ -10,8 +10,7 @@ use crate::store::message::AutoCompact;
 
 use super::frontmatter::{RoleFrontmatter, SignalFrontmatter, TeamFrontmatter};
 use super::{
-    Definition, DefinitionErr, LoadedDefinitions, Namespace, SkillLibraryCheck, agent, files,
-    frontmatter,
+    Definition, DefinitionErr, LoadedDefinitions, Namespace, SkillCheck, agent, files, frontmatter,
 };
 
 struct SeatLoader<'a> {
@@ -19,7 +18,7 @@ struct SeatLoader<'a> {
     agents: &'a Namespace,
     subagents: &'a Namespace,
     bases: &'a BTreeSet<String>,
-    skills: SkillLibraryCheck<'a>,
+    skills: SkillCheck<'a>,
     children: &'a BTreeSet<String>,
 }
 
@@ -28,7 +27,7 @@ pub(super) fn load(
     agents: &Namespace,
     subagents: &Namespace,
     bases: &BTreeSet<String>,
-    skills: SkillLibraryCheck<'_>,
+    skills: SkillCheck<'_>,
     children: &BTreeSet<String>,
     loaded: &mut LoadedDefinitions,
 ) {

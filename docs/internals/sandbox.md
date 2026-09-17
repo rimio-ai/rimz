@@ -148,6 +148,8 @@ A provider marked `Unsupported`, or without a root, refuses every configured lis
 
 The RimZ skill library at `agents_home()/skills` (by default `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/`) is merged into the provider root; a name already in the provider root shadows the library entry. Host-mode library links are preserved provider-root symlinks and likewise shadow the library entry. `RIMZ_AGENTS_HOME` moves RimZ config fragments and the skill library together; the library is then `$RIMZ_AGENTS_HOME/skills/`. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour.
 
+Definition validation (`config/definitions/agent.rs::skill_policy`) resolves each listed skill through the same two roots in the same order, the adapter's `skills_home` under the ambient env and then the library, and checks the marker on the copy that wins. It cannot share `skills::plan`, since `config` sits below `sandbox`; a named account's login home is gated at launch.
+
 ### What a list means
 
 `skills = ["merge", "review"]` lists bare skill names. Listed skills stay model-callable. Unlisted skills that RimZ can prepare stay visible but become user-invoked only. `skills = []` makes every available skill user-invoked only.

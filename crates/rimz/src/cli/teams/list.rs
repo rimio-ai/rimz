@@ -202,7 +202,7 @@ pub(super) fn load_catalog(
     );
     let sources = rimz::config::definitions::load(
         &rimz::disk::paths::agents_home(),
-        rimz::config::definitions::SkillLibraryCheck::Skip,
+        rimz::config::definitions::SkillCheck::Skip,
         &machine.agents.commands,
     )
     .sources;
