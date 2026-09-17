@@ -49,11 +49,16 @@ impl TmpView {
         if !self.sandboxed {
             return host.to_path_buf();
         }
+        // `components().collect()` drops the trailing `/` that joining an
+        // empty relative path adds when `host` is the bound dir itself.
         if let Ok(relative) = host.strip_prefix(&self.scratch_dir) {
-            return Path::new(SANDBOX_SCRATCH).join(relative);
+            return Path::new(SANDBOX_SCRATCH)
+                .join(relative)
+                .components()
+                .collect();
         }
         if let Ok(relative) = host.strip_prefix(&self.tmp_dir) {
-            return Path::new(SANDBOX_TMP).join(relative);
+            return Path::new(SANDBOX_TMP).join(relative).components().collect();
         }
         host.to_path_buf()
     }
