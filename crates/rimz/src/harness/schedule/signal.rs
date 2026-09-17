@@ -508,8 +508,8 @@ fn poll_watch(
     let every = super::watch_interval(spec).context("wait has no valid polling interval")?;
     let mut output = String::new();
     let mut grep_cursor = match spec {
-        WatchSpec::File { mark, .. } => mark.map_or(0, |mark| mark.size),
-        _ => 0,
+        WatchSpec::File { mark, .. } => GrepCursor::armed(*mark),
+        _ => GrepCursor::default(),
     };
     let mut checked_in = false;
     loop {
@@ -612,22 +612,48 @@ fn probe_check(
     Ok((probe, record.output))
 }
 
+/// Where a `--grep` watch has read to, in which file (`dev`, `ino`).
+#[derive(Default)]
+struct GrepCursor {
+    offset: u64,
+    file: Option<(u64, u64)>,
+}
+
+impl GrepCursor {
+    /// The end of the file as armed, or the start of whatever file appears.
+    fn armed(mark: Option<FileMark>) -> Self {
+        mark.map_or_else(Self::default, |mark| Self {
+            offset: mark.size,
+            file: Some((mark.dev, mark.ino)),
+        })
+    }
+}
+
 /// The first newline-terminated line at or after `cursor` that contains
-/// `pattern`, advancing `cursor` past every complete line read. A file shorter
-/// than `cursor` was truncated and is read from the start; an unterminated last
-/// line waits for its newline.
-fn grep_new_line(path: &Path, pattern: &str, cursor: &mut u64) -> anyhow::Result<Option<String>> {
+/// `pattern`, advancing `cursor` past every complete line read. A different
+/// file at the path, or one shorter than the cursor, is read from the start; an
+/// unterminated last line waits for its newline.
+fn grep_new_line(
+    path: &Path,
+    pattern: &str,
+    cursor: &mut GrepCursor,
+) -> anyhow::Result<Option<String>> {
     let mut source = match File::open(path) {
         Ok(source) => source,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err).with_context(|| format!("opening {}", path.display())),
     };
-    let size = source.metadata()?.len();
-    if size < *cursor {
-        *cursor = 0;
+    let metadata = source.metadata()?;
+    let size = metadata.len();
+    let file = Some((
+        std::os::unix::fs::MetadataExt::dev(&metadata),
+        std::os::unix::fs::MetadataExt::ino(&metadata),
+    ));
+    if cursor.file != file || size < cursor.offset {
+        *cursor = GrepCursor { offset: 0, file };
     }
-    source.seek(std::io::SeekFrom::Start(*cursor))?;
-    let mut reader = std::io::BufReader::new(source.take(size - *cursor));
+    source.seek(std::io::SeekFrom::Start(cursor.offset))?;
+    let mut reader = std::io::BufReader::new(source.take(size - cursor.offset));
     let mut line = Vec::new();
     loop {
         line.clear();
@@ -635,7 +661,7 @@ fn grep_new_line(path: &Path, pattern: &str, cursor: &mut u64) -> anyhow::Result
         if read == 0 || line.last() != Some(&b'\n') {
             return Ok(None);
         }
-        *cursor += read as u64;
+        cursor.offset += read as u64;
         let text = String::from_utf8_lossy(&line[..read - 1]);
         if text.contains(pattern) {
             return Ok(Some(text.trim_end_matches('\r').to_owned()));
@@ -960,13 +986,14 @@ mod tests {
     }
 
     #[test]
-    fn file_grep_reads_complete_lines_from_the_cursor_and_restarts_on_truncation() {
+    fn file_grep_reads_complete_lines_from_the_cursor_and_restarts_on_a_new_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.log");
-        let mut cursor = 0;
-        assert_eq!(grep_new_line(&path, "ready", &mut cursor).unwrap(), None);
+        let grep = |cursor: &mut GrepCursor| grep_new_line(&path, "ready", cursor).unwrap();
+        assert_eq!(grep(&mut GrepCursor::default()), None);
         std::fs::write(&path, "ready before arm\nbooting\n").unwrap();
-        let mut cursor = FileMark::read(&path).unwrap().unwrap().size;
+        let mark = FileMark::read(&path).unwrap();
+        let mut cursor = GrepCursor::armed(mark);
         let append = |text: &str| {
             std::fs::OpenOptions::new()
                 .append(true)
@@ -976,26 +1003,27 @@ mod tests {
                 .unwrap();
         };
         append("still booting\nrea");
-        assert_eq!(grep_new_line(&path, "ready", &mut cursor).unwrap(), None);
+        assert_eq!(grep(&mut cursor), None);
         assert_eq!(
-            cursor,
+            cursor.offset,
             "ready before arm\nbooting\nstill booting\n".len() as u64
         );
         append("dy at last\r\n");
-        assert_eq!(
-            grep_new_line(&path, "ready", &mut cursor)
-                .unwrap()
-                .as_deref(),
-            Some("ready at last")
-        );
+        assert_eq!(grep(&mut cursor).as_deref(), Some("ready at last"));
+
+        // Truncated in place below the cursor.
         std::fs::write(&path, "ready \u{fffd}again\n").unwrap();
-        assert_eq!(
-            grep_new_line(&path, "ready", &mut cursor)
-                .unwrap()
-                .as_deref(),
-            Some("ready \u{fffd}again")
-        );
-        assert_eq!(grep_new_line(&path, "ready", &mut cursor).unwrap(), None);
+        assert_eq!(grep(&mut cursor).as_deref(), Some("ready \u{fffd}again"));
+        assert_eq!(grep(&mut cursor), None);
+
+        // Rotated: a new file at the path, already longer than the cursor.
+        let rotated = dir.path().join("app.log.new");
+        std::fs::write(&rotated, "ready in the new file\n".repeat(4)).unwrap();
+        let mut cursor = GrepCursor::armed(mark);
+        std::fs::rename(&rotated, &path).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > cursor.offset);
+        assert_eq!(grep(&mut cursor).as_deref(), Some("ready in the new file"));
+        assert_eq!(cursor.offset, "ready in the new file\n".len() as u64);
     }
 
     #[test]

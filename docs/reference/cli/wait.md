@@ -100,9 +100,9 @@ Completion reads `met after <ELAPSED>` beneath ``waited on check `<command>` ``.
 
 ### File: `--file`
 
-`rimz wait --file build.log` polls once per second and fires when existence, size, or modification time differs from the mark recorded when armed. Creation, deletion, growth, truncation, and same-size rewrites with a changed modification time count. Relative paths resolve against the arming shell's current directory and are stored absolute. An absent file is accepted; a directory is refused.
+`rimz wait --file build.log` polls once per second and fires when existence, size, modification time, or the file itself (device and inode) differs from the mark recorded when armed. Creation, deletion, growth, truncation, same-size rewrites with a changed modification time, and a replacement at the path (an atomic rename or a rotation) count. Relative paths resolve against the arming shell's current directory and are stored absolute. An absent file is accepted; a directory is refused.
 
-With `--grep 'READY'`, the watcher reads from the file's size at the arm point, or byte zero if it was absent. Existing lines do not count. Matching is literal and case-sensitive, on newline-terminated lines with a trailing carriage return trimmed. A line straddling the arm point counts only from the arm byte; an unterminated last line waits for its newline. If the file shrinks below the cursor, reading restarts at byte zero.
+With `--grep 'READY'`, the watcher reads from the file's size at the arm point, or byte zero if it was absent. Existing lines do not count. Matching is literal and case-sensitive, on newline-terminated lines with a trailing carriage return trimmed. A line straddling the arm point counts only from the arm byte; an unterminated last line waits for its newline. If a different file appears at the path (a rename rotation or an atomic rewrite) or the file shrinks below the cursor, reading restarts at byte zero. One case goes unseen: the same file truncated in place and regrown past the old cursor within one poll, as `cmd > build.log` rerun can do. Lines before the old cursor are skipped. For a rerun that rewrites its log, remove the file before starting the command, or wait on `--check` instead.
 
 The message starts with `waited on file <path>`, adding ``for `<pattern>` `` with `--grep`. Completion reads `met after <ELAPSED>`; a match adds a one-line preview as ``met after <ELAPSED>: `<line>` `` and writes the whole matched line to the output file. The line stored in the verdict is capped at 4 KiB. A check-in reads `still not met after <ELAPSED>`.
 
@@ -196,7 +196,7 @@ Cancel removes each row, then sends SIGTERM to its watcher's process group, whic
 
 ## What a wait writes on your machine
 
-A wait is one row in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`; it never touches `loop.toml` or project config. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size and modification time; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `loop-watch-<name>.lock` in the workspace runtime directory.
+A wait is one row in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`; it never touches `loop.toml` or project config. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size, modification time, device, and inode; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `loop-watch-<name>.lock` in the workspace runtime directory.
 
 The row retires when the timer fires, the watch reaches its final outcome, the wait is canceled, or the target session ends, is lost, or is stopped. A check-in does not retire it. If a watcher dies without reporting, the room's elder notices the missing lock after a 30-second grace and delivers the `watcher died` verdict. `rimz gc` removes rows left behind.
 
