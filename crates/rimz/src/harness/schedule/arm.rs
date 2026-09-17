@@ -14,7 +14,7 @@ use super::catalog::{LoadedTask, TaskSource};
 use super::signal::SignalSelector;
 use super::{ParsedSchedule, Schedule, ScheduleErr};
 use crate::agents::AgentState;
-use crate::config::{CheckOn, TaskEntry, TaskTarget, WaitMeta};
+use crate::config::{CheckOn, TaskEntry, TaskTarget, WaitMeta, WatchSpec};
 use crate::ids::TeamInstanceId;
 use crate::workspace::ResolvedWorkspace;
 
@@ -48,12 +48,10 @@ pub enum SubscriptionLifetime {
 
 pub enum DeliveryTrigger {
     Delay(Duration),
-    Pid {
-        pid: u32,
-        timeout: Duration,
-    },
+    /// `on` is the row's delivery polarity: the user's `--on` for a command,
+    /// `any` for a polled spec, whose watcher emits only once its condition holds.
     Watch {
-        command: String,
+        spec: WatchSpec,
         on: CheckOn,
         timeout: Duration,
     },
@@ -313,7 +311,7 @@ fn build_entry(
     if self_wait
         && (!matches!(
             spec.trigger,
-            DeliveryTrigger::Delay(_) | DeliveryTrigger::Pid { .. } | DeliveryTrigger::Watch { .. }
+            DeliveryTrigger::Delay(_) | DeliveryTrigger::Watch { .. }
         ) || !matches!(spec.prompt, DeliveryPrompt::None)
             || spec.check.is_some()
             || spec.surplus.is_some()
@@ -362,26 +360,16 @@ fn build_entry(
         entry.surplus = surplus.ratio;
         entry.surplus_after = surplus.after;
     }
-    let (delay, pid) = match spec.trigger {
+    let delay = match spec.trigger {
         DeliveryTrigger::Delay(delay) => {
             entry.at = Some(super::delayed_at(delay).map_err(|err| ArmFailure::State(err.into()))?);
-            (Some(duration_label(delay)), None)
+            Some(duration_label(delay))
         }
-        DeliveryTrigger::Pid { pid, timeout } => {
-            entry.watch = Some(pid_watch_command(pid));
-            entry.on = Some(CheckOn::Any);
-            entry.timeout = Some(duration_label(timeout));
-            (None, Some(pid))
-        }
-        DeliveryTrigger::Watch {
-            command,
-            on,
-            timeout,
-        } => {
-            entry.watch = Some(command);
+        DeliveryTrigger::Watch { spec, on, timeout } => {
+            entry.watch = Some(spec);
             entry.on = Some(on);
             entry.timeout = Some(duration_label(timeout));
-            (None, None)
+            None
         }
         DeliveryTrigger::Signal {
             selector,
@@ -396,7 +384,7 @@ fn build_entry(
             entry.signal = Some(selector.to_string());
             entry.matches = (!matches.is_empty()).then_some(matches);
             entry.once = matches!(lifetime, SubscriptionLifetime::Once).then_some(true);
-            (None, None)
+            None
         }
         DeliveryTrigger::Clock(parsed) => {
             match parsed.schedule {
@@ -420,14 +408,13 @@ fn build_entry(
                     }
                 }
             }
-            (None, None)
+            None
         }
     };
     if self_wait {
         entry.wait_meta = Some(WaitMeta {
             armed_at: now,
             delay,
-            pid,
         });
     }
     let name = match &spec.name {
@@ -437,10 +424,6 @@ fn build_entry(
     let task = LoadedTask::new(name, entry, TaskSource::Instance);
     task.trigger().as_ref().map_err(Clone::clone)?;
     Ok((spec.name, task))
-}
-
-fn pid_watch_command(pid: u32) -> String {
-    format!("while kill -0 {pid} 2>/dev/null; do sleep 1; done")
 }
 
 pub fn duration_label(duration: Duration) -> String {

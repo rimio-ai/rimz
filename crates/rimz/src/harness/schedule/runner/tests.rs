@@ -362,7 +362,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         prompt: Some("watch".to_owned()),
         on: Some(CheckOn::Success),
         root: dir.path().to_path_buf(),
-        watch: Some("false".to_owned()),
+        watch: Some(crate::config::WatchSpec::Command("false".to_owned())),
         ..TaskEntry::default()
     };
     let state =

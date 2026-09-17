@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::agents::{PendingWait, PendingWaitTrigger};
-use crate::config::MachineConfig;
+use crate::config::{MachineConfig, WatchSpec};
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -50,11 +50,11 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
                 delay: meta.and_then(|meta| meta.delay.clone()),
             }
         }
-        Trigger::Watch { command } => match meta.and_then(|meta| meta.pid) {
-            Some(pid) => PendingWaitTrigger::Pid { pid },
-            None => PendingWaitTrigger::Command {
+        Trigger::Watch(spec) => match spec {
+            WatchSpec::Command(command) => PendingWaitTrigger::Command {
                 command: command.clone(),
             },
+            WatchSpec::Pid { pid } => PendingWaitTrigger::Pid { pid: *pid },
         },
         Trigger::Signal { selector, .. } => PendingWaitTrigger::Signal {
             selector: selector.to_string(),
@@ -163,7 +163,7 @@ mod tests {
                 ..TaskEntry::default()
             },
             TaskEntry {
-                watch: Some(String::new()),
+                watch: Some(crate::config::WatchSpec::Command(String::new())),
                 ..TaskEntry::default()
             },
             TaskEntry {
@@ -200,7 +200,6 @@ mod tests {
         let meta = crate::config::WaitMeta {
             armed_at,
             delay: Some("30m".into()),
-            pid: None,
         };
         let timer = LoadedTask::new(
             "timer",
@@ -220,15 +219,24 @@ mod tests {
                 delay: Some("30m".into()),
             }
         );
-        let command = "while kill -0 16776 2>/dev/null; do sleep 1; done";
-        for pid in [None, Some(16776)] {
+        for (spec, expected) in [
+            (
+                WatchSpec::Command("cargo test".into()),
+                PendingWaitTrigger::Command {
+                    command: "cargo test".into(),
+                },
+            ),
+            (
+                WatchSpec::Pid { pid: 16776 },
+                PendingWaitTrigger::Pid { pid: 16776 },
+            ),
+        ] {
             let task = LoadedTask::new(
                 "watch",
                 TaskEntry {
-                    watch: Some(command.into()),
+                    watch: Some(spec),
                     wait_meta: Some(crate::config::WaitMeta {
                         delay: None,
-                        pid,
                         ..meta.clone()
                     }),
                     ..TaskEntry::default()
@@ -237,12 +245,7 @@ mod tests {
             );
             assert_eq!(
                 pending_wait("watch", &task, &now).unwrap().trigger,
-                match pid {
-                    Some(pid) => PendingWaitTrigger::Pid { pid },
-                    None => PendingWaitTrigger::Command {
-                        command: command.into()
-                    },
-                }
+                expected
             );
         }
     }
@@ -261,7 +264,6 @@ mod tests {
                     wait_meta: armed_at.map(|at| crate::config::WaitMeta {
                         armed_at: at.parse().unwrap(),
                         delay: None,
-                        pid: None,
                     }),
                     ..TaskEntry::default()
                 },

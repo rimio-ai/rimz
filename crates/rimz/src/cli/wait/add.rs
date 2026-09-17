@@ -47,23 +47,13 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         if nix::sys::signal::kill(process, None) == Err(nix::errno::Errno::EPERM) {
             bail!("cannot watch PID {pid}: permission denied; choose a process owned by your user");
         }
-        (
-            DeliveryTrigger::Pid {
-                pid,
-                timeout: args.timeout.unwrap_or(Duration::from_secs(30 * 60)),
-            },
-            format!("pid {pid}"),
-        )
+        watch_trigger(WatchSpec::Pid { pid }, CheckOn::Any, &args)
     } else {
         let command = command_string(&args.command)?;
-        let description = format!("watch: {}", rimz::theme::fmt::command_preview(&command));
-        (
-            DeliveryTrigger::Watch {
-                command,
-                on: parse_on(args.on.as_deref()),
-                timeout: args.timeout.unwrap_or(Duration::from_secs(30 * 60)),
-            },
-            description,
+        watch_trigger(
+            WatchSpec::Command(command),
+            parse_on(args.on.as_deref()),
+            &args,
         )
     };
     let ArmOutcome::Armed { name, .. } = arm_delivery(
@@ -95,6 +85,18 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     let mut out = super::super::render::out();
     writeln!(out, "armed {name}: {description} → {}", target.handle)?;
     list::write_rows(&mut out, pending)
+}
+
+fn watch_trigger(spec: WatchSpec, on: CheckOn, args: &WaitArgs) -> (DeliveryTrigger, String) {
+    let description = spec.describe();
+    (
+        DeliveryTrigger::Watch {
+            spec,
+            on,
+            timeout: args.timeout.unwrap_or(Duration::from_secs(30 * 60)),
+        },
+        description,
+    )
 }
 
 fn validate_shape(args: &WaitArgs) -> Result<()> {

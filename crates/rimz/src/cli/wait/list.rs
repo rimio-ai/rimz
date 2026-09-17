@@ -96,7 +96,7 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask, arm_state: ArmState) -> Result<
             );
             (age, state)
         }
-        Trigger::Watch { .. } => match watcher_info(ctx.runtime(), name)? {
+        Trigger::Watch(_) => match watcher_info(ctx.runtime(), name)? {
             Some(info) => (
                 super::super::render::age_short(info.started_at, jiff::Timestamp::now()),
                 format!("watching pid {}", info.pid),
@@ -112,16 +112,8 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask, arm_state: ArmState) -> Result<
     Ok(WakeRow {
         name: name.to_owned(),
         trigger: match &parsed.trigger {
-            Trigger::Watch { command } => {
-                let trigger = task
-                    .entry()
-                    .wait_meta
-                    .as_ref()
-                    .and_then(|meta| meta.pid)
-                    .map_or_else(
-                        || format!("watch: {}", rimz::theme::fmt::command_preview(command)),
-                        |pid| format!("pid {pid}"),
-                    );
+            Trigger::Watch(spec) => {
+                let trigger = spec.describe();
                 match dir.as_deref() {
                     Some(dir) => format!("{trigger} · in {dir}"),
                     None => trigger,

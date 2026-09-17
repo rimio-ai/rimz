@@ -118,7 +118,7 @@ pub struct TaskEntry {
     #[serde(rename = "match", skip_serializing_if = "Option::is_none")]
     pub matches: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub watch: Option<String>,
+    pub watch: Option<WatchSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub once: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,8 +130,39 @@ pub struct WaitMeta {
     pub armed_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pid: Option<u32>,
+}
+
+/// What a wait's detached watcher observes. A bare string is a shell command
+/// run once, the form hand-written rows carry; every other form is probed by
+/// the watcher until it is met.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum WatchSpec {
+    Command(String),
+    Pid { pid: u32 },
+}
+
+impl WatchSpec {
+    /// The trigger text of receipts, `rimz wait list`, and loop listings.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Command(command) => {
+                format!("watch: {}", crate::theme::fmt::command_preview(command))
+            }
+            Self::Pid { pid } => format!("pid {pid}"),
+        }
+    }
+
+    /// The first line of the delivered wait message.
+    pub fn headline(&self) -> String {
+        match self {
+            Self::Command(command) => format!(
+                "waited on `{}`",
+                crate::theme::fmt::command_preview(command)
+            ),
+            Self::Pid { pid } => format!("waited on pid {pid}"),
+        }
+    }
 }
 
 impl TaskEntry {
@@ -329,8 +360,8 @@ mod tests {
             wait_meta: Some(WaitMeta {
                 armed_at: deadline,
                 delay: Some("30m".to_owned()),
-                pid: Some(16776),
             }),
+            watch: Some(WatchSpec::Pid { pid: 16776 }),
             prompt: Some("wait".to_owned()),
             check: Some("cargo test".to_owned()),
             verify: Some("cargo xtask gate".to_owned()),
@@ -367,12 +398,17 @@ mod tests {
         legacy_toml["tasks"]["ci"]["wait-meta"]
             .as_table_mut()
             .unwrap()
-            .remove("pid");
+            .insert("pid".to_owned(), toml::Value::Integer(16776));
+        legacy_toml["tasks"]["ci"]["watch"] =
+            toml::Value::String("while kill -0 16776 2>/dev/null; do sleep 1; done".to_owned());
         let legacy_toml: LoopConfig = legacy_toml.try_into().expect("legacy toml");
         assert_eq!(
-            legacy_toml.tasks.0["ci"].wait_meta.as_ref().unwrap().pid,
-            None
+            legacy_toml.tasks.0["ci"].watch,
+            Some(WatchSpec::Command(
+                "while kill -0 16776 2>/dev/null; do sleep 1; done".to_owned()
+            ))
         );
+        assert_eq!(legacy_toml.tasks.0["ci"].wait_meta, entry.wait_meta);
         assert_eq!(toml_round.tasks.0["ci"].wait_meta, entry.wait_meta);
         assert_eq!(
             toml_round
@@ -449,12 +485,14 @@ mod tests {
             let decoded: Tasks = serde_json::from_value(legacy.clone()).expect("legacy json");
             assert_eq!(decoded.0.get("ci"), Some(&entry));
         }
-        legacy["ci"]["wait-meta"]
-            .as_object_mut()
-            .unwrap()
-            .remove("pid");
-        let decoded: Tasks = serde_json::from_value(legacy).expect("legacy json without pid");
-        assert_eq!(decoded.0["ci"].wait_meta.as_ref().unwrap().pid, None);
+        assert_eq!(legacy["ci"]["watch"], serde_json::json!({"pid": 16776}));
+        legacy["ci"]["wait-meta"]["pid"] = serde_json::json!(16776);
+        legacy["ci"]["watch"] = serde_json::json!("true");
+        let decoded: Tasks = serde_json::from_value(legacy).expect("legacy json with pid");
+        assert_eq!(
+            decoded.0["ci"].watch,
+            Some(WatchSpec::Command("true".to_owned()))
+        );
         assert!(
             serde_json::to_value(&decoded).unwrap()["ci"]["wait-meta"]
                 .get("pid")

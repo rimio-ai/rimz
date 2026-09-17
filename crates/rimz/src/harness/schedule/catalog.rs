@@ -398,7 +398,7 @@ impl TaskCatalog {
         if task
             .trigger()
             .as_ref()
-            .is_ok_and(|parsed| matches!(parsed.trigger, super::Trigger::Watch { .. }))
+            .is_ok_and(|parsed| matches!(parsed.trigger, super::Trigger::Watch(_)))
             && let Some(runtime) =
                 WorkspaceResolver::persisted_workspace_id(task.entry().resolved_root())
                     .ok()
@@ -536,7 +536,7 @@ mod tests {
         let command = TaskEntry {
             root: PathBuf::from("/repo"),
             wait: Some(target.clone()),
-            watch: Some("cargo test".into()),
+            watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
             ..TaskEntry::default()
         };
         let signal = TaskEntry {
@@ -551,7 +551,6 @@ mod tests {
             wait_meta: Some(crate::config::WaitMeta {
                 armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
                 delay: None,
-                pid: None,
             }),
             ..command.clone()
         };
@@ -562,11 +561,7 @@ mod tests {
                 (
                     "m-pid".into(),
                     TaskEntry {
-                        wait_meta: Some(crate::config::WaitMeta {
-                            armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
-                            delay: None,
-                            pid: Some(16776),
-                        }),
+                        watch: Some(crate::config::WatchSpec::Pid { pid: 16776 }),
                         ..command.clone()
                     },
                 ),
@@ -763,7 +758,6 @@ mod tests {
         entry.wait_meta = Some(crate::config::WaitMeta {
             armed_at: jiff::Timestamp::UNIX_EPOCH,
             delay: None,
-            pid: None,
         });
         assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
         assert_eq!(TaskSource::from_entry(&entry), TaskSource::Instance);

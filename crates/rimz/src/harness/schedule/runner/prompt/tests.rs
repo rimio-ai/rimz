@@ -19,7 +19,6 @@ fn meta(_handle: &str) -> WaitMeta {
     WaitMeta {
         armed_at: "2026-01-01T14:02:00Z".parse().unwrap(),
         delay: None,
-        pid: None,
     }
 }
 
@@ -38,7 +37,7 @@ fn signal(name: &str, payload: Value) -> Signal {
 
 fn assert_watch(verdict: WatchVerdict, label: &str) {
     let task = TaskEntry {
-        watch: Some("cargo test".to_owned()),
+        watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
         ..task()
     };
     for output_path in [None, Some("/tmp/rimz-waits/wait-test.output".into())] {
@@ -120,13 +119,10 @@ fn watch_killed_by_signal_keeps_output_summary_path_and_note() {
 #[test]
 fn pid_wait_never_claims_no_output_for_the_process() {
     let task = TaskEntry {
-        watch: Some("while kill -0 42 2>/dev/null; do sleep 1; done".to_owned()),
+        watch: Some(crate::config::WatchSpec::Pid { pid: 42 }),
         ..task()
     };
-    let pid_meta = WaitMeta {
-        pid: Some(42),
-        ..meta("@coder#feat-x")
-    };
+    let pid_meta = meta("@coder#feat-x");
     for (bytes, segment) in [
         (0, ""),
         (
@@ -136,9 +132,9 @@ fn pid_wait_never_claims_no_output_for_the_process() {
     ] {
         let signal = Signal {
             watch: Some(WatchOutcome {
-                verdict: WatchVerdict::Exited {
-                    code: Some(0),
+                verdict: WatchVerdict::Met {
                     elapsed_ms: 3_000,
+                    line: None,
                 },
                 output: String::new(),
                 output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
@@ -159,7 +155,9 @@ fn pid_wait_never_claims_no_output_for_the_process() {
             now(),
         );
         assert!(
-            body.contains(&format!("exit 0 after 3s{segment} [wait-test]")),
+            body.starts_with(&format!(
+                "waited on pid 42\nmet after 3s{segment} [wait-test]"
+            )),
             "{body}"
         );
     }
@@ -169,7 +167,7 @@ fn pid_wait_never_claims_no_output_for_the_process() {
 fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
     for timeout in [None, Some("1s"), Some("12m")] {
         let task = TaskEntry {
-            watch: Some("cargo test".to_owned()),
+            watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
             timeout: timeout.map(str::to_owned),
             ..task()
         };
@@ -325,7 +323,7 @@ fn scheduled_wait_without_metadata_does_not_fabricate_delay() {
 fn watch_command_preview_preserves_both_ends() {
     let command = format!("cargo test {} --all-targets", "界".repeat(140));
     let task = TaskEntry {
-        watch: Some(command.clone()),
+        watch: Some(crate::config::WatchSpec::Command(command.clone())),
         ..task()
     };
     let body = compose_wait("wait-test", &task, None, Evidence::Manual, "", now());
@@ -334,7 +332,7 @@ fn watch_command_preview_preserves_both_ends() {
     assert!(headline.ends_with(" --all-targets`"));
     assert!(headline.contains('…'));
     assert_eq!(headline.chars().count(), "waited on ``".len() + 120);
-    assert_eq!(task.watch.as_deref(), Some(command.as_str()));
+    assert_eq!(task.watch, Some(crate::config::WatchSpec::Command(command)));
 }
 
 #[test]
@@ -342,7 +340,7 @@ fn manual_watch_and_signal_name_subject_and_fire_by_hand() {
     for (task, expected) in [
         (
             TaskEntry {
-                watch: Some("cargo test".to_owned()),
+                watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
                 ..task()
             },
             "waited on `cargo test`\nfired by hand [wait-test]",

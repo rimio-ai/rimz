@@ -345,9 +345,7 @@ pub enum Trigger {
         selector: signal::SignalSelector,
         matches: std::collections::BTreeMap<String, String>,
     },
-    Watch {
-        command: String,
-    },
+    Watch(crate::config::WatchSpec),
 }
 
 impl Trigger {
@@ -366,7 +364,7 @@ impl Trigger {
                     format!("on {selector} [{filters}]")
                 }
             }
-            Self::Watch { command } => format!("watch: {command}"),
+            Self::Watch(spec) => spec.describe(),
         }
     }
 
@@ -449,7 +447,7 @@ pub enum TaskTimingState {
     Due(Timestamp),
     NoOccurrence,
     Listening { name: signal::SignalSelector },
-    Watching { command: String },
+    Watching { spec: crate::config::WatchSpec },
 }
 
 impl TaskTiming {
@@ -495,13 +493,11 @@ impl TaskTiming {
                     },
                     (
                         Ok(ParsedTrigger {
-                            trigger: Trigger::Watch { command },
+                            trigger: Trigger::Watch(spec),
                             ..
                         }),
                         _,
-                    ) => TaskTimingState::Watching {
-                        command: command.clone(),
-                    },
+                    ) => TaskTimingState::Watching { spec: spec.clone() },
                     (Ok(_), None) => TaskTimingState::Unarmed,
                     (Ok(_), Some(_)) => match scheduled_next {
                         Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),
@@ -682,20 +678,20 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             selector,
             matches: entry.matches.clone().unwrap_or_default(),
         }
-    } else if let Some(command) = entry.watch.as_deref() {
-        if command.trim().is_empty() {
+    } else if let Some(spec) = &entry.watch {
+        if let crate::config::WatchSpec::Command(command) = spec
+            && command.trim().is_empty()
+        {
             return Err(ScheduleErr::BadWatch {
                 name: name.to_owned(),
             });
         }
-        Trigger::Watch {
-            command: command.to_owned(),
-        }
+        Trigger::Watch(spec.clone())
     } else {
         Trigger::Schedule(parse_schedule(name, entry)?)
     };
     Ok(ParsedTrigger {
-        once: matches!(trigger, Trigger::Watch { .. }) || entry.once == Some(true),
+        once: matches!(trigger, Trigger::Watch(_)) || entry.once == Some(true),
         trigger,
     })
 }

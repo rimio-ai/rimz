@@ -222,7 +222,7 @@ fn plan(
                 next_state.insert(name.clone(), now.timestamp());
             }
             Some(last_fire)
-                if matches!(&parsed.trigger, Trigger::Watch { .. })
+                if matches!(&parsed.trigger, Trigger::Watch(_))
                     && now.timestamp().duration_since(last_fire).as_secs()
                         > WATCH_LOST_GRACE_SECS
                     && watcher_missing(task, name) =>
@@ -702,7 +702,7 @@ mod tests {
         let watch = loaded(TaskEntry {
             agent: Some("claude".to_owned()),
             root: root.path().to_path_buf(),
-            watch: Some("cargo test".to_owned()),
+            watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
             ..TaskEntry::default()
         });
         assert_eq!(Tick::default().run(&watch, &now), arm(now.timestamp()));
@@ -738,7 +738,6 @@ mod tests {
             wait_meta: Some(crate::config::WaitMeta {
                 armed_at: prior,
                 delay: None,
-                pid: None,
             }),
             ..watch.entry().clone()
         });
@@ -769,7 +768,7 @@ mod tests {
                 TaskEntry {
                     agent: Some("claude".to_owned()),
                     root: root.path().to_path_buf(),
-                    watch: Some("cargo test".to_owned()),
+                    watch: Some(crate::config::WatchSpec::Command("cargo test".to_owned())),
                     ..TaskEntry::default()
                 },
                 TaskSource::Config,
