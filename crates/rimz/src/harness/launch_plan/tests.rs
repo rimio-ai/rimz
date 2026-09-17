@@ -362,6 +362,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
         let state = StatePaths::under(workspace_id, &root).unwrap();
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
         request.identity.params.model = Some("test-model".to_owned());
+        request.identity.name = Some("swift-otter".to_owned());
         if kind != "amp" {
             request.system_prompt_file = Some(base.clone().into());
             request.append_system_prompt_files = vec![fragment.clone().into()];
@@ -382,7 +383,12 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
         .unwrap();
         assert!(!root.exists(), "{kind} compilation must not write");
         assert!(plan.sandbox.is_none());
-        let reminder = plan.process().reminder.as_ref().expect("model reminder");
+        let scratch = state.agents_dir.join("swift-otter");
+        assert_eq!(
+            plan.process().env.get(ENV_SCRATCH).map(PathBuf::from),
+            Some(scratch.clone())
+        );
+        let reminder = &plan.process().reminder;
         assert!(reminder.contains("<system_reminder>"));
         assert_eq!(
             plan.reminder_channel.is_some(),
@@ -420,7 +426,10 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             std::fs::read_to_string(artifact).unwrap(),
             plan.prompt.composed.as_deref().unwrap()
         );
-        assert!(!state.tmp_dir.exists());
+        assert!(
+            scratch.is_dir(),
+            "{kind}: host launches create their scratch dir"
+        );
     }
 }
 
@@ -620,7 +629,25 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
         plan.process().env.get(ENV_ISOLATION).map(String::as_str),
         Some("sandbox")
     );
+    assert_eq!(
+        plan.process().env.get(ENV_SCRATCH).map(String::as_str),
+        Some("/tmp/scratchpad")
+    );
     let sandbox = plan.sandbox.as_ref().expect("sandbox plan");
+    let tmp_bind = sandbox
+        .plan
+        .mounts
+        .iter()
+        .position(|mount| matches!(mount, crate::sandbox::Mount::Bind { target, .. } if target == Path::new("/tmp")))
+        .expect("room tmp bind");
+    assert_eq!(
+        sandbox.plan.mounts.get(tmp_bind + 1),
+        Some(&crate::sandbox::Mount::Bind {
+            source: state.scratchpad_dir.clone(),
+            target: "/tmp/scratchpad".into(),
+        }),
+        "a launch without a handle binds the shared scratchpad over itself"
+    );
     assert!(
         sandbox.plan.mounts.iter().any(
             |mount| matches!(mount, crate::sandbox::Mount::Bind { source, .. } if source == &home)

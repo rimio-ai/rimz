@@ -445,8 +445,9 @@ fn prepare_supervised(
         request.subagent,
         machine_config.agents.max_chain_length,
     )?;
-    let caller_tmp =
-        caller.map(|caller| rimz::sandbox::TmpView::current(caller.isolation, store.paths()));
+    let caller_tmp = caller.map(|caller| {
+        rimz::sandbox::TmpView::current(caller.isolation, caller.name.as_deref(), store.paths())
+    });
     // The room pin keeps the store and effective config on the same project root.
     let workspace = supervised::anchor_subagent_workspace(workspace, request, caller, globals)?;
     let scope = if request.subagent {

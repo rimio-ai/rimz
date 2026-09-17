@@ -153,7 +153,7 @@ pub struct CompiledAgentProcess {
     /// Final child environment, also re-applied after shell startup.
     pub env: BTreeMap<String, String>,
     pub secret_keys: BTreeSet<String>,
-    pub reminder: Option<String>,
+    pub reminder: String,
     /// Environment keys removed before execution and again after shell startup.
     pub unset: BTreeSet<String>,
 }
@@ -690,10 +690,8 @@ fn compile_agent_process_with_extra_env(
     }
     let reminder = crate::harness::launch_reminders::render(request, reminders, cwd);
     let channel = adapter.append_system_text_channel();
-    if let Some(channel) = &channel
-        && let Some(text) = &reminder
-    {
-        merge_appended_system_text(action.extra_args_mut(), channel, text);
+    if let Some(channel) = &channel {
+        merge_appended_system_text(action.extra_args_mut(), channel, &reminder);
     }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
@@ -707,10 +705,7 @@ fn compile_agent_process_with_extra_env(
     let secret_keys = trusted_env.keys().cloned().collect();
     let mut env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
     if channel == Some(SystemTextChannel::ExtensionEnv) {
-        env.insert(
-            ENV_LAUNCH_REMINDERS.to_owned(),
-            reminder.clone().unwrap_or_default(),
-        );
+        env.insert(ENV_LAUNCH_REMINDERS.to_owned(), reminder.clone());
     }
     let unset = BTreeSet::new();
     let argv = login_shell_argv(&env, &unset, &provider_argv);

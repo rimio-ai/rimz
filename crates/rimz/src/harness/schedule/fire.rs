@@ -158,7 +158,7 @@ fn lost_watch_outcome(
         },
         output,
         &path,
-        &crate::sandbox::TmpView::current(None, &paths),
+        &crate::sandbox::TmpView::current(None, None, &paths),
     ))
 }
 

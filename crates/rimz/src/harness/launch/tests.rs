@@ -1,6 +1,20 @@
 use super::*;
 use crate::harness::launch_reminders::{subagent_reminder, wrap};
 
+/// The reminder a bare subagent launch carries: the host scratch line, then the child policy.
+fn child_reminder() -> String {
+    let mut request =
+        ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+    request.subagent = true;
+    let reminder = crate::harness::launch_reminders::render(
+        &request,
+        &LaunchReminders::default(),
+        Path::new("/"),
+    );
+    assert!(reminder.contains("`$RIMZ_SCRATCH`") && reminder.contains("You are a subagent:"));
+    reminder
+}
+
 fn env(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
     entries
         .iter()
@@ -315,7 +329,7 @@ fn process_compiler_locks_down_only_subagent_launches() {
                 "Read".to_owned(),
                 "Agent".to_owned(),
                 "--append-system-prompt".to_owned(),
-                subagent_reminder(),
+                child_reminder(),
                 "--".to_owned(),
                 "inspect".to_owned(),
             ],
@@ -329,7 +343,7 @@ fn process_compiler_locks_down_only_subagent_launches() {
                 "-c".to_owned(),
                 format!(
                     "developer_instructions={}",
-                    toml::Value::String(subagent_reminder())
+                    toml::Value::String(child_reminder())
                 ),
                 "--".to_owned(),
                 "inspect".to_owned(),
@@ -405,9 +419,14 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
             assert!(host.provider_argv.contains(&"workspace-write".to_owned()));
         } else {
             assert!(sandbox_values.is_empty());
+            assert_eq!(sandboxed.provider_argv.len(), host.provider_argv.len());
             assert!(
-                sandboxed.provider_argv.starts_with(&host.provider_argv),
-                "only the sandbox reminder follows the host argv"
+                host.provider_argv
+                    .iter()
+                    .zip(&sandboxed.provider_argv)
+                    .all(|(host_arg, sandboxed_arg)| host_arg == sandboxed_arg
+                        || (host_arg == &host.reminder && sandboxed_arg == &sandboxed.reminder)),
+                "only the reminder differs from the host argv"
             );
         }
     }
@@ -431,7 +450,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
             !ordinary
                 .provider_argv
                 .iter()
-                .any(|arg| arg == &subagent_reminder()),
+                .any(|arg| arg == &child_reminder()),
             "{kind}: {:?}",
             ordinary.provider_argv
         );
@@ -443,7 +462,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
             child
                 .provider_argv
                 .windows(2)
-                .any(|args| args == ["--append-system-prompt", subagent_reminder().as_str()]),
+                .any(|args| args == ["--append-system-prompt", child_reminder().as_str()]),
             "{kind}: {:?}",
             child.provider_argv
         );
@@ -468,7 +487,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
     assert_eq!(occurrences.len(), 1);
     assert_eq!(
         parse_toml_string_or_raw(&occurrences[0].value),
-        subagent_reminder()
+        child_reminder()
     );
 }
 
@@ -485,7 +504,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             description: None,
         },
     ]);
-    let reminder = wrap(&crate::harness::subagent_policy::reminder(&catalog));
+    let reminder = crate::harness::subagent_policy::reminder(&catalog);
 
     for kind in ["claude", "codex"] {
         let invocation = request(
@@ -510,7 +529,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             assert!(
                 peer.provider_argv
                     .windows(2)
-                    .any(|args| args == ["--append-system-prompt", reminder.as_str()])
+                    .any(|args| args[0] == "--append-system-prompt" && args[1].contains(&reminder))
             );
         } else {
             let occurrences = crate::agents::PresetArgMatcher::ConfigKey {
@@ -519,7 +538,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             }
             .occurrences(&peer.provider_argv);
             assert_eq!(occurrences.len(), 1);
-            assert_eq!(parse_toml_string_or_raw(&occurrences[0].value), reminder);
+            assert!(parse_toml_string_or_raw(&occurrences[0].value).contains(&reminder));
         }
 
         let without_catalog = compile_agent_process(project.path(), &invocation, project.path())
@@ -548,7 +567,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             child
                 .provider_argv
                 .iter()
-                .any(|arg| arg.contains(&subagent_reminder()))
+                .any(|arg| arg.contains(&child_reminder()))
         );
         assert!(
             !child
@@ -573,7 +592,6 @@ fn process_compiler_appends_team_context_for_native_adapters() {
             },
             project.path(),
         )
-        .expect("team reminder")
     };
 
     for kind in ["claude", "qwen", "droid"] {
@@ -657,8 +675,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
                 ..LaunchReminders::default()
             },
             project.path(),
-        )
-        .expect("team reminder");
+        );
         let team_reminder = team_reminder
             .trim_start_matches("<system_reminder>\n")
             .trim_end_matches("\n</system_reminder>")
@@ -726,7 +743,7 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             assert!(text.contains("`/tmp/scratchpad`"));
             assert_eq!(text.contains("You are a subagent:"), subagent);
             assert_eq!(
-                Some(text),
+                text,
                 crate::harness::launch_reminders::render(&invocation, &reminders, project.path())
             );
         }
@@ -786,7 +803,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
 }
 
 #[test]
-fn process_compiler_omits_disabled_model_when_nothing_else_applies() {
+fn process_compiler_carries_only_the_scratch_line_when_nothing_else_applies() {
     let project = tempfile::tempdir().expect("project");
     let mut invocation = request(
         "claude",
@@ -807,12 +824,9 @@ fn process_compiler_omits_disabled_model_when_nothing_else_applies() {
         },
     )
     .expect("process");
-    assert!(
-        !process
-            .provider_argv
-            .iter()
-            .any(|arg| arg.contains("system_reminder"))
-    );
+    assert!(process.provider_argv.contains(&process.reminder));
+    assert!(process.reminder.contains("`$RIMZ_SCRATCH`"));
+    assert!(!process.reminder.contains("You are"));
 }
 
 #[test]
@@ -835,8 +849,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
         )
         .expect("process");
         let reminder =
-            crate::harness::launch_reminders::render(&invocation, &reminders, project.path())
-                .expect("team reminder");
+            crate::harness::launch_reminders::render(&invocation, &reminders, project.path());
         assert!(reminder.contains("bubblewrap sandbox"), "{kind}");
         assert_eq!(process.env[ENV_LAUNCH_REMINDERS], reminder, "{kind}");
         assert!(
@@ -858,8 +871,8 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
             },
         )
         .expect("process without reminders");
-        assert_eq!(bare.reminder, None, "{kind}");
-        assert_eq!(bare.env[ENV_LAUNCH_REMINDERS], "", "{kind}");
+        assert!(bare.reminder.contains("`$RIMZ_SCRATCH`"), "{kind}");
+        assert_eq!(bare.env[ENV_LAUNCH_REMINDERS], bare.reminder, "{kind}");
     }
 }
 
@@ -884,7 +897,7 @@ fn process_compiler_merges_subagent_reminder_into_existing_append_flag() {
     assert_eq!(occurrences.len(), 1, "{:?}", child.provider_argv);
     assert_eq!(
         occurrences[0].value,
-        format!("existing guidance\n\n{}", subagent_reminder())
+        format!("existing guidance\n\n{}", child_reminder())
     );
 }
 
@@ -929,7 +942,7 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
         assert_eq!(occurrences.len(), 1);
         assert_eq!(
             parse_toml_string_or_raw(&occurrences[0].value),
-            format!("existing\n\n{}", subagent_reminder())
+            format!("existing\n\n{}", child_reminder())
         );
         assert!(
             child
@@ -1716,7 +1729,7 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         argv: wrapped.clone(),
         env: launch_env,
         secret_keys: BTreeSet::from(["ANTHROPIC_API_KEY".to_owned()]),
-        reminder: None,
+        reminder: String::new(),
         unset: BTreeSet::new(),
     };
 
