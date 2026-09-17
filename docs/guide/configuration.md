@@ -75,7 +75,7 @@ Set `RIMZ_HOME` to put the home somewhere else. Panes, sandboxes, and hooks inhe
 
 ### Moving from the XDG roots
 
-Earlier releases split RimZ across four XDG directories. RimZ no longer reads them, and it does not move them for you: `rimz doctor` lists any that remain, and `rimz start` refuses to open a room on a machine that has them but no `~/.rimz`, naming this section. `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, and `XDG_CACHE_HOME` no longer move RimZ's own files.
+Earlier releases split RimZ across four XDG directories. RimZ no longer reads them, and it does not move them for you: `rimz doctor` lists any that remain, and `rimz start` and `rimz attach` refuse to open a room on a machine that has them but no `~/.rimz/config.toml`, naming this section. `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, and `XDG_CACHE_HOME` no longer move RimZ's own files.
 
 | Old location | New location |
 | --- | --- |
