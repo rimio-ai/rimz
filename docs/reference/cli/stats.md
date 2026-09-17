@@ -39,7 +39,7 @@ A breakdown entry under 1% of its section, and any entry past the row cap, folds
 
 ## How fresh the figures are
 
-`rimz stats` reads the spending cache at `$XDG_STATE_HOME/rimz/shared/provider-spending.json` (`~/.local/state` when `XDG_STATE_HOME` is unset). A running sidebar keeps that cache current, and each mode treats it differently:
+`rimz stats` reads the spending cache at `~/.rimz/shared/provider-spending.json` (under `$RIMZ_HOME` when it is set). A running sidebar keeps that cache current, and each mode treats it differently:
 
 | Run | Cache | What happens |
 | --- | --- | --- |

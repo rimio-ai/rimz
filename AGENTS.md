@@ -125,7 +125,7 @@ This indexes what lives where. Runtime shape and the single-binary rationale liv
 
 **Top-level modules** in `crates/rimz/src/`, by purpose:
 
-- Durable file mechanics — `disk` atomic publish and fsync, XDG paths, rotating JSONL append, workspace lock, single-flight election, stat-keyed parse cache; `disk::usage` disk-usage measurement; `disk::summary` output-file measurement (bytes, lines, estimated tokens).
+- Durable file mechanics — `disk` atomic publish and fsync, the RimZ home and workspace-dir path resolution, rotating JSONL append, workspace lock, single-flight election, stat-keyed parse cache; `disk::usage` disk-usage measurement; `disk::summary` output-file measurement (bytes, lines, estimated tokens).
 - Identity and reach — `address` agent-address grammar, renderer, pane binding, launch-instance grouping and lineage; `workspace` resolution, its durable `workspace.json` record, and the room identity pin (`RIMZ_*` env keys); `web`; `channel`; `worktree`; `forge` and the PR-state record (`forge::pr_state`).
 - Transcript, panes, and seams — `transcript`; `pane` identity, sidebar-chrome and daemon-host classification, named keys; `sock`; `ids`; `trust`; `wakeup`, the sidebar wire of renderer heartbeat records, event vocabulary, and best-effort datagram fanout.
 - Shared utilities and presentation — `utils::time` compact duration/wall-clock parsing and the crate's one Unix-millisecond clock; `utils::path` lexical normalization; `utils::tokens` the `o200k_base` token estimate; `theme` semantic palette, provider identity, glyph resolution and setup probes, and value formats.

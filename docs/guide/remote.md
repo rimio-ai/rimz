@@ -93,7 +93,7 @@ Run it on the Linux host serving the room, where the write-rate counters live, f
 
 ## Continuity across reboots
 
-The room and its state both live on the host, in durable flat files under `~/.local/state/rimz/` there, so the room survives a mux crash or a reboot of the host. On the next attended start the host's `rimz` offers the fleet back: prior agents idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). The offer defaults yes, non-interactive starts recover automatically, and a room you closed deliberately stays closed. A supervised reconnect after a reboot uses that automatic recovery path; hook installation and project-trust offers remain pending for the next attended start. Run these on the host:
+The room and its state both live on the host, in durable flat files under `~/.rimz/` there, so the room survives a mux crash or a reboot of the host. On the next attended start the host's `rimz` offers the fleet back: prior agents idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). The offer defaults yes, non-interactive starts recover automatically, and a room you closed deliberately stays closed. A supervised reconnect after a reboot uses that automatic recovery path; hook installation and project-trust offers remain pending for the next attended start. Run these on the host:
 
 ```sh
 rimz --no-resume         # come up empty: skip recovering prior agents

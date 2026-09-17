@@ -65,11 +65,11 @@ Three sources back the catalog.
 
 | Source | File | Holds |
 | --- | --- | --- |
-| `Config` | `~/.config/rimz/loop.toml` | per-machine automation, like a crontab; never inherited by a clone |
+| `Config` | `~/.rimz/loop.toml` | per-machine automation, like a crontab; never inherited by a clone |
 | `Project` | `<root>/.rimz/config.toml` under `[tasks.*]` | shared automation that travels with the repository; inert until trusted and enabled on this machine |
-| `Instance` | `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json` | RimZ-owned runtime rows: one-shots, poll-until rows, `once` subscriptions, and every session-pinned delivery, including recurring clocks and standing signals |
+| `Instance` | `~/.rimz/ws/<workspace-dir>/loop-instances.json` | RimZ-owned runtime rows: one-shots, poll-until rows, `once` subscriptions, and every session-pinned delivery, including recurring clocks and standing signals |
 
-The instance store keeps runtime churn out of user config. An agent that arms `rimz wait --in 30m` writes an instance row, not `loop.toml`, and the row retires itself after it fires. `TaskCatalog::load(Some(root))` reads that workspace's instances and `load(None)` reads machine tasks only. The strict loader also moves any rows left in the user-global `~/.local/state/rimz/loop-instances.json` into each row's workspace file, keeping the existing row on a name conflict, and deletes the global file; lenient reads leave it alone. Wait rows found in `loop.toml` stay `Config` rows, and `rimz gc` reaps them.
+The instance store keeps runtime churn out of user config. An agent that arms `rimz wait --in 30m` writes an instance row, not `loop.toml`, and the row retires itself after it fires. `TaskCatalog::load(Some(root))` reads that workspace's instances and `load(None)` reads machine tasks only. Wait rows found in `loop.toml` stay `Config` rows, and `rimz gc` reaps them.
 
 A project task cannot make machine-local claims, so loading rejects four fields: `root` and `dir` (a project task runs at the project root), `wait` (it cannot pin a session on another machine), and `deadline` (a poll-until timestamp is machine state). It also requires `every`, `cron`, or `signal`, because a one-shot would have to delete itself from a trust-hashed file.
 
@@ -281,7 +281,7 @@ The sender is `@rimz`, and delivery inherits the harness smart-compaction defaul
 
 ## History, strikes, and arming
 
-Every fire appends a `LoopRunRecord` to the user-global `~/.local/state/rimz/loop-runs.log.jsonl`. The log is per-user, so history survives a task being edited or removed. `rimz loop show`, `rimz loop logs`, and health reads filter records by the current workspace root when it is known; records with no `root` stay visible everywhere.
+Every fire appends a `LoopRunRecord` to the user-global `~/.rimz/logs/loop-runs.log.jsonl`. The log is per-user, so history survives a task being edited or removed. `rimz loop show`, `rimz loop logs`, and health reads filter records by the current workspace root when it is known; records with no `root` stay visible everywhere.
 
 A record carries:
 
@@ -308,14 +308,14 @@ The table encodes two judgements. A turn that completed but left its check red i
 
 When consecutive strikes reach the threshold (`max-strikes`, default 3, `0` disables), the task auto-disables, displays `disabled · N strikes`, and fires `loop_disabled` notification handlers. `rimz loop enable` clears the counter and re-arms. `rimz loop fire` still works on a disabled or paused task, for testing.
 
-Two machine-local overlays hold this state without editing task definitions, each behind an advisory lock that serializes concurrent runners:
+Two machine-local overlays under `~/.rimz/loops/` hold this state without editing task definitions, each behind an advisory lock that serializes concurrent runners:
 
 | File | Holds |
 | --- | --- |
 | `loop-arming.json` | enablement, a bounded pause deadline, and an automatic-disable strike reason |
 | `loop-strikes.json` | consecutive failure counts, independent of run-log rotation |
 
-Both key a task by scope: project and instance tasks as `<workspace_id>::<name>`, machine tasks as `machine::<name>`, so a same-named task in another checkout never inherits an enable. Enabling writes the anti-replay edge, and when a timed pause expires its deadline becomes the effective last-fire edge. Either way the schedule waits for its next occurrence instead of replaying what it missed while held. `rimz gc` removes the unscoped `loop-pauses.json`, which nothing reads.
+Both key a task by scope: project and instance tasks as `<workspace_id>::<name>`, machine tasks as `machine::<name>`, so a same-named task in another checkout never inherits an enable. Enabling writes the anti-replay edge, and when a timed pause expires its deadline becomes the effective last-fire edge. Either way the schedule waits for its next occurrence instead of replaying what it missed while held.
 
 ## The signal vocabulary
 
@@ -475,7 +475,7 @@ Each decides on the producer tick and acts through a detached helper, which keep
 
 > **Automation is accountable.** User-benefiting automation appends a durable record of its trigger, evidence, and outcome, and surfaces in `rimz stats`; internal repairs keep durable diagnostic records ([diagnostics.md](../diagnostics.md)).
 
-The assist log is that invariant's record: `$XDG_STATE_HOME/rimz/assists.log.jsonl`, account-global, best-effort append, rotating at 4 MiB to one `assists.log.1.jsonl` predecessor. Readers fold both generations by timestamp. When an append fails, the intervention itself remains the operational truth.
+The assist log is that invariant's record: `~/.rimz/logs/assists.log.jsonl`, account-global, best-effort append, rotating at 4 MiB to one `assists.log.1.jsonl` predecessor. Readers fold both generations by timestamp. When an append fails, the intervention itself remains the operational truth.
 
 | `Assist` variant | Writer | Records |
 | --- | --- | --- |

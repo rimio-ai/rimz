@@ -16,6 +16,7 @@ This page indexes every command and states the rules that hold across all of the
 | Lanes, worktrees, and schedules | `channel`, `worktree`, `loop` | [Channels](./cli/channel.md) · [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
 | Hooks and trust | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
 | Configure appearance and behavior | `config`, `list-themes`, `list-pets` | [Config](./cli/config.md) |
+| Find RimZ's files | `paths` | [Paths](./cli/paths.md) |
 | Maintain and recover | `coverage`, `workspace`, `update`, `reload`, `sidebar repair`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
 Tab completion for commands, flags, and live room names is set up in the [shell completion guide](../guide/setup.md#shell-completion).

@@ -65,7 +65,7 @@ The files fall into three tiers, distinguished by what survives a reboot and who
 
 ### The workspace store
 
-The workspace store is `${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/`: durable truth plus the caches derived from it that should survive a reboot.
+The workspace store is `<home>/ws/<workspace-dir>/`, where `<home>` is `$RIMZ_HOME` or `~/.rimz`: durable truth plus the caches derived from it that should survive a reboot.
 
 ```text
 events.log.jsonl                              the framed event log
@@ -95,7 +95,9 @@ locks/{publish,log-sync,dead-reap}.stamp      debounce stamps for the off-lock t
 locks/auto-rotate.stamp                       rotation debounce, taken under the write lock
 ```
 
-`<workspace_id>` is `ws_` plus the first 24 hex characters of the SHA-256 of the canonical project root (`WorkspaceId::from_project_root`). Every root class (repo, marker, bare directory) derives it the same way, so adding a class never re-keys an existing store.
+The workspace id is `ws_` plus the first 24 hex characters of the SHA-256 of the canonical project root (`WorkspaceId::from_project_root`). Every root class (repo, marker, bare directory) derives it the same way, so adding a class never re-keys an existing store.
+
+The directory is named by a `WorkspaceDirName`, `<basename>-<hex>`, never by the id: the root's sanitized basename plus a hex prefix of the id, four digits unless a prefix is already taken by another workspace, then two more at a time. `StatePaths::for_project_root` finds an existing directory or mints the name and creates nothing; lookup scans `ws/` for names whose hex prefixes the id, and a candidate's `workspace.json` decides, so a record naming another id is skipped and several unrecorded candidates are an error. A site holding only an id (`StatePaths::for_workspace`) resolves the same way but falls back to `ws-<24hex>` when nothing exists, which only a pre-birth id-only caller can reach. The runtime directory uses the same name (`RuntimePaths::for_state`), so both trees agree.
 
 This page owns the log, the caches derived from it, and the workspace record. The other files have their own homes:
 
@@ -157,7 +159,7 @@ Freshness here gates behaviour, so these files are scoped to one mux session inc
 
 ### Account-global caches
 
-Account-global data lives under `~/.local/state/rimz/shared/` (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`), and its election locks and the spending service socket under `$XDG_RUNTIME_DIR/rimz/shared/`. The data persists so the provider dashboard opens warm after a reboot; the locks are runtime because they mean nothing once their holder is gone. `RuntimePaths::ensure_dirs` removes stray copies of those data files from the runtime `shared/` directory so they stop pinning tmpfs. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes), [providers.md](./agents/providers.md), and [spending.md](./agents/spending.md).
+Account-global data lives under `~/.rimz/shared/` (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`), and its election locks and the spending service socket under `$XDG_RUNTIME_DIR/rimz/shared/`. The data persists so the provider dashboard opens warm after a reboot; the locks are runtime because they mean nothing once their holder is gone. `RuntimePaths::ensure_dirs` removes stray copies of those data files from the runtime `shared/` directory so they stop pinning tmpfs. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes), [providers.md](./agents/providers.md), and [spending.md](./agents/spending.md).
 
 ## The event log
 

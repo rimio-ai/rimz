@@ -53,9 +53,9 @@ rimz teams forge -w feat-complex            # the whole team, one isolated workt
 From a repository checkout, copy the team and its direct definitions when you want to edit that checkout's version directly:
 
 ```sh
-mkdir -p ~/.config/rimz/teams ~/.config/rimz/agents
-cp examples/teams/forge/forge.md ~/.config/rimz/teams/
-cp examples/teams/forge/agents/*.md ~/.config/rimz/agents/
+mkdir -p ~/.rimz/teams ~/.rimz/agents
+cp examples/teams/forge/forge.md ~/.rimz/teams/
+cp examples/teams/forge/agents/*.md ~/.rimz/agents/
 rimz agents validate
 ```
 

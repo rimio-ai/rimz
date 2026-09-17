@@ -164,7 +164,7 @@ A silent command reads `· no output` after its verdict and names no file. A `--
 
 ### The output file
 
-The watcher writes combined stdout and stderr to `~/.local/state/rimz/workspaces/<workspace-id>/tmp/rimz-waits/<name>.output` as they arrive, along with its own startup errors. A check truncates it before each run; a file pattern watch writes its matched line. The message shows `/tmp/rimz-waits/<name>.output` when the machine's `agents.isolation` is sandbox and the host path otherwise; an agent launched with a different per-launch isolation can see the form that does not match its own view.
+The watcher writes combined stdout and stderr to `~/.rimz/ws/<workspace-dir>/tmp/rimz-waits/<name>.output` as they arrive, along with its own startup errors. A check truncates it before each run; a file pattern watch writes its matched line. The message shows `/tmp/rimz-waits/<name>.output` when the machine's `agents.isolation` is sandbox and the host path otherwise; an agent launched with a different per-launch isolation can see the form that does not match its own view.
 
 Closing the room removes the file. In a long-lived room, `rimz gc` removes it once the wait is gone, no watcher runs, and the file has not been written for 14 days. The last 4 KiB of output stay in the loop history for [`rimz loop logs <name>`](./loop.md#loop-logs).
 
@@ -196,7 +196,7 @@ Cancel removes each row, then sends SIGTERM to its watcher's process group, whic
 
 ## What a wait writes on your machine
 
-A wait is one row in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`; it never touches `loop.toml` or project config. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size, modification time, device, and inode; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `loop-watch-<name>.lock` in the workspace runtime directory.
+A wait is one row in `~/.rimz/ws/<workspace-dir>/loop-instances.json`; it never touches `loop.toml` or project config. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size, modification time, device, and inode; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `loop-watch-<name>.lock` in the workspace runtime directory.
 
 The row retires when the timer fires, the watch reaches its final outcome, the wait is canceled, or the target session ends, is lost, or is stopped. A check-in does not retire it. If a watcher dies without reporting, the room's elder notices the missing lock after a 30-second grace and delivers the `watcher died` verdict. `rimz gc` removes rows left behind.
 

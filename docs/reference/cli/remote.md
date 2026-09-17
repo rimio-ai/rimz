@@ -1,6 +1,6 @@
 # Remote CLI
 
-`rimz remote` attaches to a room on another host over SSH. The local `rimz` builds an `ssh` command and runs the host's own `rimz` at the far end, so your `~/.ssh/config`, keys, ports, and jump hosts apply as they do for any `ssh`. The room, its agents, and its store stay on the host. Only `remote setup` writes files there outside the room; saved aliases live on your machine in `~/.config/rimz/remote.toml` (under `$XDG_CONFIG_HOME` when it is set). Why you attach this way, the reconnecting link, and the link badge are in the [remote guide](../../guide/remote.md).
+`rimz remote` attaches to a room on another host over SSH. The local `rimz` builds an `ssh` command and runs the host's own `rimz` at the far end, so your `~/.ssh/config`, keys, ports, and jump hosts apply as they do for any `ssh`. The room, its agents, and its store stay on the host. Only `remote setup` writes files there outside the room; saved aliases live on your machine in `~/.rimz/remote.toml` (under `$RIMZ_HOME` when it is set). Why you attach this way, the reconnecting link, and the link badge are in the [remote guide](../../guide/remote.md).
 
 ```sh
 rimz remote connect <alias-or-target> [--reset] [--no-reconnect] [--force-version] [--no-auto-forward] [--web [--web-port <port>]] [--attach | --no-attach | --print]

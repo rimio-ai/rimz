@@ -91,7 +91,7 @@ forge#feat-x · idle 48s
              plan-notes.md  120 lines · 18m ago
 
 forge
-  source: ~/.config/rimz/teams/forge.md
+  source: ~/.rimz/teams/forge.md
   layout: planner,coder+reviewer
 
   @planner   claude  fable        <- leader
@@ -105,7 +105,7 @@ The team form, `rimz teams show forge`, describes the team and lists its cohorts
 
 ```text
 forge
-  source: ~/.config/rimz/teams/forge.md
+  source: ~/.rimz/teams/forge.md
   layout: planner,coder+reviewer
 
   @planner   claude  fable        <- leader
@@ -444,7 +444,7 @@ rimz teams install forge --force
 rimz teams install forge --ref main
 ```
 
-Bare `install` lists the bundles under `examples/teams/` in the RimZ GitHub repository as a `TEAM REF` table. `install <name>` fetches `<name>.md` and the agent definitions selected by its roster, writing `<agents_home>/teams/<name>.md` and `<agents_home>/agents/<agent>.md`. The bundle's kind bases (`agents/claude.md`, `agents/codex.md`) are written only where the machine has none; an existing base is never replaced, `--force` included. The default agents home is `~/.config/rimz`; `RIMZ_AGENTS_HOME` overrides it.
+Bare `install` lists the bundles under `examples/teams/` in the RimZ GitHub repository as a `TEAM REF` table. `install <name>` fetches `<name>.md` and the agent definitions selected by its roster, writing `<agents_home>/teams/<name>.md` and `<agents_home>/agents/<agent>.md`. The bundle's kind bases (`agents/claude.md`, `agents/codex.md`) are written only where the machine has none; an existing base is never replaced, `--force` included. The default agents home is `~/.rimz`, which `RIMZ_HOME` relocates; `RIMZ_AGENTS_HOME` overrides only the definition trees and skill library.
 
 | Flag | Effect |
 | --- | --- |

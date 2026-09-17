@@ -60,7 +60,7 @@ An `Auto` target is resolved again at each launch, reconnect, and probe start. C
 
 `SshDestination::parse` handles the colon-less `[user@]host` form that `rimz remote setup` accepts.
 
-Aliases persist per machine at `$XDG_CONFIG_HOME/rimz/remote.toml`, one `[[remote]]` table per entry, sorted by name and written with temp-file-plus-rename.
+Aliases persist per machine at `~/.rimz/remote.toml`, one `[[remote]]` table per entry, sorted by name and written with temp-file-plus-rename.
 
 | Field | Default | Effect |
 | --- | --- | --- |

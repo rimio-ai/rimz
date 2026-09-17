@@ -131,7 +131,7 @@ The elder tracker is built to make the common tick free. Election is in [state.m
 
 | Stamp field | Source |
 | --- | --- |
-| `config_generation` | `MachineConfig::load_stamp_generation`, a hash over the stamped per-machine config files and `~/.config/rimz` fragments |
+| `config_generation` | `MachineConfig::load_stamp_generation`, a hash over the stamped per-machine config files and `~/.rimz` fragments |
 | `workspace` | The workspace record's `project_root` and `worktree_root`, leaving out `updated_at`, which ordinary CLI and hook traffic rewrites |
 | `rimz_bin`, `claude_bin`, `codex_bin` | Stamped paths of the RimZ executable and of `claude` and `codex` as resolved on `PATH` |
 | `claude_settings` | Stamped path of Claude's settings file under the room's Claude login |

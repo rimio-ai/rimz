@@ -22,7 +22,7 @@ rimz agents codex "Prepare the release checklist." -p             # the same gra
 
 `-p` adds no engine of its own; it sequences pieces this guide set already covers:
 
-1. It checks pre-launch dollar gates and any exact managed-launch provider quota, then writes a durable run record — a JSON file under `~/.local/state/rimz/workspaces/<id>/runs/` — before anything opens.
+1. It checks pre-launch dollar gates and any exact managed-launch provider quota, then writes a durable run record — a JSON file under `~/.rimz/ws/<workspace-dir>/runs/` — before anything opens.
 2. It opens one pane in your Zellij or tmux (a split beside you when you run it inside the room, a new tab when the caller is outside it) running the official agent CLI with your prompt: the same launch as an interactive `rimz agents <kind>`, one supervised turn instead of a session.
 3. It blocks until the agent's own reporting hooks say the root turn ended — hooks are the completion signal, which is why they are a [prerequisite](#prerequisites).
 4. It prints the answer, exits with the run's code, and closes the pane. The agent's session file stays where the CLI always puts it, so `claude --resume` and the provider's own apps keep working, and `rimz agents show` and `rimz transcript` read the run back after it ends.

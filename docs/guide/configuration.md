@@ -47,7 +47,7 @@ rimz config get sidebar --json
 
 Configuration comes from two places, and each answers a different question.
 
-Your personal settings live in one directory, `~/.config/rimz/`: your terminal, accounts, notifications, theme, and launch shortcuts. This tier is yours, uncommitted and outside the project trust hash, so nothing you set here follows a repository to someone else's machine.
+Your personal settings live in one directory, the RimZ home `~/.rimz/`: your terminal, accounts, notifications, theme, and launch shortcuts. This tier is yours, uncommitted and outside the project trust hash, so nothing you set here follows a repository to someone else's machine.
 
 A repository can also carry one shared file, `<repo>/.rimz/config.toml`: the shape a team agrees on through the repo, such as the agents a clone should launch and the loop tasks it should run. Because that file can name commands to execute, RimZ trust-tracks it, and a fresh clone reads `untrusted` until you review the executable surface and grant it. The full model is [Project config](#project-config).
 
@@ -63,7 +63,56 @@ You rarely open these by hand: `rimz config set` writes to them for you, and `ri
 
 Two more things share the directory but are managed for you: `remote.toml` (named SSH room aliases, written by `rimz remote`) and a handful of machine-managed sidecars (trust grants, notification state), which you reach through their own commands rather than by hand ([Sidecars and privacy](#sidecars-and-privacy)).
 
-Alongside the three machine files and `remote.toml`, `~/.config/rimz/` holds `agents.d/` for plugins and `agents/`, `subagents/`, `teams/`, and `traits/` for [Markdown definitions](../reference/definitions.md), plus the shared `skills/` library. `XDG_CONFIG_HOME` changes the config base; `RIMZ_AGENTS_HOME` moves the definition trees and skill library together to another root. Edit Markdown definitions directly; `rimz config set` refuses profile and team definition keys.
+Alongside the three machine files and `remote.toml`, `~/.rimz/` holds `agents.d/` for plugins and `agents/`, `subagents/`, `teams/`, and `traits/` for [Markdown definitions](../reference/definitions.md), plus the shared `skills/` library. `RIMZ_HOME` moves the whole home; `RIMZ_AGENTS_HOME` still moves only the definition trees and skill library, and `rimz doctor` reports it as superseded by `RIMZ_HOME`. Edit Markdown definitions directly; `rimz config set` refuses profile and team definition keys.
+
+### Where RimZ keeps its files
+
+Everything RimZ keeps across a reboot lives under the home, and nothing else on the machine: config files at the top, `ws/<name>/` for each project's room state, and account-wide `logs/`, `loops/`, `web/`, `shared/`, `data/` (named account homes under `data/accounts/`), `cache/`, and `builds/`. Room files that only matter while the machine is up (sockets, locks, wakeup pipes) sit on tmpfs under `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, or `/tmp/rimz-<uid>/rimz/ws/<name>/` without a runtime dir, and `~/.rimz/run` links there once a room is born.
+
+A room's directory name is the project's basename plus the first hex digits of its workspace id, such as `ws/myrepo-3f2a/`, and the same name is used in both trees. When two projects share a basename and those digits, the newer one gets a longer name. `rimz paths` prints every location for the project you run it in, and `rimz paths --json` gives the same thing to scripts ([reference](../reference/cli/paths.md)).
+
+Set `RIMZ_HOME` to put the home somewhere else. Panes, sandboxes, and hooks inherit the value the room was born with.
+
+### Moving from the XDG roots
+
+Earlier releases split RimZ across four XDG directories. RimZ no longer reads them, and it does not move them for you: `rimz doctor` lists any that remain, and `rimz start` refuses to open a room on a machine that has them but no `~/.rimz`, naming this section. `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, and `XDG_CACHE_HOME` no longer move RimZ's own files.
+
+| Old location | New location |
+| --- | --- |
+| `~/.config/rimz/config.toml`, `theme.toml`, `loop.toml`, `remote.toml` | `~/.rimz/` |
+| `~/.config/rimz/agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `agents.d/`, `projects/` | `~/.rimz/` |
+| `~/.local/state/rimz/workspaces/ws_<24hex>/` | `~/.rimz/ws/<basename>-<hex>/` |
+| `$XDG_RUNTIME_DIR/rimz/ws_<24hex>/` | `$XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/` |
+| `~/.local/state/rimz/shared/` | `~/.rimz/shared/` |
+| `~/.local/state/rimz/*.log.jsonl` | `~/.rimz/logs/` |
+| `~/.local/state/rimz/loop-arming.json`, `loop-strikes.json` | `~/.rimz/loops/` |
+| `~/.local/state/rimz/web-*.json` and the Zellij web config | `~/.rimz/web/` |
+| `~/.local/state/rimz/builds/` | `~/.rimz/builds/` |
+| `~/.local/share/rimz/` | `~/.rimz/data/` |
+| `~/.cache/rimz/` | `~/.rimz/cache/` |
+
+Stop every running room first, because a live room keeps writing to the old roots. Then move the machine config and the named provider accounts, which are what you would miss:
+
+```sh
+mkdir -p ~/.rimz/data
+mv ~/.config/rimz/* ~/.rimz/
+mv ~/.local/share/rimz/* ~/.rimz/data/
+```
+
+A room's state is keyed by directory name now, so it carries over only if you move it to the name RimZ expects. To keep one, run `rimz paths` in that project and move its old directory into place:
+
+```sh
+cd ~/src/myrepo
+id=$(rimz paths --json | jq -r .workspace_id)
+mkdir -p ~/.rimz/ws
+mv ~/.local/state/rimz/workspaces/"$id" "$(rimz paths --json | jq -r .state_dir)"
+```
+
+A project you skip starts with fresh room state on its next `rimz start`. Remove the old roots once you are done so `rimz doctor` stops listing them:
+
+```sh
+rm -rf ~/.config/rimz ~/.local/state/rimz ~/.local/share/rimz ~/.cache/rimz
+```
 
 ### How the layers combine
 
@@ -71,7 +120,7 @@ RimZ reads configuration in four layers, and a later layer wins:
 
 1. built-in defaults,
 2. project config (`<repo>/.rimz/config.toml`),
-3. per-machine config (`~/.config/rimz/`),
+3. per-machine config (`~/.rimz/`),
 4. CLI flags and `RIMZ_*` environment variables.
 
 Today the per-machine layer is live, CLI and env overrides apply where each command defines them, and the project layer is read for trust. One case inverts the order on purpose: a trusted project's launch names and loop-task names (`[profiles]`, `[subagents.profiles]`, `[agents.teams]`, `[tasks]`) overlay your machine config and win a name collision, so a repository can pin the exact executable surface it hashes (see [Project config](#project-config)).
@@ -270,7 +319,7 @@ home = "/home/you/.claude-work"
 [accounts.codex.personal]
 ```
 
-`[accounts.<kind>.<name>]` declares a named Claude or Codex account: a separate provider home that a room launches that provider's agents into. `home` is optional; an empty table places the home under `~/.local/share/rimz/accounts/<kind>/<name>`. `default` is reserved for the provider's own home and is never declared, two accounts cannot share one home, and a home cannot contain `,` or end in a directory named `projects`, because provider home lists split on commas and Claude reads `projects` as its transcript folder. `rimz accounts add` writes these entries for you, and [Provider accounts](./accounts.md) walks through the whole flow. A project picks its room's accounts in `.rimz/config.toml` with `[accounts]` entries such as `claude = "work"`. That selection joins the project trust hash, and an untrusted selection refuses `rimz start` until you trust it. `rimz start --account` overrides it.
+`[accounts.<kind>.<name>]` declares a named Claude or Codex account: a separate provider home that a room launches that provider's agents into. `home` is optional; an empty table places the home under `~/.rimz/data/accounts/<kind>/<name>`. `default` is reserved for the provider's own home and is never declared, two accounts cannot share one home, and a home cannot contain `,` or end in a directory named `projects`, because provider home lists split on commas and Claude reads `projects` as its transcript folder. `rimz accounts add` writes these entries for you, and [Provider accounts](./accounts.md) walks through the whole flow. A project picks its room's accounts in `.rimz/config.toml` with `[accounts]` entries such as `claude = "work"`. That selection joins the project trust hash, and an untrusted selection refuses `rimz start` until you trust it. `rimz start --account` overrides it.
 
 `budget` sets the enforced local-day dollar cap described in [Dollar budgets](#dollar-budgets) for descriptor-gated providers with durable spend; an unsupported entry refuses room birth instead of disappearing into lenient defaults. `usage_limit_usd` is separate, display-only, and has no account-spend eligibility gate, so Cursor remains valid there: its monthly ceiling scales the provider dashboard's `ex`/`api` bar when the provider reports no real cap, while the provider still enforces real spend and agents keep running. Account enrichment is local, read-only, and best-effort; `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the live fetches for one process tree without touching transcript-derived totals or credential files.
 
@@ -367,7 +416,7 @@ This writes `isolation = "sandbox"` under `[agents]` in `config.toml` after prob
 
 ### Agent profiles, commands, and teams
 
-When you keep retyping a model and tool selection, save it as `~/.config/rimz/agents/planner.md`. A bodyless preset needs no replacement prompt:
+When you keep retyping a model and tool selection, save it as `~/.rimz/agents/planner.md`. A bodyless preset needs no replacement prompt:
 
 ```markdown
 ---
@@ -401,7 +450,7 @@ Markdown skill lists require the `Skill` tool except on Pi. Sandbox loading and 
 
 An unlisted skill RimZ cannot prepare for the user-only view — because its source is unreadable or its metadata cannot be rewritten — is left out of that agent's launch, and the pane says so at startup. The installed skill is untouched, and unaffected skills remain available with their invocation restrictions intact. Listing the skill binds it exactly as installed; see [troubleshooting](./troubleshooting.md) for remedies.
 
-To share skills across providers without copying them, put directories containing `SKILL.md` in `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/`. Each host launch links `<root>/<name> -> <library>/<name>` into that provider's skill root: Claude, Qwen, and Kiro use their config home's `skills/`; other built-ins use `~/.agents/skills`. Each named Claude home gets its links on its first host launch. Plugins declare no skill root. When `RIMZ_AGENTS_HOME` places the library at a provider's skill root (for example `RIMZ_AGENTS_HOME=~/.agents`), that provider already reads it natively and RimZ writes no links there.
+To share skills across providers without copying them, put directories containing `SKILL.md` in `~/.rimz/skills/`. Each host launch links `<root>/<name> -> <library>/<name>` into that provider's skill root: Claude, Qwen, and Kiro use their config home's `skills/`; other built-ins use `~/.agents/skills`. Each named Claude home gets its links on its first host launch. Plugins declare no skill root. When `RIMZ_AGENTS_HOME` places the library at a provider's skill root (for example `RIMZ_AGENTS_HOME=~/.agents`), that provider already reads it natively and RimZ writes no links there.
 
 Your own directories and links are never replaced; a name collision is reported at launch. Delete a library skill to remove its link at the next host launch for that root, or run `rimz uninstall` to remove RimZ links from every provider and declared account home. The library itself is kept.
 
@@ -538,7 +587,7 @@ surplus-after = "3d"
 
 ```
 
-Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and need both `rimz trust grant` and a machine-local `rimz loop enable <name>` before they run unattended. The scheduling model (shapes, watchdogs, self-waits) is [loops.md](./loops.md); this section is the field shape.
+Loop tasks live in `~/.rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and need both `rimz trust grant` and a machine-local `rimz loop enable <name>` before they run unattended. The scheduling model (shapes, watchdogs, self-waits) is [loops.md](./loops.md); this section is the field shape.
 
 `default-timeout` bounds scheduled supervised turns whose task omits `timeout`; it accepts positive `s`, `m`, `h`, and `d` durations and defaults to `2h`. Set it with `rimz config set loop.default-timeout 3h`. Task-specific `timeout` wins, and a manual `rimz loop fire` without one remains unbounded.
 
@@ -559,7 +608,7 @@ Field notes:
 - Machine tasks carry a `root`: `rimz loop add` writes an absolute path, and a hand-edited `~` or relative root is normalized before room matching, firing, and display.
 - Project tasks run at the canonical project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, reject `root`, `dir`, `wait`, and `deadline`, and require `every`, `cron`, or `signal` because one-shots are machine state.
 - Trusted project tasks win over same-named machine tasks and state instances but default disabled until locally enabled; an untrusted or stale project task stays visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, enables that task for its author, and removing or renaming a project-owned task edits the project file.
-- Every session delivery (including recurring clocks and standing signals), generated one-shot, and poll-until instance lives in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`; machine-local task enablement and bounded pauses live in `~/.local/state/rimz/loop-arming.json`.
+- Every session delivery (including recurring clocks and standing signals), generated one-shot, and poll-until instance lives in `~/.rimz/ws/<workspace-dir>/loop-instances.json`; machine-local task enablement and bounded pauses live in `~/.rimz/loops/loop-arming.json`.
 
 The full model is in [loops.md](../internals/harness/loops.md), and the CLI is in [loop.md](../reference/cli/loop.md).
 
@@ -598,7 +647,7 @@ Which providers appear, their order, and their brand styling are theme and disco
 
 ## Project config
 
-The committed `<repo>/.rimz/config.toml` declares the workspace shape a team shares. RimZ computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches, applies `[subagents.profiles]` to `rimz subagents`, and loads `[tasks]` for `rimz loop`. Use one `agents` shape per project config: `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behavior. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`. RimZ's own [`.rimz/config.toml`](../../.rimz/config.toml) is a living project-task example; its repository sync task assumes push rights on the remote.
+The committed `<repo>/.rimz/config.toml` declares the workspace shape a team shares. RimZ computes the executable-surface trust hash from it, and on a trusted workspace it injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents` launches, applies `[subagents.profiles]` to `rimz subagents`, and loads `[tasks]` for `rimz loop`. Use one `agents` shape per project config: `[[agents]]` for env entries, or `[agents.teams]` for shared teams. Applying the declared hooks and agent launch command is planned project-config behavior. Room layout is per-machine config: a project config carrying a `[layout]` table is refused with the fix to move it to `~/.rimz/config.toml`. RimZ's own [`.rimz/config.toml`](../../.rimz/config.toml) is a living project-task example; its repository sync task assumes push rights on the remote.
 
 ```toml
 [[agents]]

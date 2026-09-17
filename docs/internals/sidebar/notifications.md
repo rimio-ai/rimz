@@ -143,13 +143,13 @@ For a coalesced notification each clause may be satisfied by a different agent. 
 
 **Process.** `spawn_notify_handlers` runs each rendered command as `sh -c` with stdin, stdout, and stderr on `/dev/null`, hands the child to the global reaper (`child_process::spawn_detached_reaped`), and does not wait. A render or spawn failure logs at debug and skips that handler. Handlers inherit no hook stdout, so they can never write into a hook's decision channel.
 
-**Trust.** Handlers live only in the per-machine `~/.config/rimz/config.toml`, never in a project `.rimz/config.toml`, and sit outside the trust hash: they are personal routing that often carries push credentials, and a cloned repository cannot supply one. The threat model is [security](../../guide/security.md).
+**Trust.** Handlers live only in the per-machine `~/.rimz/config.toml`, never in a project `.rimz/config.toml`, and sit outside the trust hash: they are personal routing that often carries push credentials, and a cloned repository cannot supply one. The threat model is [security](../../guide/security.md).
 
 A handler can act on the event as well as relay it. With `RIMZ_NOTIFY_ASK` it can read `rimz asks show <id> --json` and answer through `rimz answer <id> <choice>`, which accepts only the supported answers ([transcript.md → Asks and answers](../harness/transcript.md#asks-and-answers)); the user-facing patterns are [the guide → Handlers that act](../../guide/notifications.md#handlers-that-act-not-just-alert). A script that reads pane text is reading agent output and must treat it as untrusted.
 
 ## Configuration
 
-All keys live in `[notifications]` of `~/.config/rimz/config.toml` (`NotificationsPrefs`). The user-facing description is [configuration → Notifications](../../guide/configuration.md#notifications).
+All keys live in `[notifications]` of `~/.rimz/config.toml` (`NotificationsPrefs`). The user-facing description is [configuration → Notifications](../../guide/configuration.md#notifications).
 
 | Key | Default | Effect |
 | --- | --- | --- |
@@ -169,7 +169,7 @@ RimZ writes no dock badge escape, because badge APIs differ per terminal and OS;
 
 ## The trace log
 
-Every notification decision appends to `notify.log.jsonl` in the workspace state directory (`$XDG_STATE_HOME/rimz/workspaces/<id>/`), because a tab `[!]` with no matching unread card leaves nothing else behind. The log sits beside `diag.log.jsonl` and rotates at the same 1 MiB cap (`NOTIFY_LOG_MAX_BYTES`). Records go through `DiagSink::trace_notify`, which is never rate-limited, and no correctness path reads them. Each record is an envelope (`rimz.notify_trace.v1`, build id, workspace id, session name, renderer instance id when a renderer wrote it, `at_ms`) around one event.
+Every notification decision appends to `notify.log.jsonl` in the workspace state directory (`~/.rimz/ws/<workspace-dir>/`), because a tab `[!]` with no matching unread card leaves nothing else behind. The log sits beside `diag.log.jsonl` and rotates at the same 1 MiB cap (`NOTIFY_LOG_MAX_BYTES`). Records go through `DiagSink::trace_notify`, which is never rate-limited, and no correctness path reads them. Each record is an envelope (`rimz.notify_trace.v1`, build id, workspace id, session name, renderer instance id when a renderer wrote it, `at_ms`) around one event.
 
 | `kind` | Writer | Fields |
 | --- | --- | --- |

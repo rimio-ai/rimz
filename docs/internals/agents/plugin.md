@@ -21,7 +21,7 @@ Code outside `agents` reaches this module only through the provider-neutral faç
 
 This TOML manifest tree is unchanged by [Markdown definitions](../../reference/definitions.md): plugins register kinds, while definitions configure profiles and teams that use kinds.
 
-`load_from_root` builds every plugin in one pass over `$XDG_CONFIG_HOME/rimz/agents.d/*/agent.toml`:
+`load_from_root` builds every plugin in one pass over `~/.rimz/agents.d/*/agent.toml`:
 
 1. Collect each subdirectory's `agent.toml` and sort the paths, so display order is deterministic.
 2. Parse the TOML and run `PluginManifest::validate`: protocol version, kind grammar, no collision with a `registry::BUILTINS` kind, kind equal to the directory name, non-empty identity, unique and canonical `emits` containing `session_start`, editing tools a subset of mutating tools, a `{session_id}` placeholder in `resume`, non-empty probe argv, and an existing `setup-doc` file.

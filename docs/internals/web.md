@@ -53,7 +53,7 @@ The ping interval is long on purpose. libwebsockets closes a socket whose pong m
 | Lock | `web-ttyd.lock` | `web-ttyd-share.lock` |
 | Attach | `tmux -S <socket> attach -t <session>` or `zellij attach <session>` | tmux adds `-r`, and `-f ignore-size` on tmux 3.2 or newer; Zellij attaches normally |
 
-Every state file lives under `$XDG_STATE_HOME/rimz/`.
+Every state file lives under `~/.rimz/web/`.
 
 ### Starting
 
@@ -62,16 +62,15 @@ Every state file lives under `$XDG_STATE_HOME/rimz/`.
 1. Validate config with `desired_spec`: `interface` must parse as an IP address, each `trusted_proxies` entry must parse as an IP or CIDR, `auth_users` requires a non-empty `auth_header`, and no user may be empty after trimming. Each failure is a typed `WebErr` that names the fix.
 2. Resolve ttyd from `RIMZ_TTYD_BIN`, then `PATH`, and require `ttyd --version` to parse at or above `MIN_TTYD_VERSION` (1.7.5). A missing binary reports the Homebrew and apt install; an old or unparseable version reports the floor and the upgrade.
 3. Take `web-ttyd.lock`, so concurrent room starts converge on one process and a credential rotation cannot race stale-record cleanup.
-4. Reap legacy per-session daemons: for each record under `$XDG_STATE_HOME/rimz/web-ttyd/`, send SIGTERM if its pid still names `ttyd`, then remove the directory. Malformed records, recycled pids, and cleanup errors are debug logs only.
-5. Read the record and check it is live (see [the record](#the-record)). A stale record is removed, and any of its processes still running are terminated.
-6. Build the client profile, which may generate the index page, and check that the configured listener is free unless the live record already holds it. An occupied port is `ConfiguredPortInUse`, which points at `[web] port`.
-7. Reuse the live daemon if its record matches the desired shape. Otherwise stop it, create the credential if none exists, and start fresh.
+4. Read the record and check it is live (see [the record](#the-record)). A stale record is removed, and any of its processes still running are terminated.
+5. Build the client profile, which may generate the index page, and check that the configured listener is free unless the live record already holds it. An occupied port is `ConfiguredPortInUse`, which points at `[web] port`.
+6. Reuse the live daemon if its record matches the desired shape. Otherwise stop it, create the credential if none exists, and start fresh.
 
 A fresh start has two shapes. With Basic auth and an empty `trusted_proxies` list, ttyd binds `<interface>:<port>` directly. With trusted-header auth or any trusted proxy, ttyd binds `127.0.0.1:<ephemeral>` and RimZ spawns the hidden `rimz web gate` on the configured listener, pointed at that upstream. Either way RimZ waits up to 5 seconds (`START_TIMEOUT`) for the public listener, writes the record only after it accepts, and stops every process it started when a later step fails.
 
 Both ttyd processes and the gate spawn with null stdio in their own process group. Before spawning ttyd, `without_ttyd_launch_context` removes the launching pane's identity from the environment: multiplexer membership, room, worktree, and agent variables, the client size, and remote-attach markers (`TTYD_AMBIENT_CONTEXT_ENV`). Machine environment such as `HOME`, `XDG_*`, `PATH`, locale, logging, and the `RIMZ_*_BIN` overrides passes through, so every browser attach sees the machine and none sees the pane that happened to start the daemon.
 
-The broadcast path is the same without the gate, the credential, or the legacy reap. It validates only `interface`, and its port check reports `[web] share_port`.
+The broadcast path is the same without the gate or the credential. It validates only `interface`, and its port check reports `[web] share_port`.
 
 ### The record
 
@@ -113,7 +112,7 @@ A live record is reused only when every desired value matches: the listener, the
 | `rimz web unshare` | Untouched. | Restarts it, or stops it when the list becomes empty. |
 | `rimz web unshare --all` | Untouched. | Stops it. |
 
-`rimz start` is best-effort because browser access is enrichment on a room the user asked to open; the explicit web commands treat the same checks as fatal preconditions. `rimz reload` warns instead of failing. Its restart path checks liveness and reaps legacy daemons before it validates config, so a config error there leaves a live daemon running and reports the error as a warning.
+`rimz start` is best-effort because browser access is enrichment on a room the user asked to open; the explicit web commands treat the same checks as fatal preconditions. `rimz reload` warns instead of failing. Its restart path checks liveness before it validates config, so a config error there leaves a live daemon running and reports the error as a warning.
 
 Stopping sends SIGTERM to the gate and ttyd, polls the process table for up to one second, sends SIGKILL to any survivor, waits up to one second for the public listener to close, and removes the record.
 
@@ -194,11 +193,11 @@ With `style_client = true`, the profile adds `fontFamily=<font>,monospace` and a
 - A `font_source` starting with `https://` is fetched once and cached under the SHA-256 of the URL. Any other scheme is refused. A local path is read directly, with `~` expanded.
 - A custom face must end in `.ttf`, `.otf`, `.woff`, or `.woff2` and be at most 16 MiB.
 
-Fonts cache under `$XDG_CACHE_HOME/rimz/web-fonts/`. With `RIMZ_WEB_FONTS_OFFLINE` set to any value, resolution uses the cache only.
+Fonts cache under `~/.rimz/cache/web-fonts/`. With `RIMZ_WEB_FONTS_OFFLINE` set to any value, resolution uses the cache only.
 
 ### The generated page
 
-ttyd serves no extra static routes, so fonts and scripts have to live inside the index page it serves with `-I`. `ensure_custom_index` keys the page by a SHA-256 over the `CUSTOM_INDEX_SCHEMA` string, the full bootstrap script, the ttyd version string, the font family, and each face's bytes, and caches it as `$XDG_CACHE_HOME/rimz/web-ttyd/index-<key>.html`. On a cache miss it starts a throwaway ttyd on a loopback ephemeral port with a temporary credential, fetches the stock `/` page, stops it, and injects a `<style>` block (the `@font-face` rules and the overlay restyle) before `</head>` and the bootstrap script before `</body>`.
+ttyd serves no extra static routes, so fonts and scripts have to live inside the index page it serves with `-I`. `ensure_custom_index` keys the page by a SHA-256 over the `CUSTOM_INDEX_SCHEMA` string, the full bootstrap script, the ttyd version string, the font family, and each face's bytes, and caches it as `~/.rimz/cache/web-ttyd/index-<key>.html`. On a cache miss it starts a throwaway ttyd on a loopback ephemeral port with a temporary credential, fetches the stock `/` page, stops it, and injects a `<style>` block (the `@font-face` rules and the overlay restyle) before `</head>` and the bootstrap script before `</body>`.
 
 Because the bootstrap script is part of the key, any change to it produces a new page and a new `index_key`, and the next ensure replaces either daemon. A tab left open across that replacement keeps the old page until it reloads.
 

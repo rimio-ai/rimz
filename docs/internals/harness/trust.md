@@ -38,9 +38,9 @@ The hash input is canonical JSON, and the wire format is `sha256:<hex>`. Struct 
 
 Everything else in the file deserializes leniently and never touches the hash. That covers display keys such as `display_name` and `sidebar_width`, team `leader`, `owns`, `flip-compact`, `scratch-files`, and `stages`, and task `team`, `max-strikes`, `budget`, `budget-per-day`, `surplus`, and `surplus-after`.
 
-Some tables are refused outright. [`check_project_config_removed_tables`](../../../crates/rimz/src/trust.rs) fails the read when the project config carries a `[layout]` table (which includes `[[layout.initial_panes]]` and `[layout.tmux]`), with the fix to move it to `$XDG_CONFIG_HOME/rimz/config.toml`, or a retired key that [`retired_agents_key`](../../../crates/rimz/src/config/agents.rs) names with its replacement. Project task fields that describe machine state fail to load; [loops.md § Where tasks live](./loops.md#where-tasks-live) owns that list.
+Some tables are refused outright. [`check_project_config_removed_tables`](../../../crates/rimz/src/trust.rs) fails the read when the project config carries a `[layout]` table (which includes `[[layout.initial_panes]]` and `[layout.tmux]`), with the fix to move it to `~/.rimz/config.toml`, or a retired key that [`retired_agents_key`](../../../crates/rimz/src/config/agents.rs) names with its replacement. Project task fields that describe machine state fail to load; [loops.md § Where tasks live](./loops.md#where-tasks-live) owns that list.
 
-Machine policy stays outside the hash because a repository cannot set it. Per-machine `[[notifications.handler]]` and `[notifications].command`, per-machine profiles, subagent profiles, and teams, per-machine loop `check` commands, and `agents.isolation` all live under `$XDG_CONFIG_HOME/rimz/` and are never trust-tracked. A repository therefore cannot choose host or sandbox isolation, and the [sandbox mount view](../sandbox.md) is no substitute for trust: profile skill views do not make untrusted commands safe.
+Machine policy stays outside the hash because a repository cannot set it. Per-machine `[[notifications.handler]]` and `[notifications].command`, per-machine profiles, subagent profiles, and teams, per-machine loop `check` commands, and `agents.isolation` all live under `~/.rimz/` and are never trust-tracked. A repository therefore cannot choose host or sandbox isolation, and the [sandbox mount view](../sandbox.md) is no substitute for trust: profile skill views do not make untrusted commands safe.
 
 The hashed surface is closed. A repo profile may inherit only repo profiles or built-in kinds (`RepoProfileEscapesTrust` otherwise), a repo team role binds only repo profiles, and a repo task always runs at the project root. A launch described by the project config therefore runs only hashed definitions, in a directory the project controls.
 
@@ -92,7 +92,7 @@ A project puts credentials in `[[agents]]` env, so `CompiledAgentProcess` and `A
 
 ## Storage
 
-Both records are per-machine, under `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/`, and written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs).
+Both records are per-machine, under `~/.rimz/projects/<workspace_id>/`, and written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs).
 
 `trust.toml` is the grant record:
 

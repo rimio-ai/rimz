@@ -250,7 +250,7 @@ The report goes to stderr before the rebuild:
 ```console
 Reset: session deleted, 1 cache entry removed, 2 orphan processes swept.
 Tmp and skill copies: cleared.
-Records: archived 48213 bytes to /home/me/.local/state/rimz/workspaces/ws_f89e49906df0621ad2765112/events.log.archive/events.0192f3a4-7c1e-7b20-9d6a-3f4e5a6b7c8d.jsonl.
+Records: archived 48213 bytes to /home/me/.rimz/ws/myrepo-f89e/events.log.archive/events.0192f3a4-7c1e-7b20-9d6a-3f4e5a6b7c8d.jsonl.
 Records: canceled 0 runs, removed 3 debug entries, runtime removed.
 Records: prior agent rollup kept (4 agents).
 ```
@@ -347,15 +347,15 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 | Running rooms, on both backends | Torn down | |
 | The external [loop timer](./loop.md) | Removed | |
 | Runtime and cache directories | Removed | |
-| Data directory (`~/.local/share/rimz`) | Removed, except `accounts/` | |
+| Data directory (`~/.rimz/data`) | Removed, except `accounts/` | |
 | [Provider account](./accounts.md) homes under `accounts/` | Kept: their credentials and history belong to the provider | |
-| Durable stores, spend history, and shared state (`~/.local/state/rimz`) | Kept | `--state` removes them |
-| Per-machine config, themes, trust grants, notification handlers, and remote aliases (`~/.config/rimz`) | Kept | `--config` removes them, except `agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, and `accounts/` |
-| Agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, and `accounts/`) | Always kept | |
+| Durable stores, spend history, and shared state (`ws/`, `shared/`, `logs/`, `loops/`, `web/`, `builds/` under `~/.rimz`) | Kept | `--state` removes them |
+| Per-machine config, themes, trust grants, plugins, and remote aliases (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`, `projects/`, `agents.d/` under `~/.rimz`) | Kept | `--config` removes them |
+| Agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`, and `accounts/`) and `handoffs/` | Always kept | |
 | `rimz` binaries at the running executable, Cargo's bin directory, and `/usr/local/bin` | Removed | `--keep-binary` keeps them; `RIMZ_SYSTEM_BIN_DIR` replaces `/usr/local/bin` |
 | Project `.rimz/` directories and RimZ-owned worktrees | Always kept: they can hold project config and unlanded work | |
 
-`--all` is `--state` plus `--config`. `--yes` skips the prompt and is required when stdin is not a terminal. The paths above are the defaults; XDG base directory variables move them.
+`--all` is `--state` plus `--config`. `--yes` skips the prompt and is required when stdin is not a terminal. The paths above are the defaults; `RIMZ_HOME` moves them. Anything else under the home, such as `cache/` and the `run` link, is removed.
 
 Run it from outside any RimZ room: inside one it fails with `detach and rerun from outside the RimZ room`. A Homebrew install also needs `brew uninstall rimz`. When any step fails, the rest still run, and `uninstall` exits 1 with `uninstall incomplete:` and one line per failure. A binary it had no permission to delete gets a `sudo rm PATH` line to run.
 

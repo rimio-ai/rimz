@@ -73,7 +73,7 @@ The port comes from the running writable daemon, or from `[web] port` while it i
 
 ## Start, stop, and inspect the daemons
 
-These verbs act on the daemons without naming a room. Each daemon keeps its record under `$XDG_STATE_HOME/rimz/`; a record whose process has died is cleaned up by whichever verb reads it next.
+These verbs act on the daemons without naming a room. Each daemon keeps its record under `~/.rimz/web/`; a record whose process has died is cleaned up by whichever verb reads it next.
 
 | Verb | Writable daemon | Broadcast daemon | Prints |
 | --- | --- | --- | --- |
@@ -118,7 +118,7 @@ Removing one room stops the old broadcast process before checking the config, so
 
 ## Rotate or revoke the credential
 
-The writable daemon has one credential for the whole machine, named `rimz`. RimZ creates it the first time the daemon starts and stores it under `$XDG_STATE_HOME/rimz/` with mode 0600. It stays out of URLs and logs; `open`, `url --json`, and `token create` are the only commands that print it. It applies in trusted-header mode too, where the gate presents it to ttyd.
+The writable daemon has one credential for the whole machine, named `rimz`. RimZ creates it the first time the daemon starts and stores it under `~/.rimz/web/` with mode 0600. It stays out of URLs and logs; `open`, `url --json`, and `token create` are the only commands that print it. It applies in trusted-header mode too, where the gate presents it to ttyd.
 
 | Command | Effect | Prints |
 | --- | --- | --- |

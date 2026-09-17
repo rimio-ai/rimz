@@ -4,7 +4,7 @@ RimZ reads machine agent, subagent, and team definitions directly from Markdown 
 
 ## Trees and format
 
-The definitions root is `RIMZ_AGENTS_HOME`, or `${XDG_CONFIG_HOME:-~/.config}/rimz` by default:
+The definitions root is the RimZ home, `~/.rimz` by default, which `RIMZ_HOME` relocates; `RIMZ_AGENTS_HOME` overrides it for these trees and the skill library alone:
 
 ```text
 agents/<name>.md       direct profiles and kind bases

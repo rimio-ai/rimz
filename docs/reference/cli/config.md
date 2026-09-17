@@ -1,6 +1,6 @@
 # Config CLI
 
-`rimz config` reads and edits the per-machine config: three commented TOML files under `~/.config/rimz/` that you own and can edit by hand. `rimz list-themes` and `rimz list-pets` print the choices for the two settings with many values, `theme.scheme` and `theme.pets.pet`. What each key means, the merge order, and the project config tier are in the [configuration guide](../../guide/configuration.md).
+`rimz config` reads and edits the per-machine config: three commented TOML files under the RimZ home, `~/.rimz/`, that you own and can edit by hand. `rimz list-themes` and `rimz list-pets` print the choices for the two settings with many values, `theme.scheme` and `theme.pets.pet`. What each key means, the merge order, and the project config tier are in the [configuration guide](../../guide/configuration.md).
 
 ```sh
 rimz config init [--force] [--print]
@@ -15,7 +15,7 @@ A refusal or error exits 1, following the CLI-wide [exit codes](../cli.md#exit-c
 
 ## The config files
 
-The directory is `$XDG_CONFIG_HOME/rimz/`, or `~/.config/rimz/` when `XDG_CONFIG_HOME` is unset. A dotted key's first segment decides which file `rimz config set` writes.
+The directory is `$RIMZ_HOME`, or `~/.rimz/` when `RIMZ_HOME` is unset; [`rimz paths`](./paths.md) prints it with every other location. A dotted key's first segment decides which file `rimz config set` writes.
 
 | File | Keys routed to it | What it holds |
 | --- | --- | --- |
@@ -50,12 +50,12 @@ rimz config init --print   # print the templates, write nothing
 
 ```console
 $ rimz config path
-/home/me/.config/rimz/config.toml
+/home/me/.rimz/config.toml
 ```
 
 ## Read a value
 
-`rimz config get` loads the effective config (the three files layered over built-in defaults, plus profiles and teams from `~/.config/rimz/`) and prints it. It reads strictly: a file with a TOML or validation error fails the command with that error instead of falling back to defaults.
+`rimz config get` loads the effective config (the three files layered over built-in defaults, plus profiles and teams from `~/.rimz/`) and prints it. It reads strictly: a file with a TOML or validation error fails the command with that error instead of falling back to defaults.
 
 | Form | Prints |
 | --- | --- |
@@ -177,4 +177,4 @@ $ rimz list-pets --json
 ]
 ```
 
-The terminal preview fetches each built-in sprite sheet over HTTPS into `~/.cache/rimz/pets/` (under `XDG_CACHE_HOME` when set) on first use and reads installed pets from disk. With `RIMZ_PETS_OFFLINE` set to any value it reads the cache only. A pet that cannot load leaves an empty slot, and the grid ends with `(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)`; the command still exits 0. Render tiers, custom sheets, and petdex installs are in the [pets guide](../../guide/pets.md).
+The terminal preview fetches each built-in sprite sheet over HTTPS into `~/.rimz/cache/pets/` on first use and reads installed pets from disk. With `RIMZ_PETS_OFFLINE` set to any value it reads the cache only. A pet that cannot load leaves an empty slot, and the grid ends with `(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)`; the command still exits 0. Render tiers, custom sheets, and petdex installs are in the [pets guide](../../guide/pets.md).

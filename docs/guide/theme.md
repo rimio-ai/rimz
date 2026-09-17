@@ -1,6 +1,6 @@
 # Theming
 
-RimZ wears one theme across the sidebar and human command output: the color scheme and depth, semantic color slots, and provider branding. The sidebar adds its glyph vocabulary, status-head animations, and optional animated pet. All of it is display preference in one per-machine file, `~/.config/rimz/theme.toml`. A theme changes presentation, never what an agent can do, so nothing on this page can break a run.
+RimZ wears one theme across the sidebar and human command output: the color scheme and depth, semantic color slots, and provider branding. The sidebar adds its glyph vocabulary, status-head animations, and optional animated pet. All of it is display preference in one per-machine file, `~/.rimz/theme.toml`. A theme changes presentation, never what an agent can do, so nothing on this page can break a run.
 
 RimZ reads color schemes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/alacritty), so a bundled name or the palette you already run in your terminal is one line away:
 

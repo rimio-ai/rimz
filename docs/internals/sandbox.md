@@ -67,8 +67,8 @@ Replacing `/tmp` would hide any RimZ state, socket, or project that lives under 
 
 | Candidate | Source |
 | --- | --- |
-| `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `RIMZ_AGENTS_HOME` | Each non-empty value in the launch environment. |
-| RimZ state home, runtime home, Zellij socket base, tmux socket directory | `mux::domain::ProcessDomain::required_paths`. |
+| `HOME`, `RIMZ_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `RIMZ_AGENTS_HOME` | Each non-empty value in the launch environment. |
+| RimZ home, runtime home, Zellij socket base, tmux socket directory | `mux::domain::ProcessDomain::required_paths`. |
 | Working directory, project root, worktree | The launch. |
 | Provider config home | Mount step 1, when it exists. |
 
@@ -84,7 +84,7 @@ The plan pins every environment variable it consulted, so shell startup files ca
 
 | Key | Pin |
 | --- | --- |
-| `HOME`, the five `XDG_*` roots above, `RIMZ_AGENTS_HOME` | Reapplied with the planned value; removed with `env -u` when absent. |
+| `HOME`, `RIMZ_HOME`, the five `XDG_*` roots above, `RIMZ_AGENTS_HOME` | Reapplied with the planned value; removed with `env -u` when absent. |
 | `TMUX`, `ZELLIJ_SOCKET_DIR` | Same. |
 | The adapter's native override keys (`config_home_env_keys`: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `QWEN_HOME`, `KIRO_HOME`, and others) | Same, so a room account's home key is among them. |
 | `TMPDIR` | Always `/tmp`. |
@@ -96,7 +96,7 @@ A key present with an empty value is pinned to the empty value. To move a root, 
 
 ## Room tmp
 
-Room tmp is one directory per workspace, `${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/tmp/`, created at mode `0700`. Sandboxed panes see it at `/tmp`. `StatePaths::ensure_tmp_dir` builds its layout:
+Room tmp is one directory per workspace, `~/.rimz/ws/<workspace-dir>/tmp/`, created at mode `0700`. Sandboxed panes see it at `/tmp`. `StatePaths::ensure_tmp_dir` builds its layout:
 
 | Path | Holds |
 | --- | --- |
@@ -154,7 +154,7 @@ Each sandbox launch overlays at most one user skill root, declared by the adapte
 
 A provider marked `Unsupported`, or without a root, refuses every configured list under sandbox isolation, whatever skills are installed. `Frontmatter` writes `disable-model-invocation: true` into `SKILL.md` frontmatter. `OpenAiPolicy` writes `policy.allow_implicit_invocation: false` into `agents/openai.yaml`.
 
-The RimZ skill library at `agents_home()/skills` (by default `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/`) is merged into the provider root; a name already in the provider root shadows the library entry. Host-mode library links are preserved provider-root symlinks and likewise shadow the library entry. `RIMZ_AGENTS_HOME` moves RimZ config fragments and the skill library together; the library is then `$RIMZ_AGENTS_HOME/skills/`. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour.
+The RimZ skill library at `agents_home()/skills` (by default `~/.rimz/skills/`, or `$RIMZ_HOME/skills/` when `RIMZ_HOME` relocates the home) is merged into the provider root; a name already in the provider root shadows the library entry. Host-mode library links are preserved provider-root symlinks and likewise shadow the library entry. `RIMZ_AGENTS_HOME` is the narrower override that moves only the definition trees and the skill library together; the library is then `$RIMZ_AGENTS_HOME/skills/`. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour.
 
 Definition validation (`config/definitions/agent.rs::skill_policy`) resolves each listed skill through the same two roots in the same order, the adapter's `skills_home` under the ambient env and then the library, and checks the marker on the copy that wins. It cannot share `skills::plan`, since `config` sits below `sandbox`; a named account's login home is gated at launch.
 

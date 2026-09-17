@@ -8,7 +8,7 @@ Evidence has two destinations. The default is a durable log on the box, always o
 
 ## Where diagnostics land
 
-Diagnostic logs live in persistent state because an investigation starts after the pane, mux session, or machine has gone away. Workspace logs land under `~/.local/state/rimz/workspaces/<workspace-id>/`, which survives reboot like the store; runtime files under `$XDG_RUNTIME_DIR` die with the session.
+Diagnostic logs live in persistent state because an investigation starts after the pane, mux session, or machine has gone away. Workspace logs land under `~/.rimz/ws/<workspace-dir>/`, which survives reboot like the store; runtime files under `$XDG_RUNTIME_DIR` die with the session.
 
 | Surface | Location | Records | Owner |
 | --- | --- | --- | --- |
@@ -16,7 +16,7 @@ Diagnostic logs live in persistent state because an investigation starts after t
 | `diag-frames/` | workspace state dir, `0700` | prior and offending pane-frame pairs | [Frame captures](#frame-captures) |
 | `notify.log.jsonl` | workspace state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md#the-trace-log) |
 | `plugin-presence.log.jsonl` | workspace state dir | Zellij presence-plugin keepalive samples | [below](#zellij-presence-plugin-telemetry) |
-| `focus-repairs.log.jsonl` | account-global state root, beside the assist history | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
+| `focus-repairs.log.jsonl` | account-global `~/.rimz/logs/`, beside the assist history | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
 | `binding.log.jsonl` | workspace runtime dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
 | `topology-writer-conflict.json` | workspace runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 
@@ -203,7 +203,7 @@ Each incident keeps the source severity apart from its state (`investigate`, `co
 The log is plain JSONL. A kind census is the fastest orientation on an unfamiliar one (sample output):
 
 ```console
-$ DIAG=~/.local/state/rimz/workspaces/<workspace-id>/diag.log.jsonl
+$ DIAG="$(rimz paths --json | jq -r .state_dir)"/diag.log.jsonl
 $ jq -r '.event.kind' "$DIAG" | sort | uniq -c | sort -rn | head
     311 sidebar_width_settle
     197 link_alert
@@ -250,7 +250,7 @@ Two shapes are worth recognizing.
 
 Card-content questions (a wrong gauge, a missing cost, a card resting in the wrong shape) are answered from the same read path the renderer runs, before any raw file is opened. Rendered-frame anomalies (flicker, duplicate rows, missing tabs) take the [episode workflow](#investigating-an-episode) instead.
 
-`rimz workspace resolve <path>` prints the `workspace_id` for any project path. Every worktree of a repository resolves to the repository's own workspace, so a `rimz-worktrees/<branch>` checkout maps to the main repository's directories. State lives under `$XDG_STATE_HOME/rimz/workspaces/<id>/` and runtime files under `$XDG_RUNTIME_DIR/rimz/<id>/`, a layout owned by [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs).
+`rimz workspace resolve <path>` prints the `workspace_id` for any project path. Every worktree of a repository resolves to the repository's own workspace, so a `rimz-worktrees/<branch>` checkout maps to the main repository's directories. State lives under `~/.rimz/ws/<workspace-dir>/` and runtime files under `$XDG_RUNTIME_DIR/rimz/ws/<workspace-dir>/`, where the directory name is `<basename>-<hex>` rather than the id; `rimz paths` prints both for the current project, a layout owned by [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs).
 
 `rimz sidebar snapshot --json --no-produce` prints the fused `SidebarSnapshot` a node renders: the event-fresh rollup folded over the published pane frame plus the per-session sidecars ([state.md](./sidebar/state.md)). Run it inside the workspace, or pass `--workspace-id` from outside. `--no-produce` keeps the read passive, with no mux or git forks, so inspection never perturbs the room; without it the command may pay one producing refresh.
 
@@ -269,7 +269,7 @@ The split inside that one object is the provenance map. Bare row fields (`status
 Raw sidecars confirm what a producer actually wrote. Filenames are digests because session ids are free strings, so scan by record content:
 
 ```sh
-cd "$XDG_RUNTIME_DIR/rimz/<workspace_id>"
+cd "$(rimz paths --json | jq -r .runtime_dir)"
 jq -r '[.kind, .agent_id, .context.session_name] | @tsv' agent_context/ctx.*.json   # find a session's record
 jq . agent_context/ctx.<digest>.json                                                # the full record
 ```
