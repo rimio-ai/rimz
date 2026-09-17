@@ -789,15 +789,15 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     match entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
             render::room::print_notices(ensure_single_backend_room(mux, &workspace.session_name)?)?;
-            rimz_socket_environment_preflight(&workspace.workspace_id)?;
+            rimz_socket_environment_preflight(&workspace.project_root)?;
             mux_environment_preflight(mux, &workspace.session_name)
         }
         RoomEntry::AttachCwd { workspace, .. } => {
-            rimz_socket_environment_preflight(&workspace.workspace_id)?;
+            rimz_socket_environment_preflight(&workspace.project_root)?;
             mux_environment_preflight(mux, &workspace.session_name)
         }
         RoomEntry::WebSession { record, .. } => {
-            rimz_socket_environment_preflight(&record.workspace_id)?;
+            rimz_socket_environment_preflight(&record.project_root)?;
             mux_environment_preflight(mux, &record.session_name)
         }
         RoomEntry::AttachSession {
@@ -805,7 +805,7 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
         } => {
             mux_environment_preflight(mux, session)?;
             if let Ok(Some(record)) = record {
-                rimz_socket_environment_preflight(&record.workspace_id)?;
+                rimz_socket_environment_preflight(&record.project_root)?;
             }
             Ok(())
         }
@@ -992,8 +992,8 @@ fn zellij_version_preflight() -> Result<()> {
     );
 }
 
-fn rimz_socket_environment_preflight(workspace_id: &WorkspaceId) -> Result<()> {
-    RuntimePaths::for_workspace(workspace_id.clone())
+fn rimz_socket_environment_preflight(project_root: &Path) -> Result<()> {
+    RuntimePaths::for_project_root(project_root)
         .map(|_| ())
         .context("checking RimZ runtime socket budget")
 }
