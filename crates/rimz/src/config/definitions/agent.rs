@@ -1,13 +1,13 @@
 //! Chain resolution and profile materialization for both definition namespaces.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
 use crate::config::{Profile, PromptSource, SkillName};
 
 use super::frontmatter::AgentFrontmatter;
-use super::{DefinitionErr, LoadedDefinitions, Namespace, SkillLibraryCheck, frontmatter, traits};
+use super::{DefinitionErr, LoadedDefinitions, Namespace, SkillCheck, frontmatter, traits};
 
 #[derive(Clone)]
 struct Resolved {
@@ -58,7 +58,7 @@ impl<'a> Resolver<'a> {
         tree: &'a Namespace,
         foreign: &'a Namespace,
         bases: &'a BTreeSet<String>,
-        skills: SkillLibraryCheck<'a>,
+        skills: SkillCheck<'a>,
         allowed_children: &'a BTreeSet<String>,
     ) -> Self {
         Self {
@@ -82,7 +82,7 @@ pub(super) struct Resolver<'a> {
     tree: &'a Namespace,
     foreign: &'a Namespace,
     bases: &'a BTreeSet<String>,
-    skills: SkillLibraryCheck<'a>,
+    skills: SkillCheck<'a>,
     allowed_children: &'a BTreeSet<String>,
     resolved: BTreeMap<String, Option<Resolved>>,
     trail: Vec<String>,
@@ -390,12 +390,13 @@ pub(super) fn auto_compact(path: &Path, value: &str) -> Result<String, Definitio
     Ok(text.to_owned())
 }
 
+/// Under [`SkillCheck::Check`], each listed skill resolves as the sandbox view finds it: the kind's provider skill root, then the library, first readable `SKILL.md` wins and carries the marker check.
 pub(super) fn skill_policy(
     path: &Path,
     kind: &str,
     listed: Option<&[String]>,
     tools: Option<&ToolSet>,
-    library: SkillLibraryCheck<'_>,
+    check: SkillCheck<'_>,
 ) -> Result<Option<Vec<SkillName>>, DefinitionErr> {
     let Some(listed) = listed else {
         return Ok(None);
@@ -409,26 +410,39 @@ pub(super) fn skill_policy(
     let mut skills = Vec::new();
     for name in names(path, "skills", listed)? {
         let skill: SkillName = name.parse().map_err(|_| DefinitionErr::new(path, format!("lists skill {name:?}; rimz reads one bare directory name, so a `<name>:<mode>` suffix, a path, or whitespace is refused")))?;
-        if let SkillLibraryCheck::Check(root) = library {
-            let directory = root.join(&name);
-            let skill_path = directory.join("SKILL.md");
-            let text = std::fs::read_to_string(&skill_path).map_err(|error| {
-                DefinitionErr::new(
+        if let SkillCheck::Check { env, library } = check {
+            let definition = agents::find_definition(kind);
+            let candidates: Vec<PathBuf> = definition
+                .and_then(|definition| definition.skills_home(env))
+                .into_iter()
+                .chain([library.to_path_buf()])
+                .map(|root| root.join(&name).join("SKILL.md"))
+                .collect();
+            let Some((skill_path, text)) = candidates.iter().find_map(|candidate| {
+                std::fs::read_to_string(candidate)
+                    .ok()
+                    .map(|text| (candidate, text))
+            }) else {
+                let searched: Vec<String> = candidates
+                    .iter()
+                    .map(|candidate| candidate.display().to_string())
+                    .collect();
+                return Err(DefinitionErr::new(
                     path,
                     format!(
-                        "lists skill '{name}', missing at {}: {error}",
-                        skill_path.display()
+                        "lists skill '{name}', missing at {}",
+                        searched.join(" and ")
                     ),
-                )
-            })?;
-            let marker = agents::find_definition(kind)
-                .map_or(ManualSkill::Unsupported, |definition| {
-                    definition.manual_skill()
-                });
+                ));
+            };
+            let directory = skill_path.parent().unwrap_or(skill_path);
+            let marker = definition.map_or(ManualSkill::Unsupported, |definition| {
+                definition.manual_skill()
+            });
             let manual = match marker {
                 ManualSkill::Unsupported => false,
                 ManualSkill::Frontmatter => {
-                    let (block, _) = frontmatter::split(&skill_path, &text)?;
+                    let (block, _) = frontmatter::split(skill_path, &text)?;
                     block.lines().any(|line| {
                         line.strip_prefix("disable-model-invocation:")
                             .is_some_and(|value| value.trim() == "true")

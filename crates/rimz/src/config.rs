@@ -468,7 +468,11 @@ impl MachineConfig {
     /// every configured agent profile and command.
     pub fn load_with_agent_spec_sources() -> Result<(Self, AgentSpecSources)> {
         let files = MachineConfigFiles::machine();
-        Self::load_from_with_agent_spec_sources(files.core_path(), files.agents_home())
+        Self::load_from_with_agent_spec_sources(
+            files.core_path(),
+            files.agents_home(),
+            &crate::agents::ambient_env(),
+        )
     }
 
     /// Strictly load only the per-machine loop task file. Missing file is the
@@ -489,12 +493,19 @@ impl MachineConfig {
 
     /// Load machine files and Markdown definitions from explicit roots for tests and tooling.
     fn load_from(config_path: &Path, agents_home: &Path) -> Result<Self> {
-        Self::load_from_with_agent_spec_sources(config_path, agents_home).map(|(config, _)| config)
+        Self::load_from_with_agent_spec_sources(
+            config_path,
+            agents_home,
+            &crate::agents::ambient_env(),
+        )
+        .map(|(config, _)| config)
     }
 
+    /// `env` resolves provider skill roots for the sandbox skill check.
     fn load_from_with_agent_spec_sources(
         config_path: &Path,
         agents_home: &Path,
+        env: &BTreeMap<String, String>,
     ) -> Result<(Self, AgentSpecSources)> {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
@@ -511,7 +522,7 @@ impl MachineConfig {
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
         let mut config = Self::assemble(core.value, theme.value, loop_.value);
         validate_notifications_config(&config.notifications, files.core_path())?;
-        let sources = config.load_definitions(agents_home, config_path, &mut notices);
+        let sources = config.load_definitions(agents_home, config_path, env, &mut notices);
         if let Some(error) = notices.definition_errors.first() {
             return Err(ConfigErr::Definition {
                 path: error.path.clone(),
@@ -522,7 +533,11 @@ impl MachineConfig {
         Ok((config, sources))
     }
 
-    fn load_lenient_from(config_path: &Path, agents_home: &Path) -> Self {
+    fn load_lenient_from(
+        config_path: &Path,
+        agents_home: &Path,
+        env: &BTreeMap<String, String>,
+    ) -> Self {
         let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let theme_path = files.path(MachineConfigFileKind::Theme);
         let loop_path = files.path(MachineConfigFileKind::Loop);
@@ -543,17 +558,29 @@ impl MachineConfig {
             );
             config.notifications = NotificationsPrefs::default();
         }
-        config.load_definitions(agents_home, config_path, &mut notices);
+        config.load_definitions(agents_home, config_path, env, &mut notices);
         config.notices = notices;
         config
     }
 
     pub fn parse_text(path: &Path, text: &str, agents_home: &Path) -> Result<Self> {
-        Self::parse_text_with_agents_home(path, text, agents_home, false)
+        Self::parse_text_with_agents_home(
+            path,
+            text,
+            agents_home,
+            false,
+            &crate::agents::ambient_env(),
+        )
     }
 
     fn parse_text_for_edit(path: &Path, text: &str, agents_home: &Path) -> Result<Self> {
-        Self::parse_text_with_agents_home(path, text, agents_home, true)
+        Self::parse_text_with_agents_home(
+            path,
+            text,
+            agents_home,
+            true,
+            &crate::agents::ambient_env(),
+        )
     }
 
     fn parse_text_with_agents_home(
@@ -561,6 +588,7 @@ impl MachineConfig {
         text: &str,
         agents_home: &Path,
         ignore_broken_definitions: bool,
+        env: &BTreeMap<String, String>,
     ) -> Result<Self> {
         match path.file_name().and_then(|name| name.to_str()) {
             Some(THEME_FILE) => Ok(Self::assemble(
@@ -580,7 +608,7 @@ impl MachineConfig {
                 let mut config =
                     Self::assemble(core, ThemeConfig::default(), LoopConfig::default());
                 let mut notices = ConfigNotices::default();
-                config.load_definitions(agents_home, path, &mut notices);
+                config.load_definitions(agents_home, path, env, &mut notices);
                 if !ignore_broken_definitions && let Some(error) = notices.definition_errors.first()
                 {
                     return Err(ConfigErr::Definition {
@@ -644,13 +672,17 @@ impl MachineConfig {
         &mut self,
         agents_home: &Path,
         config_path: &Path,
+        env: &BTreeMap<String, String>,
         notices: &mut ConfigNotices,
     ) -> AgentSpecSources {
-        let skills = agents_home.join("skills");
+        let library = agents_home.join("skills");
         let check = if self.agents.isolation == Isolation::Sandbox {
-            definitions::SkillLibraryCheck::Check(&skills)
+            definitions::SkillCheck::Check {
+                env,
+                library: &library,
+            }
         } else {
-            definitions::SkillLibraryCheck::Skip
+            definitions::SkillCheck::Skip
         };
         let loaded = definitions::load(agents_home, check, &self.agents.commands);
         self.agents.profiles = loaded.agent_profiles;
@@ -728,6 +760,7 @@ impl MachineConfig {
             return cached.config.clone();
         }
 
+        let env = crate::agents::ambient_env();
         // A hand-edited theme.toml can be rewritten in place. A read that races
         // the editor may parse a valid prefix whose missing fields serde fills
         // with built-ins, e.g. `[theme.pets] enabled = true` without `pet`
@@ -740,7 +773,7 @@ impl MachineConfig {
                 continue;
             }
 
-            let config = Arc::new(Self::load_lenient_from(config_path, agents_home));
+            let config = Arc::new(Self::load_lenient_from(config_path, agents_home, &env));
             let after = ConfigStamp::from_inputs(config_path, agents_home);
             if after == stamp {
                 if let Ok(mut memo) = LOAD_MEMO.get_or_init(|| Mutex::new(None)).lock() {
@@ -760,7 +793,7 @@ impl MachineConfig {
         {
             return cached.config.clone();
         }
-        Arc::new(Self::load_lenient_from(config_path, agents_home))
+        Arc::new(Self::load_lenient_from(config_path, agents_home, &env))
     }
 
     pub(crate) fn load_stamp_generation() -> u64 {
@@ -791,7 +824,11 @@ fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
         load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text).map(|_| ()),
     ];
     let mut errors: Vec<_> = checks.into_iter().filter_map(Result::err).collect();
-    let config = MachineConfig::load_lenient_from(files.core_path(), files.agents_home());
+    let config = MachineConfig::load_lenient_from(
+        files.core_path(),
+        files.agents_home(),
+        &crate::agents::ambient_env(),
+    );
     errors.extend(config.notices.definition_errors.into_iter().map(|error| {
         ConfigErr::Definition {
             path: error.path,

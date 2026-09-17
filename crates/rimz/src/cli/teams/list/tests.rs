@@ -30,7 +30,7 @@ fn team_source_survives_an_unrelated_broken_definition() {
     }
     let loaded = rimz::config::definitions::load(
         root.path(),
-        rimz::config::definitions::SkillLibraryCheck::Skip,
+        rimz::config::definitions::SkillCheck::Skip,
         &rimz::config::CommandsConfig::default(),
     );
     assert!(

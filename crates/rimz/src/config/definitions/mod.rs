@@ -14,10 +14,14 @@ use std::path::{Path, PathBuf};
 use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
+/// Whether listed skills must resolve, and where: the kind's provider skill root under `env`, then `library`, the order the sandbox skill view merges them.
 #[derive(Clone, Copy, Debug)]
-pub enum SkillLibraryCheck<'a> {
+pub enum SkillCheck<'a> {
     Skip,
-    Check(&'a Path),
+    Check {
+        env: &'a BTreeMap<String, String>,
+        library: &'a Path,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -115,7 +119,7 @@ pub fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
 /// `commands` are the `[agents.commands]` names a `subagents:` list may also allow.
 pub fn load(
     agents_home: &Path,
-    skills: SkillLibraryCheck<'_>,
+    skills: SkillCheck<'_>,
     commands: &CommandsConfig,
 ) -> LoadedDefinitions {
     let mut loaded = LoadedDefinitions::default();

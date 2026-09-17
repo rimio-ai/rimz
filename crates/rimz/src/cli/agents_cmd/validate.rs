@@ -2,27 +2,23 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use rimz::config::definitions::{self, DefinitionErr, LoadedDefinitions, SkillLibraryCheck};
+use rimz::config::definitions::{self, DefinitionErr, LoadedDefinitions, SkillCheck};
 
 use crate::cli::render;
 
 pub(super) fn run(json: bool) -> Result<()> {
     let home = rimz::disk::paths::agents_home();
     let machine = crate::cli::machine_config();
-    let skills = home.join("skills");
-    let check = if skills.is_dir() {
-        SkillLibraryCheck::Check(&skills)
-    } else {
-        if machine.agents.isolation != rimz::config::Isolation::Sandbox {
-            writeln!(
-                std::io::stderr(),
-                "warning: skill library {} is missing; skipping skill checks",
-                skills.display()
-            )?;
-        }
-        SkillLibraryCheck::Skip
-    };
-    let loaded = load(&home, check, &machine);
+    let env = rimz::agents::ambient_env();
+    let library = home.join("skills");
+    let loaded = load(
+        &home,
+        SkillCheck::Check {
+            env: &env,
+            library: &library,
+        },
+        &machine,
+    );
     if json {
         render::json_pretty(&serde_json::json!({
             "rows": loaded.rows,
@@ -79,7 +75,7 @@ pub(super) fn run(json: bool) -> Result<()> {
 /// own config load recorded, so validate never passes a set a launch refuses.
 fn load(
     home: &Path,
-    check: SkillLibraryCheck<'_>,
+    check: SkillCheck<'_>,
     machine: &rimz::config::MachineConfig,
 ) -> LoadedDefinitions {
     let mut loaded = definitions::load(home, check, &machine.agents.commands);
@@ -135,7 +131,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.path().join("agents/bad.md"), "no frontmatter").unwrap();
-        let loaded = load(root.path(), SkillLibraryCheck::Skip, &Default::default());
+        let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
         assert!(loaded.rows.iter().any(|row| row.name == "good"));
         assert!(
             loaded
@@ -160,20 +156,32 @@ mod tests {
         )
         .unwrap();
         assert!(
-            load(root.path(), SkillLibraryCheck::Skip, &Default::default())
+            load(root.path(), SkillCheck::Skip, &Default::default())
                 .errors
                 .is_empty()
         );
-        let checked = load(
-            root.path(),
-            SkillLibraryCheck::Check(&root.path().join("skills")),
-            &Default::default(),
-        );
+        let env = std::collections::BTreeMap::from([(
+            "HOME".to_owned(),
+            root.path().display().to_string(),
+        )]);
+        let check = SkillCheck::Check {
+            env: &env,
+            library: &root.path().join("skills"),
+        };
+        let checked = load(root.path(), check, &Default::default());
         assert!(
             checked
                 .errors
                 .iter()
                 .any(|error| error.message.contains("missing"))
         );
+        std::fs::create_dir_all(root.path().join(".claude/skills/missing")).unwrap();
+        std::fs::write(
+            root.path().join(".claude/skills/missing/SKILL.md"),
+            "---\ndescription: provider-root only\n---\nSkill.",
+        )
+        .unwrap();
+        let checked = load(root.path(), check, &Default::default());
+        assert!(checked.errors.is_empty(), "{:?}", checked.errors);
     }
 }

@@ -36,7 +36,7 @@ fn load_no_fragments(path: &Path) -> Result<MachineConfig> {
 }
 
 fn load_lenient_no_fragments(path: &Path) -> MachineConfig {
-    MachineConfig::load_lenient_from(path, &no_fragments(path))
+    MachineConfig::load_lenient_from(path, &no_fragments(path), &BTreeMap::new())
 }
 
 fn expire_load_memo() {
@@ -179,7 +179,7 @@ fn lenient_load_falls_back_only_for_the_broken_file() {
         "description: Planner\nagent: codex\ntools: []",
         "",
     );
-    let config = MachineConfig::load_lenient_from(&path, dir.path());
+    let config = MachineConfig::load_lenient_from(&path, dir.path(), &BTreeMap::new());
     assert_eq!(config.accounts, AccountsConfig::default());
     assert_eq!(config.agents.profiles.0["planner"].agent, "codex");
 }
@@ -1549,7 +1549,8 @@ fn definitions_load_namespaces_chains_and_sources_and_ignore_legacy_toml() {
         "",
     );
     let (config, sources) =
-        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path()).unwrap();
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &BTreeMap::new())
+            .unwrap();
     assert_eq!(config.agents.placement, LaunchPlacement::Tab);
     assert_eq!(
         config.agents.profiles.0["child"].effort.as_deref(),
@@ -1598,7 +1599,7 @@ fn definition_failures_keep_good_siblings_and_match_doctor_and_launch_preconditi
     let strict = MachineConfig::load_from(&path, dir.path()).unwrap_err();
     assert!(matches!(strict, ConfigErr::Definition { .. }));
     assert_eq!(strict.path(), bad);
-    let config = MachineConfig::load_lenient_from(&path, dir.path());
+    let config = MachineConfig::load_lenient_from(&path, dir.path(), &BTreeMap::new());
     assert!(config.agents.profiles.0.contains_key("good"));
     assert!(!config.agents.profiles.0.contains_key("bad"));
     assert_eq!(config.notices.definition_errors.len(), 1);
@@ -1682,9 +1683,26 @@ fn sandbox_config_enables_definition_skill_library_checks() {
     let path = write(&dir, "[agents]\nisolation = 'host'\n");
     MachineConfig::load_from(&path, dir.path()).unwrap();
     write(&dir, "[agents]\nisolation = 'sandbox'\n");
-    let error = MachineConfig::load_from(&path, dir.path()).unwrap_err();
+    let home = BTreeMap::from([("HOME".to_owned(), dir.path().display().to_string())]);
+    let error =
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &home).unwrap_err();
     assert!(matches!(error, ConfigErr::Definition { .. }));
     assert!(error.to_string().contains("missing"));
+
+    std::fs::create_dir_all(dir.path().join(".agents/skills/missing")).unwrap();
+    std::fs::write(
+        dir.path().join(".agents/skills/missing/SKILL.md"),
+        "---\ndescription: provider-root only\n---\nSkill.",
+    )
+    .unwrap();
+    assert!(!dir.path().join("skills").exists());
+    let config = MachineConfig::load_lenient_from(&path, dir.path(), &home);
+    assert!(
+        config.notices.definition_errors.is_empty(),
+        "{:?}",
+        config.notices.definition_errors
+    );
+    assert!(config.agents.profiles.0.contains_key("worker"));
 }
 
 #[test]
@@ -1705,7 +1723,8 @@ fn loaded_team_replaces_peer_and_retains_its_source() {
         "Pipeline.",
     );
     let (config, sources) =
-        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path()).unwrap();
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &BTreeMap::new())
+            .unwrap();
     assert_eq!(config.agents.teams.0["peer"].roles[0].profile, "peer.lead");
     assert_eq!(sources.team("peer"), Some(team_path.as_path()));
     assert_eq!(
@@ -1737,7 +1756,7 @@ fn lenient_definitions_collect_all_errors_and_post_load_validation_failure() {
         "description: Bad child\nagent: unknown",
         "",
     );
-    let config = MachineConfig::load_lenient_from(&path, dir.path());
+    let config = MachineConfig::load_lenient_from(&path, dir.path(), &BTreeMap::new());
     assert!(config.agents.profiles.0.contains_key("worker"));
     assert_eq!(
         config.notices.definition_errors.len(),

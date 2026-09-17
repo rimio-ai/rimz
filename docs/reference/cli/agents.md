@@ -311,7 +311,7 @@ rimz agents validate
 rimz agents validate --json
 ```
 
-Reads the machine Markdown definition trees without launching agents or generating files. Human output groups agents, subagents, and teams with their resolved seats, then prints source-attributed errors. JSON emits `{rows, errors}`. Any error exits nonzero. The shared skill library is checked even with host isolation; an absent library produces one warning and skips that check. See [the format and failure classes](../definitions.md#validation-and-failures).
+Reads the machine Markdown definition trees without launching agents or generating files. Human output groups agents, subagents, and teams with their resolved seats, then prints source-attributed errors. JSON emits `{rows, errors}`. Any error exits nonzero. Listed skills are checked against the provider's skill root, then the shared skill library, even with host isolation. See [the format and failure classes](../definitions.md#validation-and-failures).
 
 ### Discover agent profiles
 
