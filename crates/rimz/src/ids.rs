@@ -265,10 +265,6 @@ impl WorkspaceDirName {
     pub(crate) fn hex(&self) -> &str {
         &self.name[self.hex_start..]
     }
-
-    pub(crate) fn slug(&self) -> &str {
-        &self.name[..self.hex_start - 1]
-    }
 }
 
 impl fmt::Display for WorkspaceDirName {

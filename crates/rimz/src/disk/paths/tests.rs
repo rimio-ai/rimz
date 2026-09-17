@@ -149,7 +149,7 @@ fn mint_lengthens_past_a_taken_prefix_and_records_decide_lookup() {
     fs::create_dir_all(workspaces_dir_under(other.path()).join(&neighbour)).unwrap();
     let minted = StatePaths::for_project_root_under(&second_root, other.path()).unwrap();
     assert_ne!(minted.dir_name.as_str(), neighbour);
-    assert_eq!(minted.dir_name.slug(), "repo");
+    assert!(minted.dir_name.as_str().starts_with("repo-"));
 }
 
 #[test]

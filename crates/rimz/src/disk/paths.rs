@@ -252,7 +252,9 @@ fn workspace_dir_name_for_root(
     let fallback = WorkspaceDirName::fallback(workspace_id);
     // An unrecorded dir is this root's only when its name says so: another
     // project whose id shares the hex prefix must mint its own dir.
-    let owns_unrecorded = |name: &WorkspaceDirName| name.slug() == slug || *name == fallback;
+    let owns_unrecorded = |name: &WorkspaceDirName| {
+        *name == fallback || name.as_str() == format!("{slug}-{}", name.hex())
+    };
     if let Some(found) = find_workspace_dir(ws_dir, workspace_id, owns_unrecorded)? {
         return Ok(found);
     }
