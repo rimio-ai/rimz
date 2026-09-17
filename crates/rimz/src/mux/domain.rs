@@ -11,7 +11,7 @@ use crate::ids::MuxName;
 /// The state and multiplexer namespace inherited by a process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcessDomain {
-    state_home: PathBuf,
+    rimz_home: PathBuf,
     runtime_home: PathBuf,
     zellij_socket_base: PathBuf,
     tmux_socket: PathBuf,
@@ -25,7 +25,7 @@ impl ProcessDomain {
             crate::proc::own_uid().unwrap_or_default(),
         );
         let mut paths = vec![
-            domain.state_home,
+            domain.rimz_home,
             domain.runtime_home,
             domain.zellij_socket_base,
         ];
@@ -60,7 +60,7 @@ impl ProcessDomain {
 
     /// Whether two processes share RimZ's persistent and runtime state world.
     fn same_world(&self, other: &Self) -> bool {
-        self.state_home == other.state_home && self.runtime_home == other.runtime_home
+        self.rimz_home == other.rimz_home && self.runtime_home == other.runtime_home
     }
 
     /// Whether `pid` shares RimZ's persistent and runtime state world.
@@ -88,8 +88,8 @@ impl ProcessDomain {
         let path = |key| get(key).map(PathBuf::from);
         let tmpdir = path("TMPDIR").unwrap_or_else(|| PathBuf::from("/tmp"));
         let xdg_runtime = path("XDG_RUNTIME_DIR");
-        let state_home = crate::disk::paths::state_home_from(
-            path("XDG_STATE_HOME").as_deref(),
+        let rimz_home = crate::disk::paths::rimz_home_from(
+            path("RIMZ_HOME").as_deref(),
             path("HOME").as_deref(),
             &tmpdir,
         );
@@ -110,7 +110,7 @@ impl ProcessDomain {
             .and_then(crate::mux::tmux::socket_path_from_tmux_var)
             .unwrap_or_else(|| crate::mux::tmux::managed_server_socket_path_under(&runtime_home));
         Self {
-            state_home,
+            rimz_home,
             runtime_home,
             zellij_socket_base,
             tmux_socket,
@@ -226,8 +226,26 @@ mod tests {
     }
 
     #[test]
-    fn default_state_home_uses_the_tmpdir_fallback() {
+    fn default_rimz_home_uses_the_tmpdir_fallback() {
         let default = domain(&[]);
-        assert_eq!(default.state_home, std::path::Path::new("/tmp/rimz-state"));
+        assert_eq!(default.rimz_home, std::path::Path::new("/tmp/rimz-home"));
+    }
+
+    #[test]
+    fn a_different_rimz_home_is_a_foreign_world() {
+        let host = domain(&[("HOME", "/home/u"), ("XDG_RUNTIME_DIR", "/run/user/1000")]);
+        let explicit = domain(&[
+            ("HOME", "/home/other"),
+            ("RIMZ_HOME", "/home/u/.rimz"),
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+        ]);
+        let sandbox = domain(&[
+            ("HOME", "/home/u"),
+            ("RIMZ_HOME", "/tmp/sandbox/.rimz"),
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+        ]);
+
+        assert!(host.same_world(&explicit));
+        assert!(!host.same_world(&sandbox));
     }
 }

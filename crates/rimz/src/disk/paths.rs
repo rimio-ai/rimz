@@ -1,10 +1,20 @@
 //! Disk, runtime, and shared-cache path resolution.
 //!
-//! State paths live under `$XDG_STATE_HOME/rimz/workspaces/<id>/`.
-//! Runtime paths live under `$XDG_RUNTIME_DIR/rimz/<id>/`, falling back to
-//! `/tmp/rimz-<uid>/rimz/<id>/` at mode `0700` per `docs/internals/store.md`.
-//! Shared data caches live under `$XDG_STATE_HOME/rimz/shared/`; shared
-//! election locks live under `$XDG_RUNTIME_DIR/rimz/shared/`.
+//! Everything that outlives a boot lives under one home, [`rimz_home`]
+//! (`$RIMZ_HOME`, else `~/.rimz`): config files at the top, the agent library
+//! (`profiles/ teams/ skills/ projects/`), workspace state under
+//! `ws/<name>/`, and the account-global `shared/`, `logs/`, `loops/`, `web/`,
+//! `builds/`, `data/`, and `cache/` dirs. Runtime paths stay on tmpfs under
+//! `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, falling back to
+//! `/tmp/rimz-<uid>/rimz/ws/<name>/` at mode `0700` per
+//! `docs/internals/store.md`; shared election locks live under
+//! `$XDG_RUNTIME_DIR/rimz/shared/`.
+//!
+//! A workspace dir name is a [`WorkspaceDirName`], `<basename>-<hex>`, never
+//! the [`WorkspaceId`] itself. Resolving an id scans `ws/` for names whose hex
+//! prefixes the id and lets each candidate's `workspace.json` decide; a site
+//! holding a project root mints a new name when none exists, and a site holding
+//! only an id falls back to `ws-<24hex>`. No constructor creates anything.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -14,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
+use crate::ids::{PaneId, SidebarInstanceId, WORKSPACE_DIR_HEX_MIN, WorkspaceDirName, WorkspaceId};
 use crate::sock::SockBudget;
 
 #[derive(Debug, thiserror::Error)]
@@ -27,8 +37,12 @@ pub enum PathErr {
     },
     #[error(transparent)]
     SocketBudgetExceeded(#[from] crate::sock::SocketPathTooLong),
-    #[error("invalid RimZ runtime path layout under {path}")]
-    InvalidRuntimeLayout { path: PathBuf },
+    #[error("workspace {id} matches several dirs under {dir}: {candidates:?}")]
+    AmbiguousWorkspaceDir {
+        id: WorkspaceId,
+        dir: PathBuf,
+        candidates: Vec<String>,
+    },
     #[error("runtime path {path} is not a directory")]
     RuntimePathNotDirectory { path: PathBuf },
     #[cfg(unix)]
@@ -55,6 +69,7 @@ type Result<T> = std::result::Result<T, PathErr>;
 #[derive(Clone, Debug)]
 pub struct StatePaths {
     pub workspace_id: WorkspaceId,
+    pub dir_name: WorkspaceDirName,
     pub root: PathBuf,
     pub tmp_dir: PathBuf,
     pub scratchpad_dir: PathBuf,
@@ -87,26 +102,45 @@ pub struct StatePaths {
 }
 
 impl StatePaths {
-    pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
-        Self::under(workspace_id, &state_home())
+    /// Paths for the workspace born at `project_root`: its existing dir, else
+    /// a freshly minted `<basename>-<hex>` name. Creates nothing.
+    pub fn for_project_root(project_root: &Path) -> Result<Self> {
+        Self::for_project_root_under(project_root, &rimz_home())
     }
 
-    /// Build paths rooted at `state_root` instead of `state_home()`. Used by
-    /// tests so they don't need to mutate process env; production callers
-    /// take the XDG-based [`Self::for_workspace`].
-    pub fn under(workspace_id: WorkspaceId, state_root: &Path) -> Result<Self> {
-        let root = state_root
-            .join("rimz")
-            .join("workspaces")
-            .join(workspace_id.as_str());
+    /// [`Self::for_project_root`] under an explicit home.
+    pub fn for_project_root_under(project_root: &Path, home: &Path) -> Result<Self> {
+        let workspace_id = WorkspaceId::from_project_root(project_root);
+        let dir_name =
+            workspace_dir_name_for_root(&workspaces_dir_under(home), &workspace_id, project_root)?;
+        Ok(Self::under_named(workspace_id, dir_name, home))
+    }
+
+    /// Paths for a workspace known only by id: its existing dir, else the
+    /// `ws-<24hex>` fallback name. Creates nothing.
+    pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
+        Self::under(workspace_id, &rimz_home())
+    }
+
+    /// [`Self::for_workspace`] under an explicit home, for tests that should not
+    /// mutate process env.
+    pub fn under(workspace_id: WorkspaceId, home: &Path) -> Result<Self> {
+        let dir_name = workspace_dir_name(&workspaces_dir_under(home), &workspace_id)?;
+        Ok(Self::under_named(workspace_id, dir_name, home))
+    }
+
+    /// Paths for `workspace_id` in the dir `dir_name` under `home`.
+    pub fn under_named(workspace_id: WorkspaceId, dir_name: WorkspaceDirName, home: &Path) -> Self {
+        let root = workspaces_dir_under(home).join(dir_name.as_str());
         let snapshots_dir = root.join("snapshots");
         let messages_dir = root.join("messages");
         let transcript_dir = root.join("transcript");
         let runs_dir = root.join("runs");
         let locks_dir = root.join("locks");
         let tmp_dir = root.join("tmp");
-        Ok(Self {
+        Self {
             workspace_id,
+            dir_name,
             scratchpad_dir: tmp_dir.join("scratchpad"),
             agents_dir: tmp_dir.join("agents"),
             shared_dir: tmp_dir.join("shared"),
@@ -136,7 +170,7 @@ impl StatePaths {
             crashes_dir: root.join("crashes"),
             locks_dir,
             root,
-        })
+        }
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
@@ -197,26 +231,123 @@ impl StatePaths {
     }
 }
 
+/// The workspace dir name `workspace_id` resolves to in `ws_dir`, or the
+/// `ws-<24hex>` fallback when it has none.
+fn workspace_dir_name(ws_dir: &Path, workspace_id: &WorkspaceId) -> Result<WorkspaceDirName> {
+    Ok(find_workspace_dir(ws_dir, workspace_id)?
+        .unwrap_or_else(|| WorkspaceDirName::fallback(workspace_id)))
+}
+
+/// Longest basename slug a minted name carries, bounding the socket budget.
+const WORKSPACE_DIR_SLUG_MAX: usize = 32;
+
+/// The existing dir for `workspace_id` in `ws_dir`, else a minted
+/// `<basename>-<hex>` whose hex no dir in `ws_dir` already carries.
+fn workspace_dir_name_for_root(
+    ws_dir: &Path,
+    workspace_id: &WorkspaceId,
+    project_root: &Path,
+) -> Result<WorkspaceDirName> {
+    if let Some(found) = find_workspace_dir(ws_dir, workspace_id)? {
+        return Ok(found);
+    }
+    let taken: Vec<WorkspaceDirName> = workspace_dir_names(ws_dir)?.collect();
+    let slug = WorkspaceDirName::basename_slug(project_root, WORKSPACE_DIR_SLUG_MAX);
+    let hex_len = (WORKSPACE_DIR_HEX_MIN..workspace_id.hex().len())
+        .step_by(2)
+        .find(|&len| {
+            let hex = &workspace_id.hex()[..len];
+            !taken.iter().any(|name| name.hex() == hex)
+        })
+        .unwrap_or(workspace_id.hex().len());
+    Ok(WorkspaceDirName::mint(&slug, workspace_id, hex_len))
+}
+
+/// Every parseable workspace dir name in `ws_dir`; a missing dir has none.
+fn workspace_dir_names(ws_dir: &Path) -> Result<impl Iterator<Item = WorkspaceDirName>> {
+    let entries = match fs::read_dir(ws_dir) {
+        Ok(entries) => Some(entries),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(PathErr::Io {
+                path: ws_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+    Ok(entries
+        .into_iter()
+        .flatten()
+        .filter_map(std::result::Result::ok)
+        .filter_map(|entry| entry.file_name().to_str().and_then(WorkspaceDirName::parse)))
+}
+
+/// Locate `workspace_id`'s dir in `ws_dir` by hex prefix. A candidate whose
+/// `workspace.json` names the id wins; one naming another id is skipped; a
+/// candidate without a readable record (half-born, or a runtime tree) is
+/// accepted only when it is the sole such candidate.
+fn find_workspace_dir(
+    ws_dir: &Path,
+    workspace_id: &WorkspaceId,
+) -> Result<Option<WorkspaceDirName>> {
+    let mut unrecorded = Vec::new();
+    for name in workspace_dir_names(ws_dir)?.filter(|name| name.may_name(workspace_id)) {
+        match recorded_workspace_id(&ws_dir.join(name.as_str())) {
+            Some(recorded) if recorded == workspace_id.as_str() => return Ok(Some(name)),
+            Some(_) => {}
+            None => unrecorded.push(name),
+        }
+    }
+    if unrecorded.len() > 1 {
+        return Err(PathErr::AmbiguousWorkspaceDir {
+            id: workspace_id.clone(),
+            dir: ws_dir.to_path_buf(),
+            candidates: unrecorded.iter().map(|name| name.to_string()).collect(),
+        });
+    }
+    Ok(unrecorded.pop())
+}
+
+/// The id a workspace dir's `workspace.json` names. `disk` sits below
+/// `workspace`, so this reads the one field it needs instead of the record type.
+fn recorded_workspace_id(dir: &Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Recorded {
+        workspace_id: String,
+    }
+    let bytes = fs::read(dir.join("workspace.json")).ok()?;
+    serde_json::from_slice::<Recorded>(&bytes)
+        .ok()
+        .map(|recorded| recorded.workspace_id)
+}
+
+/// Workspace state dirs, `<home>/ws`.
 pub fn workspaces_dir() -> PathBuf {
-    workspaces_dir_under(&state_home())
+    workspaces_dir_under(&rimz_home())
 }
 
-pub fn workspaces_dir_under(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join("workspaces")
+pub fn workspaces_dir_under(home: &Path) -> PathBuf {
+    home.join("ws")
 }
 
-pub(crate) fn builds_dir_under(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join("builds")
+/// Staged `rimz reload` builds, `<home>/builds`.
+pub(crate) fn builds_dir_under(home: &Path) -> PathBuf {
+    home.join("builds")
 }
 
 #[derive(Clone, Debug)]
 pub struct RuntimePaths {
     pub workspace_id: WorkspaceId,
+    pub dir_name: WorkspaceDirName,
+    /// `$XDG_RUNTIME_DIR` or its fallback; hardened, never RimZ-owned.
+    runtime_root: PathBuf,
+    /// `<runtime_root>/rimz`.
+    rimz_root: PathBuf,
     pub root: PathBuf,
     /// User-scoped election locks. Data caches use [`Self::persistent_shared_root`].
     pub shared_root: PathBuf,
     /// User-scoped shared data caches. Production constructors root this under
-    /// [`state_home`], while [`Self::under`] roots it under the supplied runtime
+    /// [`shared_dir`], while [`Self::under`] roots it under the supplied runtime
     /// root for test isolation and byte-identical cross-workspace cache paths.
     pub persistent_shared_root: PathBuf,
     pub sock_dir: PathBuf,
@@ -247,18 +378,6 @@ pub struct RuntimePaths {
     pub(crate) active_time_dir: PathBuf,
 }
 
-/// Data-cache filenames that lived in the runtime `shared/` dir before
-/// c44f3ec6 moved them to `persistent_shared_root`. Swept on ensure so stale
-/// pre-migration copies stop pinning tmpfs (RAM).
-const LEGACY_RUNTIME_SHARED_CACHES: [&str; 6] = [
-    "accounts.json",
-    "rate_limits.json",
-    "credits.json",
-    "provider-spending.json",
-    "spending.json",
-    "pricing-cache.json",
-];
-
 pub(crate) fn is_workspace_spending_file(name: &str) -> bool {
     name.strip_prefix("workspace-spending.")
         .and_then(|rest| rest.strip_suffix(".json"))
@@ -266,11 +385,27 @@ pub(crate) fn is_workspace_spending_file(name: &str) -> bool {
 }
 
 impl RuntimePaths {
+    /// Runtime paths for a workspace known only by id, named after its state
+    /// dir (or the `ws-<24hex>` fallback).
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
-        Self::for_workspace_with_shared_root(
-            workspace_id,
+        let dir_name = workspace_dir_name(&workspaces_dir(), &workspace_id)?;
+        Self::validated(workspace_id, dir_name, &runtime_home())
+    }
+
+    /// Runtime paths for the workspace born at `project_root`, under the same
+    /// name [`StatePaths::for_project_root`] resolves.
+    pub fn for_project_root(project_root: &Path) -> Result<Self> {
+        let workspace_id = WorkspaceId::from_project_root(project_root);
+        let dir_name = workspace_dir_name_for_root(&workspaces_dir(), &workspace_id, project_root)?;
+        Self::validated(workspace_id, dir_name, &runtime_home())
+    }
+
+    /// Runtime paths paired with state paths already in hand.
+    pub fn for_state(state: &StatePaths) -> Result<Self> {
+        Self::validated(
+            state.workspace_id.clone(),
+            state.dir_name.clone(),
             &runtime_home(),
-            persistent_shared_home(),
         )
     }
 
@@ -281,22 +416,36 @@ impl RuntimePaths {
     pub fn shared() -> Self {
         let sentinel = WorkspaceId::parse("ws_000000000000000000000000")
             .expect("reserved all-zero workspace id is well-formed");
-        let mut paths = Self::under(sentinel, &runtime_home())
-            .expect("under() builds paths without IO and cannot fail");
-        paths.persistent_shared_root = persistent_shared_home();
+        let dir_name = WorkspaceDirName::fallback(&sentinel);
+        let mut paths = Self::under_named(sentinel, dir_name, &runtime_home());
+        paths.persistent_shared_root = shared_dir();
         paths
     }
 
-    /// Build runtime paths rooted at `runtime_root`. Tests prefer this so they
-    /// don't need to set `XDG_RUNTIME_DIR`. This raw constructor deliberately
-    /// skips the socket budget; ambient production callers use
-    /// [`Self::for_workspace`] so a long runtime root fails before any session
-    /// side effect. Shared data and lock paths both root under `runtime_root`
-    /// here so tests stay isolated; [`Self::for_workspace`] and [`Self::shared`]
-    /// move shared data to its persistent home.
+    /// Build runtime paths rooted at `runtime_root`, naming the dir after a
+    /// matching one already in that runtime tree (else `ws-<24hex>`). Tests
+    /// prefer this so they don't need to set `XDG_RUNTIME_DIR`. This raw
+    /// constructor deliberately skips the socket budget; ambient production
+    /// callers use [`Self::for_workspace`] so a long runtime root fails before
+    /// any session side effect. Shared data and lock paths both root under
+    /// `runtime_root` here so tests stay isolated; [`Self::for_workspace`] and
+    /// [`Self::shared`] move shared data to its persistent home.
     pub fn under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
-        let root = runtime_root.join("rimz").join(workspace_id.as_str());
-        let shared_root = runtime_root.join("rimz").join("shared");
+        let ws_dir = runtime_root.join("rimz").join("ws");
+        let dir_name = workspace_dir_name(&ws_dir, &workspace_id)?;
+        Ok(Self::under_named(workspace_id, dir_name, runtime_root))
+    }
+
+    /// Runtime paths for `workspace_id` in the dir `dir_name` under
+    /// `runtime_root`, without the socket budget.
+    pub fn under_named(
+        workspace_id: WorkspaceId,
+        dir_name: WorkspaceDirName,
+        runtime_root: &Path,
+    ) -> Self {
+        let rimz_root = runtime_root.join("rimz");
+        let root = rimz_root.join("ws").join(dir_name.as_str());
+        let shared_root = rimz_root.join("shared");
         let persistent_shared_root = shared_root.clone();
         let sock_dir = root.join("sock");
         let heartbeat_dir = root.join("heartbeat");
@@ -306,8 +455,11 @@ impl RuntimePaths {
         let agent_telemetry_dir = root.join("agent-telemetry");
         let agent_activity_dir = root.join("agent-activity");
         let active_time_dir = root.join("active-time");
-        Ok(Self {
+        Self {
             workspace_id,
+            dir_name,
+            runtime_root: runtime_root.to_path_buf(),
+            rimz_root,
             root,
             shared_root,
             persistent_shared_root,
@@ -319,13 +471,27 @@ impl RuntimePaths {
             agent_telemetry_dir,
             agent_activity_dir,
             active_time_dir,
-        })
+        }
     }
 
-    fn validated_under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
-        let paths = Self::under(workspace_id, runtime_root)?;
-        let budget = SockBudget::for_sock_dir(&paths.sock_dir);
-        budget.validate()?;
+    /// Production runtime paths: socket budget checked, shared data persistent.
+    fn validated(
+        workspace_id: WorkspaceId,
+        dir_name: WorkspaceDirName,
+        runtime_root: &Path,
+    ) -> Result<Self> {
+        let mut paths = Self::budgeted(workspace_id, dir_name, runtime_root)?;
+        paths.persistent_shared_root = shared_dir();
+        Ok(paths)
+    }
+
+    fn budgeted(
+        workspace_id: WorkspaceId,
+        dir_name: WorkspaceDirName,
+        runtime_root: &Path,
+    ) -> Result<Self> {
+        let paths = Self::under_named(workspace_id, dir_name, runtime_root);
+        SockBudget::for_sock_dir(&paths.sock_dir).validate()?;
         Ok(paths)
     }
 
@@ -333,30 +499,10 @@ impl RuntimePaths {
     /// persistent shared roots. The spending service uses this after validating
     /// a typed workspace id instead of accepting caller-supplied output paths.
     pub(crate) fn for_sibling_workspace(&self, workspace_id: WorkspaceId) -> Result<Self> {
-        let rimz_root = self
-            .root
-            .parent()
-            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
-                path: self.root.clone(),
-            })?;
-        let runtime_root = rimz_root
-            .parent()
-            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
-                path: self.root.clone(),
-            })?;
-        let mut paths = Self::validated_under(workspace_id, runtime_root)?;
+        let dir_name = workspace_dir_name(&workspaces_dir(), &workspace_id)?;
+        let mut paths = Self::budgeted(workspace_id, dir_name, &self.runtime_root)?;
         paths.shared_root = self.shared_root.clone();
         paths.persistent_shared_root = self.persistent_shared_root.clone();
-        Ok(paths)
-    }
-
-    fn for_workspace_with_shared_root(
-        workspace_id: WorkspaceId,
-        runtime_root: &Path,
-        persistent_shared_root: PathBuf,
-    ) -> Result<Self> {
-        let mut paths = Self::validated_under(workspace_id, runtime_root)?;
-        paths.persistent_shared_root = persistent_shared_root;
         Ok(paths)
     }
 
@@ -590,63 +736,30 @@ impl RuntimePaths {
     /// Account-global readers use this without materializing the reserved
     /// all-zero workspace tree returned by [`Self::shared`].
     pub fn ensure_shared_dirs(&self) -> Result<()> {
-        let (runtime_root, rimz_root) = self.runtime_roots()?;
-        ensure_private_runtime_dir(runtime_root)?;
-        ensure_private_runtime_dir(rimz_root)?;
+        ensure_private_runtime_dir(&self.runtime_root)?;
+        ensure_private_runtime_dir(&self.rimz_root)?;
         ensure_private_runtime_dir(&self.shared_root)?;
-        self.ensure_persistent_shared_root()
-    }
-
-    fn ensure_persistent_shared_root(&self) -> Result<()> {
-        if self.shared_root != self.persistent_shared_root {
-            for name in LEGACY_RUNTIME_SHARED_CACHES {
-                let path = self.shared_root.join(name);
-                match fs::remove_file(&path) {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                    Err(err) => tracing::debug!(
-                        path = %path.display(),
-                        error = %err,
-                        "legacy runtime shared cache sweep failed"
-                    ),
-                }
-            }
-        }
-        mkdir_p(&self.persistent_shared_root)?;
-        Ok(())
+        mkdir_p(&self.persistent_shared_root)
     }
 
     /// Prepare the workspace root needed by workspace-scoped disposable
     /// publications without creating every renderer subdirectory.
     pub(crate) fn ensure_workspace_root(&self) -> Result<()> {
-        let (runtime_root, rimz_root) = self.runtime_roots()?;
-        ensure_private_runtime_dir(runtime_root)?;
-        ensure_private_runtime_dir(rimz_root)?;
-        ensure_private_runtime_dir(&self.root)
-    }
-
-    fn runtime_roots(&self) -> Result<(&Path, &Path)> {
-        let rimz_root = self
-            .root
-            .parent()
-            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
-                path: self.root.clone(),
-            })?;
-        let runtime_root = rimz_root
-            .parent()
-            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
-                path: self.root.clone(),
-            })?;
-        Ok((runtime_root, rimz_root))
+        for dir in [
+            self.runtime_root.as_path(),
+            self.rimz_root.as_path(),
+            self.rimz_root.join("ws").as_path(),
+            self.root.as_path(),
+        ] {
+            ensure_private_runtime_dir(dir)?;
+        }
+        Ok(())
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
-        let (runtime_root, rimz_root) = self.runtime_roots()?;
-        ensure_private_runtime_dir(runtime_root)?;
-        ensure_private_runtime_dir(rimz_root)?;
-        ensure_private_runtime_dir(&self.root)?;
+        self.ensure_workspace_root()?;
         ensure_private_runtime_dir(&self.shared_root)?;
-        self.ensure_persistent_shared_root()?;
+        mkdir_p(&self.persistent_shared_root)?;
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
         mkdir_p(&self.read_marks_dir)?;
@@ -737,51 +850,93 @@ pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn state_home() -> PathBuf {
-    let xdg_state = env_path("XDG_STATE_HOME");
+/// The one RimZ home: `$RIMZ_HOME`, else `$HOME/.rimz`.
+pub fn rimz_home() -> PathBuf {
+    let explicit = env_path("RIMZ_HOME");
     #[cfg(test)]
     {
-        xdg_state.unwrap_or_else(unit_test_state_home)
+        explicit.unwrap_or_else(unit_test_rimz_home)
     }
     #[cfg(not(test))]
     {
-        state_home_from(
-            xdg_state.as_deref(),
+        rimz_home_from(
+            explicit.as_deref(),
             env_path("HOME").as_deref(),
             &env::temp_dir(),
         )
     }
 }
 
-/// Resolve the production state root from an explicit environment view.
-pub(crate) fn state_home_from(
-    xdg_state: Option<&Path>,
+/// Resolve the RimZ home from an explicit environment view.
+pub(crate) fn rimz_home_from(
+    rimz_home: Option<&Path>,
     home: Option<&Path>,
     tmpdir: &Path,
 ) -> PathBuf {
-    xdg_state
+    rimz_home
         .map(Path::to_path_buf)
-        .or_else(|| home.map(|home| home.join(".local/state")))
-        .unwrap_or_else(|| tmpdir.join("rimz-state"))
+        .or_else(|| home.map(|home| home.join(".rimz")))
+        .unwrap_or_else(|| tmpdir.join("rimz-home"))
 }
 
-/// Under `cfg(test)`, the lib crate resolves the implicit state root to a
+/// Under `cfg(test)`, the lib crate resolves the implicit home to a
 /// process-unique, uncreated temp path. Read-only callers leave no residue;
 /// mutating tests own a [`tempfile::TempDir`] and use [`StatePaths::under`].
-/// Tests that need a specific root set `XDG_STATE_HOME`.
+/// Tests that need a specific root set `RIMZ_HOME`.
 #[cfg(test)]
-fn unit_test_state_home() -> PathBuf {
+fn unit_test_rimz_home() -> PathBuf {
     use std::sync::LazyLock;
 
     static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
         env::temp_dir().join(format!(
-            "rimz-unit-test-state-{}-{}",
+            "rimz-unit-test-home-{}-{}",
             std::process::id(),
             uuid::Uuid::now_v7().simple()
         ))
     });
 
     ROOT.clone()
+}
+
+/// Account-global data caches, `<home>/shared`.
+pub fn shared_dir() -> PathBuf {
+    rimz_home().join("shared")
+}
+
+/// Account-global JSONL logs (assists, focus repairs, loop runs, user inputs).
+pub fn logs_dir() -> PathBuf {
+    rimz_home().join("logs")
+}
+
+/// Loop arming and strike overlays with their locks.
+pub fn loops_dir() -> PathBuf {
+    rimz_home().join("loops")
+}
+
+/// `rimz web` ttyd and share records, their locks, and the Zellij web config.
+pub fn web_dir() -> PathBuf {
+    rimz_home().join("web")
+}
+
+/// Staged `rimz reload` builds.
+pub fn builds_dir() -> PathBuf {
+    builds_dir_under(&rimz_home())
+}
+
+/// Stable user-level artifacts: the materialized Zellij presence plugin and
+/// named account homes.
+pub fn data_dir() -> PathBuf {
+    rimz_home().join("data")
+}
+
+/// RimZ's own regenerable downloads (pet assets, ttyd binaries and fonts).
+pub fn cache_dir() -> PathBuf {
+    rimz_home().join("cache")
+}
+
+/// Handoff notes; the name is reserved here and owned by the skills that write it.
+pub fn handoffs_dir() -> PathBuf {
+    rimz_home().join("handoffs")
 }
 
 pub fn runtime_home() -> PathBuf {
@@ -798,8 +953,14 @@ pub(crate) fn runtime_home_from(xdg_runtime: Option<&Path>, uid: u32) -> PathBuf
         .unwrap_or_else(|| PathBuf::from("/tmp").join(format!("rimz-{uid}")))
 }
 
-fn persistent_shared_home() -> PathBuf {
-    state_home().join("rimz").join("shared")
+/// RimZ's runtime tree, `<runtime>/rimz`.
+pub fn runtime_rimz_root() -> PathBuf {
+    runtime_home().join("rimz")
+}
+
+/// Workspace runtime dirs, `<runtime>/rimz/ws`.
+pub fn runtime_workspaces_dir() -> PathBuf {
+    runtime_rimz_root().join("ws")
 }
 
 /// The resolved runtime domain as concrete environment values.
@@ -812,7 +973,8 @@ fn persistent_shared_home() -> PathBuf {
 /// Every value is the resolved one, so a variable the user left unset is
 /// pinned to the default RimZ already computes instead of drifting per pane.
 /// Deriving these beside [`runtime_home`] is what keeps socket identity and
-/// stamped environment two projections of one domain.
+/// stamped environment two projections of one domain. The `XDG_*` values
+/// locate provider homes, not RimZ's own.
 pub(crate) fn runtime_domain_env() -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     let mut put = |key: &str, path: PathBuf| {
@@ -821,6 +983,7 @@ pub(crate) fn runtime_domain_env() -> BTreeMap<String, String> {
     if let Some(home) = env_path("HOME") {
         put("HOME", home);
     }
+    put("RIMZ_HOME", rimz_home());
     put("XDG_CONFIG_HOME", config_home());
     put("XDG_DATA_HOME", data_home());
     put("XDG_CACHE_HOME", cache_home());
@@ -834,26 +997,62 @@ fn runtime_fallback_home() -> PathBuf {
     runtime_home_from(None, current_uid())
 }
 
-/// Per-user, per-machine config root. Hosts configuration that survives
-/// reboots but is not per-workspace.
-pub fn config_home() -> PathBuf {
-    if let Some(value) = env_path("XDG_CONFIG_HOME") {
-        return value;
-    }
-    if let Some(home) = env_path("HOME") {
-        return home.join(".config");
-    }
-    env::temp_dir().join("rimz-config")
+/// Pre-`~/.rimz` RimZ roots still present on this host.
+pub fn legacy_roots() -> Vec<PathBuf> {
+    [config_home(), state_home(), data_home()]
+        .into_iter()
+        .map(|root| root.join("rimz"))
+        .filter(|root| root.exists())
+        .collect()
 }
 
-/// Per-user agent library root, defaulting to `config_home()/rimz`. `RIMZ_AGENTS_HOME` relocates profiles, teams, and skills together.
+/// The XDG config root. RimZ's own config lives under [`rimz_home`]; this
+/// locates user-level units RimZ installs for other programs (systemd).
+pub fn config_home() -> PathBuf {
+    xdg_home("XDG_CONFIG_HOME", ".config")
+}
+
+/// The XDG state root, stamped for providers and probed for legacy roots.
+pub fn state_home() -> PathBuf {
+    // CHASE: private once callers move
+    xdg_home("XDG_STATE_HOME", ".local/state")
+}
+
+/// The XDG data root, stamped for providers and probed for legacy roots.
+pub(crate) fn data_home() -> PathBuf {
+    // CHASE: private once callers move
+    xdg_home("XDG_DATA_HOME", ".local/share")
+}
+
+/// Per-user cache root, where Zellij keeps its serialized-session cache
+/// (`<cache>/zellij/<contract_version>/session_info/<name>`). `rimz reset` wipes
+/// the matching entry so a stuck room cannot be resurrected.
+pub(crate) fn cache_home() -> PathBuf {
+    xdg_home("XDG_CACHE_HOME", ".cache")
+}
+
+/// `$<key>`, else `$HOME/<under_home>`. Without either a unit test resolves
+/// to an uncreated temp path and production to `<tmp>/rimz-xdg/<under_home>`.
+fn xdg_home(key: &str, under_home: &str) -> PathBuf {
+    if let Some(value) = env_path(key) {
+        return value;
+    }
+    #[cfg(test)]
+    {
+        unit_test_rimz_home().join("xdg").join(under_home)
+    }
+    #[cfg(not(test))]
+    {
+        env_path("HOME")
+            .map(|home| home.join(under_home))
+            .unwrap_or_else(|| env::temp_dir().join("rimz-xdg").join(under_home))
+    }
+}
+
+/// Per-user agent library root: `$RIMZ_AGENTS_HOME`, else [`rimz_home`].
+/// `RIMZ_AGENTS_HOME` relocates profiles, teams, and skills together.
 pub fn agents_home() -> PathBuf {
-    resolve_agents_home(
-        env_path("RIMZ_AGENTS_HOME"),
-        env_path("XDG_CONFIG_HOME"),
-        env_path("HOME"),
-    )
-    .unwrap_or_else(|| config_home().join("rimz"))
+    env_path("RIMZ_AGENTS_HOME").unwrap_or_else(rimz_home)
 }
 
 /// Resolve the agent library root from a launch environment, ignoring empty values.
@@ -863,23 +1062,9 @@ fn agents_home_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
-    resolve_agents_home(
-        path("RIMZ_AGENTS_HOME"),
-        path("XDG_CONFIG_HOME"),
-        path("HOME"),
-    )
-}
-
-fn resolve_agents_home(
-    agents: Option<PathBuf>,
-    config: Option<PathBuf>,
-    home: Option<PathBuf>,
-) -> Option<PathBuf> {
-    agents.or_else(|| {
-        config
-            .or_else(|| home.map(|home| home.join(".config")))
-            .map(|config| config.join("rimz"))
-    })
+    path("RIMZ_AGENTS_HOME")
+        .or_else(|| path("RIMZ_HOME"))
+        .or_else(|| path("HOME").map(|home| home.join(".rimz")))
 }
 
 const SKILLS_SUBDIR: &str = "skills";
@@ -892,31 +1077,6 @@ pub fn skills_library() -> PathBuf {
 /// Resolve the shared skill library from a launch environment.
 pub(crate) fn skills_library_in(env: &BTreeMap<String, String>) -> Option<PathBuf> {
     agents_home_in(env).map(|root| root.join(SKILLS_SUBDIR))
-}
-
-/// Per-user data root. RimZ stores stable, user-level artifacts here, including
-/// the materialized embedded Zellij presence plugin.
-pub(crate) fn data_home() -> PathBuf {
-    if let Some(value) = env_path("XDG_DATA_HOME") {
-        return value;
-    }
-    if let Some(home) = env_path("HOME") {
-        return home.join(".local/share");
-    }
-    env::temp_dir().join("rimz-data")
-}
-
-/// Per-user cache root, where Zellij keeps its serialized-session cache
-/// (`<cache>/zellij/<contract_version>/session_info/<name>`). `rimz reset` wipes
-/// the matching entry so a stuck room cannot be resurrected.
-pub(crate) fn cache_home() -> PathBuf {
-    if let Some(value) = env_path("XDG_CACHE_HOME") {
-        return value;
-    }
-    if let Some(home) = env_path("HOME") {
-        return home.join(".cache");
-    }
-    env::temp_dir().join("rimz-cache")
 }
 
 /// Read an environment variable as a path, treating an empty value as unset.
@@ -937,413 +1097,4 @@ fn current_uid() -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ids::WorkspaceId;
-
-    #[test]
-    fn agents_home_environment_precedence() {
-        let mut env = BTreeMap::new();
-        assert_eq!(agents_home_in(&env), None);
-        assert_eq!(skills_library_in(&env), None);
-        env.insert("HOME".to_owned(), "/home/user".to_owned());
-        assert_eq!(
-            agents_home_in(&env),
-            Some(PathBuf::from("/home/user/.config/rimz"))
-        );
-        env.insert("XDG_CONFIG_HOME".to_owned(), "/config".to_owned());
-        assert_eq!(agents_home_in(&env), Some(PathBuf::from("/config/rimz")));
-        env.insert("RIMZ_AGENTS_HOME".to_owned(), "/library".to_owned());
-        assert_eq!(agents_home_in(&env), Some(PathBuf::from("/library")));
-        assert_eq!(
-            skills_library_in(&env),
-            Some(PathBuf::from("/library/skills"))
-        );
-        env.insert("RIMZ_AGENTS_HOME".to_owned(), String::new());
-        assert_eq!(agents_home_in(&env), Some(PathBuf::from("/config/rimz")));
-        env.insert("XDG_CONFIG_HOME".to_owned(), String::new());
-        assert_eq!(
-            agents_home_in(&env),
-            Some(PathBuf::from("/home/user/.config/rimz"))
-        );
-        env.insert("HOME".to_owned(), String::new());
-        assert_eq!(agents_home_in(&env), None);
-    }
-
-    #[test]
-    fn workspace_spending_file_names() {
-        for name in ["workspace-spending.abc.json", "workspace-spending..json"] {
-            assert!(is_workspace_spending_file(name));
-        }
-        for name in [
-            "workspace-spending.json",
-            "budget.json",
-            "workspace-spending.abc.json.tmp",
-        ] {
-            assert!(!is_workspace_spending_file(name));
-        }
-    }
-
-    fn short_tempdir() -> tempfile::TempDir {
-        tempfile::Builder::new()
-            .prefix("r")
-            .tempdir_in("/tmp")
-            .expect("short tempdir")
-    }
-
-    #[test]
-    fn unit_tests_resolve_implicit_state_to_an_uncreated_temp_path() {
-        if env_path("XDG_STATE_HOME").is_some() {
-            return;
-        }
-
-        let resolved = state_home();
-        if let Some(home) = env_path("HOME") {
-            assert_ne!(
-                resolved,
-                home.join(".local/state"),
-                "unit test escaped to real state home"
-            );
-        }
-        assert!(
-            resolved.starts_with(env::temp_dir()),
-            "unit-test state home must be a temp root"
-        );
-        assert!(
-            !resolved.exists(),
-            "resolving the unit-test state home must not create residue"
-        );
-    }
-
-    #[test]
-    fn state_paths_resolve_under_state_home() {
-        let id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let paths = StatePaths::for_workspace(id.clone()).unwrap();
-        assert!(paths.root.ends_with(Path::new(id.as_str())));
-        assert_eq!(paths.events_log.file_name().unwrap(), "events.log.jsonl");
-        assert_eq!(paths.latest_snapshot.file_name().unwrap(), "latest.json");
-        assert_eq!(paths.rollup_cache.file_name().unwrap(), "rollup.json");
-        assert!(paths.rollup_cache.starts_with(&paths.snapshots_dir));
-        assert_eq!(paths.runs_dir.file_name().unwrap(), "runs");
-        assert_eq!(paths.waits_dir, paths.tmp_dir.join("rimz-waits"));
-        assert_eq!(paths.subagents_dir, paths.tmp_dir.join("rimz-subagents"));
-        assert_eq!(paths.scratchpad_dir, paths.tmp_dir.join("scratchpad"));
-        assert_eq!(paths.agents_dir, paths.tmp_dir.join("agents"));
-        assert_eq!(paths.shared_dir, paths.tmp_dir.join("shared"));
-        assert_eq!(
-            paths.scratch_dir(Some("otter")),
-            paths.agents_dir.join("otter")
-        );
-        assert_eq!(paths.scratch_dir(None), paths.scratchpad_dir);
-        assert_eq!(paths.transcript_dir.file_name().unwrap(), "transcript");
-        assert_eq!(
-            paths.workspace_record.file_name().unwrap(),
-            "workspace.json"
-        );
-        assert_eq!(paths.room_bin.file_name().unwrap(), "rimz");
-        assert_eq!(paths.live_roster.file_name().unwrap(), "live-roster.json");
-        assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
-    }
-
-    #[test]
-    fn runtime_paths_share_user_scoped_cache_files() {
-        let root = Path::new("/tmp/rimz-runtime-test");
-        let first = WorkspaceId::from_project_root(Path::new("/tmp/project-a"));
-        let second = WorkspaceId::from_project_root(Path::new("/tmp/project-b"));
-        let first_paths = RuntimePaths::under(first, root).unwrap();
-        let second_paths = RuntimePaths::under(second, root).unwrap();
-
-        assert_ne!(first_paths.root, second_paths.root);
-        assert_eq!(
-            first_paths.copilot_otel_path(),
-            first_paths
-                .root
-                .join("agent-telemetry")
-                .join("copilot-otel.jsonl")
-        );
-        assert_eq!(first_paths.shared_root, second_paths.shared_root);
-        assert_eq!(
-            first_paths.shared_accounts_path(),
-            second_paths.shared_accounts_path()
-        );
-        assert_eq!(
-            first_paths.shared_rate_limits_path(),
-            second_paths.shared_rate_limits_path()
-        );
-        assert_eq!(
-            first_paths.shared_provider_spending_path(),
-            second_paths.shared_provider_spending_path()
-        );
-        assert_eq!(
-            first_paths.shared_spending_cursor_path(),
-            second_paths.shared_spending_cursor_path()
-        );
-        assert_eq!(
-            first_paths.shared_pricing_cache_path(),
-            second_paths.shared_pricing_cache_path()
-        );
-    }
-
-    #[test]
-    fn spending_service_paths_are_user_shared_versioned_and_socket_safe() {
-        let root = Path::new("/tmp/rimz-service-path-test");
-        let first = RuntimePaths::under(
-            WorkspaceId::from_project_root(Path::new("/tmp/project-a")),
-            root,
-        )
-        .unwrap();
-        let second = RuntimePaths::under(
-            WorkspaceId::from_project_root(Path::new("/tmp/project-b")),
-            root,
-        )
-        .unwrap();
-
-        let socket =
-            first.shared_spending_service_socket_path(1, 18, 10, 7, "0123456789abcdef01234567");
-        assert_eq!(
-            socket,
-            second.shared_spending_service_socket_path(1, 18, 10, 7, "0123456789abcdef01234567")
-        );
-        assert_eq!(
-            first.shared_spending_service_owner_lock(1, 18, 10, 7, "0123456789abcdef01234567"),
-            second.shared_spending_service_owner_lock(1, 18, 10, 7, "0123456789abcdef01234567")
-        );
-        assert_ne!(
-            socket,
-            first.shared_spending_service_socket_path(2, 18, 10, 7, "0123456789abcdef01234567")
-        );
-        assert_ne!(
-            socket,
-            first.shared_spending_service_socket_path(1, 19, 10, 7, "0123456789abcdef01234567")
-        );
-        assert_ne!(
-            socket,
-            first.shared_spending_service_socket_path(1, 18, 11, 7, "0123456789abcdef01234567")
-        );
-        assert_ne!(
-            socket,
-            first.shared_spending_service_socket_path(1, 18, 10, 8, "0123456789abcdef01234567")
-        );
-        assert_ne!(
-            socket,
-            first.shared_spending_service_socket_path(1, 18, 10, 7, "fedcba9876543210fedcba98")
-        );
-        crate::sock::validate_socket_path(&socket).unwrap();
-    }
-
-    #[test]
-    fn shared_directory_preparation_leaves_workspace_tree_absent() {
-        let temp = short_tempdir();
-        let paths = RuntimePaths::under(
-            WorkspaceId::parse("ws_000000000000000000000000").unwrap(),
-            temp.path(),
-        )
-        .unwrap();
-
-        paths.ensure_shared_dirs().unwrap();
-
-        assert!(paths.shared_root.is_dir());
-        assert!(paths.persistent_shared_root.is_dir());
-        assert!(!paths.root.exists());
-    }
-
-    #[test]
-    fn production_runtime_paths_persist_shared_data_and_keep_locks_runtime() {
-        let temp = short_tempdir();
-        let state_root = temp.path().join("state");
-        let runtime_root = temp.path().join("runtime");
-        let persistent_shared_root = state_root.join("rimz").join("shared");
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-
-        let paths = RuntimePaths::for_workspace_with_shared_root(
-            workspace_id,
-            &runtime_root,
-            persistent_shared_root.clone(),
-        )
-        .unwrap();
-
-        assert_eq!(paths.shared_root, runtime_root.join("rimz").join("shared"));
-        assert_eq!(paths.persistent_shared_root, persistent_shared_root);
-        let board_lock = paths.board_lock(Path::new("/tmp/team"));
-        assert!(board_lock.starts_with(paths.shared_root.join("board-write")));
-        assert_ne!(board_lock, paths.board_lock(Path::new("/tmp/other-team")));
-        assert_eq!(
-            paths.shared_provider_spending_path(),
-            state_root
-                .join("rimz")
-                .join("shared")
-                .join("provider-spending.json")
-        );
-        assert_eq!(
-            paths.shared_accounts_path(),
-            state_root.join("rimz").join("shared").join("accounts.json")
-        );
-        assert_eq!(
-            paths.shared_spending_cursor_path(),
-            state_root.join("rimz").join("shared").join("spending.json")
-        );
-        assert_eq!(
-            paths.shared_spending_lock(),
-            runtime_root
-                .join("rimz")
-                .join("shared")
-                .join("spending.lock")
-        );
-        assert_eq!(
-            paths.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
-                crate::ids::AgentKind::new_unchecked("codex")
-            )),
-            state_root
-                .join("rimz")
-                .join("shared")
-                .join("auto_redeem.codex@default.json")
-        );
-        assert_eq!(
-            paths.shared_auto_redeem_rate_path(&crate::ids::LoginKey::default_for(
-                crate::ids::AgentKind::new_unchecked("codex")
-            )),
-            state_root
-                .join("rimz")
-                .join("shared")
-                .join("auto_redeem_rate.codex@default.json")
-        );
-        assert_eq!(
-            paths.shared_auto_redeem_lock(&crate::ids::LoginKey::default_for(
-                crate::ids::AgentKind::new_unchecked("codex")
-            )),
-            runtime_root
-                .join("rimz")
-                .join("shared")
-                .join("auto_redeem.codex@default.lock")
-        );
-
-        paths.ensure_dirs().unwrap();
-
-        assert!(paths.persistent_shared_root.is_dir());
-        assert!(paths.shared_root.is_dir());
-        assert!(paths.agent_telemetry_dir.is_dir());
-    }
-
-    #[test]
-    fn ensure_dirs_sweeps_legacy_runtime_shared_caches() {
-        let temp = short_tempdir();
-        let state_root = temp.path().join("state");
-        let runtime_root = temp.path().join("runtime");
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let paths = RuntimePaths::for_workspace_with_shared_root(
-            workspace_id,
-            &runtime_root,
-            state_root.join("rimz").join("shared"),
-        )
-        .unwrap();
-        fs::create_dir_all(&paths.shared_root).unwrap();
-        for name in LEGACY_RUNTIME_SHARED_CACHES {
-            fs::write(paths.shared_root.join(name), b"legacy").unwrap();
-        }
-        let lock = paths.shared_root.join("spending.lock");
-        let probe = paths.shared_root.join("session-context-probe.x");
-        fs::write(&lock, b"lock").unwrap();
-        fs::write(&probe, b"probe").unwrap();
-
-        paths.ensure_dirs().unwrap();
-
-        for name in LEGACY_RUNTIME_SHARED_CACHES {
-            assert!(!paths.shared_root.join(name).exists(), "{name} swept");
-        }
-        assert!(lock.exists());
-        assert!(probe.exists());
-    }
-
-    #[test]
-    fn ensure_dirs_keeps_shared_cache_when_roots_match() {
-        let temp = short_tempdir();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let paths = RuntimePaths::under(workspace_id, temp.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        let cache = paths.shared_root.join("spending.json");
-        fs::write(&cache, b"live").unwrap();
-
-        paths.ensure_dirs().unwrap();
-
-        assert!(cache.exists());
-    }
-
-    #[test]
-    fn runtime_fallback_uses_short_tmp_root() {
-        let fallback = runtime_fallback_home();
-        let expected = format!("rimz-{}", current_uid());
-        assert_eq!(fallback.parent(), Some(Path::new("/tmp")));
-        assert_eq!(
-            fallback.file_name().and_then(|name| name.to_str()),
-            Some(expected.as_str())
-        );
-    }
-
-    #[test]
-    fn validated_under_fails_fast_with_the_xdg_remedy() {
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let deep_root = Path::new("/tmp").join("d".repeat(crate::sock::AF_UNIX_PATH_LIMIT));
-
-        let err =
-            RuntimePaths::validated_under(workspace_id, &deep_root).expect_err("overlong root");
-        let rendered = err.to_string();
-
-        match err {
-            PathErr::SocketBudgetExceeded(source) => {
-                assert!(source.path.starts_with(&deep_root));
-                assert!(source.used > source.limit);
-                assert!(rendered.contains(crate::sock::XDG_REMEDY));
-            }
-            other => panic!("expected SocketBudgetExceeded, got {other:?}"),
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_dirs_hardens_runtime_root_before_workspace_children() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let runtime_root = dir.path().join("runtime");
-        let rimz_root = runtime_root.join("rimz");
-        fs::create_dir_all(&rimz_root).unwrap();
-        for path in [&runtime_root, &rimz_root] {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o777)).unwrap();
-        }
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let runtime = RuntimePaths::under(workspace_id, &runtime_root).unwrap();
-
-        runtime.ensure_dirs().unwrap();
-
-        for path in [
-            runtime_root.as_path(),
-            rimz_root.as_path(),
-            runtime.root.as_path(),
-            runtime.shared_root.as_path(),
-        ] {
-            let mode = fs::metadata(path).unwrap().permissions().mode();
-            assert_eq!(mode & 0o077, 0, "{} is private", path.display());
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ensure_dirs_rejects_symlinked_runtime_root() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let real_root = dir.path().join("real");
-        fs::create_dir(&real_root).unwrap();
-        let runtime_root = dir.path().join("runtime");
-        symlink(&real_root, &runtime_root).unwrap();
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let runtime = RuntimePaths::under(workspace_id, &runtime_root).unwrap();
-
-        let err = runtime.ensure_dirs().expect_err("symlinked root");
-
-        match err {
-            PathErr::RuntimeDirSymlink { path } => assert_eq!(path, runtime_root),
-            other => panic!("expected RuntimeDirSymlink, got {other:?}"),
-        }
-    }
-}
+mod tests;
