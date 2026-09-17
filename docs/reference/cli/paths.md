@@ -46,8 +46,8 @@ builds                /home/me/.rimz/builds
 | `workspace id` | The room's identity, `ws_<24hex>`, derived from the project root. Flags, JSON fields, and `RIMZ_WORKSPACE_ID` carry this value. |
 | `workspace dir` | The directory name the room's files live under: the project root's basename and the first hex digits of the id. The name lengthens by two hex digits when another project already holds the shorter one, and it stays fixed once created. |
 | `state dir`, `runtime dir` | The room's durable directory under `home/ws/` and its tmpfs directory under `runtime root/ws/`, both named by `workspace dir`. |
-| `room tmp`, `scratch` | The room's private tmp and the scratchpad inside it. |
-| `scratch (agent view)` | The scratchpad as the invoking agent sees it: `/tmp/scratchpad` under sandbox isolation, the host path otherwise. |
+| `room tmp`, `scratch` | The room's private tmp, and the invoking agent's scratch dir inside it: `agents/<handle>` for a named agent, the shared `scratchpad` otherwise. |
+| `scratch (agent view)` | That scratch dir as the invoking agent sees it: `/tmp/scratchpad` under sandbox isolation, the host path otherwise. |
 | `runtime root` | `$XDG_RUNTIME_DIR/rimz`, else `/tmp/rimz-<uid>/rimz`. `~/.rimz/run` links here once a room is born; RimZ itself never reads through the link. |
 | `handoffs` | Reserved for agent hand-off notes. |
 | `logs`, `loops`, `web`, `shared`, `data`, `cache`, `builds` | Account-global directories: append-only logs, loop overlays, web daemon records, shared caches, the presence plugin and named account homes, downloaded assets, and reload staging. |

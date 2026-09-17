@@ -41,7 +41,7 @@ struct PathsReport {
     runtime_dir: PathBuf,
     room_tmp: PathBuf,
     scratch: PathBuf,
-    /// The scratch dir as the invoking agent sees it: `/tmp/scratchpad` under
+    /// The invoking agent's scratch dir as it sees it: `/tmp/scratchpad` under
     /// sandbox isolation, the host path otherwise.
     scratch_agent_view: PathBuf,
     handoffs: PathBuf,
@@ -61,7 +61,11 @@ pub fn run(args: PathsArgs, globals: &GlobalFlags) -> Result<()> {
     let state =
         StatePaths::for_project_root(&workspace.project_root).context("resolving state paths")?;
     let runtime = RuntimePaths::for_state(&state).context("resolving runtime paths")?;
-    let view = TmpView::current(invoking_isolation(), &state);
+    let handle = std::env::var(rimz::harness::launch::ENV_AGENT_NAME)
+        .ok()
+        .filter(|name| rimz::agents::petname::valid_agent_name(name));
+    let view = TmpView::current(invoking_isolation(), handle.as_deref(), &state);
+    let scratch = state.scratch_dir(handle.as_deref());
     let report = PathsReport {
         schema: SCHEMA,
         home: paths::rimz_home(),
@@ -73,8 +77,8 @@ pub fn run(args: PathsArgs, globals: &GlobalFlags) -> Result<()> {
         workspace_id: state.workspace_id.to_string(),
         workspace_dir: state.dir_name.to_string(),
         project_root: workspace.project_root,
-        scratch_agent_view: view.agent_path(&state.scratchpad_dir),
-        scratch: state.scratchpad_dir,
+        scratch_agent_view: view.agent_path(&scratch),
+        scratch,
         room_tmp: state.tmp_dir,
         state_dir: state.root,
         runtime_dir: runtime.root,
