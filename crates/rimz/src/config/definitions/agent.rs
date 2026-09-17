@@ -390,7 +390,7 @@ pub(super) fn auto_compact(path: &Path, value: &str) -> Result<String, Definitio
     Ok(text.to_owned())
 }
 
-/// Under [`SkillCheck::Check`], each listed skill resolves as the sandbox view finds it: the kind's provider skill root, then the library, first readable `SKILL.md` wins and carries the marker check.
+/// Under [`SkillCheck::Check`], each listed skill resolves as the sandbox view finds it: the kind's provider skill root, then the library. The first root holding `SKILL.md` wins and carries the marker check; only an absent file falls through, so an unreadable copy fails rather than letting a shadowed library copy speak for it.
 pub(super) fn skill_policy(
     path: &Path,
     kind: &str,
@@ -418,11 +418,26 @@ pub(super) fn skill_policy(
                 .chain([library.to_path_buf()])
                 .map(|root| root.join(&name).join("SKILL.md"))
                 .collect();
-            let Some((skill_path, text)) = candidates.iter().find_map(|candidate| {
-                std::fs::read_to_string(candidate)
-                    .ok()
-                    .map(|text| (candidate, text))
-            }) else {
+            let mut found = None;
+            for candidate in &candidates {
+                match std::fs::read_to_string(candidate) {
+                    Ok(text) => {
+                        found = Some((candidate, text));
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(DefinitionErr::new(
+                            path,
+                            format!(
+                                "lists skill '{name}', unreadable at {}: {error}",
+                                candidate.display()
+                            ),
+                        ));
+                    }
+                }
+            }
+            let Some((skill_path, text)) = found else {
                 let searched: Vec<String> = candidates
                     .iter()
                     .map(|candidate| candidate.display().to_string())
