@@ -26,7 +26,11 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
     for name in ["visible", "hidden"] {
         let dir = env.home_root.join(".claude/skills").join(name);
         std::fs::create_dir_all(&dir).expect("skill directory");
-        std::fs::write(dir.join("SKILL.md"), name).expect("skill content");
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Test skill\n---\n{name}\n"),
+        )
+        .expect("skill content");
     }
     for name in ["visible", "reflect"] {
         let dir = env.agents_home().join("skills").join(name);

@@ -40,7 +40,9 @@ const SANDBOX_REMINDER_BODY: &str = concat!(
 
 const HOST_SCRATCH_REMINDER_BODY: &str = concat!(
     "Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room ",
-    "closes; every temporary file you make goes there."
+    "closes; every temporary file you make goes there. If your harness names a ",
+    "session-specific scratchpad and says to use another location only when asked, this is ",
+    "that ask: use `$RIMZ_SCRATCH` in its place."
 );
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(

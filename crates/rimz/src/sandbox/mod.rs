@@ -17,6 +17,9 @@ pub use rewrite::PlannedCopy;
 
 const SANDBOX_TMP: &str = "/tmp";
 const SANDBOX_SCRATCH: &str = "/tmp/scratchpad";
+/// The launch's private scratch dir: its host path on every launch, pinned to
+/// `/tmp/scratchpad` under the sandbox.
+pub const ENV_SCRATCH: &str = "RIMZ_SCRATCH";
 
 /// Where an agent sees room tmp: `/tmp` in a sandbox, with its own scratch dir
 /// at `/tmp/scratchpad`; the host path otherwise.
@@ -306,7 +309,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     }
     pins.insert("TMPDIR".to_owned(), EnvPin::Set(SANDBOX_TMP.to_owned()));
     pins.insert(
-        "RIMZ_SCRATCH".to_owned(),
+        ENV_SCRATCH.to_owned(),
         EnvPin::Set(SANDBOX_SCRATCH.to_owned()),
     );
     for key in root_keys {

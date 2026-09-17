@@ -9,7 +9,7 @@ use crate::agents::skill_links::{self, Desired, SkillLinkErr, SkillLinkOutcome, 
 use crate::config::effective::LaunchAgents;
 use crate::config::{AccountsConfig, CommandsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths};
-use crate::sandbox::{self, SandboxPlan};
+use crate::sandbox::{self, ENV_SCRATCH, SandboxPlan};
 
 use super::launch::{self, AgentProcessStage, CompiledAgentProcess, ExecRequest};
 use super::launch_reminders::{LaunchReminders, TeamReminder};
@@ -21,10 +21,6 @@ use super::prompt_compose::{
 /// plan wraps it in bubblewrap, `host` otherwise. Set by the launch plan on
 /// every launch, so a parent's value never leaks into a child.
 const ENV_ISOLATION: &str = "RIMZ_ISOLATION";
-/// The launch's private scratch dir: its host path, which the sandbox pin
-/// layer replaces with `/tmp/scratchpad`. Set on every launch, like
-/// [`ENV_ISOLATION`].
-const ENV_SCRATCH: &str = "RIMZ_SCRATCH";
 
 pub struct LaunchPlanInputs<'a> {
     pub request: &'a ExecRequest,

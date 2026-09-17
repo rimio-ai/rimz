@@ -1,6 +1,6 @@
 //! Bounded subprocess helpers for integration tests.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -127,33 +127,51 @@ impl CommandTimeoutExt for Command {
     }
 
     fn bounded_status(&mut self) -> io::Result<ExitStatus> {
-        let debug = format!("{self:?}");
-        isolate_process_group(self);
-        let mut child = self
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
-        let deadline = Instant::now() + COMMAND_TIMEOUT;
-        loop {
-            if let Some(status) = child.try_wait()? {
-                return Ok(status);
-            }
-            if Instant::now() >= deadline {
-                kill_process_group(&mut child);
-                let _ = child.wait();
-                return Err(timeout_error(&debug, COMMAND_TIMEOUT, &[], &[]));
-            }
-            thread::sleep(POLL_STEP);
-        }
+        bounded_status_with_stderr(self, Stdio::null())
     }
 
     fn assert_success_within_timeout(&mut self, label: &str) -> ExitStatus {
-        let status = self
-            .bounded_status()
-            .unwrap_or_else(|err| panic!("{label} did not finish: {err}"));
-        assert!(status.success(), "{label} exited with {status}");
+        // A file, not a pipe: a daemon the command leaves running inherits
+        // stderr, and a pipe would never reach end of file.
+        let mut stderr = tempfile::tempfile().expect("stderr capture file");
+        let status = bounded_status_with_stderr(
+            self,
+            stderr.try_clone().expect("stderr capture handle").into(),
+        )
+        .unwrap_or_else(|err| panic!("{label} did not finish: {err}"));
+        if !status.success() {
+            let mut bytes = Vec::new();
+            let _ = stderr
+                .rewind()
+                .and_then(|()| stderr.read_to_end(&mut bytes));
+            panic!(
+                "{label} exited with {status}; stderr tail: {}",
+                lossy_tail(&bytes)
+            );
+        }
         status
+    }
+}
+
+fn bounded_status_with_stderr(command: &mut Command, stderr: Stdio) -> io::Result<ExitStatus> {
+    let debug = format!("{command:?}");
+    isolate_process_group(command);
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr)
+        .spawn()?;
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            kill_process_group(&mut child);
+            let _ = child.wait();
+            return Err(timeout_error(&debug, COMMAND_TIMEOUT, &[], &[]));
+        }
+        thread::sleep(POLL_STEP);
     }
 }
 
