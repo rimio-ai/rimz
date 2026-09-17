@@ -7,7 +7,7 @@ use toml_edit::{DocumentMut, Item, Table};
 
 use crate::config::{MachineConfig, TaskEntry};
 use crate::disk::atomic::write_bytes_atomically;
-use crate::disk::paths::agents_home;
+use crate::disk::paths::{agents_home, holds_rimz_home, rimz_home};
 use crate::trust::TrustState;
 
 const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
@@ -46,6 +46,13 @@ impl TaskStore<'_> {
                     .with_context(|| format!("validating `loop.tasks.{name}`"))?;
             }
             Self::Project(project_root) => {
+                if holds_rimz_home(project_root, &rimz_home()) {
+                    bail!(
+                        "{} holds the RimZ home, so its config.toml is the machine config; \
+                         run from a project directory, or drop --project to edit machine tasks",
+                        project_root.display()
+                    );
+                }
                 let value = toml::from_str::<toml::Value>(rendered)
                     .with_context(|| format!("parsing {}", path.display()))?;
                 crate::config::effective::project_tasks_from_value(
