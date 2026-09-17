@@ -479,13 +479,13 @@ Context cost, token split, and active time cover the agent's seat for its whole 
 
 The Messages section lists your messages and agents' attributed messages. When it hides system messages, a faint line gives their count and the command that lists them, `rimz message list --all --system @<agent>`.
 
-When room tmp exists, `show` prints its host path and notes that sandboxed panes mount it at `/tmp`. The directory is shared by the room's sandboxed agents and survives an agent restart; its lifecycle is in [sandbox.md → Room tmp](../../internals/sandbox.md#room-tmp).
+When room tmp exists, `show` prints its host path and notes that sandboxed panes mount it at `/tmp`. When the agent's scratch directory exists, `show` also prints its host path (`scratch:`) and notes that sandboxed panes mount it at `/tmp/scratchpad`. Room tmp is shared by the room's sandboxed agents, the scratch directory belongs to one handle, and both survive an agent restart; their lifecycle is in [sandbox.md → Room tmp](../../internals/sandbox.md#room-tmp).
 
 | Flag | Effect |
 | --- | --- |
 | `--capture` | Append a Capture section framing the pane's visible area, with the pane id in the top border. An agent without a bound pane is an error. |
 | `--ansi` | Keep colors inside the capture frame. |
-| `--json` | Emit the report: the [`list` entry](#list) under `agent`, plus `stale`, the full `ask`, `run`, `messages` (the same filtered list, without the hidden count), `capture`, and `tmp_dir` when they apply. A stopped agent keeps every entry key, with live-only fields such as context severity and active time `null`. |
+| `--json` | Emit the report: the [`list` entry](#list) under `agent`, plus `stale`, the full `ask`, `run`, `messages` (the same filtered list, without the hidden count), `capture`, `tmp_dir`, and `scratch_dir` when they apply. A stopped agent keeps every entry key, with live-only fields such as context severity and active time `null`. |
 
 #### `logs`
 
