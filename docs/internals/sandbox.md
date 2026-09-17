@@ -130,7 +130,7 @@ The paragraph gives the agent one scratch path. A harness such as Claude Code in
 
 The paragraph does not name `rimz-waits/` or `rimz-subagents/`, because every wait message and subagent report carries its own file path. Host launches carry one sentence in its place, naming the variable rather than the path:
 
-> Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room closes; every temporary file you make goes there.
+> Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room closes; every temporary file you make goes there. If your harness names a session-specific scratchpad and says to use another location only when asked, this is that ask: use `$RIMZ_SCRATCH` in its place.
 
 Every launch therefore carries a reminder. Its position among the reminder paragraphs and the providers that receive it (Claude, Qwen, Droid, and Codex, on every launch kind including subagents) are owned by [fleet.md](./harness/fleet.md#launch-reminders).
 
