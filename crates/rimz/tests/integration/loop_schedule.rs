@@ -980,192 +980,6 @@ fn same_task_name_in_two_rooms_does_not_collide() {
 }
 
 #[test]
-fn legacy_instances_are_rehomed_once_by_workspace() {
-    let env = Env::new();
-    let other = env.home_root.join("other-project");
-    std::fs::create_dir(&other).expect("other project");
-    let entry = TaskEntry {
-        root: env.project_root.clone(),
-        check: Some("true".to_owned()),
-        at: Some("07:00".to_owned()),
-        ..TaskEntry::default()
-    };
-    let existing = TaskEntry {
-        check: Some("false".to_owned()),
-        ..entry.clone()
-    };
-    write_loop_instances(
-        &env,
-        Tasks(BTreeMap::from([("same".to_owned(), existing.clone())])),
-    );
-    let legacy_path = env.state_root().join("rimz/loop-instances.json");
-    let legacy = Tasks(BTreeMap::from([
-        ("disabled".to_owned(), entry.clone()),
-        ("same".to_owned(), entry),
-        (
-            "other".to_owned(),
-            TaskEntry {
-                root: other.clone(),
-                check: Some("true".to_owned()),
-                at: Some("07:00".to_owned()),
-                ..TaskEntry::default()
-            },
-        ),
-    ]));
-    std::fs::write(
-        &legacy_path,
-        serde_json::to_vec(&legacy).expect("legacy json"),
-    )
-    .expect("legacy");
-    let disabled = Arming {
-        enabled: false,
-        at: Some(Timestamp::from_second(1).unwrap()),
-        pause_until: None,
-        strikes: Some(3),
-    };
-    let paused = Arming {
-        enabled: true,
-        at: Some(Timestamp::from_second(2).unwrap()),
-        pause_until: Some("2099-01-01T00:00:00Z".parse().unwrap()),
-        strikes: None,
-    };
-    let destination_key = project_task_key(&env.project_root, "same");
-    let other_key = project_task_key(&other, "other");
-    write_loop_arming(
-        &env,
-        &BTreeMap::from([
-            (machine_task_key("disabled"), disabled),
-            (machine_task_key("same"), paused),
-            (destination_key.clone(), disabled),
-            (machine_task_key("other"), paused),
-        ]),
-    );
-    std::fs::write(
-        loop_strikes_path(&env),
-        serde_json::to_vec(&BTreeMap::from([
-            (machine_task_key("disabled"), 3_u32),
-            (machine_task_key("same"), 1_u32),
-            (destination_key.clone(), 3),
-            (machine_task_key("other"), 2),
-        ]))
-        .unwrap(),
-    )
-    .unwrap();
-    loop_ok(&env, &["loop", "list"]);
-    assert!(!legacy_path.exists());
-    assert_eq!(
-        read_loop_instances(&env).0,
-        BTreeMap::from([
-            ("same".to_owned(), existing),
-            ("disabled".to_owned(), legacy.0["disabled"].clone()),
-        ])
-    );
-    let other_path = env.state_path_for(&other).root.join("loop-instances.json");
-    let migrated: Tasks =
-        serde_json::from_slice(&std::fs::read(&other_path).expect("migrated")).expect("tasks");
-    assert_eq!(migrated.0["other"], legacy.0["other"]);
-    assert_eq!(read_loop_arming(&env)[&destination_key], disabled);
-    assert_eq!(read_loop_arming(&env)[&other_key], paused);
-    assert_eq!(read_loop_strikes(&env)[&destination_key], 3);
-    assert_eq!(read_loop_strikes(&env)[&other_key], 2);
-    let disabled_key = project_task_key(&env.project_root, "disabled");
-    assert_eq!(read_loop_arming(&env)[&disabled_key], disabled);
-    assert_eq!(read_loop_strikes(&env)[&disabled_key], 3);
-    loop_ok(&env, &["loop", "remove", "same"]);
-    loop_ok(&env, &["loop", "remove", "disabled"]);
-    loop_ok(&env, &["loop", "list"]);
-    assert!(read_loop_instances(&env).0.is_empty());
-    assert!(!legacy_path.exists());
-}
-
-#[test]
-fn malformed_instance_migration_preserves_source_and_destination() {
-    let env = Env::new();
-    let legacy_path = env.state_root().join("rimz/loop-instances.json");
-    std::fs::create_dir_all(legacy_path.parent().expect("parent")).expect("state dir");
-    std::fs::write(&legacy_path, b"not json").expect("legacy");
-    let (_, error) = loop_fail(&env, &["loop", "list"]);
-    assert!(error.contains("loop-instances.json"), "{error}");
-    assert_eq!(
-        std::fs::read(&legacy_path).expect("legacy unchanged"),
-        b"not json"
-    );
-    let legacy = Tasks(BTreeMap::from([(
-        "same".to_owned(),
-        TaskEntry {
-            root: env.project_root.clone(),
-            check: Some("true".to_owned()),
-            at: Some("07:00".to_owned()),
-            ..TaskEntry::default()
-        },
-    )]));
-    let bytes = serde_json::to_vec(&legacy).expect("json");
-    std::fs::write(&legacy_path, &bytes).expect("legacy");
-    let destination = loop_instances_path(&env);
-    std::fs::create_dir_all(destination.parent().expect("parent")).expect("workspace dir");
-    std::fs::write(&destination, b"broken destination").expect("destination");
-    loop_fail(&env, &["loop", "list"]);
-    assert_eq!(
-        std::fs::read(&legacy_path).expect("legacy unchanged"),
-        bytes
-    );
-    assert_eq!(
-        std::fs::read(&destination).expect("destination unchanged"),
-        b"broken destination"
-    );
-    std::fs::remove_file(&legacy_path).expect("remove legacy");
-    loop_fail(
-        &env,
-        &["loop", "add", "new", "--check", "true", "--at", "07:00"],
-    );
-    assert_eq!(
-        std::fs::read(&destination).expect("destination unchanged"),
-        b"broken destination"
-    );
-}
-
-#[test]
-fn concurrent_legacy_instance_loads_preserve_all_rows() {
-    let env = Env::new();
-    let legacy_path = env.state_root().join("rimz/loop-instances.json");
-    std::fs::create_dir_all(legacy_path.parent().expect("parent")).expect("state dir");
-    let legacy = Tasks(
-        (0..20)
-            .map(|index| {
-                (
-                    format!("task-{index}"),
-                    TaskEntry {
-                        root: env.project_root.clone(),
-                        check: Some("true".to_owned()),
-                        at: Some("07:00".to_owned()),
-                        ..TaskEntry::default()
-                    },
-                )
-            })
-            .collect(),
-    );
-    std::fs::write(&legacy_path, serde_json::to_vec(&legacy).expect("json")).expect("legacy");
-    let children = [0, 1].map(|_| {
-        env.rimz()
-            .args(["loop", "list"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("list child")
-    });
-    for child in children {
-        let output = child.wait_with_output().expect("list result");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    assert_eq!(read_loop_instances(&env), legacy);
-    assert!(!legacy_path.exists());
-}
-
-#[test]
 fn loop_history_filters_workspace_and_keeps_legacy_records() {
     let env = Env::new();
     let records = [
@@ -1256,7 +1070,7 @@ fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        rimz::trust::status_with_roots(&project, &env.config_root())
+        rimz::trust::status_with_roots(&project, &env.rimz_home())
             .expect("project trust")
             .state,
         rimz::trust::TrustState::Trusted,
@@ -2240,7 +2054,7 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-strikes", "feature-loop");
     let notify_log = env.project_root.join("loop-disabled-notify.log");
-    let config_path = env.config_root().join("rimz/config.toml");
+    let config_path = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config_path.parent().expect("config parent")).expect("mkdir config");
     std::fs::write(
         config_path,
@@ -3029,7 +2843,7 @@ fn loop_show_surfaces_spawn_failure_tail_and_prior_error() {
             env.project_root.display()
         ),
     );
-    let paths = rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root()).unwrap();
+    let paths = env.state_path_for(&env.project_root);
     paths.ensure_dirs().unwrap();
     let mut run = RunRecord::new(
         env.workspace_id.clone(),
@@ -3621,7 +3435,7 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
             && project_text.contains("branch = \"feature\""),
         "{project_text}"
     );
-    let trusted = rimz::trust::status_with_roots(&env.project_root, &env.config_root())
+    let trusted = rimz::trust::status_with_roots(&env.project_root, &env.rimz_home())
         .expect("project trust after add");
     assert_eq!(trusted.state, rimz::trust::TrustState::Trusted);
     let trusted_hash = trusted.current_hash.expect("trusted surface hash");
@@ -3631,7 +3445,7 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
         project_text.replace("branch = \"feature\"", "branch = \"success\""),
     )
     .expect("change project signal match");
-    let stale = rimz::trust::status_with_roots(&env.project_root, &env.config_root())
+    let stale = rimz::trust::status_with_roots(&env.project_root, &env.rimz_home())
         .expect("project trust after signal change");
     assert_eq!(stale.state, rimz::trust::TrustState::Stale);
     assert_ne!(stale.current_hash.as_deref(), Some(trusted_hash.as_str()));
@@ -4145,11 +3959,11 @@ fn write_project_config_at(project_root: &Path, text: &str) {
 }
 
 fn loop_arming_path(env: &Env) -> std::path::PathBuf {
-    env.state_root().join("rimz").join("loop-arming.json")
+    env.rimz_home().join("loops/loop-arming.json")
 }
 
 fn loop_strikes_path(env: &Env) -> std::path::PathBuf {
-    env.state_root().join("rimz").join("loop-strikes.json")
+    env.rimz_home().join("loops/loop-strikes.json")
 }
 
 fn loop_instances_path(env: &Env) -> std::path::PathBuf {
@@ -4159,7 +3973,7 @@ fn loop_instances_path(env: &Env) -> std::path::PathBuf {
 }
 
 fn loop_runs_path(env: &Env) -> std::path::PathBuf {
-    env.state_root().join("rimz").join("loop-runs.log.jsonl")
+    env.rimz_home().join("logs/loop-runs.log.jsonl")
 }
 
 fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
@@ -4240,12 +4054,11 @@ fn write_loop_fire_state(env: &Env, stamps: BTreeMap<String, Timestamp>) {
 }
 
 fn write_loop_fire_state_for_root(env: &Env, root: &Path, stamps: BTreeMap<String, Timestamp>) {
-    let workspace_id = WorkspaceId::from_project_root(root);
-    let path = env
-        .runtime_root
-        .join("rimz")
-        .join(workspace_id.as_str())
-        .join("loop-fire.json");
+    let state = env.state_path_for(root);
+    let path =
+        rimz::RuntimePaths::under_named(state.workspace_id, state.dir_name, &env.runtime_root)
+            .root
+            .join("loop-fire.json");
     std::fs::create_dir_all(path.parent().expect("loop fire parent")).expect("mkdir runtime");
     std::fs::write(path, serde_json::to_vec_pretty(&stamps).expect("json"))
         .expect("write loop fire state");
@@ -4302,7 +4115,7 @@ fn append_legacy_loop_record(env: &Env, task: &str, result: LoopRunResult) {
 }
 
 fn loop_config_path(env: &Env) -> std::path::PathBuf {
-    env.config_root().join("rimz").join("loop.toml")
+    env.rimz_home().join("loop.toml")
 }
 
 fn init_git_repo(root: &Path) -> bool {

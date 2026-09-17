@@ -52,6 +52,7 @@ mod linux {
         let mut sandbox_command = domain_sleep_command();
         sandbox_command
             .env("HOME", sandbox.path().join("home"))
+            .env("RIMZ_HOME", sandbox.path().join("home/.rimz"))
             .env("XDG_STATE_HOME", sandbox.path().join("state"))
             .env("XDG_RUNTIME_DIR", sandbox.path().join("runtime"))
             .env("TMUX_TMPDIR", sandbox.path().join("tmux"))
@@ -96,6 +97,7 @@ mod linux {
         command.env_clear();
         for key in [
             "HOME",
+            "RIMZ_HOME",
             "XDG_STATE_HOME",
             "XDG_RUNTIME_DIR",
             "TMPDIR",

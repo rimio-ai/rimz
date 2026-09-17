@@ -1245,7 +1245,7 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
     if let Some(target) = target {
         let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
             .ok_or_else(|| anyhow::anyhow!("session {session_name} is not a managed RimZ room"))?;
-        let runtime = RuntimePaths::for_workspace(workspace.workspace_id)?;
+        let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
         rimz::mux::focus_anchor::execute_action(backend.as_ref(), &runtime, &session_name, target)
             .context("focusing pane")?;
     }
@@ -1341,9 +1341,9 @@ fn resolve_sidebar_targets(
 ) -> Result<ResolvedSidebarTargets> {
     rimz::address::require_mention(target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let state = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing state paths")?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
+    let state =
+        StatePaths::for_project_root(&workspace.project_root).context("preparing state paths")?;
+    let runtime = RuntimePaths::for_project_root(&workspace.project_root)
         .context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime paths")?;
     let channel = current_channel(&workspace);

@@ -382,17 +382,15 @@ impl WorkspaceResolver {
         )
     }
 
-    /// Resolve the workspace identity recorded by durable state. Persisted
-    /// roots can outlive their directory, so a vanished path is normalized
-    /// lexically instead of being treated as a new room precondition.
-    pub fn persisted_workspace_id(root: impl AsRef<Path>) -> Result<WorkspaceId> {
+    /// Resolve the project root recorded by durable state. Persisted roots can
+    /// outlive their directory, so a vanished path is normalized lexically
+    /// instead of being treated as a new room precondition.
+    pub fn persisted_project_root(root: impl AsRef<Path>) -> Result<PathBuf> {
         let root = root.as_ref();
         if root.exists() {
-            return Self::resolve(root, None).map(|workspace| workspace.workspace_id);
+            return Self::resolve(root, None).map(|workspace| workspace.project_root);
         }
-        Ok(WorkspaceId::from_project_root(&normalized_root(
-            root.to_path_buf(),
-        )?))
+        normalized_root(root.to_path_buf())
     }
 
     /// Resolve on behalf of a participant in a live room: the session's
@@ -612,7 +610,7 @@ fn classify_root(root: &Path) -> Result<RootClass> {
     if git_output(root, ["rev-parse", "--show-toplevel"])?.is_some() {
         return Ok(RootClass::Repo);
     }
-    if PROJECT_MARKERS.iter().any(|m| root.join(m).exists()) {
+    if has_project_marker(root) {
         return Ok(RootClass::Marker);
     }
     Ok(RootClass::Directory)
@@ -696,8 +694,16 @@ fn current_branch(worktree_root: &Path) -> Result<Option<String>> {
 fn resolve_marker(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()
-        .find(|dir| PROJECT_MARKERS.iter().any(|m| dir.join(m).exists()))
+        .find(|dir| has_project_marker(dir))
         .map(Path::to_path_buf)
+}
+
+fn has_project_marker(dir: &Path) -> bool {
+    let home = crate::disk::paths::rimz_home();
+    PROJECT_MARKERS.iter().any(|marker| {
+        dir.join(marker).exists()
+            && !(marker.starts_with(".rimz/") && crate::disk::paths::holds_rimz_home(dir, &home))
+    })
 }
 
 const SESSION_BASENAME_SLUG_MAX: usize = 8;

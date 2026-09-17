@@ -139,7 +139,7 @@ pub fn arm_delivery(
     {
         return Err(ArmFailure::ConfigOwned(name.to_owned()));
     }
-    let paths = crate::disk::paths::StatePaths::for_workspace(workspace.workspace_id.clone())
+    let paths = crate::disk::paths::StatePaths::for_project_root(&workspace.project_root)
         .map_err(|err| ArmFailure::State(Box::new(err)))?;
     let taken = catalog
         .visible()
@@ -199,11 +199,11 @@ pub fn retire_session(
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
 ) -> Result<usize, RetireFailure> {
-    let paths = crate::disk::paths::StatePaths::for_workspace(workspace.workspace_id.clone())
+    let paths = crate::disk::paths::StatePaths::for_project_root(&workspace.project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
     let names = super::instances::retire_session(&paths.root, kind, session)
         .map_err(|err| RetireFailure(err.to_string()))?;
-    let runtime = crate::disk::paths::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+    let runtime = crate::disk::paths::RuntimePaths::for_project_root(&workspace.project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
     let mut failures = Vec::new();
     for name in &names {

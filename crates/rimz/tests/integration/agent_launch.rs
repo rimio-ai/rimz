@@ -371,7 +371,7 @@ fn explain_prints_the_plan_without_side_effects() {
     let env = Env::new();
     let state = env.state_path_for(&env.project_root);
     let runtime = env.runtime_paths();
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(
         config_dir.join("config.toml"),
@@ -530,11 +530,11 @@ fn explain_prints_the_plan_without_side_effects() {
         "sources": [
           {
             "bytes": 18,
-            "path": "<home>/config/rimz/agents/claude.md"
+            "path": "<home>/rimz-home/agents/claude.md"
           },
           {
             "bytes": 18,
-            "path": "<home>/config/rimz/agents/writer.md"
+            "path": "<home>/rimz-home/agents/writer.md"
           }
         ]
       },
@@ -706,7 +706,7 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
     let env = Env::new();
     let provider_home = env.home_root.join(".claude");
     std::fs::create_dir_all(provider_home.join("projects")).expect("empty conversation catalog");
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(
         config_dir.join("config.toml"),
@@ -1458,7 +1458,7 @@ fn launch_prompt_artifact_round_trips_and_missing_file_fails() {
 fn unsupported_profile_skills_refuse_before_launch_and_run_records() {
     for supervised in [false, true] {
         let env = Env::new();
-        let config_dir = env.config_root().join("rimz");
+        let config_dir = env.rimz_home();
         std::fs::create_dir_all(&config_dir).expect("mkdir config");
         std::fs::write(
             config_dir.join("config.toml"),

@@ -804,8 +804,11 @@ fn vanished_task_root_keeps_its_persisted_workspace_identity() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("vanished");
 
-    let (workspace, workspace_id) = stop_workspace(&root).expect("resolve stop workspace");
+    let (workspace, project_root) = stop_workspace(&root).expect("resolve stop workspace");
 
     assert!(workspace.is_none());
-    assert_eq!(workspace_id, WorkspaceId::from_project_root(&root));
+    assert_eq!(
+        WorkspaceId::from_project_root(&project_root),
+        WorkspaceId::from_project_root(&root)
+    );
 }

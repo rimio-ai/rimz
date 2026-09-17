@@ -3659,7 +3659,7 @@ fn steer_auto_compact_runs_before_a_full_window() {
     assert_eq!(command.status, MessageStatus::Sent);
     assert_eq!(prompt.text, "go");
     assert_eq!(prompt.status, MessageStatus::Sent);
-    let compact_assist = rimz::harness::assist_log::recent(&env.state_root(), None)
+    let compact_assist = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None)
         .into_iter()
         .find(|record| {
             matches!(

@@ -261,6 +261,9 @@ fn validate_repo_team_profile_closure(repo: &RepoConfig) -> agents_spec::Result<
 
 pub fn project_tasks(project_root: &Path, config_root: &Path) -> Result<Option<ProjectTasks>> {
     let report = trust::status_with_roots(project_root, config_root)?;
+    if report.state == TrustState::NoConfig {
+        return Ok(None);
+    }
     let config_path = project_root.join(PROJECT_CONFIG_REL);
     let Some(repo_value) = read_repo_value(&config_path)? else {
         return Ok(None);
@@ -370,7 +373,7 @@ impl LaunchAgents {
         let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
             return Ok(());
         };
-        if self.state == TrustState::Trusted {
+        if matches!(self.state, TrustState::Trusted | TrustState::NoConfig) {
             return Ok(());
         }
         let Some(repo_value) = read_repo_value(&self.config_path)? else {

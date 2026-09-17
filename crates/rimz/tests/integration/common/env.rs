@@ -23,6 +23,8 @@ const DIAG_TAIL_RECORDS: usize = 20;
 /// Canonicalize, falling back to the original path when it does not yet exist
 /// (a project root the test is about to create). Workspace IDs hash the
 /// canonical root, so harness and binary must agree on the same form.
+const RIMZ_HOME_DIR: &str = "rimz-home";
+
 pub fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
@@ -109,7 +111,7 @@ impl Env {
         let project_root = home_root.join("project");
         std::fs::create_dir_all(&project_root).expect("mkdir project root");
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        for dir in ["state", "config", ".rimz"] {
+        for dir in ["state", "config", RIMZ_HOME_DIR] {
             std::fs::create_dir_all(home_root.join(dir)).expect("mkdir env root");
         }
         let env = Env {
@@ -170,9 +172,11 @@ impl Env {
 
     // --- paths ---
 
-    /// `RIMZ_HOME` for every command this env builds.
+    /// `RIMZ_HOME` for every command this env builds. Not `~/.rimz`: the
+    /// binary knows its home is no project marker, but this process resolves
+    /// workspaces without the pin and would root the project at the fixture HOME.
     pub fn rimz_home(&self) -> PathBuf {
-        self.home_root.join(".rimz")
+        self.home_root.join(RIMZ_HOME_DIR)
     }
 
     /// `XDG_STATE_HOME`; RimZ no longer writes here, so a `rimz/` child is a

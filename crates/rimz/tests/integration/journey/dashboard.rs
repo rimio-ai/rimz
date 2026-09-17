@@ -79,7 +79,7 @@ fn provider_dashboard_renders_published_spend_and_session_cost() {
 }
 
 fn write_provider_tab_config(env: &Env) {
-    let dir = env.config_root().join("rimz");
+    let dir = env.rimz_home();
     std::fs::create_dir_all(&dir).expect("mkdir config");
     std::fs::write(
         dir.join("theme.toml"),

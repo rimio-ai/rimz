@@ -408,9 +408,9 @@ impl TaskCatalog {
             .as_ref()
             .is_ok_and(|parsed| matches!(parsed.trigger, super::Trigger::Watch(_)))
             && let Some(runtime) =
-                WorkspaceResolver::persisted_workspace_id(task.entry().resolved_root())
+                WorkspaceResolver::persisted_project_root(task.entry().resolved_root())
                     .ok()
-                    .and_then(|workspace_id| RuntimePaths::for_workspace(workspace_id).ok())
+                    .and_then(|root| RuntimePaths::for_project_root(&root).ok())
         {
             let _ = super::signal::stop_watcher(&runtime, name);
         }
@@ -502,10 +502,10 @@ pub(super) fn delivery_target_alive(
     target: &crate::config::TaskTarget,
 ) -> Result<bool> {
     let root = entry.resolved_root();
-    let workspace_id = WorkspaceResolver::persisted_workspace_id(&root)
+    let project_root = WorkspaceResolver::persisted_project_root(&root)
         .with_context(|| format!("resolving persisted project root at {}", root.display()))?;
-    let paths = StatePaths::for_workspace(workspace_id.clone())?;
-    let runtime = RuntimePaths::for_workspace(workspace_id)?;
+    let paths = StatePaths::for_project_root(&project_root)?;
+    let runtime = RuntimePaths::for_state(&paths)?;
     let store = Store::open(paths, runtime)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     Ok(snapshot.agents.iter().any(|agent| {

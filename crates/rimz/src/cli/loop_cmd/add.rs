@@ -55,7 +55,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     preflight_entry(
         task_action,
         resolved_for_preflight.as_ref(),
-        &rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?,
+        &rimz::RuntimePaths::for_project_root(&workspace.project_root)?,
     )?;
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let project_pre_state = args

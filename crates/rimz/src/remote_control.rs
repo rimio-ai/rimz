@@ -234,7 +234,7 @@ pub fn apply_runtime_toggle(
             let Some(mux) = live.mux_of(&workspace.session_name) else {
                 continue;
             };
-            let paths = match StatePaths::for_workspace(workspace.workspace_id.clone()) {
+            let paths = match StatePaths::for_project_root(&workspace.project_root) {
                 Ok(paths) => paths,
                 Err(err) => {
                     tracing::debug!(
@@ -282,7 +282,8 @@ pub fn apply_runtime_toggle(
     }
 
     for workspace in workspaces {
-        let Ok(runtime) = crate::disk::paths::RuntimePaths::for_workspace(workspace.workspace_id)
+        let Ok(runtime) =
+            crate::disk::paths::RuntimePaths::for_project_root(&workspace.project_root)
         else {
             continue;
         };
@@ -316,7 +317,7 @@ fn codex_daemon_envs(
         }
     }
     for workspace in workspaces {
-        let Ok(paths) = StatePaths::for_workspace(workspace.workspace_id.clone()) else {
+        let Ok(paths) = StatePaths::for_project_root(&workspace.project_root) else {
             continue;
         };
         if let Ok(login) =

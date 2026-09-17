@@ -16,19 +16,20 @@ fn main() -> Result<()> {
     let args = Args::parse()?;
     let scratch_root = args.scratch_root.clone();
     let project_root = scratch_root.join("project-root");
-    let state_root = scratch_root.join("state");
+    let rimz_home = scratch_root.join("rimz-home");
     let runtime_root = scratch_root.join("runtime");
     let pane_fixture = scratch_root.join("panes.json");
     std::fs::create_dir_all(&project_root)
         .with_context(|| format!("creating project root {}", project_root.display()))?;
 
     let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let paths = StatePaths::under(workspace_id.clone(), &state_root).context("building paths")?;
+    let paths =
+        StatePaths::for_project_root_under(&project_root, &rimz_home).context("building paths")?;
     paths.ensure_dirs().context("creating state dirs")?;
 
     let mut runtime =
-        RuntimePaths::under(workspace_id.clone(), &runtime_root).context("building runtime")?;
-    runtime.persistent_shared_root = state_root.join("rimz").join("shared");
+        RuntimePaths::under_named(workspace_id.clone(), paths.dir_name.clone(), &runtime_root);
+    runtime.persistent_shared_root = rimz_home.join("shared");
     runtime.ensure_dirs().context("creating runtime dirs")?;
     let codex_home = scratch_root.join("codex-home");
 
@@ -38,7 +39,7 @@ fn main() -> Result<()> {
         .context("opening store")?
         .record_workspace(&workspace)
         .context("recording workspace")?;
-    let spending_scopes = seed_spending_scopes(&state_root, &runtime_root, &scratch_root, &args)?;
+    let spending_scopes = seed_spending_scopes(&rimz_home, &runtime_root, &scratch_root, &args)?;
 
     let panes = synthetic_panes(&scratch_root, &project_root, &args)?;
     if args.git_worktrees {
@@ -57,7 +58,7 @@ fn main() -> Result<()> {
 
     println!("workspace_id={workspace_id}");
     println!("project_root={}", project_root.display());
-    println!("XDG_STATE_HOME={}", state_root.display());
+    println!("RIMZ_HOME={}", rimz_home.display());
     println!("XDG_RUNTIME_DIR={}", runtime_root.display());
     println!("RIMZ_TEST_PANE_LIST={}", pane_fixture.display());
     println!("CODEX_HOME={}", codex_home.display());
@@ -228,7 +229,7 @@ fn seed_spending_history(
 }
 
 fn seed_spending_scopes(
-    state_root: &Path,
+    rimz_home: &Path,
     runtime_root: &Path,
     scratch_root: &Path,
     args: &Args,
@@ -244,14 +245,17 @@ fn seed_spending_scopes(
                 .with_context(|| format!("creating spending scope {}", root.display()))?;
             let workspace = WorkspaceResolver::resolve(&root, None)
                 .with_context(|| format!("resolving spending scope {}", root.display()))?;
-            let paths = StatePaths::under(workspace.workspace_id.clone(), state_root)
+            let paths = StatePaths::for_project_root_under(&workspace.project_root, rimz_home)
                 .context("building spending scope state paths")?;
             paths
                 .ensure_dirs()
                 .context("creating spending scope state dirs")?;
-            let mut runtime = RuntimePaths::under(workspace.workspace_id.clone(), runtime_root)
-                .context("building spending scope runtime paths")?;
-            runtime.persistent_shared_root = state_root.join("rimz").join("shared");
+            let mut runtime = RuntimePaths::under_named(
+                workspace.workspace_id.clone(),
+                paths.dir_name.clone(),
+                runtime_root,
+            );
+            runtime.persistent_shared_root = rimz_home.join("shared");
             runtime
                 .ensure_dirs()
                 .context("creating spending scope runtime dirs")?;

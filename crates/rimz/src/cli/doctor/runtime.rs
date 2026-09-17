@@ -75,7 +75,7 @@ pub(super) fn collect_last_incident(
     ws: &rimz::ResolvedWorkspace,
     cleared_at: Option<jiff::Timestamp>,
 ) -> Option<model::LastIncident> {
-    let paths = StatePaths::for_workspace(ws.workspace_id.clone()).ok()?;
+    let paths = StatePaths::for_project_root(&ws.project_root).ok()?;
     let marker: rimz::store::event::LastDeathMarker =
         serde_json::from_slice(&fs::read(&paths.last_death_marker).ok()?).ok()?;
     if cleared_at.is_some_and(|cleared_at| marker.at <= cleared_at) {
@@ -280,8 +280,8 @@ fn binary_row(install: binaries::BinaryInstall) -> model::MuxBinaryRow {
 fn collect_plugin_presence(
     ws: &rimz::ResolvedWorkspace,
 ) -> Option<model::Probe<model::PresencePlugins>> {
-    let runtime = RuntimePaths::for_workspace(ws.workspace_id.clone()).ok()?;
-    let state = StatePaths::for_workspace(ws.workspace_id.clone()).ok()?;
+    let runtime = RuntimePaths::for_project_root(&ws.project_root).ok()?;
+    let state = StatePaths::for_project_root(&ws.project_root).ok()?;
     let now_ms = rimz::utils::time::unix_now_ms();
     let cache = pane_topology::read_pane_topology_cache(&runtime, &ws.session_name);
     let cache_writer = cache.as_ref().and_then(|cache| cache.writer.as_ref());
@@ -488,7 +488,7 @@ fn collect_duplicate_sessions(
     ws: &rimz::ResolvedWorkspace,
     selected: MuxName,
 ) -> model::Probe<model::DuplicateSessions> {
-    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+    let runtime = match RuntimePaths::for_project_root(&ws.project_root) {
         Ok(runtime) => runtime,
         Err(err) => {
             return model::Probe::Unavailable {
@@ -613,7 +613,7 @@ fn collect_presence(
         };
     }
 
-    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+    let runtime = match RuntimePaths::for_project_root(&ws.project_root) {
         Ok(runtime) => runtime,
         Err(err) => {
             return model::Presence::Unavailable {
@@ -767,7 +767,7 @@ fn tmux_poll_presence(
 }
 
 fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::TopologyWriterHealth> {
-    let recorded_bin = StatePaths::for_workspace(ws.workspace_id.clone())
+    let recorded_bin = StatePaths::for_project_root(&ws.project_root)
         .ok()
         .and_then(|state| rimz::workspace::record::read(&state.workspace_record).ok())
         .and_then(|record| record.rimz_bin)
@@ -779,7 +779,7 @@ fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::Topolo
                 fix: (!exists).then(|| "run `rimz reload`".to_owned()),
             }
         });
-    let conflict = RuntimePaths::for_workspace(ws.workspace_id.clone())
+    let conflict = RuntimePaths::for_project_root(&ws.project_root)
         .ok()
         .and_then(|runtime| {
             let now_ms = rimz::utils::time::unix_now_ms();
@@ -855,8 +855,8 @@ pub(super) fn collect_remote_control(
     }
 
     let state = project_root
-        .and_then(|root| rimz::workspace::WorkspaceResolver::persisted_workspace_id(root).ok())
-        .and_then(|id| StatePaths::for_workspace(id).ok());
+        .and_then(|root| rimz::workspace::WorkspaceResolver::persisted_project_root(root).ok())
+        .and_then(|root| StatePaths::for_project_root(&root).ok());
     let envs = match state {
         Some(state) => match rimz::remote_control::HostLoginEnvs::for_room(
             &state.workspace_record,
@@ -947,7 +947,7 @@ pub(super) fn collect_remote_control(
 pub(super) fn collect_socket_headroom(
     ws: &rimz::ResolvedWorkspace,
 ) -> model::Probe<model::SockBudget> {
-    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+    let runtime = match RuntimePaths::for_project_root(&ws.project_root) {
         Ok(runtime) => runtime,
         Err(err) => {
             return model::Probe::Unavailable {

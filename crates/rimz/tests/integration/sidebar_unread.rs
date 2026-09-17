@@ -217,7 +217,7 @@ fn row_unread(snapshot: &serde_json::Value, row_id: &str) -> bool {
 }
 
 fn write_machine_config(env: &Env, text: &str) {
-    let dir = env.config_root().join("rimz");
+    let dir = env.rimz_home();
     std::fs::create_dir_all(&dir).expect("mkdir config dir");
     std::fs::write(dir.join("config.toml"), text).expect("write config");
 }

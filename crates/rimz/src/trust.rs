@@ -278,7 +278,7 @@ pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
     let record_path = trust_record_path(config_root, &workspace_id);
 
     let current_surface =
-        read_project_config(&config_path)?.map(|config| surface_snapshot(&config));
+        read_project_config_at(project_root, config_root)?.map(|config| surface_snapshot(&config));
     let current_hash = current_surface.as_ref().map(|surface| surface.hash.clone());
     let record = read_trust_record(&record_path)?;
 
@@ -316,7 +316,7 @@ pub(crate) fn grant_with_roots(project_root: &Path, config_root: &Path) -> Resul
     let config_path = project_root.join(CONFIG_REL);
     let record_path = trust_record_path(config_root, &workspace_id);
 
-    let Some(config) = read_project_config(&config_path)? else {
+    let Some(config) = read_project_config_at(project_root, config_root)? else {
         return Ok(TrustReport {
             state: TrustState::NoConfig,
             workspace_id,
@@ -383,8 +383,7 @@ fn birth_prompt_with_roots(
     config_root: &Path,
 ) -> Result<Option<BirthPromptOffer>> {
     let workspace_id = WorkspaceId::from_project_root(project_root);
-    let config_path = project_root.join(CONFIG_REL);
-    let Some(config) = read_project_config(&config_path)? else {
+    let Some(config) = read_project_config_at(project_root, config_root)? else {
         return Ok(None);
     };
     let current_surface = surface_snapshot(&config);
@@ -450,7 +449,7 @@ pub(crate) fn agent_env(project_root: &Path, kind: &str) -> Result<AgentEnv> {
 }
 
 fn agent_env_with_roots(project_root: &Path, config_root: &Path, kind: &str) -> Result<AgentEnv> {
-    let Some(config) = read_project_config(&project_root.join(CONFIG_REL))? else {
+    let Some(config) = read_project_config_at(project_root, config_root)? else {
         return Ok(AgentEnv::Unconfigured);
     };
     let mut env = BTreeMap::new();
@@ -497,7 +496,7 @@ pub(crate) fn project_logins(project_root: &Path) -> Result<ProjectLogins> {
 }
 
 fn project_logins_with_roots(project_root: &Path, config_root: &Path) -> Result<ProjectLogins> {
-    let Some(config) = read_project_config(&project_root.join(CONFIG_REL))? else {
+    let Some(config) = read_project_config_at(project_root, config_root)? else {
         return Ok(ProjectLogins::Unconfigured);
     };
     if config.accounts.is_empty() {
@@ -526,6 +525,18 @@ fn project_record_path(config_root: &Path, workspace_id: &WorkspaceId, file: &st
     path.push(workspace_id.as_str());
     path.push(file);
     path
+}
+
+/// The project layer at `project_root`; none where its `.rimz` is the RimZ
+/// home, whose `config.toml` is the machine config.
+fn read_project_config_at(
+    project_root: &Path,
+    config_root: &Path,
+) -> Result<Option<ProjectConfig>> {
+    if crate::disk::paths::holds_rimz_home(project_root, config_root) {
+        return Ok(None);
+    }
+    read_project_config(&project_root.join(CONFIG_REL))
 }
 
 fn read_project_config(path: &Path) -> Result<Option<ProjectConfig>> {

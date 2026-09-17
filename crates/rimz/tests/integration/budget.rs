@@ -103,7 +103,7 @@ fn budget_refuses_to_arm_unconfigured_daily_caps() {
 fn unsupported_account_caps_leave_config_and_ledger_untouched() {
     let env = Env::new();
     env.rimz().args(["config", "init"]).assert().success();
-    let config_path = env.config_root().join("rimz/config.toml");
+    let config_path = env.rimz_home().join("config.toml");
     let before = std::fs::read(&config_path).expect("read generated config");
 
     env.rimz()
@@ -134,7 +134,7 @@ fn unsupported_account_caps_leave_config_and_ledger_untouched() {
 fn config_set_rejects_unsupported_account_budget_without_writing() {
     let env = Env::new();
     env.rimz().args(["config", "init"]).assert().success();
-    let path = env.config_root().join("rimz/config.toml");
+    let path = env.rimz_home().join("config.toml");
     let before = std::fs::read_to_string(&path).expect("config");
 
     env.rimz()

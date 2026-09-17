@@ -91,7 +91,7 @@ pub(super) fn resume_lane(
             lane_label,
             pane_id,
         } => {
-            let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+            let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
             rimz::mux::focus_anchor::execute_action(
                 backend,
                 &runtime,

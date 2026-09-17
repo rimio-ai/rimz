@@ -86,7 +86,7 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
 
 fn room_logins(ws: &rimz::ResolvedWorkspace) -> Result<Option<rimz::ids::RoomLogins>, String> {
     let paths =
-        rimz::StatePaths::for_workspace(ws.workspace_id.clone()).map_err(|err| err.to_string())?;
+        rimz::StatePaths::for_project_root(&ws.project_root).map_err(|err| err.to_string())?;
     rimz::workspace::record::read_optional(&paths.workspace_record)
         .map(|record| record.and_then(|record| record.logins))
         .map_err(|err| err.to_string())

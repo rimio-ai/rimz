@@ -421,7 +421,7 @@ fn remote_explicit_missing_paths_refuse_instead_of_attaching() {
 }
 
 fn write_link_notify_command_config(env: &Env) {
-    let dir = env.config_root().join("rimz");
+    let dir = env.rimz_home();
     std::fs::create_dir_all(&dir).expect("mkdir rimz config dir");
     std::fs::write(
         dir.join("config.toml"),
@@ -647,8 +647,7 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
     assert_eq!(ack["seq"], 7);
     assert_eq!(ack["ports"], serde_json::json!([3000, 8080]));
 
-    let runtime = rimz::RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root)
-        .expect("runtime paths");
+    let runtime = env.runtime_paths();
     let path = rimz::remote::link::stats_path(&runtime);
     let file: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).expect("stats file json");
@@ -670,8 +669,7 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
 #[test]
 fn link_stats_ingest_keeps_a_newer_publishers_sidecar() {
     let env = Env::new();
-    let runtime = rimz::RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root)
-        .expect("runtime paths");
+    let runtime = env.runtime_paths();
     let path = rimz::remote::link::stats_path(&runtime);
     let seeded = rimz::remote::link::LinkStatsFile::new(
         1_000,

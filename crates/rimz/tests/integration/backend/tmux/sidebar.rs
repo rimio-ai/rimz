@@ -20,6 +20,7 @@ fn live_work_boundary_resize_is_audited() {
         ))
         .expect("ensure session");
     for (name, value) in [
+        ("RIMZ_HOME", env.rimz_home()),
         ("XDG_STATE_HOME", env.state_root()),
         ("XDG_RUNTIME_DIR", env.runtime_root.clone()),
         ("XDG_CONFIG_HOME", env.config_root()),
@@ -70,8 +71,7 @@ fn live_work_boundary_resize_is_audited() {
     resize(&width.saturating_sub(5).to_string());
     resize(&width.saturating_sub(10).to_string());
 
-    let state =
-        rimz::StatePaths::under(env.workspace_id.clone(), &env.state_root()).expect("state paths");
+    let state = env.state_path_for(&env.project_root);
     let diag = rimz::diag::DiagSink::under(
         state.root.clone(),
         state.workspace_id.clone(),
@@ -125,6 +125,7 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
         ))
         .expect("ensure_session");
     for (name, value) in [
+        ("RIMZ_HOME", env.rimz_home()),
         ("XDG_STATE_HOME", env.state_root()),
         ("XDG_RUNTIME_DIR", env.runtime_root.clone()),
         ("XDG_CONFIG_HOME", env.config_root()),

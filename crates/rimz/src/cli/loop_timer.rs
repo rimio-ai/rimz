@@ -10,7 +10,6 @@ use rimz::disk::atomic::write_bytes_atomically;
 use rimz::disk::paths::{RuntimePaths, config_home, env_path};
 use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::harness::schedule::fire::LoopRunHost;
-use rimz::ids::WorkspaceId;
 
 const SYSTEMD_SERVICE: &str = "rimz-loop.service";
 const SYSTEMD_TIMER: &str = "rimz-loop.timer";
@@ -100,8 +99,7 @@ pub(super) fn tick(now: &Zoned) -> Result<()> {
         which::which("systemd-run").is_ok(),
     )?;
     for root in task_roots() {
-        let workspace_id = WorkspaceId::from_project_root(&root);
-        let runtime = match RuntimePaths::for_workspace(workspace_id) {
+        let runtime = match RuntimePaths::for_project_root(&root) {
             Ok(runtime) => runtime,
             Err(err) => {
                 tracing::warn!(root = %root.display(), error = %err, "loop tick could not resolve runtime paths");
@@ -132,8 +130,7 @@ pub(super) fn uncovered_task_roots() -> usize {
     task_roots()
         .into_iter()
         .filter(|root| {
-            let workspace_id = WorkspaceId::from_project_root(root);
-            RuntimePaths::for_workspace(workspace_id)
+            RuntimePaths::for_project_root(root)
                 .ok()
                 .is_none_or(|runtime| !runtime_is_open(&runtime))
         })

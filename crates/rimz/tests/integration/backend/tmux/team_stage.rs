@@ -12,7 +12,7 @@ fn flip_and_registration_rewake_reach_receiver_after_done() {
     require_tmux!();
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let config = env.config_root().join("rimz/config.toml");
+    let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).unwrap();
     std::fs::write(config, "[agents]\nisolation = \"host\"\n").unwrap();
     crate::common::write_definition(

@@ -1,7 +1,7 @@
 use crate::common::{CommandTimeoutExt, Env, daemon_test_guard};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 
 fn assert_success(output: &Output, action: &str) {
     assert!(
@@ -129,7 +129,7 @@ fn free_loopback_port() -> u16 {
 }
 
 fn write_machine_config(env: &Env, text: &str) {
-    let path = env.config_root().join("rimz").join("config.toml");
+    let path = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config parent");
     std::fs::write(path, text).expect("write machine config");
 }
@@ -297,8 +297,8 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
     assert!(
         !fixture
             .env
-            .state_root()
-            .join("rimz/web-ttyd-credential.json")
+            .rimz_home()
+            .join("web/web-ttyd-credential.json")
             .exists(),
         "URL inspection persisted a credential"
     );
@@ -319,11 +319,8 @@ fn offline_url_and_status_use_configured_shared_port_without_spawning() {
 #[test]
 fn offline_token_operations_keep_one_singular_credential() {
     let fixture = WebFixture::new("ttyd-offline-token.log");
-    let credential_path = fixture
-        .env
-        .state_root()
-        .join("rimz/web-ttyd-credential.json");
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let credential_path = fixture.env.rimz_home().join("web/web-ttyd-credential.json");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
 
     let empty = fixture
         .command()
@@ -413,7 +410,7 @@ fn web_restart_starts_offline_and_replaces_online_daemons_with_the_current_profi
     assert_success(&offline, "offline web restart");
     let stdout = String::from_utf8_lossy(&offline.stdout);
     assert!(stdout.contains("ttyd: was offline; started a fresh daemon"));
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
     let before: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("initial daemon record"))
             .expect("initial daemon JSON");
@@ -544,11 +541,8 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
     assert_eq!(status["port"], fixture.web_port);
     assert!(status["pid"].as_u64().is_some());
 
-    let credential_path = fixture
-        .env
-        .state_root()
-        .join("rimz/web-ttyd-credential.json");
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let credential_path = fixture.env.rimz_home().join("web/web-ttyd-credential.json");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
     let daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("read capable daemon record"))
             .expect("parse capable daemon record");
@@ -602,13 +596,8 @@ fn two_rooms_reuse_one_shared_daemon_and_rotate_restarts_it() {
         &format!("[web]\nport = {}\n", fixture.web_port),
     );
 
-    std::fs::remove_file(
-        fixture
-            .env
-            .state_root()
-            .join("rimz/web-ttyd-credential.json"),
-    )
-    .expect("remove shared credential");
+    std::fs::remove_file(fixture.env.rimz_home().join("web/web-ttyd-credential.json"))
+        .expect("remove shared credential");
     let no_start = fixture
         .command_with_sessions(&sessions)
         .args(["--mux", "tmux", "web", "open", "--session"])
@@ -695,8 +684,8 @@ fn read_only_broadcast_allowlist_reuses_restarts_and_stops_its_daemon() {
         "{}",
         String::from_utf8_lossy(&first.stderr)
     );
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd-share.json");
-    let allowlist_path = fixture.env.state_root().join("rimz/web-share.json");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd-share.json");
+    let allowlist_path = fixture.env.rimz_home().join("web/web-share.json");
     let first_daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("first share record"))
             .expect("first share JSON");
@@ -840,7 +829,7 @@ fn broadcast_revocation_stops_old_daemon_before_replacement_validation() {
         assert_success(&share, "share room");
     }
 
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd-share.json");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd-share.json");
     let daemon: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("broadcast daemon record"))
             .expect("broadcast daemon JSON");
@@ -865,7 +854,7 @@ fn broadcast_revocation_stops_old_daemon_before_replacement_validation() {
         "old broadcast daemon survived failed replacement"
     );
     let allowlist: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(fixture.env.state_root().join("rimz/web-share.json"))
+        &std::fs::read(fixture.env.rimz_home().join("web/web-share.json"))
             .expect("broadcast allowlist"),
     )
     .expect("broadcast allowlist JSON");
@@ -916,12 +905,12 @@ fn web_stop_stops_writable_and_broadcast_daemons() {
         String::from_utf8_lossy(&stop.stdout),
         "stopped 2 ttyd daemons\n"
     );
-    assert!(!fixture.env.state_root().join("rimz/web-ttyd.json").exists());
+    assert!(!fixture.env.rimz_home().join("web/web-ttyd.json").exists());
     assert!(
         !fixture
             .env
-            .state_root()
-            .join("rimz/web-ttyd-share.json")
+            .rimz_home()
+            .join("web/web-ttyd-share.json")
             .exists()
     );
 }
@@ -987,13 +976,13 @@ fn trusted_header_open_uses_a_basic_upstream_and_migrates_stale_records() {
     assert!(
         fixture
             .env
-            .state_root()
-            .join("rimz/web-ttyd-credential.json")
+            .rimz_home()
+            .join("web/web-ttyd-credential.json")
             .exists(),
         "trusted-header mode did not mint its upstream credential"
     );
 
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
     let mut record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("trusted-header daemon record"))
             .expect("trusted-header daemon JSON");
@@ -1120,7 +1109,7 @@ fn trusted_proxy_gate_forwards_loopback_and_stops_both_processes() {
         .expect("start trusted-proxy gate");
     assert_success(&start, "trusted-proxy gate start");
 
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("gated daemon record"))
             .expect("gated daemon JSON");
@@ -1198,7 +1187,7 @@ fn stale_gated_daemon_terminates_its_surviving_gate_and_can_restart() {
         .expect("start gated daemon");
     assert_success(&start, "initial gated daemon start");
 
-    let daemon_path = fixture.env.state_root().join("rimz/web-ttyd.json");
+    let daemon_path = fixture.env.rimz_home().join("web/web-ttyd.json");
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&daemon_path).expect("gated daemon record"))
             .expect("gated daemon JSON");
@@ -1272,7 +1261,7 @@ fn markerless_stock_index_keeps_daemon_pixel_incapable() {
     success_json(&open, "markerless web open");
 
     let daemon: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(fixture.env.state_root().join("rimz/web-ttyd.json"))
+        &std::fs::read(fixture.env.rimz_home().join("web/web-ttyd.json"))
             .expect("read markerless daemon record"),
     )
     .expect("parse markerless daemon record");
@@ -1333,74 +1322,6 @@ fn concurrent_start_calls_create_one_shared_daemon() {
 
 #[cfg(unix)]
 #[test]
-fn first_shared_start_reaps_legacy_ttyd_before_binding_its_port() {
-    let _guard = daemon_test_guard();
-    let fixture = WebFixture::new("ttyd-legacy.log");
-    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
-        .expect("reserve legacy port")
-        .local_addr()
-        .expect("legacy port address")
-        .port();
-    write_machine_config(&fixture.env, &format!("[web]\nport = {port}\n"));
-    let mut legacy = Command::new(&fixture.ttyd_bin)
-        .args(["-p", &port.to_string(), "sh"])
-        .env("RIMZ_TEST_TTYD_LOG", &fixture.ttyd_log)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start legacy ttyd fixture");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while std::time::Instant::now() < deadline
-        && std::net::TcpStream::connect(("127.0.0.1", port)).is_err()
-    {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert!(
-        std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(),
-        "legacy ttyd fixture did not bind"
-    );
-
-    let legacy_dir = fixture.env.state_root().join("rimz/web-ttyd");
-    std::fs::create_dir_all(&legacy_dir).expect("mkdir legacy state");
-    std::fs::write(
-        legacy_dir.join("legacy.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "session": fixture.workspace.session_name,
-            "pid": legacy.id(),
-            "port": port
-        }))
-        .expect("serialize legacy state"),
-    )
-    .expect("write legacy state");
-
-    let start = fixture
-        .command()
-        .args(["web", "start"])
-        .bounded_output()
-        .expect("start shared daemon after legacy cleanup");
-    assert_success(&start, "shared start after legacy cleanup");
-    assert!(!legacy_dir.exists(), "legacy state directory remains");
-    assert!(
-        legacy.try_wait().expect("query legacy ttyd").is_some(),
-        "legacy ttyd still runs"
-    );
-
-    let log = std::fs::read_to_string(&fixture.ttyd_log).expect("read ttyd log");
-    assert!(
-        log.lines().any(|line| line.contains("\tweb\texec")),
-        "shared daemon did not replace legacy instance: {log}"
-    );
-    let stop = fixture
-        .command()
-        .args(["web", "stop"])
-        .bounded_output()
-        .expect("stop shared daemon");
-    assert_success(&stop, "stop shared daemon after legacy cleanup");
-}
-
-#[cfg(unix)]
-#[test]
 fn no_start_requires_an_online_daemon() {
     let fixture = WebFixture::new("ttyd-no-start.log");
     let output = fixture
@@ -1429,7 +1350,7 @@ fn stale_daemon_record_never_signals_a_reused_non_ttyd_pid() {
         .arg("60")
         .spawn()
         .expect("spawn unrelated process");
-    let state = env.state_root().join("rimz");
+    let state = env.rimz_home().join("web");
     std::fs::create_dir_all(&state).expect("mkdir web state");
     std::fs::write(
         state.join("web-ttyd.json"),

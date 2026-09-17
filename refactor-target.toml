@@ -220,8 +220,9 @@ allowed-dependencies = [
 # The skill library resolves from process env for uninstall and from a launch env map for sandbox and launch planning.
 # Launches derive and create each agent's private scratch dir under room tmp.
 # One home: every root resolves through a named `disk::paths` dir function, and
-# workspace dirs through the `for_project_root`/`under_named` constructors.
-surface-budget = 154
+# workspace dirs through the `for_project_root`/`under_named` constructors;
+# `holds_rimz_home` keeps the home out of project-marker and trust lookups.
+surface-budget = 156
 
 [[module]]
 path = "crates/rimz/src/forge"

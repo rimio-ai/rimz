@@ -205,7 +205,7 @@ use {chat::*, scope::*, thread::*};
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace =
         resolve_view_workspace(args.target.as_deref(), args.worktree.as_deref(), globals)?;
-    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+    let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing state paths")?;
     let view = chat_view_with_mode(
         &workspace,
@@ -263,7 +263,7 @@ pub(crate) fn resolve_view_workspace(
     let Some(channel) = requested_channel(target, worktree) else {
         return Ok(current);
     };
-    let paths = rimz::StatePaths::for_workspace(current.workspace_id.clone())
+    let paths = rimz::StatePaths::for_project_root(&current.project_root)
         .context("preparing state paths")?;
     let current_has = live_agents(crate::cli::open_store(&current).ok().as_ref())
         .iter()
@@ -355,7 +355,7 @@ pub(crate) fn chat_view_with_hidden(
     all: bool,
     hidden: Hidden,
 ) -> Result<RenderedChat> {
-    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+    let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing state paths")?;
     chat_view_with_mode(
         workspace,
@@ -622,7 +622,7 @@ pub(crate) fn latest_ask_view(
     if !agent.is_awaiting_input() {
         return Ok(None);
     }
-    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+    let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing state paths")?;
     latest_ask_view_from_paths(&paths, agent)
 }

@@ -66,6 +66,9 @@ fn broker_serves_a_warm_app_server_over_its_socket() {
     if env.skip_if_sandboxed() {
         return;
     }
+    // `rimz start` records the room before it launches the broker, which
+    // resolves its dirs by id.
+    env.record(&env.project_root);
     let stub = codex_appserver_stub();
 
     // Launch the broker as `rimz start` would, with the stub standing in for the
@@ -129,6 +132,9 @@ fn broker_respawns_after_credentials_stamp_changes() {
     if env.skip_if_sandboxed() {
         return;
     }
+    // `rimz start` records the room before it launches the broker, which
+    // resolves its dirs by id.
+    env.record(&env.project_root);
     let codex_home = tempfile::tempdir().expect("codex home");
     let auth_path = codex_home.path().join("auth.json");
     let auth_a = r#"{"marker":"A"}"#;

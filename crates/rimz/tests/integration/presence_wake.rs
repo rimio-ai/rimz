@@ -140,6 +140,7 @@ impl WakeEnv {
         command
             .current_dir(&self.project_root)
             .env("HOME", &self.home_root)
+            .env("RIMZ_HOME", &self.state_root)
             .env("XDG_STATE_HOME", &self.state_root)
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("RIMZ_ZELLIJ_BIN", trace_shim_path())
@@ -352,6 +353,7 @@ impl WakeEnv {
             ])
             .current_dir(&self.project_root)
             .env("HOME", &self.home_root)
+            .env("RIMZ_HOME", &self.state_root)
             .env("XDG_STATE_HOME", &self.state_root)
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("RIMZ_ZELLIJ_BIN", trace_shim_path())

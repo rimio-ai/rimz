@@ -116,6 +116,7 @@ impl HostSandbox {
 fn sandbox_env(root: &Path) -> BTreeMap<&'static str, PathBuf> {
     BTreeMap::from([
         ("HOME", root.join("home")),
+        ("RIMZ_HOME", root.join("home").join(".rimz")),
         ("TMUX_TMPDIR", root.join("tmux")),
         ("XDG_CACHE_HOME", root.join("cache")),
         ("XDG_CONFIG_HOME", root.join("config")),
@@ -463,6 +464,7 @@ mod tests {
         let sandbox = HostSandbox::for_manual_command().unwrap();
         for key in [
             "HOME",
+            "RIMZ_HOME",
             "XDG_CACHE_HOME",
             "XDG_CONFIG_HOME",
             "XDG_DATA_HOME",

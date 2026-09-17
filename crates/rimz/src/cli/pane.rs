@@ -387,7 +387,7 @@ fn load_agent_overlay(
 ) -> Option<rimz::store::snapshot::SidebarSnapshot> {
     let store = crate::cli::open_store(workspace).ok()?;
     let mut snapshot = store.snapshot_cached().ok()?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone()).ok()?;
+    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root).ok()?;
     snapshot = snapshot.with_agent_context(rimz::store::agent_context::read_all(&runtime));
     Some(snapshot.with_live_panes(panes.to_vec(), None))
 }
@@ -645,7 +645,7 @@ fn zoom(
         };
         let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
             .ok_or_else(|| anyhow::anyhow!("pane zoom requires a managed RimZ room session"))?;
-        let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id)?;
+        let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
         rimz::mux::focus_anchor::execute_action(
             backend,
             &runtime,

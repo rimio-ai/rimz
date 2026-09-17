@@ -524,7 +524,7 @@ fn bare_directory_resolves_as_a_directory_workspace() {
 }
 
 #[test]
-fn persisted_workspace_id_absolutizes_a_vanished_relative_root() {
+fn persisted_project_root_absolutizes_a_vanished_relative_root() {
     let relative = Path::new("target/rimz-vanished-persisted-root");
     assert!(!relative.exists(), "fixture root must stay nonexistent");
     let absolute = crate::utils::path::normalize_path_lexical(
@@ -532,8 +532,8 @@ fn persisted_workspace_id_absolutizes_a_vanished_relative_root() {
     );
 
     assert_eq!(
-        WorkspaceResolver::persisted_workspace_id(relative).expect("resolve persisted identity"),
-        WorkspaceId::from_project_root(&absolute)
+        WorkspaceResolver::persisted_project_root(relative).expect("resolve persisted root"),
+        absolute
     );
 }
 

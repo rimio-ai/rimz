@@ -26,7 +26,7 @@ use clap::{Args, Subcommand};
 use serde_json::Value;
 use tracing::warn;
 
-use super::{GlobalFlags, runtime_paths_for};
+use super::GlobalFlags;
 use rimz::agents::{
     AgentContext, AgentCost, AgentDefinition, PriceBook, StatusLineInvocation, definition_by_kind,
     pricing,
@@ -117,7 +117,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
         return Ok(());
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let runtime = runtime_paths_for(workspace.workspace_id)?;
+    let runtime = runtime_paths_for_root(&workspace.project_root)?;
     let prices = pricing::cached_book(&runtime.shared_pricing_cache_path());
     attach_context_cost(agent, &payload, &prices, &mut observation.context);
     rimz::store::agent_context::write(
@@ -132,6 +132,15 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     // other wakeup: a send failure never fails the statusline render.
     let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
     Ok(())
+}
+
+/// Runtime paths by project root, so a pre-birth workspace resolves the same
+/// dir name its birth mints.
+fn runtime_paths_for_root(project_root: &std::path::Path) -> Result<rimz::RuntimePaths> {
+    let runtime =
+        rimz::RuntimePaths::for_project_root(project_root).context("preparing runtime paths")?;
+    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    Ok(runtime)
 }
 
 fn attach_context_cost(
@@ -163,7 +172,7 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
         return Ok(());
     }
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let runtime = runtime_paths_for(workspace.workspace_id)?;
+    let runtime = runtime_paths_for_root(&workspace.project_root)?;
     let (prices, book_fingerprint) =
         pricing::cached_book_with_fingerprint(&runtime.shared_pricing_cache_path());
     for observation in &observations {

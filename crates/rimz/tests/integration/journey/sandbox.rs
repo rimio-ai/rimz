@@ -132,7 +132,7 @@ while IFS= read -r line; do :; done
     env.rimz()
         .args(["trust", "grant"])
         .assert_success_within_timeout("trust sandbox journey agent environment");
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("create machine config directory");
     std::fs::write(
         config_dir.join("config.toml"),

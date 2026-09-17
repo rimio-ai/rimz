@@ -8,8 +8,6 @@ use crate::common::Env;
 
 struct UninstallFixture {
     env: Env,
-    data_root: PathBuf,
-    cache_root: PathBuf,
     cargo_home: PathBuf,
     system_bin: PathBuf,
 }
@@ -17,17 +15,13 @@ struct UninstallFixture {
 impl UninstallFixture {
     fn new() -> Self {
         let env = Env::new();
-        let data_root = env.home_root.join("data");
-        let cache_root = env.home_root.join("cache");
         let cargo_home = env.home_root.join("cargo");
         let system_bin = env.home_root.join("system-bin");
-        for dir in [&data_root, &cache_root, &cargo_home, &system_bin] {
+        for dir in [&cargo_home, &system_bin] {
             fs::create_dir_all(dir).expect("mkdir uninstall fixture dir");
         }
         Self {
             env,
-            data_root,
-            cache_root,
             cargo_home,
             system_bin,
         }
@@ -46,19 +40,20 @@ impl UninstallFixture {
     }
 
     fn apply_env(&self, cmd: &mut Command) {
-        cmd.env("XDG_DATA_HOME", &self.data_root)
-            .env("XDG_CACHE_HOME", &self.cache_root)
-            .env("CARGO_HOME", &self.cargo_home)
+        cmd.env("CARGO_HOME", &self.cargo_home)
             .env("RIMZ_SYSTEM_BIN_DIR", &self.system_bin);
     }
 
+    /// The directory holding one category of RimZ files inside the home, or
+    /// the runtime tree.
     fn root(&self, kind: RootKind) -> PathBuf {
+        let home = self.env.rimz_home();
         match kind {
-            RootKind::State => self.env.state_root().join("rimz"),
+            RootKind::State => home.join("ws"),
             RootKind::Runtime => self.env.runtime_root.join("rimz"),
-            RootKind::Data => self.data_root.join("rimz"),
-            RootKind::Cache => self.cache_root.join("rimz"),
-            RootKind::Config => self.env.config_root().join("rimz"),
+            RootKind::Data => home.join("data"),
+            RootKind::Cache => home.join("cache"),
+            RootKind::Config => home.join("projects"),
         }
     }
 
@@ -68,14 +63,7 @@ impl UninstallFixture {
             fs::create_dir_all(&root).expect("mkdir root");
             fs::write(root.join("marker"), kind.label()).expect("write marker");
         }
-        for name in [
-            "agents",
-            "subagents",
-            "teams",
-            "traits",
-            "skills",
-            "accounts",
-        ] {
+        for name in LIBRARY {
             let dir = self.env.agents_home().join(name);
             fs::create_dir_all(&dir).expect("mkdir library");
             fs::write(dir.join("marker"), name).expect("write library marker");
@@ -84,37 +72,35 @@ impl UninstallFixture {
 
     fn assert_present(&self, kind: RootKind) {
         assert!(
-            self.root(kind).exists(),
+            self.root(kind).join("marker").exists(),
             "{} root should remain",
             kind.label()
         );
     }
 
     fn assert_absent(&self, kind: RootKind) {
-        if matches!(kind, RootKind::Config) {
-            assert!(!self.root(kind).join("marker").exists());
-            for name in [
-                "agents",
-                "subagents",
-                "teams",
-                "traits",
-                "skills",
-                "accounts",
-            ] {
-                assert_eq!(
-                    fs::read_to_string(self.env.agents_home().join(name).join("marker")).unwrap(),
-                    name
-                );
-            }
-            return;
-        }
         assert!(
             !self.root(kind).exists(),
             "{} root should be removed",
             kind.label()
         );
+        for name in LIBRARY {
+            assert_eq!(
+                fs::read_to_string(self.env.agents_home().join(name).join("marker")).unwrap(),
+                name
+            );
+        }
     }
 }
+
+const LIBRARY: [&str; 6] = [
+    "agents",
+    "subagents",
+    "teams",
+    "traits",
+    "skills",
+    "accounts",
+];
 
 #[derive(Clone, Copy)]
 enum RootKind {
@@ -225,14 +211,7 @@ fn uninstall_state_and_config_flags_extend_default_scope_independently() {
     config_only.assert_present(RootKind::State);
     config_only.assert_absent(RootKind::Config);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    for name in [
-        "agents",
-        "subagents",
-        "teams",
-        "traits",
-        "skills",
-        "accounts",
-    ] {
+    for name in LIBRARY {
         assert!(
             stderr.contains(&format!(
                 "kept {}",
@@ -277,7 +256,7 @@ fn uninstall_previews_and_removes_only_owned_skill_links_in_every_mode() {
         fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
         let account_home = fixture.root(RootKind::Data).join("accounts/claude/work");
         fs::write(
-            fixture.root(RootKind::Config).join("config.toml"),
+            fixture.env.rimz_home().join("config.toml"),
             format!("[accounts.claude.work]\nhome = {:?}\n", account_home),
         )
         .unwrap();
@@ -386,7 +365,10 @@ fn uninstall_removes_managed_hooks() {
         stderr.contains("Hooks: removed claude, claude@work"),
         "{stderr}"
     );
-    assert!(stderr.contains("kept provider account homes"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("kept {}", fixture.root(RootKind::Data).display())),
+        "{stderr}"
+    );
     assert!(work_home.join(".credentials.json").is_file());
     assert!(!fixture.root(RootKind::Data).join("marker").exists());
     let unhooked = fs::read_to_string(&work_settings).expect("work settings kept");
@@ -397,7 +379,7 @@ fn uninstall_removes_managed_hooks() {
 fn uninstall_unhooks_native_homes_when_the_accounts_config_is_refused() {
     let fixture = UninstallFixture::new();
     fixture.env.install_agent_hooks("claude");
-    let config = fixture.root(RootKind::Config);
+    let config = fixture.env.rimz_home();
     fs::create_dir_all(&config).expect("config root");
     fs::write(
         config.join("config.toml"),

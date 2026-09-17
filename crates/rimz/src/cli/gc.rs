@@ -75,7 +75,7 @@ fn sweep_unattended(older_than: Duration, globals: &GlobalFlags) -> Result<GcOut
         at: now,
         assist: auto_gc_assist(&workspace.workspace_id, older_than, &result),
     });
-    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+    let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing store paths")?;
     if paths.root.is_dir() {
         rimz::harness::auto_gc::write_stamp(&paths, now)?;

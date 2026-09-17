@@ -11,7 +11,7 @@ use rimz::ids::AgentSessionId;
 use rimz::store::gc::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 use rimz::store::message::{DeliveryGate, MessageRecord};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
-use rimz::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
+use rimz::{MuxName, SidebarInstanceId};
 use serde_json::json;
 
 use crate::common::Env;
@@ -41,11 +41,7 @@ fn sidebar_snapshot_does_not_create_an_abandoned_state_scaffold() {
         serde_json::from_slice(&output.stdout).expect("snapshot json");
     assert_eq!(snapshot["agents"], json!([]));
 
-    let workspace_state = env
-        .state_root()
-        .join("rimz")
-        .join("workspaces")
-        .join(env.workspace_id.as_str());
+    let workspace_state = env.state_path_for(&env.project_root).root;
     assert!(
         !workspace_state.exists(),
         "read-only snapshot should not create a state scaffold"
@@ -55,7 +51,7 @@ fn sidebar_snapshot_does_not_create_an_abandoned_state_scaffold() {
 #[test]
 fn gc_removes_stale_sidebar_heartbeat_and_leaves_unknown_file() {
     let env = Env::new();
-    let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
+    let rt = env.runtime_paths();
     rt.ensure_dirs().expect("runtime dirs");
 
     let heartbeat = SidebarHeartbeat::new(
@@ -101,7 +97,7 @@ fn gc_removes_stale_sidebar_heartbeat_and_leaves_unknown_file() {
 #[test]
 fn gc_removes_stale_sidebar_read_marks() {
     let env = Env::new();
-    let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
+    let rt = env.runtime_paths();
     rt.ensure_dirs().expect("runtime dirs");
 
     let read_marks_path = rt.sidebar_read_marks_path(&SidebarInstanceId::new());
@@ -214,19 +210,17 @@ fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
 #[test]
 fn gc_reaps_scaffold_but_keeps_unreadable_history() {
     let env = Env::new();
-    let workspaces = env.state_root().join("rimz").join("workspaces");
+    let workspaces = env.rimz_home().join("ws");
     std::fs::create_dir_all(&workspaces).expect("mkdir workspaces");
 
     // An abandoned `rimz start` scaffold: empty subdirs, no workspace.json.
-    let scaffold =
-        workspaces.join(WorkspaceId::from_project_root(std::path::Path::new("/scaffold")).as_str());
+    let scaffold = workspaces.join("scaffold-abcd");
     for sub in ["snapshots", "runs", "locks"] {
         std::fs::create_dir_all(scaffold.join(sub)).expect("mkdir scaffold sub");
     }
 
     // An unreadable record that still holds history: kept and reported.
-    let history =
-        workspaces.join(WorkspaceId::from_project_root(std::path::Path::new("/history")).as_str());
+    let history = workspaces.join("history-abcd");
     std::fs::create_dir_all(&history).expect("mkdir history");
     std::fs::write(history.join("workspace.json"), b"{ not json").expect("garbled record");
     std::fs::write(history.join("events.log.jsonl"), b"{}\n").expect("history");
@@ -261,7 +255,7 @@ fn gc_reaps_dead_loop_delivery_schedule() {
             ))
             .unwrap();
     }
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let config_path = config_dir.join("loop.toml");
     std::fs::write(
@@ -344,7 +338,7 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
         .join("loop-instances.json");
     std::fs::create_dir_all(instances_path.parent().expect("instances dir")).expect("mkdir state");
     std::fs::write(&instances_path, instances.to_string()).expect("write instances");
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let config_path = config_dir.join("loop.toml");
     std::fs::write(
@@ -402,11 +396,11 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
 #[test]
 fn gc_sweeps_orphan_temps_and_probe_markers() {
     let env = Env::new();
-    let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
+    let rt = env.runtime_paths();
     rt.ensure_dirs().expect("runtime dirs");
     let state = env.state_path_for(&env.project_root);
     std::fs::create_dir_all(&state.snapshots_dir).expect("mkdir snapshots");
-    let state_shared = env.state_root().join("rimz").join("shared");
+    let state_shared = env.rimz_home().join("shared");
     std::fs::create_dir_all(&state_shared).expect("mkdir state shared");
 
     let nonce = "00000000000000000000000000000000";
@@ -520,7 +514,7 @@ fn gc_older_than_takes_day_spans_and_the_configured_default() {
 fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
     let env = Env::new();
     let state = env.state_path_for(&env.project_root);
-    let assists = env.state_root().join("rimz").join("assists.log.jsonl");
+    let assists = env.rimz_home().join("logs/assists.log.jsonl");
     let unattended = || {
         env.rimz()
             .args(["gc", "--unattended", "--root"])
@@ -554,7 +548,7 @@ fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
         stamp["swept_at"].is_string(),
         "unattended sweep stamps the workspace: {stamp}"
     );
-    let records = rimz::harness::assist_log::recent(&env.state_root(), None);
+    let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
     assert_eq!(records.len(), 1, "one assist per sweep: {records:?}");
     match &records[0].assist {
         rimz::harness::assist_log::Assist::AutoGc {
@@ -572,7 +566,7 @@ fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
 }
 
 fn write_machine_config(env: &Env, text: &str) {
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(config_dir.join("config.toml"), text).expect("write config");
 }
@@ -582,7 +576,7 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-live", "feature-live");
-    let config_dir = env.config_root().join("rimz");
+    let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let config_path = config_dir.join("loop.toml");
     std::fs::write(

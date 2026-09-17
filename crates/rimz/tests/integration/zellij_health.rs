@@ -127,8 +127,8 @@ fn unresponsive_zellij_session_with_unknown_ownership_avoids_destroy_guidance() 
         )
         .expect("record managed room");
 
-    let workspaces = env.state_root().join("rimz/workspaces");
-    let hidden_workspaces = env.state_root().join("rimz/workspaces-hidden");
+    let workspaces = env.rimz_home().join("ws");
+    let hidden_workspaces = env.rimz_home().join("ws-hidden");
     fs::rename(&workspaces, &hidden_workspaces).expect("hide workspace records");
     fs::write(&workspaces, b"not a directory").expect("block workspace record lookup");
 

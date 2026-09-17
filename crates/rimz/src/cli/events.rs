@@ -57,7 +57,7 @@ pub fn run(args: EventsArgs, globals: &GlobalFlags) -> Result<()> {
 fn follow(replay: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id)
+    let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("resolving lifecycle event-log paths")?;
     let mut follower = rimz::store::follow::EventFollower::open(paths, replay)
         .context("opening lifecycle event stream")?;

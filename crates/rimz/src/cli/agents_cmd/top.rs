@@ -45,9 +45,9 @@ pub(super) struct TopArgs {
 pub(super) fn run_top(args: TopArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let _mux = rimz::room::require_live_mux(globals.mux, &workspace)?;
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)
         .context("preparing runtime paths")?;
-    let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+    let state = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing state paths")?;
     let mut reader = rimz::sidebar::consumer::PublishedSnapshotReader::new(
         runtime.clone(),
