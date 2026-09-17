@@ -153,6 +153,11 @@ impl WorkspaceId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The 24 hex digits after `ws_`.
+    pub fn hex(&self) -> &str {
+        &self.0[3..]
+    }
 }
 
 impl fmt::Display for WorkspaceId {
@@ -166,6 +171,109 @@ impl FromStr for WorkspaceId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
+    }
+}
+
+/// Minimum hex digits a workspace directory name carries.
+pub const WORKSPACE_DIR_HEX_MIN: usize = 4;
+const WORKSPACE_ID_HEX_LEN: usize = 24;
+
+/// A workspace directory name, `<slug>-<hex>`: a basename slug plus an
+/// even-length prefix (at least four digits) of its [`WorkspaceId`] hex.
+///
+/// The name is a location, never an identity: two workspaces may share a
+/// prefix, and `workspace.json` inside the directory names the full id.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WorkspaceDirName {
+    name: String,
+    hex_start: usize,
+}
+
+impl WorkspaceDirName {
+    /// Parse `<slug>-<hex>`, split at the last `-`.
+    pub fn parse(value: &str) -> Option<Self> {
+        let (slug, hex) = value.rsplit_once('-')?;
+        let hex_ok = hex.len() >= WORKSPACE_DIR_HEX_MIN
+            && hex.len() <= WORKSPACE_ID_HEX_LEN
+            && hex.len() % 2 == 0
+            && hex.chars().all(|c| c.is_ascii_hexdigit());
+        let slug_ok = !slug.is_empty()
+            && !slug.starts_with('-')
+            && slug
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        (hex_ok && slug_ok).then(|| Self {
+            name: value.to_owned(),
+            hex_start: slug.len() + 1,
+        })
+    }
+
+    /// Name `workspace_id` with `slug` and the first `hex_len` id hex digits,
+    /// clamped to an even length between the minimum and the full id.
+    pub fn mint(slug: &str, workspace_id: &WorkspaceId, hex_len: usize) -> Self {
+        let hex_len = hex_len.clamp(WORKSPACE_DIR_HEX_MIN, WORKSPACE_ID_HEX_LEN) & !1;
+        let slug = if slug.is_empty() { "root" } else { slug };
+        Self {
+            name: format!("{slug}-{}", &workspace_id.hex()[..hex_len]),
+            hex_start: slug.len() + 1,
+        }
+    }
+
+    /// The name for a workspace located without its project root: the full id
+    /// hex under the `ws` slug, so it can never shadow a minted neighbour.
+    pub fn fallback(workspace_id: &WorkspaceId) -> Self {
+        Self::mint("ws", workspace_id, WORKSPACE_ID_HEX_LEN)
+    }
+
+    /// The slug for a project root's basename, at most `max` characters:
+    /// ASCII alphanumerics and `_` kept, every other run collapsed to one `-`.
+    pub fn basename_slug(project_root: &Path, max: usize) -> String {
+        let basename = project_root
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default();
+        let mut slug = String::new();
+        for c in basename.chars() {
+            let c = if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '-'
+            };
+            if !(c == '-' && slug.ends_with('-')) {
+                slug.push(c);
+            }
+        }
+        let slug: String = slug.trim_matches('-').chars().take(max).collect();
+        let slug = slug.trim_matches('-');
+        if slug.is_empty() {
+            "root".to_owned()
+        } else {
+            slug.to_owned()
+        }
+    }
+
+    /// Whether this name's hex is a prefix of `workspace_id`, making the
+    /// directory a candidate location for it.
+    pub fn may_name(&self, workspace_id: &WorkspaceId) -> bool {
+        workspace_id.hex().starts_with(self.hex())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.name
+    }
+
+    pub fn slug(&self) -> &str {
+        &self.name[..self.hex_start - 1]
+    }
+
+    pub fn hex(&self) -> &str {
+        &self.name[self.hex_start..]
+    }
+}
+
+impl fmt::Display for WorkspaceDirName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)
     }
 }
 
@@ -1024,6 +1132,45 @@ mod tests {
         assert!(WorkspaceId::parse("0123456789abcdefABCDEF01").is_err());
         assert!(WorkspaceId::parse("ws_short").is_err());
         assert!(WorkspaceId::parse("ws_0123456789abcdefABCDEFG").is_err());
+    }
+
+    #[test]
+    fn workspace_dir_name_round_trips_and_rejects_malformed_names() {
+        let id = WorkspaceId::parse("ws_abcdef0123456789abcdef01").unwrap();
+        let minted = WorkspaceDirName::mint("my-repo", &id, 4);
+        assert_eq!(minted.as_str(), "my-repo-abcd");
+        let parsed = WorkspaceDirName::parse(minted.as_str()).expect("minted parses");
+        assert_eq!(parsed, minted);
+        assert_eq!((parsed.slug(), parsed.hex()), ("my-repo", "abcd"));
+        assert!(parsed.may_name(&id));
+        assert_eq!(WorkspaceDirName::mint("x", &id, 7).hex(), "abcdef");
+        assert_eq!(WorkspaceDirName::mint("x", &id, 99).hex(), id.hex());
+        assert_eq!(
+            WorkspaceDirName::fallback(&id).as_str(),
+            "ws-abcdef0123456789abcdef01"
+        );
+        for bad in [
+            "repo",
+            "repo-abc",
+            "repo-abcde",
+            "repo-abcg",
+            "-abcd",
+            "--abcd",
+            "a b-abcd",
+            "ws_abcdef0123456789abcdef01",
+        ] {
+            assert_eq!(WorkspaceDirName::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn workspace_basename_slug_sanitizes_and_caps() {
+        let slug = |root: &str, max| WorkspaceDirName::basename_slug(Path::new(root), max);
+        assert_eq!(slug("/src/my repo!", 32), "my-repo");
+        assert_eq!(slug("/src/abcdefghijk", 8), "abcdefgh");
+        assert_eq!(slug("/src/abcdefg-ij", 8), "abcdefg");
+        assert_eq!(slug("/", 32), "root");
+        assert_eq!(slug("/src/---", 32), "root");
     }
 
     #[test]

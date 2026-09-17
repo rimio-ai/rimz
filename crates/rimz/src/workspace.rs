@@ -34,7 +34,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use self::record::{WorkspaceRecord, WorkspaceRecordErr};
-use crate::ids::{MuxName, WorkspaceId};
+use crate::ids::{MuxName, WorkspaceDirName, WorkspaceId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceErr {
@@ -713,41 +713,9 @@ fn resolve_marker(start: &Path) -> Option<PathBuf> {
 const SESSION_BASENAME_SLUG_MAX: usize = 8;
 
 fn session_name_for(project_root: &Path) -> String {
-    let basename = project_root
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "root".into());
-    let slug: String = basename
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        // Collapse runs of separators (leading slash, spaces, `/`) into one `-`.
-        .fold(String::new(), |mut acc, c| {
-            if c == '-' && acc.ends_with('-') {
-                return acc;
-            }
-            acc.push(c);
-            acc
-        });
-    let slug = slug
-        .trim_matches('-')
-        .chars()
-        .take(SESSION_BASENAME_SLUG_MAX)
-        .collect::<String>();
-    let slug = slug.trim_matches('-');
-    let slug = if slug.is_empty() { "root" } else { slug };
+    let slug = WorkspaceDirName::basename_slug(project_root, SESSION_BASENAME_SLUG_MAX);
     let workspace_id = WorkspaceId::from_project_root(project_root);
-    let hash = workspace_id
-        .as_str()
-        .strip_prefix("ws_")
-        .unwrap_or(workspace_id.as_str());
-    format!("rimz-{slug}-{}", &hash[..6])
+    format!("rimz-{slug}-{}", &workspace_id.hex()[..6])
 }
 
 #[cfg(test)]
