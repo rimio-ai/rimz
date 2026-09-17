@@ -21,7 +21,8 @@ pub enum PruneReason {
 /// A workspace store removed by [`super::prune_dead_workspaces`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemovedWorkspace {
-    pub workspace_id: WorkspaceId,
+    pub workspace_id: Option<WorkspaceId>,
+    pub dir_name: String,
     pub reason: PruneReason,
     pub bytes: u64,
     /// The recorded project root, when the record was readable.
@@ -33,8 +34,8 @@ pub struct WorkspacePruneReport {
     pub removed: Vec<RemovedWorkspace>,
     pub kept: usize,
     /// Dirs with an unreadable record that still hold history, kept for the
-    /// operator to inspect rather than silently deleted: `(id, error)`.
-    pub retained_unreadable: Vec<(WorkspaceId, String)>,
+    /// operator to inspect rather than silently deleted: `(directory name, error)`.
+    pub retained_unreadable: Vec<(String, String)>,
 }
 
 impl WorkspacePruneReport {
@@ -56,7 +57,7 @@ impl WorkspacePruneReport {
 #[must_use = "maintenance report; surface it to the caller"]
 pub(crate) fn prune_dead_workspaces_under(
     workspaces_root: &Path,
-    runtime_rimz_root: &Path,
+    runtime_workspaces_root: &Path,
     dry_run: bool,
 ) -> Result<WorkspacePruneReport> {
     let Some(entries) = read_dir_if_exists(workspaces_root)? else {
@@ -73,23 +74,23 @@ pub(crate) fn prune_dead_workspaces_under(
         if !path.is_dir() {
             continue;
         }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Ok(workspace_id) = WorkspaceId::parse(name) else {
-            continue;
-        };
+        let name = entry.file_name();
+        let runtime_dir = runtime_workspaces_root.join(&name);
 
         match classify_workspace(&path) {
             Verdict::Keep => report.kept += 1,
-            Verdict::Retain(err) => report.retained_unreadable.push((workspace_id, err)),
-            Verdict::Remove(reason, project_root) => {
-                let bytes = workspace_bytes(&path, &workspace_id, runtime_rimz_root);
+            Verdict::Retain(err) => report
+                .retained_unreadable
+                .push((name.to_string_lossy().into_owned(), err)),
+            Verdict::Remove(reason, project_root, workspace_id) => {
+                let bytes = dir_size(&path).saturating_add(dir_size(&runtime_dir));
                 if !dry_run {
-                    remove_workspace(&path, &workspace_id, runtime_rimz_root)?;
+                    remove_dir_all_if_exists(&path)?;
+                    remove_dir_all_if_exists(&runtime_dir)?;
                 }
                 report.removed.push(RemovedWorkspace {
                     workspace_id,
+                    dir_name: name.to_string_lossy().into_owned(),
                     reason,
                     bytes,
                     project_root,
@@ -103,15 +104,19 @@ pub(crate) fn prune_dead_workspaces_under(
 enum Verdict {
     Keep,
     Retain(String),
-    Remove(PruneReason, Option<PathBuf>),
+    Remove(PruneReason, Option<PathBuf>, Option<WorkspaceId>),
 }
 
 fn classify_workspace(path: &Path) -> Verdict {
     match record::read(&path.join("workspace.json")) {
         Ok(record) if record.project_root.exists() => Verdict::Keep,
-        Ok(record) => Verdict::Remove(PruneReason::ProjectRootGone, Some(record.project_root)),
+        Ok(record) => Verdict::Remove(
+            PruneReason::ProjectRootGone,
+            Some(record.project_root),
+            Some(record.workspace_id),
+        ),
         Err(err) if workspace_has_history(path) => Verdict::Retain(err.to_string()),
-        Err(_) => Verdict::Remove(PruneReason::AbandonedScaffold, None),
+        Err(_) => Verdict::Remove(PruneReason::AbandonedScaffold, None, None),
     }
 }
 
@@ -124,22 +129,6 @@ fn workspace_has_history(path: &Path) -> bool {
 
 fn dir_has_entries(path: &Path) -> bool {
     fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
-}
-
-fn remove_workspace(
-    state_dir: &Path,
-    workspace_id: &WorkspaceId,
-    runtime_rimz_root: &Path,
-) -> Result<()> {
-    let runtime_dir = runtime_rimz_root.join(workspace_id.as_str());
-    remove_dir_all_if_exists(state_dir)?;
-    remove_dir_all_if_exists(&runtime_dir)?;
-    Ok(())
-}
-
-fn workspace_bytes(state_dir: &Path, workspace_id: &WorkspaceId, runtime_rimz_root: &Path) -> u64 {
-    let runtime_dir = runtime_rimz_root.join(workspace_id.as_str());
-    dir_size(state_dir).saturating_add(dir_size(&runtime_dir))
 }
 
 fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
@@ -161,32 +150,30 @@ mod tests {
     #[test]
     fn prune_reaps_dead_roots_and_scaffolds_but_keeps_history() {
         let temp = tempdir().unwrap();
-        let workspaces = temp.path().join("workspaces");
-        let runtime = temp.path().join("runtime-rimz");
+        let workspaces = crate::disk::paths::workspaces_dir_under(temp.path());
+        let runtime = temp.path().join("runtime/rimz/ws");
         fs::create_dir_all(&workspaces).unwrap();
 
         // 1. Alive: record points at a project root that still exists.
         let alive_root = temp.path().join("alive");
         fs::create_dir_all(&alive_root).unwrap();
         let alive_id = WorkspaceId::from_project_root(&alive_root);
-        write_record(&workspaces.join(alive_id.as_str()), &alive_id, &alive_root);
+        write_record(&workspaces.join("alive-abcd"), &alive_id, &alive_root);
 
         // 2. Dead root: recorded project root is gone; runtime dir present too.
         let gone_root = temp.path().join("gone");
         let gone_id = WorkspaceId::from_project_root(&gone_root);
-        write_record(&workspaces.join(gone_id.as_str()), &gone_id, &gone_root);
-        fs::create_dir_all(runtime.join(gone_id.as_str())).unwrap();
+        write_record(&workspaces.join("gone-abcd"), &gone_id, &gone_root);
+        fs::create_dir_all(runtime.join("gone-abcd")).unwrap();
 
         // 3. Abandoned scaffold: empty snapshots/runs/locks, no record.
-        let scaffold_id = WorkspaceId::from_project_root(Path::new("/scaffold"));
-        let scaffold_dir = workspaces.join(scaffold_id.as_str());
+        let scaffold_dir = workspaces.join("unfinished");
         for sub in ["snapshots", "runs", "locks"] {
             fs::create_dir_all(scaffold_dir.join(sub)).unwrap();
         }
 
         // 4. Unreadable record but real history: retained, never deleted.
-        let history_id = WorkspaceId::from_project_root(Path::new("/history"));
-        let history_dir = workspaces.join(history_id.as_str());
+        let history_dir = workspaces.join("history");
         fs::create_dir_all(&history_dir).unwrap();
         fs::write(history_dir.join("workspace.json"), b"{ not json").unwrap();
         fs::write(history_dir.join("events.log.jsonl"), b"{}\n").unwrap();
@@ -208,12 +195,28 @@ mod tests {
             "dead-root removal reports reclaimed bytes"
         );
 
-        assert!(workspaces.join(alive_id.as_str()).exists());
-        assert!(!workspaces.join(gone_id.as_str()).exists());
-        assert!(
-            !runtime.join(gone_id.as_str()).exists(),
-            "runtime dir reaped"
+        assert!(workspaces.join("alive-abcd").exists());
+        assert!(!workspaces.join("gone-abcd").exists());
+        assert!(!runtime.join("gone-abcd").exists(), "runtime dir reaped");
+        assert_eq!(
+            report
+                .removed
+                .iter()
+                .find(|row| row.reason == PruneReason::ProjectRootGone)
+                .unwrap()
+                .workspace_id,
+            Some(gone_id)
         );
+        assert_eq!(
+            report
+                .removed
+                .iter()
+                .find(|row| row.reason == PruneReason::AbandonedScaffold)
+                .unwrap()
+                .dir_name,
+            "unfinished"
+        );
+        assert_eq!(report.retained_unreadable[0].0, "history");
         assert!(!scaffold_dir.exists());
         assert!(history_dir.exists(), "history retained");
     }
@@ -221,15 +224,15 @@ mod tests {
     #[test]
     fn prune_dead_workspaces_dry_run_reports_without_removing() {
         let temp = tempdir().unwrap();
-        let workspaces = temp.path().join("workspaces");
-        let runtime = temp.path().join("runtime-rimz");
+        let workspaces = crate::disk::paths::workspaces_dir_under(temp.path());
+        let runtime = temp.path().join("runtime/rimz/ws");
         fs::create_dir_all(&workspaces).unwrap();
 
         let gone_root = temp.path().join("gone");
         let gone_id = WorkspaceId::from_project_root(&gone_root);
-        let gone_dir = workspaces.join(gone_id.as_str());
+        let gone_dir = workspaces.join("gone-abcd");
         write_record(&gone_dir, &gone_id, &gone_root);
-        fs::create_dir_all(runtime.join(gone_id.as_str())).unwrap();
+        fs::create_dir_all(runtime.join("gone-abcd")).unwrap();
 
         let report = prune_dead_workspaces_under(&workspaces, &runtime, true).unwrap();
 
@@ -237,7 +240,7 @@ mod tests {
         assert!(report.removed[0].bytes > 0);
         assert!(gone_dir.exists(), "dry-run keeps workspace dir");
         assert!(
-            runtime.join(gone_id.as_str()).exists(),
+            runtime.join("gone-abcd").exists(),
             "dry-run keeps runtime dir"
         );
     }

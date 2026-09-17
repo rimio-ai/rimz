@@ -86,7 +86,7 @@ impl Reporting {
             tracing::error!(
                 target: "rimz::observability",
                 error = %error,
-                "invalid Sentry DSN; reporting disabled — fix [sentry] dsn in ~/.config/rimz/config.toml or set RIMZ_SENTRY_DSN",
+                "invalid Sentry DSN; reporting disabled — fix [sentry] dsn in ~/.rimz/config.toml or set RIMZ_SENTRY_DSN",
             );
         }
     }

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
-use crate::disk::paths::state_home;
+use crate::disk::paths::logs_dir;
 use crate::harness::schedule::arming;
 use crate::harness::schedule::catalog::LoadedTask;
 use crate::harness::schedule::signal::WatchVerdict;
@@ -50,7 +50,7 @@ pub enum RunTransition {
 pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransition {
     let mut scoped_record = record.clone();
     scoped_record.root = Some(task.entry().resolved_root());
-    append_to(&state_home(), &scoped_record);
+    append_to(&logs_dir(), &scoped_record);
     let name = &record.task;
     let key = task.key(name);
     let signal = strikes::classify(record);
@@ -258,7 +258,7 @@ pub struct TaskCostSummary {
 }
 
 fn log_path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(NAME)
+    state_root.join(NAME)
 }
 
 fn append_to(state_root: &Path, record: &LoopRunRecord) {
@@ -645,7 +645,7 @@ mod tests {
         let now = "2026-06-02T12:00:00-04:00[America/New_York]"
             .parse::<Zoned>()
             .expect("zoned");
-        let path = log_path(dir.path());
+        let path = dir.path().join("loop-runs.log.jsonl");
         std::fs::create_dir_all(path.parent().expect("log parent")).expect("log dir");
         let mut prior = record("wait", 0, LoopRunResult::Completed);
         prior.at = "2026-06-02T03:00:00Z".parse().expect("timestamp");

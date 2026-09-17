@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::disk::paths::state_home;
+use crate::disk::paths::logs_dir;
 use crate::harness::auto_redeem::RedeemReason;
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -123,11 +123,11 @@ pub struct AssistWindowReset {
 }
 
 pub fn log_path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(NAME)
+    state_root.join(NAME)
 }
 
 pub fn append(record: &AssistRecord) {
-    append_to(&state_home(), record, MAX_BYTES);
+    append_to(&logs_dir(), record, MAX_BYTES);
 }
 
 pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> {
@@ -285,6 +285,7 @@ mod tests {
         let second = resumed(20);
         append_to(dir.path(), &second, 1);
 
+        assert!(dir.path().join("assists.log.jsonl").is_file());
         assert_eq!(recent(dir.path(), None), vec![first, second]);
     }
 

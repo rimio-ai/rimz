@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::disk::atomic::{AtomicErr, write_temp_then_rename, write_temp_then_rename_cache};
+use crate::disk::atomic::{AtomicErr, write_temp_then_rename_cache};
 use crate::disk::lock::{LockErr, WorkspaceLock};
 
 #[derive(Debug, thiserror::Error)]
@@ -32,11 +32,11 @@ impl OverlayStore {
     }
 
     pub(super) fn path(&self, state_root: &Path) -> PathBuf {
-        state_root.join("rimz").join(self.data_name)
+        state_root.join(self.data_name)
     }
 
     pub(super) fn lock_path(&self, state_root: &Path) -> PathBuf {
-        state_root.join("rimz").join(self.lock_name)
+        state_root.join(self.lock_name)
     }
 
     pub(super) fn load<V>(&self, state_root: &Path) -> BTreeMap<String, V>
@@ -74,27 +74,6 @@ impl OverlayStore {
             let removed = entries.remove(name).is_some();
             (removed, removed)
         })
-    }
-
-    pub(super) fn copy_missing<V>(&self, state_root: &Path, keys: &[(String, String)]) -> Result<()>
-    where
-        V: Clone + DeserializeOwned + Serialize,
-    {
-        let _guard = WorkspaceLock::acquire(&self.lock_path(state_root))?;
-        let mut entries = self.load::<V>(state_root);
-        let mut changed = false;
-        for (old, new) in keys {
-            if !entries.contains_key(new)
-                && let Some(value) = entries.get(old).cloned()
-            {
-                entries.insert(new.clone(), value);
-                changed = true;
-            }
-        }
-        if changed {
-            write_temp_then_rename(&self.path(state_root), &entries)?;
-        }
-        Ok(())
     }
 
     pub(super) fn rename<V>(&self, state_root: &Path, old: &str, new: &str) -> Result<bool>
@@ -152,7 +131,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(STORE.load::<u32>(dir.path()).is_empty());
 
-        std::fs::create_dir_all(dir.path().join("rimz")).expect("state dir");
         std::fs::write(STORE.path(dir.path()), b"not json").expect("corrupt state");
         assert!(STORE.load::<u32>(dir.path()).is_empty());
     }
@@ -163,6 +141,8 @@ mod tests {
         set(dir.path(), "old", 1);
         set(dir.path(), "gone", 2);
 
+        assert!(dir.path().join("test-overlay.json").is_file());
+        assert!(dir.path().join("test-overlay.lock").is_file());
         assert!(
             STORE
                 .rename::<u32>(dir.path(), "old", "new")

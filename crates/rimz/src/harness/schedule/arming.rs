@@ -13,11 +13,10 @@ use serde::{Deserialize, Serialize};
 
 use super::catalog::TaskSource;
 use super::overlay_store::{OverlayError, OverlayStore};
-use crate::disk::paths::state_home;
+use crate::disk::paths::loops_dir;
 use crate::ids::WorkspaceId;
 
 const STORE: OverlayStore = OverlayStore::new("loop-arming.json", "loop-arming.lock");
-const LEGACY_PAUSE_STORE: OverlayStore = OverlayStore::new("loop-pauses.json", "loop-pauses.lock");
 const MACHINE_SCOPE: &str = "machine::";
 
 #[derive(Debug, thiserror::Error)]
@@ -28,19 +27,11 @@ pub struct ArmingError(ArmingErrorKind);
 enum ArmingErrorKind {
     #[error(transparent)]
     Overlay(OverlayError),
-    #[error(transparent)]
-    Io(std::io::Error),
 }
 
 impl From<OverlayError> for ArmingError {
     fn from(value: OverlayError) -> Self {
         Self(ArmingErrorKind::Overlay(value))
-    }
-}
-
-impl From<std::io::Error> for ArmingError {
-    fn from(value: std::io::Error) -> Self {
-        Self(ArmingErrorKind::Io(value))
     }
 }
 
@@ -137,22 +128,22 @@ impl ArmState {
 }
 
 pub fn load() -> BTreeMap<String, Arming> {
-    load_from(&state_home())
+    load_from(&loops_dir())
 }
 
 pub(super) fn enable(key: &str) -> Result<Arming> {
-    enable_in(&state_home(), key, Timestamp::now())
+    enable_in(&loops_dir(), key, Timestamp::now())
 }
 
 pub fn disable(key: &str, strikes: Option<u32>) -> Result<()> {
-    disable_in(&state_home(), key, strikes, Timestamp::now())
+    disable_in(&loops_dir(), key, strikes, Timestamp::now())
 }
 
 /// Pause a task without changing its effective enablement.
 ///
 /// A missing record inherits its source default before the pause is written.
 pub fn pause(key: &str, source: TaskSource, until: Timestamp) -> Result<()> {
-    pause_in(&state_home(), key, source, until)
+    pause_in(&loops_dir(), key, source, until)
 }
 
 pub(super) fn disable_if_live(
@@ -161,27 +152,19 @@ pub(super) fn disable_if_live(
     strikes: Option<u32>,
     now: Timestamp,
 ) -> Result<bool> {
-    disable_if_live_in(&state_home(), key, source, strikes, now)
+    disable_if_live_in(&loops_dir(), key, source, strikes, now)
 }
 
 pub(super) fn remove(key: &str) -> Result<bool> {
-    remove_from(&state_home(), key)
+    remove_from(&loops_dir(), key)
 }
 
 pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
-    rename_in(&state_home(), old, new)
-}
-
-pub(super) fn migrate_instance_keys(state_root: &Path, keys: &[(String, String)]) -> Result<()> {
-    Ok(STORE.copy_missing::<Arming>(state_root, keys)?)
+    rename_in(&loops_dir(), old, new)
 }
 
 pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
-    prune_orphans_in(&state_home(), known, scopes)
-}
-
-pub(super) fn remove_legacy_pauses() -> Result<usize> {
-    remove_legacy_pauses_in(&state_home())
+    prune_orphans_in(&loops_dir(), known, scopes)
 }
 
 pub(super) fn effective_last_fire(
@@ -264,21 +247,6 @@ fn disable_if_live_in(
             (true, changed)
         })
         .map_err(Into::into)
-}
-
-fn remove_legacy_pauses_in(state_root: &Path) -> Result<usize> {
-    let mut removed = 0;
-    for path in [
-        LEGACY_PAUSE_STORE.path(state_root),
-        LEGACY_PAUSE_STORE.lock_path(state_root),
-    ] {
-        match std::fs::remove_file(path) {
-            Ok(()) => removed += 1,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
-        }
-    }
-    Ok(removed)
 }
 
 fn set_in(state_root: &Path, key: &str, entry: Arming) -> Result<()> {
@@ -484,20 +452,5 @@ mod tests {
             )
             .expect("machine default")
         );
-    }
-
-    #[test]
-    fn legacy_pause_cleanup_removes_data_and_lock() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let data = LEGACY_PAUSE_STORE.path(dir.path());
-        let lock = LEGACY_PAUSE_STORE.lock_path(dir.path());
-        std::fs::create_dir_all(data.parent().expect("legacy parent")).expect("state dir");
-        std::fs::write(&data, "{}").expect("legacy data");
-        std::fs::write(&lock, "").expect("legacy lock");
-
-        assert_eq!(remove_legacy_pauses_in(dir.path()).expect("cleanup"), 2);
-        assert!(!data.exists());
-        assert!(!lock.exists());
-        assert_eq!(remove_legacy_pauses_in(dir.path()).expect("idempotent"), 0);
     }
 }

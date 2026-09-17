@@ -132,9 +132,7 @@ fn lost_watch_outcome(
     arm_stamp: Timestamp,
     now: Timestamp,
 ) -> anyhow::Result<super::signal::WatchOutcome> {
-    let paths = StatePaths::for_workspace(WorkspaceId::from_project_root(
-        &task.entry().resolved_root(),
-    ))?;
+    let paths = StatePaths::for_project_root(&task.entry().resolved_root())?;
     let path = super::signal::wait_output_path(&paths, name);
     let armed_at = task
         .entry()
@@ -239,9 +237,10 @@ fn plan(
 }
 
 fn watcher_missing(task: &LoadedTask, name: &str) -> bool {
-    let Ok(runtime) = RuntimePaths::for_workspace(WorkspaceId::from_project_root(
-        &task.entry().resolved_root(),
-    )) else {
+    let Ok(state) = StatePaths::for_project_root(&task.entry().resolved_root()) else {
+        return false;
+    };
+    let Ok(runtime) = RuntimePaths::for_state(&state) else {
         return false;
     };
     super::signal::watcher_info(&runtime, name).is_ok_and(|info| info.is_none())
@@ -710,8 +709,8 @@ mod tests {
         assert_eq!(Tick::armed(recent).run(&watch, &now), carry(recent));
 
         let stale = seconds_before(now.timestamp(), WATCH_LOST_GRACE_SECS + 1);
-        let runtime = RuntimePaths::for_workspace(WorkspaceId::from_project_root(root.path()))
-            .expect("watch runtime");
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let runtime = RuntimePaths::for_state(&paths).expect("watch runtime");
         std::fs::create_dir_all(&runtime.root).expect("runtime root");
         let guard = super::super::signal::acquire_watch_lock(&runtime, NAME)
             .unwrap()
@@ -729,7 +728,6 @@ mod tests {
             outcome.summary,
             crate::disk::summary::FileSummary::default()
         );
-        let paths = StatePaths::for_workspace(WorkspaceId::from_project_root(root.path())).unwrap();
         let path = super::super::signal::wait_output_path(&paths, NAME);
         assert_eq!(outcome.output_path, Some(path.clone()));
         paths.ensure_tmp_dir().unwrap();
@@ -752,8 +750,8 @@ mod tests {
     #[test]
     fn invalid_renamed_watcher_signal_does_not_stop_elder_fire() {
         let root = tempfile::tempdir().unwrap();
-        let runtime = RuntimePaths::for_workspace(WorkspaceId::from_project_root(root.path()))
-            .expect("watch runtime");
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        let runtime = RuntimePaths::for_state(&paths).expect("watch runtime");
         std::fs::create_dir_all(&runtime.root).expect("runtime root");
         let now = zdt(2026, 6, 24, 8, 5, 0);
         let stale = seconds_before(now.timestamp(), WATCH_LOST_GRACE_SECS + 1);

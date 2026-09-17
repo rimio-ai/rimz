@@ -287,6 +287,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     let mut pins = BTreeMap::new();
     let root_keys = [
         "HOME",
+        "RIMZ_HOME",
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
         "XDG_CACHE_HOME",

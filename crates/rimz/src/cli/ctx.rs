@@ -47,8 +47,7 @@ impl Ctx {
     ) -> Result<Self> {
         let paths =
             StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
-        let runtime =
-            RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
+        let runtime = RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
         let record = record::read(&paths.workspace_record).with_context(|| {
             format!(
                 "reading workspace record `{}`",

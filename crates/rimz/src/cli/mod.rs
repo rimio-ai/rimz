@@ -27,6 +27,7 @@ mod loop_cmd;
 mod loop_timer;
 mod message;
 mod pane;
+mod paths;
 mod pricing_refresh;
 mod profile_report;
 mod providers;
@@ -116,6 +117,7 @@ pub fn dispatch() -> Result<()> {
     match cli.subcommand {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
+        Some(Subcmd::Paths(args)) => paths::run(args, &globals),
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
         Some(Subcmd::Providers(args)) => providers::run(args, &globals),
         Some(Subcmd::Logins(args)) => accounts::run(args, &globals),
@@ -520,6 +522,8 @@ enum Subcmd {
     Workspace(workspace::WorkspaceArgs),
     /// Show known workspaces and which mux is running them.
     List(list::ListArgs),
+    /// Show where RimZ keeps this project's files.
+    Paths(paths::PathsArgs),
     /// Token-activity heatmap and usage insights.
     ///
     /// Includes model and agent breakdowns.
@@ -859,10 +863,9 @@ fn require_definitions(config: &rimz::config::MachineConfig) -> Result<()> {
 }
 
 pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
-    let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing store paths")?;
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
+    let paths =
+        StatePaths::for_project_root(&workspace.project_root).context("preparing store paths")?;
+    let runtime = RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
     let store = Store::open(paths, runtime).context("opening store")?;
     store
         .record_workspace(workspace)
@@ -871,13 +874,12 @@ pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
 }
 
 pub(crate) fn open_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result<Option<Store>> {
-    let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing store paths")?;
+    let paths =
+        StatePaths::for_project_root(&workspace.project_root).context("preparing store paths")?;
     if !paths.root.is_dir() {
         return Ok(None);
     }
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing runtime paths")?;
+    let runtime = RuntimePaths::for_state(&paths).context("preparing runtime paths")?;
     Ok(Store::open_existing(paths, runtime))
 }
 

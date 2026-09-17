@@ -175,8 +175,7 @@ pub const ACCOUNTS_DIR: &str = "accounts";
 
 /// Where RimZ puts an account home the user did not place itself.
 pub fn default_named_home(kind: &AgentKind, name: &LoginName) -> PathBuf {
-    crate::disk::paths::data_home()
-        .join("rimz")
+    crate::disk::paths::data_dir()
         .join(ACCOUNTS_DIR)
         .join(kind.as_str())
         .join(name.as_str())

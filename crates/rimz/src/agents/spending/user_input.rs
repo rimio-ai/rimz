@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::disk::paths::state_home;
+use crate::disk::paths::logs_dir;
 use crate::ids::AgentKind;
 
 const NAME: &str = "user-inputs.log.jsonl";
@@ -27,7 +27,7 @@ pub struct UserInputRecord {
 }
 
 pub fn append(record: &UserInputRecord) {
-    append_in(&state_home(), record);
+    append_in(&logs_dir(), record);
 }
 
 pub fn append_in(state_root: &Path, record: &UserInputRecord) {
@@ -40,7 +40,7 @@ pub fn append_in(state_root: &Path, record: &UserInputRecord) {
 }
 
 pub(super) fn load() -> Vec<UserInputRecord> {
-    load_in(&state_home())
+    load_in(&logs_dir())
 }
 
 pub fn load_in(state_root: &Path) -> Vec<UserInputRecord> {
@@ -53,7 +53,7 @@ pub fn load_in(state_root: &Path) -> Vec<UserInputRecord> {
 }
 
 fn log_path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(NAME)
+    state_root.join(NAME)
 }
 
 #[cfg(test)]
@@ -75,6 +75,7 @@ mod tests {
         append_in(dir.path(), &record(10, Some("/tmp/repo/../repo/worktree")));
         append_in(dir.path(), &record(20, Some("relative/worktree")));
 
+        assert!(dir.path().join("user-inputs.log.jsonl").is_file());
         assert_eq!(
             load_in(dir.path()),
             vec![record(10, Some("/tmp/repo/worktree")), record(20, None),]

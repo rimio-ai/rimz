@@ -39,7 +39,7 @@ use rimz::agents::spending::{
     read_provider_spending_cache, refresh_global_spending_direct, unix_secs_now, utc_date,
 };
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig};
-use rimz::disk::paths::state_home;
+use rimz::disk::paths::logs_dir;
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 const DAY_SECS: i64 = 86_400;
@@ -153,7 +153,7 @@ impl Window {
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.assists {
-        let assists = AssistStats::load(&state_home(), Window::AllTime, Timestamp::now());
+        let assists = AssistStats::load(&logs_dir(), Window::AllTime, Timestamp::now());
         return render_full(&assists);
     }
     if args.refresh {
@@ -161,7 +161,7 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     }
     let loaded = load_stats(!args.json)?;
     let today_day = unix_secs_now() as i64 / DAY_SECS;
-    let assists = AssistStats::load(&state_home(), Window::AllTime, Timestamp::now());
+    let assists = AssistStats::load(&logs_dir(), Window::AllTime, Timestamp::now());
     if args.json {
         return emit_json(&loaded.stats, &assists, today_day, args.dollars);
     }

@@ -12,8 +12,6 @@ use std::path::{Path, PathBuf};
 use crate::config::{TaskEntry, Tasks};
 use crate::disk::atomic::{AtomicErr, write_temp_then_rename};
 use crate::disk::lock::{LockErr, WorkspaceLock};
-use crate::disk::paths::workspaces_dir_under;
-use crate::ids::WorkspaceId;
 use jiff::Timestamp;
 
 #[derive(Debug, thiserror::Error)]
@@ -32,9 +30,9 @@ pub(super) enum InstanceErr {
         path: PathBuf,
         source: serde_json::Error,
     },
-    #[error("migrating instance arming state: {0}")]
+    #[error("clearing instance arming state: {0}")]
     Arming(#[from] super::arming::ArmingError),
-    #[error("migrating instance strike state: {0}")]
+    #[error("clearing instance strike state: {0}")]
     Strikes(#[from] super::strikes::StrikesError),
 }
 
@@ -61,68 +59,6 @@ pub(super) fn load_strict_from(state_root: &Path) -> Result<Tasks> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Tasks::default()),
         Err(source) => Err(InstanceErr::Read { path, source }),
     }
-}
-
-pub(super) fn migrate_legacy(state_home: &Path) -> Result<()> {
-    let legacy_root = state_home.join("rimz");
-    let legacy_path = path(&legacy_root);
-    match std::fs::metadata(&legacy_path) {
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(InstanceErr::Read {
-                path: legacy_path,
-                source,
-            });
-        }
-        Ok(_) => {}
-    }
-    let _guard = WorkspaceLock::acquire(&lock_path(&legacy_root))?;
-    let legacy = load_strict_from(&legacy_root)?;
-    let mut workspaces = BTreeMap::<PathBuf, BTreeMap<String, TaskEntry>>::new();
-    let mut overlay_keys = Vec::new();
-    for (name, entry) in legacy.0 {
-        let root = workspaces_dir_under(state_home)
-            .join(WorkspaceId::from_project_root(&entry.resolved_root()).as_str());
-        workspaces.entry(root).or_default().insert(name, entry);
-    }
-    let mut destinations = Vec::new();
-    for (root, entries) in workspaces {
-        let guard = WorkspaceLock::acquire(&lock_path(&root))?;
-        let mut current = load_strict_from(&root)?.0;
-        for (name, entry) in entries {
-            if current.get(&name).is_none_or(|existing| existing == &entry) {
-                overlay_keys.push((
-                    super::arming::TaskKey::for_task(
-                        &name,
-                        super::catalog::TaskSource::Config,
-                        &entry.resolved_root(),
-                    ),
-                    super::arming::TaskKey::for_task(
-                        &name,
-                        super::catalog::TaskSource::Instance,
-                        &entry.resolved_root(),
-                    ),
-                ));
-            }
-            current.entry(name).or_insert(entry);
-        }
-        destinations.push((root, guard, current));
-    }
-    // Keep destination locks until the source is cleared, including across all
-    // publishes, so another writer cannot remove a row before migration commits.
-    super::arming::migrate_instance_keys(state_home, &overlay_keys)?;
-    super::strikes::migrate_instance_keys(state_home, &overlay_keys)?;
-    for (root, _, entries) in &destinations {
-        write_temp_then_rename(&path(root), entries)?;
-    }
-    // Persist an empty source before unlinking so a crash cannot resurrect rows
-    // if the unlink itself has not reached disk.
-    write_temp_then_rename(&legacy_path, &Tasks::default())?;
-    std::fs::remove_file(&legacy_path).map_err(|source| InstanceErr::Read {
-        path: legacy_path,
-        source,
-    })?;
-    Ok(())
 }
 
 pub(super) fn insert(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
@@ -271,7 +207,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
 
         assert!(load_from(dir.path()).0.is_empty());
-        std::fs::create_dir_all(dir.path().join("rimz")).expect("state dir");
         std::fs::write(path(dir.path()), b"not json").expect("corrupt state");
         assert!(load_from(dir.path()).0.is_empty());
     }

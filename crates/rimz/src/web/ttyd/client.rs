@@ -23,11 +23,11 @@ use crate::web::WebWarning;
 
 const STOCK_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
 const STOCK_INDEX_MAX_BYTES: u64 = 16 * 1024 * 1024;
-const INDEX_CACHE_DIR: &str = "rimz/web-ttyd";
+const INDEX_CACHE_DIR: &str = "web-ttyd";
 const CUSTOM_INDEX_SCHEMA: &str = "rimz.ttyd-index.v10";
 
 const OFFLINE_ENV: &str = "RIMZ_WEB_FONTS_OFFLINE";
-const FONT_CACHE_DIR: &str = "rimz/web-fonts";
+const FONT_CACHE_DIR: &str = "web-fonts";
 const FONT_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_FONT_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -130,7 +130,7 @@ fn ensure_custom_index(
     faces: &[FontFace],
 ) -> Result<Option<(PathBuf, String)>, String> {
     let key = custom_index_key(ttyd_version, family, faces);
-    let path = paths::cache_home()
+    let path = paths::cache_dir()
         .join(INDEX_CACHE_DIR)
         .join(format!("index-{key}.html"));
     if path.is_file() {
@@ -895,7 +895,7 @@ fn expand_home(path: &Path) -> PathBuf {
 }
 
 fn font_cache_dir() -> PathBuf {
-    paths::cache_home().join(FONT_CACHE_DIR)
+    paths::cache_dir().join(FONT_CACHE_DIR)
 }
 
 fn offline() -> bool {

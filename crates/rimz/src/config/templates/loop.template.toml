@@ -1,6 +1,6 @@
 # RimZ per-machine loop configuration.
 #
-# Save as ~/.config/rimz/loop.toml, or run `rimz config init`.
+# Save as ~/.rimz/loop.toml, or run `rimz config init`.
 # Durable recurring loop tasks live here. One-shots and self-waits created by
 # RimZ live in the state store instead, so this file stays hand-editable.
 

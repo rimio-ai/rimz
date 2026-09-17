@@ -52,7 +52,8 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
     for project in ["/home/user/alpha", "/home/user/beta"] {
         let project_root = std::path::PathBuf::from(project);
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        let paths = StatePaths::under(workspace_id.clone(), state_root).expect("state paths");
+        let paths =
+            StatePaths::for_project_root_under(&project_root, state_root).expect("state paths");
         std::fs::create_dir_all(&paths.root).expect("mkdir workspace");
         record::write(
             &paths,
@@ -70,9 +71,10 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
         )
         .expect("write record");
     }
-    // A directory whose name isn't a workspace id, and a workspace dir with no
+    // An invalid directory name and a workspace dir with no
     // record, are both skipped silently.
     std::fs::create_dir_all(root.join("not-a-workspace-id")).expect("mkdir junk");
+    std::fs::create_dir_all(root.join("unfinished-abcd")).expect("mkdir recordless");
 
     let mut sessions: Vec<String> = known_workspaces_under(&root)
         .expect("enumerate")
@@ -123,6 +125,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     let known = known_workspaces_under(&workspaces_dir_under(&state_root)).expect("enumerate");
     assert_eq!(known.len(), 1);
     assert_eq!(known[0].workspace_id, workspace_id);
+    assert_eq!(known[0].dir_name, paths.dir_name);
     assert_eq!(known[0].project_root, canonical_root);
     assert_eq!(known[0].session_name, session_name_for(&canonical_root));
 

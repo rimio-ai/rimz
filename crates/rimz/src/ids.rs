@@ -155,7 +155,7 @@ impl WorkspaceId {
     }
 
     /// The 24 hex digits after `ws_`.
-    pub fn hex(&self) -> &str {
+    pub(crate) fn hex(&self) -> &str {
         &self.0[3..]
     }
 }
@@ -175,7 +175,7 @@ impl FromStr for WorkspaceId {
 }
 
 /// Minimum hex digits a workspace directory name carries.
-pub const WORKSPACE_DIR_HEX_MIN: usize = 4;
+pub(crate) const WORKSPACE_DIR_HEX_MIN: usize = 4;
 const WORKSPACE_ID_HEX_LEN: usize = 24;
 
 /// A workspace directory name, `<slug>-<hex>`: a basename slug plus an
@@ -210,7 +210,7 @@ impl WorkspaceDirName {
 
     /// Name `workspace_id` with `slug` and the first `hex_len` id hex digits,
     /// clamped to an even length between the minimum and the full id.
-    pub fn mint(slug: &str, workspace_id: &WorkspaceId, hex_len: usize) -> Self {
+    pub(crate) fn mint(slug: &str, workspace_id: &WorkspaceId, hex_len: usize) -> Self {
         let hex_len = hex_len.clamp(WORKSPACE_DIR_HEX_MIN, WORKSPACE_ID_HEX_LEN) & !1;
         let slug = if slug.is_empty() { "root" } else { slug };
         Self {
@@ -221,13 +221,13 @@ impl WorkspaceDirName {
 
     /// The name for a workspace located without its project root: the full id
     /// hex under the `ws` slug, so it can never shadow a minted neighbour.
-    pub fn fallback(workspace_id: &WorkspaceId) -> Self {
+    pub(crate) fn fallback(workspace_id: &WorkspaceId) -> Self {
         Self::mint("ws", workspace_id, WORKSPACE_ID_HEX_LEN)
     }
 
     /// The slug for a project root's basename, at most `max` characters:
     /// ASCII alphanumerics and `_` kept, every other run collapsed to one `-`.
-    pub fn basename_slug(project_root: &Path, max: usize) -> String {
+    pub(crate) fn basename_slug(project_root: &Path, max: usize) -> String {
         let basename = project_root
             .file_name()
             .map(|name| name.to_string_lossy())
@@ -254,7 +254,7 @@ impl WorkspaceDirName {
 
     /// Whether this name's hex is a prefix of `workspace_id`, making the
     /// directory a candidate location for it.
-    pub fn may_name(&self, workspace_id: &WorkspaceId) -> bool {
+    pub(crate) fn may_name(&self, workspace_id: &WorkspaceId) -> bool {
         workspace_id.hex().starts_with(self.hex())
     }
 
@@ -262,11 +262,7 @@ impl WorkspaceDirName {
         &self.name
     }
 
-    pub fn slug(&self) -> &str {
-        &self.name[..self.hex_start - 1]
-    }
-
-    pub fn hex(&self) -> &str {
+    pub(crate) fn hex(&self) -> &str {
         &self.name[self.hex_start..]
     }
 }
@@ -1141,7 +1137,7 @@ mod tests {
         assert_eq!(minted.as_str(), "my-repo-abcd");
         let parsed = WorkspaceDirName::parse(minted.as_str()).expect("minted parses");
         assert_eq!(parsed, minted);
-        assert_eq!((parsed.slug(), parsed.hex()), ("my-repo", "abcd"));
+        assert_eq!((parsed.as_str(), parsed.hex()), ("my-repo-abcd", "abcd"));
         assert!(parsed.may_name(&id));
         assert_eq!(WorkspaceDirName::mint("x", &id, 7).hex(), "abcdef");
         assert_eq!(WorkspaceDirName::mint("x", &id, 99).hex(), id.hex());

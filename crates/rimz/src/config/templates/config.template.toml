@@ -1,6 +1,6 @@
 # RimZ per-machine configuration.
 #
-# Save as ~/.config/rimz/config.toml, or run `rimz config init`.
+# Save as ~/.rimz/config.toml, or run `rimz config init`.
 # Every key below is optional. Defaults stay commented so an untouched file
 # keeps following defaults shipped by future RimZ versions; uncomment a line
 # only when this machine needs an override.

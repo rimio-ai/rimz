@@ -246,7 +246,7 @@ pub(super) fn read_wait_tail(path: &Path) -> std::io::Result<String> {
 
 /// Prune old wait audit output, retaining definitions and running watchers.
 pub fn prune_wait_outputs() -> anyhow::Result<usize> {
-    let entries = match std::fs::read_dir(crate::disk::paths::workspaces_dir()) {
+    let entries = match crate::workspace::known_workspaces() {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(err) => return Err(err.into()),
@@ -261,18 +261,13 @@ pub fn prune_wait_outputs() -> anyhow::Result<usize> {
     let now = std::time::SystemTime::now();
     let mut removed = 0;
     for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                tracing::warn!(error = %err, "wait log gc skipped unreadable directory entry");
-                continue;
-            }
-        };
-        let Ok(id) = crate::ids::WorkspaceId::parse(&entry.file_name().to_string_lossy()) else {
-            continue;
-        };
+        let id = entry.workspace_id;
         let pruned: anyhow::Result<usize> = (|| {
-            let paths = StatePaths::for_workspace(id.clone())?;
+            let paths = StatePaths::under_named(
+                id.clone(),
+                entry.dir_name,
+                &crate::disk::paths::rimz_home(),
+            );
             let record = crate::workspace::record::read(&paths.workspace_record)?;
             let instances = super::instances::load_strict_from(&paths.root)?;
             let retained = instances
@@ -289,7 +284,7 @@ pub fn prune_wait_outputs() -> anyhow::Result<usize> {
                 })
                 .map(|(name, _)| name.clone())
                 .collect();
-            let runtime = RuntimePaths::for_workspace(id.clone())?;
+            let runtime = RuntimePaths::for_state(&paths)?;
             Ok(prune_wait_outputs_in(
                 &paths.waits_dir,
                 &runtime,

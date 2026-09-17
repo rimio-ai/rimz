@@ -478,10 +478,9 @@ fn source_detail_names_definition_path() {
         format!(
             "state — {}",
             ui::home_relative(
-                state_home()
-                    .join("rimz")
-                    .join("workspaces")
-                    .join(WorkspaceId::from_project_root(&entry.resolved_root()).as_str())
+                StatePaths::for_project_root(&entry.resolved_root())
+                    .expect("state paths")
+                    .root
                     .join("loop-instances.json")
                     .to_string_lossy()
                     .as_ref(),

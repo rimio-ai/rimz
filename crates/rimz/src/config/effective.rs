@@ -110,7 +110,7 @@ pub struct LaunchAgents {
 
 /// Read `agents` and `subagents.profiles` from the machine snapshot without reloading it.
 pub fn load(machine: &MachineConfig, project_root: &Path) -> Result<LaunchAgents> {
-    load_with_roots(machine, project_root, &crate::disk::paths::config_home())
+    load_with_roots(machine, project_root, &crate::disk::paths::rimz_home())
 }
 
 pub fn load_with_roots(

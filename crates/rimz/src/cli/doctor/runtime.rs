@@ -947,15 +947,14 @@ pub(super) fn collect_remote_control(
 pub(super) fn collect_socket_headroom(
     ws: &rimz::ResolvedWorkspace,
 ) -> model::Probe<model::SockBudget> {
-    let runtime =
-        match RuntimePaths::under(ws.workspace_id.clone(), &rimz::disk::paths::runtime_home()) {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                return model::Probe::Unavailable {
-                    error: err.to_string(),
-                };
-            }
-        };
+    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return model::Probe::Unavailable {
+                error: err.to_string(),
+            };
+        }
+    };
     let budget = rimz::sock::SockBudget::for_sock_dir(&runtime.sock_dir);
     let fits = budget.fits();
     model::Probe::Ready(model::SockBudget {

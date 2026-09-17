@@ -1,7 +1,7 @@
 //! `rimz list` — show running and recently-active workspaces.
 //!
 //! "Known" means a `workspace.json` record exists under
-//! `$XDG_STATE_HOME/rimz/workspaces/<id>/` from a previous `rimz start` or
+//! `<rimz-home>/ws/<name>/` from a previous `rimz start` or
 //! store write. "Running" means the session name shows up in
 //! `zellij list-sessions` or `tmux list-sessions`. The two are joined by
 //! session name so reattach decisions stay local — no daemon, no index file.
@@ -69,7 +69,7 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
     let mut rows: Vec<WorkspaceRow> = known
         .into_iter()
         .filter_map(|known| {
-            let workspace_dir = root.join(known.workspace_id.as_str());
+            let workspace_dir = root.join(known.dir_name.as_str());
             let last_activity = activity_for(&workspace_dir);
             let last_death = death_for(&workspace_dir);
             let running_on = if zellij_sessions.contains(&known.session_name) {

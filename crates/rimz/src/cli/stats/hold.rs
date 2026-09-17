@@ -175,7 +175,7 @@ impl HeldStats {
         match (self.current.as_ref(), self.refresh_failure.as_deref()) {
             (Some(stats), _) => {
                 let today_day = unix_secs_now() as i64 / DAY_SECS;
-                let assists = AssistStats::load(&state_home(), self.active, Timestamp::now());
+                let assists = AssistStats::load(&logs_dir(), self.active, Timestamp::now());
                 render_panel(
                     &mut frame,
                     panel::PanelStats {

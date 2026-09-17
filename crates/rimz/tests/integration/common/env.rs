@@ -109,7 +109,7 @@ impl Env {
         let project_root = home_root.join("project");
         std::fs::create_dir_all(&project_root).expect("mkdir project root");
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        for dir in ["state", "config"] {
+        for dir in ["state", "config", ".rimz"] {
             std::fs::create_dir_all(home_root.join(dir)).expect("mkdir env root");
         }
         let env = Env {
@@ -170,6 +170,13 @@ impl Env {
 
     // --- paths ---
 
+    /// `RIMZ_HOME` for every command this env builds.
+    pub fn rimz_home(&self) -> PathBuf {
+        self.home_root.join(".rimz")
+    }
+
+    /// `XDG_STATE_HOME`; RimZ no longer writes here, so a `rimz/` child is a
+    /// legacy-root fixture.
     pub fn state_root(&self) -> PathBuf {
         self.home_root.join("state")
     }
@@ -179,7 +186,7 @@ impl Env {
     }
 
     pub fn agents_home(&self) -> PathBuf {
-        self.config_root().join("rimz")
+        self.rimz_home()
     }
 
     pub fn cache_root(&self) -> PathBuf {
@@ -211,9 +218,7 @@ impl Env {
     }
 
     fn workspace_runtime(&self) -> PathBuf {
-        self.runtime_root
-            .join("rimz")
-            .join(self.workspace_id.as_str())
+        self.runtime_paths().root
     }
 
     /// Absolute path to the built `rimz` binary, for helper scripts that shell out.
@@ -233,6 +238,7 @@ impl Env {
     pub fn rimz_at(&self, rimz_bin: &Path) -> Command {
         let mut cmd = Command::new(rimz_bin);
         cmd.scrub_session_env()
+            .env("RIMZ_HOME", self.rimz_home())
             .env("XDG_STATE_HOME", self.state_root())
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("XDG_CONFIG_HOME", self.config_root())
@@ -266,6 +272,7 @@ impl Env {
     /// reconstructing a partial environment that can miss tmux isolation.
     pub fn pin_pty_command(&self, cmd: &mut portable_pty::CommandBuilder) {
         cmd.scrub_session_env();
+        cmd.env("RIMZ_HOME", self.rimz_home());
         cmd.env("XDG_STATE_HOME", self.state_root());
         cmd.env("XDG_RUNTIME_DIR", &self.runtime_root);
         cmd.env("XDG_CONFIG_HOME", self.config_root());
@@ -579,16 +586,16 @@ impl Env {
 
     // --- store access (per project root) ---
 
+    /// The state paths `rimz` resolves for `project_root`: its existing
+    /// `ws/<name>` dir, or the name birth would mint.
     pub fn state_path_for(&self, project_root: &Path) -> StatePaths {
-        let workspace_id = WorkspaceId::from_project_root(&canonical(project_root));
-        StatePaths::under(workspace_id, &self.state_root()).expect("state paths")
+        StatePaths::for_project_root_under(&canonical(project_root), &self.rimz_home())
+            .expect("state paths")
     }
 
     pub fn store_for(&self, project_root: &Path) -> Store {
-        let workspace_id = WorkspaceId::from_project_root(&canonical(project_root));
-        let state =
-            StatePaths::under(workspace_id.clone(), &self.state_root()).expect("state paths");
-        let runtime = self.runtime_paths_for(workspace_id);
+        let state = self.state_path_for(project_root);
+        let runtime = self.runtime_paths_for(&state);
         Store::open(state, runtime).expect("open store")
     }
 
@@ -599,7 +606,7 @@ impl Env {
 
     /// Runtime paths (heartbeat/sock dirs) for the harness workspace.
     pub fn runtime_paths(&self) -> RuntimePaths {
-        self.runtime_paths_for(self.workspace_id.clone())
+        self.runtime_paths_for(&self.state_path_for(&self.project_root))
     }
 
     pub fn publish_accounts(&self, accounts: &rimz::sidebar::refresh::AccountsCache) {
@@ -618,10 +625,13 @@ impl Env {
         .expect("publish rate-limit cache");
     }
 
-    fn runtime_paths_for(&self, workspace_id: WorkspaceId) -> RuntimePaths {
-        let mut paths =
-            RuntimePaths::under(workspace_id, &self.runtime_root).expect("runtime paths");
-        paths.persistent_shared_root = self.state_root().join("rimz").join("shared");
+    fn runtime_paths_for(&self, state: &StatePaths) -> RuntimePaths {
+        let mut paths = RuntimePaths::under_named(
+            state.workspace_id.clone(),
+            state.dir_name.clone(),
+            &self.runtime_root,
+        );
+        paths.persistent_shared_root = self.rimz_home().join("shared");
         paths
     }
 
@@ -706,8 +716,7 @@ impl Env {
     }
 
     fn diag_sink(&self, session: &str) -> DiagSink {
-        let state =
-            StatePaths::under(self.workspace_id.clone(), &self.state_root()).expect("state paths");
+        let state = self.state_path_for(&self.project_root);
         DiagSink::under(state.root, self.workspace_id.clone(), session, None)
     }
 
@@ -757,6 +766,7 @@ fn rimz_command_pins_persistent_roots_and_both_mux_namespaces() {
     };
 
     assert_eq!(configured("HOME"), env.home_root);
+    assert_eq!(configured("RIMZ_HOME"), env.rimz_home());
     assert_eq!(configured("XDG_CONFIG_HOME"), env.config_root());
     assert_eq!(configured("XDG_DATA_HOME"), env.data_root());
     assert_eq!(configured("XDG_CACHE_HOME"), env.cache_root());

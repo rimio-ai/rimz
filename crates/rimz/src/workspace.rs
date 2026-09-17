@@ -161,6 +161,7 @@ impl ResolvedWorkspace {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnownWorkspace {
     pub workspace_id: WorkspaceId,
+    pub dir_name: crate::ids::WorkspaceDirName,
     pub project_root: PathBuf,
     pub session_name: String,
     pub root_class: RootClass,
@@ -195,14 +196,14 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
         let Some(name) = path.file_name().and_then(OsStr::to_str) else {
             continue;
         };
-        let Ok(workspace_id) = WorkspaceId::parse(name) else {
+        let Some(dir_name) = crate::ids::WorkspaceDirName::parse(name) else {
             continue;
         };
         let record_path = path.join("workspace.json");
         match record::read(&record_path) {
             Ok(record) => {
                 let Some(candidate) =
-                    normalize_known_workspace_record(workspace_id, &record_path, record)
+                    normalize_known_workspace_record(dir_name, &record_path, record)
                 else {
                     continue;
                 };
@@ -220,7 +221,7 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
             Err(WorkspaceRecordErr::Io { source, .. })
                 if source.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
-                tracing::warn!(workspace = %workspace_id, error = %err, "skipping workspace with unreadable record");
+                tracing::warn!(workspace = %dir_name, error = %err, "skipping workspace with unreadable record");
             }
         }
     }
@@ -237,50 +238,38 @@ struct KnownWorkspaceCandidate {
 }
 
 fn normalize_known_workspace_record(
-    workspace_id: WorkspaceId,
+    dir_name: crate::ids::WorkspaceDirName,
     record_path: &Path,
     mut record: WorkspaceRecord,
 ) -> Option<KnownWorkspaceCandidate> {
-    match record.project_root.canonicalize() {
-        Ok(project_root) => {
-            let canonical_id = WorkspaceId::from_project_root(&project_root);
-            let session_name = session_name_for(&project_root);
-            if canonical_id != workspace_id {
-                tracing::debug!(
-                    workspace = %workspace_id,
-                    canonical_workspace = %canonical_id,
-                    path = %record_path.display(),
-                    "skipping stale workspace record whose canonical root belongs to another workspace",
-                );
-                return None;
-            }
-
-            if record.workspace_id != workspace_id
-                || record.project_root != project_root
-                || record.session_name != session_name
-            {
-                record.workspace_id = workspace_id.clone();
-                record.project_root = project_root;
-                record.session_name = session_name;
-                record.updated_at = jiff::Timestamp::now();
-                if let Err(err) = record::write_path(record_path, &record) {
-                    tracing::warn!(
-                        path = %record_path.display(),
-                        error = %err,
-                        "repairing workspace record failed; using repaired value in memory",
-                    );
-                }
-            }
+    let workspace_id = record.workspace_id.clone();
+    if !dir_name.may_name(&workspace_id) {
+        tracing::warn!(workspace = %workspace_id, directory = %dir_name, "skipping workspace record whose id does not match its directory");
+        return None;
+    }
+    if let Ok(project_root) = record.project_root.canonicalize() {
+        let canonical_id = WorkspaceId::from_project_root(&project_root);
+        let session_name = session_name_for(&project_root);
+        if canonical_id != workspace_id {
+            tracing::debug!(
+                workspace = %workspace_id,
+                canonical_workspace = %canonical_id,
+                path = %record_path.display(),
+                "skipping stale workspace record whose canonical root belongs to another workspace",
+            );
+            return None;
         }
-        Err(_) => {
-            if record.workspace_id != workspace_id {
+
+        if record.project_root != project_root || record.session_name != session_name {
+            record.project_root = project_root;
+            record.session_name = session_name;
+            record.updated_at = jiff::Timestamp::now();
+            if let Err(err) = record::write_path(record_path, &record) {
                 tracing::warn!(
-                    workspace = %workspace_id,
-                    recorded_workspace = %record.workspace_id,
                     path = %record_path.display(),
-                    "skipping workspace record whose id does not match its directory",
+                    error = %err,
+                    "repairing workspace record failed; using repaired value in memory",
                 );
-                return None;
             }
         }
     }
@@ -288,6 +277,7 @@ fn normalize_known_workspace_record(
     Some(KnownWorkspaceCandidate {
         workspace: KnownWorkspace {
             workspace_id,
+            dir_name,
             project_root: record.project_root,
             session_name: record.session_name,
             root_class: record.root_class,

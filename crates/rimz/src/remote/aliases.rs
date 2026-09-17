@@ -1,4 +1,4 @@
-//! Per-machine remote aliases persisted at `$XDG_CONFIG_HOME/rimz/remote.toml`.
+//! Per-machine remote aliases persisted at `$RIMZ_HOME/remote.toml`.
 //!
 //! Schema (TOML):
 //!
@@ -18,13 +18,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::ConfigFileDiagnosis;
 use crate::disk::atomic;
-use crate::disk::paths::config_home;
+use crate::disk::paths::rimz_home;
 use crate::ids::MuxName;
 use crate::remote::{RemoteTarget, RemoteTargetError};
 
 const REMOTE_FILE: &str = "remote.toml";
 const REMOTE_TEMPLATE: &str = include_str!("../config/templates/remote.template.toml");
-const RIMZ_CONFIG_SUBDIR: &str = "rimz";
 const ALIAS_NAME_MAX_LEN: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
@@ -87,19 +86,19 @@ pub struct RemoteAliases {
 }
 
 impl RemoteAliases {
-    /// Load aliases from `$XDG_CONFIG_HOME/rimz/remote.toml`. A missing file is
+    /// Load aliases from `$RIMZ_HOME/remote.toml`. A missing file is
     /// an empty alias set.
     pub fn load() -> Result<Self> {
         Self::load_from(&Self::config_path())
     }
 
-    /// Save aliases to `$XDG_CONFIG_HOME/rimz/remote.toml`.
+    /// Save aliases to `$RIMZ_HOME/remote.toml`.
     pub fn save(&self) -> Result<()> {
         self.save_to(&Self::config_path())
     }
 
     pub fn config_path() -> PathBuf {
-        config_home().join(RIMZ_CONFIG_SUBDIR).join(REMOTE_FILE)
+        rimz_home().join(REMOTE_FILE)
     }
 
     pub fn ensure_template() -> Result<bool> {
@@ -273,7 +272,7 @@ mod tests {
         let list = RemoteAliases::load_from(&path).unwrap();
         assert!(list.entries().is_empty());
 
-        let template_path = dir.path().join("rimz").join("remote.toml");
+        let template_path = dir.path().join("home").join("remote.toml");
         assert!(RemoteAliases::ensure_template_at(&template_path).unwrap());
         assert_eq!(
             std::fs::read_to_string(&template_path).unwrap(),

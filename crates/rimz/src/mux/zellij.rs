@@ -374,6 +374,7 @@ impl ZellijBackend {
             let dir = dir.to_string_lossy().into_owned();
             spec = spec
                 .env("XDG_RUNTIME_DIR", dir.clone())
+                .env("RIMZ_HOME", dir.clone())
                 .env("XDG_STATE_HOME", dir.clone())
                 .env("XDG_CONFIG_HOME", dir.clone())
                 .env("XDG_CACHE_HOME", dir.clone())

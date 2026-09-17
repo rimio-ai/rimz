@@ -21,11 +21,11 @@ use sha2::{Digest, Sha256};
 use crate::agents::PermissionMode;
 use crate::config::{CheckOn, ConfigFileDiagnosis, Team};
 use crate::disk::atomic::{self, write_bytes_atomically};
-use crate::disk::paths::config_home;
+use crate::disk::paths::rimz_home;
 use crate::ids::{RoomLogins, WorkspaceId};
 
 const CONFIG_REL: &str = ".rimz/config.toml";
-const PROJECTS_SUBDIR: [&str; 2] = ["rimz", "projects"];
+const PROJECTS_SUBDIR: [&str; 1] = ["projects"];
 const TRUST_FILE: &str = "trust.toml";
 const BIRTH_PROMPT_FILE: &str = "birth-prompt.toml";
 const HASH_PREFIX: &str = "sha256:";
@@ -203,28 +203,28 @@ pub enum SurfaceDiffKind {
 /// Read the current trust state for `project_root`. The executable-surface
 /// hash is recomputed every call; that's the auto-revoke contract.
 pub fn status(project_root: &Path) -> Result<TrustReport> {
-    status_with_roots(project_root, &config_home())
+    status_with_roots(project_root, &rimz_home())
 }
 
 /// Pin the current executable-surface hash as trusted on this machine.
 pub fn grant(project_root: &Path) -> Result<TrustReport> {
-    grant_with_roots(project_root, &config_home())
+    grant_with_roots(project_root, &rimz_home())
 }
 
 /// Delete the trust record. The state reverts to `Untrusted`, or `NoConfig`
 /// when `.rimz/config.toml` is absent.
 pub fn revoke(project_root: &Path) -> Result<TrustReport> {
-    revoke_with_roots(project_root, &config_home())
+    revoke_with_roots(project_root, &rimz_home())
 }
 
 /// Return the one-time birth trust offer for an untrusted project, when due.
 pub fn birth_prompt(project_root: &Path) -> Result<Option<BirthPromptOffer>> {
-    birth_prompt_with_roots(project_root, &config_home())
+    birth_prompt_with_roots(project_root, &rimz_home())
 }
 
 /// Mark a shown birth prompt as declined using its already-computed surface hash.
 pub fn dismiss_birth_prompt_offer(project_root: &Path, offer: &BirthPromptOffer) -> Result<()> {
-    dismiss_birth_prompt_offer_with_roots(project_root, &config_home(), offer)
+    dismiss_birth_prompt_offer_with_roots(project_root, &rimz_home(), offer)
 }
 
 /// Project roots with a durable trust grant on this machine.
@@ -233,7 +233,7 @@ pub fn dismiss_birth_prompt_offer(project_root: &Path, offer: &BirthPromptOffer)
 /// its configuration; this is only the discovery index for roots that have
 /// ever been granted.
 pub fn granted_roots() -> Result<Vec<PathBuf>> {
-    granted_roots_with_config(&config_home())
+    granted_roots_with_config(&rimz_home())
 }
 
 fn granted_roots_with_config(config_root: &Path) -> Result<Vec<PathBuf>> {
@@ -446,7 +446,7 @@ pub(crate) enum AgentEnv {
 /// sharing a name merge in declaration order; later entries win on key
 /// collisions. Values are injected literally — no shell expansion.
 pub(crate) fn agent_env(project_root: &Path, kind: &str) -> Result<AgentEnv> {
-    agent_env_with_roots(project_root, &config_home(), kind)
+    agent_env_with_roots(project_root, &rimz_home(), kind)
 }
 
 fn agent_env_with_roots(project_root: &Path, config_root: &Path, kind: &str) -> Result<AgentEnv> {
@@ -493,7 +493,7 @@ pub(crate) enum ProjectLogins {
 }
 
 pub(crate) fn project_logins(project_root: &Path) -> Result<ProjectLogins> {
-    project_logins_with_roots(project_root, &config_home())
+    project_logins_with_roots(project_root, &rimz_home())
 }
 
 fn project_logins_with_roots(project_root: &Path, config_root: &Path) -> Result<ProjectLogins> {
@@ -554,7 +554,7 @@ fn check_project_config_removed_tables(path: &Path, text: &str) -> Result<()> {
     if doc.contains_key("layout") {
         return Err(TrustErr::RemovedProjectTable {
             path: path.to_path_buf(),
-            detail: "`[layout]` and `[[layout.initial_panes]]` are per-machine room layout config; move them to `$XDG_CONFIG_HOME/rimz/config.toml`"
+            detail: "`[layout]` and `[[layout.initial_panes]]` are per-machine room layout config; move them to `$RIMZ_HOME/config.toml`"
                 .to_owned(),
         });
     }
@@ -647,7 +647,7 @@ fn surface_snapshot(config: &ProjectConfig) -> SurfaceSnapshot {
 }
 
 /// On-disk trust record at
-/// `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`.
+/// `$RIMZ_HOME/projects/<workspace_id>/trust.toml`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct TrustRecord {
     project_root: PathBuf,

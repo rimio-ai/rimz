@@ -135,10 +135,10 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
 
     let project_root = PathBuf::from(format!("/tmp/rimz-{name}"));
     let workspace_id = WorkspaceId::from_project_root(&project_root);
-    record_known_workspace_session(&env.state_root(), &workspace_id, &project_root, &name);
+    record_known_workspace_session(&env.rimz_home(), &workspace_id, &project_root, &name);
     assert!(
         rimz::workspace::known_workspaces_under(&rimz::disk::paths::workspaces_dir_under(
-            &env.state_root()
+            &env.rimz_home()
         ),)
         .expect("known workspaces")
         .iter()

@@ -1768,6 +1768,7 @@ fn runtime_dir_pins_full_zellij_env_surface() {
     let pinned = ZellijBackend::with_runtime_dir(&runtime).cmd();
     let keys = [
         "XDG_RUNTIME_DIR",
+        "RIMZ_HOME",
         "XDG_STATE_HOME",
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",

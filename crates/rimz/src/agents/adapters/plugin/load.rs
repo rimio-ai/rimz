@@ -63,9 +63,7 @@ pub fn loaded() -> &'static LoadedPlugins {
 }
 
 pub fn plugins_root() -> PathBuf {
-    crate::disk::paths::config_home()
-        .join("rimz")
-        .join("agents.d")
+    crate::disk::paths::rimz_home().join("agents.d")
 }
 
 pub fn load_from_root(root: &Path) -> LoadedPlugins {

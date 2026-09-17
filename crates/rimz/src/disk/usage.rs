@@ -9,8 +9,6 @@ use std::os::unix::fs::MetadataExt;
 
 use crate::disk::paths;
 
-const RIMZ_SUBDIR: &str = "rimz";
-
 /// Best-effort recursive size for a path without following symlinks.
 pub(crate) fn dir_size(path: &Path) -> u64 {
     dir_size_inner(path, &mut HashSet::new())
@@ -59,21 +57,15 @@ fn file_identity(_meta: &fs::Metadata) -> Option<FileIdentity> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageKind {
-    State,
+    Home,
     Runtime,
-    Data,
-    Cache,
-    Config,
 }
 
 impl StorageKind {
     pub fn label(self) -> &'static str {
         match self {
-            Self::State => "state",
+            Self::Home => "home",
             Self::Runtime => "runtime",
-            Self::Data => "data",
-            Self::Cache => "cache",
-            Self::Config => "config",
         }
     }
 }
@@ -101,14 +93,8 @@ impl RuntimeStorage {
 
 pub fn measure() -> RuntimeStorage {
     measure_under(&[
-        (StorageKind::State, paths::state_home().join(RIMZ_SUBDIR)),
-        (
-            StorageKind::Runtime,
-            paths::runtime_home().join(RIMZ_SUBDIR),
-        ),
-        (StorageKind::Data, paths::data_home().join(RIMZ_SUBDIR)),
-        (StorageKind::Cache, paths::cache_home().join(RIMZ_SUBDIR)),
-        (StorageKind::Config, paths::config_home().join(RIMZ_SUBDIR)),
+        (StorageKind::Home, paths::rimz_home()),
+        (StorageKind::Runtime, paths::runtime_rimz_root()),
     ])
 }
 
@@ -190,11 +176,11 @@ mod tests {
         fs::write(state.join("store.json"), b"{}").unwrap();
 
         let disk_usage = measure_under(&[
-            (StorageKind::State, state.clone()),
+            (StorageKind::Home, state.clone()),
             (StorageKind::Runtime, runtime.clone()),
         ]);
 
-        assert_eq!(disk_usage.roots[0].kind, StorageKind::State);
+        assert_eq!(disk_usage.roots[0].kind, StorageKind::Home);
         assert_eq!(disk_usage.roots[0].path, state);
         assert!(disk_usage.roots[0].present);
         assert!(disk_usage.roots[0].bytes >= 2);

@@ -150,6 +150,24 @@ impl RoomEntry<'_> {
     }
 }
 
+/// A host with only pre-home roots would get an empty home here and lose its
+/// config, so start refuses before config bootstrap creates the home.
+fn refuse_legacy_only_home() -> Result<()> {
+    let home = rimz::disk::paths::rimz_home();
+    if home.exists() {
+        return Ok(());
+    }
+    let legacy = rimz::disk::paths::legacy_roots();
+    if legacy.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "{} does not exist but legacy RimZ roots do. {}",
+        home.display(),
+        rimz::disk::paths::legacy_roots_fix(&legacy, &home)
+    )
+}
+
 fn resume_prompt_mode(confirm_resume: bool, stdin_is_terminal: bool) -> ResumePromptMode {
     if confirm_resume || stdin_is_terminal {
         ResumePromptMode::Interactive
@@ -167,6 +185,7 @@ fn start_attended() -> bool {
 }
 
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
+    refuse_legacy_only_home()?;
     let machine = crate::cli::launch_machine_config()?;
     rimz::sandbox::preflight(machine.agents.isolation)?;
     validate_agent_plugins()?;
@@ -524,36 +543,26 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
     // Every entry that births a room resolves and freezes its accounts; only
     // `start` takes flags, and only `start` re-judges a room already live.
-    let birth_identity = match &entry {
+    let birth_root = match &entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
-            Some((&workspace.workspace_id, workspace.project_root.as_path()))
+            Some(workspace.project_root.as_path())
         }
         _ if was_live => None,
-        RoomEntry::AttachCwd { workspace, .. } => {
-            Some((&workspace.workspace_id, workspace.project_root.as_path()))
-        }
-        RoomEntry::WebSession { record, .. } => {
-            Some((&record.workspace_id, record.project_root.as_path()))
-        }
+        RoomEntry::AttachCwd { workspace, .. } => Some(workspace.project_root.as_path()),
+        RoomEntry::WebSession { record, .. } => Some(record.project_root.as_path()),
         RoomEntry::AttachSession {
             record: Ok(Some(record)),
             ..
-        } => Some((&record.workspace_id, record.project_root.as_path())),
+        } => Some(record.project_root.as_path()),
         RoomEntry::AttachSession { .. } => None,
     };
     let requested = match &entry {
         RoomEntry::Start { args, .. } => crate::cli::accounts::requested_logins(&args.account)?,
         _ => RoomLogins::new(),
     };
-    let logins = birth_identity
-        .map(|(workspace_id, project_root)| {
-            rimz::room::resolve_birth_logins(
-                workspace_id,
-                project_root,
-                &machine_config,
-                &requested,
-                was_live,
-            )
+    let logins = birth_root
+        .map(|project_root| {
+            rimz::room::resolve_birth_logins(project_root, &machine_config, &requested, was_live)
         })
         .transpose()?;
     let starting = matches!(

@@ -88,16 +88,18 @@ pub struct TempSweepReport {
 
 #[must_use = "maintenance report; surface it to the caller"]
 pub fn collect_runtime(older_than: Duration, dry_run: bool) -> Result<GcReport> {
-    collect::collect_runtime_under(&paths::runtime_home().join("rimz"), older_than, dry_run)
+    collect::collect_runtime_under(
+        &paths::runtime_workspaces_dir(),
+        &paths::RuntimePaths::shared().shared_root,
+        older_than,
+        dry_run,
+    )
 }
 
 #[must_use = "maintenance report; surface it to the caller"]
 pub fn collect_orphan_temps(older_than: Duration, dry_run: bool) -> TempSweepReport {
     let mut report = TempSweepReport::default();
-    for root in [
-        paths::state_home().join("rimz"),
-        paths::runtime_home().join("rimz"),
-    ] {
+    for root in [paths::rimz_home(), paths::runtime_rimz_root()] {
         let (files, bytes) = temp_sweep::sweep_orphan_temps_under(&root, older_than, dry_run);
         report.files_removed += files;
         report.bytes_removed = report.bytes_removed.saturating_add(bytes);
@@ -109,7 +111,7 @@ pub fn collect_orphan_temps(older_than: Duration, dry_run: bool) -> TempSweepRep
 pub fn prune_dead_workspaces(dry_run: bool) -> Result<WorkspacePruneReport> {
     prune::prune_dead_workspaces_under(
         &paths::workspaces_dir(),
-        &paths::runtime_home().join("rimz"),
+        &paths::runtime_workspaces_dir(),
         dry_run,
     )
 }

@@ -63,8 +63,8 @@ fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
 fn machine_config_section_keeps_the_classified_problem_compact() {
     let config = MachineConfigHealth {
         broken_files: vec![MachineConfigProblem {
-            path: "/home/eddie/.config/rimz/config.toml".to_owned(),
-            error: "line 144: `auto_continue` is defined more than once in the same table; fix: remove the extra `auto_continue` at /home/eddie/.config/rimz/config.toml:144, then re-run".to_owned(),
+            path: "/home/eddie/.rimz/config.toml".to_owned(),
+            error: "line 144: `auto_continue` is defined more than once in the same table; fix: remove the extra `auto_continue` at /home/eddie/.rimz/config.toml:144, then re-run".to_owned(),
             kind: MachineConfigProblemKind::Parse,
         }],
         legacy_agents_home: Vec::new(),

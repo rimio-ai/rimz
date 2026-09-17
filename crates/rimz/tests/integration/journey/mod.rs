@@ -236,8 +236,12 @@ impl<'a> RoomHarness<'a> {
     }
 
     pub fn publish_link_stats(&self, stats: &rimz::remote::link::LinkStatsFile) {
-        let paths = rimz::RuntimePaths::under(self.env.workspace_id.clone(), self.runtime.path())
-            .expect("runtime paths");
+        let env_runtime = self.env.runtime_paths();
+        let paths = rimz::RuntimePaths::under_named(
+            env_runtime.workspace_id,
+            env_runtime.dir_name,
+            self.runtime.path(),
+        );
         rimz::disk::atomic::write_temp_then_rename_cache(
             &rimz::remote::link::stats_path(&paths),
             stats,
@@ -878,12 +882,13 @@ fn journey_spending_scope(env: &Env) -> String {
 
 fn seed_workspace_spending_fixture(env: &Env, target_runtime: &std::path::Path) {
     let scope_hash = journey_spending_scope(env);
-    let source = env.runtime_paths().workspace_spending_path(&scope_hash);
+    let runtime = env.runtime_paths();
+    let source = runtime.workspace_spending_path(&scope_hash);
     if !source.exists() {
         return;
     }
-    let target = rimz::RuntimePaths::under(env.workspace_id.clone(), target_runtime)
-        .expect("renderer runtime paths");
+    let target =
+        rimz::RuntimePaths::under_named(runtime.workspace_id, runtime.dir_name, target_runtime);
     target.ensure_dirs().expect("renderer runtime dirs");
     let cache = rimz::agents::spending::read_workspace_spending_cache(&source);
     rimz::agents::spending::write_workspace_spending_cache(

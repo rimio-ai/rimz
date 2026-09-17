@@ -667,7 +667,7 @@ fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::store::run::R
     let run_id = rimz::RunId::parse(run_id).ok()?;
     let paths = StatePaths::under(
         WorkspaceId::from_project_root(&entry.resolved_root()),
-        &state_home(),
+        &rimz::disk::paths::logs_dir(),
     )
     .ok()?;
     rimz::harness::run::load(&paths, &run_id).ok()

@@ -488,9 +488,9 @@ fn presence_plugin_identity_renders_expressible_fields() {
     let cases = [
         Case {
             session: "rimz-test",
-            rimz_bin: "/state/rimz/workspaces/ws_0123456789abcdef01234567/rimz",
+            rimz_bin: "/home/user/.rimz/ws/repo-0123/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/state/rimz/workspaces/ws_0123456789abcdef01234567/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.rimz/ws/repo-0123/rimz,focus_follows_mouse=false,mouse_click_through=true",
         },
         Case {
             session: "rimz-test",
@@ -590,7 +590,7 @@ fn materialize_presence_plugin_bytes_writes_stable_artifact_or_nothing() {
     let path = materialize_presence_plugin_bytes(b"wasm-bytes", dir.path())
         .unwrap()
         .unwrap();
-    assert!(path.ends_with("rimz/plugins/rimz-presence-zellij.wasm"));
+    assert_eq!(path, dir.path().join("plugins/rimz-presence-zellij.wasm"));
     assert_eq!(std::fs::read(&path).unwrap(), b"wasm-bytes");
 
     let same_path = materialize_presence_plugin_bytes(b"wasm-bytes", dir.path())

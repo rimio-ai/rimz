@@ -62,7 +62,7 @@ pub enum StageBuildErr {
 /// Copy the invoking build into the durable user-scoped build store.
 pub fn stage_current_build() -> Result<StagedBuild, StageBuildErr> {
     let source = current_reexec_target().ok_or(StageBuildErr::MissingSource)?;
-    stage_build_under(&source, &crate::disk::paths::state_home())
+    stage_build_under(&source, &crate::disk::paths::rimz_home())
 }
 
 fn stage_build_under(source: &Path, state_root: &Path) -> Result<StagedBuild, StageBuildErr> {
@@ -1085,6 +1085,7 @@ mod tests {
         record.rimz_build = Some(first.build.clone());
         record::write(&paths, &record).unwrap();
         let known = KnownWorkspace {
+            dir_name: paths.dir_name.clone(),
             workspace_id: workspace.workspace_id.clone(),
             project_root: workspace.project_root.clone(),
             session_name: workspace.session_name.clone(),

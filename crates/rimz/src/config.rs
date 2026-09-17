@@ -1,4 +1,4 @@
-//! Per-machine settings, loaded from `~/.config/rimz/config.toml`, `theme.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
+//! Per-machine settings, loaded from `~/.rimz/config.toml`, `theme.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
 //!
 //! Markdown definitions under the agents home populate profiles and teams at every config load; config.toml owns machine launch preferences.
 //!
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::disk::parse_cache::StampedPath;
-use crate::disk::paths::{self, config_home};
+use crate::disk::paths::{self, rimz_home};
 
 mod accounts;
 mod agents;
@@ -132,7 +132,6 @@ const MAX_REFRESH_MS: u16 = 1_000;
 const CONFIG_FILE: &str = "config.toml";
 const THEME_FILE: &str = "theme.toml";
 const LOOP_FILE: &str = "loop.toml";
-const RIMZ_CONFIG_SUBDIR: &str = "rimz";
 const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config/templates/config.template.toml");
 const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.template.toml");
 const MACHINE_LOOP_TEMPLATE: &str = include_str!("config/templates/loop.template.toml");
@@ -191,10 +190,7 @@ pub struct MachineConfigFiles {
 impl MachineConfigFiles {
     /// Resolve the current machine's config roots.
     fn machine() -> Self {
-        Self::from_paths(
-            config_home().join(RIMZ_CONFIG_SUBDIR).join(CONFIG_FILE),
-            paths::agents_home(),
-        )
+        Self::from_paths(rimz_home().join(CONFIG_FILE), paths::agents_home())
     }
 
     /// Build an explicit config set for tests and tooling.
@@ -451,14 +447,19 @@ impl MachineConfig {
         MachineConfigFileKind::Loop.template()
     }
 
-    /// The core per-machine config path: `$XDG_CONFIG_HOME/rimz/config.toml`.
+    /// The core per-machine config path: `$RIMZ_HOME/config.toml`.
     pub fn config_path() -> PathBuf {
         MachineConfigFiles::machine().path(MachineConfigFileKind::Core)
     }
 
-    /// The loop per-machine config path: `$XDG_CONFIG_HOME/rimz/loop.toml`.
+    /// The loop per-machine config path: `$RIMZ_HOME/loop.toml`.
     pub fn loop_path() -> PathBuf {
         MachineConfigFiles::machine().path(MachineConfigFileKind::Loop)
+    }
+
+    /// The theme per-machine config path: `$RIMZ_HOME/theme.toml`.
+    pub fn theme_path() -> PathBuf {
+        MachineConfigFiles::machine().path(MachineConfigFileKind::Theme)
     }
 
     /// Load from the default per-machine paths. Missing files are defaults —

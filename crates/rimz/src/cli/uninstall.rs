@@ -231,18 +231,21 @@ fn render_preview(preview: Preview<'_>) -> Result<()> {
     writeln!(stderr, "RimZ uninstall preview")?;
     writeln!(stderr, "Storage:")?;
     for root in &preview.disk_usage.roots {
-        let action = if root.kind == StorageKind::Data
-            && root.path.join(rimz::agents::ACCOUNTS_DIR).exists()
-        {
-            format!("remove, keeping {}/", rimz::agents::ACCOUNTS_DIR)
-        } else if root_removed(root.kind, preview.remove_state, preview.remove_config) {
-            "remove".to_owned()
-        } else if root.kind == StorageKind::State {
-            "kept (pass --state)".to_owned()
-        } else if root.kind == StorageKind::Config {
-            "kept (pass --config)".to_owned()
-        } else {
-            "kept".to_owned()
+        let action = match root.kind {
+            StorageKind::Runtime => "remove".to_owned(),
+            StorageKind::Home => format!(
+                "clean; state {}, config {}; keep definitions and provider accounts",
+                if preview.remove_state {
+                    "removed"
+                } else {
+                    "kept (--state)"
+                },
+                if preview.remove_config {
+                    "removed"
+                } else {
+                    "kept (--config)"
+                },
+            ),
         };
         let present = if root.present { "" } else { " (absent)" };
         writeln!(
@@ -464,16 +467,7 @@ fn remove_roots(
     stderr: &mut impl Write,
     failures: &mut Vec<String>,
 ) -> Result<()> {
-    for kind in [
-        StorageKind::Runtime,
-        StorageKind::Cache,
-        StorageKind::Data,
-        StorageKind::State,
-        StorageKind::Config,
-    ] {
-        if !root_removed(kind, remove_state, remove_config) {
-            continue;
-        }
+    for kind in [StorageKind::Runtime, StorageKind::Home] {
         if kind == StorageKind::Runtime {
             let outcomes = rimz::uninstall::remove_runtime_root();
             render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
@@ -483,42 +477,18 @@ fn remove_roots(
             failures.push(format!("missing {} disk_usage root", kind.label()));
             continue;
         };
-        if kind == StorageKind::Data {
-            let outcomes =
-                rimz::uninstall::remove_root_keeping(&root.path, &[rimz::agents::ACCOUNTS_DIR]);
-            render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
-            let accounts = root.path.join(rimz::agents::ACCOUNTS_DIR);
-            if accounts.exists() {
-                writeln!(
-                    stderr,
-                    "{}: kept provider account homes {}",
-                    kind.label(),
-                    accounts.display()
-                )?;
-            }
-            continue;
-        }
-        if kind == StorageKind::Config {
-            let keep = [
-                "agents",
-                "subagents",
-                "teams",
-                "traits",
-                "skills",
-                "accounts",
-            ];
-            let outcomes = rimz::uninstall::remove_root_keeping(&root.path, &keep);
-            render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
-            for name in keep {
-                let path = root.path.join(name);
-                if path.symlink_metadata().is_ok() {
-                    writeln!(stderr, "{}: kept {}", kind.label(), path.display())?;
-                }
-            }
-            continue;
-        }
-        let outcomes = [rimz::uninstall::remove_root(&root.path)];
+        let outcomes =
+            rimz::uninstall::remove_root_keeping(&paths::data_dir(), &[rimz::agents::ACCOUNTS_DIR]);
         render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
+        let keep = home_kept_children(remove_state, remove_config);
+        let outcomes = rimz::uninstall::remove_root_keeping(&root.path, &keep);
+        render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
+        for name in keep {
+            let path = root.path.join(name);
+            if path.symlink_metadata().is_ok() {
+                writeln!(stderr, "{}: kept {}", kind.label(), path.display())?;
+            }
+        }
     }
     Ok(())
 }
@@ -556,12 +526,31 @@ fn render_removal_outcomes(
     Ok(())
 }
 
-fn root_removed(kind: StorageKind, remove_state: bool, remove_config: bool) -> bool {
-    match kind {
-        StorageKind::Runtime | StorageKind::Cache | StorageKind::Data => true,
-        StorageKind::State => remove_state,
-        StorageKind::Config => remove_config,
+fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static str> {
+    let mut keep = vec![
+        "profiles",
+        "agents",
+        "subagents",
+        "teams",
+        "traits",
+        "skills",
+        "accounts",
+        "data",
+        "handoffs",
+    ];
+    if !remove_state {
+        keep.extend(["ws", "shared", "logs", "loops", "builds"]);
     }
+    if !remove_config {
+        keep.extend([
+            "config.toml",
+            "theme.toml",
+            "loop.toml",
+            "remote.toml",
+            "projects",
+        ]);
+    }
+    keep
 }
 
 fn storage_root(disk_usage: &RuntimeStorage, kind: StorageKind) -> Option<&StorageRoot> {
@@ -603,4 +592,43 @@ fn shell_quote_path(path: &Path) -> String {
         // Existing filesystem paths cannot contain NUL bytes.
         .expect("path display string is shell-quotable")
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_cleanup_preserves_flagged_categories_and_user_files() {
+        for (remove_state, remove_config) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path().join("home");
+            for child in [
+                "ws",
+                "profiles",
+                "data/accounts",
+                "cache",
+                "projects",
+                "handoffs",
+            ] {
+                std::fs::create_dir_all(home.join(child)).unwrap();
+                std::fs::write(home.join(child).join("user-file"), b"keep").unwrap();
+            }
+            std::fs::write(home.join("config.toml"), b"config").unwrap();
+            let outcomes = rimz::uninstall::remove_root_keeping(
+                &home,
+                &home_kept_children(remove_state, remove_config),
+            );
+            assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
+            assert_eq!(home.join("ws/user-file").exists(), !remove_state);
+            assert_eq!(home.join("projects/user-file").exists(), !remove_config);
+            assert_eq!(home.join("config.toml").exists(), !remove_config);
+            for child in ["profiles", "data/accounts", "handoffs"] {
+                assert!(home.join(child).join("user-file").exists());
+            }
+            assert!(!home.join("cache").exists());
+        }
+    }
 }
