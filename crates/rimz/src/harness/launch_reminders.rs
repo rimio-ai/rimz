@@ -38,6 +38,11 @@ const SANDBOX_REMINDER_BODY: &str = concat!(
     "use `/tmp/scratchpad` in its place."
 );
 
+const HOST_SCRATCH_REMINDER_BODY: &str = concat!(
+    "Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room ",
+    "closes; every temporary file you make goes there."
+);
+
 const SUBAGENT_REMINDER_BODY: &str = concat!(
     "You are a subagent: a supervised child launched by another agent to ",
     "complete the task you were given. The task is scoped to this one run, so do the work ",
@@ -55,11 +60,7 @@ pub fn subagent_reminder() -> String {
     wrap(SUBAGENT_REMINDER_BODY)
 }
 
-pub(super) fn render(
-    request: &ExecRequest,
-    reminders: &LaunchReminders,
-    cwd: &Path,
-) -> Option<String> {
+pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &Path) -> String {
     let mut paragraphs = Vec::new();
     let params = &request.identity.params;
     if !request.subagent
@@ -76,18 +77,17 @@ pub(super) fn render(
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
         paragraphs.push(model_line(params, &model));
     }
-    if reminders.sandbox {
-        paragraphs.push(SANDBOX_REMINDER_BODY.to_owned());
-    }
+    paragraphs.push(if reminders.sandbox {
+        SANDBOX_REMINDER_BODY.to_owned()
+    } else {
+        HOST_SCRATCH_REMINDER_BODY.to_owned()
+    });
     if request.subagent {
         paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
     } else if let Some(catalog) = reminders.subagent_catalog.as_ref() {
         paragraphs.push(subagent_policy::reminder(catalog));
     }
-    if paragraphs.is_empty() {
-        return None;
-    }
-    Some(wrap(&paragraphs.join("\n\n")))
+    wrap(&paragraphs.join("\n\n"))
 }
 
 /// `on <model>` when the launch names a model; none otherwise.
@@ -131,14 +131,14 @@ mod tests {
             team: Some(team_reminder(team)),
             ..LaunchReminders::default()
         };
-        let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
+        let text = render(&request, &reminders, Path::new("/worktree"));
         assert_eq!(text.matches("<system_reminder>").count(), 1);
         assert_eq!(text.matches("</system_reminder>").count(), 1);
         assert!(text.contains(
             "no run state and no board; your first `rimz teams flip` creates the board."
         ));
         request.subagent = true;
-        let text = render(&request, &reminders, Path::new("/worktree")).expect("child reminder");
+        let text = render(&request, &reminders, Path::new("/worktree"));
         assert!(!text.contains("rimz teams flip"));
     }
 
@@ -147,7 +147,10 @@ mod tests {
         let cwd = Path::new("/worktree");
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
-        assert!(render(&request, &LaunchReminders::default(), cwd).is_none());
+        assert_eq!(
+            render(&request, &LaunchReminders::default(), cwd),
+            wrap(HOST_SCRATCH_REMINDER_BODY)
+        );
         request.identity.params = LaunchParams {
             team: Some("forge".to_owned()),
             role: Some("coder".to_owned()),
@@ -165,8 +168,9 @@ mod tests {
             request.subagent = subagent;
             for sandbox in [false, true] {
                 reminders.sandbox = sandbox;
-                let text = render(&request, &reminders, cwd).expect("reminder");
+                let text = render(&request, &reminders, cwd);
                 assert_eq!(text.contains(SANDBOX_REMINDER_BODY), sandbox);
+                assert_eq!(text.contains(HOST_SCRATCH_REMINDER_BODY), !sandbox);
                 assert_eq!(text.contains("team `forge`"), !subagent);
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
@@ -184,10 +188,14 @@ mod tests {
                     assert!(text.find("team `forge`").unwrap() < model);
                     assert!(model < text.find("Fresh session").unwrap());
                 }
-                if sandbox {
-                    let sandbox = text.find(SANDBOX_REMINDER_BODY).unwrap();
-                    assert!(model < sandbox && sandbox < policy);
-                }
+                let view = text
+                    .find(if sandbox {
+                        SANDBOX_REMINDER_BODY
+                    } else {
+                        HOST_SCRATCH_REMINDER_BODY
+                    })
+                    .expect("view paragraph");
+                assert!(model < view && view < policy);
             }
         }
     }
@@ -264,7 +272,7 @@ mod tests {
             team: Some(team_reminder(team)),
             ..LaunchReminders::default()
         };
-        let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
+        let text = render(&request, &reminders, Path::new("/worktree"));
         assert!(
             text.starts_with(
                 "<system_reminder>\nYou are @planner, leader of team `forge`. Seats: @planner (you) runs on Claude Fable 5.1; @coder runs on Codex. Fresh session in worktree /worktree."
@@ -276,7 +284,7 @@ mod tests {
 
         // `model-reminder = false` unnames every seat, the member's own and its teammates'.
         reminders.model = false;
-        let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
+        let text = render(&request, &reminders, Path::new("/worktree"));
         assert!(
             text.contains("Seats: @planner (you); @coder. Fresh session"),
             "{text}"

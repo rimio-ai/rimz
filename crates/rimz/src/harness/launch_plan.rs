@@ -21,6 +21,10 @@ use super::prompt_compose::{
 /// plan wraps it in bubblewrap, `host` otherwise. Set by the launch plan on
 /// every launch, so a parent's value never leaks into a child.
 const ENV_ISOLATION: &str = "RIMZ_ISOLATION";
+/// The launch's private scratch dir: its host path, which the sandbox pin
+/// layer replaces with `/tmp/scratchpad`. Set on every launch, like
+/// [`ENV_ISOLATION`].
+const ENV_SCRATCH: &str = "RIMZ_SCRATCH";
 
 pub struct LaunchPlanInputs<'a> {
     pub request: &'a ExecRequest,
@@ -124,6 +128,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         crate::config::Isolation::Host
     };
     extra_env.insert(ENV_ISOLATION.to_owned(), isolation.to_string());
+    let scratch_dir = inputs.state.scratch_dir(request.identity.name.as_deref());
+    extra_env.insert(ENV_SCRATCH.to_owned(), scratch_dir.display().to_string());
     let mut stage = launch::compile_agent_process_stage_with_extra_env(
         inputs.project_root,
         &request,
@@ -161,6 +167,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 project_root: inputs.project_root,
                 worktree: request.worktree_path.as_deref(),
                 tmp_dir: &inputs.state.tmp_dir,
+                scratch_dir: &scratch_dir,
                 skills_dir: &inputs.state.skills_dir,
                 provider_home,
                 provider_home_env_keys: adapter.config_home_env_keys(),
@@ -203,8 +210,9 @@ pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanEr
             launch::write_prompt_artifact(artifact)?;
         }
     }
+    plan.state
+        .ensure_scratch_dir(plan.request.identity.name.as_deref())?;
     if let Some(sandbox) = &plan.sandbox {
-        plan.state.ensure_tmp_dir()?;
         sandbox::apply(sandbox)?;
     }
     plan.skill_links

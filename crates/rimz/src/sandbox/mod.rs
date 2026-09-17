@@ -16,32 +16,40 @@ mod skills;
 pub use rewrite::PlannedCopy;
 
 const SANDBOX_TMP: &str = "/tmp";
+const SANDBOX_SCRATCH: &str = "/tmp/scratchpad";
 
-/// Where an agent sees room tmp: `/tmp` in a sandbox, the host path otherwise.
+/// Where an agent sees room tmp: `/tmp` in a sandbox, with its own scratch dir
+/// at `/tmp/scratchpad`; the host path otherwise.
 pub struct TmpView {
     tmp_dir: PathBuf,
+    scratch_dir: PathBuf,
     sandboxed: bool,
 }
 
 impl TmpView {
-    fn new(isolation: Isolation, paths: &StatePaths) -> Self {
+    fn new(isolation: Isolation, handle: Option<&str>, paths: &StatePaths) -> Self {
         Self {
             tmp_dir: paths.tmp_dir.clone(),
+            scratch_dir: paths.scratch_dir(handle),
             sandboxed: isolation == Isolation::Sandbox,
         }
     }
 
-    /// The view of an agent launched with this `--isolation` override; `None`
-    /// follows current machine policy.
-    pub fn current(isolation: Option<Isolation>, paths: &StatePaths) -> Self {
+    /// The view of the agent `handle` launched with this `--isolation`
+    /// override; `None` follows current machine policy.
+    pub fn current(isolation: Option<Isolation>, handle: Option<&str>, paths: &StatePaths) -> Self {
         let isolation = isolation.unwrap_or_else(|| MachineConfig::load_lenient().agents.isolation);
-        Self::new(isolation, paths)
+        Self::new(isolation, handle, paths)
     }
 
     pub fn agent_path(&self, host: &Path) -> PathBuf {
-        if self.sandboxed
-            && let Ok(relative) = host.strip_prefix(&self.tmp_dir)
-        {
+        if !self.sandboxed {
+            return host.to_path_buf();
+        }
+        if let Ok(relative) = host.strip_prefix(&self.scratch_dir) {
+            return Path::new(SANDBOX_SCRATCH).join(relative);
+        }
+        if let Ok(relative) = host.strip_prefix(&self.tmp_dir) {
             return Path::new(SANDBOX_TMP).join(relative);
         }
         host.to_path_buf()
@@ -107,6 +115,8 @@ pub struct SandboxInputs<'a> {
     pub project_root: &'a Path,
     pub worktree: Option<&'a Path>,
     pub tmp_dir: &'a Path,
+    /// The launch's scratch dir under `tmp_dir`, bound at `/tmp/scratchpad`.
+    pub scratch_dir: &'a Path,
     pub skills_dir: &'a Path,
     pub provider_home: Option<ProviderHome>,
     pub provider_home_env_keys: &'a [&'a str],
@@ -125,6 +135,7 @@ pub struct SandboxPlan {
     pub skipped: Vec<SkippedSkill>,
     pub copies: Vec<PlannedCopy>,
     tmp_dir: PathBuf,
+    scratch_dir: PathBuf,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -260,7 +271,10 @@ pub fn apply(plan: &SandboxPlan) -> Result<(), SandboxErr> {
         rewrite::apply(copy)?;
     }
     crate::disk::paths::ensure_private_runtime_dir(&plan.tmp_dir)?;
-    Ok(())
+    std::fs::create_dir_all(&plan.scratch_dir).map_err(|source| SandboxErr::Io {
+        path: plan.scratch_dir.clone(),
+        source,
+    })
 }
 
 pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
@@ -290,7 +304,11 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
                 .map_or(EnvPin::Unset, EnvPin::Set),
         );
     }
-    pins.insert("TMPDIR".to_owned(), EnvPin::Set("/tmp".to_owned()));
+    pins.insert("TMPDIR".to_owned(), EnvPin::Set(SANDBOX_TMP.to_owned()));
+    pins.insert(
+        "RIMZ_SCRATCH".to_owned(),
+        EnvPin::Set(SANDBOX_SCRATCH.to_owned()),
+    );
     for key in root_keys {
         if let Some(value) = inputs.env.get(key).filter(|value| !value.is_empty()) {
             required.push(PathBuf::from(value));
@@ -313,6 +331,11 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     mounts.push(Mount::Bind {
         source: inputs.tmp_dir.to_path_buf(),
         target: PathBuf::from(SANDBOX_TMP),
+    });
+    validate_path(inputs.scratch_dir)?;
+    mounts.push(Mount::Bind {
+        source: inputs.scratch_dir.to_path_buf(),
+        target: PathBuf::from(SANDBOX_SCRATCH),
     });
     let mut reach = BTreeSet::new();
     for path in required {
@@ -360,6 +383,7 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         skipped: views.skipped,
         copies: views.copies,
         tmp_dir: inputs.tmp_dir.to_path_buf(),
+        scratch_dir: inputs.scratch_dir.to_path_buf(),
     })
 }
 
@@ -457,19 +481,25 @@ mod tests {
         )
         .unwrap();
         let output = paths.waits_dir.join("wait-test.output");
-        let sandbox = TmpView::new(Isolation::Sandbox, &paths);
+        let own = paths.scratch_dir(Some("otter")).join("f");
+        let other = paths.scratch_dir(Some("fox")).join("f");
+        let sandbox = TmpView::new(Isolation::Sandbox, Some("otter"), &paths);
+        for (host, agent) in [
+            (output.as_path(), "/tmp/rimz-waits/wait-test.output"),
+            (own.as_path(), "/tmp/scratchpad/f"),
+            (other.as_path(), "/tmp/agents/fox/f"),
+            (Path::new("/elsewhere/file"), "/elsewhere/file"),
+        ] {
+            assert_eq!(sandbox.agent_path(host), Path::new(agent));
+        }
         assert_eq!(
-            sandbox.agent_path(&output),
-            Path::new("/tmp/rimz-waits/wait-test.output")
+            TmpView::new(Isolation::Sandbox, None, &paths)
+                .agent_path(&paths.scratchpad_dir.join("f")),
+            Path::new("/tmp/scratchpad/f")
         );
-        assert_eq!(
-            sandbox.agent_path(Path::new("/elsewhere/file")),
-            Path::new("/elsewhere/file")
-        );
-        assert_eq!(
-            TmpView::new(Isolation::Host, &paths).agent_path(&output),
-            output
-        );
+        let host = TmpView::new(Isolation::Host, Some("otter"), &paths);
+        assert_eq!(host.agent_path(&output), output);
+        assert_eq!(host.agent_path(&own), own);
     }
 
     #[test]

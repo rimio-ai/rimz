@@ -56,6 +56,7 @@ fn skill_prepare(
         project_root: &env.project_root,
         worktree: None,
         tmp_dir: &state.paths().tmp_dir,
+        scratch_dir: &state.paths().scratch_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
@@ -213,6 +214,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
         project_root: &env.project_root,
         worktree: None,
         tmp_dir: &state.paths().tmp_dir,
+        scratch_dir: &state.paths().scratch_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
@@ -712,6 +714,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
         project_root: &env.project_root,
         worktree: None,
         tmp_dir: &state.paths().tmp_dir,
+        scratch_dir: &state.paths().scratch_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &["CODEX_HOME"],
@@ -967,6 +970,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
         project_root: &env.project_root,
         worktree: None,
         tmp_dir: &state.paths().tmp_dir,
+        scratch_dir: &state.paths().scratch_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
@@ -1044,9 +1048,11 @@ test "$(cat "$HOME/.agents/skills/c/agents/openai.yaml")" = 'policy:
   allow_implicit_invocation: false'
 test -d "$XDG_RUNTIME_DIR/rimz/$RIMZ_TEST_WORKSPACE_ID"
 test -c /dev/null
-test -d /tmp/scratchpad
+test "$RIMZ_SCRATCH" = /tmp/scratchpad
+test -d /tmp/shared
 test -d /tmp/rimz-waits
 test -d /tmp/rimz-subagents
+printf parent > /tmp/scratchpad/same-name
 test "$(cat "$HOME/.codex/config.toml")" = sandbox-test
 if touch "$HOME/.agents/skills/b/changed" 2>/dev/null; then exit 1; fi
 test ! -e "$RIMZ_TEST_HOST_TMP_FILE"
@@ -1060,6 +1066,7 @@ printf '%s\n' shared > /tmp/team-file
     let host_tmp = tempfile::NamedTempFile::new_in("/tmp").unwrap();
     let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
     request.skills = Some(vec!["b".parse().unwrap()]);
+    request.identity.name = Some("scout".to_owned());
     let output = env
         .rimz()
         .args(exec_args(&env, &request))
@@ -1107,8 +1114,9 @@ printf '%s\n' shared > /tmp/team-file
         env.home_root.to_str().unwrap()
     );
 
-    std::fs::write(shim_dir.join("codex"), "#!/bin/sh\nset -eu\ntest \"$(cat /tmp/team-file)\" = shared\nprintf child > /tmp/child-file\n").unwrap();
+    std::fs::write(shim_dir.join("codex"), "#!/bin/sh\nset -eu\ntest \"$(cat /tmp/team-file)\" = shared\nprintf child > /tmp/child-file\ntest ! -e /tmp/scratchpad/same-name\ntest \"$(cat /tmp/agents/scout/same-name)\" = parent\nprintf child > /tmp/scratchpad/same-name\n").unwrap();
     request.subagent = true;
+    request.identity.name = Some("otter".to_owned());
     env.rimz()
         .args(exec_args(&env, &request))
         .env("PATH", path_with_front(&shim_dir))
@@ -1119,6 +1127,13 @@ printf '%s\n' shared > /tmp/team-file
         std::fs::read_to_string(tmp.join("child-file")).unwrap(),
         "child"
     );
+    for (handle, contents) in [("scout", "parent"), ("otter", "child")] {
+        assert_eq!(
+            std::fs::read_to_string(store.paths().scratch_dir(Some(handle)).join("same-name"))
+                .unwrap(),
+            contents
+        );
+    }
 }
 
 #[test]
@@ -1163,6 +1178,11 @@ fn sandbox_skills_under_host_are_ignored_at_provider_exec() {
     for kind in ["codex", "amp"] {
         let shim_dir = write_env_dump_shim(&env, kind);
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        request.identity.name = Some(format!("host-{kind}"));
+        let scratch = env
+            .store()
+            .paths()
+            .scratch_dir(request.identity.name.as_deref());
         for skills in [vec!["missing-skill".parse().unwrap()], vec![]] {
             request.skills = Some(skills);
             let output = env
@@ -1178,9 +1198,14 @@ fn sandbox_skills_under_host_are_ignored_at_provider_exec() {
                 "host launch ignores profile skills for {kind}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            assert!(probe.exists());
+            let dump = std::fs::read_to_string(&probe).unwrap();
+            assert!(
+                dump.lines()
+                    .any(|line| line == format!("RIMZ_SCRATCH={}", scratch.display())),
+                "host launch exports its scratch host path for {kind}"
+            );
+            assert!(scratch.is_dir());
             std::fs::remove_file(&probe).unwrap();
-            assert!(!env.store().paths().tmp_dir.exists());
             assert!(!env.store().paths().skills_dir.exists());
         }
     }
@@ -1362,7 +1387,6 @@ fn host_exec_links_library_into_codex_and_claude_account_roots_once() {
                 std::fs::read_link(root.join("shared")).unwrap(),
                 library.join("shared")
             );
-            assert!(!env.store().paths().tmp_dir.exists());
             assert!(!env.store().paths().skills_dir.exists());
         }
         assert!(!env.home_root.join(".claude/skills").exists());
@@ -1505,6 +1529,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
         project_root: &env.project_root,
         worktree: None,
         tmp_dir: &state.paths().tmp_dir,
+        scratch_dir: &state.paths().scratch_dir(None),
         skills_dir: &state.paths().skills_dir,
         provider_home: None,
         provider_home_env_keys: &[],
