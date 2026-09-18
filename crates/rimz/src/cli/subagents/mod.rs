@@ -647,6 +647,7 @@ fn child_reports(
 fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
     let (config, mut sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
         .context("loading machine config")?;
+    crate::cli::report_definition_errors(&config)?;
     let participant = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let caller = match crate::cli::open_existing_store(&participant)? {

@@ -164,10 +164,8 @@ pub fn resolve_single_agent_launch(
     workspace: &crate::workspace::ResolvedWorkspace,
 ) -> Result<ResolvedSingleAgentLaunch> {
     let machine_config = crate::config::MachineConfig::load_lenient();
-    if let Some(message) = machine_config.definition_failure() {
-        bail!("{message}");
-    }
     let launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
+    launch.block_set_failure()?;
     let layout = match crate::harness::spec::resolve_spec(
         Some(spec),
         &launch.profiles,
@@ -182,6 +180,7 @@ pub fn resolve_single_agent_launch(
                 Some(spec),
                 &machine_config.agents.commands,
             )?;
+            launch.block_failed_reference(Some(spec), None)?;
             return Err(err.into());
         }
         Err(err) => return Err(err.into()),
@@ -219,6 +218,7 @@ pub fn resolve_launch(
     spec: Option<&str>,
     agent_override: Option<&str>,
 ) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
+    launch.block_set_failure()?;
     let profiles = launch.profiles_for(scope);
     let layout = match crate::harness::spec::resolve_spec_with_agent_override(
         spec,
@@ -232,6 +232,7 @@ pub fn resolve_launch(
         Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
         | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
             launch.block_untrusted_reference(scope, spec, commands)?;
+            launch.block_failed_reference(spec, agent_override)?;
             if let Some(name) = spec
                 .map(str::trim)
                 .filter(|name| other_profiles(launch, scope).0.contains_key(*name))
@@ -240,12 +241,15 @@ pub fn resolve_launch(
             }
             return Err(err.into());
         }
-        Err(crate::harness::spec::LayoutErr::UnknownAgentOverride { .. })
-            if agent_override
+        Err(err @ crate::harness::spec::LayoutErr::UnknownAgentOverride { .. }) => {
+            launch.block_failed_reference(None, agent_override)?;
+            if let Some(name) = agent_override
                 .map(str::trim)
-                .is_some_and(|name| other_profiles(launch, scope).0.contains_key(name)) =>
-        {
-            return Err(wrong_doorway(agent_override.unwrap_or_default().trim(), scope).into());
+                .filter(|name| other_profiles(launch, scope).0.contains_key(*name))
+            {
+                return Err(wrong_doorway(name, scope).into());
+            }
+            return Err(err.into());
         }
         Err(err) => return Err(err.into()),
     };

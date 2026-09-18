@@ -181,6 +181,7 @@ pub(super) fn load_catalog(
     worktree: Option<&str>,
     machine: &MachineConfig,
 ) -> Result<Vec<TeamReport>> {
+    crate::cli::report_definition_errors(machine)?;
     let ctx = Ctx::open(globals)?;
     report_unknown_config_keys(machine)?;
     let effective = rimz::config::effective::load(machine, &ctx.workspace.project_root)?;
@@ -231,6 +232,7 @@ pub(super) fn effective_teams(globals: &GlobalFlags) -> Result<TeamsConfig> {
         .context("resolving current workspace")?;
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     report_unknown_config_keys(&machine)?;
+    crate::cli::report_definition_errors(&machine)?;
     Ok(rimz::config::effective::load(&machine, &workspace.project_root)?.teams)
 }
 

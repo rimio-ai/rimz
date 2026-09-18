@@ -337,11 +337,13 @@ fn load_member_team(
         Some(name),
         &machine.agents.commands,
     )?;
-    let team = effective
-        .teams
-        .0
-        .get(name)
-        .ok_or_else(|| anyhow::anyhow!("team `{name}` is no longer configured"))?;
+    let team = effective.teams.0.get(name).ok_or_else(|| {
+        anyhow::anyhow!(
+            machine
+                .definition_failure_for(name)
+                .unwrap_or_else(|| format!("team `{name}` is no longer configured"))
+        )
+    })?;
     Ok(Some(team.clone()))
 }
 

@@ -1,7 +1,7 @@
 //! Provider-native conversation forks launched as fresh RimZ agent rows.
 
 use super::*;
-use crate::cli::launch_machine_config;
+use crate::cli::machine_config;
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
@@ -61,10 +61,19 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(name) = args.name.as_deref() {
         validate_agent_name(name)?;
     }
-    let config = launch_machine_config()?;
+    let config = machine_config();
     let adapter = rimz::agents::find_definition(seed.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", seed.kind))?;
     let effective = rimz::config::effective::load(&config, &workspace.project_root)?;
+    effective.block_set_failure()?;
+    if seed
+        .launch
+        .profile
+        .as_deref()
+        .is_some_and(|name| !effective.profiles.0.contains_key(name))
+    {
+        effective.block_failed_reference(seed.launch.profile.as_deref(), None)?;
+    }
     let posture = fork_posture(&seed, &effective.profiles)?;
     if args.isolation.is_some() {
         seed.launch.isolation = args.isolation;

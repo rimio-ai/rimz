@@ -228,6 +228,149 @@ fn effective_launch(
     .expect("effective launch config")
 }
 
+#[test]
+fn failed_definitions_refuse_only_the_requested_launch() {
+    use crate::config::effective::ProfileScope;
+
+    let root = tempfile::tempdir().unwrap();
+    for namespace in ["agents", "subagents", "teams"] {
+        std::fs::create_dir(root.path().join(namespace)).unwrap();
+    }
+    std::fs::write(
+        root.path().join("agents/codex.md"),
+        "---\ndescription: Codex base\n---\nCodex base.",
+    )
+    .unwrap();
+    for (namespace, name) in [
+        ("agents", "broken"),
+        ("subagents", "child"),
+        ("teams", "crew"),
+    ] {
+        std::fs::write(
+            root.path().join(namespace).join(format!("{name}.md")),
+            "invalid frontmatter",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        root.path().join("agents/good.md"),
+        "---\ndescription: Good\nagent: codex\ntools: []\n---\n",
+    )
+    .unwrap();
+    let machine =
+        MachineConfig::parse_text(&root.path().join("config.toml"), "", root.path()).unwrap();
+    let launch = effective_launch(&machine, root.path());
+    for (name, scope, failed_name) in [
+        ("broken", ProfileScope::Agents, "broken"),
+        ("child", ProfileScope::Subagents, "child"),
+        ("crew", ProfileScope::Agents, "crew"),
+        ("crew.worker", ProfileScope::Agents, "crew"),
+    ] {
+        let error =
+            super::resolve_launch(&launch, scope, &machine.agents.commands, Some(name), None)
+                .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            machine.definition_failure_for(failed_name).unwrap()
+        );
+    }
+    let error = super::resolve_launch(
+        &launch,
+        ProfileScope::Agents,
+        &machine.agents.commands,
+        None,
+        Some("broken"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        machine.definition_failure_for("broken").unwrap()
+    );
+    resolve_launch(&launch, &machine.agents.commands, Some("good"), None).unwrap();
+    assert!(matches!(
+        resolve_launch(
+            &launch,
+            &machine.agents.commands,
+            Some("never-defined"),
+            None
+        ),
+        Err(ResolveLaunchError::Layout(
+            crate::harness::spec::LayoutErr::UnknownTeam { .. }
+        ))
+    ));
+    assert!(matches!(
+        resolve_launch(
+            &launch,
+            &machine.agents.commands,
+            Some("codex,never-defined"),
+            None
+        ),
+        Err(ResolveLaunchError::Layout(
+            crate::harness::spec::LayoutErr::UnknownCell { .. }
+        ))
+    ));
+
+    std::fs::create_dir(root.path().join(".rimz")).unwrap();
+    std::fs::write(
+        root.path().join(".rimz/config.toml"),
+        "[profiles.broken]\nagent = 'codex'\n",
+    )
+    .unwrap();
+    let launch = effective_launch(&machine, root.path());
+    assert!(matches!(
+        resolve_launch(&launch, &machine.agents.commands, Some("broken"), None),
+        Err(ResolveLaunchError::Effective(
+            crate::config::effective::EffectiveConfigErr::Blocked { .. }
+        ))
+    ));
+    crate::trust::grant_with_roots(root.path(), &root.path().join("config-home")).unwrap();
+    let launch = effective_launch(&machine, root.path());
+    assert!(resolve_launch(&launch, &machine.agents.commands, Some("broken"), None).is_ok());
+    assert_eq!(
+        resolve_launch(&launch, &machine.agents.commands, Some("crew"), None)
+            .unwrap_err()
+            .to_string(),
+        machine.definition_failure_for("crew").unwrap()
+    );
+}
+
+#[test]
+fn agent_launch_precondition_surfaces_definition_error() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = MachineConfig::default();
+    let path = PathBuf::from("/tmp/.agents/agents/broken.md");
+    config
+        .notices
+        .failed_definitions
+        .insert("broken".to_owned(), [path.clone()].into());
+    config
+        .notices
+        .definition_errors
+        .push(crate::config::DefinitionError {
+            path,
+            message: "invalid frontmatter".to_owned(),
+        });
+    let launch = effective_launch(&config, root.path());
+    for (spec, agent_override) in [
+        (Some(" broken "), None),
+        (None, Some(" broken ")),
+        (Some("broken.worker"), None),
+    ] {
+        let error = launch
+            .block_failed_reference(spec, agent_override)
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "/tmp/.agents/agents/broken.md: invalid frontmatter"
+        );
+    }
+    assert!(
+        launch
+            .block_failed_reference(Some("never-defined"), None)
+            .is_ok()
+    );
+}
+
 fn resolve_launch(
     launch: &crate::config::effective::LaunchAgents,
     commands: &crate::config::CommandsConfig,

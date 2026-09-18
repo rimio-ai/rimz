@@ -148,6 +148,27 @@ mod tests {
                 .iter()
                 .any(|error| error.path.ends_with("bad.md"))
         );
+        let machine = rimz::config::MachineConfig::parse_text(
+            &root.path().join("config.toml"),
+            "",
+            root.path(),
+        )
+        .unwrap();
+        let effective =
+            rimz::config::effective::load_with_roots(&machine, root.path(), root.path()).unwrap();
+        for name in loaded.failed.keys() {
+            let error = effective
+                .block_failed_reference(Some(name), None)
+                .unwrap_err();
+            let detail = loaded
+                .errors
+                .iter()
+                .filter(|error| loaded.failed[name].contains(&error.path))
+                .map(|error| format!("{}: {}", error.path.display(), error.message))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            assert_eq!(error.to_string(), detail);
+        }
     }
 
     #[test]

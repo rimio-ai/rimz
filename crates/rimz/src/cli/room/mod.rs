@@ -188,7 +188,7 @@ fn start_attended() -> bool {
 
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     refuse_legacy_only_home()?;
-    let machine = crate::cli::launch_machine_config()?;
+    let machine = crate::cli::machine_config();
     rimz::sandbox::preflight(machine.agents.isolation)?;
     validate_agent_plugins()?;
     let workspace = match rimz::WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
@@ -249,7 +249,7 @@ pub(crate) fn ensure_workspace_room_detached(
     confirm_resume: bool,
 ) -> Result<RoomContext> {
     refuse_legacy_only_home()?;
-    let machine = crate::cli::launch_machine_config()?;
+    let machine = crate::cli::machine_config();
     rimz::sandbox::preflight(machine.agents.isolation)?;
     validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())

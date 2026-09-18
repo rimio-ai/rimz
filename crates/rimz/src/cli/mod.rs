@@ -847,17 +847,10 @@ pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -
     Ok(())
 }
 
-/// The machine config every launch entry uses: one broken definition refuses the
-/// launch with its source file, so no entry can start on a partial set.
-pub(crate) fn launch_machine_config() -> Result<std::sync::Arc<rimz::config::MachineConfig>> {
-    let config = machine_config();
-    require_definitions(&config)?;
-    Ok(config)
-}
-
-fn require_definitions(config: &rimz::config::MachineConfig) -> Result<()> {
-    if let Some(message) = config.definition_failure() {
-        anyhow::bail!("{message}");
+pub(crate) fn report_definition_errors(config: &rimz::config::MachineConfig) -> Result<()> {
+    let mut err = render::err();
+    for error in &config.notices.definition_errors {
+        writeln!(err, "rimz: {}: {}", error.path.display(), error.message)?;
     }
     Ok(())
 }
@@ -1064,26 +1057,6 @@ mod tests {
         .expect("equal roots");
 
         assert!(proceed);
-    }
-
-    #[test]
-    fn agent_launch_precondition_surfaces_definition_error() {
-        let mut config = rimz::config::MachineConfig::default();
-        config
-            .notices
-            .definition_errors
-            .push(rimz::config::DefinitionError {
-                path: PathBuf::from("/tmp/.agents/agents/broken.md"),
-                message: "invalid frontmatter".to_owned(),
-            });
-
-        let error = require_definitions(&config).expect_err("broken definition");
-
-        assert_eq!(
-            error.to_string(),
-            "/tmp/.agents/agents/broken.md: invalid frontmatter"
-        );
-        assert!(!error.to_string().contains("unknown team"));
     }
 
     #[test]
