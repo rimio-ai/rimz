@@ -32,6 +32,7 @@ pub struct LoadedDefinitions {
     pub teams: TeamsConfig,
     pub sources: AgentSpecSources,
     pub errors: Vec<DefinitionErr>,
+    pub failed: BTreeMap<String, BTreeSet<PathBuf>>,
     pub rows: Vec<DefinitionRow>,
 }
 
@@ -189,6 +190,11 @@ pub fn load(
                 }
                 if let Some(previous) = names.get(&name) {
                     tree.failed.insert(name.clone());
+                    loaded
+                        .failed
+                        .entry(name.clone())
+                        .or_default()
+                        .insert(previous.clone());
                     return Err(DefinitionErr::new(
                         &path,
                         format!(
@@ -212,6 +218,7 @@ pub fn load(
                 Ok(())
             })();
             if let Err(error) = result {
+                loaded.failed.entry(name.clone()).or_default().insert(path);
                 tree.failed.insert(name);
                 loaded.errors.push(error);
             }
@@ -265,6 +272,11 @@ pub fn load(
         &children,
         &mut loaded,
     );
+    loaded.failed.retain(|name, _| {
+        !loaded.agent_profiles.0.contains_key(name)
+            && !loaded.subagent_profiles.0.contains_key(name)
+            && !loaded.teams.0.contains_key(name)
+    });
     loaded
 }
 

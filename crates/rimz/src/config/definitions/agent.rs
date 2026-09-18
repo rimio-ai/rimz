@@ -36,7 +36,13 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
 /// Resolves every definition of one tree into `loaded`.
 pub(super) fn resolve_namespace(mut resolver: Resolver<'_>, loaded: &mut LoadedDefinitions) {
     for name in resolver.tree.definitions.keys() {
-        resolver.resolve(name);
+        if resolver.resolve(name).is_none() {
+            loaded
+                .failed
+                .entry(name.clone())
+                .or_default()
+                .insert(resolver.tree.definitions[name].path.clone());
+        }
     }
     loaded.errors.extend(resolver.errors);
     for (name, resolved) in resolver.resolved {

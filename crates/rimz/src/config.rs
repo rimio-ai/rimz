@@ -14,7 +14,7 @@
 //! file to built-in defaults. A broken Markdown definition drops only that definition from read-only views and blocks launches with its source error.
 //! Strict [`MachineConfig::load`] backs config inspection and reports precise errors.
 
-use std::collections::{BTreeMap, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -355,6 +355,7 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 pub struct ConfigNotices {
     pub unknown_keys: Vec<UnknownConfigKey>,
     pub definition_errors: Vec<DefinitionError>,
+    pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
 }
 
 /// A key ignored while loading a per-machine config file.
@@ -462,8 +463,7 @@ impl MachineConfig {
         MachineConfigFiles::machine().path(MachineConfigFileKind::Theme)
     }
 
-    /// Load from the default per-machine paths. Missing files are defaults —
-    /// never an error.
+    /// Load from the default per-machine paths with strict TOML validation and no memo. Missing files are defaults; broken Markdown definitions are retained in notices alongside the good definitions.
     pub fn load() -> Result<Self> {
         Self::load_with_agent_spec_sources().map(|(config, _)| config)
     }
@@ -487,9 +487,7 @@ impl MachineConfig {
             .map(|loop_| loop_.unwrap_or_default())
     }
 
-    /// Load per-machine config for a runtime entry point. A file that fails to
-    /// load degrades to its built-in defaults with a warning instead of
-    /// aborting the room; the strict [`Self::load`] reports the precise error for `rimz config` and `rimz doctor`.
+    /// Load memoized per-machine config for a runtime entry point. Unlike [`Self::load`], broken TOML degrades to built-in defaults with a warning; both retain Markdown definition failures in notices alongside the good definitions.
     pub fn load_lenient() -> Arc<Self> {
         let files = MachineConfigFiles::machine();
         Self::load_lenient_with_memo(files.core_path(), files.agents_home())
@@ -527,12 +525,6 @@ impl MachineConfig {
         let mut config = Self::assemble(core.value, theme.value, loop_.value);
         validate_notifications_config(&config.notifications, files.core_path())?;
         let sources = config.load_definitions(agents_home, config_path, env, &mut notices);
-        if let Some(error) = notices.definition_errors.first() {
-            return Err(ConfigErr::Definition {
-                path: error.path.clone(),
-                message: error.message.clone(),
-            });
-        }
         config.notices = notices;
         Ok((config, sources))
     }
@@ -613,13 +605,6 @@ impl MachineConfig {
                     Self::assemble(core, ThemeConfig::default(), LoopConfig::default());
                 let mut notices = ConfigNotices::default();
                 config.load_definitions(agents_home, path, env, &mut notices);
-                if !ignore_broken_definitions && let Some(error) = notices.definition_errors.first()
-                {
-                    return Err(ConfigErr::Definition {
-                        path: error.path.clone(),
-                        message: error.message.clone(),
-                    });
-                }
                 if ignore_broken_definitions {
                     // An edit judges config.toml's own keys; the definition set's
                     // failures surface at launch and must not lock the editor out.
@@ -629,8 +614,6 @@ impl MachineConfig {
                         ..config.agents.clone()
                     };
                     validate_agents_file(&own_keys, &SubagentProfilesConfig::default(), path)?;
-                } else {
-                    validate_agents_file(&config.agents, &config.subagents, agents_home)?;
                 }
                 config.notices = notices;
                 Ok(config)
@@ -694,6 +677,7 @@ impl MachineConfig {
         self.agents.profiles = loaded.agent_profiles;
         self.subagents.profiles = loaded.subagent_profiles;
         self.agents.teams.0.extend(loaded.teams.0);
+        notices.failed_definitions = loaded.failed;
         notices
             .definition_errors
             .extend(loaded.errors.into_iter().map(|error| DefinitionError {
@@ -731,6 +715,20 @@ impl MachineConfig {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         })
+    }
+
+    /// Failures for one unloaded definition name, including each source path.
+    pub fn definition_failure_for(&self, name: &str) -> Option<String> {
+        let paths = self.notices.failed_definitions.get(name)?;
+        Some(
+            self.notices
+                .definition_errors
+                .iter()
+                .filter(|notice| paths.contains(&notice.path))
+                .map(|notice| format!("{}: {}", notice.path.display(), notice.message))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        )
     }
 
     pub fn headline_spec(&self) -> crate::agents::spending::HeadlineSpec {
