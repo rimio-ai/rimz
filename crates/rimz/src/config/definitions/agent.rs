@@ -463,7 +463,16 @@ pub(super) fn skill_policy(
             let manual = match marker {
                 ManualSkill::Unsupported => false,
                 ManualSkill::Frontmatter => {
-                    let (block, _) = frontmatter::split(skill_path, &text)?;
+                    let (block, _) = frontmatter::split(skill_path, &text).map_err(|error| {
+                        DefinitionErr::new(
+                            path,
+                            format!(
+                                "lists skill '{name}', invalid at {}: {}",
+                                error.path.display(),
+                                error.message
+                            ),
+                        )
+                    })?;
                     block.lines().any(|line| {
                         line.strip_prefix("disable-model-invocation:")
                             .is_some_and(|value| value.trim() == "true")
@@ -483,7 +492,13 @@ pub(super) fn skill_policy(
                             }
                             let document: Option<Document> = serde_saphyr::from_str(&text)
                                 .map_err(|error| {
-                                    DefinitionErr::new(&policy_path, error.to_string())
+                                    DefinitionErr::new(
+                                        path,
+                                        format!(
+                                            "lists skill '{name}', invalid at {}: {error}",
+                                            policy_path.display()
+                                        ),
+                                    )
                                 })?;
                             document
                                 .and_then(|document| document.policy)
@@ -492,7 +507,13 @@ pub(super) fn skill_policy(
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                         Err(error) => {
-                            return Err(DefinitionErr::new(&policy_path, error.to_string()));
+                            return Err(DefinitionErr::new(
+                                path,
+                                format!(
+                                    "lists skill '{name}', unreadable at {}: {error}",
+                                    policy_path.display()
+                                ),
+                            ));
                         }
                     }
                 }
