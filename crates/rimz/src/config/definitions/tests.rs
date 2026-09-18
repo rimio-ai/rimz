@@ -1221,12 +1221,39 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
     let loaded = load_checked(root.path());
     assert_eq!(loaded.errors.len(), 2);
     assert!(loaded.agent_profiles.0.contains_key("codex-seat"));
+    for kind in ["claude", "pi"] {
+        let error = loaded
+            .errors
+            .iter()
+            .find(|error| error.path.ends_with(format!("agents/{kind}-seat.md")))
+            .unwrap();
+        assert_eq!(
+            error.message,
+            format!(
+                "lists skill 'one', which {} marks user-only for {kind} (`disable-model-invocation: true`); listing cannot lift that marker: drop it from `skills:` or remove the marker",
+                root.path().join("skills/one/SKILL.md").display()
+            )
+        );
+    }
     write(
         root.path(),
         "skills/one/agents/openai.yaml",
         "policy:\n  allow_implicit_invocation: false\n",
     );
-    assert_eq!(load_checked(root.path()).errors.len(), 3);
+    let loaded = load_checked(root.path());
+    assert_eq!(loaded.errors.len(), 3);
+    let error = loaded
+        .errors
+        .iter()
+        .find(|error| error.path.ends_with("agents/codex-seat.md"))
+        .unwrap();
+    assert_eq!(
+        error.message,
+        format!(
+            "lists skill 'one', which {} marks user-only for codex (`policy.allow_implicit_invocation: false`); listing cannot lift that marker: drop it from `skills:` or remove the marker",
+            root.path().join("skills/one/agents/openai.yaml").display()
+        )
+    );
     write(
         root.path(),
         "skills/one/SKILL.md",

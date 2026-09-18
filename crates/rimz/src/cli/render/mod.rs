@@ -77,6 +77,12 @@ pub(crate) fn err() -> anstream::AutoStream<std::io::StderrLock<'static>> {
     anstream::AutoStream::auto(std::io::stderr().lock())
 }
 
+pub(super) fn definition_notice(path: &str, detail: &str) -> String {
+    format!(
+        "{path} cannot be used: {detail}; `rimz agents`, `rimz subagents`, and `rimz teams` refuse to launch it until the definition is fixed; run `rimz agents validate`"
+    )
+}
+
 pub(crate) fn warn_unreadable_lanes(lifetimes: &rimz::agents::attribution::LaneLifetimes) {
     for (path, reason) in lifetimes.unreadable() {
         let _ = writeln!(

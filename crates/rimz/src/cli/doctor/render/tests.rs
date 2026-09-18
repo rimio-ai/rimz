@@ -105,7 +105,7 @@ fn machine_config_definition_problem_names_launch_precondition() {
     });
 
     assert!(out.contains("cannot be used"), "{out}");
-    assert!(out.contains("refuse launches"), "{out}");
+    assert!(out.contains("`rimz agents`, `rimz subagents`, and `rimz teams` refuse to launch it until the definition is fixed; run `rimz agents validate`"), "{out}");
     assert!(!out.contains("unparseable"), "{out}");
     assert!(!out.contains("built-in defaults"), "{out}");
 }
