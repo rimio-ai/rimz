@@ -83,13 +83,6 @@ pub(super) struct Home {
 #[derive(Debug, Serialize)]
 pub(super) struct MachineConfigHealth {
     pub(super) broken_files: Vec<MachineConfigProblem>,
-    pub(super) legacy_agents_home: Vec<LegacyAgentsHome>,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct LegacyAgentsHome {
-    pub(super) path: String,
-    pub(super) fix: String,
 }
 
 #[derive(Debug, Serialize)]

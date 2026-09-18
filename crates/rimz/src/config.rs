@@ -1168,21 +1168,6 @@ pub fn is_definition_source(agents_home: &Path, path: &Path) -> bool {
         .any(|dir| path.starts_with(agents_home.join(dir)))
 }
 
-/// Legacy TOML trees retained only for migration diagnostics.
-pub fn agents_home_fragment_dirs(root: &Path) -> Vec<PathBuf> {
-    [("profiles", "agent.toml"), ("teams", "team.toml")]
-        .into_iter()
-        .filter_map(|(dir, file)| {
-            let path = root.join(dir);
-            let found = std::fs::read_dir(&path)
-                .ok()?
-                .filter_map(std::result::Result::ok)
-                .any(|entry| entry.path().join(file).is_file());
-            found.then_some(path)
-        })
-        .collect()
-}
-
 fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {
     crate::harness::spec::validate_config(&agents.profiles, &agents.commands, &agents.teams)
         .map_err(|source| ConfigErr::Agents {

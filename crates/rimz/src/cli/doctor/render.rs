@@ -251,18 +251,6 @@ fn render_machine_config(
     tally: &mut Tally,
 ) -> io::Result<()> {
     section(w, tally, "MACHINE CONFIG")?;
-    for legacy in &config.legacy_agents_home {
-        let mut kv = KeyVals::new().indent(2);
-        kv.push(
-            "legacy file",
-            verdict(
-                tally,
-                Health::Info,
-                format!("{}: {}", home_relative(&legacy.path), legacy.fix),
-            ),
-        );
-        kv.render(w)?;
-    }
     if config.broken_files.is_empty() {
         let mut kv = KeyVals::new().indent(2);
         kv.push(
