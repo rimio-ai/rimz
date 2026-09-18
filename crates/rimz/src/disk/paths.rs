@@ -3,7 +3,7 @@
 //! Everything that outlives a boot lives under one home, [`rimz_home`]
 //! (`$RIMZ_HOME`, else `~/.rimz`): config files at the top, the agent library
 //! (`agents/ subagents/ teams/ traits/ skills/`, relocated by
-//! `$RIMZ_AGENTS_HOME`), trust grants under `projects/`, workspace state under
+//! `$RIMZ_AGENTS_HOME`), trust grants under `trust/`, workspace state under
 //! `ws/<name>/`, the provider homes under `accounts/`, and the machine-wide
 //! `logs/`, `loops/`, `web/`, `builds/`, and `cache/` dirs (provider caches
 //! under `cache/providers/`). Runtime paths stay on tmpfs under

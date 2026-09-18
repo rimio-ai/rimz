@@ -80,7 +80,8 @@ Earlier releases split RimZ across four XDG directories. RimZ no longer reads th
 | Old location | New location |
 | --- | --- |
 | `~/.config/rimz/config.toml`, `theme.toml`, `loop.toml`, `remote.toml` | `~/.rimz/` |
-| `~/.config/rimz/agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `agents.d/`, `projects/` | `~/.rimz/` |
+| `~/.config/rimz/agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `agents.d/` | `~/.rimz/` |
+| `~/.config/rimz/projects/` | `~/.rimz/trust/` |
 | `~/.local/state/rimz/workspaces/ws_<24hex>/` | `~/.rimz/ws/<basename>-<hex>/` |
 | `$XDG_RUNTIME_DIR/rimz/ws_<24hex>/` | `$XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/` |
 | `~/.local/state/rimz/shared/` | `~/.rimz/cache/providers/` |

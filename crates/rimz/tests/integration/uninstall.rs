@@ -52,7 +52,7 @@ impl UninstallFixture {
             RootKind::State => home.join("ws"),
             RootKind::Runtime => self.env.runtime_root.join("rimz"),
             RootKind::Cache => home.join("cache/providers"),
-            RootKind::Config => home.join("projects"),
+            RootKind::Config => home.join("trust"),
         }
     }
 
