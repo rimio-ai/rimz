@@ -232,7 +232,6 @@ pub(super) fn effective_teams(globals: &GlobalFlags) -> Result<TeamsConfig> {
         .context("resolving current workspace")?;
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     report_unknown_config_keys(&machine)?;
-    crate::cli::report_definition_errors(&machine)?;
     Ok(rimz::config::effective::load(&machine, &workspace.project_root)?.teams)
 }
 
