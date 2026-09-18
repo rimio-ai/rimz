@@ -181,6 +181,7 @@ pub fn resolve_single_agent_launch(
                 &machine_config.agents.commands,
             )?;
             launch.block_failed_reference(Some(spec), None)?;
+            launch.block_failed_reference(unknown_cell(&err), None)?;
             return Err(err.into());
         }
         Err(err) => return Err(err.into()),
@@ -210,6 +211,14 @@ pub struct ProfilePromptFileError {
     path: PathBuf,
 }
 
+/// The one cell of a multi-cell spec that failed to resolve, so a failed definition refuses by name.
+fn unknown_cell(err: &crate::harness::spec::LayoutErr) -> Option<&str> {
+    match err {
+        crate::harness::spec::LayoutErr::UnknownCell { cell, .. } => Some(cell),
+        _ => None,
+    }
+}
+
 /// Resolve effective profiles/teams without applying runtime launch options.
 pub fn resolve_launch(
     launch: &crate::config::effective::LaunchAgents,
@@ -233,6 +242,7 @@ pub fn resolve_launch(
         | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
             launch.block_untrusted_reference(scope, spec, commands)?;
             launch.block_failed_reference(spec, agent_override)?;
+            launch.block_failed_reference(unknown_cell(&err), None)?;
             if let Some(name) = spec
                 .map(str::trim)
                 .filter(|name| other_profiles(launch, scope).0.contains_key(*name))
