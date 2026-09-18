@@ -265,6 +265,7 @@ fn failed_definitions_refuse_only_the_requested_launch() {
         ("child", ProfileScope::Subagents, "child"),
         ("crew", ProfileScope::Agents, "crew"),
         ("crew.worker", ProfileScope::Agents, "crew"),
+        ("good,broken", ProfileScope::Agents, "broken"),
     ] {
         let error =
             super::resolve_launch(&launch, scope, &machine.agents.commands, Some(name), None)
