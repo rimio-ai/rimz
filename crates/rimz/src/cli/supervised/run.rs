@@ -425,7 +425,7 @@ fn prepare_supervised(
     globals: &GlobalFlags,
 ) -> Result<Option<PreparedRun>> {
     let workspace = supervised::resolve_run_workspace(globals)?;
-    let machine_config = crate::cli::launch_machine_config()?;
+    let machine_config = crate::cli::machine_config();
     let mode = request.permission_mode;
     let store = crate::cli::open_store(&workspace)?;
     // Inside a team's lane, a bare role names that team's role, exactly as it

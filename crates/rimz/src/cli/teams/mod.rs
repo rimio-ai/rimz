@@ -364,6 +364,7 @@ fn reject_launch_flags_without_name(
 fn list_profiles(json: bool, path: bool) -> Result<()> {
     let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
         .context("loading machine config")?;
+    crate::cli::report_definition_errors(&config)?;
     let reports = crate::cli::profile_report::available_profiles(
         &config.agents.profiles,
         &config.agents.commands,
@@ -380,6 +381,11 @@ fn list_profiles(json: bool, path: bool) -> Result<()> {
 
 fn ensure_defined(name: &str, globals: &GlobalFlags) -> Result<rimz::config::TeamsConfig> {
     let teams = list::effective_teams(globals)?;
+    if !teams.0.contains_key(name)
+        && let Some(detail) = crate::cli::machine_config().definition_failure_for(name)
+    {
+        bail!("{detail}");
+    }
     validate_team_name(name, &teams)?;
     Ok(teams)
 }

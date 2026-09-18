@@ -731,6 +731,20 @@ impl MachineConfig {
         )
     }
 
+    /// Failures no definition name owns (a namespace collision, an unreadable tree): the set itself is inconsistent, so every launch refuses.
+    fn unattributed_definition_failure(&self) -> Option<String> {
+        let owned: std::collections::BTreeSet<&PathBuf> =
+            self.notices.failed_definitions.values().flatten().collect();
+        let lines: Vec<String> = self
+            .notices
+            .definition_errors
+            .iter()
+            .filter(|notice| !owned.contains(&notice.path))
+            .map(|notice| format!("{}: {}", notice.path.display(), notice.message))
+            .collect();
+        (!lines.is_empty()).then(|| lines.join("\n\n"))
+    }
+
     pub fn headline_spec(&self) -> crate::agents::spending::HeadlineSpec {
         crate::agents::spending::HeadlineSpec {
             mode: self.sidebar.spend_window,

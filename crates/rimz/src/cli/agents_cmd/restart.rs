@@ -45,7 +45,7 @@ pub(in crate::cli) fn restart_resolved(
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.worktree_root.clone());
-    let machine_config = crate::cli::launch_machine_config()?;
+    let machine_config = crate::cli::machine_config();
     let posture = restart_posture(agent, workspace, &machine_config)?;
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
@@ -254,6 +254,14 @@ fn restart_posture(
     machine_config: &rimz::config::MachineConfig,
 ) -> Result<ResumePosture> {
     let launch = rimz::config::effective::load(machine_config, &workspace.project_root)?;
+    launch.block_set_failure()?;
+    if agent
+        .profile
+        .as_deref()
+        .is_some_and(|name| !launch.profiles.0.contains_key(name))
+    {
+        launch.block_failed_reference(agent.profile.as_deref(), None)?;
+    }
     let posture = rimz::harness::resume::resolve_posture(
         rimz::harness::resume::PostureRequest {
             profile: agent.profile.as_deref(),

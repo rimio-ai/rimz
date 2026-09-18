@@ -627,6 +627,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Profiles { json, path, teams }) => {
             let (config, sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
                 .context("loading machine config")?;
+            crate::cli::report_definition_errors(&config)?;
             let mut reports = crate::cli::profile_report::available_profiles(
                 &config.agents.profiles,
                 &config.agents.commands,

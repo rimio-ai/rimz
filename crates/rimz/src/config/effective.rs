@@ -1,7 +1,7 @@
 //! Effective launch configuration that depends on both machine config and the
 //! trusted project config.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::{
@@ -16,6 +16,8 @@ const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EffectiveConfigErr {
+    #[error("{0}")]
+    FailedDefinition(String),
     #[error(transparent)]
     Trust(#[from] trust::TrustErr),
     #[error("cannot access {path}: {source}")]
@@ -103,6 +105,8 @@ pub struct LaunchAgents {
     pub profiles: ProfilesConfig,
     pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
+    failed_definitions: BTreeMap<String, String>,
+    set_failure: Option<String>,
     repo_sources: AgentSpecSources,
     state: TrustState,
     config_path: PathBuf,
@@ -118,6 +122,17 @@ pub fn load_with_roots(
     project_root: &Path,
     config_root: &Path,
 ) -> Result<LaunchAgents> {
+    let failed_definitions = machine
+        .notices
+        .failed_definitions
+        .keys()
+        .filter_map(|name| {
+            machine
+                .definition_failure_for(name)
+                .map(|detail| (name.clone(), detail))
+        })
+        .collect();
+    let set_failure = machine.unattributed_definition_failure();
     let machine_subagent_profiles = &machine.subagents.profiles;
     let machine = &machine.agents;
     let report = trust::status_with_roots(project_root, config_root)?;
@@ -127,6 +142,8 @@ pub fn load_with_roots(
             profiles: machine.profiles.clone(),
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
+            failed_definitions,
+            set_failure,
             repo_sources: AgentSpecSources::default(),
             state: report.state,
             config_path,
@@ -138,6 +155,8 @@ pub fn load_with_roots(
             profiles: machine.profiles.clone(),
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
+            failed_definitions,
+            set_failure,
             repo_sources: AgentSpecSources::default(),
             state: report.state,
             config_path,
@@ -238,6 +257,8 @@ pub fn load_with_roots(
         profiles,
         subagent_profiles,
         teams,
+        failed_definitions,
+        set_failure,
         repo_sources,
         state: report.state,
         config_path,
@@ -342,6 +363,37 @@ fn task_has_prompt(entry: &TaskEntry) -> bool {
 }
 
 impl LaunchAgents {
+    /// Refuse every launch while a definition failure no single name owns stands.
+    pub fn block_set_failure(&self) -> Result<()> {
+        match &self.set_failure {
+            Some(detail) => Err(EffectiveConfigErr::FailedDefinition(detail.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuse unresolved names whose Markdown definitions failed to load.
+    pub fn block_failed_reference(
+        &self,
+        spec: Option<&str>,
+        agent_override: Option<&str>,
+    ) -> Result<()> {
+        let spec = spec.map(str::trim);
+        for name in [
+            spec,
+            agent_override.map(str::trim),
+            spec.and_then(|spec| spec.split_once('.').map(|(team, _)| team)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|name| !name.is_empty())
+        {
+            if let Some(detail) = self.failed_definitions.get(name) {
+                return Err(EffectiveConfigErr::FailedDefinition(detail.clone()));
+            }
+        }
+        Ok(())
+    }
+
     /// Overlay trusted project profile provenance onto machine catalog sources.
     pub fn overlay_profile_sources(&self, sources: &mut AgentSpecSources) {
         sources
