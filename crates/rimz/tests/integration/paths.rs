@@ -56,7 +56,7 @@ fn paths_names_one_workspace_dir_in_both_trees() {
     );
     assert_eq!(report["scratch_agent_view"], report["scratch"]);
 
-    let sandboxed = paths_json(env.rimz().env("RIMZ_ISOLATION", "sandbox"));
+    let sandboxed = paths_json(env.rimz().env(rimz::config::Isolation::ENV, "sandbox"));
     assert_eq!(sandboxed["scratch_agent_view"], "/tmp/scratchpad");
 
     env.rimz()

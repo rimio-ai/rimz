@@ -680,7 +680,9 @@ impl MachineConfig {
         notices: &mut ConfigNotices,
     ) -> AgentSpecSources {
         let library = agents_home.join("skills");
-        let check = if self.agents.isolation == Isolation::Sandbox {
+        let check = if self.agents.isolation == Isolation::Sandbox
+            && Isolation::ambient(env) != Some(Isolation::Sandbox)
+        {
             definitions::SkillCheck::Check {
                 env,
                 library: &library,

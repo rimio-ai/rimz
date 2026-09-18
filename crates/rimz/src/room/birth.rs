@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
+use crate::config::Isolation;
 use crate::harness::rebirth::{RebirthChoice, RebirthPlan};
 use crate::harness::resume::ResumePlan;
 use crate::mux::{
@@ -113,6 +114,9 @@ impl RoomContext {
             }
         };
         if !pre_existed {
+            if Isolation::ambient(&crate::agents::ambient_env()) == Some(Isolation::Sandbox) {
+                bail!("this pane runs inside a RimZ sandbox; start the room from a host shell");
+            }
             crate::sidebar::purge_rebirth_heartbeats(&self.runtime);
             if let Err(err) = crate::mux::width_target::clear(&self.runtime) {
                 tracing::debug!(

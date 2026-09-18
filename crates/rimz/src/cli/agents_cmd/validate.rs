@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use rimz::config::Isolation;
 use rimz::config::definitions::{self, DefinitionErr, LoadedDefinitions, SkillCheck};
 
 use crate::cli::render;
@@ -11,14 +12,22 @@ pub(super) fn run(json: bool) -> Result<()> {
     let machine = crate::cli::machine_config();
     let env = rimz::agents::ambient_env();
     let library = home.join("skills");
-    let loaded = load(
-        &home,
+    let in_sandbox = Isolation::ambient(&env) == Some(Isolation::Sandbox);
+    let check = if machine.agents.isolation == Isolation::Sandbox && !in_sandbox {
         SkillCheck::Check {
             env: &env,
             library: &library,
-        },
-        &machine,
-    );
+        }
+    } else {
+        SkillCheck::Skip
+    };
+    if in_sandbox {
+        writeln!(
+            render::err(),
+            "rimz: skill listings were not checked because this shell runs inside a sandbox view; run `rimz agents validate` from a host shell"
+        )?;
+    }
+    let loaded = load(&home, check, &machine);
     if json {
         render::json_pretty(&serde_json::json!({
             "rows": loaded.rows,

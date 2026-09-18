@@ -540,7 +540,7 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
         assert_eq!(plan.process().env.get("CLAUDE_CONFIG_DIR"), None);
         assert_eq!(plan.process().env.get("CODEX_HOME"), None);
         assert_eq!(
-            plan.process().env.get(ENV_ISOLATION).map(String::as_str),
+            plan.process().env.get(Isolation::ENV).map(String::as_str),
             Some("host"),
             "{kind}"
         );
@@ -626,7 +626,7 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
             .any(|pair| pair == ["--sandbox", "danger-full-access"])
     );
     assert_eq!(
-        plan.process().env.get(ENV_ISOLATION).map(String::as_str),
+        plan.process().env.get(Isolation::ENV).map(String::as_str),
         Some("sandbox")
     );
     assert_eq!(
