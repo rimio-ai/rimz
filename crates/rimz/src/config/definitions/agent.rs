@@ -498,10 +498,19 @@ pub(super) fn skill_policy(
                 }
             };
             if manual {
+                let (marker_file, marker_line) = if matches!(marker, ManualSkill::OpenAiPolicy) {
+                    (
+                        directory.join("agents/openai.yaml"),
+                        "policy.allow_implicit_invocation: false",
+                    )
+                } else {
+                    (skill_path.clone(), "disable-model-invocation: true")
+                };
                 return Err(DefinitionErr::new(
                     path,
                     format!(
-                        "lists skill '{name}', which is marked user-only for {kind}; listing it changes nothing"
+                        "lists skill '{name}', which {} marks user-only for {kind} (`{marker_line}`); listing cannot lift that marker: drop it from `skills:` or remove the marker",
+                        marker_file.display()
                     ),
                 ));
             }

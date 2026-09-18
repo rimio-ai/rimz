@@ -9,7 +9,8 @@ use std::io::{self, Write};
 use jiff::Timestamp;
 
 use crate::cli::render::{
-    Cell, KeyVals, Table, age_label, cell, fmt_bytes, home_relative, paint, palette, status,
+    Cell, KeyVals, Table, age_label, cell, definition_notice, fmt_bytes, home_relative, paint,
+    palette, status,
 };
 use rimz::agents::AgentStatus;
 use rimz::trust::TrustState;
@@ -273,11 +274,9 @@ fn render_machine_config(
     }
     for problem in &config.broken_files {
         let detail = match problem.kind {
-            MachineConfigProblemKind::Definition => format!(
-                "{} cannot be used: {}; `rimz agents` and `rimz teams` refuse launches until this definition is fixed; run `rimz agents validate`",
-                home_relative(&problem.path),
-                problem.error,
-            ),
+            MachineConfigProblemKind::Definition => {
+                definition_notice(&home_relative(&problem.path), &problem.error)
+            }
             MachineConfigProblemKind::Parse => format!(
                 "{} is unparseable: {}; settings in this file use built-in defaults",
                 home_relative(&problem.path),

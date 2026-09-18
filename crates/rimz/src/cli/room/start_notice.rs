@@ -23,9 +23,7 @@ fn broken_config_notice_for(err: &rimz::config::ConfigErr, fragment: bool) -> St
         .map(rimz::config::ConfigFileDiagnosis::summary)
         .unwrap_or_else(|| render::one_line_error(err));
     if fragment {
-        format!(
-            "{path} cannot be used: {detail}; `rimz agents` and `rimz teams` refuse launches until this definition is fixed; run `rimz agents validate`"
-        )
+        render::definition_notice(&path, &detail)
     } else if err.diagnosis().is_some() {
         format!(
             "{path} is unparseable — every setting in it is ignored and built-in defaults apply: {detail}; fix the file, then restart"
@@ -245,7 +243,7 @@ mod tests {
             notice.contains("/tmp/agents/bad.md cannot be used"),
             "{notice}"
         );
-        assert!(notice.contains("refuse launches"), "{notice}");
+        assert!(notice.contains("`rimz agents`, `rimz subagents`, and `rimz teams` refuse to launch it until the definition is fixed; run `rimz agents validate`"), "{notice}");
         assert!(!notice.contains("unparseable"), "{notice}");
         assert!(!notice.contains("built-in defaults"), "{notice}");
     }
