@@ -195,7 +195,7 @@ mod tests {
             "LSP",
             "Skill",
         ]);
-        // Literal args from ~/.rimz/profiles/planner/agent.toml.
+        // Literal args the planner agent launches with.
         let expected = shlex::split("--strict-mcp-config --tools 'Bash,Read,Grep,Glob,Edit,Write,AskUserQuestion,LSP,Skill'").unwrap();
         assert_eq!(render_tool_args("claude", Some(&plain)).unwrap(), expected);
         let named = tools(&["Agent(Explore, Plan)", "Bash", "Agent(Explore)"]);
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn generated_implementer_parity() {
-        // Literal args from ~/.rimz/profiles/implementer/agent.toml.
+        // Literal args the implementer agent launches with.
         let expected = shlex::split(r#"--strict-config -c 'web_search="disabled"' -c 'agents.enabled=false' -c 'features.goals=false' -c 'features.multi_agent=false' -c 'features.multi_agent_v2=false' -c 'features.shell_snapshot=true' -c 'features.shell_tool=true' -c 'features.skill_mcp_dependency_install=false' -c 'features.tool_call_mcp_elicitation=false' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'features.in_app_browser=false' -c 'features.image_generation=false' -c 'features.tool_suggest=false' -c 'features.memories=false' -c 'features.default_mode_request_user_input=false' -c 'tools.experimental_request_user_input.enabled=false' -c 'skills.include_instructions=false'"#).unwrap();
         assert_eq!(
             render_tool_args(

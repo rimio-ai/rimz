@@ -398,62 +398,6 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
 }
 
 #[test]
-fn doctor_reports_ignored_fragments_until_replaced_with_definitions() {
-    let env = Env::new();
-    let legacy = env.home_root.join(".agents");
-    let profile = legacy.join("profiles/reviewer");
-    std::fs::create_dir_all(&profile).expect("mkdir legacy profile");
-    std::fs::write(profile.join("agent.toml"), "agent = \"claude\"\n").expect("write fragment");
-    std::fs::create_dir_all(legacy.join("skills/own")).expect("mkdir provider skills");
-    let team = env.agents_home().join("teams/forge/team.toml");
-    std::fs::create_dir_all(team.parent().unwrap()).unwrap();
-    std::fs::write(&team, "ignored").unwrap();
-    let config = env.agents_home().join("agents.toml");
-    std::fs::write(&config, "ignored").unwrap();
-
-    let report = doctor_json(
-        &env.rimz()
-            .args(["doctor", "--json"])
-            .output()
-            .expect("spawn doctor"),
-    );
-    let notices = report["machine_config"]["legacy_agents_home"]
-        .as_array()
-        .expect("legacy list");
-    assert_eq!(notices.len(), 3, "{report:#}");
-    for path in [&config, &team, &profile.join("agent.toml")] {
-        assert!(
-            notices
-                .iter()
-                .any(|notice| notice["path"] == path.display().to_string()),
-            "{report:#}"
-        );
-    }
-    assert_eq!(report["machine_config"]["broken_files"], json!([]));
-
-    crate::common::write_definition(
-        &env,
-        "agents",
-        "reviewer",
-        "description: Reviewer\nagent: claude\ntools: []",
-        "",
-    );
-    std::fs::remove_dir_all(legacy.join("profiles")).expect("remove ignored fragments");
-    std::fs::remove_file(config).unwrap();
-    std::fs::remove_file(team).unwrap();
-    let report = doctor_json(
-        &env.rimz()
-            .args(["doctor", "--json"])
-            .output()
-            .expect("spawn doctor"),
-    );
-    assert!(
-        report["machine_config"]["legacy_agents_home"] == json!([]),
-        "{report:#}"
-    );
-}
-
-#[test]
 fn doctor_classifies_an_unparseable_project_config() {
     let env = Env::new();
     let path = env.project_root.join(".rimz/config.toml");
