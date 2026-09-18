@@ -1603,6 +1603,73 @@ async fn exec_prompt_failures_fail_provisional_launch_and_release_run_waiter() {
 }
 
 #[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn exec_failed_definition_persists_detail_before_releasing_run_waiter() {
+    use rimz::harness::run::RunCancellation;
+    use rimz::harness::run_wake::{ExpectedRunFrame, RunWaiter};
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    let env = Env::new();
+    std::fs::create_dir_all(env.rimz_home()).expect("config directory");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = \"sandbox\"\n",
+    )
+    .expect("sandbox config");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: codex\ntools: [Skill]\nskills: [missing]",
+        "Worker prompt.",
+    );
+    let store = env.store();
+    let launch_id = "launch_definition_failure";
+    seed_provisional_agent_launch(&env, launch_id, "pruner");
+    let record = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        rimz::agents::PermissionMode::Auto,
+        "prompt".to_owned(),
+        env.project_root.clone(),
+    );
+    rimz::harness::run::create(store.paths(), &record).expect("pending run");
+    let waiter = RunWaiter::bind(
+        store.runtime_paths(),
+        ExpectedRunFrame {
+            workspace_id: env.workspace_id.clone(),
+            run_id: record.run_id.clone(),
+        },
+        RunCancellation::new(),
+    )
+    .expect("run waiter");
+    let mut request = fresh_exec("codex", Some("prompt"));
+    request.run_id = Some(record.run_id.clone());
+    request.identity.name = Some("pruner".to_owned());
+    request.identity.launch_id = Some(launch_id.to_owned());
+    request.identity.params.profile = Some("worker".to_owned());
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", "/nonexistent")
+        .bounded_output()
+        .expect("wrapper exits before bubblewrap preflight");
+    assert!(!output.status.success());
+    let terminal = waiter
+        .wait_terminal(&store, Some(std::time::Duration::from_secs(1)), None)
+        .await
+        .expect("parent unblocks");
+    assert_eq!(terminal.status, RunStatus::Failed);
+    let detail = terminal.failure_tail.expect("definition failure detail");
+    assert!(detail.contains("agents/worker.md:"), "{detail}");
+    assert!(detail.contains("missing"), "{detail}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&detail));
+    assert!(store.read_events().expect("launch events").iter().any(|event| matches!(
+        event.kind(), EventKind::AgentLaunch(ref payload) if payload.state == AgentLaunchState::Failed && payload.agent_id == launch_id
+    )));
+}
+
+#[cfg(unix)]
 #[test]
 fn close_pane_exec_reports_startup_failure_before_dropping_to_shell() {
     let env = Env::new();

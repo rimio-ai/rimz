@@ -16,6 +16,31 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let launch_identity = exec_launch_identity(envelope.request())?;
     let machine_config = crate::cli::machine_config();
+    if let Some(detail) = envelope
+        .request()
+        .identity
+        .params
+        .profile
+        .as_deref()
+        .and_then(|profile| machine_config.definition_failure_for(profile))
+    {
+        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        if let Some(context) = run_context.as_ref()
+            && let Err(err) = rimz::harness::run::record_failure_tail(
+                context.store.paths(),
+                &context.run_id,
+                &detail,
+            )
+        {
+            tracing::debug!(
+                run_id = %context.run_id,
+                error = %err,
+                "could not record supervised run definition failure",
+            );
+        }
+        fail_run_on_exec_precondition(run_context.as_ref());
+        anyhow::bail!(detail);
+    }
     let isolation = envelope
         .request()
         .identity
