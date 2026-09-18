@@ -400,7 +400,7 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
     rt.ensure_dirs().expect("runtime dirs");
     let state = env.state_path_for(&env.project_root);
     std::fs::create_dir_all(&state.snapshots_dir).expect("mkdir snapshots");
-    let state_shared = env.rimz_home().join("shared");
+    let state_shared = env.rimz_home().join("cache").join("providers");
     std::fs::create_dir_all(&state_shared).expect("mkdir state shared");
 
     let nonce = "00000000000000000000000000000000";

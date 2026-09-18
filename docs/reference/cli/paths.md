@@ -32,9 +32,9 @@ runtime root          /run/user/1000/rimz
 logs                  /home/me/.rimz/logs
 loops                 /home/me/.rimz/loops
 web                   /home/me/.rimz/web
-shared                /home/me/.rimz/shared
-data                  /home/me/.rimz/data
+accounts              /home/me/.rimz/accounts
 cache                 /home/me/.rimz/cache
+providers cache       /home/me/.rimz/cache/providers
 builds                /home/me/.rimz/builds
 ```
 
@@ -50,11 +50,13 @@ builds                /home/me/.rimz/builds
 | `scratch (agent view)` | That scratch dir as the invoking agent sees it: `/tmp/scratchpad` under sandbox isolation, the host path otherwise. |
 | `runtime root` | `$XDG_RUNTIME_DIR/rimz`, else `/tmp/rimz-<uid>/rimz`. `~/.rimz/run` links here once a room is born; RimZ itself never reads through the link. |
 | `handoffs` | Reserved for agent hand-off notes. |
-| `logs`, `loops`, `web`, `shared`, `data`, `cache`, `builds` | Account-global directories: append-only logs, loop overlays, web daemon records, shared caches, the presence plugin and named account homes, downloaded assets, and reload staging. |
+| `accounts` | Provider homes RimZ placed for named accounts, `accounts/<kind>/<name>/`: credentials and transcripts that nothing regenerates and no RimZ command removes. |
+| `logs`, `loops`, `web`, `builds` | Machine-wide directories: append-only logs, loop overlays, web daemon records, and reload staging. |
+| `cache`, `providers cache` | Everything RimZ can rebuild: downloaded assets and the presence plugin under `cache/`, and the provider caches (accounts, rate limits, credits, spend, pricing) under `cache/providers/`. Safe to delete; the cost is a cold provider dashboard and one full spending walk. |
 
 ## JSON
 
-`--json` prints one object with schema `rimz.paths.v1`. Its keys are `schema`, `home`, `config`, `theme`, `loop_config`, `remote`, `agents_home`, `workspace_id`, `workspace_dir`, `project_root`, `state_dir`, `runtime_dir`, `room_tmp`, `scratch`, `scratch_agent_view`, `handoffs`, `runtime_root`, `logs`, `loops`, `web`, `shared`, `data`, `cache`, and `builds`, each a string with the row's meaning above.
+`--json` prints one object with schema `rimz.paths.v1`. Its keys are `schema`, `home`, `config`, `theme`, `loop_config`, `remote`, `agents_home`, `workspace_id`, `workspace_dir`, `project_root`, `state_dir`, `runtime_dir`, `room_tmp`, `scratch`, `scratch_agent_view`, `handoffs`, `runtime_root`, `logs`, `loops`, `web`, `accounts`, `cache`, `providers_cache`, and `builds`, each a string with the row's meaning above.
 
 ```sh
 cd "$(rimz paths --json | jq -r .state_dir)"

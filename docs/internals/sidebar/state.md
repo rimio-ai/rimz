@@ -169,7 +169,7 @@ Producer cycles, forced folds, fresh-pane requests, hard refreshes, and failed f
 
 Each lane is one file with one writer, written temp-file-plus-rename. Exact freshness values are in [Cadences](#cadences); locks, single-flighting, and repair live in the module that writes the lane.
 
-Room-local lanes live in the workspace runtime directory beside the store's runtime files ([store.md → the per-room runtime tier](../store.md#the-per-room-runtime-tier)). Account-global data caches live under `~/.rimz/shared/` so relaunches open warm, and their `*.lock` election files under `$XDG_RUNTIME_DIR/rimz/shared/`.
+Room-local lanes live in the workspace runtime directory beside the store's runtime files ([store.md → the per-room runtime tier](../store.md#the-per-room-runtime-tier)). Account-global data caches live under `~/.rimz/cache/providers/` so relaunches open warm, and their `*.lock` election files under `$XDG_RUNTIME_DIR/rimz/shared/`.
 
 ### The pane frame
 

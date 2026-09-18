@@ -169,14 +169,11 @@ fn config_home_env_key(kind: &AgentKind) -> Option<&'static str> {
     }
 }
 
-/// The directory under RimZ's data root that holds the account homes RimZ
-/// placed; they carry provider credentials and history, not RimZ data.
-pub const ACCOUNTS_DIR: &str = "accounts";
-
-/// Where RimZ puts an account home the user did not place itself.
+/// Where RimZ puts an account home the user did not place itself:
+/// `<home>/accounts/<kind>/<name>`. It carries provider credentials and
+/// history, not RimZ data, so nothing in RimZ removes it.
 pub fn default_named_home(kind: &AgentKind, name: &LoginName) -> PathBuf {
-    crate::disk::paths::data_dir()
-        .join(ACCOUNTS_DIR)
+    crate::disk::paths::accounts_dir()
         .join(kind.as_str())
         .join(name.as_str())
 }

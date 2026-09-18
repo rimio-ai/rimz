@@ -635,7 +635,7 @@ impl Env {
             state.dir_name.clone(),
             &self.runtime_root,
         );
-        paths.persistent_shared_root = self.rimz_home().join("shared");
+        paths.persistent_shared_root = self.rimz_home().join("cache").join("providers");
         paths
     }
 

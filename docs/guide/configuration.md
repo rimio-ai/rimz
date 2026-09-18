@@ -67,7 +67,7 @@ Alongside the three machine files and `remote.toml`, `~/.rimz/` holds `agents.d/
 
 ### Where RimZ keeps its files
 
-Everything RimZ keeps across a reboot lives under the home, and nothing else on the machine: config files at the top, `ws/<name>/` for each project's room state, and account-wide `logs/`, `loops/`, `web/`, `shared/`, `data/` (named account homes under `data/accounts/`), `cache/`, and `builds/`. Room files that only matter while the machine is up (sockets, locks, wakeup pipes) sit on tmpfs under `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, or `/tmp/rimz-<uid>/rimz/ws/<name>/` without a runtime dir, and `~/.rimz/run` links there once a room is born.
+Everything RimZ keeps across a reboot lives under the home, and nothing else on the machine: config files at the top, `ws/<name>/` for each project's room state, `accounts/<kind>/<name>/` for the provider homes RimZ placed, and machine-wide `logs/`, `loops/`, `web/`, `builds/`, and `cache/`. Two of those are worth knowing by name: `cache/` holds only what RimZ can rebuild (downloaded assets, the presence plugin, and the provider caches under `cache/providers/`), so deleting it costs a cold provider dashboard and one full spending walk and nothing else; `accounts/` holds provider logins with their credentials and transcripts, which nothing can regenerate and no RimZ command removes. Room files that only matter while the machine is up (sockets, locks, wakeup pipes) sit on tmpfs under `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, or `/tmp/rimz-<uid>/rimz/ws/<name>/` without a runtime dir, and `~/.rimz/run` links there once a room is born.
 
 A room's directory name is the project's basename plus the first hex digits of its workspace id, such as `ws/myrepo-3f2a/`, and the same name is used in both trees. When two projects share a basename and those digits, the newer one gets a longer name. `rimz paths` prints every location for the project you run it in, and `rimz paths --json` gives the same thing to scripts ([reference](../reference/cli/paths.md)).
 
@@ -83,20 +83,20 @@ Earlier releases split RimZ across four XDG directories. RimZ no longer reads th
 | `~/.config/rimz/agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `agents.d/`, `projects/` | `~/.rimz/` |
 | `~/.local/state/rimz/workspaces/ws_<24hex>/` | `~/.rimz/ws/<basename>-<hex>/` |
 | `$XDG_RUNTIME_DIR/rimz/ws_<24hex>/` | `$XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/` |
-| `~/.local/state/rimz/shared/` | `~/.rimz/shared/` |
+| `~/.local/state/rimz/shared/` | `~/.rimz/cache/providers/` |
 | `~/.local/state/rimz/*.log.jsonl` | `~/.rimz/logs/` |
 | `~/.local/state/rimz/loop-arming.json`, `loop-strikes.json` | `~/.rimz/loops/` |
 | `~/.local/state/rimz/web-*.json` and the Zellij web config | `~/.rimz/web/` |
 | `~/.local/state/rimz/builds/` | `~/.rimz/builds/` |
-| `~/.local/share/rimz/` | `~/.rimz/data/` |
+| `~/.local/share/rimz/accounts/` | `~/.rimz/accounts/` |
 | `~/.cache/rimz/` | `~/.rimz/cache/` |
 
 Stop every running room first, because a live room keeps writing to the old roots. Then move the machine config and the named provider accounts, which are what you would miss:
 
 ```sh
-mkdir -p ~/.rimz/data
+mkdir -p ~/.rimz
 mv ~/.config/rimz/* ~/.rimz/
-mv ~/.local/share/rimz/* ~/.rimz/data/
+mv ~/.local/share/rimz/accounts ~/.rimz/accounts
 ```
 
 A room's state is keyed by directory name now, so it carries over only if you move it to the name RimZ expects. To keep one, run `rimz paths` in that project and move its old directory into place:
@@ -319,7 +319,7 @@ home = "/home/you/.claude-work"
 [accounts.codex.personal]
 ```
 
-`[accounts.<kind>.<name>]` declares a named Claude or Codex account: a separate provider home that a room launches that provider's agents into. `home` is optional; an empty table places the home under `~/.rimz/data/accounts/<kind>/<name>`. `default` is reserved for the provider's own home and is never declared, two accounts cannot share one home, and a home cannot contain `,` or end in a directory named `projects`, because provider home lists split on commas and Claude reads `projects` as its transcript folder. `rimz accounts add` writes these entries for you, and [Provider accounts](./accounts.md) walks through the whole flow. A project picks its room's accounts in `.rimz/config.toml` with `[accounts]` entries such as `claude = "work"`. That selection joins the project trust hash, and an untrusted selection refuses `rimz start` until you trust it. `rimz start --account` overrides it.
+`[accounts.<kind>.<name>]` declares a named Claude or Codex account: a separate provider home that a room launches that provider's agents into. `home` is optional; an empty table places the home under `~/.rimz/accounts/<kind>/<name>`. `default` is reserved for the provider's own home and is never declared, two accounts cannot share one home, and a home cannot contain `,` or end in a directory named `projects`, because provider home lists split on commas and Claude reads `projects` as its transcript folder. `rimz accounts add` writes these entries for you, and [Provider accounts](./accounts.md) walks through the whole flow. A project picks its room's accounts in `.rimz/config.toml` with `[accounts]` entries such as `claude = "work"`. That selection joins the project trust hash, and an untrusted selection refuses `rimz start` until you trust it. `rimz start --account` overrides it.
 
 `budget` sets the enforced local-day dollar cap described in [Dollar budgets](#dollar-budgets) for descriptor-gated providers with durable spend; an unsupported entry refuses room birth instead of disappearing into lenient defaults. `usage_limit_usd` is separate, display-only, and has no account-spend eligibility gate, so Cursor remains valid there: its monthly ceiling scales the provider dashboard's `ex`/`api` bar when the provider reports no real cap, while the provider still enforces real spend and agents keep running. Account enrichment is local, read-only, and best-effort; `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the live fetches for one process tree without touching transcript-derived totals or credential files.
 

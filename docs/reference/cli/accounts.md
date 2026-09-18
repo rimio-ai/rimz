@@ -22,7 +22,7 @@ Every named account has a home directory, and RimZ checks each home when it read
 
 | Rule | Detail |
 | --- | --- |
-| Default location | Without `home`, the account lives at `~/.rimz/data/accounts/<KIND>/<NAME>` (under `$RIMZ_HOME` when it is set). |
+| Default location | Without `home`, the account lives at `~/.rimz/accounts/<KIND>/<NAME>` (under `$RIMZ_HOME` when it is set). |
 | Absolute path | `home` in `config.toml` must be absolute or start with `~`. `add --home` resolves a relative path against the current directory before writing it. |
 | Not the provider's own home | `~/.claude` for Claude, `~/.codex` for Codex. That directory is already the `default` account. |
 | One account per home | Two accounts of the same kind cannot share a home. |
@@ -51,9 +51,9 @@ rimz accounts add <KIND> <NAME> [--home <PATH>]
 
 ```console
 $ rimz accounts add claude work
-✓ claude  installed 13 hooks → ~/.rimz/data/accounts/claude/work/settings.json  (new file)
-claude account `work` lives at ~/.rimz/data/accounts/claude/work
-  log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/data/accounts/claude/work claude
+✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
+claude account `work` lives at ~/.rimz/accounts/claude/work
+  log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
   use it        rimz start --account claude=work
 ```
 
@@ -82,7 +82,7 @@ rimz accounts list [--json]
 $ rimz accounts list
 KIND    NAME      HOME                               STATUS
 claude  default   ~/.claude                          native
-claude  work      ~/.rimz/data/accounts/claude/work  ready
+claude  work      ~/.rimz/accounts/claude/work  ready
 codex   default   ~/.codex                           native
 codex   personal  ~/codex-me                         hooks missing
 RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run `rimz accounts add codex personal`
@@ -121,7 +121,7 @@ rimz accounts remove <KIND> <NAME>
 
 ```console
 $ rimz accounts remove claude work
-removed claude account `work`; its home ~/.rimz/data/accounts/claude/work and the provider files in it stay on disk, and a room still using it refuses to start until `rimz reset`
+removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk, and a room still using it refuses to start until `rimz reset`
 ```
 
 A room born on the removed account keeps that selection, so its next `rimz start` fails with ``unknown claude account `work`; configured: default; run `rimz accounts add claude work` ``. Either add the account again, or run `rimz reset`, which clears the room's selection; `rimz reset --account <KIND>=<NAME>` picks another in the same step.

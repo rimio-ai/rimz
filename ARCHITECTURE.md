@@ -82,19 +82,18 @@ per-workspace runtime   $XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/  (or /tmp/rim
   one room's disposable tier: wakeup sockets, heartbeats, read receipts,
   enrichment sidecars, wait watcher locks, and active-time accumulators
 
-shared persistent       ~/.rimz/shared/
-  account-global provider state: accounts, rate limits, credits, spend, pricing
-
 shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
   the account-global election locks and the spending service's versioned socket
 
-user-global persistent  ~/.rimz/{builds,loops,logs,web,data,cache}/
-  builds/<build_id>/rimz immutable executable generations, the loop registry,
-  append-only logs, the browser daemon pid/port records and credential, the
-  broadcast room allowlist, named account homes, and downloaded assets
+machine-wide persistent ~/.rimz/{accounts,builds,loops,logs,web,cache}/
+  accounts/<kind>/<name>/ provider homes RimZ placed, builds/<build_id>/rimz
+  immutable executable generations, the loop registry, append-only logs, the
+  browser daemon pid/port records and credential, the broadcast room allowlist,
+  and cache/ for everything RimZ can rebuild: downloaded assets, the presence
+  plugin, and cache/providers/ (accounts, rate limits, credits, spend, pricing)
 ```
 
-One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent. The store tier's durability contract (temp-file-plus-rename, the framed log, and the write classes) is [store.md](./docs/internals/store.md); the provider files are [providers.md](./docs/internals/agents/providers.md) and [spending.md](./docs/internals/agents/spending.md); the loop registry is [loops.md](./docs/internals/harness/loops.md); executable staging is [sidebar.md → Build promotion](./docs/internals/sidebar/sidebar.md#build-promotion).
+One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent. Two persistent dirs sit at the ends of that scale: `cache/` is safe to delete, at the cost of a cold provider dashboard and one full spending walk, and `accounts/` holds provider logins (credentials, settings, transcripts) that nothing can regenerate and no RimZ command removes. The store tier's durability contract (temp-file-plus-rename, the framed log, and the write classes) is [store.md](./docs/internals/store.md); the provider files are [providers.md](./docs/internals/agents/providers.md) and [spending.md](./docs/internals/agents/spending.md); the loop registry is [loops.md](./docs/internals/harness/loops.md); executable staging is [sidebar.md → Build promotion](./docs/internals/sidebar/sidebar.md#build-promotion).
 
 ## Code and crate structure
 
@@ -102,7 +101,7 @@ The path index (repository layout and per-module ownership) is [AGENTS.md § Cod
 
 Add a crate only when ownership, target type, or dependency profile demands it. `rimz` is the one host runtime artifact: CLI, domain library, and native sidebar renderer ship in the same executable, every renderer projecting the same `rimz sidebar snapshot` view-model.
 
-`rimz-presence-zellij` clears that bar because it is a wasm32-wasip1 plugin binary owned by the Zellij plugin-host boundary, depending on no rimz crate. Every `rimz` build embeds the vendored wasm checked in under `crates/rimz/presence/` and materializes it under the user's data directory before loading it. Its decision logic is a `zellij-tile`-free pure `policy.rs`, and its host-boundary argv/KDL rendering is pure `wire.rs`; both host-test in the ordinary workspace run. The plugin talks to rimz only through wake/focus argv: it observes pane and client changes, publishes `pane-topology.json` as a Zellij-only cache, and reports settled switch generations. Host code derives session focus, pane roles, repair ownership, and typed events through the common presence projector ([multiplexers.md → Zellij presence channel](./docs/internals/multiplexers.md#the-zellij-presence-plugin)).
+`rimz-presence-zellij` clears that bar because it is a wasm32-wasip1 plugin binary owned by the Zellij plugin-host boundary, depending on no rimz crate. Every `rimz` build embeds the vendored wasm checked in under `crates/rimz/presence/` and materializes it under `~/.rimz/cache/` before loading it. Its decision logic is a `zellij-tile`-free pure `policy.rs`, and its host-boundary argv/KDL rendering is pure `wire.rs`; both host-test in the ordinary workspace run. The plugin talks to rimz only through wake/focus argv: it observes pane and client changes, publishes `pane-topology.json` as a Zellij-only cache, and reports settled switch generations. Host code derives session focus, pane roles, repair ownership, and typed events through the common presence projector ([multiplexers.md → Zellij presence channel](./docs/internals/multiplexers.md#the-zellij-presence-plugin)).
 
 The top-level `theme` module is renderer-neutral presentation policy: it resolves schemes, semantic tones, provider identity, resolved glyph vocabulary and setup probes, and shared human value formats. The CLI and native sidebar convert its `Tone` values only at their renderer edges, so the runtime ships one interface language without coupling the core to `anstyle` or ratatui ([theme.md](./docs/internals/theme.md)).
 

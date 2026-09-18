@@ -51,8 +51,7 @@ impl UninstallFixture {
         match kind {
             RootKind::State => home.join("ws"),
             RootKind::Runtime => self.env.runtime_root.join("rimz"),
-            RootKind::Data => home.join("data"),
-            RootKind::Cache => home.join("cache"),
+            RootKind::Cache => home.join("cache/providers"),
             RootKind::Config => home.join("projects"),
         }
     }
@@ -106,25 +105,17 @@ const LIBRARY: [&str; 6] = [
 enum RootKind {
     State,
     Runtime,
-    Data,
     Cache,
     Config,
 }
 
 impl RootKind {
-    const ALL: [Self; 5] = [
-        Self::State,
-        Self::Runtime,
-        Self::Data,
-        Self::Cache,
-        Self::Config,
-    ];
+    const ALL: [Self; 4] = [Self::State, Self::Runtime, Self::Cache, Self::Config];
 
     fn label(self) -> &'static str {
         match self {
             Self::State => "state",
             Self::Runtime => "runtime",
-            Self::Data => "data",
             Self::Cache => "cache",
             Self::Config => "config",
         }
@@ -132,7 +123,7 @@ impl RootKind {
 }
 
 #[test]
-fn bare_uninstall_removes_runtime_cache_data_and_keeps_state_config() {
+fn bare_uninstall_removes_runtime_and_cache_and_keeps_state_config() {
     let fixture = UninstallFixture::new();
     fixture.seed_roots();
 
@@ -153,7 +144,6 @@ fn bare_uninstall_removes_runtime_cache_data_and_keeps_state_config() {
     assert_eq!(stderr.matches("Skill links: none").count(), 2, "{stderr}");
     fixture.assert_absent(RootKind::Runtime);
     fixture.assert_absent(RootKind::Cache);
-    fixture.assert_absent(RootKind::Data);
     fixture.assert_present(RootKind::State);
     fixture.assert_present(RootKind::Config);
 }
@@ -254,7 +244,7 @@ fn uninstall_previews_and_removes_only_owned_skill_links_in_every_mode() {
         let library = library_home.join("skills");
         fs::create_dir_all(library.join("shared")).unwrap();
         fs::write(library.join("shared/SKILL.md"), "shared skill").unwrap();
-        let account_home = fixture.root(RootKind::Data).join("accounts/claude/work");
+        let account_home = fixture.env.rimz_home().join("accounts/claude/work");
         fs::write(
             fixture.env.rimz_home().join("config.toml"),
             format!("[accounts.claude.work]\nhome = {:?}\n", account_home),
@@ -345,12 +335,12 @@ fn uninstall_removes_managed_hooks() {
         "{}",
         String::from_utf8_lossy(&added.stderr)
     );
-    let work_home = fixture.root(RootKind::Data).join("accounts/claude/work");
+    let accounts = fixture.env.rimz_home().join("accounts");
+    let work_home = accounts.join("claude/work");
     let work_settings = work_home.join("settings.json");
     let hooked = fs::read_to_string(&work_settings).expect("work settings");
     assert!(hooked.contains("rimz"), "{hooked}");
     fs::write(work_home.join(".credentials.json"), b"{}").expect("seed credentials");
-    fs::write(fixture.root(RootKind::Data).join("marker"), b"data").expect("seed data");
 
     let output = fixture
         .rimz()
@@ -366,11 +356,10 @@ fn uninstall_removes_managed_hooks() {
         "{stderr}"
     );
     assert!(
-        stderr.contains(&format!("kept {}", fixture.root(RootKind::Data).display())),
+        stderr.contains(&format!("kept {}", accounts.display())),
         "{stderr}"
     );
     assert!(work_home.join(".credentials.json").is_file());
-    assert!(!fixture.root(RootKind::Data).join("marker").exists());
     let unhooked = fs::read_to_string(&work_settings).expect("work settings kept");
     assert!(!unhooked.contains("rimz"), "{unhooked}");
 }

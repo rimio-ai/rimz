@@ -16,15 +16,15 @@ rimz reset --account claude=default    # rebuild the room on your own ~/.claude
 
 ```console
 $ rimz accounts add claude work
-✓ claude  installed 13 hooks → ~/.rimz/data/accounts/claude/work/settings.json  (new file)
-claude account `work` lives at ~/.rimz/data/accounts/claude/work
-  log in once   CLAUDE_CONFIG_DIR=/tmp/scratchpad/acct/home/.rimz/data/accounts/claude/work claude
+✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
+claude account `work` lives at ~/.rimz/accounts/claude/work
+  log in once   CLAUDE_CONFIG_DIR=/tmp/scratchpad/acct/home/.rimz/accounts/claude/work claude
   use it        rimz start --account claude=work
 ```
 
 What it does on your machine:
 
-1. Writes `[accounts.claude.work]` to `~/.rimz/config.toml`. `--home <path>` records a directory you choose, such as an existing `~/.claude-work`; without it the home is `~/.rimz/data/accounts/<kind>/<name>`.
+1. Writes `[accounts.claude.work]` to `~/.rimz/config.toml`. `--home <path>` records a directory you choose, such as an existing `~/.claude-work`; without it the home is `~/.rimz/accounts/<kind>/<name>`.
 2. Creates the home directory.
 3. Installs the RimZ reporting hooks into that home's provider config, exactly as `rimz hooks install` does for `~/.claude`.
 
@@ -38,7 +38,7 @@ A named Claude home's first host launch links in your shared [library skills](./
 $ rimz accounts list
 KIND    NAME      HOME                               STATUS
 claude  default   ~/.claude                          native
-claude  work      ~/.rimz/data/accounts/claude/work  ready
+claude  work      ~/.rimz/accounts/claude/work  ready
 codex   default   ~/.codex                           native
 codex   personal  ~/codex-personal                   hooks untrusted
 ```
@@ -68,7 +68,7 @@ The project selection joins the project trust hash, so a cloned repository canno
 $ rimz start --account claude=personal
 error: unknown claude account `personal`; configured: default, work; run `rimz accounts add claude personal`
 $ rimz start --account claude=work
-error: RimZ hooks are missing for claude account `work` at `/tmp/scratchpad/acct/home/.rimz/data/accounts/claude/work`; run `rimz accounts add claude work`
+error: RimZ hooks are missing for claude account `work` at `/tmp/scratchpad/acct/home/.rimz/accounts/claude/work`; run `rimz accounts add claude work`
 ```
 
 The selection is saved in the room's `workspace.json` and does not change while the room lives. RimZ sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on every provider process the room launches: panes you open by hand with `rimz agents`, team members, subagents, supervised runs, loop tasks, restarts, and the remote-control hosts. `rimz agents explain @coder` prints the account an agent launches under. Other providers have only `default` and launch as they always have.
@@ -101,7 +101,7 @@ rimz accounts remove claude work
 
 This deletes the `[accounts.claude.work]` entry and nothing else: the home, its credentials, and its transcripts stay on disk, and `rimz accounts add claude work --home <that home>` brings the account back. A room still selecting a removed account refuses to start until you add the account again or run `rimz reset`, which clears the selection (`rimz reset --account` picks another in the same step).
 
-`rimz uninstall` keeps account homes too: it removes RimZ's hooks from every declared account's home, and when it clears RimZ's data directory it leaves `accounts/` in place.
+`rimz uninstall` keeps account homes too: it removes RimZ's hooks from every declared account's home and leaves `~/.rimz/accounts/` in place under every flag.
 
 ## See also
 

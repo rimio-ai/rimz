@@ -49,9 +49,9 @@ struct PathsReport {
     logs: PathBuf,
     loops: PathBuf,
     web: PathBuf,
-    shared: PathBuf,
-    data: PathBuf,
+    accounts: PathBuf,
     cache: PathBuf,
+    providers_cache: PathBuf,
     builds: PathBuf,
 }
 
@@ -87,9 +87,9 @@ pub fn run(args: PathsArgs, globals: &GlobalFlags) -> Result<()> {
         logs: paths::logs_dir(),
         loops: paths::loops_dir(),
         web: paths::web_dir(),
-        shared: paths::shared_dir(),
-        data: paths::data_dir(),
+        accounts: paths::accounts_dir(),
         cache: paths::cache_dir(),
+        providers_cache: paths::providers_cache_dir(),
         builds: paths::builds_dir(),
     };
     if args.json {
@@ -132,9 +132,9 @@ fn render_table(report: &PathsReport, w: &mut impl std::io::Write) -> std::io::R
         ("logs", path(&report.logs)),
         ("loops", path(&report.loops)),
         ("web", path(&report.web)),
-        ("shared", path(&report.shared)),
-        ("data", path(&report.data)),
+        ("accounts", path(&report.accounts)),
         ("cache", path(&report.cache)),
+        ("providers cache", path(&report.providers_cache)),
         ("builds", path(&report.builds)),
     ] {
         table.row([cell(label), cell(value)]);
