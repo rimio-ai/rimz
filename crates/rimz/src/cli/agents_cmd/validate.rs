@@ -13,7 +13,7 @@ pub(super) fn run(json: bool) -> Result<()> {
     let env = rimz::agents::ambient_env();
     let library = home.join("skills");
     let in_sandbox = Isolation::ambient(&env) == Some(Isolation::Sandbox);
-    let check = if machine.agents.isolation == Isolation::Sandbox && !in_sandbox {
+    let check = if !in_sandbox {
         SkillCheck::Check {
             env: &env,
             library: &library,

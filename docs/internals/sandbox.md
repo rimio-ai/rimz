@@ -40,6 +40,7 @@ The exec wrapper uses the shared [launch plan](./harness/fleet.md#the-exec-wrapp
 The wrapped process has three properties a contributor should expect:
 
 - Each pane gets exactly one RimZ sandbox, never nested wrappers. The wrapper runs the absolute bubblewrap path its preflight probed, so a trusted provider `PATH` override does not change it.
+- A sandboxed pane never plans another launch's view from its own. It never births a mux server (room birth refuses under ambient sandbox isolation), and it never judges skill listings, since its unlisted skills appear there as RimZ's user-only copies. A launch it requests is planned and judged by the exec wrapper, which the host-born mux server spawns on the host.
 - Bubblewrap forks the provider instead of becoming it. `--die-with-parent` ensures that terminating the supervised bubblewrap process also terminates the provider.
 - Bubblewrap sets `NoNewPrivs`, so `sudo` and setuid binaries cannot escalate inside the pane. Privileged work belongs in a host shell.
 
@@ -90,7 +91,7 @@ The plan pins every environment variable it consulted, so shell startup files ca
 | `TMPDIR` | Always `/tmp`. |
 | `RIMZ_SCRATCH` | Always `/tmp/scratchpad`. |
 
-Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host` and `RIMZ_SCRATCH` to the host path of its scratch dir ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces and find its scratch dir in either mode; the pin above replaces the host path under the sandbox.
+Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host` and `RIMZ_SCRATCH` to the host path of its scratch dir ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces and find its scratch dir in either mode (`Isolation::ambient` is the one reader); the pin above replaces the host path under the sandbox.
 
 A key present with an empty value is pinned to the empty value. To move a root, export it before launching RimZ or set it in trusted launch environment config; changing it only in the pane's startup files does not change the planned mounts. Finalized provider-account launches keep their raw argv and get the same pins without another shell.
 
