@@ -16,31 +16,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let launch_identity = exec_launch_identity(envelope.request())?;
     let machine_config = crate::cli::machine_config();
-    if let Some(detail) = envelope
-        .request()
-        .identity
-        .params
-        .profile
-        .as_deref()
-        .and_then(|profile| machine_config.definition_failure_for(profile))
-    {
-        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-        if let Some(context) = run_context.as_ref()
-            && let Err(err) = rimz::harness::run::record_failure_tail(
-                context.store.paths(),
-                &context.run_id,
-                &detail,
-            )
-        {
-            tracing::debug!(
-                run_id = %context.run_id,
-                error = %err,
-                "could not record supervised run definition failure",
-            );
-        }
-        fail_run_on_exec_precondition(run_context.as_ref());
-        anyhow::bail!(detail);
-    }
     let isolation = envelope
         .request()
         .identity
@@ -95,6 +70,26 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     );
     if let Err(err) = &effective {
         let _ = writeln!(crate::cli::render::err(), "rimz: {err}");
+    }
+    if let Some(detail) =
+        exec_definition_failure(&request, &machine_config, effective.as_ref().ok())
+    {
+        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        if let Some(context) = run_context.as_ref()
+            && let Err(err) = rimz::harness::run::record_failure_tail(
+                context.store.paths(),
+                &context.run_id,
+                &detail,
+            )
+        {
+            tracing::debug!(
+                run_id = %context.run_id,
+                error = %err,
+                "could not record supervised run definition failure",
+            );
+        }
+        fail_run_on_exec_precondition(run_context.as_ref());
+        anyhow::bail!(detail);
     }
     let ambient_env = rimz::agents::ambient_env();
     let plan = rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
@@ -401,6 +396,31 @@ fn linger_subagent(
         }
         std::thread::sleep(Duration::from_secs(1));
     }
+}
+
+/// The host-side refusal for a fresh launch of a profile whose definition failed to load. Resume
+/// and fork are left alone: lane resume degrades to a bare resume by design, and restart/fork
+/// refuse at the CLI. A trusted project profile that shadows the failed name launches normally.
+pub(super) fn exec_definition_failure(
+    request: &rimz::harness::launch::ExecRequest,
+    machine: &rimz::config::MachineConfig,
+    effective: Option<&rimz::config::effective::LaunchAgents>,
+) -> Option<String> {
+    if !matches!(
+        request.action,
+        rimz::harness::launch::ExecAction::Launch { .. }
+    ) {
+        return None;
+    }
+    let profile = request.identity.params.profile.as_deref()?;
+    let shadowed = effective.is_some_and(|effective| {
+        effective.profiles.0.contains_key(profile)
+            || effective.subagent_profiles.0.contains_key(profile)
+    });
+    if shadowed {
+        return None;
+    }
+    machine.definition_failure_for(profile)
 }
 
 pub(super) fn should_exec_agent_directly(request: &rimz::harness::launch::ExecRequest) -> bool {
