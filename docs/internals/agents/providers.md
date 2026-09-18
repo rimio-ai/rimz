@@ -123,7 +123,7 @@ With no explicit `provider_list`, a usage rank orders panels: a live room sessio
 
 ### The shared caches
 
-The account, rate-limit, and credits caches live under `~/.rimz/shared/`, with single-flight locks under `$XDG_RUNTIME_DIR/rimz/shared/`.
+The account, rate-limit, and credits caches live under `~/.rimz/cache/providers/`, with single-flight locks under `$XDG_RUNTIME_DIR/rimz/shared/`.
 
 | Cache | Keyed by | Holds |
 | --- | --- | --- |

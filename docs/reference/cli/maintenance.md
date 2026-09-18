@@ -346,10 +346,9 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 | RimZ skill links in each provider's skill root, including declared account homes | Removed; your own entries are kept | |
 | Running rooms, on both backends | Torn down | |
 | The external [loop timer](./loop.md) | Removed | |
-| Runtime and cache directories | Removed | |
-| Data directory (`~/.rimz/data`) | Removed, except `accounts/` | |
-| [Provider account](./accounts.md) homes under `accounts/` | Kept: their credentials and history belong to the provider | |
-| Durable stores, spend history, and shared state (`ws/`, `shared/`, `logs/`, `loops/`, `web/`, `builds/` under `~/.rimz`) | Kept | `--state` removes them |
+| The runtime tree and `~/.rimz/cache/`, including the provider caches under `cache/providers/` | Removed | |
+| [Provider account](./accounts.md) homes under `~/.rimz/accounts/` | Kept: their credentials and history belong to the provider | |
+| Durable stores and spend history (`ws/`, `logs/`, `loops/`, `web/`, `builds/` under `~/.rimz`) | Kept | `--state` removes them |
 | Per-machine config, themes, trust grants, plugins, and remote aliases (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`, `projects/`, `agents.d/` under `~/.rimz`) | Kept | `--config` removes them |
 | Agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`, and `accounts/`) and `handoffs/` | Always kept | |
 | `rimz` binaries at the running executable, Cargo's bin directory, and `/usr/local/bin` | Removed | `--keep-binary` keeps them; `RIMZ_SYSTEM_BIN_DIR` replaces `/usr/local/bin` |

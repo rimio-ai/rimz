@@ -159,7 +159,7 @@ Freshness here gates behaviour, so these files are scoped to one mux session inc
 
 ### Account-global caches
 
-Account-global data lives under `~/.rimz/shared/` (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`), and its election locks and the spending service socket under `$XDG_RUNTIME_DIR/rimz/shared/`. The data persists so the provider dashboard opens warm after a reboot; the locks are runtime because they mean nothing once their holder is gone. `RuntimePaths::ensure_dirs` removes stray copies of those data files from the runtime `shared/` directory so they stop pinning tmpfs. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes), [providers.md](./agents/providers.md), and [spending.md](./agents/spending.md).
+Account-global provider caches live under `~/.rimz/cache/providers/` (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`), and their election locks and the spending service socket under `$XDG_RUNTIME_DIR/rimz/shared/`. The caches persist so the provider dashboard opens warm after a reboot, and every one rebuilds from the providers' own files (a re-probe, or one full spending walk for the cursor); the locks are runtime because they mean nothing once their holder is gone. `RuntimePaths::ensure_dirs` removes stray copies of those data files from the runtime `shared/` directory so they stop pinning tmpfs. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes), [providers.md](./agents/providers.md), and [spending.md](./agents/spending.md).
 
 ## The event log
 

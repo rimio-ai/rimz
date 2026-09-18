@@ -89,7 +89,7 @@ pub fn ensure_presence_plugin_artifact() -> Option<PathBuf> {
             .ok()
             .filter(|path| path.is_file());
     }
-    match materialize_presence_plugin_bytes(EMBEDDED_PRESENCE_PLUGIN, &paths::data_dir()) {
+    match materialize_presence_plugin_bytes(EMBEDDED_PRESENCE_PLUGIN, &paths::cache_dir()) {
         Ok(Some(path)) => path.canonicalize().ok().filter(|path| path.is_file()),
         Ok(None) => None,
         Err(err) => {
@@ -108,7 +108,7 @@ pub fn ensure_presence_plugin_artifact() -> Option<PathBuf> {
 }
 
 fn materialized_presence_plugin_path() -> Option<PathBuf> {
-    materialized_presence_plugin_path_under(&paths::data_dir())
+    materialized_presence_plugin_path_under(&paths::cache_dir())
         .canonicalize()
         .ok()
         .filter(|path| path.is_file())

@@ -153,7 +153,7 @@ fn start_refuses_a_legacy_only_host_without_creating_the_home() {
 
     // A home that other commands created (stats, hook logs) holds no config
     // yet, so start and a cwd attach still refuse.
-    std::fs::create_dir_all(env.rimz_home().join("shared")).expect("seed home");
+    std::fs::create_dir_all(env.rimz_home().join("cache/providers")).expect("seed home");
     for args in [&["start", "--no-attach"][..], &["attach"][..]] {
         let output = env
             .rimz()

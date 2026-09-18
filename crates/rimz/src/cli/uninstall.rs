@@ -477,9 +477,6 @@ fn remove_roots(
             failures.push(format!("missing {} disk_usage root", kind.label()));
             continue;
         };
-        let outcomes =
-            rimz::uninstall::remove_root_keeping(&paths::data_dir(), &[rimz::agents::ACCOUNTS_DIR]);
-        render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
         let keep = home_kept_children(remove_state, remove_config);
         let outcomes = rimz::uninstall::remove_root_keeping(&root.path, &keep);
         render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
@@ -535,11 +532,10 @@ fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static s
         "traits",
         "skills",
         "accounts",
-        "data",
         "handoffs",
     ];
     if !remove_state {
-        keep.extend(["ws", "shared", "logs", "loops", "web", "builds"]);
+        keep.extend(["ws", "logs", "loops", "web", "builds"]);
     }
     if !remove_config {
         keep.extend([
@@ -612,8 +608,8 @@ mod tests {
             for child in [
                 "ws",
                 "profiles",
-                "data/accounts",
-                "cache",
+                "accounts",
+                "cache/providers",
                 "projects",
                 "handoffs",
             ] {
@@ -629,7 +625,7 @@ mod tests {
             assert_eq!(home.join("ws/user-file").exists(), !remove_state);
             assert_eq!(home.join("projects/user-file").exists(), !remove_config);
             assert_eq!(home.join("config.toml").exists(), !remove_config);
-            for child in ["profiles", "data/accounts", "handoffs"] {
+            for child in ["profiles", "accounts", "handoffs"] {
                 assert!(home.join(child).join("user-file").exists());
             }
             assert!(!home.join("cache").exists());

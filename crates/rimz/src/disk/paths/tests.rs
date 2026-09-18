@@ -385,7 +385,7 @@ fn production_runtime_paths_persist_shared_data_and_keep_locks_runtime() {
     let temp = short_tempdir();
     let state_root = temp.path().join("home");
     let runtime_root = temp.path().join("runtime");
-    let persistent_shared_root = state_root.join("shared");
+    let persistent_shared_root = state_root.join("cache").join("providers");
     let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
 
     let mut paths = RuntimePaths::under(workspace_id, &runtime_root).unwrap();

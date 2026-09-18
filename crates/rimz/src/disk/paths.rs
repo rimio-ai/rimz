@@ -3,8 +3,9 @@
 //! Everything that outlives a boot lives under one home, [`rimz_home`]
 //! (`$RIMZ_HOME`, else `~/.rimz`): config files at the top, the agent library
 //! (`profiles/ teams/ skills/ projects/`), workspace state under
-//! `ws/<name>/`, and the account-global `shared/`, `logs/`, `loops/`, `web/`,
-//! `builds/`, `data/`, and `cache/` dirs. Runtime paths stay on tmpfs under
+//! `ws/<name>/`, the provider homes under `accounts/`, and the machine-wide
+//! `logs/`, `loops/`, `web/`, `builds/`, and `cache/` dirs (provider caches
+//! under `cache/providers/`). Runtime paths stay on tmpfs under
 //! `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, falling back to
 //! `/tmp/rimz-<uid>/rimz/ws/<name>/` at mode `0700` per
 //! `docs/internals/store.md`; shared election locks live under
@@ -363,9 +364,10 @@ pub struct RuntimePaths {
     pub root: PathBuf,
     /// User-scoped election locks. Data caches use [`Self::persistent_shared_root`].
     pub shared_root: PathBuf,
-    /// User-scoped shared data caches. Production constructors root this under
-    /// [`shared_dir`], while [`Self::under`] roots it under the supplied runtime
-    /// root for test isolation and byte-identical cross-workspace cache paths.
+    /// User-scoped provider caches. Production constructors root this under
+    /// [`providers_cache_dir`], while [`Self::under`] roots it under the
+    /// supplied runtime root for test isolation and byte-identical
+    /// cross-workspace cache paths.
     pub persistent_shared_root: PathBuf,
     pub sock_dir: PathBuf,
     pub heartbeat_dir: PathBuf,
@@ -435,7 +437,7 @@ impl RuntimePaths {
             .expect("reserved all-zero workspace id is well-formed");
         let dir_name = WorkspaceDirName::fallback(&sentinel);
         let mut paths = Self::under_named(sentinel, dir_name, &runtime_home());
-        paths.persistent_shared_root = shared_dir();
+        paths.persistent_shared_root = providers_cache_dir();
         paths
     }
 
@@ -498,7 +500,7 @@ impl RuntimePaths {
         runtime_root: &Path,
     ) -> Result<Self> {
         let mut paths = Self::budgeted(workspace_id, dir_name, runtime_root)?;
-        paths.persistent_shared_root = shared_dir();
+        paths.persistent_shared_root = providers_cache_dir();
         Ok(paths)
     }
 
@@ -928,9 +930,19 @@ fn unit_test_rimz_home() -> PathBuf {
     ROOT.clone()
 }
 
-/// Account-global data caches, `<home>/shared`.
-pub fn shared_dir() -> PathBuf {
-    rimz_home().join("shared")
+/// Provider homes RimZ placed for named accounts, `<home>/accounts/<kind>/<name>`.
+/// They carry provider credentials and history that nothing can regenerate,
+/// so no RimZ command removes this tree.
+pub fn accounts_dir() -> PathBuf {
+    rimz_home().join("accounts")
+}
+
+/// Account-global provider caches, `<home>/cache/providers`: probe memos,
+/// rate limits, credits, the spend cursor and aggregate, and the pricing
+/// book. Every file rebuilds from the providers' own files; deleting the
+/// tree costs a cold dashboard and one full spending walk.
+pub fn providers_cache_dir() -> PathBuf {
+    cache_dir().join("providers")
 }
 
 /// Account-global JSONL logs (assists, focus repairs, loop runs, user inputs).
@@ -953,13 +965,9 @@ pub fn builds_dir() -> PathBuf {
     builds_dir_under(&rimz_home())
 }
 
-/// Stable user-level artifacts: the materialized Zellij presence plugin and
-/// named account homes.
-pub fn data_dir() -> PathBuf {
-    rimz_home().join("data")
-}
-
-/// RimZ's own regenerable downloads (pet assets, ttyd binaries and fonts).
+/// RimZ's own regenerable artifacts: pet assets, ttyd binaries and fonts, the
+/// materialized Zellij presence plugin, and the provider caches under
+/// [`providers_cache_dir`]. Safe to delete at any time.
 pub fn cache_dir() -> PathBuf {
     rimz_home().join("cache")
 }
