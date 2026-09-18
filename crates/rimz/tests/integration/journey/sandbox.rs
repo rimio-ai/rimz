@@ -9,6 +9,177 @@ use rimz::config::Isolation;
 use crate::common::{CommandTimeoutExt, Env, path_with_front, write_hook_firing_agent};
 
 #[test]
+fn tmux_sandbox_subagent_skills_are_judged_from_host_truth() {
+    use rimz::store::run::RunStatus;
+
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping sandbox skill journey");
+        return;
+    }
+    if let Err(err) = rimz::sandbox::preflight(Isolation::Sandbox) {
+        eprintln!("skipping sandbox skill journey: {err}");
+        return;
+    }
+    for author_marked in [false, true] {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        env.install_agent_hooks("claude");
+        let skill_dir = env.home_root.join(".claude/skills/librarian");
+        std::fs::create_dir_all(&skill_dir).expect("skill directory");
+        let skill = skill_dir.join("SKILL.md");
+        let marker = if author_marked {
+            "disable-model-invocation: true\n"
+        } else {
+            ""
+        };
+        let source = format!(
+            "---\nname: librarian\ndescription: Test skill\n{marker}---\nRead the library.\n"
+        );
+        std::fs::write(&skill, &source).expect("host skill");
+        let agent_bin = write_hook_firing_agent(&env, "claude");
+        let shim = agent_bin.join("claude");
+        let mut body = std::fs::read_to_string(&shim).expect("hook-firing shim");
+        body = body.replace("sess-hook-agent", "sandbox-skills-$$");
+        let tail = body
+            .rfind("feed '{\"hook_event_name\":\"Stop\"")
+            .expect("completion hook");
+        body.truncate(tail);
+        body.push_str(
+            r#"set -eu
+test "$TMPDIR" = /tmp
+case "$*" in *'This pane runs in a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
+skill="$HOME/.claude/skills/librarian/SKILL.md"
+case "$*" in
+    *sandbox-librarian-task*)
+        cp "$skill" /tmp/child-skill
+        if grep -q 'disable-model-invocation' "$skill"; then exit 1; fi
+        feed '{"hook_event_name":"Stop","session_id":"'"$session"'","last_assistant_message":"child skill callable"}'
+        exit 0
+        ;;
+esac
+grep -q 'disable-model-invocation: true' "$skill"
+cp "$skill" /tmp/parent-skill
+feed '{"hook_event_name":"Stop","session_id":"'"$session"'","last_assistant_message":"ready"}'
+if "$rimz" --mux tmux subagents librarian-child sandbox-librarian-task --timeout 1m > /tmp/child-launch 2>&1; then
+    printf '0\n' > /tmp/child-launch-status
+else
+    printf '%s\n' "$?" > /tmp/child-launch-status
+fi
+while IFS= read -r line; do :; done
+"#,
+        );
+        std::fs::write(&shim, body).expect("sandbox skill agent");
+        let config = toml::to_string(&serde_json::json!({
+            "agents": [{
+                "name": "claude",
+                "env": {"PATH": path_with_front(&agent_bin).to_str().expect("agent PATH")},
+            }],
+        }))
+        .expect("agent environment");
+        env.write_config(&env.project_root, &config);
+        env.rimz()
+            .args(["trust", "grant"])
+            .assert_success_within_timeout("trust sandbox skill agent");
+        std::fs::create_dir_all(env.rimz_home()).expect("machine config directory");
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = \"sandbox\"\n",
+        )
+        .expect("sandbox config");
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "claude",
+            "description: Claude base",
+            "Follow instructions.",
+        );
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Parent\nagent: claude\ntools: [Skill]\nskills: []",
+            "",
+        );
+        let child_definition = crate::common::write_definition(
+            &env,
+            "subagents",
+            "librarian-child",
+            "description: Child\nagent: claude\ntools: [Skill]\nskills: [librarian]",
+            "",
+        );
+        crate::common::write_definition(
+            &env,
+            "teams",
+            "library",
+            "layout: parent\nleader: parent\nstages: [Build]\nroles:\n  - {role: parent, agent: worker, owns: [Build]}",
+            "Complete the work.",
+        );
+        env.rimz()
+            .env("PATH", path_with_front(&agent_bin))
+            .args(["--mux", "tmux", "start", "--no-attach"])
+            .assert_success_within_timeout("start sandbox skill room");
+        env.rimz()
+            .env("PATH", path_with_front(&agent_bin))
+            .args(["--mux", "tmux", "teams", "library", "--bg"])
+            .assert_success_within_timeout("launch sandbox parent seat");
+        let store = env.store();
+        let tmp = &store.paths().tmp_dir;
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let terminal = loop {
+            let runs = rimz::harness::run::list(store.paths()).expect("child runs");
+            assert!(runs.len() <= 1, "unexpected child runs: {runs:?}");
+            if let Some(run) = runs.into_iter().find(|run| run.status.is_terminal())
+                && tmp.join("child-launch-status").exists()
+            {
+                break run;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "child did not finish (author_marked={author_marked}): launch={:?}, parent skill={:?}",
+                std::fs::read_to_string(tmp.join("child-launch")),
+                std::fs::read_to_string(tmp.join("parent-skill")),
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert!(
+            std::fs::read_to_string(tmp.join("parent-skill"))
+                .expect("parent consumed its skill view")
+                .contains("disable-model-invocation: true")
+        );
+        if author_marked {
+            assert_eq!(terminal.status, RunStatus::Failed);
+            let detail = terminal.failure_tail.expect("exec refusal detail");
+            assert!(
+                detail.contains(&format!(
+                    "{}: lists skill 'librarian'",
+                    child_definition.display()
+                )),
+                "{detail}"
+            );
+            assert!(detail.contains("marks user-only for claude"), "{detail}");
+            assert!(detail.contains(&skill.display().to_string()), "{detail}");
+            assert!(!tmp.join("child-skill").exists(), "provider must not start");
+        } else {
+            assert_eq!(terminal.status, RunStatus::Completed, "{terminal:?}");
+            assert_eq!(
+                std::fs::read_to_string(tmp.join("child-launch-status")).expect("launch status"),
+                "0\n"
+            );
+            let child_skill = std::fs::read_to_string(tmp.join("child-skill"))
+                .expect("child consumed its skill view");
+            assert!(!child_skill.contains("disable-model-invocation"));
+            assert!(child_skill.contains("Read the library."));
+        }
+        assert_eq!(
+            std::fs::read(&skill).expect("host source"),
+            source.as_bytes()
+        );
+    }
+}
+
+#[test]
 fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping sandbox team journey");
