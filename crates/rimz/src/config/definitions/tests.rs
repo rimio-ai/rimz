@@ -1257,6 +1257,31 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
     write(
         root.path(),
         "skills/one/SKILL.md",
+        "Skill without metadata.",
+    );
+    write(root.path(), "skills/one/agents/openai.yaml", "policy: [");
+    let loaded = load_checked(root.path());
+    assert_eq!(loaded.errors.len(), 3, "{:?}", loaded.errors);
+    for (seat, file) in [
+        ("claude", "skills/one/SKILL.md"),
+        ("pi", "skills/one/SKILL.md"),
+        ("codex", "skills/one/agents/openai.yaml"),
+    ] {
+        let error = loaded
+            .errors
+            .iter()
+            .find(|error| error.path.ends_with(format!("agents/{seat}-seat.md")))
+            .unwrap();
+        let prefix = format!(
+            "lists skill 'one', invalid at {}: ",
+            root.path().join(file).display()
+        );
+        assert!(error.message.starts_with(&prefix), "{}", error.message);
+        assert!(loaded.failed[&format!("{seat}-seat")].contains(&error.path));
+    }
+    write(
+        root.path(),
+        "skills/one/SKILL.md",
         "---\ndescription: colons: accepted\n---\nSkill.",
     );
     write(
