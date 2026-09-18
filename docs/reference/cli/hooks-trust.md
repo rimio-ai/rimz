@@ -143,7 +143,7 @@ trust: stale — executable surface changed since last grant
   workspace id: ws_f89e49906df0621ad2765112
   project root: /home/me/code/query-engine
   config path:  /home/me/code/query-engine/.rimz/config.toml
-  record path:  /home/me/.rimz/projects/ws_f89e49906df0621ad2765112/trust.toml
+  record path:  /home/me/.rimz/trust/ws_f89e49906df0621ad2765112/trust.toml
   current hash: sha256:5c1d…
   granted hash: sha256:979e…
   granted at:   2026-09-08T09:21:53.057781717Z
@@ -159,7 +159,7 @@ The hash and grant lines appear only when they have a value. `--json` prints one
 | --- | --- |
 | `state` | `no_config`, `untrusted`, `trusted`, or `stale` |
 | `workspace_id` | The workspace id |
-| `project_root`, `config_path`, `record_path` | Absolute paths; `record_path` is the grant file under `~/.rimz/projects/` |
+| `project_root`, `config_path`, `record_path` | Absolute paths; `record_path` is the grant file under `~/.rimz/trust/` |
 | `current_hash` | `sha256:<hex>` of the live surface, or `null` with no config |
 | `granted_hash`, `granted_at` | The grant's hash and RFC 3339 time, or `null` with no grant |
 | `surface_diff` | `null`, or an array of `{kind, path, granted, current}` where `kind` is `added`, `removed`, or `changed`, `path` is an array of segments, and `granted` or `current` is omitted when that side has no value |

@@ -543,7 +543,7 @@ fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static s
             "theme.toml",
             "loop.toml",
             "remote.toml",
-            "projects",
+            "trust",
             "agents.d",
             "cursor-statusline.json",
         ]);
@@ -610,7 +610,7 @@ mod tests {
                 "profiles",
                 "accounts",
                 "cache/providers",
-                "projects",
+                "trust",
                 "handoffs",
             ] {
                 std::fs::create_dir_all(home.join(child)).unwrap();
@@ -623,7 +623,7 @@ mod tests {
             );
             assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
             assert_eq!(home.join("ws/user-file").exists(), !remove_state);
-            assert_eq!(home.join("projects/user-file").exists(), !remove_config);
+            assert_eq!(home.join("trust/user-file").exists(), !remove_config);
             assert_eq!(home.join("config.toml").exists(), !remove_config);
             for child in ["profiles", "accounts", "handoffs"] {
                 assert!(home.join(child).join("user-file").exists());

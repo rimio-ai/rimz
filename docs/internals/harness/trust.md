@@ -92,7 +92,7 @@ A project puts credentials in `[[agents]]` env, so `CompiledAgentProcess` and `A
 
 ## Storage
 
-Both records are per-machine, under `~/.rimz/projects/<workspace_id>/`, and written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs).
+Both records are per-machine, under `~/.rimz/trust/<workspace_id>/`, and written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs).
 
 `trust.toml` is the grant record:
 

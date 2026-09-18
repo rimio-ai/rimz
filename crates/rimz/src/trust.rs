@@ -25,7 +25,7 @@ use crate::disk::paths::rimz_home;
 use crate::ids::{RoomLogins, WorkspaceId};
 
 const CONFIG_REL: &str = ".rimz/config.toml";
-const PROJECTS_SUBDIR: [&str; 1] = ["projects"];
+const TRUST_SUBDIR: &str = "trust";
 const TRUST_FILE: &str = "trust.toml";
 const BIRTH_PROMPT_FILE: &str = "birth-prompt.toml";
 const HASH_PREFIX: &str = "sha256:";
@@ -237,15 +237,13 @@ pub fn granted_roots() -> Result<Vec<PathBuf>> {
 }
 
 fn granted_roots_with_config(config_root: &Path) -> Result<Vec<PathBuf>> {
-    let projects_root = PROJECTS_SUBDIR
-        .iter()
-        .fold(config_root.to_path_buf(), |root, part| root.join(part));
-    let entries = match std::fs::read_dir(&projects_root) {
+    let trust_root = config_root.join(TRUST_SUBDIR);
+    let entries = match std::fs::read_dir(&trust_root) {
         Ok(entries) => entries,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => {
             return Err(TrustErr::Io {
-                path: projects_root,
+                path: trust_root,
                 source,
             });
         }
@@ -518,13 +516,10 @@ fn birth_prompt_path(config_root: &Path, workspace_id: &WorkspaceId) -> PathBuf 
 }
 
 fn project_record_path(config_root: &Path, workspace_id: &WorkspaceId, file: &str) -> PathBuf {
-    let mut path = config_root.to_path_buf();
-    for segment in PROJECTS_SUBDIR {
-        path.push(segment);
-    }
-    path.push(workspace_id.as_str());
-    path.push(file);
-    path
+    config_root
+        .join(TRUST_SUBDIR)
+        .join(workspace_id.as_str())
+        .join(file)
 }
 
 /// The project layer at `project_root`; none where its `.rimz` is the RimZ
@@ -658,7 +653,7 @@ fn surface_snapshot(config: &ProjectConfig) -> SurfaceSnapshot {
 }
 
 /// On-disk trust record at
-/// `$RIMZ_HOME/projects/<workspace_id>/trust.toml`.
+/// `$RIMZ_HOME/trust/<workspace_id>/trust.toml`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct TrustRecord {
     project_root: PathBuf,
