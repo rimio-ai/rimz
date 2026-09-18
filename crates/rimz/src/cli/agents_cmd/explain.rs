@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use rimz::agents::capabilities::SystemTextChannel;
 use rimz::agents::{PermissionMode, PresetArgMatcher, PresetField};
-use rimz::config::{SkillName, effective::LaunchAgents};
+use rimz::config::{Isolation, SkillName, effective::LaunchAgents};
 use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
@@ -190,6 +190,9 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     )?;
     let bwrap = rimz::sandbox::preflight(isolation)?;
     let ambient_env = rimz::agents::ambient_env();
+    if Isolation::ambient(&ambient_env) == Some(Isolation::Sandbox) {
+        warnings.push("the rendered skill view is planned from this pane's sandbox view and can differ from the host's".to_owned());
+    }
     let plan = launch_plan::compile(LaunchPlanInputs {
         request: &request,
         cwd: &cwd,

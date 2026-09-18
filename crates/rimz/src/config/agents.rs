@@ -170,6 +170,15 @@ pub enum Isolation {
     Sandbox,
 }
 
+impl Isolation {
+    /// The provider's isolation, stamped on every launch so a parent's value never leaks into a child.
+    pub const ENV: &str = "RIMZ_ISOLATION";
+
+    pub fn ambient(env: &BTreeMap<String, String>) -> Option<Isolation> {
+        env.get(Self::ENV)?.parse().ok()
+    }
+}
+
 impl std::fmt::Display for Isolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {

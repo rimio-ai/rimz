@@ -102,11 +102,7 @@ pub fn run(args: PathsArgs, globals: &GlobalFlags) -> Result<()> {
 /// The isolation the invoking agent runs under, stamped by its launch plan;
 /// outside a launched agent, machine policy decides.
 fn invoking_isolation() -> Option<Isolation> {
-    match std::env::var("RIMZ_ISOLATION").ok()?.as_str() {
-        "sandbox" => Some(Isolation::Sandbox),
-        "host" => Some(Isolation::Host),
-        _ => None,
-    }
+    Isolation::ambient(&rimz::agents::ambient_env())
 }
 
 fn render_table(report: &PathsReport, w: &mut impl std::io::Write) -> std::io::Result<()> {

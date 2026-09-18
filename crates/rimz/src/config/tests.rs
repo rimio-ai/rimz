@@ -1706,6 +1706,32 @@ fn sandbox_config_enables_definition_skill_library_checks() {
 }
 
 #[test]
+fn sandbox_ambient_skips_definition_skill_library_checks() {
+    let dir = tempdir().unwrap();
+    write_definition(
+        dir.path(),
+        "agents/worker.md",
+        "description: Worker\nagent: codex\ntools: [Skill]\nskills: [missing]",
+        "",
+    );
+    let path = write(&dir, "[agents]\nisolation = 'sandbox'\n");
+    let mut env = BTreeMap::from([
+        ("HOME".to_owned(), dir.path().display().to_string()),
+        (Isolation::ENV.to_owned(), "sandbox".to_owned()),
+    ]);
+    let (config, _) =
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap();
+    assert!(config.notices.definition_errors.is_empty());
+    assert!(config.agents.profiles.0.contains_key("worker"));
+
+    env.insert(Isolation::ENV.to_owned(), "host".to_owned());
+    let error =
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap_err();
+    assert!(matches!(error, ConfigErr::Definition { .. }));
+    assert!(error.to_string().contains("missing"));
+}
+
+#[test]
 fn loaded_team_replaces_peer_and_retains_its_source() {
     let dir = tempdir().unwrap();
     let path = write(&dir, "");

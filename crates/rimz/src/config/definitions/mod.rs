@@ -15,6 +15,7 @@ use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSou
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
 /// Whether listed skills must resolve, and where: the kind's provider skill root under `env`, then `library`, the order the sandbox skill view merges them.
+/// The check reads the host's skill roots and is meaningless through a sandbox view; callers inside a view must skip it.
 #[derive(Clone, Copy, Debug)]
 pub enum SkillCheck<'a> {
     Skip,
