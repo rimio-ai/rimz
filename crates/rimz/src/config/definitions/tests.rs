@@ -463,6 +463,13 @@ fn duplicate_team_names_remove_all_seats_and_sources() {
     let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
     assert!(loaded.teams.0.is_empty());
     assert!(loaded.sources.team("probe").is_none());
+    let paths = BTreeSet::from([
+        root.path().join("teams/duplicate.md"),
+        root.path().join("teams/probe.md"),
+    ]);
+    for name in ["probe", "probe.lead", "probe.judge"] {
+        assert_eq!(loaded.failed[name], paths);
+    }
     assert!(
         !loaded
             .agent_profiles
@@ -476,6 +483,54 @@ fn duplicate_team_names_remove_all_seats_and_sources() {
             .agent_profiles
             .keys()
             .any(|name| name.starts_with("probe."))
+    );
+}
+
+#[test]
+fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
+    let root = team_fixture();
+    team_definition(
+        root.path(),
+        "name: renamed\nleader: lead\nstages: [Plan, Implement, Review]",
+        &TEAM_ROLES.replace("agent: worker", "agent: missing"),
+        "Pipeline.",
+    );
+    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let path = root.path().join("teams/probe.md");
+    for name in ["renamed", "renamed.lead", "renamed.judge"] {
+        assert_eq!(loaded.failed[name], BTreeSet::from([path.clone()]));
+    }
+    for handle in ["lead", "judge"] {
+        assert!(loaded.errors.iter().any(|error| error.path == path && error.message == format!("team 'renamed' role '{handle}' selects unknown or failed agent 'missing'; team roles can select definitions from agents only")));
+    }
+    write(
+        root.path(),
+        "teams/probe.md",
+        "---\nroles: [\n---\nPipeline.",
+    );
+    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    assert_eq!(loaded.failed["probe"], BTreeSet::from([path]));
+}
+
+#[test]
+fn duplicate_agent_names_record_both_sources_in_one_namespace() {
+    let root = fixture();
+    for file in ["first", "second"] {
+        definition(
+            root.path(),
+            &format!("agents/{file}.md"),
+            "name: duplicate\nagent: pi",
+            "",
+        );
+    }
+    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    assert!(!loaded.agent_profiles.0.contains_key("duplicate"));
+    assert_eq!(
+        loaded.failed["duplicate"],
+        BTreeSet::from([
+            root.path().join("agents/first.md"),
+            root.path().join("agents/second.md"),
+        ])
     );
 }
 
@@ -763,6 +818,13 @@ fn failed_parents_exclude_dependents_and_keep_independent_profiles() {
     assert!(!loaded.agent_profiles.0.contains_key("child"));
     assert!(!loaded.agent_profiles.0.contains_key("parent"));
     assert!(loaded.agent_profiles.0.contains_key("independent"));
+    for name in ["child", "parent"] {
+        assert_eq!(
+            loaded.failed[name],
+            BTreeSet::from([root.path().join(format!("agents/{name}.md"))])
+        );
+    }
+    assert!(!loaded.failed.contains_key("independent"));
 }
 
 #[test]
@@ -868,6 +930,13 @@ fn names_and_kind_bases_are_validated() {
     );
     assert!(!loaded.agent_profiles.0.contains_key("duplicate"));
     assert!(!loaded.subagent_profiles.0.contains_key("duplicate"));
+    assert_eq!(
+        loaded.failed["duplicate"],
+        BTreeSet::from([
+            root.path().join("agents/probe.md"),
+            root.path().join("subagents/probe.md"),
+        ])
+    );
     write(
         root.path(),
         "agents/claude.md",
@@ -880,6 +949,11 @@ fn names_and_kind_bases_are_validated() {
         "---\ndescription: Base\n---",
     );
     error(root.path(), "no prompt body");
+    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    assert_eq!(
+        loaded.failed["claude"],
+        BTreeSet::from([root.path().join("agents/claude.md")])
+    );
 }
 
 #[test]

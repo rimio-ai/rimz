@@ -184,8 +184,9 @@ upward-dependencies = [
 # The compaction seat selects the harness brief.
 # The [gc] section and its span parser feed `rimz gc` and the elder's auto-gc check.
 # Doctor and start notices classify agents-home fragments and find a legacy root through config's fragment walk.
-# The Markdown definition loader, its rows and errors feed config load and `agents validate`.
-surface-budget = 188
+# The Markdown definition loader, its rows and errors feed config load and `agents validate`;
+# per-name failures feed launch refusal.
+surface-budget = 189
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

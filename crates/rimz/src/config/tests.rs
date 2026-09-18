@@ -1596,23 +1596,27 @@ fn definition_failures_keep_good_siblings_and_match_doctor_and_launch_preconditi
         "description: Bad\nagent: missing",
         "",
     );
-    let strict = MachineConfig::load_from(&path, dir.path()).unwrap_err();
-    assert!(matches!(strict, ConfigErr::Definition { .. }));
-    assert_eq!(strict.path(), bad);
+    let strict = MachineConfig::load_from(&path, dir.path()).unwrap();
     let config = MachineConfig::load_lenient_from(&path, dir.path(), &BTreeMap::new());
+    assert_eq!(strict.notices, config.notices);
+    let parsed = MachineConfig::parse_text(&path, "", dir.path()).unwrap();
+    assert_eq!(strict.notices, parsed.notices);
     assert!(config.agents.profiles.0.contains_key("good"));
     assert!(!config.agents.profiles.0.contains_key("bad"));
     assert_eq!(config.notices.definition_errors.len(), 1);
     assert_eq!(config.notices.definition_errors[0].path, bad);
-    assert!(
-        config
-            .definition_failure()
-            .unwrap()
-            .contains(bad.to_str().unwrap())
+    let detail = format!(
+        "{}: {}",
+        bad.display(),
+        config.notices.definition_errors[0].message
     );
+    assert_eq!(config.definition_failure_for("bad"), Some(detail.clone()));
+    assert_eq!(config.definition_failure_for("good"), None);
+    assert_eq!(config.definition_failure_for("never-defined"), None);
+    assert_eq!(config.definition_failure(), Some(detail.clone()));
     let broken = broken_machine_files_in(&MachineConfigFiles::from_paths(path, dir.path()));
     assert_eq!(broken.len(), 1);
-    assert_eq!(broken[0].to_string(), strict.to_string());
+    assert_eq!(broken[0].to_string(), detail);
 }
 
 #[test]
@@ -1684,10 +1688,15 @@ fn sandbox_config_enables_definition_skill_library_checks() {
     MachineConfig::load_from(&path, dir.path()).unwrap();
     write(&dir, "[agents]\nisolation = 'sandbox'\n");
     let home = BTreeMap::from([("HOME".to_owned(), dir.path().display().to_string())]);
-    let error =
-        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &home).unwrap_err();
-    assert!(matches!(error, ConfigErr::Definition { .. }));
-    assert!(error.to_string().contains("missing"));
+    let (config, _) =
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &home).unwrap();
+    assert!(
+        config
+            .definition_failure_for("worker")
+            .unwrap()
+            .contains("missing")
+    );
+    assert!(!config.agents.profiles.0.contains_key("worker"));
 
     std::fs::create_dir_all(dir.path().join(".agents/skills/missing")).unwrap();
     std::fs::write(
@@ -1725,10 +1734,15 @@ fn sandbox_ambient_skips_definition_skill_library_checks() {
     assert!(config.agents.profiles.0.contains_key("worker"));
 
     env.insert(Isolation::ENV.to_owned(), "host".to_owned());
-    let error =
-        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap_err();
-    assert!(matches!(error, ConfigErr::Definition { .. }));
-    assert!(error.to_string().contains("missing"));
+    let (config, _) =
+        MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap();
+    assert!(
+        config
+            .definition_failure_for("worker")
+            .unwrap()
+            .contains("missing")
+    );
+    assert!(!config.agents.profiles.0.contains_key("worker"));
 }
 
 #[test]

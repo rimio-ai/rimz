@@ -1284,8 +1284,7 @@ fn setup_yes_ignores_broken_legacy_fragments_and_preserves_broken_markdown() {
     env.rimz()
         .args(["config", "get", "agents", "--json"])
         .assert()
-        .failure()
-        .stderr(contains(definition.display().to_string()));
+        .success();
 }
 
 #[test]

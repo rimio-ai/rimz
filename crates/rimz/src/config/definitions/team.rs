@@ -46,19 +46,20 @@ pub(super) fn load(
             return;
         }
     };
-    let mut names = BTreeSet::new();
+    let mut names = BTreeMap::new();
     for path in paths {
+        let mut name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let mut role_names = Vec::new();
         let result = (|| {
             let text = std::fs::read_to_string(&path)
                 .map_err(|error| DefinitionErr::new(&path, error.to_string()))?;
             let (yaml, body) = frontmatter::split(&path, &text)?;
             let fm: TeamFrontmatter = frontmatter::parse(&path, yaml)?;
-            let name = fm.name.clone().unwrap_or_else(|| {
-                path.file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            });
+            name = fm.name.clone().unwrap_or_else(|| name.clone());
             if name.is_empty()
                 || !name
                     .bytes()
@@ -69,7 +70,16 @@ pub(super) fn load(
                     format!("unsafe team name {name:?}"),
                 ));
             }
-            if !names.insert(name.clone()) {
+            let roster = roster(&path, &name, &fm, body);
+            if let Ok(team) = &roster {
+                role_names.extend(team.roles.iter().map(|binding| binding.profile.clone()));
+            }
+            if let Some(previous) = names.insert(name.clone(), path.clone()) {
+                loaded
+                    .failed
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(previous);
                 loaded.teams.0.remove(&name);
                 loaded.sources.teams.remove(&name);
                 loaded.rows.retain(|row| {
@@ -78,6 +88,11 @@ pub(super) fn load(
                     }
                     loaded.agent_profiles.0.remove(&row.name);
                     loaded.sources.agent_profiles.remove(&row.name);
+                    loaded
+                        .failed
+                        .entry(row.name.clone())
+                        .or_default()
+                        .extend([row.source.clone(), path.clone()]);
                     false
                 });
                 return Err(DefinitionErr::new(
@@ -85,11 +100,11 @@ pub(super) fn load(
                     format!("team '{name}' is declared twice"),
                 ));
             }
-            let team = roster(&path, &name, &fm, body)?;
+            let team = roster?;
             let mut profiles = Vec::new();
             let mut errors = Vec::new();
             for (role, binding) in fm.roles.iter().zip(&team.roles) {
-                match seats.load(&path, role, &fm, loaded) {
+                match seats.load(&path, &name, role, &fm, loaded) {
                     Ok(profile) => profiles.push((binding, profile)),
                     Err(error) => errors.push(error),
                 }
@@ -109,11 +124,20 @@ pub(super) fn load(
                 }
             }
             loaded.sources.teams.insert(name.clone(), path.clone());
-            loaded.teams.0.insert(name, team);
+            loaded.teams.0.insert(name.clone(), team);
             Ok(())
         })();
         if let Err(error) = result {
             loaded.errors.push(error);
+        }
+        if !loaded.teams.0.contains_key(&name) {
+            for failed in std::iter::once(&name).chain(&role_names) {
+                loaded
+                    .failed
+                    .entry(failed.clone())
+                    .or_default()
+                    .insert(path.clone());
+            }
         }
     }
 }
@@ -229,6 +253,7 @@ impl SeatLoader<'_> {
     fn load(
         &self,
         path: &Path,
+        name: &str,
         role: &RoleFrontmatter,
         team: &TeamFrontmatter,
         loaded: &LoadedDefinitions,
@@ -236,7 +261,8 @@ impl SeatLoader<'_> {
         let definition = self.agents.definitions.get(&role.agent)
             .filter(|_| loaded.agent_profiles.0.contains_key(&role.agent))
             .ok_or_else(|| {
-                DefinitionErr::new(path, format!("selects unknown or failed agent '{}'; team roles can select definitions from agents only", role.agent))
+                let handle = role.role.as_deref().unwrap_or(&role.agent);
+                DefinitionErr::new(path, format!("team '{name}' role '{handle}' selects unknown or failed agent '{}'; team roles can select definitions from agents only", role.agent))
             })?;
         let original = &loaded.agent_profiles.0[&role.agent];
         let mut fm = role.overlay();

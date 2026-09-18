@@ -704,7 +704,8 @@ fn set_is_not_locked_out_by_a_broken_definition_set() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
-    assert!(MachineConfig::load_from(&config, dir.path()).is_err());
+    let loaded = MachineConfig::load_from(&config, dir.path()).unwrap();
+    assert!(!loaded.notices.definition_errors.is_empty());
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(&config, dir.path()));
     editor.set("timezone", "UTC").unwrap();
     assert!(
