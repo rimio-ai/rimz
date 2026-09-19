@@ -314,6 +314,7 @@ fn inactive_groups_sink_below_process_groups() {
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
+        pipeline: None,
         status_counts: Vec::new(),
         rows: vec![process_row("zsh", "/repo/b")],
         diff_added: None,
@@ -638,6 +639,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
+        pipeline: None,
         status_counts: Vec::new(),
         rows: agents
             .iter()

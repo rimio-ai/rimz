@@ -432,6 +432,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         kind: SidebarWorktreeKind::Channel,
         team: None,
         cohort_effort: None,
+        pipeline: None,
         status_counts: Vec::new(),
         rows: vec![activity_row(false, None, Timestamp::now(), path)],
         diff_added: None,

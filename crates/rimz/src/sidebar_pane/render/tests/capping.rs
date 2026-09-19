@@ -1018,6 +1018,7 @@ fn group(
         kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
+        pipeline: None,
         status_counts: Vec::new(),
         rows,
         diff_added: None,

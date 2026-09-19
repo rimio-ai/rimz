@@ -37,10 +37,10 @@ pub(crate) use providers::{format_plan_label, sort_windows};
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 use model::cohort_team;
 pub use model::{
-    DailyBudgetView, PresenceSample, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
-    SidebarLinkHealth, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
-    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi, WorktreePrState,
-    WorktreeTrunkSync, lead_unread_row,
+    DailyBudgetView, PipelinePosition, PresenceSample, RemoteControlBadge, SidebarCohortEffort,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
+    SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind, WorktreePrCi, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
@@ -398,6 +398,14 @@ impl SidebarSnapshot {
         self.worktree_groups
             .iter()
             .flat_map(|group| group.rows.iter())
+    }
+
+    /// Whether a pipeline clock needs a fresh frame as snapshot time advances.
+    pub fn has_running_pipeline_clock(&self) -> bool {
+        self.worktree_groups
+            .iter()
+            .filter_map(|group| group.pipeline.as_ref())
+            .any(SidebarPipeline::clock_running)
     }
 
     /// Every mutable row across every worktree group, in group order.

@@ -959,6 +959,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
         kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
+        pipeline: None,
         status_counts: Vec::new(),
         rows,
         diff_added: None,

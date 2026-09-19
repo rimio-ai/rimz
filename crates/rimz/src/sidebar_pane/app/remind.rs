@@ -275,6 +275,7 @@ mod tests {
             kind: SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
+            pipeline: None,
             status_counts: Vec::new(),
             rows,
             diff_added: None,

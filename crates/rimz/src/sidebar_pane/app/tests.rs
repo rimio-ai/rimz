@@ -65,6 +65,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
+        pipeline: None,
         status_counts: Vec::new(),
         rows: vec![crate::store::snapshot::SidebarRow {
             id: "claude-1".to_owned(),
@@ -847,6 +848,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
+            pipeline: None,
             status_counts: Vec::new(),
             rows: vec![crate::store::snapshot::SidebarRow {
                 id: "agent-1".to_owned(),

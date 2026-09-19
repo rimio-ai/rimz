@@ -200,6 +200,7 @@ impl SidebarSnapshot {
                     kind,
                     team,
                     cohort_effort: None,
+                    pipeline: None,
                     status_counts,
                     rows,
                     diff_added: None,
