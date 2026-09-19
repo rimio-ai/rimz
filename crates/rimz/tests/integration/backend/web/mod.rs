@@ -115,8 +115,7 @@ fn paced_tmux_border_drag_tracks_before_release_and_lands_at_endpoint() {
     let browser = BrowserHandle::launch(&stack.browser);
     let url = format!("{}&rimzdebug=1", opened.url);
     let tab = browser.authed_tab(&url, &opened.secret);
-    wait_until_attached(&tab, &fixture.workspace.session_name, ATTACH_TIMEOUT);
-    std::thread::sleep(Duration::from_secs(3));
+    fixture.wait_client_sized_to_term(&tab, ATTACH_TIMEOUT);
 
     let widths = fixture.pane_widths();
     let initial_width = widths[0];
@@ -216,8 +215,7 @@ fn tmux_mouse_mode_churn_keeps_held_drag_tracking() {
     let browser = BrowserHandle::launch_with_size(&stack.browser, (1280, 1100));
     let url = format!("{}&rimzdebug=1", opened.url);
     let (tab, frames) = browser.tab_with_websocket_capture(&url, &opened.secret);
-    wait_until_attached(&tab, &fixture.workspace.session_name, ATTACH_TIMEOUT);
-    std::thread::sleep(Duration::from_secs(3));
+    fixture.wait_client_sized_to_term(&tab, ATTACH_TIMEOUT);
 
     support::eval_string(
         &tab,
@@ -240,7 +238,7 @@ return JSON.stringify(window.__probeRect);
 }catch(error){return String(error&&error.stack||error)}})()"#,
     )
     .expect("configure churn regression terminal");
-    std::thread::sleep(Duration::from_secs(1));
+    fixture.wait_client_sized_to_term(&tab, ATTACH_TIMEOUT);
 
     let pane_geometry = fixture.target_pane_geometry();
     let values = pane_geometry
