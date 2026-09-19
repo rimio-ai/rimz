@@ -573,15 +573,21 @@ pub(crate) fn report_task_pass(name: &str) {
     report_gate_pass(name, None);
 }
 
+/// A note's first line rides in the pass line; any further lines (the nextest
+/// `FLAKY` recap) follow it, indented.
 #[expect(
     clippy::print_stderr,
     reason = "xtask prints compact gate progress to the operator's stderr"
 )]
 fn report_gate_pass(name: &str, note: Option<&str>) {
-    if let Some(note) = note {
-        eprintln!("✓ {name} ({note})");
-    } else {
+    let Some(note) = note else {
         eprintln!("✓ {name}");
+        return;
+    };
+    let mut lines = note.lines();
+    eprintln!("✓ {name} ({})", lines.next().unwrap_or_default());
+    for line in lines {
+        eprintln!("  {line}");
     }
 }
 
@@ -692,15 +698,23 @@ fn bound_trimmed_output(output: String) -> String {
     )
 }
 
+/// The nextest summary line, then the `FLAKY` recap lines nextest prints under
+/// it for each test that passed only on retry, so a passing run's log still
+/// names every flaky test in full.
 fn extract_test_summary(output: &str) -> Option<String> {
-    output
-        .lines()
-        .find(|line| {
-            line.contains("tests run:")
-                || line.contains("test run:")
-                || line.trim_start().starts_with("cargo nextest:")
-        })
-        .map(|line| line.trim().to_owned())
+    let mut lines = output.lines().map(str::trim).skip_while(|line| {
+        !(line.contains("tests run:")
+            || line.contains("test run:")
+            || line.starts_with("cargo nextest:"))
+    });
+    let summary = lines.next()?;
+    let recap = lines.filter(|line| line.starts_with("FLAKY "));
+    Some(
+        std::iter::once(summary)
+            .chain(recap)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 // cargo-machete decides "I'm running under cargo" with
@@ -1337,6 +1351,26 @@ Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped
             Some("cargo nextest: 1 passed, 42 skipped (0.01s)")
         );
         assert_eq!(extract_test_summary("no summary here"), None);
+    }
+
+    #[test]
+    fn extract_test_summary_keeps_nextest_flaky_recap() {
+        let output = "\
+  TRY 1 FAIL [   0.003s] (───) rimz::integration backend::zellij::tab
+    FLAKY 1/1 [   0.001s] printed by the test itself, before the summary
+  TRY 2 PASS [   0.003s] (2/2) rimz::integration backend::zellij::tab
+────────────
+     Summary [   0.009s] 2 tests run: 2 passed (1 flaky), 0 skipped
+   FLAKY 2/5 [   0.003s] (2/2) rimz::integration backend::zellij::tab
+";
+
+        assert_eq!(
+            extract_test_summary(output).as_deref(),
+            Some(
+                "Summary [   0.009s] 2 tests run: 2 passed (1 flaky), 0 skipped\n\
+                 FLAKY 2/5 [   0.003s] (2/2) rimz::integration backend::zellij::tab"
+            )
+        );
     }
 
     #[test]
