@@ -476,23 +476,77 @@ mod parse {
             vec!["--ask"],
             vec!["--yolo"],
             vec!["--model", "opus"],
-            vec!["--agent", "claude"],
-            vec!["--system-prompt-file", "base.md"],
-            vec!["--append-system-prompt-file", "fragment.md"],
             vec!["--effort", "high"],
-            vec!["--", "--foo"],
+            vec!["--isolation", "host"],
         ] {
             for prefix in [vec!["rimz", "claude"], vec!["rimz", "launch", "claude"]] {
                 for resume in ["--resume", "--continue"] {
                     let mut argv = prefix.clone();
                     argv.push(resume);
                     argv.extend_from_slice(&override_args);
-                    assert_clap_error(&argv, clap::error::ErrorKind::ArgumentConflict);
+                    let args = parse_agents(&argv);
+                    let launch = match &args.command {
+                        Some(AgentsSubcmd::Launch(launch)) => launch.as_ref(),
+                        _ => &args.launch,
+                    };
+                    assert!(launch.cohort.resume);
+                    validate_resume_inputs(launch, ResumeEntrance::Flag).unwrap();
                 }
+            }
+        }
+        for (input, override_args, message) in [
+            (
+                "PROMPT",
+                vec!["ship"],
+                "a resumed session takes no prompt; send it after it opens with `rimz message`",
+            ),
+            (
+                "--agent",
+                vec!["--agent", "claude"],
+                "`--agent` changes which session resume matches; resume the spec as launched",
+            ),
+            (
+                "--system-prompt-file",
+                vec!["--system-prompt-file", "base.md"],
+                "resume takes system-prompt files from the current profile; update the profile or launch fresh instead of passing `--system-prompt-file`",
+            ),
+            (
+                "--append-system-prompt-file",
+                vec!["--append-system-prompt-file", "fragment.md"],
+                "resume takes system-prompt files from the current profile; update the profile or launch fresh instead of passing `--append-system-prompt-file`",
+            ),
+            (
+                "passthrough arguments",
+                vec!["--", "--foo"],
+                "resume does not accept passthrough arguments after `--`; put supported settings in the profile or launch fresh",
+            ),
+        ] {
+            for resume in [Some("--resume"), Some("--continue"), None] {
+                let mut argv = vec!["rimz", "claude"];
+                argv.extend(resume);
+                argv.extend_from_slice(&override_args);
+                let args = parse_agents(&argv);
+                let (entrance, expected) = if resume.is_some() {
+                    (ResumeEntrance::Flag, message.to_owned())
+                } else {
+                    (
+                        ResumeEntrance::Reconcile,
+                        format!(
+                            "{message}; rerun without {input}, or choose fresh instead of resume"
+                        ),
+                    )
+                };
+                let error = validate_resume_inputs(&args.launch, entrance)
+                    .expect_err("resume refuses this input");
+                assert_eq!(error.to_string(), expected);
             }
         }
         assert_clap_error(
             &["rimz", "claude", "--ask", "--yolo"],
+            clap::error::ErrorKind::ArgumentConflict,
+        );
+        assert_clap_error(
+            &["rimz", "claude", "--resume", "--ask", "--yolo"],
             clap::error::ErrorKind::ArgumentConflict,
         );
     }
@@ -614,20 +668,12 @@ mod parse {
             assert_clap_error(argv, kind);
         }
         for override_args in [
-            &["hi"][..],
-            &["--channel=design"],
+            &["--channel=design"][..],
             &["--from-pr", "1"],
             &["--name", "swift-otter"],
             &["--description", "work"],
-            &["--model", "opus"],
-            &["--agent", "codex"],
-            &["--effort", "high"],
             &["--budget", "5"],
-            &["--ask"],
-            &["--yolo"],
-            &["--system-prompt-file", "/x"],
             &["-p"],
-            &["--", "--debug"],
         ] {
             let argv = [vec!["rimz", "claude", "--resume"], override_args.to_vec()].concat();
             assert_clap_error(&argv, ArgumentConflict);

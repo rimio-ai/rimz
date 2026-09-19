@@ -10,7 +10,7 @@ The code lives in `crates/rimz/src/sandbox/`: `mod.rs` plans the mounts, pins, a
 
 A launch runs under its recorded `--isolation` override (`LaunchParams.isolation`, carried in the exec envelope) when it has one, and under current machine policy otherwise. A repository cannot choose either, because `agents.isolation` lives in machine config outside the trust hash.
 
-The override travels with the launch. Restart, fork, and rebirth replay a recorded override and otherwise read the current machine policy. A subagent launched without its own `--isolation` inherits its parent's recorded override. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's room tmp.
+The override travels with the launch. Restart, fork, and rebirth replay a recorded override and otherwise read the current machine policy. Cohort resume accepts `--isolation host|sandbox` on both `rimz agents` and `rimz teams`: the flag replaces the stored override, and omission preserves it. Matched seeds are preflighted on that effective isolation; the exec wrapper re-stamps a present override on `agent.attached` before the provider starts. A subagent launched without its own `--isolation` inherits its parent's recorded override. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's room tmp.
 
 ## Preflight
 

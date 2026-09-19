@@ -134,7 +134,7 @@ A lane block reads top to bottom:
 | Member table | `MEMBER STATUS AGE ACTIVITY CTX COST`, members in the team's declared role order. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` is the time since the member's last activity, and `COST` is each role's lifetime spend in this worktree. |
 | `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `never fired`, `fired <age> ago` when the last firing delivered, `skipped <age> ago` when it matched the family but not the subscription, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` gives the total run count once it has run more than once. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
-| `isolation` | `host · tmp /tmp`, or `sandbox · tmp <room tmp dir> (as /tmp)`: the `--isolation` recorded at launch, else the machine's `agents.isolation`. Members that disagree show the machine setting. |
+| `isolation` | `host · tmp /tmp`, or `sandbox · tmp <room tmp dir> (as /tmp)`: the `--isolation` recorded at launch or replaced on resume, else the machine's `agents.isolation`. Members that disagree show the machine setting. |
 | `memory` | Files matching the team's effective scratch patterns (defaults or explicit `scratch-files`), relative to the worktree, with line counts and modification ages. Omitted when none exist. |
 
 A script that blocks until the work is done runs [`rimz teams wait`](#wait-for-a-cohort-to-finish) rather than polling `.stage.name` from `--json`. The report ends with the definition, with no launch, resume, or focus hints.
@@ -214,7 +214,7 @@ rimz teams launch forge -w feat-rate-limits
 | `--bg` | Keep focus where it is. |
 | `--new-tab` | Open the launch in a new tab or tmux window. |
 
-`--resume` takes identity from the store, so it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--description`, `--budget`, and `--isolation`. `--fresh` conflicts with `--resume` and `--from-pr`. Launch flags without a team name are refused with `team launch options require a team name`.
+`--resume` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation. It refuses `PROMPT`: send it with `rimz message` after the session opens, or choose fresh at the named-worktree prompt. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--resume` and `--from-pr`. Launch flags without a team name are refused with `team launch options require a team name`.
 
 A launch that opens new panes prints a receipt:
 
@@ -255,6 +255,8 @@ rimz teams resume forge -w --bg
 ```
 
 `resume` reopens the newest closed cohort of the team, with the identity, directory, and lane recorded in the store and each role's launch settings from its current profile. `team#worktree` or `-w NAME` limits the match to that worktree. Bare `-w`, or no flag while you stand in a linked worktree, scopes to the current worktree; from the root checkout the newest match anywhere in the room wins. A matched member that is still live refuses the command. Matching rules are on [`rimz agents` → Resume a cohort](./agents.md#resume-a-cohort).
+
+`--isolation host|sandbox` replaces each resumed member's recorded isolation; for example, `rimz teams resume forge --isolation host`. Omitting it preserves each member's recorded override, falling back to machine policy only when none is recorded. The replacement survives restart, rebirth, and child launches. For one-shot permission, model, or effort changes, use [`rimz agents forge --resume`](./agents.md#resume-a-cohort).
 
 `--bg` keeps focus where it is. `resume` prints one line per member, `resumed <kind>:<name> (<session id>)` or `started fresh <member>` for a member with nothing to resume, followed by `Check:`, `Reach:`, and `Wait:` command hints for the cohort.
 

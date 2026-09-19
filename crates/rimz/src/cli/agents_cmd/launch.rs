@@ -6,11 +6,60 @@ use crate::cli::{machine_config, render, report_unknown_config_keys};
 
 use super::placement::{PlacementErrors, PlacementRequest};
 
+pub(super) enum ResumeEntrance {
+    Flag,
+    Reconcile,
+}
+
+pub(super) fn validate_resume_inputs(
+    args: &AgentLaunchArgs,
+    entrance: ResumeEntrance,
+) -> Result<()> {
+    let overrides = &args.overrides;
+    let (input, message) = if args.prompt.is_some() {
+        (
+            "PROMPT",
+            "a resumed session takes no prompt; send it after it opens with `rimz message`",
+        )
+    } else if overrides.agent.is_some() {
+        (
+            "--agent",
+            "`--agent` changes which session resume matches; resume the spec as launched",
+        )
+    } else if overrides.system_prompt_file.is_some() {
+        (
+            "--system-prompt-file",
+            "resume takes system-prompt files from the current profile; update the profile or launch fresh instead of passing `--system-prompt-file`",
+        )
+    } else if !overrides.append_system_prompt_files.is_empty() {
+        (
+            "--append-system-prompt-file",
+            "resume takes system-prompt files from the current profile; update the profile or launch fresh instead of passing `--append-system-prompt-file`",
+        )
+    } else if !overrides.passthrough.is_empty() {
+        (
+            "passthrough arguments",
+            "resume does not accept passthrough arguments after `--`; put supported settings in the profile or launch fresh",
+        )
+    } else {
+        return Ok(());
+    };
+    match entrance {
+        ResumeEntrance::Flag => bail!("{message}"),
+        ResumeEntrance::Reconcile => {
+            bail!("{message}; rerun without {input}, or choose fresh instead of resume")
+        }
+    }
+}
+
 pub(super) fn launch_layout(
     mut args: AgentsArgs,
     globals: &GlobalFlags,
     allow_in_place: bool,
 ) -> Result<()> {
+    if args.launch.cohort.resume {
+        validate_resume_inputs(&args.launch, ResumeEntrance::Flag)?;
+    }
     let explicit_worktree_name = args
         .launch
         .cohort
@@ -206,6 +255,7 @@ pub(super) fn launch_layout(
         )? {
             reconcile::Reconciled::Done => return Ok(()),
             reconcile::Reconciled::Resume(path) => {
+                validate_resume_inputs(&args.launch, ResumeEntrance::Reconcile)?;
                 return launch_resume_layout(
                     args,
                     globals,

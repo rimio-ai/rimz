@@ -164,7 +164,7 @@ pub(crate) struct CohortLaunchArgs {
     #[arg(
         long,
         visible_alias = "continue",
-        conflicts_with_all = ["prompt", "channel", "from_pr", "description", "budget"]
+        conflicts_with_all = ["channel", "from_pr", "description", "budget"]
     )]
     pub(crate) resume: bool,
     /// Launch new sessions in a named worktree instead of resuming its closed cohort.
@@ -217,10 +217,6 @@ pub(crate) struct LaunchOverrideArgs {
 }
 
 #[derive(Debug, Default, PartialEq, Args)]
-#[command(group = clap::ArgGroup::new("launch-overrides")
-    .multiple(true)
-    .args(["ask", "yolo", "model", "agent", "system_prompt_file", "append_system_prompt_files", "effort", "isolation", "passthrough"])
-    .conflicts_with("resume"))]
 pub(crate) struct AgentLaunchArgs {
     /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
     #[arg(
