@@ -700,13 +700,17 @@ fn bound_trimmed_output(output: String) -> String {
 
 /// The nextest summary line, then the `FLAKY` recap lines nextest prints under
 /// it for each test that passed only on retry, so a passing run's log still
-/// names every flaky test in full.
+/// names every flaky test in full. Lines are matched and reported without
+/// color, since CI forces `CARGO_TERM_COLOR=always`.
 fn extract_test_summary(output: &str) -> Option<String> {
-    let mut lines = output.lines().map(str::trim).skip_while(|line| {
-        !(line.contains("tests run:")
-            || line.contains("test run:")
-            || line.starts_with("cargo nextest:"))
-    });
+    let mut lines = output
+        .lines()
+        .map(|line| strip_ansi_csi(line).trim().to_owned())
+        .skip_while(|line| {
+            !(line.contains("tests run:")
+                || line.contains("test run:")
+                || line.starts_with("cargo nextest:"))
+        });
     let summary = lines.next()?;
     let recap = lines.filter(|line| line.starts_with("FLAKY "));
     Some(
@@ -715,6 +719,23 @@ fn extract_test_summary(output: &str) -> Option<String> {
             .collect::<Vec<_>>()
             .join("\n"),
     )
+}
+
+/// Drops ANSI CSI sequences (`ESC [ params final-byte`), the shape of the
+/// color codes nextest and cargo emit.
+fn strip_ansi_csi(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' {
+            plain.push(ch);
+            continue;
+        }
+        if chars.next() == Some('[') {
+            let _final_byte = chars.by_ref().find(|c| ('@'..='~').contains(c));
+        }
+    }
+    plain
 }
 
 // cargo-machete decides "I'm running under cargo" with
@@ -1369,6 +1390,23 @@ Summary [   12.3s] 2611 tests run: 2611 passed, 42 skipped
             Some(
                 "Summary [   0.009s] 2 tests run: 2 passed (1 flaky), 0 skipped\n\
                  FLAKY 2/5 [   0.003s] (2/2) rimz::integration backend::zellij::tab"
+            )
+        );
+    }
+
+    #[test]
+    fn extract_test_summary_strips_color_from_flaky_recap() {
+        let output = "\
+\x1b[33;1m  TRY 2 PASS\x1b[0m [   0.002s] (1/1) \x1b[35;1mfl\x1b[0m \x1b[34;1mflaky_one\x1b[0m
+\x1b[32;1m     Summary\x1b[0m [   0.007s] \x1b[1m1\x1b[0m test run: \x1b[1m1\x1b[0m \x1b[32;1mpassed\x1b[0m (\x1b[1m1\x1b[0m \x1b[33;1mflaky\x1b[0m), \x1b[1m0\x1b[0m skipped
+\x1b[33;1m   FLAKY 2/3\x1b[0m [   0.002s] (1/1) \x1b[35;1mfl\x1b[0m \x1b[34;1mflaky_one\x1b[0m
+";
+
+        assert_eq!(
+            extract_test_summary(output).as_deref(),
+            Some(
+                "Summary [   0.007s] 1 test run: 1 passed (1 flaky), 0 skipped\n\
+                 FLAKY 2/3 [   0.002s] (1/1) fl flaky_one"
             )
         );
     }
