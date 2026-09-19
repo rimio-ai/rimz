@@ -117,6 +117,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 | Provider accounts | Cold providers probe in waves of at most four account-then-version chains, each subprocess capped at 3 s | `ACCOUNTS_TTL` per provider; contention serves the stale cache instead of starting a second wave |
 | Fleet spend walk | Within `SPENDING_TTL`: one read of the published aggregate, no transcript IO. A due walk: frontier stats plus O(appended bytes) per changed file | One warm walker per namespace owns the index; consumers never open `spending.json` ([spending.md](./agents/spending.md#one-walk-per-namespace)) |
 | Finished-cohort effort | Transcript stat and parse for collapsible groups only; unchanged files reuse a process-local parse memo | `COHORT_SPEND_TTL`; the producer publishes `cohort-spend.json` and renderers only read it |
+| Team pipeline | One board read per eligible staged-team group plus one effective-team resolution per pass; no subprocess or event-log scan | Every refresher pass, no TTL; publishes `pipeline.json` only when content changes. With no team groups, skips resolution and board reads but clears stale entries |
 | Codex daemon reap | Zero unless Codex remote control is on or a daemon-hooked session is live; when due, one process scan plus one WebSocket handshake | `CODEX_DAEMON_REAP_TTL`; success and failure share the stamp |
 
 ### The store write path

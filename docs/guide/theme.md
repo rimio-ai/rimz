@@ -223,11 +223,14 @@ total = "◇"
 | `value` | compact value qualifiers such as the active-time `approx` marker |
 | `worktree` | the group header's git story: `branch`, `merge`, `ahead`, `behind`, `trunk_equal`, `trunk_branch`, `trunk_merge`, `pr_open`, `pr_closed`, `reconciling`, `dotted` |
 | `card` | the agent card body |
+| `pipeline` | the team's stage dots: `passed`, `current`, `future`, `done` |
 | `process` | the CPU / mem / IO row |
 | `keys` | help-overlay action leads |
 | `chrome` | framing, spines, tabs, badges, and the help-box frame |
 
 The `status` group sets head *shapes*; their color, effect, and speed stay in [`[theme.animations]`](#animations). Two names read across to animation roles: `status.attention` is the role `failed`, and `status.done` is `success`. The drawn gauges, the box-drawing chrome, the `worktree.dotted` seal, and the `compacting` wave keep their box-drawing glyphs in every preset, because the terminal grid draws them more precisely than any icon. Nerd Font mode assumes a Nerd Font v3+ face is active — install one from [Nerd Fonts](https://www.nerdfonts.com/font-downloads), or a Homebrew cask ([installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional)), and select it as your terminal font. On a non-`Mono` build that draws icons double-width, pad the alignment-sensitive glyphs with a trailing space.
+
+Override stage dots under `[theme.glyphs.unicode.pipeline]` or `[theme.glyphs.nerd_font.pipeline]`. Both sets use `●`, `◉`, and `○` for passed, current, and future; the done seal is `●` in Unicode and `󰗠` in Nerd Font. These roles are independent of clock and status shapes, so changing an age-clock glyph does not change a stage dot.
 
 ## Provider styling
 
