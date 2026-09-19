@@ -80,7 +80,8 @@ pub struct LaunchParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<PermissionMode>,
     /// A per-launch `--isolation` override of machine `agents.isolation`.
-    /// Stored durably so restart, fork, resume, and subagents reproduce it;
+    /// Stored at launch and re-stamped by the resume wrapper's attach, so
+    /// restart, fork, resume, and subagents reproduce it;
     /// `None` follows the machine setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<crate::config::Isolation>,

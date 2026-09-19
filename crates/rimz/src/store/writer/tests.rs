@@ -207,6 +207,7 @@ fn attach_agent_pane_records_process_owned_placement() {
             "rimz-test",
             &pane_id,
             owner.clone(),
+            Some(crate::config::Isolation::Sandbox),
         )
         .expect("attach resumed agent");
 
@@ -231,6 +232,7 @@ fn attach_agent_pane_records_process_owned_placement() {
     assert_eq!(payload.pane_id, pane_id);
     assert_eq!(payload.pane_pid, Some(std::process::id()));
     assert_eq!(payload.runtime_owner, owner);
+    assert_eq!(payload.isolation, Some(crate::config::Isolation::Sandbox));
 }
 
 #[test]

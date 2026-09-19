@@ -317,6 +317,9 @@ impl ReducerState {
         if let Some(launch_id) = &payload.launch_id {
             state.launch_id = Some(launch_id.clone());
         }
+        if let Some(isolation) = payload.isolation {
+            state.isolation = Some(isolation);
+        }
         state.pane = Some(PaneRef {
             pane_pid: payload.pane_pid,
             ..PaneRef::from_id(payload.pane_id.clone())
