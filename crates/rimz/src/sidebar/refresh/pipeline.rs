@@ -32,22 +32,24 @@ pub(super) fn refresh_pipeline_for(
     runtime: &RuntimePaths,
     config: &MachineConfig,
 ) {
-    if !snapshot
+    let has_team = snapshot
         .worktree_groups
         .iter()
-        .any(|group| group.team.is_some())
-    {
-        return;
-    }
-    let local_teams = snapshot.project_root.as_deref().and_then(|root| {
-        crate::config::effective::load(config, root)
-            .ok()
-            .map(|agents| agents.teams)
-    });
-    let teams = local_teams.as_ref().unwrap_or(&config.agents.teams);
+        .any(|group| group.team.is_some());
+    let groups = if has_team {
+        let local_teams = snapshot.project_root.as_deref().and_then(|root| {
+            crate::config::effective::load(config, root)
+                .ok()
+                .map(|agents| agents.teams)
+        });
+        let teams = local_teams.as_ref().unwrap_or(&config.agents.teams);
+        compute_pipelines(&snapshot.worktree_groups, teams, &config.time_zone())
+    } else {
+        BTreeMap::new()
+    };
     let refreshed = PipelineCache {
         version: PIPELINE_CACHE_VERSION,
-        groups: compute_pipelines(&snapshot.worktree_groups, teams, &config.time_zone()),
+        groups,
     };
     let path = runtime.pipeline_path();
     if refreshed == read_pipeline_cache(&path) {
@@ -204,15 +206,15 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), old);
         let stale = PipelineCache {
             version: PIPELINE_CACHE_VERSION + 1,
-            ..cache
+            ..cache.clone()
         };
         crate::disk::atomic::write_temp_then_rename_cache(&path, &stale).unwrap();
         assert_eq!(read_pipeline_cache(&path), PipelineCache::default());
+        refresh_pipeline_for(&snapshot, &runtime, &config);
+        assert_eq!(read_pipeline_cache(&path), cache);
+        // A team that leaves the snapshot must not keep projecting its old entry.
         snapshot.worktree_groups[0].team = None;
         refresh_pipeline_for(&snapshot, &runtime, &config);
-        assert_eq!(
-            crate::disk::atomic::read_json_cache::<PipelineCache>(&path),
-            stale
-        );
+        assert!(read_pipeline_cache(&path).groups.is_empty());
     }
 }
