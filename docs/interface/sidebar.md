@@ -430,7 +430,7 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
  ○ zsh
 ```
 
-A group with one staged team and a readable worktree `blackboard.md` containing a `Stage:` line gets a pipeline line directly below its header, above the first card. The team's members must identify one worktree.:
+A group with one staged team and a readable worktree `blackboard.md` containing a `Stage:` line gets a pipeline line directly below its header, above the first card. The team's members must identify one worktree:
 
 ```
 ▎⑂ pipeline · forge ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
