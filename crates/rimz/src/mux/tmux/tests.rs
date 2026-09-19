@@ -123,7 +123,7 @@ fn projected_rename_runs_under_one_window_name_check() {
     let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
     for (observed, name) in [
         ("#feat ?", "#feat"),
-        ("a,b", "a,b ✓"),
+        ("a_b", "a_b ✓"),
         ("x}y", "{x}"),
         ("it's ⢿", "it's"),
     ] {
