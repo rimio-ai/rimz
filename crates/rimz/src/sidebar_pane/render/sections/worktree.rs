@@ -123,19 +123,20 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
                         && row.status().is_some_and(AgentStatus::is_actionable)
                 })
             })
-            .unwrap_or(0)
-            + first_row;
+            .or((!rows.is_empty()).then_some(0))
+            .map(|index| HitTarget::Row(first_row + index));
         let owner_status = owner.and_then(|index| rows[index].status());
-        block.push_target(
-            with_gutter(
-                ctx.theme,
-                pipeline_line(ctx, pipeline, owner_status),
-                lane,
-                None,
-                ctx.width,
-            ),
-            HitTarget::Row(target),
+        let line = with_gutter(
+            ctx.theme,
+            pipeline_line(ctx, pipeline, owner_status),
+            lane,
+            None,
+            ctx.width,
         );
+        match target {
+            Some(target) => block.push_target(line, target),
+            None => block.push_inert(line),
+        }
     }
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
