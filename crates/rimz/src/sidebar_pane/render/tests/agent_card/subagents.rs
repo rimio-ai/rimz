@@ -408,6 +408,50 @@ fn subagent_stats_line_outlives_the_turn() {
 }
 
 #[test]
+fn all_older_children_open_in_one_click_without_a_lone_fold() {
+    // Every child landed outside the recent window, so no live or recent row
+    // is visible. Opening the section shows the older rows directly rather
+    // than a lone `+K older` fold that would cost a second click.
+    let mut parent = agent(
+        "claude-root",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    parent.user_turn_started_at = Some(fixed_now() - Duration::from_secs(7_200));
+    let mut agents = vec![parent];
+    for index in 0..3 {
+        let mut child = agent(
+            &format!("child-{index}"),
+            "claude",
+            AgentStatus::Success,
+            None,
+            None,
+            Some(&format!("task-{index}")),
+        );
+        child.parent_agent_id = Some("claude-root".into());
+        child.last_activity = fixed_now() - Duration::from_secs(3_600 + index);
+        child.last_seen = child.last_activity;
+        agents.push(child);
+    }
+    let snapshot = snapshot_with(agents);
+    let mut ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    ui.delegation_overrides
+        .insert(snapshot.worktree_groups[0].rows[0].id.clone(), true);
+    let text = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 30);
+    assert!(text.contains("subagents (3)"), "{text}");
+    assert!(!text.contains("older"), "{text}");
+    for index in 0..3 {
+        assert!(text.contains(&format!("task-{index}")), "{text}");
+    }
+}
+
+#[test]
 fn engaged_card_without_children_has_no_stats_line() {
     let parent = agent(
         "claude-root",

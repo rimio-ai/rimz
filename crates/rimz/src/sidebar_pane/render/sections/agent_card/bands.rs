@@ -1,7 +1,9 @@
 //! Visibility bands for an open delegation section. Live children come first in
 //! spawn order, uncapped; finished children follow newest-landed first while
 //! they ended inside the recent window and up to the recent cap; every other
-//! finished child is older and folds behind `+K older`. The collapsed list is a
+//! finished child is older and folds behind `+K older` — unless no live or recent
+//! row is visible, where the card shows the older rows directly rather than a
+//! lone fold that costs a second click. The collapsed list is a
 //! prefix of the expanded one, and a child that finishes moves from the end of
 //! the live band to the top of the recent band.
 

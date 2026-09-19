@@ -199,7 +199,10 @@ pub(super) fn row_lines(
                     );
                     // Older rows go last, after the waits, so opening the
                     // history only appends below what was already on screen.
-                    if expanded.history {
+                    // With no live or recent row to fold behind, the fold would
+                    // only cost a second click, so older rows show directly.
+                    let show_older = expanded.history || shown.is_empty();
+                    if show_older {
                         inner.extend(
                             sub_agent_entry_lines(ctx, &agent.sub_agents, &bands.older)
                                 .into_iter()
@@ -212,7 +215,7 @@ pub(super) fn row_lines(
                     let folded = usize::try_from(agent.sub_agent_count)
                         .unwrap_or(usize::MAX)
                         .saturating_sub(shown.len());
-                    if !expanded.history && folded > 0 {
+                    if !show_older && folded > 0 {
                         inner.push(CardLine {
                             line: Line::styled(format!("  +{folded} older"), ctx.theme.muted()),
                             target: Some(HitTarget::ToggleDelegationHistory(row.id.clone())),
