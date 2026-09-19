@@ -1753,3 +1753,113 @@ fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
     );
     env.store().append_event(&event).expect("append launch");
 }
+
+/// `--resume` preflights a matched session on the isolation it will run
+/// under: the `--isolation` override, else the stored value, never the
+/// machine default. A failing `bwrap` on PATH makes any sandbox preflight
+/// refuse, so only the stored-sandbox case without an override reaches it.
+#[cfg(unix)]
+#[test]
+fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
+    use rimz::config::Isolation;
+
+    for (stored, flag, needs_bwrap) in [
+        (Some(Isolation::Sandbox), None, true),
+        (Some(Isolation::Host), None, false),
+        (Some(Isolation::Sandbox), Some("host"), false),
+    ] {
+        let env = Env::new();
+        std::fs::create_dir_all(env.rimz_home()).expect("config directory");
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = \"sandbox\"\n",
+        )
+        .expect("sandbox machine config");
+        let shim_dir = write_env_dump_shim(&env, "codex");
+        let bwrap = shim_dir.join("bwrap");
+        std::fs::write(&bwrap, "#!/bin/sh\necho fake-bwrap-refuses >&2\nexit 1\n")
+            .expect("write failing bwrap");
+        let mut permissions = std::fs::metadata(&bwrap)
+            .expect("bwrap metadata")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&bwrap, permissions).expect("chmod bwrap");
+
+        let workspace =
+            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+        let kind = AgentKind::new_unchecked("codex");
+        let session_id = "closed-codex-session";
+        let store = env.store();
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &kind,
+                AgentLaunchPayload {
+                    agent_id: session_id.into(),
+                    launch_id: Some(session_id.into()),
+                    agent_name: "quiet-otter".to_owned(),
+                    agent_name_explicit: false,
+                    launch: LaunchParams {
+                        isolation: stored,
+                        ..LaunchParams::default()
+                    },
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: Some(rimz::pane::RuntimeOwner::new(
+                        rimz::pane::RuntimeOwnerKind::Agent,
+                        session_id,
+                        u32::MAX,
+                        None,
+                    )),
+                    worktree_path: Some(workspace.worktree_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .expect("seed closed session");
+        let transcript = env.home_root.join("closed.jsonl");
+        std::fs::write(&transcript, "{}\n").expect("write conversation");
+        let mut observation =
+            AgentLifecycleObservation::new(Some(session_id.into()), LifecycleSignal::Ended);
+        observation.transcript_path = Some(transcript.display().to_string());
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                kind.as_str(),
+                "SessionEnd",
+                &observation,
+            ))
+            .expect("close session");
+
+        let mut command = env.rimz();
+        command
+            .current_dir(&env.project_root)
+            .env("PATH", path_with_front(&shim_dir))
+            .args(["agents", "codex", "--resume"]);
+        if let Some(flag) = flag {
+            command.args(["--isolation", flag]);
+        }
+        let output = command.bounded_output().expect("resume exits");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // No room runs here, so a case that clears preflight stops at the
+        // live-room check; the sandbox preflight refuses before it.
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            !stderr.contains("nothing to resume"),
+            "the seeded session must match (stored={stored:?}, flag={flag:?}): {stderr}"
+        );
+        let expected = if needs_bwrap {
+            "fake-bwrap-refuses"
+        } else {
+            "no live RimZ room"
+        };
+        assert!(
+            stderr.contains(expected),
+            "stored={stored:?}, flag={flag:?}: {stderr}"
+        );
+    }
+}
