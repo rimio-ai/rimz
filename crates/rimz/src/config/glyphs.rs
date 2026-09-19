@@ -114,6 +114,12 @@ glyph_roles! {
         WorktreeDotted => "dotted",
         ChannelHash => "channel_hash",
     }
+    "pipeline" {
+        PipelinePassed => "passed",
+        PipelineCurrent => "current",
+        PipelineFuture => "future",
+        PipelineDone => "done",
+    }
     "card" {
         CardSubagents => "subagents",
         CardWaits => "waits",
