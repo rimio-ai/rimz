@@ -720,7 +720,7 @@ fn ledger_line(now: Timestamp, by: &str, from: Option<&str>, to: &str, note: &st
     };
     format!(
         "- {} @{by}: {transition} — {}",
-        at.strftime("%Y-%m-%d %H:%M"),
+        at.strftime(super::scratch::PROGRESS_STAMP_FORMAT),
         note.replace(['\r', '\n'], " ")
     )
 }
@@ -851,6 +851,25 @@ mod tests {
         ] {
             assert_eq!(rewrite_board(board, "Done", None, "- done"), expected);
         }
+    }
+
+    #[test]
+    fn ledger_line_round_trips_run_times_to_the_second() {
+        let now = "2026-09-12T14:02:37Z".parse().unwrap();
+        let line = ledger_line(now, "user", Some("Plan"), "Done", "finished");
+        let worktree = tempfile::tempdir().unwrap();
+        std::fs::write(
+            worktree.path().join("blackboard.md"),
+            format!("Stage: Done\n## Progress\n{line}\n"),
+        )
+        .unwrap();
+        let run = super::super::scratch::board_run(
+            worktree.path(),
+            &MachineConfig::load_lenient().time_zone(),
+        )
+        .unwrap();
+        assert_eq!(run.started_at, Some(now));
+        assert_eq!(run.done_at, Some(now));
     }
 
     #[test]

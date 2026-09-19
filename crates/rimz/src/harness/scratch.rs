@@ -3,6 +3,21 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
+
+use crate::config::DONE_STAGE;
+
+pub(super) const PROGRESS_STAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
+fn parse_progress_stamp(stamp: &str, zone: &TimeZone) -> Option<Timestamp> {
+    DateTime::strptime(PROGRESS_STAMP_FORMAT, stamp)
+        .or_else(|_| DateTime::strptime("%Y-%m-%d %H:%M", stamp))
+        .ok()?
+        .to_zoned(zone.clone())
+        .ok()
+        .map(|at| at.timestamp())
+}
+
 const MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
     case_sensitive: true,
     require_literal_separator: true,
@@ -84,6 +99,65 @@ pub struct BoardStage {
     pub owner: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardRun {
+    pub stage: BoardStage,
+    pub started_at: Option<Timestamp>,
+    pub done_at: Option<Timestamp>,
+}
+
+/// Read the current stage and run times from one blackboard snapshot.
+pub fn board_run(root: &Path, zone: &TimeZone) -> Option<BoardRun> {
+    let board = std::fs::read_to_string(root.join("blackboard.md")).ok()?;
+    parse_board_run(&board, zone)
+}
+
+fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
+    let mut run = BoardRun {
+        stage: parse_board_stage(board)?,
+        started_at: None,
+        done_at: None,
+    };
+    let progress = parse_board_sections(board, &["Progress", "Progress log"]);
+    for line in progress.as_deref().unwrap_or_default().lines() {
+        let Some(entry) = line.strip_prefix("- ") else {
+            continue;
+        };
+        let entry = entry
+            .split_once(" — ")
+            .map_or(entry.trim_end(), |(entry, _)| entry);
+        let Some((stamp, entry)) = entry.split_once(" @") else {
+            continue;
+        };
+        let Some((by, transition)) = entry.split_once(": ") else {
+            continue;
+        };
+        if by.is_empty() || by.contains(char::is_whitespace) {
+            continue;
+        }
+        let (from, to) = match transition.split_once(" -> ") {
+            Some((from, to)) if !from.is_empty() => (Some(from), to),
+            _ => match transition.strip_prefix("opened ") {
+                Some(to) => (None, to),
+                None => continue,
+            },
+        };
+        if to.is_empty() {
+            continue;
+        }
+        let Some(at) = parse_progress_stamp(stamp, zone) else {
+            continue;
+        };
+        if run.started_at.is_none() || from == Some(DONE_STAGE) {
+            run.started_at = Some(at);
+        }
+        if to == DONE_STAGE && run.stage.name == DONE_STAGE {
+            run.done_at = Some(at);
+        }
+    }
+    Some(run)
+}
+
 /// Read the first `Stage:` line, separating only a terminal ` (@owner)` suffix.
 pub fn board_stage(root: &Path) -> Option<BoardStage> {
     let board = std::fs::read_to_string(root.join("blackboard.md")).ok()?;
@@ -119,9 +193,17 @@ pub fn board_section(root: &Path, heading: &str) -> Option<String> {
 }
 
 fn parse_board_section(board: &str, heading: &str) -> Option<String> {
+    parse_board_sections(board, &[heading])
+}
+
+fn parse_board_sections(board: &str, headings: &[&str]) -> Option<String> {
     let section = board
         .lines()
-        .skip_while(|line| line.strip_prefix("## ").map(str::trim) != Some(heading))
+        .skip_while(|line| {
+            !line
+                .strip_prefix("## ")
+                .is_some_and(|heading| headings.contains(&heading.trim()))
+        })
         .skip(1)
         .scan(false, |in_fence, line| {
             if ["```", "~~~"].iter().any(|fence| line.starts_with(fence)) {
@@ -144,6 +226,65 @@ fn is_atx_heading(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_run_reads_stage_and_optional_ledger() {
+        let worktree = tempfile::tempdir().unwrap();
+        assert_eq!(board_run(worktree.path(), &TimeZone::UTC), None);
+        for board in [
+            "# Board",
+            "## Progress\n- 2026-09-12 14:02 @user: opened Plan — start",
+        ] {
+            assert_eq!(parse_board_run(board, &TimeZone::UTC), None);
+        }
+        std::fs::write(
+            worktree.path().join("blackboard.md"),
+            "Stage: Plan (@planner)",
+        )
+        .unwrap();
+        let run = board_run(worktree.path(), &TimeZone::UTC).unwrap();
+        assert_eq!(run.stage.name, "Plan");
+        assert_eq!(run.stage.owner.as_deref(), Some("planner"));
+        assert_eq!((run.started_at, run.done_at), (None, None));
+    }
+
+    #[test]
+    fn board_run_tracks_first_start_restarts_and_last_done() {
+        let zone = TimeZone::get("Asia/Kolkata").unwrap();
+        let ledger = "- garbage\n- 2026-09-12 14:00 @user: nonsense — ignored\n- invalid @user: opened Plan — ignored\n- 2026-09-12 14:02 @user: opened Plan — start\n- 2026-09-12 14:03:07 @planner: Plan -> Plan — reopen\n- 2026-09-12 14:04:08 @planner: Plan -> Done — finish";
+        let first = "2026-09-12T08:32:00Z".parse().unwrap();
+        let finish = "2026-09-12T08:34:08Z".parse().unwrap();
+        for heading in ["Progress", "Progress log"] {
+            for stage in ["Plan", "Done"] {
+                let board = format!(
+                    "Stage: {stage}\n## {heading}\n{ledger}\n### Evidence\n- 2026-09-12 14:05 @user: Done -> Plan — outside ledger"
+                );
+                let run = parse_board_run(&board, &zone).unwrap();
+                assert_eq!(run.started_at, Some(first));
+                assert_eq!(run.done_at, (stage == "Done").then_some(finish));
+            }
+        }
+        let board = format!(
+            "Stage: Done\n## Progress\n{ledger}\n- 2026-09-12 14:06:09 @user: Done -> Plan — restart\n- 2026-09-12 14:07:10 @planner: Plan -> Done — finish again"
+        );
+        let run = parse_board_run(&board, &zone).unwrap();
+        assert_eq!(
+            run.started_at,
+            Some("2026-09-12T08:36:09Z".parse().unwrap())
+        );
+        assert_eq!(run.done_at, Some("2026-09-12T08:37:10Z".parse().unwrap()));
+    }
+
+    #[test]
+    fn board_run_does_not_parse_transitions_in_notes() {
+        let board = "Stage: Done\n## Progress\n- 2026-09-12 14:02:03 @user: Plan -> Plan — later -> Done\n- 2026-09-12 14:04:05 @user: opened Plan — Done -> Plan";
+        let run = parse_board_run(board, &TimeZone::UTC).unwrap();
+        assert_eq!(
+            run.started_at,
+            Some("2026-09-12T14:02:03Z".parse().unwrap())
+        );
+        assert_eq!(run.done_at, None);
+    }
 
     #[test]
     fn scan_preserves_rooted_matching_deduplication_and_probe_failures() {

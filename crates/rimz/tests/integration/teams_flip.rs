@@ -268,6 +268,15 @@ fn flip_cli_persists_board_signal_and_owner_note() {
     ));
     assert!(board.ends_with("\n## Evidence\nKeep this section.\n"));
     assert!(board.contains("- existing entry\n"));
+    let stamp = board
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("- ")?
+                .split_once(" @user:")
+                .map(|(stamp, _)| stamp)
+        })
+        .unwrap();
+    jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", stamp).unwrap();
     let signals = fixture.signals();
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].source, SignalSource::Team);
