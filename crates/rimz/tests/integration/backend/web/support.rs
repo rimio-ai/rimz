@@ -442,6 +442,42 @@ impl LiveWebFixture {
         self.server.output(&["send-keys", "-t", &pane, "C-c"]);
     }
 
+    /// Wait until tmux holds a client on this room sized to the browser
+    /// terminal, and the window has taken that width: the grid a drag's cell
+    /// coordinates are computed in. The page URL carries `room=` from `web
+    /// open` itself, so it proves no attach.
+    pub(super) fn wait_client_sized_to_term(&self, tab: &Tab, budget: Duration) {
+        let deadline = Instant::now() + budget;
+        loop {
+            let term = eval_string(
+                tab,
+                "window.term?`${window.term.cols}x${window.term.rows}`:''",
+            )
+            .unwrap_or_default();
+            let clients = tmux_stdout(
+                &self.server,
+                &[
+                    "list-clients",
+                    "-t",
+                    &self.workspace.session_name,
+                    "-F",
+                    "#{client_width}x#{client_height}",
+                ],
+            );
+            let window_width = tmux_display(&self.server, &self.target_pane, "#{window_width}");
+            if clients.lines().any(|client| client == term)
+                && term.split('x').next() == Some(window_width.as_str())
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no tmux client sized to the browser terminal {term:?}; clients={clients:?}, window_width={window_width}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     pub(super) fn target_pane_geometry(&self) -> String {
         tmux_display(
             &self.server,
