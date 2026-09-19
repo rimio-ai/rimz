@@ -9,6 +9,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use super::command::ScrubSessionEnvExt;
+use super::zellij::HERMETIC_CONFIG_KDL;
 use rimz::diag::DiagSink;
 use rimz::diag::record::DiagEnvelope;
 use rimz::pane::PaneRef;
@@ -136,7 +137,7 @@ impl Env {
         }
         std::fs::write(
             env.zellij_config_dir().join("config.kdl"),
-            "show_startup_tips false\nshow_release_notes false\n",
+            HERMETIC_CONFIG_KDL,
         )
         .expect("write test Zellij config");
         // Pre-create the heartbeat dir so sidebar writes never race the store creating it.

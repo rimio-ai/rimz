@@ -468,7 +468,6 @@ fn reconcile_repairs_a_nested_sidebar_into_a_full_height_left_column() {
         }}
     }}
 }}
-stacked_pane_list false
 "#,
         )
     });
@@ -748,7 +747,12 @@ fn reconcile_add_docks_sidebar_in_wide_tab() {
         .into_iter()
         .map(|pane| pane.id)
         .collect();
-    assert_eq!(after_ids, before_ids, "every work pane survives the add");
+    assert_eq!(
+        after_ids,
+        before_ids,
+        "every work pane survives the add: panes={:?}",
+        expect_list_panes(&xdg, &name)
+    );
     client.assert_input_reaches(&focused_work, "restored work pane after sidebar add");
 }
 /// Adding a sidebar to a tab whose work panes are already row-stacked used to

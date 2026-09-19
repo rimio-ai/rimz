@@ -9,6 +9,15 @@ use tempfile::TempDir;
 
 use super::{CommandTimeoutExt, ScrubSessionEnvExt};
 
+/// The `config.kdl` every test-born Zellij server reads: stock behavior without
+/// the first-run wizard or tips UI, plus the room options RimZ pins in its birth
+/// layout. A detached server honors the config file, so a test layout that
+/// stands in for a room gets the room's pane representation without restating
+/// it. `stacked_pane_list false` keeps collapsed stack members unsuppressed,
+/// each with its own rect, as in a RimZ room.
+pub(super) const HERMETIC_CONFIG_KDL: &str =
+    "show_startup_tips false\nshow_release_notes false\nstacked_pane_list false\n";
+
 /// Owns the private HOME, XDG, and temporary-file surface shared by one
 /// Zellij test server and all of its clients.
 pub struct ZellijNamespace {
@@ -37,11 +46,8 @@ impl ZellijNamespace {
         .expect("arm Zellij namespace reaper");
         let config_dir = root_path.join(".config/zellij");
         std::fs::create_dir_all(&config_dir).expect("zellij config dir");
-        std::fs::write(
-            config_dir.join("config.kdl"),
-            "// Hermetic test config: stock behavior, no first-run wizard or tips UI.\nshow_startup_tips false\nshow_release_notes false\n",
-        )
-        .expect("zellij config.kdl");
+        std::fs::write(config_dir.join("config.kdl"), HERMETIC_CONFIG_KDL)
+            .expect("zellij config.kdl");
         Self {
             sandbox,
             _root: root,
