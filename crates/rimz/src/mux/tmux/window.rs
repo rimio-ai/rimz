@@ -13,6 +13,11 @@ use super::options::{
 };
 use super::parse::parse_new_window_ids;
 
+/// Window options that carry a compare-and-set rename's two names into one
+/// tmux command list; see [`TmuxBackend::window_name_guarded_command`].
+const RENAME_OBSERVED_OPTION: &str = "@rimz_rename_observed";
+const RENAME_TARGET_OPTION: &str = "@rimz_rename_target";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TmuxPaneGeometry {
     pub(super) pane_id: String,
@@ -261,9 +266,26 @@ impl TmuxBackend {
             .args(["list-panes", "-t", anchor.raw(), "-F", "#{pane_id}"]))
     }
 
-    pub(super) fn clear_pane_rimz_title_command(&self, pane_id: &str) -> CommandSpec {
-        self.cmd()
-            .args(["set-option", "-pu", "-t", pane_id, RIMZ_TITLE_OPTION])
+    /// Hand the window back to inherited naming and drop every listed pane's
+    /// RimZ title pin, in one command list.
+    pub(super) fn release_window_command(
+        &self,
+        anchor: &PaneId,
+        name: &str,
+        pane_ids: &[String],
+    ) -> Result<CommandSpec> {
+        let mut command = self.clear_window_status_and_restore_command(anchor, name)?;
+        for pane_id in pane_ids {
+            command = command.args([
+                ";",
+                "set-option",
+                "-pu",
+                "-t",
+                pane_id.as_str(),
+                RIMZ_TITLE_OPTION,
+            ]);
+        }
+        Ok(command)
     }
 
     fn rename_window_args(anchor: &PaneId, name: &str) -> Result<Vec<String>> {
@@ -344,6 +366,81 @@ impl TmuxBackend {
             "-t".to_owned(),
             anchor.raw().to_owned(),
             RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION.to_owned(),
+        ]))
+    }
+
+    /// Wrap `command`, a rename of `anchor`'s window to `name`, so it applies
+    /// only while the window is still named `observed`. tmux runs one
+    /// invocation's command list without another client's commands in between,
+    /// so the check and the rename are one step. Both names travel as window
+    /// options and the rename reads its name through a format, so neither is
+    /// parsed as tmux command syntax; every other word is a pane id, flag, or
+    /// option name.
+    pub(super) fn window_name_guarded_command(
+        &self,
+        anchor: &PaneId,
+        observed: &str,
+        name: &str,
+        command: &CommandSpec,
+    ) -> Result<CommandSpec> {
+        let prefix = self.cmd().args.len();
+        let mut guarded = Vec::new();
+        for words in command.args[prefix..].split(|word| word == ";") {
+            let rename = words.first().is_some_and(|verb| verb == "rename-window");
+            let mut quoted = Vec::with_capacity(words.len());
+            for (index, word) in words.iter().enumerate() {
+                let word = if rename && index + 1 == words.len() {
+                    format!("#{{{RENAME_TARGET_OPTION}}}")
+                } else {
+                    word.clone()
+                };
+                if word.contains('\'') {
+                    return Err(MuxErr::Output {
+                        program: "tmux".to_owned(),
+                        reason: format!("cannot quote `{word}` in a guarded tab rename"),
+                    });
+                }
+                quoted.push(format!("'{word}'"));
+            }
+            guarded.push(quoted.join(" "));
+        }
+        let target = anchor.raw();
+        let condition = format!("#{{==:#{{window_name}},#{{{RENAME_OBSERVED_OPTION}}}}}");
+        let target_name = sanitize_window_name(name);
+        let guarded = guarded.join(" ; ");
+        Ok(self.cmd().args([
+            "set-option",
+            "-w",
+            "-t",
+            target,
+            RENAME_OBSERVED_OPTION,
+            observed,
+            ";",
+            "set-option",
+            "-w",
+            "-t",
+            target,
+            RENAME_TARGET_OPTION,
+            target_name.as_str(),
+            ";",
+            "if-shell",
+            "-F",
+            "-t",
+            target,
+            condition.as_str(),
+            guarded.as_str(),
+            ";",
+            "set-option",
+            "-wu",
+            "-t",
+            target,
+            RENAME_OBSERVED_OPTION,
+            ";",
+            "set-option",
+            "-wu",
+            "-t",
+            target,
+            RENAME_TARGET_OPTION,
         ]))
     }
 

@@ -15,7 +15,6 @@ use crate::theme;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TabRename {
     pub(crate) anchor: PaneId,
-    pub(crate) observed_name: String,
     pub(crate) desired_name: String,
     pub(crate) intent: TabNameIntent,
 }
@@ -122,16 +121,19 @@ pub(crate) fn desired_tab_renames(
                 .iter()
                 .filter_map(|pane| pane.title.as_deref())
                 .collect::<Vec<_>>();
+            let observed = observed_name.clone();
             let (desired_name, intent) = if let Some(status) = status {
-                (format!("{base} {}", status.glyph()), TabNameIntent::Status)
+                (
+                    format!("{base} {}", status.glyph()),
+                    TabNameIntent::Status { observed },
+                )
             } else if !has_agent && base != shell_name && is_named_after_panes(base, &names) {
-                (shell_name.to_owned(), TabNameIntent::Release)
+                (shell_name.to_owned(), TabNameIntent::Release { observed })
             } else {
-                (base.to_owned(), TabNameIntent::Rest)
+                (base.to_owned(), TabNameIntent::Rest { observed })
             };
-            (desired_name != *observed_name).then(|| TabRename {
+            (desired_name != *observed_name).then_some(TabRename {
                 anchor,
-                observed_name: observed_name.clone(),
                 desired_name,
                 intent,
             })
@@ -231,7 +233,12 @@ mod tests {
 
         assert_eq!(renames[0].desired_name, "#feat !");
         assert_eq!(renames[0].anchor.raw(), "%1");
-        assert_eq!(renames[0].intent, TabNameIntent::Status);
+        assert_eq!(
+            renames[0].intent,
+            TabNameIntent::Status {
+                observed: "#feat".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -242,9 +249,13 @@ mod tests {
 
         let renames = desired_tab_renames(&snapshot, &frame("my tab ✓", &["%1"]), "zsh");
 
-        assert_eq!(renames[0].observed_name, "my tab ✓");
         assert_eq!(renames[0].desired_name, "my tab");
-        assert_eq!(renames[0].intent, TabNameIntent::Rest);
+        assert_eq!(
+            renames[0].intent,
+            TabNameIntent::Rest {
+                observed: "my tab ✓".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -334,7 +345,12 @@ mod tests {
         let snapshot = snapshot(Vec::new(), now);
         let renames = desired_tab_renames(&snapshot, &frame, "zsh");
         assert_eq!(renames[0].desired_name, "zsh");
-        assert_eq!(renames[0].intent, TabNameIntent::Release);
+        assert_eq!(
+            renames[0].intent,
+            TabNameIntent::Release {
+                observed: "opus+codex".to_owned()
+            }
+        );
         let mut released = frame;
         released.tabs[0].name = Some("zsh".to_owned());
         assert!(desired_tab_renames(&snapshot, &released, "zsh").is_empty());
@@ -366,13 +382,23 @@ mod tests {
         assert!(desired_tab_renames(&snapshot, &frame("opus", &["%1"]), "zsh").is_empty());
         let renames = desired_tab_renames(&snapshot, &named_frame("#feat ?", &["opus"]), "zsh");
         assert_eq!(renames[0].desired_name, "#feat");
-        assert_eq!(renames[0].intent, TabNameIntent::Rest);
+        assert_eq!(
+            renames[0].intent,
+            TabNameIntent::Rest {
+                observed: "#feat ?".to_owned()
+            }
+        );
         let renames = desired_tab_renames(
             &snapshot,
             &named_frame("opus+codex+pi+…", &["pi", "opus", "codex", "nvim"]),
             "zsh",
         );
-        assert_eq!(renames[0].intent, TabNameIntent::Release);
+        assert_eq!(
+            renames[0].intent,
+            TabNameIntent::Release {
+                observed: "opus+codex+pi+…".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -385,7 +411,12 @@ mod tests {
             frame.tabs[0].panes[0].current.hosted_agent_kind =
                 Some(crate::ids::AgentKind::new_unchecked("claude"));
             let renames = desired_tab_renames(&snapshot, &frame, "zsh");
-            assert_eq!(renames[0].intent, TabNameIntent::Release);
+            assert_eq!(
+                renames[0].intent,
+                TabNameIntent::Release {
+                    observed: "opus".to_owned()
+                }
+            );
             assert_eq!(renames[0].anchor.raw(), "%2");
             frame.tabs[0].panes[1].title = None;
             assert!(desired_tab_renames(&snapshot, &frame, "zsh").is_empty());
@@ -401,7 +432,12 @@ mod tests {
             frame.tabs[0].panes[0].current.command = Some(command.to_owned());
             let renames = desired_tab_renames(&snapshot, &frame, "zsh");
             assert_eq!(renames[0].desired_name, "opus");
-            assert_eq!(renames[0].intent, TabNameIntent::Rest);
+            assert_eq!(
+                renames[0].intent,
+                TabNameIntent::Rest {
+                    observed: "opus !".to_owned()
+                }
+            );
         }
     }
 }

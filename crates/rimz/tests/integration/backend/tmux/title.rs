@@ -12,7 +12,14 @@ fn window_names_keep_literal_hashes() {
 
     server
         .backend
-        .rename_tab(session, &anchor, "#health ready", TabNameIntent::Rest)
+        .rename_tab(
+            session,
+            &anchor,
+            "#health ready",
+            TabNameIntent::Rest {
+                observed: server.display(anchor.raw(), "#{window_name}"),
+            },
+        )
         .expect("rename window");
     assert_eq!(server.window_names(session), ["#health ready"]);
 
@@ -57,7 +64,14 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
     let anchor = PaneId::from_parts(MuxName::Tmux, server.display(session, "#{pane_id}"));
     server
         .backend
-        .rename_tab(session, &anchor, "shell ?", TabNameIntent::Status)
+        .rename_tab(
+            session,
+            &anchor,
+            "shell ?",
+            TabNameIntent::Status {
+                observed: server.display(anchor.raw(), "#{window_name}"),
+            },
+        )
         .expect("status before claim");
     server
         .backend
@@ -94,7 +108,14 @@ fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
     );
     server
         .backend
-        .rename_tab(session, &anchor, "sh", TabNameIntent::Release)
+        .rename_tab(
+            session,
+            &anchor,
+            "sh",
+            TabNameIntent::Release {
+                observed: "#feat".to_owned(),
+            },
+        )
         .expect("release pin");
     let roster = list_session_panes(&server, session);
     assert_eq!(
@@ -216,4 +237,63 @@ fn attached_terminal_title_ignores_shell_osc_title() {
             .any(|title| title.contains("marvin@evil") || title.contains("~/leak")),
         "shell-controlled title reached the attached client: titles={titles:?}; capture={capture:?}",
     );
+}
+
+/// A producer projects a rename from the name it observed and applies it
+/// later; a launch claim that lands in between must survive it.
+#[test]
+fn projected_rename_keeps_a_claim_made_after_its_observation() {
+    require_tmux!();
+    let session = "rimz-stale-projection";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((120, 40)));
+    let anchor = PaneId::from_parts(MuxName::Tmux, server.display(session, "#{pane_id}"));
+    server
+        .backend
+        .rename_tab(
+            session,
+            &anchor,
+            "shell ?",
+            TabNameIntent::Status {
+                observed: server.display(anchor.raw(), "#{window_name}"),
+            },
+        )
+        .expect("status");
+    server
+        .backend
+        .rename_tab(
+            session,
+            &anchor,
+            "opus",
+            TabNameIntent::Claim {
+                pane_name: "opus".to_owned(),
+            },
+        )
+        .expect("claim");
+    server
+        .backend
+        .rename_tab(
+            session,
+            &anchor,
+            "shell",
+            TabNameIntent::Rest {
+                observed: "shell ?".to_owned(),
+            },
+        )
+        .expect("a stale projection is a silent miss");
+    assert_eq!(server.display(anchor.raw(), "#{window_name}"), "opus");
+    assert_eq!(server.display(anchor.raw(), "#{@rimz_title}"), "opus");
+
+    server
+        .backend
+        .rename_tab(
+            session,
+            &anchor,
+            "opus ?",
+            TabNameIntent::Status {
+                observed: "opus".to_owned(),
+            },
+        )
+        .expect("current projection");
+    assert_eq!(server.display(anchor.raw(), "#{window_name}"), "opus ?");
 }

@@ -929,11 +929,11 @@ impl MuxBackend for TmuxBackend {
         name: &str,
         intent: TabNameIntent,
     ) -> Result<()> {
-        let command = match intent {
+        let command = match &intent {
             TabNameIntent::Claim { pane_name } => {
-                self.claim_window_command(anchor, name, &pane_name)?
+                self.claim_window_command(anchor, name, pane_name)?
             }
-            TabNameIntent::Status => {
+            TabNameIntent::Status { .. } => {
                 let automatic = self
                     .automatic_rename_probe_command(anchor)?
                     .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
@@ -944,7 +944,7 @@ impl MuxBackend for TmuxBackend {
                     self.rename_window_command(anchor, name)?
                 }
             }
-            TabNameIntent::Rest => {
+            TabNameIntent::Rest { .. } => {
                 let restore = self
                     .restore_automatic_rename_probe_command(anchor)?
                     .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
@@ -955,18 +955,20 @@ impl MuxBackend for TmuxBackend {
                     self.rename_window_command(anchor, name)?
                 }
             }
-            TabNameIntent::Release => {
-                self.clear_window_status_and_restore_command(anchor, name)?
-                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+            TabNameIntent::Release { .. } => {
                 let output = self
                     .window_pane_ids_command(anchor)?
                     .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
-                for pane_id in String::from_utf8_lossy(&output.stdout).lines() {
-                    self.clear_pane_rimz_title_command(pane_id)
-                        .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
-                }
-                return Ok(());
+                let panes = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                self.release_window_command(anchor, name, &panes)?
             }
+        };
+        let command = match intent.observed() {
+            Some(observed) => self.window_name_guarded_command(anchor, observed, name, &command)?,
+            None => command,
         };
         command
             .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)

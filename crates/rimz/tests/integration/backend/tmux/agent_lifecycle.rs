@@ -87,7 +87,9 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
                 &workspace.session_name,
                 &anchor,
                 "shell ?",
-                TabNameIntent::Status,
+                TabNameIntent::Status {
+                    observed: server.display(anchor.raw(), "#{window_name}"),
+                },
             )
             .expect("pending status rename");
         let launch = shlex::try_join([
@@ -134,12 +136,21 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
                 &workspace.session_name,
                 &anchor,
                 &format!("{title} ?"),
-                TabNameIntent::Status,
+                TabNameIntent::Status {
+                    observed: title.to_owned(),
+                },
             )
             .expect("agent status");
         server
             .backend
-            .rename_tab(&workspace.session_name, &anchor, title, TabNameIntent::Rest)
+            .rename_tab(
+                &workspace.session_name,
+                &anchor,
+                title,
+                TabNameIntent::Rest {
+                    observed: format!("{title} ?"),
+                },
+            )
             .expect("idle agent");
         assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
         assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");

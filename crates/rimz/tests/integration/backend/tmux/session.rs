@@ -28,7 +28,14 @@ fn tab_status_clear_restores_automatic_rename() {
         // The command-builder unit test covers Unicode preservation. Keep the
         // live seam assertion locale-neutral: tmux replaces non-ASCII with `_`
         // when the server starts under CI's `LC_ALL=C`.
-        .rename_tab(session, &anchor, "work ?", TabNameIntent::Status)
+        .rename_tab(
+            session,
+            &anchor,
+            "work ?",
+            TabNameIntent::Status {
+                observed: server.display(session, "#{window_name}"),
+            },
+        )
         .expect("rename pane's window");
 
     assert_eq!(server.display(session, "#{window_name}"), "work ?");
@@ -46,7 +53,14 @@ fn tab_status_clear_restores_automatic_rename() {
 
     server
         .backend
-        .rename_tab(session, &anchor, "work", TabNameIntent::Rest)
+        .rename_tab(
+            session,
+            &anchor,
+            "work",
+            TabNameIntent::Rest {
+                observed: "work ?".to_owned(),
+            },
+        )
         .expect("clear pane's window status");
 
     assert_eq!(server.display(session, "#{window_name}"), "work");
@@ -86,11 +100,25 @@ fn tab_status_clear_preserves_an_intentionally_stable_name() {
 
     server
         .backend
-        .rename_tab(session, &anchor, "stable ?", TabNameIntent::Status)
+        .rename_tab(
+            session,
+            &anchor,
+            "stable ?",
+            TabNameIntent::Status {
+                observed: "stable".to_owned(),
+            },
+        )
         .expect("rename stable window");
     server
         .backend
-        .rename_tab(session, &anchor, "stable", TabNameIntent::Rest)
+        .rename_tab(
+            session,
+            &anchor,
+            "stable",
+            TabNameIntent::Rest {
+                observed: "stable ?".to_owned(),
+            },
+        )
         .expect("clear stable window status");
 
     assert_eq!(server.display(session, "#{window_name}"), "stable");
@@ -139,7 +167,14 @@ fn tab_release_restores_automatic_rename_and_clears_every_pane_pin() {
 
     server
         .backend
-        .rename_tab(session, &anchor, "sh", TabNameIntent::Release)
+        .rename_tab(
+            session,
+            &anchor,
+            "sh",
+            TabNameIntent::Release {
+                observed: "opus".to_owned(),
+            },
+        )
         .expect("release launch name without a status marker");
     let deadline = Instant::now() + Duration::from_secs(5);
     while server.display(anchor.raw(), "#{window_name}") != "sh" {

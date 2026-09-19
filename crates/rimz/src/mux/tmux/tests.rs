@@ -94,10 +94,83 @@ fn tab_release_lists_the_anchor_window_and_clears_each_pane_pin() {
         verb_args(&list),
         ["list-panes", "-t", "%7", "-F", "#{pane_id}"]
     );
-    for pane_id in ["%7", "%8"] {
+    let release = backend
+        .release_window_command(&pane, "zsh", &["%7".to_owned(), "%8".to_owned()])
+        .expect("tmux pane");
+    assert_eq!(
+        verb_args(&release)[15..],
+        [
+            "@rimz_restore_automatic_rename",
+            ";",
+            "set-option",
+            "-pu",
+            "-t",
+            "%7",
+            "@rimz_title",
+            ";",
+            "set-option",
+            "-pu",
+            "-t",
+            "%8",
+            "@rimz_title",
+        ]
+    );
+}
+
+#[test]
+fn projected_rename_runs_under_one_window_name_check() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+    for (observed, name) in [
+        ("#feat ?", "#feat"),
+        ("a,b", "a,b ✓"),
+        ("x}y", "{x}"),
+        ("it's ⢿", "it's"),
+    ] {
+        let rename = backend
+            .rename_window_command(&pane, name)
+            .expect("tmux pane");
+        let guarded = backend
+            .window_name_guarded_command(&pane, observed, name, &rename)
+            .expect("guard");
+        let target_name = name.replace([':', '.'], "-");
         assert_eq!(
-            verb_args(&backend.clear_pane_rimz_title_command(pane_id)),
-            ["set-option", "-pu", "-t", pane_id, "@rimz_title"]
+            verb_args(&guarded),
+            [
+                "set-option",
+                "-w",
+                "-t",
+                "%7",
+                "@rimz_rename_observed",
+                observed,
+                ";",
+                "set-option",
+                "-w",
+                "-t",
+                "%7",
+                "@rimz_rename_target",
+                target_name.as_str(),
+                ";",
+                "if-shell",
+                "-F",
+                "-t",
+                "%7",
+                "#{==:#{window_name},#{@rimz_rename_observed}}",
+                "'rename-window' '-t' '%7' '#{@rimz_rename_target}'",
+                ";",
+                "set-option",
+                "-wu",
+                "-t",
+                "%7",
+                "@rimz_rename_observed",
+                ";",
+                "set-option",
+                "-wu",
+                "-t",
+                "%7",
+                "@rimz_rename_target",
+            ],
+            "names travel as option values, never as command syntax"
         );
     }
 }

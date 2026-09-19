@@ -2,13 +2,29 @@
 
 /// Claim pins a launch name and forgets status restoration. Status temporarily
 /// disables automatic naming, remembering whether to restore it on Rest.
-/// Release restores inherited naming unconditionally and drops pane pins.
+/// Release restores inherited naming and drops pane pins.
+///
+/// Status, Rest, and Release are projections from the tab name a producer
+/// observed, and apply only while the tab still bears it; Claim applies
+/// whatever the tab is called.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TabNameIntent {
     Claim { pane_name: String },
-    Status,
-    Rest,
-    Release,
+    Status { observed: String },
+    Rest { observed: String },
+    Release { observed: String },
+}
+
+impl TabNameIntent {
+    /// The tab name a projection was computed from; a claim has none.
+    pub(super) fn observed(&self) -> Option<&str> {
+        match self {
+            Self::Claim { .. } => None,
+            Self::Status { observed } | Self::Rest { observed } | Self::Release { observed } => {
+                Some(observed)
+            }
+        }
+    }
 }
 
 pub(crate) fn label_from_pane_names<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
