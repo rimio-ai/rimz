@@ -193,6 +193,10 @@ pub struct AgentLaunchPayload {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentAttachPayload {
     pub agent_id: AgentSessionId,
+    /// The isolation the resume wrapper enforced; absent when the session
+    /// follows the machine setting or on non-resume attaches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<crate::config::Isolation>,
     /// Stable identity exported by the resume wrapper. Older attach events and
     /// wrappers that predate launch identity leave this unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]

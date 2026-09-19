@@ -153,6 +153,7 @@ fn launch_and_attach_first_events_reduce_against_the_carried_agent() {
         &kind,
         AgentAttachPayload {
             agent_id: carried.agent_id.clone(),
+            isolation: None,
             launch_id: None,
             pane_id: pane_id.clone(),
             pane_pid: Some(42),

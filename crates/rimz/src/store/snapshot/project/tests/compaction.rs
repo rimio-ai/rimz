@@ -89,6 +89,7 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
             launch_id: Some(AgentSessionId::from("launch_coder")),
             launch: LaunchParams {
                 role: Some("coder".to_owned()),
+                isolation: Some(crate::config::Isolation::Host),
                 ..LaunchParams::default()
             },
             pane_id: Some(PaneId::parse(pane_id).expect("pane id")),
@@ -152,8 +153,42 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         }),
     );
 
-    let after_start =
-        reduce_agent_states(&[launch.clone(), predecessor.clone(), continuation.clone()]);
+    let attach = EventEnvelope::agent_attached(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentAttachPayload {
+            agent_id: AgentSessionId::from("predecessor"),
+            launch_id: Some(AgentSessionId::from("launch_coder")),
+            isolation: Some(crate::config::Isolation::Sandbox),
+            pane_id: PaneId::parse(pane_id).expect("pane id"),
+            pane_pid: Some(owner_pid),
+            runtime_owner: RuntimeOwner::new(
+                RuntimeOwnerKind::Agent,
+                "predecessor",
+                owner_pid,
+                Some("agent-start".to_owned()),
+            ),
+        },
+    );
+    let events = vec![launch, predecessor, attach];
+    let attached = reduce_agent_states(&events);
+    assert_eq!(
+        attached
+            .iter()
+            .find(|agent| agent.agent_id == "predecessor")
+            .unwrap()
+            .isolation,
+        Some(crate::config::Isolation::Sandbox),
+    );
+    let mut events = events;
+    events.push(lifecycle_for_agent(
+        "predecessor",
+        "PreCompact",
+        signal("compacting"),
+    ));
+    events.push(continuation);
+    let after_start = reduce_agent_states(&events);
     let predecessor_state = after_start
         .iter()
         .find(|agent| agent.agent_id == "predecessor")
@@ -175,12 +210,25 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         Some("launch_coder")
     );
     assert_eq!(continuation_state.role.as_deref(), Some("coder"));
+    assert_eq!(
+        predecessor_state.isolation,
+        Some(crate::config::Isolation::Sandbox)
+    );
+    assert_eq!(
+        continuation_state.isolation,
+        Some(crate::config::Isolation::Sandbox)
+    );
 
-    let after_turn = reduce_agent_states(&[launch, predecessor, continuation, continued_turn]);
+    events.push(continued_turn);
+    let after_turn = reduce_agent_states(&events);
     let continuation_state = after_turn
         .iter()
         .find(|agent| agent.agent_id == "continuation")
         .unwrap();
+    assert_eq!(
+        continuation_state.isolation,
+        Some(crate::config::Isolation::Sandbox)
+    );
     assert_eq!(
         continuation_state.compacted_from.as_deref(),
         Some("predecessor"),

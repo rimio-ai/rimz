@@ -170,6 +170,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 rimz::pane::RuntimeOwnerKind::Agent,
                 target.1.as_str(),
             ),
+            request.identity.params.isolation,
         );
     }
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
@@ -213,6 +214,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 target.1.as_str(),
                 child.id(),
             ),
+            request.identity.params.isolation,
         );
     }
     if let Some(context) = run_context.as_ref() {
@@ -881,6 +883,7 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
                 rimz::pane::RuntimeOwnerKind::Agent,
                 current.agent_id.as_str(),
             ),
+            None,
         )?;
         Ok(())
     });
@@ -900,6 +903,7 @@ fn record_own_resume_pane(
     target: &(AgentKind, AgentSessionId),
     launch_id: Option<AgentSessionId>,
     runtime_owner: rimz::pane::RuntimeOwner,
+    isolation: Option<rimz::config::Isolation>,
 ) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
@@ -913,9 +917,19 @@ fn record_own_resume_pane(
             &workspace.session_name,
             &pane_id,
             runtime_owner,
+            isolation,
         )?;
         Ok(())
     }) {
+        if let Some(isolation) = isolation {
+            let _ = writeln!(
+                crate::cli::render::err(),
+                "rimz: could not record isolation {isolation} for resumed {} {}: {err}",
+                target.0,
+                target.1,
+            );
+            return;
+        }
         tracing::debug!(
             kind = %target.0,
             agent_id = %target.1,

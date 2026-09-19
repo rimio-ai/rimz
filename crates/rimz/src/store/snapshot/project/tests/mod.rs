@@ -134,6 +134,7 @@ fn attach_event(
         &AgentKind::new_unchecked(kind),
         AgentAttachPayload {
             agent_id: AgentSessionId::from(agent_id),
+            isolation: None,
             launch_id: launch_id.map(AgentSessionId::from),
             pane_id: PaneId::parse(pane_id).expect("pane id"),
             pane_pid,
@@ -259,6 +260,28 @@ fn legacy_attach_for_unknown_session_mints_no_card() {
 }
 
 #[test]
+fn attach_without_isolation_preserves_the_launch_setting() {
+    for isolation in [None, Some(crate::config::Isolation::Host)] {
+        let launch = launch_event(
+            "codex",
+            AgentLaunchPayload {
+                launch: LaunchParams {
+                    isolation,
+                    ..LaunchParams::default()
+                },
+                ..launch_payload("sess-resumed", "coder")
+            },
+        );
+        let attached = reduce_agent_states(&[
+            launch,
+            attach_event("codex", "sess-resumed", None, "tmux:%4", Some(84), 84),
+        ]);
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0].isolation, isolation);
+    }
+}
+
+#[test]
 fn identified_attach_seeds_a_discovered_resume() {
     let states = reduce_agent_states(&[attach_event(
         "codex",
@@ -272,6 +295,7 @@ fn identified_attach_seeds_a_discovered_resume() {
         .iter()
         .find(|state| state.kind == "codex" && state.agent_id == "sess-discovered")
         .expect("identified attach seeds session");
+    assert_eq!(state.isolation, None);
     assert_eq!(
         state.launch_id.as_deref(),
         Some("sess-discovered"),
@@ -1232,6 +1256,7 @@ fn resumed_fork_events(provider_pane: &str) -> Vec<EventEnvelope> {
             &AgentKind::new_unchecked("codex"),
             AgentAttachPayload {
                 agent_id: AgentSessionId::from("primary"),
+                isolation: None,
                 launch_id: Some(AgentSessionId::from("launch_coder")),
                 pane_id: PaneId::parse(pane_id).expect("pane id"),
                 pane_pid: Some(42),
@@ -1501,6 +1526,7 @@ fn launch_identity_retry_inspects_only_same_instance_candidates() {
         &AgentKind::new_unchecked("codex"),
         AgentAttachPayload {
             agent_id: AgentSessionId::from("conversation-a"),
+            isolation: None,
             launch_id: Some(AgentSessionId::from("launch-coder")),
             pane_id: PaneId::parse(pane_id).expect("pane id"),
             pane_pid: None,
