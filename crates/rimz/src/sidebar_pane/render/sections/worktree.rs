@@ -7,19 +7,23 @@
 
 use std::collections::HashSet;
 
+use crate::agents::AgentStatus;
 use crate::config::GlyphRole;
 use crate::store::snapshot::{
-    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi, WorktreePrState,
-    WorktreeTrunkSync,
+    PipelinePosition, SidebarPipeline, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind, WorktreePrCi, WorktreePrState, WorktreeTrunkSync,
 };
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::fmt::{activity_short, age_label, age_secs, dollars2, tokens_int};
+use crate::sidebar_pane::render::fmt::{
+    activity_short, age_label, age_secs, dollars2, run_clock_label, tokens_int,
+};
 use crate::sidebar_pane::render::labels::{
     TokenColumns, TokenDetail, branch_delta_spans, diff_spans, elapsed_glyph, status_glyph,
-    status_rest_style, token_breakdown_spans, token_total_glyph, trunk_glyph_spans,
+    status_rest_style, status_style_at, token_breakdown_spans, token_total_glyph,
+    trunk_glyph_spans,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -102,6 +106,37 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         header_target,
         header_hit.into_iter().chain(header_link),
     );
+    if let Some(pipeline) = &group.pipeline
+        && !finished_folded(visible_group)
+    {
+        let rows = visible_group.rows(roster);
+        let owner = pipeline.owner.as_deref().and_then(|owner| {
+            rows.iter().position(|row| {
+                row.team() == group.team.as_deref()
+                    && row.as_agent().and_then(|card| card.handle.as_deref()) == Some(owner)
+            })
+        });
+        let target = owner
+            .or_else(|| {
+                rows.iter().position(|row| {
+                    row.team() == group.team.as_deref()
+                        && row.status().is_some_and(AgentStatus::is_actionable)
+                })
+            })
+            .unwrap_or(0)
+            + first_row;
+        let owner_status = owner.and_then(|index| rows[index].status());
+        block.push_target(
+            with_gutter(
+                ctx.theme,
+                pipeline_line(ctx, pipeline, owner_status),
+                lane,
+                None,
+                ctx.width,
+            ),
+            HitTarget::Row(target),
+        );
+    }
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
         let expanded = CardExpansion::resolve(
@@ -151,6 +186,63 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     block
 }
 
+fn finished_folded(group: &VisibleGroup<'_>) -> bool {
+    group.hidden_count() > 0 && !group.expanded() && group.source().collapses()
+}
+
+fn pipeline_line(
+    ctx: &RowCtx<'_>,
+    pipeline: &SidebarPipeline,
+    owner: Option<AgentStatus>,
+) -> Line<'static> {
+    let theme = ctx.theme;
+    let position = pipeline.position();
+    let mut track = Vec::new();
+    if position != PipelinePosition::Undeclared {
+        for index in 0..pipeline.stages.len() {
+            if index > 0 {
+                track.push(Span::raw(" "));
+            }
+            let (role, style) = match position {
+                PipelinePosition::Done if index + 1 == pipeline.stages.len() => (
+                    GlyphRole::PipelineDone,
+                    status_rest_style(theme, AgentStatus::Success),
+                ),
+                PipelinePosition::At(current) if index == current => (
+                    GlyphRole::PipelineCurrent,
+                    owner.map_or(theme.muted(), |status| {
+                        status_style_at(theme, status, ctx.animation_phase)
+                    }),
+                ),
+                PipelinePosition::At(current) if index > current => {
+                    (GlyphRole::PipelineFuture, theme.muted())
+                }
+                _ => (GlyphRole::PipelinePassed, theme.body()),
+            };
+            track.push(Span::styled(theme.glyph(role).to_owned(), style));
+        }
+    }
+    let right = pipeline.span_secs(ctx.now).map_or_else(Vec::new, |secs| {
+        vec![Span::styled(run_clock_label(secs), theme.muted())]
+    });
+    let width = content_width(ctx.width);
+    let budget = width.saturating_sub(2 + spans_width(&right) + usize::from(!right.is_empty()));
+    let mut left = vec![Span::raw("  ")];
+    let track_width = spans_width(&track) + 2;
+    let name_budget = if !track.is_empty() && track_width + text_width(&pipeline.stage) <= budget {
+        left.extend(track);
+        left.push(Span::raw("  "));
+        budget - track_width
+    } else {
+        budget
+    };
+    left.push(Span::styled(
+        ellipsize(&pipeline.stage, name_budget),
+        theme.body(),
+    ));
+    pin_right(left, right, width)
+}
+
 fn worktree_tail(
     ctx: &RowCtx<'_>,
     roster: &VisibleRoster<'_>,
@@ -161,7 +253,7 @@ fn worktree_tail(
     let hidden = visible_group.hidden_count();
     if hidden > 0 && !visible_group.expanded() {
         return WorktreeTail::More {
-            line: if collapses {
+            line: if finished_folded(visible_group) {
                 finished_roster_line(ctx, visible_group, roster)
             } else {
                 Line::styled(format!("  +{hidden} more"), ctx.theme.muted())
@@ -226,6 +318,12 @@ fn finished_roster_line(
             team.to_owned(),
             ctx.theme.muted().add_modifier(Modifier::BOLD),
         ));
+        if let Some(pipeline) = &group.pipeline {
+            spans.push(Span::styled(
+                format!(" · {}", pipeline.stage),
+                ctx.theme.muted(),
+            ));
+        }
         spans.push(Span::raw("  "));
     }
     let width = content_width(ctx.width);

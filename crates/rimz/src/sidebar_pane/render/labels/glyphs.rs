@@ -106,7 +106,11 @@ pub(in crate::sidebar_pane::render) fn status_style(theme: &Theme, status: Agent
     status_style_at(theme, status, 0)
 }
 
-pub(super) fn status_style_at(theme: &Theme, status: AgentStatus, animation_phase: u64) -> Style {
+pub(in crate::sidebar_pane::render) fn status_style_at(
+    theme: &Theme,
+    status: AgentStatus,
+    animation_phase: u64,
+) -> Style {
     role_style(
         theme,
         crate::sidebar_pane::render::animation::ResolvedAnimations::status_role(status),

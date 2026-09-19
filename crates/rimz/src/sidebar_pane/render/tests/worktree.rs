@@ -1,6 +1,148 @@
 use super::*;
 use crate::sidebar_pane::render::theme::Component;
 
+fn pipeline_snapshot() -> SidebarSnapshot {
+    let agents = ["planner", "coder"].map(|role| {
+        let mut member = agent(
+            role,
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/pipeline"),
+            Some("pipeline"),
+            None,
+        );
+        member.team = Some("forge".to_owned());
+        member.role = Some(role.to_owned());
+        member
+    });
+    let mut snapshot = snapshot_with(agents.into());
+    snapshot.worktree_groups[0].pipeline = Some(crate::store::snapshot::SidebarPipeline {
+        stages: ["Explore", "Plan", "Implement", "Review", "Ship"]
+            .map(str::to_owned)
+            .into(),
+        stage: "Implement".to_owned(),
+        owner: Some("coder".to_owned()),
+        started_at: Some(fixed_now() - Duration::from_secs(2_832)),
+        done_at: None,
+    });
+    snapshot
+}
+
+#[test]
+fn render_pipeline_states() {
+    for (name, stage, clock, nerd, width) in [
+        ("pipeline_running", "Implement", true, false, 54),
+        ("pipeline_done_unicode", "Done", true, false, 54),
+        ("pipeline_done_nerd", "Done", true, true, 54),
+        ("pipeline_undeclared", "Investigate", true, false, 54),
+        ("pipeline_no_clock", "Implement", false, false, 54),
+        ("pipeline_narrow", "Implement", true, false, 22),
+    ] {
+        let mut snapshot = pipeline_snapshot();
+        let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+        pipeline.stage = stage.to_owned();
+        if stage == "Done" {
+            pipeline.done_at = Some(fixed_now() - Duration::from_secs(12));
+        }
+        if !clock {
+            pipeline.started_at = None;
+        }
+        if nerd {
+            snapshot.theme.glyphs.set = Some("nerd_font".to_owned());
+        }
+        let rendered = snapshot_to_screen(&snapshot, width, 24);
+        assert!(rendered.contains(stage), "{rendered}");
+        if width == 22 {
+            assert!(!rendered.contains('◉'), "track drops whole: {rendered}");
+            assert!(rendered.contains("47:12"));
+        }
+        assert_snapshot(name, rendered);
+    }
+}
+
+#[test]
+fn render_pipeline_folded_stage() {
+    let mut snapshot = pipeline_snapshot();
+    let group = &mut snapshot.worktree_groups[0];
+    group.finished = true;
+    group.pipeline.as_mut().unwrap().stage = "Done".to_owned();
+    for row in &mut group.rows {
+        row.as_agent_mut().unwrap().status = AgentStatus::Success;
+    }
+    let rendered = snapshot_to_screen(&snapshot, 54, 20);
+    assert!(rendered.contains("forge · Done"), "{rendered}");
+    assert!(!rendered.contains('●'));
+    assert_snapshot("pipeline_folded", rendered);
+}
+
+#[test]
+fn pipeline_click_and_status_style_follow_visible_owner() {
+    let mut snapshot = pipeline_snapshot();
+    let theme = Theme::fixed(false);
+    let cost_rolls = CostRolls::default();
+    for owner in [Some("coder"), Some("absent"), None] {
+        let group = &mut snapshot.worktree_groups[0];
+        group.pipeline.as_mut().unwrap().owner = owner.map(str::to_owned);
+        let owner_index = group
+            .rows
+            .iter()
+            .position(|row| row.display_name() == "coder")
+            .unwrap();
+        group.rows[owner_index].as_agent_mut().unwrap().status = AgentStatus::Waiting;
+        let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 7, &cost_rolls);
+        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+        assert_eq!(
+            block.interactions.target_at(4, 1),
+            Some(HitTarget::Row(owner_index))
+        );
+        assert_eq!(block.interactions.row_map()[1], None);
+        let current = block.lines[1]
+            .spans
+            .iter()
+            .find(|span| span.content == theme.glyph(crate::config::GlyphRole::PipelineCurrent))
+            .unwrap();
+        assert_eq!(
+            current.style,
+            if owner == Some("coder") {
+                super::super::labels::status_style_at(&theme, AgentStatus::Waiting, 7)
+            } else {
+                theme.muted()
+            }
+        );
+    }
+}
+
+#[test]
+fn pipeline_does_not_change_attention_or_animation() {
+    let mut snapshot = pipeline_snapshot();
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = AgentStatus::Waiting;
+    let cadence = animation_cadence_for_test(&snapshot);
+    let unread = lead_unread(&snapshot.worktree_groups).map(|(id, status)| (id.to_owned(), status));
+    let with = snapshot_to_screen(&snapshot, 54, 24);
+    snapshot.worktree_groups[0].pipeline = None;
+    assert_eq!(cadence, animation_cadence_for_test(&snapshot));
+    assert_eq!(
+        unread,
+        lead_unread(&snapshot.worktree_groups).map(|(id, status)| (id.to_owned(), status))
+    );
+    let without = snapshot_to_screen(&snapshot, 54, 24);
+    let without_pipeline = with
+        .lines()
+        .filter(|line| !line.contains("Implement") && !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        without_pipeline,
+        without
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn render_directory_room_root_pod_is_name_only() {
     // A directory room: a git-backed row's resolved worktree keeps the full
