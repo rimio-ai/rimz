@@ -169,7 +169,7 @@ Point any co-launched layout — a named team or an inline multi-agent spec — 
 
 `rimz agents claude:planner,codex:coder -w feat-once` focuses the existing pair when the same command runs again.
 
-When the cohort is closed and the tree still carries work, `rimz teams forge -w feat-rate-limits` asks whether to resume the team, launch it fresh, or cancel, offering `(resume/fresh/cancel)` with `resume` as the default.
+When the cohort is closed and the tree still carries work, `rimz teams forge -w feat-rate-limits` asks whether to resume the team's closed sessions, launch new agents into the same checkout, or cancel, offering `(resume/fresh/cancel)` with `resume` as the default.
 
 Choose `fresh` when you want new sessions without losing the previous run's work. The branch, uncommitted changes, and declared scratch files such as `blackboard.md` and `plan-notes.md` stay in the same checkout. The new members receive a reminder of existing scratch files so they can read the old run before acting.
 

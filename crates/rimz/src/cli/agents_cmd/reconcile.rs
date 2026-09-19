@@ -109,7 +109,7 @@ fn resume_or_done(
     }
     match crate::cli::choose(
         &format!(
-            "worktree `{name}` has work in progress; resume {subject}, launch it fresh, or cancel?"
+            "worktree `{name}` has work in progress; resume {subject}'s closed sessions, launch new agents into the same checkout, or cancel?"
         ),
         &["resume", "fresh", "cancel"],
         0,
