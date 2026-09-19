@@ -219,6 +219,15 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           mold -run cargo xtask test --profile journey
 
+      # A green run still carries each flaky test's failed first attempt here.
+      - name: Upload nextest JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-junit
+          path: target/ci/nextest/*/junit.xml
+          if-no-files-found: ignore
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats
