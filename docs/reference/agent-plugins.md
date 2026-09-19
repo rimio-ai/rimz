@@ -368,7 +368,7 @@ A named quota with no fixed length carries a `scope` with a stable `id` and a sh
 {"plan":"business","account_id":"account-123","rate_limit_windows":[{"scope":{"id":"build_minutes","label":"bld"},"used_percentage":42,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"}]}
 ```
 
-Without `duration_mins`, the dashboard shows the reset time but no refill, burn pace, or not-started state. A window with both `scope` and `duration_mins` is a sub-cap: it draws as a tick on the unscoped window of the same duration, and not at all when that window is absent. The [provider dashboard](../interface/sidebar.md#zone-3--the-provider-dashboard) shows how bars and ticks read.
+Without `duration_mins`, the dashboard shows the reset time but no refill, burn pace, or not-started state. A window with both `scope` and `duration_mins` is a sub-cap: it draws as a tick on the unscoped window of the same duration, and not at all when that window is absent. The [provider dashboard](../interface/sidebar.md#the-provider-dashboard) shows how bars and ticks read.
 
 ```json
 {"logged_out":true}

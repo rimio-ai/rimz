@@ -1,6 +1,6 @@
 # Pets
 
-A pet is an animated sprite on the sidebar's [provider dashboard](../../interface/sidebar.md#zone-3--the-provider-dashboard) that acts out what the selected card is doing. It is opt-in: `[theme.pets] enabled` is off by default, and the default `pet` is `rocky`.
+A pet is an animated sprite on the sidebar's [provider dashboard](../../interface/sidebar.md#the-provider-dashboard) that acts out what the selected card is doing. It is opt-in: `[theme.pets] enabled` is off by default, and the default `pet` is `rocky`.
 
 The pets module owns everything expensive, and the renderer owns nothing but a copy. [`sidebar_pane/pets/`](../../../crates/rimz/src/sidebar_pane/pets/) does the network fetches, disk cache, WebP and PNG decode, frame slicing, cell-art conversion, track selection, and captions. The renderer receives one `PetView` (an optional body, an optional caption, and an optional frame interval) and copies it into the ratatui buffer like any other widget, so no draw path blocks on IO.
 

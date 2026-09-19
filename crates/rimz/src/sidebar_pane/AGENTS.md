@@ -26,4 +26,4 @@ Local contract for `crates/rimz/src/sidebar_pane/` — the pane-resident rendere
 
 ## Tests
 
-Render tests golden a full screen through the `assert_snapshot` helper in [`render/tests/`](./render/tests/mod.rs), which pins `insta` settings and scrubs live durations and ages before comparing — reach for it rather than calling `insta` directly, so a frame never fails on elapsed time. Reducer, selection, and ordering tests stay pure and in-module.
+Render tests golden a full screen through the `assert_snapshot` helper in [`render/tests/`](./render/tests/mod.rs), which pins `insta` settings and scrubs live durations and ages before comparing — reach for it rather than calling `insta` directly, so a frame never fails on elapsed time. The frames in [docs/interface/sidebar.md](../../../../docs/interface/sidebar.md) are drawn from these snapshots: a render change updates the `.snap` and that page together. Reducer, selection, and ordering tests stay pure and in-module.

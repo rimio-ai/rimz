@@ -21,7 +21,7 @@ sources                                    user-scoped caches
 
 Everything on this path is enrichment. A missing binary, a logged-out account, or an unreachable API degrades to an omitted plan label, a `v?` version placeholder, or an unknown budget track. Two consumers treat the facts as control inputs: [parked turns](#spent-windows-and-paused-rows) read fused windows, and a fresh managed Qwen launch may gate on an exact account binding ([Account scope](#account-scope)). Neither turns a quota reading into a provider billing statement. [Daily dollar caps](#daily-dollar-caps) decide on transcript spend, never on a provider probe.
 
-The native surfaces each provider reads are in its adapter page ([Per-provider mapping](#per-provider-mapping)); the raw endpoints are in the [upstream references](../../externals/agent-adapter/claude-reference.md#auth-surface). The dashboard on screen is [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard).
+The native surfaces each provider reads are in its adapter page ([Per-provider mapping](#per-provider-mapping)); the raw endpoints are in the [upstream references](../../externals/agent-adapter/claude-reference.md#auth-surface). The dashboard on screen is [the interface reference](../../interface/sidebar.md#the-provider-dashboard).
 
 ## The model
 
@@ -176,7 +176,7 @@ Fused kind-wide windows feed provider-limit display and [parked-turn](#spent-win
 
 Included windows are sliding: the clock starts on the first token, and until then the provider keeps `resets_at` a full window-length ahead. A window has not started when its reset sits about a full window out and its usage is at or below the 1% floor (`FRESH_WINDOW_USAGE_FLOOR`); a fresh Codex 5h window reports 1% used, so a zero check would miss it. Any usage above the floor means the window has started, and its reset is a real countdown.
 
-The dashboard draws a not-started window as a full bar with no `↻` countdown, which reads as ready to start ([interface](../../interface/sidebar.md#zone-3--the-provider-dashboard)). This is display only.
+The dashboard draws a not-started window as a full bar with no `↻` countdown, which reads as ready to start ([interface](../../interface/sidebar.md#the-provider-dashboard)). This is display only.
 
 ### Persistence across idle sessions
 
@@ -316,6 +316,6 @@ Golden the account mapping from fixture probe and transport payloads, including 
 - [model.md](./model.md): the rollup the account facts ride on, and the displayed-status ladder a park feeds.
 - [adapter.md](./adapter.md): the capability seam behind `probe_account`, `probe_account_usage`, and `parse_spend`.
 - [`rimz providers`](../../reference/cli/providers.md): the CLI query for account status, windows, credits, spend, and daily caps.
-- [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard): bars, the `ex` and `api` rows, and exhausted-window rendering.
+- [the interface reference](../../interface/sidebar.md#the-provider-dashboard): bars, the `ex` and `api` rows, and exhausted-window rendering.
 - [sidebar.md](../sidebar/sidebar.md#provider-dashboard): where the dashboard sits in the renderer.
 - [budget.md](../harness/budget.md): dollar-cap ledgers, verdicts, and waivers.

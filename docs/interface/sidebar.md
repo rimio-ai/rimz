@@ -1,573 +1,651 @@
-# The sidebar, on screen
+# The sidebar on screen
 
-The sidebar is one narrow column that answers a single question: **which pane needs you, right now.** Every pane in the room is a row; agents are enriched from the store; everything groups by the worktree it lives in. The sidebar routes you to the pane — you read and answer in the agent's own UI.
+This page is the reference for what the sidebar draws: every line, glyph, bar, and notice, and every key it answers to. Use it to look up something you saw. To learn how to read the column and how it decides which agent needs you, start with [the sidebar guide](../guide/sidebar.md). To restyle any color, glyph, or animation shown here, see [theming](../guide/theme.md).
 
-It stacks three reading zones, top to bottom — the **cockpit** (who is here, what it costs, what needs you), the **agent cards** (one card per pane, grouped by worktree), and the **provider dashboard** (your accounts, their budgets, and the optional pet) — with bottom chrome (a footer and a health line) pinned under all three.
+The frames are plain text in the default Unicode glyph set, laid out the way the renderer prints them. Names, counts, ages, and dollar figures are examples. On screen each mark also has a color from your palette, but shape carries the meaning, so the column reads the same under `NO_COLOR`.
 
-This page shows what the sidebar *means on screen*. Three companions own the rest: [theme.md](../guide/theme.md) is the knobs that restyle every tone, glyph, and animation; [internals/sidebar/sidebar.md](../internals/sidebar/sidebar.md) is how the column is built — presence, launch, reload recovery, the view-model; [DESIGN.md → Triage at a glance](../../DESIGN.md#triage-at-a-glance) is why it works this way. Where a behavior or a tone is produced elsewhere, this page names what you see and links the mechanism rather than restating it.
+## The whole frame
 
-Every frame below is what the renderer actually paints — structure, glyphs, columns, and alignment exact; the live values (ages, percentages, resets, counts) illustrative. Color comes from the active palette, RGB on a truecolor terminal and quantized to xterm 256 colors on an indexed one. These frames are colorless text, so they read as `NO_COLOR` does: shapes carry every meaning, and color only reinforces.
-
-## The whole frame at a glance
-
-A complete frame: a selected agent in a worktree, with the per-provider dashboard pinned at the bottom. The cockpit figures use the current RimZ room's project root and grouped worktrees; the provider dashboard and store figures use account-global transcript totals.
+The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the top and the [provider dashboard](#the-provider-dashboard) and [footer](#bottom-chrome) at the bottom stay fixed. The [agent cards](#the-agent-cards) scroll between them.
 
 ```
- ⌘ query-engine                    ~/code/query-engine    ← workspace identity
+ ⌘ query-engine                     ~/code/query-engine     ← workspace name and path
 
- ◎ 91                          ◇ 32M ↘ 28M ↗ 3M ◌ 472M    ← headline sessions · headline tokens (right)
- ¤ 16 (2)                                      $420.00    ← live agents · clickable unread count · headline fleet usd value
- ─────────────────────────────────────────────────────
- ? 3   ! 0   ⏸ 0   ✓ 8                       ⢿ 3   ○ 2    ← make-up: attention/parked/done | working/free
- ↑ 2 need you                                            ← unread jump banner: appears when the oldest waiting agent is scrolled out; click scrolls to top
+ ◎ 91                           ◇ 32M ↘ 28M ↗ 3M ◌ 472M     ← sessions in the spend window, their tokens
+ ¤ 16 (2) ⑃ 1                                   $420.00     ← live agents, unread count, open PRs, spend
+ ──────────────────────────────────────────────────────
+ ? 3   ! 0   ⏸︎ 0   ✓ 8                  ⢿ 3   ☾ 1   ○ 1     ← make-up line: agents by status
 
-▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⑃ main    ← selected worktree · commits/diff · PR marker
-▌⣾ claude · Opus 4.8 · xhigh · 1m                $1.27    ← line 1: identity · capabilities · usd value
-▌  store refactor                                        ← line 2: session description
-▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context window progress: how full the context window is
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%             ◔ 8m    ← token stats: filled toks in context window · session cache hit
-▌  ⧉ subagents (2) · ⧖ waits (3)                 $0.42    ← lifetime child count and cost · pending one-shot waits
-▌    ⠁ Explore — audit the trust hash                     ← live child first, spawn order: thinking head
-▌      ◇ 3k · Opus 4.8                           ◔  3m    ← running child: tokens · model · elapsed
-▌    ✓ Explore — locate the render seam          ◔  1m    ← done child, newest first: one line · landed age
-▌    ◷ in 12m                                    ◔ 18m    ← timer: time until it fires · elapsed since armed
-▌    ⣾ Run the test suite                        ◔  4m    ← shell job: working animation · command or description · elapsed
-▌      cargo test                                         ← a described background shell's command, muted
-▌    ⌁ pr.merged                                 ◔  5m    ← signal: selector · elapsed since armed
+▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⑃ main🮇    ← worktree header: branch, commits, diff, PR state
+▌⣾ claude · Opus 4.8 · xhigh · 200k               $1.27▐    ← status, handle, model, effort, window, cost
+▌  store refactor                                      ▐    ← what the session is on
+▌  ▣ ━━━━━━━━━━━━━━━━╺━╺───────────────────────── 38.2%▐    ← context meter
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%              ◔ 8m▐    ← tokens in the window, cache hit, last activity
+▌  ⧉ subagents (2) · ⧖ waits (3)                  $0.42▐    ← subagents and waits line
+▌    ⠁ Explore — audit the trust hash                  ▐    ← running subagent
+▌      ◇ 3k · Opus 4.8                            ◔  3m▐    ← its tokens, model, elapsed time
+▌    ✓ Explore — locate the render seam           ◔  1m▐    ← finished subagent, time since it finished
+▌    ◷ in 12m                                     ◔ 18m▐    ← timer wait, time since it was armed
+▌    ⣾ Run the test suite                         ◔  4m▐    ← background shell
+▌      cargo test                                      ▐    ← its command
+▌    ⌁ pr.merged                                  ◔  5m▐    ← signal wait
+▎○ zsh                                                 🮇    ← process row
 
- ─────────────────────────────────────────────────────
-  Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control health (green up / red down)
+ ──────────────────────────────────────────────────────
+ Claude v2.1.169 · Claude Max                      ⇅ rc     ← provider, version, plan, remote control
 
-  ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M       $188.88    ← headline stats: sessions · tokens · usd value
- ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 1h47m    ← 5-hour budget left, until reset time
-   ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 5d22h    ← 7-day budget left, until reset time
+  ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M        $188.88     ← provider sessions, tokens, spend
+ ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱ ↻  1h47m     ← 5-hour budget left, time to reset
+   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰╱▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱ ↻  5d22h     ← 7-day budget left, model sub-cap tick
 
-  ── Total: ────────────────────────────────────────────    ← fleet-total scope
-  W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88    ← week stats: sessions · tokens · usd value
-  M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66    ← month stats: sessions · tokens · usd value
+  ── Total: ───────────────────────────────────────────     ← fleet store
+  W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88     ← trailing week, all providers
+  M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66     ← trailing month
 
-                                                    ? for help  ← footer help
+ ⇄ remote 210ms                              ? for help     ← footer
 ```
 
-The rest of this doc reads that frame zone by zone — what each zone shows and how it renders. Why the column ranks, groups, and routes the way it does is [the sidebar guide](../guide/sidebar.md); this page stays with what you see.
+The cockpit counts this room only: its project root and the worktrees grouped under it. The provider dashboard and the fleet store count every session on the account, in any project.
 
 ## Reading the glyphs
 
-One vocabulary runs through the whole sidebar: a shape carries the meaning, color reinforces it. This is the complete legend, and the canonical home for it — every other doc points here.
+One glyph vocabulary runs through the whole sidebar. The tables group it by where a glyph appears and show the default Unicode set. `[theme.glyphs]` can switch to a Nerd Font set or override single glyphs without changing a meaning ([theming: glyphs](../guide/theme.md#glyphs)).
 
-The tables group glyphs by where they appear on screen: the **status cell** leading every row, the short-lived **heads** that ride over it, the **meters and stats** on cards and panels, and the **structure and chrome** around them. Find a glyph by where you saw it.
+### Status glyphs
 
-The tables show the default Unicode set. `[theme.glyphs]` can select Nerd Font or override either shipped inline set without changing the meanings; see [theme.md → Glyphs](../guide/theme.md#glyphs).
+A status glyph leads every agent card and labels every bucket of the cockpit's make-up line.
 
-**Status — the leading cell of every agent row.**
+| glyph | status | meaning | needs you |
+|-------|--------|---------|-----------|
+| `?` | waiting | asked you something: a permission, a plan approval, a question | yes |
+| `!` | failed | the turn errored, died on a provider API error, went silent past the stall window, or repeated one tool call 20 times | yes |
+| `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection; resumes when the provider recovers | when it recovers |
+| `✓` | done | the turn finished cleanly | a look |
+| `⢿` | working | running a turn; the cell animates through braille frames (`⣾`, `⣽`, ...), and any of them reads as working | no |
+| `☾` | sleeping | resting until an armed one-shot wait fires | no |
+| `○` | idle | alive, nothing in flight | no |
 
-| glyph | state | meaning | needs you |
-|-------|-------|---------|-----------|
-| `?`   | waiting    | asked you something; answer in its pane | yes |
-| `!`   | attention  | a failed turn, a turn dead on a non-transient provider API error, or a working agent gone silent past the stall window | yes |
-| `⏸`   | paused     | stopped mid-turn on a provider rate-limit, overload, or dropped/interrupted connection; resumes when the provider recovers or the window resets | on recovery |
-| `⢿`   | working    | running and editing; the animation cycles through the braille frames (`⣾`, `⣽`, …), so any of them reads as working | no |
-| `⠁`   | thinking   | running, before the turn's first file edit | no |
-| `⠙`   | resolving  | a working-family spinner (the themable `resolving` animation, kin to `⠁` and `⢿`); a row wearing it is active and counts as working | no |
-| `○`   | idle       | alive, nothing to do | no |
-| `✓`   | done       | finished cleanly | a look, not the lead |
-| `☾`   | sleeping   | resting until an armed one-shot wait fires; the description names the wait | nothing yet |
-| `○`/`⢿` | process  | a pane with no agent (shell, editor): hollow `○` when idle, `⢿` while it does real work — the same shapes the idle and working agent rows wear, one soft step quieter, never a cockpit tally | no |
+`?` is always yellow, `!` always red, and `⏸︎` always blue, whatever the card's age. What each status means in an agent's life is [the agent lifecycle](../guide/sidebar.md#the-agent-lifecycle). The mux tab bar reuses `!`, `?`, `⏸︎`, `⢿`, and `✓` as a static suffix on the tab name ([the sidebar guide](../guide/sidebar.md#what-it-is)).
 
-Mux tab names reuse the fixed representatives from this table as one suffix (`!`, `?`, `⏸`, `⢿`, or `✓`), choosing the tab's most urgent live agent. They do not animate: each glyph is a state label, while the sidebar row can animate within that same role.
-
-The sleeping moon is static and cool-toned, not an attention animation. It replaces only an idle or done status: working, waiting, failed, paused, and delegation to live children take precedence. Standing subscriptions do not make an agent sleep. Sleeping opens no unread mark and sends no notification; unread and any configured success notification arrive when the wait cycle finishes at done. An earlier unread result stays unread across the sleep. Sleeping contributes only a resting status to the mux tab.
-
-Three short-lived **heads** ride over the base status on the leading cell, so they never earn a cockpit bucket of their own — every running agent, whichever head it wears, counts as **working** (`⢿`) in the make-up:
+A running agent can show a head in place of `⢿`. Whichever head it shows, it counts as working in the cockpit.
 
 | head | meaning |
 |------|---------|
-| `⠁` thinking | the running turn before its first file edit — reasoning and reading, not yet writing; a research turn that never edits stays here end to end |
-| `▇` compacting | condensing its context window, then returns to its resting head |
-| `⢄` waiting on subagents | delegated to its children; the work is in the rows below |
+| `⠁` thinking | the turn has not edited a file yet; a research turn that never edits stays here to the end |
+| `▇` compacting | condensing its context window |
+| `⢄` waiting on subagents | delegated to its children; their entries are listed under the card |
+| `⠙` resolving | a working-family spinner, themable as `resolving` |
 
-Every head's shape, color, effect, and speed is per-machine theme through [`[theme.animations]`](../guide/theme.md#animations); the glyph shapes through [`[theme.glyphs]`](../guide/theme.md#glyphs).
+Each head's frames, color, effect, and speed are configurable under [`[theme.animations]`](../guide/theme.md#animations).
 
-**Attention and the unread inbox.** The two actionable glyphs hold a **fixed tone at any age** — `?` yellow, `!` red — and never heat toward a hotter color; `⏸` holds blue. What moves is the *unread* signal. A row reads unread from the moment it needs you until you focus its pane, and the sidebar marks it two ways: a soft **wash** fills the card the way a mail inbox shades an unread line, and the **one row that most needs you** — the oldest unanswered `?`/`!` — animates across its glyph, name, and description. Every other unread row, an unread `✓` result included, holds a steady bright crest instead, so exactly one pane is ever in motion and the eye lands on where to go next. The selected card keeps its own signature — the bright `▌` spine and recessed band — and wins when a card is both selected and unread.
-
-A working agent gone silent past the stall window (`[agents.attention]`, 30 minutes by default) escalates to `!` — unless its provider window is spent without reset, which pauses (`⏸`) instead. A running agent that repeats the same tool with the same arguments shows `⟲` from 3 through 19 consecutive calls; at 20 the marker yields to `!` and the description reads `loop: <tool> ×<count>`. Any differing call clears the run. A parent waiting on subagents is exempt from the silence rule: its quiet wave is the children's work. A fresh idle agent collapses to identity plus any RimZ-authored description. Selecting it always opens the empty `▢` context meter below its description, or below an animated ellipsis compose affordance when it has no description; moving selection away restores the collapsed shape.
-
-How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. `bright` vs. `blink`, the age-paced cadence, the OKLab lift, and the per-depth and `NO_COLOR` fallbacks — is theme behavior: [theme.md → Unread attention](../guide/theme.md#unread-attention).
-
-**Window — the model's context window on the identity line.** A lowercase magnitude token (`258k`, `1m`) closing the capability cluster on non-idle cards: the live out-of-band reading (Claude's statusline, Codex's app-server) when one exists, else a configured or exact model-metadata capacity, omitted until a source names it. An idle card drops the token. It is dim capability chrome, not a status signal, tinted louder as the window grows so the size reads at a glance; capacity alone does not create a context meter.
-
-**Meters and stats — one grammar everywhere.** Each meter carries its value by shape, so it reads under `NO_COLOR`; the tone ramps that color it live in [theme.md → Display](../guide/theme.md#display).
-
-| token | reads as |
-|-------|----------|
-| `▣ ━━━━╺━──── 38.2%` | context meter — how full the window is; the bar fills as used, `▢` hollow at 0%. Small windows draw linearly, and the fill curve grows with the window. The fill also shows *where* the window went: a wide cache-read run in the meter's health tone, with gap-fronted `╺` runs for cache-write and fresh-input accents; without cache reads, cache-write stays violet and fresh input vermilion while severity remains on `▣` and `▤`. Components at or above 0.5% of the filled window earn a half-cell floor, smaller components fold into the lead run, and the segmented fill meets the track without a trailing gap |
-| `▤ 76k`           | filled context — the absolute tokens in the window, the `▣` meter's numerator |
-| `◇ ↘ ↗ ◌` / `◍`   | token markers, one stable color each: `◇` total (blue) · `↘` input incl. cache creation (deep red, the costliest read) · `↗` output incl. thinking when reported separately (blue) · `◌` cache-read (green); a cumulative-only card uses these four without implying occupancy, while a current-context line adds `◍` cache-write (violet) for the per-call split |
-| `97%`              | session cache hit — cached prompt input divided by cached plus cache-written plus fresh input; green at 90%+, yellow at 70–89%, red below 70%; absent before the session has input-side counters |
-| `↻ N`             | completed context compactions — the card's lifetime count, from the first; trails the context line after a `·` (the same glyph marks provider budget resets and Codex reset credits — the last two rows of this table) |
-| `⟲ N`             | consecutive identical tool calls — amber while the row stays running between the warning and attention thresholds; at the higher threshold it yields to `!` and the count moves into the `loop:` description |
-| `◔ 5m`            | last-activity age — shown once it crosses five minutes, so a card stays quiet through normal churn; the face fills by the quarter hour (`◔`≤15m · `◑`≤30m · `◕`≤45m · `●`≤60m · `◉` past) and heats to red by the hour, where resuming likely re-reads the whole context uncached. A finished card heats on the same ramp, since prompting it again pays that same uncached re-read. On a running subagent line the same face reads the child's elapsed work as a fixed `m`/`h` label (`<1m` under a minute) |
-| `C 11%` / `M 512M` / `⇅ 3M/s` | a working process row's CPU · resident memory (RSS) · combined VFS I/O rate — one fixed-width grid (`C` sky · `M` sage · `⇅` violet) that appears only once all three have values |
-| `+127 -43`        | lines added / removed against the trunk — committed, staged, unstaged, and untracked all counted |
-| `⇡3 ⇣1`           | commits ahead / behind the trunk (worktree header; zero components drop) |
-| `≡ main`          | pristine worktree — clean, no worktree-owned commits, at the trunk tip |
-| `✓ main`          | merged worktree — its work is landed and nothing remains to offer; remove it; the muted resting tone leaves the glyph to carry the verdict; a known PR verdict (`⑃`/`✕`/`✓`) overrides this local verdict |
-| `⟳ main` / `✓ main` / `✕ main` / `⑃ main` / `≡ main` / `⑂ main` | trunk marker ladder: local rebase/merge/cherry-pick in progress, then PR merged, PR closed, PR open, then local merged, pristine, or plain branch; merged is muted, closed is red, and open stays cool |
-| `✓ #91` / `✕ #91` / `◌ #91`; bare `✓` / `✕` / `◌` | the branch's CI verdict at its HEAD commit: passing in green, failing in red, or still running in amber; an open or merged pull request supplies the verdict beside its linked number, while a branch without a PR shows the bare glyph |
-| `$1.27` / `$0.42` | spend — dollar green, two decimals, identical for provider totals and locally priced counters; omitted while a session's cost rounds to zero |
-| `▰▱` / `▱▱` / `ex` / `api` | provider account bar: included-window budget (`5h`/`7d`/`30d`, or a provider- or plugin-defined label such as `bld`/`dep`, fill = left), unknown budget as a dim empty track, paid extra usage as `ex` (fill = left, with its whole-dollar budget beside it), API-key budget as `api` (fill = budget left, with `$left` beside it); an unbudgeted API key is a full bar with `∞`, which also marks an explicitly unlimited named quota or a currently lifted limit |
-| `╱` | model sub-cap tick on its own remaining-budget scale across the full provider bar: the left end only at exactly 0%, the right end only at exactly 100%, partial readings inside; may replace fill or empty track |
-| `↻ 2h06m`         | when a provider budget resets; a known-duration window is soft at a sustainable burn pace, heating toward red as spend outruns the window or cooling toward green when spend runs well under it once enough of the window has elapsed; a durationless named quota keeps the reported countdown in the quiet tone because pace is unknowable — the duration form of `↻`, next to a budget bar (the count forms are compactions on a card and reset credits in the Codex header) |
-| `↻ N`             | the count form of `↻`: on a card context line, completed compactions; in the Codex provider header, available rate-limit reset credits, with the glyph colored by soonest expiry and blinking while a spent window makes redemption useful |
-
-**Structure and chrome.**
+### Card glyphs
 
 | mark | meaning |
 |------|---------|
-| `⌘ name`        | the workspace, with the name in the green `good` tone |
-| `¤ N`           | the live agents in the room right now — the glyph in the agents' working clay |
-| `⑃ N`           | open pull requests on agent lanes awaiting you — green when every known CI verdict passes, amber while one runs, red when one fails, and the cool PR-open tone while CI is unknown; click it to filter the body to those lanes |
-| `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the store window — teal in both |
-| `⧉ N`           | the subagents an agent has spawned — lifetime count on the card's delegation line, shared with waits; when the section is open, live children and recently finished ones beneath it, with the rest behind `+K older`; click the line to open or close it; the marker violet, the label soft |
-| `⋯ bg`          | an agent has background work pending — a faint secondary marker after the description that rides the settled `✓` as “done, background chore still running” |
-| `⧖ N`           | armed one-shot waits for the agent: timers, existing PIDs, watched commands, polled checks, files, and one-shot signals, plus the background shells the agent runs (Claude only); shares the clickable delegation line with subagents, with wait entries beneath when expanded; the marker violet, the label soft |
-| `◷` / `⌁`       | a wait entry's static violet lead: a timer or a signal; a live watch (PID, command, check, or file) or background shell wears the working animation in the same violet instead |
-| `⑂ name` / `⮌ name` | a group header with a git story — branch for pristine/diverged worktrees, merge for landed removable worktrees |
-| `name` (bold)   | a directory room's own pod — name-only, no git story |
-| `▎`             | the selection lane — the worktree you're in, a dim selection-tone bracket |
-| `▌`             | the selected card's bright spine, over a `selection_bg` band that fills and recesses the whole card so it reads as one panel |
-| `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
-| `─`             | a section hairline |
-| `▐` / `▕`       | the cards' scrollbar — thumb / track, shown while the viewport moves and settling away ~1s after it stops (`[theme.display] scrollbar` pins or removes it) |
-| `┤ Tab ├`       | an active tab under `NO_COLOR` — the caps carry the pick by shape when the fill drops; make-up buckets keep their fixed cells and mark the pick with reverse video |
-| `⇅ rc`          | remote control is on for that provider — green when its managed server is up (or pane sessions auto-enable), red when a configured server is down |
-| `zᶻ idle` / `zᶻ idle · 17m` / `zᶻ away` | AFK presence in the footer — input has been idle for the configured idle window (`[sidebar] afk_after_secs`, 15 minutes by default) on tmux, with elapsed minutes added after the first minute, or no terminal client is attached |
-| `⇄ remote 210ms` | remote SSH link badge in the footer — RTT EWMA; loss appears only above `10%`, and `⇄ remote ?` means the last stats are stale |
+| `▣ ━━━╺━───  38.2%` | context meter: the share of the context window in use; `▢` while it is 0% |
+| `▤ 76k` | tokens in the context window now |
+| `◌` `◍` `↘` `↗` | cache-read, cache-write, fresh input, and output tokens |
+| `◇` | total tokens |
+| `97%` | session cache hit: green from 90%, yellow from 70%, red below |
+| `↻ 2` | completed context compactions |
+| `⟲ 5` | consecutive identical tool calls, shown from 3 through 19 |
+| `◔ 8m` | an age or elapsed time; the face fills by the quarter hour: `◔` to 15 minutes, `◑` to 30, `◕` to 45, `●` to 60, `◉` past an hour |
+| `200k`, `1m` | the model's context window size |
+| `$1.27` | cost in dollars, two decimals |
+| `⋯ bg` | the turn finished while background work is still pending |
+| `C 34%` `M 512M` `⇅ 8M/s` | a working process row's CPU, resident memory, and I/O rate |
 
-When two checkout groups render the same branch name, each header adds a muted `· repo` qualifier naming the shortest path suffix that distinguishes its checkout; unambiguous headers stay unchanged.
+Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` cyan, `◌` green, `◍` violet.
 
-The AFK badge is quiet chrome: it appears only while away, uses the muted tone, and takes the footer's left edge. The remote-link badge yields to it and appears after two spaces only when the line still fits before `? for help`.
+### Worktree header glyphs
 
-Remote-link badge tones are color-only: a healthy link reads green, then latency and loss slide it continuously through yellow and amber to red, bold at the critical end; a warming link stays neutral until it has an RTT sample. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge in the common active case, and `? for help` pins to the footer's right edge.
+| mark | meaning |
+|------|---------|
+| `⑂ name` | a worktree group, named by its branch |
+| `⮌ name` | a worktree group whose work has landed |
+| `# name` | a named channel with no git state |
+| `✓` `✕` `◌` beside the name | CI at the branch's HEAD commit: passing, failing, running |
+| `#91` | the branch's pull request |
+| `⇡3 ⇣1` | commits ahead of and behind the trunk |
+| `+127 -43` | lines added and removed against the trunk |
+| `⟳` `✓` `✕` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
+| `▸` | a collapsed finished group |
+| `+3 more` / `− less` | hidden idle rows; click to expand or collapse |
 
-## Zone 1 — the cockpit
+### Subagent and wait glyphs
 
-The top block. Fixed height, so the rows below it never jump as agents change state. Top to bottom it answers: *whose room is this, what's it costing, who needs me, and what has the fleet done.*
+| mark | meaning |
+|------|---------|
+| `⧉` | subagents the agent has spawned |
+| `⧖` | waits the agent has armed |
+| `◷` | a timer wait |
+| `⌁` | a signal wait |
+| working spinner, in violet | a live watch (command, check, PID, file) or a background shell |
+| `+7 older` | finished subagents folded away; click to list them |
+
+### Dashboard glyphs
+
+| mark | meaning |
+|------|---------|
+| `▰▰▰▱▱` | budget bar: the filled part is the budget left |
+| `╱` | a model's own sub-cap, as a tick on its parent window's bar |
+| `5h` `7d` `30d` | an included budget window, labeled by its length |
+| `cr`, `bld`, `dep` | a quota the provider or a plugin names |
+| `ex` | paid extra usage |
+| `api` | an API-key budget |
+| `↻ 1h47m` | time until the window resets |
+| `↻ 2` in a block header | Codex rate-limit reset credits available |
+| `∞` | no limit |
+| `–` | the provider reports no figure for this slot |
+| `⇅ rc` | remote control is on for this provider: green when its server is up, red when a configured server is down |
+| `W:` `M:` | fleet totals for the trailing week and month |
+
+### Cockpit and chrome glyphs
+
+| mark | meaning |
+|------|---------|
+| `⌘ name` | the workspace |
+| `◎ N` | sessions that ran in the spend window |
+| `¤ N` | agents alive right now |
+| `(2)` | unread cards |
+| `⑃ N` | open pull requests on the agents' branches |
+| `↑ 2 need you` | the card that most needs you is scrolled out of view |
+| `▌` ... `▐` | the selected card's left and right spines |
+| `▎` ... `🮇` | the selection lane: every row of the group that holds the selection |
+| `┄` | the dotted seal on the selected group's header |
+| `┄ external ┄` | the group for panes outside the project |
+| `─` | a section rule |
+| `▐` / `▕` on the right edge | scrollbar thumb and track, drawn over the right spines while the cards scroll |
+| `┤ Tab ├` | the active dashboard tab under `NO_COLOR` |
+| `zᶻ idle`, `zᶻ away` | you are away from the terminal |
+| `⇄ remote 210ms` | SSH link round-trip time |
+| `⚠` | a pane-source notice or health alert |
+
+`🮇` is from Unicode's Symbols for Legacy Computing block. A font without it shows a placeholder box at the lane's right edge; nothing else depends on it.
+
+## The cockpit
+
+The cockpit is the top block. Its height is fixed, so the cards below do not shift as agents change status.
 
 ```
- ⌘ query-engine                    ~/code/query-engine
+ ⌘ query-engine                     ~/code/query-engine
 
- ◎ 12                          ◇ 88k ↘ 24k ↗ 64k ◌ 68k
- ¤ 6 (2) ⑃ 1                                     $4.20
- ─────────────────────────────────────────────────────
- ? 2   ! 1   ⏸ 0   ✓ 0                       ⢿ 2   ○ 1
+ ◎ 12                           ◇ 88k ↘ 24k ↗ 64k ◌ 68k
+ ¤ 6 (2) ⑃ 1                                      $4.20
+ ──────────────────────────────────────────────────────
+ ? 2   ! 1   ⏸︎ 0   ✓ 0                  ⢿ 2   ☾ 0   ○ 1
+ ↑ 2 need you
 ```
 
-- **Identity.** The workspace name behind `⌘` renders in the green `good` tone, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
-- **Summary — who's here and what the headline window burned.** Two lines, each a colored glyph and soft-tier count on the left with headline numbers pinned right. Line 1 is the configured spend window at a glance: `◎` (teal) the sessions (threads) that have run in this room, with the room's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in one color — pinned to the right edge in the coarse integer form. Before any spend arrives, the breakdown stays visible as zeroes. Line 2: `¤` (the agents' working clay) the live agents in the room right now, followed by a steady unread count like `(2)` when unseen rows exist, then `⑃ N` for open pull requests on the agent lanes' branches; the PR chip is red when any CI fails, amber while one is pending, green when all known lanes pass, and the cool PR-open tone when CI is unknown. The PR count is omitted when no lane has one. The room's spend stays pinned right. Clicking the unread count applies the unread lens, which stays active while you jump through matching cards; a second click, `A`, another filter pick, or unread reaching zero clears or replaces it. Clicking `⑃ N` applies the open-PR lens so only lanes whose branch has an open pull request remain, and that scope likewise persists across card jumps until an explicit clear or replacement, or the last open PR resolves. The counts read from the live room and the workspace-scoped JSONL tally's `[sidebar] spend_window`: `"session"` (default), `"24h"`, or `"today"` using the global `timezone`. An empty room reads `◎ 0` over `¤ 0` with `$0.00`.
-- **Headline spend.** The room's workspace-scoped spend for the configured headline window, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any in-scope agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. Cumulative session values such as Cursor and Droid enter this aggregate and live budgets; replace-style current usage such as Antigravity stays card-only because it cannot be added over time. The value is always present, starting at `$0.00`; within one headline-window epoch it ratchets upward and resets when the configured spend window rolls.
-- **Scope paths.** The workspace scope is path-prefix based over the project root and grouped worktree roots; a checkout reached through a different symlink spelling than the transcript's `cwd` can read as outside the room until the paths agree.
-- **The make-up — split by who might want you.** The **left cluster** counts who needs an answer: `?` waiting, `!` failed, `⏸` paused, `✓` done. The **right cluster** is the calm tail: `⢿` working (every running agent, whatever head it wears), `☾` sleeping, then `○` idle. Every bucket always shows, zeros included, each in its semantic tone. A bucket carries the [unread signal](#reading-the-glyphs) only when it owns the lead unread row, so the make-up line mirrors the inbox without ever putting more than that one bucket in motion.
-- **The unread jump banner — the agent that needs you, one click away.** The `↑ N need you` line appears when the lead unread card has scrolled out of view and stays hidden while that card is on screen, toned by the lead's status — yellow for a waiting lead, red for a failed one. Ranking puts the lead at the top; clicking the banner scrolls there and pins that view, while the inbox key (`n`/`Space`) jumps to and focuses the lead. It clears the moment nothing is awaiting you.
-- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status, and the active scope applies in every tab of the room while you click or keyboard-jump through matching cards. Clicking the active bucket or pressing its active shortcut returns to all everywhere, `A` clears directly, another filter replaces it, answering the bucket down to zero invalidates it, and a zero bucket is inert. Keyboard filters mirror the buckets and the unread count: `u` unread, `q` waiting, `!`/`e` attention, `p` paused, `s` done, `w` working, `z` sleeping, `o` idle, `A` all. The waiting key is `q` (question), leaving `?` as the footer's help key; lowercase `a`/`d` resize the sidebar. The picked bucket paints as a padded chip for colored statuses — dark ink on the fill, bold, with one space on each side like the dashboard tab — while idle keeps the soft stat gray and adds reverse video and weight; the picked unread and open-PR lenses paint their cockpit counts as the same chip. Under `NO_COLOR`, reverse video marks the same fixed cells. The counts always span the full room, filtered or not, so the line stays the room's honest tally while the body narrows.
+| line | shows |
+|------|-------|
+| 1 | `⌘` and the workspace name in green. The project path sits on the right with your home directory as `~`; when space runs out the path loses its left end behind `…`. |
+| 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, `↘` input including cache creation, `↗` output, `◌` cache-read. |
+| 3 | `¤` live agents, `(N)` unread cards when there are any, `⑃ N` open pull requests when there are any, and the room's spend for the window on the right. |
+| 4 | the make-up line: agents by status. |
+| 5 | the `↑ N need you` banner, only while it applies. |
 
-At 44 columns or wider, all seven buckets fit with single-digit counts. The existing narrow-width policy preserves the left cluster and clips the calm tail: at 38 columns idle clips, and at 34 the sleeping count and idle bucket clip. Keyboard filters remain available when a bucket is clipped.
+The spend window is `[sidebar] spend_window`: `"session"` (the default), `"24h"`, or `"today"` ([configuration](../guide/configuration.md#sidebar-rendering)). Before any spend arrives the token breakdown shows zeroes and the spend shows `$0.00`. When an agent's cost moves, the spend counts up to the new figure within 1.2 seconds. It never decreases inside one window and resets when the window rolls. Antigravity reports current usage that cannot be summed over time, so its cost shows on its card and stays out of this total. How every figure is computed is [Token Insight](../guide/insight.md).
 
-An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
+The room's scope is a path prefix: the project root and each grouped worktree root. A checkout you reach through a symlink spelled differently from the path in the agent's transcript can count as outside the room until the two paths agree.
+
+The `⑃ N` count is red when any of those pull requests fails CI, yellow while one is running, green when every known verdict passes, and blue when CI is unknown.
+
+### The make-up line
+
+The left cluster counts agents that may want you: `?` waiting, `!` failed, `⏸︎` paused, `✓` done. The right cluster counts the rest: `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero, and the counts always cover the whole room.
+
+Click a non-zero bucket, the unread count, or the `⑃` count to filter the cards to it. The filter applies in every tab of the room and stays on while you move between matching cards. The active filter is drawn as a filled chip, or in reverse video under `NO_COLOR`. To clear it, click it again, press its key again, press `A`, or pick another filter. It also clears when its count reaches zero. The filter keys are in [Keys and mouse](#keys-and-mouse).
+
+All seven buckets fit from 39 columns. Below that the idle bucket is dropped, and at 34 columns the sleeping count goes too. The filter keys still work for a dropped bucket.
+
+### The unread banner
+
+`↑ N need you` appears when the card that most needs you, the oldest unread `?` or `!`, has scrolled out of view. It is yellow for a waiting card and red for a failed one. Click it to scroll to that card, or press `n` to jump into its pane. It disappears when that card is on screen or nothing is waiting for you.
+
+### An empty room
+
+A room with no agents has no make-up line:
 
 ```
- ⌘ query-engine
+ ⌘ query-engine                     ~/code/query-engine
 
- ◎ 0                              ◇ 0 ↘ 0 ↗ 0 ◌ 0
- ¤ 0                                            $0.00
- ──────────────────────────────────────────────────────────
+ ◎ 0                                    ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                              $0.00
+ ──────────────────────────────────────────────────────
 ```
 
-## Zone 2 — the agent cards
+## The agent cards
 
-The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation — only same-worktree agents collaborate — so each group reads as one bounded block.
-
-While a [make-up bucket](#zone-1--the-cockpit), the unread lens, or the open-PR lens is picked in any tab, every tab's body shows every matching card: non-matching rows, process rows, worktree groups left empty, and the worktree's `+K more` line all step aside until the pick clears, and the unfiltered cap does not apply.
-
-**The cards scroll between the pinned zones.** When the cards outgrow the pane they scroll between the cockpit and the dashboard — both stay put — and the right-margin scrollbar (`▐` thumb, `▕` track) appears while the viewport moves. The viewport follows the **selection**: picking any row brings its card, expanded subagent list included, fully into view, pinning a too-tall card's first line to the top. The mouse wheel scrolls freely without moving the selection — peek anywhere, and the next selection change snaps the view back. `?` swaps the card body for the keys-and-filter overlay while the cockpit, footer, and alert rails stay pinned.
+The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The view follows the selection: selecting a card brings all of it into view, and a card taller than the view is pinned by its first line. The mouse wheel scrolls without moving the selection, and the next selection change brings the view back.
 
 ### The card
 
-An agent is a small stacked card. The standard resting card is four lines, plus the `⧉ subagents (N) · ⧖ waits (N)` delegation line once the session has spawned a child or armed a one-shot wait; either half appears alone when only one applies. An idle agent with no prompt or session history stays fresh: it is identity-only without a descriptor and identity + description when launched with one. Selecting any fresh card adds the empty meter, with an animated compose affordance filling the description slot when no authored description exists; a selected described fresh card is identity + description + empty meter. Submitting any prompt engages the card for good: it holds identity, description, meter, and stats lines while data fills in place, using `▢ 0%` and `▤ 0` before the first measurement. Selecting an engaged card opens its delegation section by default, appending its subagent entries, then one entry per pending wait, under the delegation line, and lights the spine, so its standard lines never reflow. If it belongs to a named team, every visible teammate expands at the same time, but the spine and selection band stay on the selected card alone.
-
-Below 46 columns the delegation line uses the legend shorthand `⧉ N · ⧖ M`, keeping both counts and the cost visible. Either half keeps this shorthand when shown alone. At 46 columns and wider the full `subagents (N)` and `waits (M)` labels return. Selection never changes which form the current width uses. Clicking the delegation line opens or closes the section without focusing the agent's pane, on a selected card as on an unselected one: closed shows the delegation line alone. That choice outranks the selection and density default in either direction and holds for the renderer's life, across later prompts and selection moving away and back. An open section folds its older finished children behind a separate clickable `  +K older` tail; opening it appends them below and drops the tail. The tail folds only behind visible child rows: when no child is live or recent, opening the section lists the older children directly, so one click reaches them. That history expires at the parent's next user-authored prompt, and closing the section folds it too; messages from other agents and RimZ's automatic deliveries do not expire it.
-
-`[theme.display] card_density` tunes that body without changing routing: `auto` uses the standard card, `expanded` opens the delegation section on every engaged card by default, and `compact` trims resting cards by status — including the standing delegation line — while selection opens the selected card and any visible named teammates to their lifecycle stages' full shapes. Select a compact resting card first to expose its clickable delegation line. Compact resting cards read idle as identity only, running/waiting as identity + description + meter (including the `▢ 0%` placeholder), and paused/done/sleeping/failed as identity + description.
-
-idle:
-
 ```
-○ claude · Opus 4.8 · xhigh                              ← line 1 — glyph · name · model · reasoning config
-  refactor auth module                                   ← line 2 — what it's on
-  ▢ ───────────────────────────────────────────    0%    ← context meter — empty window
-  ▤ 12k · ◌ 10k ↘ 2k · 83%                       ◔ 6m    ← context line — filled window · composition · session cache hit · age
+▌✓ claude · Opus 4.8 · xhigh · 200k               $2.14▐    ← identity line
+▌  store refactor                                      ▐    ← description line
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━╺────────── 78.4%▐    ← context meter
+▌  ▤ 157k · ◌ 149k ◍ 6k ↘ 2k ↗ 2k · 97% · ↻ 2      ◔ 8m▐    ← stats line
+▌  ⧉ subagents (2) · ⧖ waits (1)                  $0.42▐    ← subagents and waits line
 ```
 
-complete:
+| line | shows |
+|------|-------|
+| identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, one reasoning token (an effort level or `thinking`), and the context window size. The session's cost sits on the right once it is above zero and counts up like the cockpit spend. |
+| description | What the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name. |
+| context meter | The percent of the context window in use, as a bar. The fill shows where the window went: a run of cache reads first, then a segment each for cache writes and fresh input, each starting with `╺`. The bar's color follows the context health bands. |
+| stats line | `▤` tokens in the window, then the same split in numbers, the session cache hit, `↻ N` compactions, and `⟲ N` repeated tool calls. The time since the agent's last activity sits on the right once it passes five minutes. |
+| subagents and waits | Present once the session has spawned a subagent or armed a wait. See [Subagents and waits](#subagents-and-waits). |
+
+On a narrow sidebar the identity line drops the reasoning token first, then the model and window, and keeps the handle. The window size shows on non-idle cards only.
+
+`▤` is the latest API call's cache-read, cache-write, and fresh input added together, which is the amount the meter's percent measures. A column that is zero or unreported is left out. A provider that reports only session totals, as stock Droid does, shows `◇ total ↘ input ↗ output ◌ cache-read` on this line instead, and its meter stays empty. The cache hit is cached input divided by all input, and it is absent until the session has input counters.
+
+The meter draws windows up to 256k tokens linearly and larger ones on a log curve that reaches full strength at 1M, so a large window keeps detail in its working range. The percent is always the raw share in use. The age clock heats toward red as the hour approaches, because a prompt after an hour of quiet usually re-reads the whole context uncached. A parent with subagents shows the most recent activity among itself and its children. Bands, curve, and tones are set under [`[theme.display]`](../guide/theme.md#display).
+
+### Card shapes
+
+A card's line set depends on what the session has done, so a line never appears or moves because data arrived late.
+
+| card | lines |
+|------|-------|
+| fresh: idle, never prompted | identity, plus the description when it was launched with one |
+| fresh, selected | adds the empty meter `▢ 0%`, and an animated `…` in the description slot when there is no description |
+| engaged: after its first prompt | identity, description, meter, stats, with `▢ 0%` and `▤ 0` until data arrives |
+| engaged, with subagents or waits | adds the subagents and waits line |
+| selected | lights the spines and lists the subagent and wait entries below the card |
+
+Selecting a card only appends lines below it. When the selected agent belongs to a named team, every visible teammate's card opens the same way, and the spines stay on the selected card.
+
+`[theme.display] card_density` changes how much a resting card shows:
+
+| value | resting cards |
+|-------|---------------|
+| `auto` (default) | the shapes above |
+| `expanded` | every engaged card lists its subagent and wait entries |
+| `compact` | idle: identity. Running and waiting: identity, description, meter. Paused, done, sleeping, failed: identity and description. Selecting a card restores its full shape. |
+
+### Subagents and waits
 
 ```
-✓ claude · Opus 4.8 · xhigh · 1m                $2.14
-  store refactor
-  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━───────────── 78.4%
-  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%             ◔ 8m
+▌  ⧉ subagents (9) · ⧖ waits (4)                  $0.84▐
+▌    ⠁ Explore — map the render path                   ▐
+▌      ◇ 31k · Opus 4.8  · high                   ◔  3m▐
+▌    ✓ review — audit the trust hash        ◔  1m $0.42▐
+▌      ◇ 22k · Haiku 4.5                               ▐
+▌    ◷ in 12m                                     ◔ 18m▐
+▌    ⣾ cargo xtask gate --name foo_test           ◔  4m▐
+▌    ⣾ Run the test suite                         ◔  5m▐
+▌      cargo test --workspace                          ▐
+▌    ⌁ pr.merged · 2h left                        ●  1h▐
+▌  +7 older                                            ▐
 ```
 
-- **Line 1 — identity.** The animated leading cell, then the agent's handle — its team role, explicit name, or profile, else the kind — in the provider brand color (so a team reads `planner` / `coder` / `reviewer`; unknown kinds mid-gray), then capability: model · one reasoning-configuration token (effort or `thinking`) · window token, dim metadata under the brand-colored name. Capability degrades by width — wide carries model · reasoning configuration · window, medium drops reasoning configuration, narrow keeps just the name; the window token rides non-idle cards only. The `$cost` pins right and joins the line once the card has a nonzero price (an idle agent at `$0.00` shows nothing), counting up in the same eased odometer roll as the cockpit headline. Provider totals and locally priced counters render identically. Cumulative session values join the headline aggregate; Antigravity's replace-style current usage stays card-only when its canonical model ID or qualified selector label resolves to the local price table, without claiming subscription billing or creating provider-history/stat records.
-- **Line 2 — what it's on.** The label falls through a priority list until something names the session: the session name first (including Codex's automatic short title and Claude's `--name` / `/rename`; a name that merely prefixes the prompt is skipped), then the provider thread preview, the launch or adapter-reported `description`, the agent's task, the session's first usable prompt, and finally its latest prompt. The first-prompt slot stays fixed across later turns so an unnamed session keeps one label. An idle agent with nothing yet collapses to the identity line. A turn that died on a provider API error takes the line over with the upstream error text (`API Error: Overloaded`) for as long as its `!` holds, so the card says why without a jump ([model.md → displayed status](../internals/agents/model.md#displayed-status)).
-- **The context meter (`▣`/`▢`).** The resting card's one bar: `▢` hollow at 0%, including before the first measurement, and `▣` once anything fills it; the value is always the raw percent *used*. The drawn fill's log curve grows with the context window: windows up to 256k stay linear, and 1M windows use the full curve to keep useful visual resolution through their working range; linear geometry remains configurable. Supported kitty-graphics paths move the fill edge at pixel precision; every other flat bar rounds to the nearest half cell, and any nonzero fill keeps a one-pixel or half-cell floor. The fill also shows *where* the window went — a dominant cache-read run in the current health tone, with gap-fronted `╺` runs for cache-write (`◍`) and fresh-input (`↘`) accents. When cache reads are absent, the bar uses only the flat composition tones (violet cache-write and vermilion fresh input); severity remains visible on the `▣` and `▤` glyphs. Components at or above 0.5% of the filled window earn the cell bar's half-cell floor; smaller components fold into the lead run, and the segmented fill rounds to a whole cell so its final accent meets the track without a trailing gap. A row with no per-call split yet paints one flat run. The health bands, fill geometry, and pixel tier are tunable ([theme.md → Display](../guide/theme.md#display)).
-- **The stats line.** Before token data arrives it reads `▤ 0`; all-zero composition columns drop whole. With current-window data, it is the meter's absolute companion: `▤` is `input + cache-write + cache-read` of the latest API call, the numerator the `▣` percent scales, followed after a `·` by `◌` cache-read, `◍` cache-write, `↘` fresh input, and `↗` output. A provider-reported occupancy without categories renders as the bare `▤ total` and a flat meter; Qwen adds transcript categories only while their filled-input sum matches its live scalar. A zero or unreported column drops whole, so a cache-write marker appears only for a reported nonzero write; these columns stay disjoint per call, unlike the fleet lines whose `↘` subsumes cache-write. When current-window occupancy is absent and a provider exposes only cumulative session counters, as stock-pane Droid does, the line instead uses `◇ total ↘ input ↗ output ◌ cache-read`; cache creation folds into input and separately reported thinking folds into output. Cumulative categories never establish gauge occupancy or a `▤` composition. When cumulative input-side counters exist, the trailing plain percent is the session cache-hit ratio and uses the shared green/yellow/red health bands. A completed-compaction count joins as `· ↻ N` from the first, and the last-activity age pins right once it crosses five minutes (a delegating parent reads the freshest of its own and its children's activity).
+`⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. That figure is a breakdown of the card's own cost: native children are already inside the session's cost, and the identity line adds the launched children. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md) plus, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
 
-While sleeping, line 2 names the first pending wait as a sentence instead of the usual session label: timers read `wakes in 12m` or `wakes now`, PID waits `wakes after pid 16776`, watched commands and checks `wakes after <command>`, files `wakes when app.log changes` or ``wakes when app.log matches `<pattern>` ``, and signals `wakes on <selector>` with ` · 12m left` when a deadline exists. Timers sort soonest-first, followed by live watches and signals, with names breaking ties. The wait description uses the soft italic body tone; a turn-error label still takes precedence.
+Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card, and that choice outranks selection and `card_density` until the sidebar restarts. In `compact` density, select the card first to reach the line.
 
-The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an aligned grid.
+| entry | lead | text | right side | second line |
+|-------|------|------|------------|-------------|
+| running subagent | `⠁` while it reasons, `⢿` while it acts | type, then its task | cost, when known | `◇` tokens, model, effort, and elapsed time |
+| finished subagent | `✓` or `!` | type, then its task | time since it finished, then cost | `◇` tokens, model, effort |
+| timer | `◷` | `in 12m`, or `due` once the time passes | time since armed | |
+| watch | working spinner | the command without its program path, `pid 16776`, `app.log changes`, or ``app.log matches `<pattern>` `` | time since armed | |
+| background shell | working spinner | its description, or the command when it has none | time since RimZ first saw it | the command, when there is a description |
+| signal | `⌁` | `pr.merged`, or `pr.merged · 2h left` with a deadline | time since armed | |
 
-**Selection.** In `auto`, the resting card is the four lines above plus its standing delegation line, when present. Selecting any row lights the bold `▌` spine and, unless its delegation line was clicked closed, *appends* the subagent entries, then one entry per pending wait, under the delegation line — it never reshapes a line already on screen, so the card never reflows. In `expanded`, those entries already appear on every engaged card. Selecting a named-team member expands every visible teammate's card in the same way, without giving those teammates the selected spine or band:
+Entries list in a fixed order, and opening more of the list only appends rows:
 
-resting:
+1. Running subagents, in the order they started. They are never capped.
+2. Finished subagents, newest first, that finished within `recent_subagent_secs` (900 seconds by default), up to `max_recent_subagents` (5 by default).
+3. Waits: timers by due time, then watches, then background shells, then signals. A wait leaves the list when it fires or its job ends.
+4. `+K older`, which folds every other finished subagent. Click it to append them. When no subagent is running or recent, opening the section lists the older ones directly.
 
-```
- ⣾ claude · Opus · 1m                           $1.27
-   store refactor
-   ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────── 78.4%
-   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%            ◔ 8m
-   ⧉ subagents (1)                              $0.42
-```
+The listed subagents plus `K` equal the count in the line. `K` can exceed the rows it reveals, because a native subagent that was replaced while still running is counted and has no row. The older list folds again when you close the section, send the parent a new prompt, or run `/clear` or `/compact`. Messages from other agents and RimZ's own deliveries leave it open.
 
-selected — only appends, never reshapes
-```
-▌⣾ claude · Opus · 1m                           $1.27
-▌  store refactor
-▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────── 78.4%
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%            ◔ 8m
-▌  ⧉ subagents (1)                              $0.42
-▌    ⢿ Explore
-```
+A subagent's clock heats with age like a card's. A wait's clock stays muted, since a wait is pending by design, and it is absent when the arm time is unknown. A subagent that reported nothing beyond its type shows a single line. Subagents never get a card of their own while their parent's card is visible. Which fields each provider reports for a child is in [sidebar internals](../internals/sidebar/sidebar.md#sub-agent-lists).
 
-Once an agent has spawned a child, the `⧉ subagents (N)` half of the delegation line remains on its standard card. `N` is the lifetime count of provider-native and RimZ-launched children as far back as store GC retains them; the known lifetime cost of both origins pins right. That cost is a breakdown, not an amount to add to the parent's line 1: provider-native cost is already inside the parent's own session figure, while launched-child cost is the portion line 1 adds. The `⧖ waits (N)` half shares that line and disappears when no one-shot waits remain. An open section appends the subagent entries in two bands, then one entry per pending wait, under the delegation line. The first band is every live child, in spawn order (creation time ascending, stable across refreshes) and never capped. The second is finished children, newest landed first, while they landed inside the recent window (`[theme.display] recent_subagent_secs`, default 900 seconds) and up to the recent cap (`max_recent_subagents`, default 5). Every other finished child folds behind `  +K older` after the waits, for as long as store GC retains it; the rows plus `K` add up to the header's `N`. The shorter list is always a prefix of the longer one: nothing reorders within a band, opening `+K older` only appends rows, and the only movement is a child leaving the live band for the top of the finished band when it lands. Still-running RimZ-launched children stay live across turns; superseded running provider-native children are not retained, so they count in `K` with no row to reveal.
+### Unread and attention marks
 
-Nested Codex descendants remain in this flat root-owned list and keep their root-relative task path as detail. Each entry leads with the same live head an agent row wears — the `⠁` thinking animation while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — followed by the child's nickname/type and task. A deeper-indented second line carries available reported tokens `◇` and model/effort metadata. For a launched child, `◇` is its cumulative displayed session total — input, cache writes, and output, with cache reads excluded. While the child runs, its live elapsed work pins right — the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label (`<1m` under a minute, never seconds), toned by the age ramp. That line is a per-card grid — the figure right-aligned, the model padded to the widest sibling, a missing field blank-filling its slot — so the metadata stacks into columns across children. A **finished** child keeps exact token/model/effort metadata but drops the elapsed clock; instead line 1 pins how long ago it landed, muted, in the same glyph and duration vocabulary, ahead of its cost. A metadata-free completion still collapses to its single type line:
+A card is unread from the moment it becomes waiting, failed, paused, or done until you focus its pane or press `m`. An unread card has a soft wash behind it. The one card that most needs you, the oldest unanswered `?` or `!`, also animates across its glyph, name, and description, and the make-up bucket that owns it animates with it. Every other unread card is bright and bold without motion, so one thing on screen moves at a time. A card that is both selected and unread shows the selection. The animation style is `[theme.animations] unread` ([theming: unread attention](../guide/theme.md#unread-attention)).
+
+A waiting or failed card looks like any other card with `?` or `!` in the lead. When a turn dies on a provider API error, the description shows the provider's error text for as long as the `!` holds:
 
 ```
-▌  ⧉ subagents (9)                              $0.42
-▌    ⠁ explorer — locate the seam               $0.42
-▌      ◇ 12k · Opus 4.8                         ◔ 14m
-▌    ✓ review — audit the trust hash            ◔  2m
-▌      ◇ 22k · Haiku 4.5
-▌  +7 older
+▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌! claude · Opus 4.8 · high · 200k                $1.27▐
+▌  API Error: Overloaded                               ▐
+▌  ▣ ━━━━━━━━━━━━━━━━╺━╺───────────────────────── 38.2%▐
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                        ▐
 ```
 
-The **waits** follow the subagent entries in the same grammar: the lead shows liveness, line 1 is the wait itself, and a second line appears only when a second fact deserves one. Timers come first by due time, then live watches and background shells, then signals. Timers lead with `◷` and read `in 12m`, or `due` once it passes. Live watches lead with the working animation: a command or check reads as the command with its program path trimmed, a PID wait as `pid 16776`, and a file as `app.log changes` or ``app.log matches `<pattern>` ``. A Claude background shell also animates and reads as its description with the command on a deeper-indented, muted line 2, or as the command alone when it has no description. All four watch kinds list before background shells. Signals lead with `⌁` and read `pr.merged · 2h left`, or `pr.merged` without a deadline. Timer and signal leads stay static, since nothing runs until they fire; every lead is violet so waits read under their parent, and the parent's own status head carries sleeping. A wait disappears once it fires or its job ends. The section title keeps `⧖` (a sleeping bell in Nerd Font), distinct from the agent's sleeping status. The elapsed-since-armed clock pins right on line 1 in the same glyph and duration vocabulary as subagents, but stays muted rather than heating with age: a wait is pending by design. It is absent when the arm time is unknown.
+Two checks raise `!` without a report from the agent. A working agent that stays silent for 30 minutes becomes `!`, or `⏸︎` when its provider budget window is spent. A parent waiting on its subagents is exempt. A working agent that repeats one tool call with the same arguments shows `⟲ N` on its stats line from the third call; at 20 it becomes `!` and the description reads `loop: <tool> ×<count>`. Any different call clears the run. All three thresholds are under [`[agents.attention]`](../guide/sidebar.md#tuning).
+
+A sleeping card names its first pending wait in the description:
 
 ```
-▌  ⧉ subagents (2) · ⧖ waits (5)                $0.42
-▌    ⠁ Explore — map the render path            $0.42
-▌      ◇ 31k · opus · high                      ◔  3m
-▌    ✓ review — audit the trust hash            ◔  1m
-▌      ◇ 22k · haiku
-▌    ◷ in 12m                                   ◔ 18m
-▌    ⣾ cargo xtask gate --name foo_test         ◔  4m
-▌    ⣾ pid 16776                                ◔  3m
-▌    ⣾ Run the test suite                       ◔  5m
-▌      cargo test --workspace
-▌    ⌁ pr.merged · 2h left                      ◔  1h
+▌☾ claude                                              ▐
+▌  wakes in 12m                                        ▐
+▌  ▢ ────────────────────────────────────────────    0%▐
+▌  ▤ 0                                                 ▐
+▌  ⧖ waits (1)                                         ▐
+▌    ◷ in 12m                                     ◔ <1m▐
 ```
 
-Claude's description, cumulative tokens, and precise start time ride in from `subagentStatusLine`; the Claude-only feed is configured at install and fed at runtime. The same feed incrementally prices every request in that child's dedicated transcript; when every model resolves, the exact cumulative figure pins right on line 1. Any unpriced request hides the figure rather than showing a partial sum. That provider-native figure is display-only because Claude's parent session spend already includes it. A child launched through `rimz subagents` instead shows its launch profile as its type, prices its own provider session, and adds that cost to the parent's line-1 figure across every turn. A Codex-native child reads nickname, task path, role, model/effort, and current context tokens — not a cumulative total — from the child rollout around each hook; its elapsed fallback starts at durable child registration. Copilot reads the model from the parent's start record and reconciles the exact total from the completion record at the next parent checkpoint. Siblings on different models read apart at a glance and a reasoning child uses the same thinking animation its parent would. A child with no enrichment shows just its `glyph type` line. Provider-native subagents have no pane; a launched child owns a pane while it runs or is kept. Neither gets a duplicate top-level row while its parent is visible; both nest here only.
+| wait | description |
+|------|-------------|
+| timer | `wakes in 12m`, then `wakes now` |
+| PID | `wakes after pid 16776` |
+| command or check | `wakes after <command>` |
+| file | `wakes when app.log changes`, or ``wakes when app.log matches `<pattern>` `` |
+| signal | `wakes on <selector>`, with ` · 12m left` when it has a deadline |
 
-### Attention rows
-
-A waiting or failed agent is the whole point. Its glyph leads, bold, and the card rises to the top of its worktree:
-
-```
-▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌! claude · Opus · 1m
-▌  db migrate
-▌  ▢ ──────────────────────────────────────────    0%    ← context meter — empty window
-```
-
-A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs you and *what task*, and selecting it lands you in the agent's pane, where the full prompt and its safe defaults live — that is the row's job, to route you there.
+`☾` replaces only an idle or done status. Working, waiting, failed, paused, and waiting on subagents all take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 
 ### Process rows
 
-A pane no agent has stamped reads like a slim agent card, one soft step quieter: a hollow `○` for an idle shell or editor, the `⢿` spinner for a pane doing real work (a build, test, install), the program name in the soft middle tier. Inside a worktree group the process rows settle below the agent cards, the recession reading them as the group's command tail rather than more agents. An active pane anchors its primary line on the shell that owns it, so it stays put as commands come and go, and carries the live command on a second line with the program trimmed to its name and arguments verbatim; a working or stuck row pins the [resource grid](#reading-the-glyphs) (`C`/`M`/`⇅`) into the same right slot a card gives its `$cost`, while an idle shell stays bare even when values exist.
+A pane that no agent runs in, such as a shell, an editor, or a build, shows as a process row below the group's agent cards, drawn dimmer than a card.
 
 ```
-○ zsh
-⢿ zsh                        C  34%  M 512M  ⇅   8M/s
-    cargo build --release
+ ○ zsh
+ ⣾ cargo                       C  34%  M 512M  ⇅   8M/s
+   cargo build --release
 ```
 
-The label is the program the pane runs, read past environment and shell wrappers such as `env VAR=value` and `sh -c`, other command prefixes such as `sudo` and `timeout`, and through a `node`/`npx` launcher (`sudo npm install -g @openai/codex` is an `npm` install, not a codex agent; `node …/codex` is codex). Shell scripts select the first non-setup command: `sh -c 'cd /repo && cargo build'` identifies `cargo`, while `sh -c 'echo ready; cargo build'` identifies `echo`. No status, no meter, never counted in the cockpit — it is presence, not a cue. It is still a jump target, and the moment an agent's hook stamps that pane it becomes that agent's card.
+An idle row is `○` and the program's name. A working row spins, shows the running command on a second line, and shows CPU, memory, and I/O on the right once all three have values. A process that stays stuck with no CPU or I/O progress for ten seconds shows `!`. The name is the program the pane really runs: RimZ reads past `env`, `sudo`, `timeout`, `sh -c`, and `node` or `npx` launchers, so `sudo npm install -g @openai/codex` reads as `npm`. Process rows are never counted in the cockpit. They are jump targets, and when an agent starts in the pane the row becomes that agent's card.
 
-### Worktree groups and the selection lane
+### Worktree headers
 
-Worktrees stack as bounded blocks under quiet neutral headings, so the names organize the column without competing with attention or the selection. The worktree **holding your selection** reads as one bracketed lane: a dim `▎` spine and dotted `┄` seal down its header and every row, then the selected card lit with the bright `▌` spine over the recessed `selection_bg` band — subagents included — so the selected block reads as one card. Every other worktree carries a blank gutter, so the lane and band are the only selection markers on screen and the pane you're in is unmistakable.
-
-The worktree header carries the worktree's git story on the right: local reconciling (`⟳`) takes the top marker, then a forge PR verdict — merged (`✓`), closed (`✕`), or open (`⑃`) — outranks the local trunk verdict: merged (`✓`), pristine (`≡`), or plain branch (`⑂`). The verdict ladder renders merged as muted settled history, closed as red, and open in the cool link tone. Diverged and reconciling worktrees show the `⇡`/`⇣` commit delta against the trunk, then the total diff, then the marker; a merged PR drops those spent figures even when squash-merge ancestry leaves the branch diverged, while a closed PR keeps them. Pristine, merged, and PR-clean worktrees also collapse to the marker alone. The `+/-` churn counts committed, staged, unstaged, and untracked file content, so work `git diff` cannot see still reads as work. The trunk worktree itself wears no pristine/merged verdict — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../guide/configuration.md#sidebar-rendering)).
-
-A branch's CI verdict at its HEAD commit shows beside the worktree name as `✓`, `✕`, or `◌` for passing, failing, or pending. A linked pull request shows its `#N` after that glyph in the cool link tone and supplies the verdict while open or merged; a branch without a PR shows the bare CI glyph. Identity and CI stay beside the name while the PR state stays on the right marker.
-
-A worktree channel leads with the fork (`⑂`) or merge (`⮌`) glyph like a worktree pod, shows a linked PR's `#N` beside the channel name, and carries the same right-pinned git story: commit delta, churn, and the PR or merge glyph. A plain named or directory lane with no git story keeps the `# name` header.
+Each group starts with a header. Its left side names the work, and its right side shows where the work stands against the trunk.
 
 ```
-▎⑂ feature-migration ◌ #91 ┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23  ⑃ main    ← diverged with an open PR whose CI is running
-▎⑂ fresh-fork ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← pristine: no worktree-owned commits
-▎⮌ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← merged: safe to remove
+▎⑂ feature-migration ◌ #91 ┄┄┄┄ ⇡3 ⇣1  +230 -23  ⑃ main🮇    ← diverged, open PR #91, CI running
+▎⑂ fresh-fork ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main🮇    ← pristine: no commits of its own
+▎⮌ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main🮇    ← merged: safe to remove
 ```
 
-```
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
-▌? claude
-▌  permission
-▌  ▢ ──────────────────────────────────────────    0%
-▎⣾ codex · GPT 5.5
-▎  add tests
-▎  ▢ ──────────────────────────────────────────    0%
+On the left: `⑂` or `⮌`, the branch name, the team working in it as `· forge`, the CI verdict at the branch's HEAD commit (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a branch without one shows the bare CI glyph. In terminals that support hyperlinks, `#91` opens the pull request. When two groups have the same branch name, each adds a muted `· repo` qualifier, the shortest path suffix that tells the checkouts apart. When the header runs out of room, the pull request number is the first thing dropped.
 
- ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← out-of-project panes, attention-only tally
+On the right: commits ahead of and behind the trunk with zero counts left out, then lines added and removed, then the trunk marker. The line counts include committed, staged, unstaged, and untracked work, so work that `git diff` does not show still counts. The first marker that applies is shown:
+
+| marker | meaning |
+|--------|---------|
+| `⟳ main` | a local rebase, merge, or cherry-pick is in progress |
+| `✓ main` | the pull request merged; muted, and the commit and line figures are dropped |
+| `✕ main` | the pull request closed unmerged; red, and the figures stay |
+| `⑃ main` | the pull request is open |
+| `✓ main` | no pull request, and the trunk already contains the work: safe to remove |
+| `≡ main` | pristine: a clean tree with no commits of its own, at the trunk's tip |
+| `⑂ main` | a plain branch |
+
+Pristine and merged headers show the marker alone. The trunk's own checkout shows no marker, only its commit and line figures. RimZ takes the trunk from `[sidebar] trunk`, then `main`, `master`, and the remote's default branch ([configuration](../guide/configuration.md#sidebar-rendering)).
+
+The group that holds the selection is drawn as a lane: a dim `▎` down its left edge, `🮇` down its right, and a dotted seal across its header. Inside it the selected card has bright `▌` and `▐` spines over a recessed background, subagent entries included. Other groups have a blank gutter and a header without the seal.
+
+```
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇    ← selected group: lane spine and dotted seal
+▌? claude                                              ▐    ← selected card: bright spine on both edges
+▌  permission                                          ▐
+▌  ▢ ────────────────────────────────────────────    0%▐
+▌  ▤ 0                                                 ▐
+▎⣾ codex · GPT 5.5 · 272k                              🮇    ← same group, not selected
+▎  add tests                                           🮇
+▎  ▢ ────────────────────────────────────────────    0%🮇
+▎  ▤ 0                                                 🮇
+
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄     ← panes outside the project
  ? deploy.sh
    Deploy staging?
 ```
 
-The `external` block is the catch-all for panes outside the project — untethered scripts, CI, stray shells. It renders as a dim divider rather than a worktree header, always sorts last, and keeps an attention-only `? n` / `! n` tally so an out-of-project ask still surfaces from the tail.
+Panes outside the project (scripts, CI, stray shells) collect under the dim `external` divider, which always sorts last. It keeps a `? n` or `! n` count so an ask from outside the project still shows.
 
-A [directory room](../../ARCHITECTURE.md) groups git-backed agents by the worktree root their hooks resolve, at any depth in the room: each active checkout keeps the full `⑂` header with its own git story, while the panes the room root itself holds sit under a **name-only header** — the directory's basename in bold, no fork glyph, no git cluster, because a plain directory has neither a fork nor a trunk to measure against. It is still a jump target and still wears the selection lane.
+A room opened on a plain directory groups git-backed agents by their checkout, each under a full header. The panes the directory itself holds sit under a bold header with the directory's name, with no glyph or git figures, because a plain directory has no trunk to compare against.
 
 ```
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3            ← a git-backed row: full pod header, per-checkout stats
-▌⣾ claude
-▌  db migrate
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3🮇    ← a checkout inside the directory: full header
+▌⣾ claude                                              ▐
+▌  db migrate                                          ▐
+▌  ▢ ────────────────────────────────────────────    0%▐
+▌  ▤ 0                                                 ▐
 
- agents                                                  ← the room's own pod: name-only, no git story
+ agents                                                     ← the directory's own group: name only
  ○ zsh
 ```
 
-**Ranking is automatic: unread, hot, warm, then archived.** Within a worktree, rows first sort by inbox and age band, then by a fixed-point attention score: `waiting`, `failed`, and `paused` heat as their clock approaches the one-hour boundary, warm rows decay until 24 hours, and archived rows park below current work. Calm rows keep stable pane order within equal states, and worktrees sort by their most-urgent member, then by calm activity — working, all-success, idle, process-only — before git state refines ties. A non-dirty merged or closed group with no running or attention member enters the archive immediately.
+### Row cap and finished groups
 
-**The cap.** Each active worktree shows a capped number of rows with a dim `+K more`. Click `+K more` to expand that group in place; the expanded live group shows every row and a dim `− less` line that collapses it. The ordinary cap trims only the idle/process tail; active, blocked, paused, finished, unread, and focused rows stay visible. A finished group with several agents collapses as one unit to a muted-bold header and two-line dim receipt, hiding unread success too; a finished group with one agent keeps its card visible even beside process rows, and a process-only group stays expanded. A merged verdict leaves only its marker on the header. The expandable `▸` roster leads at the content edge with the shared team name when present, then each member's status glyph and softened provider-brand name, folds overflow and process rows into `+n`, and pins the cohort's rounded lifetime transcript cost right; the totals line shows the same lifetime token split followed by the aggregate cache-hit percentage and pins retained active time right, falling back to finished age when that sidecar has expired. These figures cover each durable team seat's sessions in the worktree's current life, including resumed sessions and subagents within that life, and agree with the team catalogue and attribution's branch-unfiltered all-in cost and token fold. Expanding a finished receipt puts each seat's lifetime cost on its member card, so the cards add back to the pin; live cards keep the current session's self-reported cost. A narrow multi-agent roster falls back to `▸ +K done`; click the header or either receipt line, use the `s` status filter, or focus a member to reveal the full roster, then click the header to collapse it. A focused or order-held member reveals every card, so the pod is never half-collapsed:
-
-```
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
-▌⣾ codex
-▌  task-0
-▌  ▢ ──────────────────────────────────────────    0%
-▎⣾ codex
-▎  task-1
-▎  ▢ ──────────────────────────────────────────    0%
-▎  +3 more
-```
+A group shows at most six idle and process rows. The rest fold behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. Working, waiting, failed, paused, done, unread, and selected cards are never folded. While a filter is active the cap is off, and rows and groups that do not match are hidden.
 
 ```
- ⮌ merged-work ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main
- ▸ rimz  ✓ planner  ✓ coder  ✓ reviewer                 $4.02
-   ◇ 1M ↘ 300k ↗ 80k ◌ 900k                              ◉ 2h
+ ⑂ main
+ ○ codex
+ ○ codex
+ ○ codex
+ ○ codex
+ ○ codex
+ ○ codex
+   +3 more
 ```
 
-Sleeping ranks below running and above idle (score weight 150, between 200 and 100). The seven status-count buckets are ordered `waiting → failed → paused → success → running → sleeping → idle`; click the sleeping bucket or press `z` to filter to it.
-
-### Jump — the row is the link
-
-You don't read where to go; you go. Selecting a row focuses that pane — no mux pane number is ever shown.
-
-- `↑`/`↓` or `k`/`j` select a row; `K`/`J` select the previous or next worktree's first visible row; `g`/`G` select the first or last row; `↵` or `l` jumps to the selected pane.
-- `n`/`N` jump to the **next/previous thing that needs you** — unread needs-a-look rows first, oldest episode first, then read waiting/failed rows oldest first — and focus it to read. `␣` is an alias for `n`. One key tames a fleet; `N` walks back.
-- `1`–`9` jump by the row's visible position.
-- `m` toggles the selected row read/unread **without jumping**; `M` marks every row read.
-- `u`, `q`, `!`/`e`, `p`, `s`, `w`, `z`, and `o` filter the body to unread/waiting/attention/paused/done/working/sleeping/idle; the active filter key toggles back to all, and `A` clears to all directly.
-- `a`/`d` calculate and persist a validated narrower/wider absolute target, then every tab converges to the smallest reachable width at or above it; resize feedback confirms progress without redefining the target, and a new session resets it.
-- `←/→` switch the provider dashboard's tab when the dashboard is tabbed — a provider pick in place, never a jump.
-- A click anywhere in a card's block jumps to it.
-- The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.
-
-From any pane in the room, the configurable `Alt+p` ([configuration](../guide/configuration.md#sidebar-rendering)) focuses the sidebar and toggles back to your last working pane — the one key that reaches the room from inside an agent.
-
-## Zone 3 — the provider dashboard
-
-The budgets are account-scoped — every session of a provider shares one account's budget — so they pin to a panel at the bottom rather than riding the rows. Accounts default to usage-rank order (running, recently used, then recently logged in); display config controls how they stack or tab and can override the order (`provider_tabs`, `provider_list`, `max_provider_blocks`; [theme.md → Display](../guide/theme.md#display)).
-
-In **tabbed** mode the panel's top hairline becomes a tab rail naming every provider, the active tab a brand-filled bold chip (the rail's glyphs are identical across tabs, so a switch moves color and weight alone; `┤ ├` caps mark the pick under `NO_COLOR`). One account's block paints at a time, so the budgets read one account deep, and the header reads plan-first (`Claude Max · v2.1.169`; `v?` until a source reports the binary version, the plan label absent until the account surface names one). With pets disabled the active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads its ChatGPT account, a process pane falls to the first tab; `←`/`→` or a click picks one by hand until you select a pane of a different provider. Every logged-in account earns its block even when idle this run, so your budgets show between turns — kept current by per-provider out-of-band refresh ([providers.md](../internals/agents/providers.md)).
-
-With `[theme.pets] enabled = true`, the active provider block narrows and one pane-local companion rides its right edge, driven by fused fleet state plus a canned caption. It renders as true pixels where tmux passthrough and the terminal support kitty graphics, else as sextant cell art in `auto`. Pixel pets reserve `15×9` cells and cell-art pets reserve `18×9` cells; in the dashboard both tiers get one empty row underneath, so the art ends one row above the panel bottom and the provider block keeps identical height across tiers. The rail still shows provider tabs only, and the same `←`/`→` and click controls pick a tab. The provider block keeps its auto layout tiers — wide the full historical row, normal the taller totals block beside the pet column, narrow dropping token splits then version text as it crowds — and the sprite drops out entirely under `NO_COLOR` or when the pane is too narrow to hold it.
+A group is finished when its pull request merged or closed, or the trunk contains its work, its tree is clean, and no member is working or needs you. A finished group with several agents collapses to its header and a two-line receipt, unread results included:
 
 ```
- ── Claude ──── Codex ──────────────────────────
-                                      resting
-          Claude Max · v2.1.169      ▄▟████▙▄
- ▐▛███▜▌ ◎ 58  ◇ 17M ↘ 15M ↗ 2M ◌ 198M $188.88
-▝▜█████▛▘ 5h ▰▰▰▰▰▰▱▱ ↻ 1h47m       ██▀█ █▀██
-  ▘▘ ▝▝   7d ▰▰▰╱▰▱▱▱ ↻ 5d22h       ██ ▄ ▄ ██
-                                      ▜█▄██▄█▛
- ── Total: ────────────────────────    ▀▀  ▀▀
- W: ◎ 420        ◇ 202.9M ◌ 5.2B
- M: ◎ 860        ◇ 420.0M ◌ 10.8B
- W: $3,888.88          M: $8,666.66
- ⇄ remote 210ms              ? for help
+ ⮌ merged-work                                   ✓ main
+ ▸ rimz  ✓ planner  ✓ coder  ✓ reviewer           $4.02
+   ◇ 1M ↘ 300k ↗ 80k ◌ 900k · 75%                  ◉ 2h
 ```
 
-Each block with historical usage speaks the fleet store's vocabulary, scoped to the provider: the configured headline `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right. A ledgerless block keeps that full row in place: `◎` carries the number of identity-bearing sessions active in this room, while the unavailable token and dollar positions show dim `–` placeholders rather than invented zeroes. The stats row stays one row in every provider layout; normal and narrow hide the input/output split only when the width needs it. The `Total:` delimiter switches from provider-headline facts to the separate account-global fleet totals. Wide paints `W:` and `M:` as two full rows with USD pinned right; normal and narrow split each token row into a left `W:`/`M:` session cluster and right-aligned token stats, then put `W: $...` on the left and `M: $...` on the right of the third total row. A cold or empty fleet cache keeps those global rows and reads `$0.00`; the ledgerless provider headline does not synthesize one.
+The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with its active time on the right, or the time since it finished once that record expires. Both cover every session the team ran in this worktree, resumed sessions and subagents included. When the line is too narrow for one member it reads `▸ +K done`.
 
-A **metered account** drains one "mana" bar per included budget window toward its reset. The bar fills with what's *left*, sliding continuously green → gold → amber → red as it empties over a dim empty track — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`, Copilot's token-billed AI Credit `cr`, or a compact provider- or plugin-defined label such as `bld`/`dep`) occupies the shared three-cell slot and wears its own bar's tone, while the `↻` reset countdown beside it wears the spend pace: soft when the current burn rate sustains to reset, then sliding gold → amber → red as it outruns the window, or cooling toward green once spend falls to about 1.5x under pace and reaching full green at 3x under pace after the early-window gate, with the quiet soft tier as the fallback when pace is unknowable. A spent longer duration window gates the shorter duration ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets. Named quotas are independent: an exhausted `bld` lane does not paint `dep` exhausted, and both remain visible rather than yielding a row to the temporal extra-credit substitution. When a spent duration window puts the account on known-usable paid extra usage, `ex` takes the first row and the longest included window stays on the second, filled when usable or exhausted with its reset. Unknown or exhausted extra credits keep the spent window first instead. A known extra-usage limit reads as its whole-dollar budget (`$50`) while the bar still shows the percentage left. Without a limit, a known remaining balance or usage reads dollars, and a wholly unknown value reads `∞` over a dim empty track.
+Click the header or either receipt line, press `s`, or focus a member to show the cards, and click the header to collapse them again. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A finished group with one agent, and a group with only process rows, stay open.
 
-A model sub-cap folds onto its parent window's bar as a **tick**, not another row. The fill and tick use different rulers: the fill shows the parent's remaining percentage, while `╱` shows the model's own remaining percentage across the full bar width. The tick replaces either fill or empty track, with 0% remaining at the leftmost cell and 100% at the rightmost. Its zero-based position is `min(filled_cells(remaining, width), width - 1)`, where `filled_cells` rounds `remaining × width / 100` to the nearest cell. Its tone also follows the model's own remaining percentage; a spent model cap places a red tick at cell 0. The tick leaves the parent's label tone and reset countdown unchanged, has no label or countdown of its own, does not exhaust other windows or trigger paid-extra substitution, and follows the parent row when `ex` moves it. A known model reading keeps its tick on real bars even when the parent is exhausted or forced exhausted by a longer window. An unknown model reading, unknown parent row, or lifted unlimited row draws no tick. In the eight-cell weekly bar above, 37% weekly usage leaves 63% overall (five filled cells), while 58% Fable usage leaves 42% of Fable's own cap (tick at cell 3).
+The order of cards and groups follows status and age, and read state never moves a card. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
 
-These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
+## The provider dashboard
 
-A named quota with no reported duration does not participate in sliding-window detection, burn pace, surplus, temporal hierarchy, or reset-to-max roll-forward. Its provider-reported reset remains visible in the quiet tone and can arm a genuinely exhausted turn; `∞` remains visible for an explicitly unlimited named quota.
-
-When the provider temporarily lifts a previously reported limit, its row stays visible as a full bar with `∞` in the countdown marker slot; unlike a not-started window's blank slot, this explicitly reads as unlimited until the provider reports the window again.
-
-When RimZ is reading only cached budgets and the longest cached duration window has already reset, the balance is unknown until the provider refreshes. If every cached window lacks a reset, the newest reading likewise becomes unknown once its shortest reported duration has elapsed. Each named durationless quota becomes unknown independently when its reported reset passes rather than rolling forward. The panel keeps the account and window labels, but an unknown cached budget row becomes a dim empty track with no countdown, so it does not claim either a refreshed full budget or an exhausted one. A metered account whose window list has not arrived yet paints one labeled dim track for each descriptor-declared expected window, preserving the eventual budget grid without inventing a reading; an unknown or unstable provider shape keeps one anonymous track as the fallback.
-
-Provider blocks stacked (`theme.display.provider_tabs = "never"`). Claude and Codex use account-global provider totals; Pi is shown as an idle API-key block to pin its curated catalog emblem:
+Provider budgets belong to an account, and every session of that provider shares them, so they sit in a fixed panel at the bottom instead of on the cards. Every logged-in account gets a block, even one with no sessions in this room, and RimZ refreshes its budgets between turns.
 
 ```
-  Claude v2.1.169 · Claude Max                   ⇅ rc
-  ▐▛███▜▌  ◎ 58  ◇ 17M ↘ 15M ↗ 2M ◌ 198M      $188.88
- ▝▜█████▛▘ ex  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱     $50
-   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱ ↻ 5d22h
+ ─── Claude ──── Codex ────────────────────────────────
 
-  Codex v0.137.0 · ChatGPT Pro                   ⇅ rc
-  ▗▛███▜▖  ◎ 42  ◇ 16M ↘ 15M ↗ 1M ◌ 272M      $288.88
- ▐▜▌ ▚ ▐▛▌ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱ ↻ 1h45m
-  ▝▀▀▀▀▀▘  7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱ ↻ 3d19h
+           Claude Max · v2.1.169                   ⇅ rc
+  ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M        $188.88
+ ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱ ↻  1h47m
+   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰╱▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱ ↻  5d22h
+```
 
-  Pi v0.80.6 · OpenAI API
-  █▜███▛█  ◎ 19  ◇  8M ↘  7M ↗ 1M ◌ 142M      $420.42
- ▝▜▛▀▀▀▜▛▘ api ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ∞
+| line | shows |
+|------|-------|
+| header | In tabs: the plan, then the version. Stacked: the provider and version, then the plan. The version reads `v?` until a source reports it, and the plan is absent until the account names one. `⇅ rc` and Codex's `↻ N` reset credits sit on the right. |
+| stats | `◎` sessions in the spend window, the `◇ ↘ ↗ ◌` tokens with cache creation counted in `↘`, and the provider's spend. A provider with no usage history keeps the row: `◎` counts its sessions active in this room, and the token and dollar slots show `–`. |
+| budget rows | one bar per budget window: label, bar, and reset countdown |
+
+With several providers the panel shows one block at a time under a tab rail. The active tab follows the selected card's provider, and falls to the first tab for a process row. `←`, `→`, or a click picks a tab by hand until you select a card of another provider. Under `NO_COLOR` the active tab is marked `┤ Claude ├`. `[theme.display]` sets tabs or stacking with `provider_tabs`, the providers and their order with `provider_list`, and the most stacked blocks with `max_provider_blocks`, 3 by default ([theming: display](../guide/theme.md#display)). By default providers rank by use: running, then recently used, then recently logged in.
+
+Stacked blocks (`provider_tabs = "never"`):
+
+```
+ Claude v2.1.169 · Claude Max                      ⇅ rc
+
+  ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M        $188.88
+ ▝▜█████▛▘ ex  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱      $50     ← on paid extra usage, $50 budget
+   ▘▘ ▝▝   7d  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻  5d22h     ← spent: empty track, red on screen
+
+ Codex v0.137.0 · ChatGPT Pro                 ↻ 2  ⇅ rc
+
+  ▗▛▀▀▀▜▖  ◎ 42  ◇ 16M ↘ 15M ↗ 1M ◌ 272M        $288.88
+ ▐█ ▜▖  █▌ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰              ← not started: full bar, no countdown
+  ▝▀▀▀▀▀▘  7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱ ↻  3d19h     ← running
+
+ Pi v0.80.6 · OpenAI API
+
+  █▜███▛█  ◎ 19  ◇  8M ↘  7M ↗ 1M ◌ 142M        $420.42
+ ▝▜▛▀▀▀▜▛▘ api ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ∞            ← API key with no budget
   ▝▘   ▝▘
 ```
 
-An **unmetered** account (an API key) shows an `api` budget bar. A configured display ceiling drains against trailing-month transcript spend and places the remaining dollars at the right; spend stays in the stats row above. With no configured budget, the bar is full and reads `∞`. The dashboard isn't pinned to fixed windows — each is labeled by its reported length, and paid usage earns a separate `ex` row only when it matters to the account's usable budget.
+### Budget bars
 
-A **Pi block** names its version and the backing account it runs on — `Pi v0.80.6 · Anthropic OAuth`. Pi keeps its budget readings under the `pi` provider: live sessions publish response-header windows, idle OAuth accounts refresh out-of-band, and an API key gets the `api` budget row instead ([providers.md → Per-provider mapping](../internals/agents/providers.md#per-provider-mapping)).
+A bar's filled part is the budget left. Every bar starts and ends on the same columns, so the rows compare at a glance.
 
-Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — green when its managed server is up (or pane sessions auto-enable), red when a configured server is down. The host stays infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. Above that threshold the clipped emblem rows resolve as one shape, centered together within the fixed provider-art gutter so narrow catalog and theme-supplied marks keep one axis; full-width marks retain their position and tint ranges stay attached to the original art. The brand emblem resolves from the embedded catalog with a shared fallback, while emblem, color, and name remain configurable through `[theme.providers.<kind>]` (see [theme.md](../guide/theme.md#provider-styling)).
+| you see | meaning |
+|---------|---------|
+| a partly filled bar and `↻ 1h47m` | The window is running. The fill slides from green through gold and amber to red as it empties. |
+| a full bar and no countdown | The window has not started. Providers start the clock at your first token, so there is no reset to count down to yet. |
+| an empty track, all red | The window is spent. |
+| a short window painted spent while a longer one is spent | The longer window gates it: a spent `7d` makes `5h` unusable until the `7d` resets, so `5h` shows red with no countdown whatever its own reading. |
+| a dim empty track and no countdown | The reading is unknown: RimZ holds only a cached reading whose window has since reset, or the provider has not reported its windows yet. |
+| a full bar and `∞` | No limit applies: an API key without a budget, a quota the provider reports as unlimited, or a limit the provider has lifted for now. |
+| an `ex` row with `$50` | The account is on paid extra usage because an included window is spent. The bar is the share of the extra budget left and the figure is that budget in whole dollars. `ex` takes the first row and the longest included window stays second. Without a limit the row shows the dollars remaining or used, or `∞` over a dim track when nothing is known. |
+| an `api` row | An API key. With a display budget configured, the bar drains against your trailing-month spend and the dollars left sit on the right. Without one, the bar is full and reads `∞`. |
+| `cr`, `bld`, `dep`, and other names | A quota the provider or a plugin names, such as Copilot's AI credits. Named quotas are independent: one spent quota does not mark another spent. A named quota with no reported length shows its reset in a quiet tone. |
+
+The `↻` countdown's color shows your pace. It is neutral when the current burn rate lasts to the reset, slides through gold and amber to red as spending outruns the window, and cools toward green when spending runs well under pace, once 40% of the window has passed. The stops are `[theme.display.budget_bar.burn_rate]` ([theming: display](../guide/theme.md#display)).
+
+A model's own cap inside a window draws as a `╱` tick on that window's bar instead of a row. The fill and the tick use different scales: the fill is the window's budget left, and the tick's position is the share of the model's cap left, across the full width of the bar. Only exactly 0% reaches the left end and only exactly 100% reaches the right. The tick's color follows the model's share, and it has no label or countdown. In [the whole frame](#the-whole-frame), the `7d` bar has about 65% left while the tick near 42% says the model's weekly cap is closer to spent than the window. A tick still draws on a spent bar when the model's reading is known. An unknown reading or an unlimited row has no tick.
+
+Codex's `↻ N` in the block header counts rate-limit reset credits. The glyph is red, amber, yellow, then green as the nearest credit's expiry moves further away, and grey at a week or more. It blinks while a spent window makes redeeming one useful.
+
+How budgets are read, cached, and refreshed is in [provider internals](../internals/agents/providers.md).
+
+### Pets
+
+With `[theme.pets] enabled = true`, the active block narrows and an animated companion with a caption sits at its right edge. It draws as pixels where the terminal supports kitty graphics (15 by 9 cells) and as cell art otherwise (18 by 9 cells). It is hidden under `NO_COLOR` and when the pane is too narrow. See [pets](../guide/pets.md).
+
+### Narrow panes
+
+As the pane narrows, a block drops the input and output token split, then the version text. Below 34 columns the provider emblem goes and the bars run the full width.
 
 ### The fleet store
 
-The account-global running totals seal the bottom of the dashboard, above the footer — a quiet two-row store you learn to glance at, never a cue that competes with the rows. The trailing-week (`W:`) and trailing-month (`M:`) rows span every provider.
+The last two rows of the dashboard total every provider and every project on this machine's accounts, for the trailing week (`W:`) and the trailing month (`M:`).
 
 ```
- W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88
- M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66
+  ── Total: ───────────────────────────────────────────
+  W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88
+  M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66
 ```
 
-- **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend` — the precise one-decimal record beside the cockpit's coarse live read, every field right-aligned into one shared grid so the `W:`/`M:` labels stack and the columns line up. Cache creation folds into the `↘` input figure, keeping the store to the headline numbers.
-- **No animation.** The store figures are static — the count-ups live above, the configured headline in the cockpit and each card's `$cost`. The windows escalate `headline → week → month`.
-
-Every figure is computed from the transcript JSONL — Codex's dollars priced from its token counts, every provider that logs usage counted, all of them account-global. The store reads the last persistent account-global totals when they exist, and `$0.00` until something has been recorded.
+Each row reads sessions, total tokens, input including cache creation, output, cache-read, and spend, to one decimal and aligned in columns. The figures come from the agents' transcripts, with Codex's dollars priced from its token counts, and read `$0.00` until something is recorded. They do not animate. On narrower panes the dollars move to a third row, `W: $...` on the left and `M: $...` on the right, and the token rows drop the input and output split when they must. How the totals are computed is [Token Insight](../guide/insight.md#how-the-numbers-are-calculated).
 
 ## Bottom chrome
 
-Pinned to the bottom edge, below all three zones. The body is truncated before this chrome is ever clipped, so it can never scroll off.
-
-**Footer.** Faint chrome — the deepest legible gray, receding to pure scaffolding. It is just `? for help`, pinned to the bottom-right edge:
+The footer is the last line. The cards give up space before the dashboard or the footer do, so neither scrolls away.
 
 ```
-                                                   ? for help
+ zᶻ idle · 17m                               ? for help
 ```
 
-When the room is AFK, the footer adds a muted sleep badge at the left edge and keeps help on the right. tmux reports both detached and attached-but-idle after the configured idle window (`[sidebar] afk_after_secs`, 15 minutes by default), so it shows `zᶻ idle` during the first minute and then `zᶻ idle · 17m`; Zellij reports attached/detached only, so it shows `zᶻ away` once every terminal client detaches:
+| mark | when |
+|------|------|
+| `? for help` | always, at the right edge |
+| `zᶻ idle`, then `zᶻ idle · 17m` | tmux: no input for `[sidebar] afk_after_secs` (15 minutes by default); minutes are added after the first minute |
+| `zᶻ away` | no terminal client is attached; Zellij reports only this state |
+| `⇄ remote 210ms` | the room runs over SSH: the smoothed round-trip time, with packet loss added above 10%; `⇄ remote ?` means the last reading is stale |
 
-```
-zᶻ idle · 17m                                      ? for help
-```
+The away badge takes the left edge. The remote badge sits there otherwise, and follows the away badge only when the line has room. The remote badge's color runs from green through yellow and amber to red, bold at the worst, and stays neutral until the link has a first reading.
 
-**Pane-source notice.** When the producer repairs a partial pane read by carrying live panes from the prior frame, a dim line appears above the footer while the room stays interactive:
+### Notices and alerts
+
+When RimZ repairs a partial read of the multiplexer's panes by carrying panes over from the last frame, a dim notice appears above the footer and the room stays usable:
 
 ```
  ⚠ pane source degraded · 2 carried panes · 8s
 ```
 
-When the renderer is holding a successful-but-regressive fetch behind the last good frame, the same layer says why the rows are intentionally stale:
+When it holds back an update that would have emptied the rows, the notice says why the rows are stale:
 
 ```
  ⚠ pane updates held · empty pane frame
 ```
 
-These notices clear when the next accepted pane frame lands. A health alert takes over the bottom line while a fetch failure is active.
-
-**Help overlay** (`?`). The keys, status filters, and standalone sidebar-focus chord float over the bottom-right of the card body, next to the footer hint, while uncovered cards stay visible. Key chords use the cool accent tone, and any key or focus leaving the sidebar closes it.
-
-```
-╭ help ──────────────────────────────────╮
-│ keys                                   │
-│ ↕ j/k rows          ↕ J/K   worktrees  │
-│ ↕ g/G ends          ↕ ^f/^b page       │
-│ ↕ H/L screen        ⏎ l     focus      │
-│ ⏎ 1-9 direct        ␣ n/N   needs-you  │
-│ ✉ m   read/unread   ✉ M     read all   │
-│ ↔ ←/→ account tabs  ⟳ r     reload     │
-│ ✕ x   dismiss       ↕ a/d   width      │
-│                                        │
-│ filter                                 │
-│ ? q   waiting       ! e     attention  │
-│ ⏸︎ p   paused        ✓ s     done       │
-│ ⢿ w   working       ○ o     idle       │
-│ ☾ z   sleeping                         │
-│ ● u   unread        ≡ A     all        │
-│                                        │
-│ ▐ alt p sidebar                        │
-╰─────────── any key to close ───────────╯
-```
-
-**Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:
+Both clear on the next good read. When the sidebar cannot read the room at all, an alert replaces the footer, and the empty body means a missing read, with the room itself unchanged:
 
 ```
  ⚠ Sidebar degraded for 8s: snapshot failed: store not found
 ```
 
-On recovery it doesn't vanish; it lingers as a dim, dismissable notice so a failure that flickered past is still visible after the fact:
+After recovery the alert stays as a dim notice until you press `x`, so a failure that came and went is still visible. A new failure raises it again. `r` reloads the tab.
 
 ```
  ⚠ last alert 8s ago: snapshot failed: store not found  ·  x dismiss
 ```
 
-Press `x` to dismiss it; a fresh failure re-arms it. `r` reloads the tab.
+If the alert persists, see [troubleshooting](../guide/troubleshooting.md#the-sidebar-degraded-banner).
 
-## Keeping these frames honest
+### The help overlay
 
-The renderer's golden tests in [`crates/rimz/src/sidebar_pane/render/`](../../crates/rimz/src/sidebar_pane/render/) are the machine-checked source of truth for these frames — `cargo xtask test` re-renders each scenario and diffs it against a committed `.snap`. The frames in this doc are drawn from those scenarios:
+`?` opens the overlay over the bottom right of the cards. Any key closes it, and so does focus leaving the sidebar. It lists your configured movement keys, so it differs from this frame after a rebind.
 
-| scenario | golden test |
-|----------|-------------|
-| narrow card | `l0_density_minimal_row` |
-| capability + window | `agent_capability` |
-| selected, enriched card | `enriched_selected_agent_card` |
-| card context line + age pin | `agent_card_context_age` |
-| card context line + compactions | `agent_card_context_compactions` |
-| codex card composition (no `◍`) | `codex_card_context_composition` |
-| process row + resource stats | `process_row_resource_stats` |
-| agents + dimmed process tail | `agents_process_tail` |
-| subagent list + elapsed column | `subagent_two_line_entry` |
-| persistent subagent stats line | `subagent_stats_line` |
-| card wait entries | `wait_entries` |
-| worktree grouping + external | `worktree_attention_map` |
-| equal-to-trunk header (`≡`) | `worktree_equal_to_trunk` |
-| clear worktree header (`✓`) | `worktree_clear_safe_to_remove` |
-| dirty tree blocks the markers | `worktree_dirty_tree_keeps_the_cluster` |
-| per-worktree cap | `group_cap_with_overflow` |
-| cockpit unread count | `cockpit_unread_count` |
-| unread jump banner | `unread_jump_banner` |
-| make-up bucket picked, body filtered | `make_up_filter_failed` |
-| unread lens picked, body filtered | `make_up_filter_unread` |
-| cards overflow, scrollbar mid-scroll | `scroll_overflow_shows_bar` |
-| selection-driven scroll to bottom, bar settled away | `scroll_offset_follows_selection_to_bottom` |
-| tall expanded card pinned to top | `scroll_pins_tall_expanded_card_top` |
-| wheel pin holds the viewport | `scroll_manual_offset_holds` |
-| scrollbar hidden once settled | `scrollbar_hides_after_settle` |
-| scrollbar pinned (`always`) | `scrollbar_always_mode` |
-| scrollbar removed (`never`) | `scrollbar_never_mode` |
-| provider dashboard, tabbed (derived tab) | `provider_dashboard` |
-| provider dashboard, manual tab pick | `provider_dashboard_codex_tab` |
-| provider dashboard, stacked auto layout | `provider_dashboard_stacked` |
-| fleet store (week/month) | `fleet_store` |
-| health alert | `degraded_banner` |
-| pane-source notice | `render_truth_degraded_notice_keeps_room_chrome` |
+```
+╭ help ─────────────────────────────────╮
+│ keys                                  │
+│ ↕ j/k rows          ↕ J/K   worktrees │
+│ ↕ g/G ends          ↕ ^f/^b page      │
+│ ↕ H/L screen        ⏎ l     focus     │
+│ ⏎ 1-9 direct        ␣ n/N   needs-you │
+│ ✉ m   read/unread   ✉ M     read all  │
+│ ↔ ←/→ account tabs  ⟳ r     reload    │
+│ ✕ x   dismiss       ↕ a/d   width     │
+│                                       │
+│ filter                                │
+│ ? q   waiting       ! e     attention │
+│ ⏸︎ p   paused        ✓ s     done      │
+│ ⢿ w   working       ○ o     idle      │
+│ ☾ z   sleeping                        │
+│ ● u   unread        ≡ A     all       │
+│                                       │
+│ ▐ alt p sidebar                       │
+│   alt g zoom                          │
+╰────────── any key to close ───────────╯
+```
 
-When the renderer changes how something looks, update the `.snap` (the test prints the diff) and this doc together.
+## Keys and mouse
+
+These keys work while the sidebar has focus. From any other pane, `Alt+p` focuses the sidebar, and pressing it again returns to the pane you left. `Alt+g` zooms the focused work pane to fullscreen and never zooms the sidebar. Both are set by `[sidebar] focus_key` and `zoom_key` ([configuration](../guide/configuration.md#sidebar-rendering)).
+
+| key | action |
+|-----|--------|
+| `j` / `k`, `↓` / `↑` | select the next or previous row, without changing focus |
+| `J` / `K` | select the first row of the next or previous worktree |
+| `g` / `G` | select the first or last row |
+| `Ctrl+f` / `Ctrl+b`, `PageDown` / `PageUp` | move a page; under tmux's default prefix `Ctrl+b` never arrives, so use `PageUp` |
+| `H` / `L` | select the first or last row on screen |
+| `Enter`, `l` | focus the selected row's pane |
+| `1` to `9` | focus the pane of the row at that position on screen |
+| `n`, `Space` | jump to the next card that needs you: unread cards oldest first, then read `?` and `!` cards oldest first |
+| `N` | the same walk, backward |
+| `m` | mark the selected card read or unread, without jumping |
+| `M` | mark every card read |
+| `←` / `→` | switch the dashboard tab |
+| `a` / `d` | make the sidebar narrower or wider in every tab of the room ([sidebar guide](../guide/sidebar.md#bottom-chrome)) |
+| `r` | reload this tab's sidebar |
+| `x` | dismiss a recovered alert |
+| `?` | open the help overlay |
+
+| filter key | cards shown |
+|------------|-------------|
+| `u` | unread |
+| `q` | waiting (`?` is the help key) |
+| `!`, `e` | failed; the overlay labels it attention |
+| `p` | paused |
+| `s` | done |
+| `w` | working |
+| `z` | sleeping |
+| `o` | idle |
+| `A` | all |
+
+Pressing the active filter's key again also returns to all. Movement keys and `a` / `d` can be rebound under `[sidebar.keys]`, and a rebound chord takes priority over a fixed key, so it can shadow a filter. The other keys are fixed.
+
+| mouse | action |
+|-------|--------|
+| click a card or process row | focus its pane |
+| click a make-up bucket, the unread count, or `⑃ N` | filter the cards |
+| click `↑ N need you` | scroll to the card that most needs you |
+| click a subagents and waits line | open or close its entries |
+| click `+K older`, `+K more`, `− less` | unfold or fold rows |
+| click a finished group's header or receipt | show or collapse its cards |
+| click a dashboard tab | switch provider |
+| wheel | scroll the cards without moving the selection |
+| drag the pane border | set the sidebar width for the room |

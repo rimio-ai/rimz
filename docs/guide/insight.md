@@ -70,7 +70,7 @@ The `5h` and `7d` bars measure a different thing from the dollar figures. They a
 
 If a live session reports a drop to 25% used or less, the sidebar requests a fresh provider reading rather than waiting for the usual refresh interval. It holds the previous value until the provider confirms the drop or the low reading persists for two minutes without a fresh provider reading contradicting it; a failed query does not trigger another on every frame.
 
-When a window empties mid-turn the agent parks rather than fails, and with auto-continue it resumes itself the moment the window resets ([loops → keep the fleet moving](./loops.md#keep-the-fleet-moving)). The exact bar tones, the reset colouring, and the not-yet-started window are drawn in the [interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard); where the readings come from is [providers internals](../internals/agents/providers.md).
+When a window empties mid-turn the agent parks rather than fails, and with auto-continue it resumes itself the moment the window resets ([loops → keep the fleet moving](./loops.md#keep-the-fleet-moving)). The exact bar tones, the reset colouring, and the not-yet-started window are drawn in the [interface reference](../interface/sidebar.md#the-provider-dashboard); where the readings come from is [providers internals](../internals/agents/providers.md).
 
 #### Cap the spend you read here
 
@@ -137,6 +137,6 @@ A few knobs, all plain TOML ([configuration](./configuration.md)):
 - [Agents](./fleet.md#manage-a-running-room): one agent's token split and cost with `rimz agents show`.
 - [Loops](./loops.md#keep-the-fleet-moving): auto-continue when a budget window empties mid-turn.
 - [Configuration](./configuration.md#sidebar-rendering): the spend window, timezone, and provider-display knobs.
-- [The sidebar on screen](../interface/sidebar.md#zone-3--the-provider-dashboard): every bar, tone, and glyph drawn exactly.
+- [The sidebar on screen](../interface/sidebar.md#the-provider-dashboard): every bar, tone, and glyph drawn exactly.
 - [Providers internals](../internals/agents/providers.md): accounts, balances, and parked turns in depth.
 - [Spending internals](../internals/agents/spending.md): spend and the price table in depth.
