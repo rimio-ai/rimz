@@ -558,13 +558,13 @@ impl FetchWorker {
                     &session,
                     &rename.anchor,
                     &rename.desired_name,
-                    rename.intent,
+                    rename.intent.clone(),
                 );
                 if let Err(err) = result {
                     tracing::debug!(
                         session = %session,
                         pane = %rename.anchor,
-                        observed_name = %rename.observed_name,
+                        intent = ?rename.intent,
                         desired_name = %rename.desired_name,
                         tags.operation = "sidebar.tab_status.rename",
                         error = &err as &dyn std::error::Error,

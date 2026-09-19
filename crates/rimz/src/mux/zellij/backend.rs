@@ -435,6 +435,18 @@ impl ZellijBackend {
         pane: &PaneId,
         timeout: Duration,
     ) -> Result<u64> {
+        self.tab_for_pane_within(session_name, pane, timeout)
+            .map(|(tab_id, _)| tab_id)
+    }
+
+    /// The stable id and current name of the tab holding `pane`, from one
+    /// listing.
+    fn tab_for_pane_within(
+        &self,
+        session_name: &str,
+        pane: &PaneId,
+        timeout: Duration,
+    ) -> Result<(u64, Option<String>)> {
         let pane_id = ZellijPaneId::try_from(pane)
             .ok()
             .and_then(ZellijPaneId::terminal_id)
@@ -446,7 +458,10 @@ impl ZellijBackend {
         listed
             .into_iter()
             .find(|candidate| !candidate.is_plugin && candidate.id == pane_id)
-            .and_then(|candidate| candidate.tab_id.or(candidate.tab_position))
+            .and_then(|candidate| {
+                let tab_id = candidate.tab_id.or(candidate.tab_position)?;
+                Some((tab_id, candidate.tab_name))
+            })
             .ok_or_else(|| MuxErr::Output {
                 program: "zellij".to_owned(),
                 reason: format!("target pane `{pane}` is absent from session `{session_name}`"),
@@ -1661,8 +1676,13 @@ impl MuxBackend for ZellijBackend {
         name: &str,
         intent: TabNameIntent,
     ) -> Result<()> {
-        let tab_id =
-            self.tab_id_for_pane_within(session, anchor, super::super::TAB_RENAME_TIMEOUT)?;
+        let (tab_id, current) =
+            self.tab_for_pane_within(session, anchor, super::super::TAB_RENAME_TIMEOUT)?;
+        if let (Some(observed), Some(current)) = (intent.observed(), current.as_deref())
+            && observed != current
+        {
+            return Ok(());
+        }
         self.zellij_action(session)
             .args([
                 "rename-tab-by-id".to_owned(),

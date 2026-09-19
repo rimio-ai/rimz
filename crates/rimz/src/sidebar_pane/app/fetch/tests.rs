@@ -426,9 +426,10 @@ fn tab_name_memo_deduplicates_within_one_pane_observation() {
     let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_7");
     let rename = crate::sidebar::produce::tab_status::TabRename {
         anchor: anchor.clone(),
-        observed_name: "#feat".to_owned(),
         desired_name: "#feat ?".to_owned(),
-        intent: crate::mux::tab_name::TabNameIntent::Status,
+        intent: crate::mux::tab_name::TabNameIntent::Status {
+            observed: "#feat".to_owned(),
+        },
     };
     let mut memo = TabNameMemo::default();
 
@@ -473,10 +474,10 @@ fn released_tab_deduplicates_and_settles_on_the_next_observation() {
     let mut memo = TabNameMemo::default();
     let renames =
         crate::sidebar::produce::tab_status::desired_tab_renames(&snapshot, &frame, "zsh");
-    assert_eq!(
+    assert!(matches!(
         renames[0].intent,
-        crate::mux::tab_name::TabNameIntent::Release
-    );
+        crate::mux::tab_name::TabNameIntent::Release { .. }
+    ));
     assert_eq!(memo.pending(&frame, renames.clone()).len(), 1);
     assert!(memo.pending(&frame, renames).is_empty());
     frame.observed_at_ms += 1;

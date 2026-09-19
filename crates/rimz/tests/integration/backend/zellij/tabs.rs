@@ -386,8 +386,36 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
         other.title
     );
 
+    // A projection from a frame older than the claim finds the tab renamed and
+    // leaves it; the Status below, projected from the claimed name, then applies.
     room.backend()
-        .rename_tab(room.name(), &anchor, "work ✓", TabNameIntent::Status)
+        .rename_tab(
+            room.name(),
+            &anchor,
+            "shell",
+            TabNameIntent::Rest {
+                observed: "shell ?".to_owned(),
+            },
+        )
+        .expect("stale projection after the claim");
+    assert!(
+        expect_list_panes(room.path(), room.name())
+            .panes
+            .iter()
+            .filter(|pane| pane.tab_id == target_id)
+            .all(|pane| pane.tab_name.as_deref() == Some("#feat")),
+        "a stale projection must keep the claimed name",
+    );
+
+    room.backend()
+        .rename_tab(
+            room.name(),
+            &anchor,
+            "work ✓",
+            TabNameIntent::Status {
+                observed: "#feat".to_owned(),
+            },
+        )
         .expect("rename shifted tab by its pane anchor");
 
     let renamed = poll_until(
@@ -412,7 +440,14 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
     );
     let shell = rimz::proc::shell_pane_name();
     room.backend()
-        .rename_tab(room.name(), &anchor, &shell, TabNameIntent::Release)
+        .rename_tab(
+            room.name(),
+            &anchor,
+            &shell,
+            TabNameIntent::Release {
+                observed: "work ✓".to_owned(),
+            },
+        )
         .expect("release anchored tab");
     let released = poll_until(
         Duration::from_secs(10),

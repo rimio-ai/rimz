@@ -1044,6 +1044,14 @@ pub trait MuxBackend: Send + Sync {
     /// directly, while Zellij resolves the pane's stable tab id before using
     /// its by-id rename action. The intent distinguishes a launch claim,
     /// temporary status, resting name, and release to inherited naming.
+    ///
+    /// A projected intent (Status, Rest, Release) is a compare-and-set: it
+    /// applies only while the tab still bears the name it was projected from,
+    /// so a stale projection never overwrites a newer rename such as a launch
+    /// claim; a miss returns `Ok` and the next projection starts from the fresh
+    /// name. tmux checks and writes in one server command list. Zellij has no
+    /// conditional rename: it compares in the listing that resolves the tab,
+    /// leaving one action round trip between check and write.
     fn rename_tab(
         &self,
         session: &str,

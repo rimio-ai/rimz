@@ -320,13 +320,19 @@ fn rename_tab_resolves_the_anchor_to_a_stable_id() {
         TabNameIntent::Claim {
             pane_name: "-opus".to_owned(),
         },
-        TabNameIntent::Status,
-        TabNameIntent::Rest,
-        TabNameIntent::Release,
+        TabNameIntent::Status {
+            observed: "#feat".to_owned(),
+        },
+        TabNameIntent::Rest {
+            observed: "#feat".to_owned(),
+        },
+        TabNameIntent::Release {
+            observed: "#feat".to_owned(),
+        },
     ] {
         let claim = matches!(intent, TabNameIntent::Claim { .. });
         let (temp, shim) = support::pane_roster_shim(
-            r#"[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3,"is_focused":false},{"id":8,"is_plugin":false,"tab_id":43,"tab_position":1,"is_focused":true}]"#,
+            r##"[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3,"tab_name":"#feat","is_focused":false},{"id":8,"is_plugin":false,"tab_id":43,"tab_position":1,"is_focused":true}]"##,
         );
         let backend = ZellijBackend::with_program_for_test(&shim);
         let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
@@ -352,6 +358,37 @@ fn rename_tab_resolves_the_anchor_to_a_stable_id() {
                 "{log}"
             );
         }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn projected_rename_skips_a_tab_renamed_since_its_observation() {
+    use crate::mux::tab_name::TabNameIntent;
+
+    for intent in [
+        TabNameIntent::Status {
+            observed: "shell ?".to_owned(),
+        },
+        TabNameIntent::Rest {
+            observed: "shell ?".to_owned(),
+        },
+        TabNameIntent::Release {
+            observed: "shell ?".to_owned(),
+        },
+    ] {
+        let (temp, shim) = support::pane_roster_shim(
+            r#"[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3,"tab_name":"opus","is_focused":true}]"#,
+        );
+        let backend = ZellijBackend::with_program_for_test(&shim);
+        let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+
+        backend
+            .rename_tab("rimz-test", &pane, "shell", intent)
+            .expect("a stale projection is a silent miss");
+
+        let log = shim_log(&temp);
+        assert_eq!(command_count(&log, "action rename-tab-by-id"), 0, "{log}");
     }
 }
 
