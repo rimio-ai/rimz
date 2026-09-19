@@ -7,7 +7,9 @@ use anyhow::{Context, Result, bail};
 use rimz::agents::{LaunchPreset, PermissionMode};
 use rimz::config::{MachineConfig, effective::LaunchAgents};
 use rimz::harness::budget::BudgetSpec;
-use rimz::harness::plan::{LaunchFinalizeOptions, LaunchFinalizeWarning, ResolvedLaunch};
+use rimz::harness::plan::{
+    LaunchFinalizeOptions, LaunchFinalizeWarning, PermissionModeChoice, ResolvedLaunch,
+};
 use rimz::harness::spec::LayoutSpec;
 use rimz::store::snapshot::SidebarSnapshot;
 
@@ -77,7 +79,8 @@ pub(super) fn resolve_finalized_layout(
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            permission_mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?,
+            permission_mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?
+                .map(PermissionModeChoice::Explicit),
             isolation: overrides.isolation,
             preset: &preset,
             passthrough: &overrides.passthrough,

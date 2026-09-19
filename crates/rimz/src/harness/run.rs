@@ -47,7 +47,7 @@ pub struct SupervisedRunRequest {
     /// child.
     pub subagent: bool,
     pub force_new_tab: bool,
-    pub permission_mode: PermissionMode,
+    pub permission_mode: Option<PermissionMode>,
     /// The launch's `--isolation` override; a subagent without one inherits
     /// its parent's.
     pub isolation: Option<crate::config::Isolation>,
@@ -75,7 +75,7 @@ impl SupervisedRunRequest {
     pub fn new(
         spec: String,
         prompt: String,
-        permission_mode: PermissionMode,
+        permission_mode: Option<PermissionMode>,
         managed_launch: crate::agents::ManagedLaunchState,
     ) -> Self {
         Self {

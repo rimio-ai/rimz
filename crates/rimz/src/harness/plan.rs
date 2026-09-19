@@ -20,8 +20,14 @@ use crate::store::{
 };
 
 #[derive(Clone, Copy, Debug)]
+pub enum PermissionModeChoice {
+    Explicit(PermissionMode),
+    Default(PermissionMode),
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct LaunchFinalizeOptions<'a> {
-    pub permission_mode: Option<PermissionMode>,
+    pub permission_mode: Option<PermissionModeChoice>,
     pub isolation: Option<crate::config::Isolation>,
     pub preset: &'a crate::agents::LaunchPreset,
     pub passthrough: &'a [String],
@@ -523,8 +529,17 @@ fn finalize_agent_cell(
     if options.isolation.is_some() {
         cell.launch.isolation = options.isolation;
     }
-    if let Some(permission_mode) = options.permission_mode
-        && cell.launch.mode.is_none()
+    let permission_mode = match options.permission_mode {
+        Some(PermissionModeChoice::Explicit(mode)) => {
+            if let Some(adapter) = adapter {
+                adapter.spec().launch.strip_permission_args(&mut cell.args);
+            }
+            Some(mode)
+        }
+        Some(PermissionModeChoice::Default(mode)) if cell.launch.mode.is_none() => Some(mode),
+        _ => None,
+    };
+    if let Some(permission_mode) = permission_mode
         && let Some(adapter) = adapter
     {
         cell.args

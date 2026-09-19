@@ -877,8 +877,7 @@ fn into_supervised_request(
     let permission_mode = interactive_permission_mode_from_flags(
         args.launch.overrides.ask,
         args.launch.overrides.yolo,
-    )?
-    .unwrap_or(PermissionMode::Auto);
+    )?;
     let system_prompt_file = resolve_launch_prompt_file(
         args.launch.overrides.system_prompt_file.as_deref(),
         "--system-prompt-file",
