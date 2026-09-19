@@ -504,6 +504,7 @@ fn enrich_core(
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
     let cohort_spend_cache = read_cohort_spend_cache(&runtime.cohort_spend_path());
+    let pipeline_cache = super::refresh::pipeline::read_pipeline_cache(&runtime.pipeline_path());
 
     // The room's enumerated group roots — a repo room's worktree checkouts, so
     // one parked outside the project root still earns its own pod instead of
@@ -709,6 +710,9 @@ fn enrich_core(
     project_diff_stats(&mut folded, &diff_cache);
     disambiguate_group_labels(&mut folded);
     project_cohort_effort(&mut folded, &cohort_spend_cache);
+    for group in &mut folded.worktree_groups {
+        group.pipeline = pipeline_cache.groups.get(&group.key).cloned();
+    }
     if let Some(lanes) = lanes {
         project_pr_state_map(&mut folded, &lanes.pr_states, &lanes.branch_ci, &diff_cache);
     } else {

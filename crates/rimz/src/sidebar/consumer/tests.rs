@@ -66,6 +66,7 @@ fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'stati
         ("pane_frame", runtime.pane_frame_path()),
         ("diff_stats", runtime.diff_stats_path()),
         ("cohort_spend", runtime.cohort_spend_path()),
+        ("pipeline", runtime.pipeline_path()),
         ("pr_state", runtime.pr_state_path()),
         ("unread", runtime.unread_path()),
         ("link_stats", crate::remote::link::stats_path(runtime)),
@@ -98,6 +99,17 @@ fn write_stamp_file(path: &Path, value: &str) {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(path, format!("{value}-baseline")).unwrap();
+}
+
+#[test]
+fn pipeline_publication_changes_adoption_stamp() {
+    let fixture = StampFixture::new();
+    let before = consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime);
+    write_stamp_file(&fixture.runtime.pipeline_path(), "new-pipeline");
+    assert_ne!(
+        before,
+        consumer_projection_inputs_stamp(&fixture.state, &fixture.runtime)
+    );
 }
 
 fn daemon_codex(
@@ -442,6 +454,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
         "pane_frame",
         "diff_stats",
         "cohort_spend",
+        "pipeline",
         "pr_state",
         "unread",
         "link_stats",

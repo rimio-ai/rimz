@@ -491,6 +491,8 @@ impl LoopState {
         self.last_known_elder = update.role().is_producer();
         if matches!(update, FetchUpdate::Unchanged { .. }) {
             self.fetched_at = Instant::now();
+            self.current.now = jiff::Timestamp::now();
+            self.dirty |= self.current.has_running_pipeline_clock();
             return false;
         }
         let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });

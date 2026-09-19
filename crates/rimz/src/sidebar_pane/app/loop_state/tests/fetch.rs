@@ -7,6 +7,7 @@ use super::*;
 fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
     let mut rig = Rig::new();
     rig.state.dirty = false;
+    rig.state.current.now = jiff::Timestamp::UNIX_EPOCH;
     rig.fetch.request(FetchRequest::default(), false);
     assert!(rig.next_request().is_some());
 
@@ -15,11 +16,45 @@ fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
     });
 
     assert!(!rig.state.dirty);
+    assert!(rig.state.current.now > jiff::Timestamp::UNIX_EPOCH);
     rig.fetch.request(FetchRequest::default(), false);
     assert!(
         rig.next_request().is_some(),
         "unchanged final outcome must release the single-flight request"
     );
+}
+
+#[test]
+fn unchanged_consumer_ticks_only_running_pipeline_clocks() {
+    let mut rig = Rig::new();
+    rig.state.current = agent_snapshot(&rig.ws);
+    rig.state.current.worktree_groups[0].pipeline = Some(crate::store::snapshot::SidebarPipeline {
+        stages: vec!["Build".to_owned()],
+        stage: "Build".to_owned(),
+        owner: None,
+        started_at: Some(jiff::Timestamp::UNIX_EPOCH),
+        done_at: None,
+    });
+    rig.state.dirty = false;
+    rig.state.current.now = jiff::Timestamp::UNIX_EPOCH;
+    assert!(!rig.state.apply_latest_snapshot(FetchUpdate::Unchanged {
+        role: FetchRole::Consumer
+    }));
+    assert!(rig.state.dirty);
+    assert!(rig.state.current.now > jiff::Timestamp::UNIX_EPOCH);
+
+    rig.state.current.worktree_groups[0]
+        .pipeline
+        .as_mut()
+        .unwrap()
+        .stage = "Done".to_owned();
+    rig.state.dirty = false;
+    rig.state.current.now = jiff::Timestamp::UNIX_EPOCH;
+    assert!(!rig.state.apply_latest_snapshot(FetchUpdate::Unchanged {
+        role: FetchRole::Consumer
+    }));
+    assert!(!rig.state.dirty);
+    assert!(rig.state.current.now > jiff::Timestamp::UNIX_EPOCH);
 }
 
 #[test]
