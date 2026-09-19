@@ -578,16 +578,17 @@ fn explain_prints_the_plan_without_side_effects() {
         serde_json::json!(["--model opus", "--yolo", "-- --foo"])
     );
     assert_eq!(overridden["model"], "opus");
-    assert_eq!(overridden["mode"], "ask");
+    assert_eq!(overridden["mode"], "yolo");
     let argv = overridden["provider_argv"].as_array().unwrap();
     assert!(
         argv.windows(2)
             .any(|pair| pair[0] == "--model" && pair[1] == "opus")
     );
-    assert!(
-        !argv
-            .iter()
-            .any(|arg| arg == "--dangerously-skip-permissions")
+    assert_eq!(
+        argv.iter()
+            .filter(|arg| *arg == "--dangerously-skip-permissions")
+            .count(),
+        1
     );
     assert!(argv.iter().any(|arg| arg == "--foo"));
     let team = env
