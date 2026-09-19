@@ -69,6 +69,8 @@ The planner comes back to you at its design gates; the sidebar lifts the whole t
 
 ## See and drive your teams
 
+To follow a staged run without opening each pane, read the [sidebar pipeline line](./sidebar.md#the-agent-cards) below its worktree header. It shows the board's stage and elapsed run time; click it to reach the stage owner. Unlike the stage age in `teams show`, this clock covers the whole run and stops at `Done`.
+
 When several copies of a team are working in parallel, checking each pane loses the overview. The team catalogue gives each live cohort its own row with lane, stage, PR/CI, and status; `show` opens the detail for one line of work:
 
 ```sh

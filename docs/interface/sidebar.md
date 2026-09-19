@@ -114,6 +114,17 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `▸` | a collapsed finished group |
 | `+3 more` / `− less` | hidden idle rows; click to expand or collapse |
 
+### Pipeline glyphs
+
+Each declared stage gets one dot; `Done` has no separate slot. These roles live under `[theme.glyphs.<set>.pipeline]` independently of the clock and status glyphs.
+
+| role | Unicode | Nerd Font | meaning |
+|------|---------|-----------|---------|
+| `passed` | `●` | `●` | before the current stage |
+| `current` | `◉` | `◉` | current stage |
+| `future` | `○` | `○` | after the current stage |
+| `done` | `●` | `󰗠` (U+F05E0) | replaces the last dot at `Done` |
+
 ### Subagent and wait glyphs
 
 | mark | meaning |
@@ -419,6 +430,18 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
  ○ zsh
 ```
 
+A group with one staged team and a readable worktree `blackboard.md` containing a `Stage:` line gets a pipeline line directly below its header, above the first card. The team's members must identify one worktree.:
+
+```
+▎⑂ pipeline · forge ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▎  ● ● ◉ ○ ○  Implement                         47:12🮇
+▌⣾ planner                                           ▐
+```
+
+The dots follow declared stage order: passed, current, then future. Flipping backward moves the current dot back. At `Done`, every dot is passed and the last becomes the done seal; the word `Done` keeps the meaning visible without color. A board stage outside the declared pipeline shows its name without a track. The current dot takes the visible stage owner's status color and animation phase, or stays muted when that owner has no visible card. The line never creates `!`, unread state, attention ranking, tab status, or a notification.
+
+The right-pinned clock is the whole run's elapsed time, `m:ss` below an hour and `h:mm:ss` thereafter, not time in the current stage. It starts at the first parseable entry in the board's `## Progress` (or `## Progress log`) ledger, restarts at each later flip out of `Done`, and freezes at the last `-> Done` entry when the board says `Done`. No parseable start, a future start, or `Done` without a valid stop means no clock. Clicking the line focuses the visible stage owner's pane, otherwise the first actionable team member, otherwise the group's first visible row.
+
 ### Row cap and finished groups
 
 A group shows at most six idle and process rows. The rest fold behind a dim `+K more`. Click it to show every row, and click `− less` to fold them again. Working, waiting, failed, paused, done, unread, and selected cards are never folded. While a filter is active the cap is off, and rows and groups that do not match are hidden.
@@ -446,7 +469,14 @@ The first line lists the team name when the members share one, each member's fin
 
 Click the header or either receipt line, press `s`, or focus a member to show the cards, and click the header to collapse them again. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A finished group with one agent, and a group with only process rows, stay open.
 
-The order of cards and groups follows status and age, and read state never moves a card. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
+A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
+
+```
+ ⑂ pipeline · forge
+ ▸ forge · Done  ✓ planner  ✓ coder
+```
+
+Expanding the group restores the pipeline line. The order of cards and groups follows status and age, and read state never moves a card. The rules are in [how the column is ordered](../guide/sidebar.md#how-the-column-is-ordered).
 
 ## The provider dashboard
 
@@ -521,6 +551,8 @@ How budgets are read, cached, and refreshed is in [provider internals](../intern
 With `[theme.pets] enabled = true`, the active block narrows and an animated companion with a caption sits at its right edge. It draws as pixels where the terminal supports kitty graphics (15 by 9 cells) and as cell art otherwise (18 by 9 cells). It is hidden under `NO_COLOR` and when the pane is too narrow. See [pets](../guide/pets.md).
 
 ### Narrow panes
+
+The pipeline keeps its clock and stage name ahead of its track: the dots disappear as a whole first, then the name ellipsizes. It never draws a partial track.
 
 As the pane narrows, a block drops the input and output token split, then the version text. Below 36 columns the provider emblem goes and the bars run the full width. A pet narrows the block further.
 
@@ -648,6 +680,7 @@ Pressing the active filter's key again also returns to all. Movement keys and `a
 | mouse | action |
 |-------|--------|
 | click a card or process row | focus its pane |
+| click a pipeline line | focus the visible stage owner, else the first actionable team member, else the group's first visible row |
 | click a make-up bucket, the unread count, or `⑃ N` | filter the cards |
 | click `↑ N need you` | scroll to the top of the cards |
 | click a subagents and waits line | open or close its entries |
