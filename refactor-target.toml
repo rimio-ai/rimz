@@ -376,7 +376,8 @@ path = "crates/rimz/src/store"
 # Flip and smart compaction share the typed occupied-context threshold predicate.
 # The carryover parse counter is re-exported through testkit beside the event-log byte counters.
 # A lifecycle receipt names a side conversation's host so the hook credits the host card's clocks.
-surface-budget = 342
+# The sidebar group record carries a team pipeline and its derived position.
+surface-budget = 344
 
 [[module]]
 path = "crates/rimz/src/theme"

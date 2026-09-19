@@ -31,6 +31,7 @@ fn group(key: &str, rows: Vec<SidebarRow>) -> SidebarWorktreeGroup {
         kind: SidebarWorktreeKind::Worktree,
         team: None,
         cohort_effort: None,
+        pipeline: None,
         status_counts: Vec::<SidebarStatusCount>::new(),
         rows,
         diff_added: None,

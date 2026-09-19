@@ -465,6 +465,7 @@ mod tests {
             kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
+            pipeline: None,
             status_counts,
             rows,
             diff_added: None,

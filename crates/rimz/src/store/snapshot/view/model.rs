@@ -153,6 +153,55 @@ pub struct SidebarCohortEffort {
     pub seats: BTreeMap<String, SidebarSeatEffort>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarPipeline {
+    /// Declared stages, excluding Done.
+    pub stages: Vec<String>,
+    pub stage: String,
+    pub owner: Option<String>,
+    pub started_at: Option<jiff::Timestamp>,
+    pub done_at: Option<jiff::Timestamp>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipelinePosition {
+    At(usize),
+    Done,
+    Undeclared,
+}
+
+impl SidebarPipeline {
+    pub fn position(&self) -> PipelinePosition {
+        if self.stage == crate::config::DONE_STAGE {
+            return PipelinePosition::Done;
+        }
+        self.stages
+            .iter()
+            .position(|stage| stage == &self.stage)
+            .map_or(PipelinePosition::Undeclared, PipelinePosition::At)
+    }
+
+    pub fn span_secs(&self, now: jiff::Timestamp) -> Option<u64> {
+        let start = self.started_at?;
+        if start > now {
+            return None;
+        }
+        let end = if self.position() == PipelinePosition::Done {
+            now.min(self.done_at?)
+        } else {
+            now
+        };
+        if end < start {
+            return None;
+        }
+        u64::try_from(end.duration_since(start).as_secs()).ok()
+    }
+
+    pub fn clock_running(&self) -> bool {
+        self.started_at.is_some() && self.position() != PipelinePosition::Done
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarWorktreeGroup {
     pub key: String,
@@ -170,6 +219,8 @@ pub struct SidebarWorktreeGroup {
     pub team: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cohort_effort: Option<SidebarCohortEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<SidebarPipeline>,
     pub status_counts: Vec<SidebarStatusCount>,
     pub rows: Vec<SidebarRow>,
     /// Total insertions and deletions relative to trunk.
@@ -411,6 +462,7 @@ mod tests {
             kind: SidebarWorktreeKind::Worktree,
             team: None,
             cohort_effort: None,
+            pipeline: None,
             status_counts: Vec::new(),
             rows,
             diff_added: None,
@@ -484,6 +536,68 @@ mod tests {
 
         assert!(decoded.seats.is_empty());
         assert_eq!(decoded.cost_usd, Some(1.0));
+    }
+
+    #[test]
+    fn worktree_group_without_pipeline_stays_serde_compatible() {
+        let group = collapse_test_group(Vec::new());
+        let mut value = serde_json::to_value(&group).unwrap();
+        assert!(value.get("pipeline").is_none());
+        value.as_object_mut().unwrap().remove("pipeline");
+        let decoded: SidebarWorktreeGroup = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.pipeline, None);
+    }
+
+    fn pipeline(stage: &str) -> SidebarPipeline {
+        SidebarPipeline {
+            stages: vec!["Plan".to_owned(), "Implement".to_owned()],
+            stage: stage.to_owned(),
+            owner: Some("coder".to_owned()),
+            started_at: Some(jiff::Timestamp::from_second(100).unwrap()),
+            done_at: None,
+        }
+    }
+
+    #[test]
+    fn pipeline_position_follows_the_board_stage() {
+        assert_eq!(pipeline("Plan").position(), PipelinePosition::At(0));
+        assert_eq!(pipeline("Implement").position(), PipelinePosition::At(1));
+        assert_eq!(pipeline("Done").position(), PipelinePosition::Done);
+        assert_eq!(pipeline("Review").position(), PipelinePosition::Undeclared);
+    }
+
+    #[test]
+    fn pipeline_span_uses_the_run_start_and_done_stop() {
+        let now = jiff::Timestamp::from_second(200).unwrap();
+        let mut run = pipeline("Implement");
+        assert_eq!(run.span_secs(now), Some(100));
+        run.done_at = Some(jiff::Timestamp::from_second(150).unwrap());
+        assert_eq!(run.span_secs(now), Some(100));
+        run.stage = "Done".to_owned();
+        assert_eq!(run.span_secs(now), Some(50));
+        run.done_at = Some(jiff::Timestamp::from_second(250).unwrap());
+        assert_eq!(run.span_secs(now), Some(100));
+        run.done_at = Some(jiff::Timestamp::from_second(99).unwrap());
+        assert_eq!(run.span_secs(now), None);
+        run.done_at = None;
+        assert_eq!(run.span_secs(now), None);
+        run.stage = "Implement".to_owned();
+        run.started_at = Some(jiff::Timestamp::from_second(201).unwrap());
+        assert_eq!(run.span_secs(now), None);
+        run.started_at = Some(jiff::Timestamp::new(199, 500_000_000).unwrap());
+        assert_eq!(run.span_secs(now), Some(0));
+        run.started_at = None;
+        assert_eq!(run.span_secs(now), None);
+    }
+
+    #[test]
+    fn pipeline_clock_runs_only_with_a_start_outside_done() {
+        assert!(pipeline("Implement").clock_running());
+        assert!(pipeline("Review").clock_running());
+        assert!(!pipeline("Done").clock_running());
+        let mut run = pipeline("Plan");
+        run.started_at = None;
+        assert!(!run.clock_running());
     }
 
     #[test]
