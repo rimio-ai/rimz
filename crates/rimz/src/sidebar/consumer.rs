@@ -364,6 +364,7 @@ fn consumer_fold_inputs_stamp(
         runtime.root.join("metrics-sample.json"),
         runtime.diff_stats_path(),
         runtime.cohort_spend_path(),
+        runtime.pipeline_path(),
         runtime.pr_state_path(),
         runtime.shared_accounts_path(),
         runtime.shared_rate_limits_path(),
@@ -411,6 +412,7 @@ fn consumer_projection_inputs_stamp(
         runtime: [
             runtime.pane_frame_path(),
             workspace_projection_path(runtime),
+            runtime.pipeline_path(),
         ]
         .into_iter()
         .map(|path| StampedPath::of(&path))

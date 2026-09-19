@@ -25,6 +25,7 @@ pub(super) mod daemon_reap;
 mod git_refs;
 pub mod git_stats;
 pub(super) mod live_spend;
+pub(super) mod pipeline;
 mod pr;
 pub(super) mod rate_limits;
 mod runner;
@@ -307,6 +308,7 @@ pub(super) fn refresh_heavy_lanes(
         &mut state.cohort_rollup,
         &mut state.cohort_effort,
     );
+    pipeline::refresh_pipeline_for(base, runtime, config);
     let pr_cache = produce_pr_states(base, runtime);
 
     RefreshedLanes {

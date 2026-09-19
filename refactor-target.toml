@@ -223,7 +223,8 @@ allowed-dependencies = [
 # One home: every root resolves through a named `disk::paths` dir function, and
 # workspace dirs through the `for_project_root`/`under_named` constructors;
 # `holds_rimz_home` keeps the home out of project-marker and trust lookups.
-surface-budget = 156
+# The runtime pipeline cache path joins the sidebar cache paths.
+surface-budget = 157
 
 [[module]]
 path = "crates/rimz/src/forge"

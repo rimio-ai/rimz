@@ -607,6 +607,10 @@ impl RuntimePaths {
         self.root.join("cohort-spend.json")
     }
 
+    pub(crate) fn pipeline_path(&self) -> PathBuf {
+        self.root.join("pipeline.json")
+    }
+
     pub(crate) fn pr_state_path(&self) -> PathBuf {
         self.root.join("pr-state.json")
     }
