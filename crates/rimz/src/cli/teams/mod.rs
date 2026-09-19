@@ -29,12 +29,7 @@ pub struct TeamsArgs {
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
-    #[arg(
-        long,
-        value_name = "host|sandbox",
-        requires = "name",
-        conflicts_with = "resume"
-    )]
+    #[arg(long, value_name = "host|sandbox", requires = "name")]
     isolation: Option<rimz::config::Isolation>,
     /// Emit the team catalogue as JSON.
     #[arg(long)]
@@ -114,7 +109,7 @@ struct TeamLaunchArgs {
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
-    #[arg(long, value_name = "host|sandbox", conflicts_with = "resume")]
+    #[arg(long, value_name = "host|sandbox")]
     isolation: Option<rimz::config::Isolation>,
 }
 
@@ -138,6 +133,28 @@ struct ResumeArgs {
     /// Open without focusing the resumed team tab.
     #[arg(long)]
     bg: bool,
+    /// Replace the resumed members' recorded isolation.
+    #[arg(long, value_name = "host|sandbox")]
+    isolation: Option<rimz::config::Isolation>,
+}
+
+impl ResumeArgs {
+    fn into_agents_args(self) -> agents_cmd::AgentsArgs {
+        agents_cmd::AgentsArgs::from_launch(agents_cmd::AgentLaunchArgs {
+            spec: Some(self.name),
+            cohort: agents_cmd::CohortLaunchArgs {
+                worktree: self.worktree,
+                resume: true,
+                bg: self.bg,
+                ..Default::default()
+            },
+            overrides: agents_cmd::LaunchOverrideArgs {
+                isolation: self.isolation,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
 }
 
 #[derive(Debug, Args)]
@@ -241,22 +258,10 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(TeamsSubcmd::Launch(args)) => {
             launch_team(args.name, args.prompt, args.launch, args.isolation, globals)
         }
-        Some(TeamsSubcmd::Resume(args)) => {
-            let (name, worktree) = team_lane(args.name, args.worktree)?;
-            ensure_defined(&name, globals)?;
-            agents_cmd::run(
-                agents_cmd::AgentsArgs::from_launch(agents_cmd::AgentLaunchArgs {
-                    spec: Some(name),
-                    cohort: agents_cmd::CohortLaunchArgs {
-                        worktree,
-                        resume: true,
-                        bg: args.bg,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-                globals,
-            )
+        Some(TeamsSubcmd::Resume(mut args)) => {
+            (args.name, args.worktree) = team_lane(args.name, args.worktree)?;
+            ensure_defined(&args.name, globals)?;
+            agents_cmd::run(args.into_agents_args(), globals)
         }
         Some(TeamsSubcmd::Stop(args)) => {
             let (name, worktree) = team_lane(args.name, args.worktree)?;
@@ -556,13 +561,25 @@ mod tests {
             &["rimz", "forge", "--resume", "--isolation", "host"][..],
             &["rimz", "launch", "forge", "--resume", "--isolation", "host"],
         ] {
-            let error = TeamsHarness::try_parse_from(argv).expect_err("resume replays isolation");
-            assert_eq!(
-                error.kind(),
-                clap::error::ErrorKind::ArgumentConflict,
-                "{argv:?}"
-            );
+            let args = parse_teams(argv);
+            let (launch, isolation) = match args.command {
+                Some(TeamsSubcmd::Launch(args)) => (args.launch, args.isolation),
+                _ => (args.launch, args.isolation),
+            };
+            assert!(launch.resume);
+            assert_eq!(isolation, Some(rimz::config::Isolation::Host));
         }
+        let resume = parse_teams(&["rimz", "resume", "forge", "--isolation", "host"]);
+        let Some(TeamsSubcmd::Resume(args)) = resume.command else {
+            panic!("resume verb");
+        };
+        let args = args.into_agents_args();
+        assert_eq!(args.launch.spec.as_deref(), Some("forge"));
+        assert!(args.launch.cohort.resume);
+        assert_eq!(
+            args.launch.overrides.isolation,
+            Some(rimz::config::Isolation::Host)
+        );
     }
 
     #[test]

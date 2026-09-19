@@ -140,7 +140,7 @@ The profile fields these flags override are described in the [configuration guid
 
 `--agent` swaps the engine and keeps the job. The replacement profile or kind supplies the provider, and supplies model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer prompt on the `opus` profile's model and effort. When the replacement leaves model or effort unset, a same-provider re-base keeps the cell's values, while a provider change drops the cell's model and keeps its effort. Permission mode, budget, `auto-compact`, skills, and prompt files carry over from the original profile, and the replacement fills only what the original left unset. Raw profile `args` carry over on a same-provider re-base; on a provider change they come from the replacement instead, so a named Codex definition can supply its model and generated tool flags when selected as the replacement. Command-line flags still win, and typed fields the new adapter cannot express fail before any pane opens. `--agent` applies to this launch only: it conflicts with `--resume`, and a later `restart` refuses when the profile resolves back to a different provider.
 
-`--isolation sandbox` runs the bubblewrap preflight and refuses before any pane opens when it fails. The override is recorded on each agent, so `restart`, `fork`, resume, room rebirth, and the agent's `rimz subagents` children keep it. An agent launched without the flag follows the machine setting each time it relaunches.
+`--isolation sandbox` runs the bubblewrap preflight and refuses before any pane opens when it fails. The override is recorded on each agent, so `restart`, `fork`, resume, room rebirth, and the agent's `rimz subagents` children keep it. A cohort resume with `--isolation host|sandbox` replaces that recorded override while keeping the conversation. Omitting the flag preserves any recorded override; an agent with no recorded override follows the machine setting each time it relaunches.
 
 ### Channel, worktree, and placement
 
@@ -267,7 +267,9 @@ A matched member that is still live refuses the command, so an address is never 
 
 A single-cell resume run from the cohort's own directory takes over the current pane, so the hint an exiting team member leaves (`resume with rimz agents forge.coder --resume`) works from the shell it dropped into. Run from anywhere else, a lane-scoped resume opens its own tab.
 
-Resume takes identity from the store, so it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--budget`, `--model`, `--effort`, `--agent`, `--isolation`, `--ask`, `--yolo`, `-p`, the system-prompt flags, and passthrough arguments.
+`--resume` and `--continue` accept `--isolation host|sandbox`, `--ask` or `--yolo`, `--model`, and `--effort`. Isolation replaces the member's recorded override and survives later relaunches and child launches. For a matched session, permission mode, model, and effort overrides apply only to this invocation; later resumes, restart, and rebirth return to their usual profile and recorded-value rules. Omitting a flag keeps the existing resume behavior. A member with no resumable session starts fresh and records its launch settings normally.
+
+Resume refuses `PROMPT` (send it with `rimz message` after the session opens), `--agent` (it changes which session the spec matches), `--system-prompt-file`, `--append-system-prompt-file` (update the profile instead), and passthrough arguments after `--` (use supported profile settings or launch fresh). The same refusals apply when you choose resume at the named-worktree prompt: rerun without the input, or choose fresh. Identity and cohort options `--from-pr`, `--channel`, `--name`, `--description`, `--budget`, `-p`, and `--fresh` still conflict with resume.
 
 ### Resume a lane by place
 
