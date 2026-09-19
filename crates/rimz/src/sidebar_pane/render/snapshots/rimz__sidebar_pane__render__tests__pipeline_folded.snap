@@ -1,0 +1,25 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 247
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 2                                            $0.00
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 2   ☾ 0   ○ 0
+
+ ⑂ pipeline · forge
+ ▸ forge · Done  ✓ planner  ✓ coder
+
+
+
+
+
+
+ ────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+
+                                           ? for help

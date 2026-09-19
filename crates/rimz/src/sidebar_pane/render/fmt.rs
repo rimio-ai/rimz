@@ -36,6 +36,14 @@ pub(super) fn age_short(at: Timestamp, now: Timestamp) -> String {
     age_label(age_secs(at, now))
 }
 
+pub(super) fn run_clock_label(secs: u64) -> String {
+    if secs < 3_600 {
+        format!("{}:{:02}", secs / 60, secs % 60)
+    } else {
+        format!("{}:{:02}:{:02}", secs / 3_600, secs / 60 % 60, secs % 60)
+    }
+}
+
 /// A row's last-activity age, floored to its highest whole unit: `{m}m` up to an
 /// hour, whole hours `{h}h` from 1h on, capped at `>1d` from a day on — a coarse
 /// "how long since this agent last did something". Ages under five minutes never
@@ -259,6 +267,20 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn run_clock_boundaries() {
+        for (secs, label) in [
+            (0, "0:00"),
+            (7, "0:07"),
+            (2_832, "47:12"),
+            (3_599, "59:59"),
+            (3_600, "1:00:00"),
+            (6_432, "1:47:12"),
+        ] {
+            assert_eq!(run_clock_label(secs), label);
+        }
+    }
 
     #[test]
     fn time_and_window_labels_keep_their_compact_boundaries() {
