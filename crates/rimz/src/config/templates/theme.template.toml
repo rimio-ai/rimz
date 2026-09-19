@@ -206,6 +206,12 @@
 ## expand = "▸"
 ## dotted = "┄"
 
+[theme.glyphs.unicode.pipeline]
+## passed = "●"
+## current = "◉"
+## future = "○"
+## done = "●"
+
 [theme.glyphs.unicode.card]
 ## subagents = "⧉"
 ## waits = "⧖"
@@ -315,6 +321,12 @@
 ## reconciling = ""
 ## expand = "▸"
 ## dotted = "┄"
+
+[theme.glyphs.nerd_font.pipeline]
+## passed = "●"
+## current = "◉"
+## future = "○"
+## done = "󰗠"
 
 [theme.glyphs.nerd_font.card]
 ## subagents = ""

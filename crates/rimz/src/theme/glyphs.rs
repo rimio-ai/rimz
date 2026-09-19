@@ -87,6 +87,10 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(WorktreeExpand, "▸", None),
     glyph!(WorktreeDotted, "┄", None),
     glyph!(ChannelHash, "#", Some("\u{f292}")),
+    glyph!(PipelinePassed, "●", None),
+    glyph!(PipelineCurrent, "◉", None),
+    glyph!(PipelineFuture, "○", None),
+    glyph!(PipelineDone, "●", Some("\u{f05e0}")),
     glyph!(CardSubagents, "⧉", Some("\u{ed50}")),
     glyph!(CardWaits, "⧖", Some("\u{f00a0}")),
     glyph!(CardWaitTimer, "◷", Some("\u{f051f}")),
@@ -417,6 +421,9 @@ mod tests {
             GlyphRole::WorktreeTrunkEqual,
             GlyphRole::WorktreeExpand,
             GlyphRole::WorktreeDotted,
+            GlyphRole::PipelinePassed,
+            GlyphRole::PipelineCurrent,
+            GlyphRole::PipelineFuture,
             GlyphRole::CardParkedBg,
             GlyphRole::ChromeAlert,
             GlyphRole::ChromeRemoteControl,
@@ -452,6 +459,8 @@ mod tests {
              working = \"⢿\"\n\
              [nerd_font.meter]\n\
              bar_half = \"H\"\n\
+             [nerd_font.clock]\n\
+             q4 = \"Q\"\n\
              [nerd_font.keys]\n\
              focus = \"F\"\n\
              [nerd_font.chrome]\n\
@@ -465,6 +474,8 @@ mod tests {
         assert_eq!(glyphs.kind(), GlyphSetKind::NerdFont);
         assert_eq!(glyphs.glyph(GlyphRole::StatusWorking), "⢿");
         assert_eq!(glyphs.glyph(GlyphRole::MeterBarHalf), "H");
+        assert_eq!(glyphs.glyph(GlyphRole::ClockQ4), "Q");
+        assert_eq!(glyphs.glyph(GlyphRole::PipelinePassed), "●");
         assert_eq!(glyphs.glyph(GlyphRole::KeysFocus), "F");
         assert_eq!(glyphs.glyph(GlyphRole::ChromeBoxVertical), "|");
         assert_eq!(
