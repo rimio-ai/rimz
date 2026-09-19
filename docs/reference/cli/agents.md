@@ -116,7 +116,7 @@ A `<kind>-<mode>` cell launches that kind with one permission posture. RimZ rend
 | `<kind>-auto` | every kind except `opencode`, `amp`, `kiro`, and `pi` | the adapter's automatic-approval flags |
 | `<kind>-yolo` | every kind except `droid`, `amp`, `kiro`, and `pi` | the adapter's bypass flags |
 
-On the command line, `--ask` keeps native permission prompts and `--yolo` passes the adapter's bypass flags; with neither, each CLI keeps its own default. Each agent's exact flags per mode are in [agent support](../agent-support.md#permission-modes).
+On the command line, `--ask` keeps native permission prompts and `--yolo` passes the adapter's bypass flags. Either flag replaces a profile's declared mode or a permission-mode cell's posture for that run; a restart returns to the profile's mode. With neither, the declared mode stays, or the CLI keeps its own default (supervised `-p` defaults an unset mode to `auto`). Replacement recognizes the adapter's rendered flag vectors, not alternate spellings in raw profile `args` such as `--permission-mode=plan`. Each agent's exact flags per mode are in [agent support](../agent-support.md#permission-modes).
 
 ### Shared launch params
 
@@ -129,7 +129,7 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 | `--budget <AMOUNT[/day]>` | Dollar cap per agent: a bare amount caps the session, `/day` resets at the local day boundary. Inspect or change it later with [`rimz agents budget`](./budget.md#cap-one-agent). |
 | `--system-prompt-file <PATH>` | Replace each agent's base system prompt with the file. |
 | `--append-system-prompt-file <PATH>` | Repeatable. Replaces the inherited profile and role fragment list with these files, in command-line order; the team layer stays intact. |
-| `--ask`, `--yolo` | Permission posture; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
+| `--ask`, `--yolo` | Replace the permission posture for this run, including a profile's declared mode; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
 | `--agent <PROFILE\|KIND>` | Re-base every agent cell onto another profile or provider (below). |
 | `--isolation host\|sandbox` | Isolation for this launch instead of the machine's `agents.isolation` (below). |
 | `-n`, `--name <NAME>` | Handle for a single-agent launch: `rimz agents claude --name writer` appears as `@writer`. Without it the agent renders as `@<kind>` when that is unambiguous, and keeps a pet name for exact addressing. |
@@ -342,7 +342,7 @@ rimz agents explain coder --prompt > prompt.md
 | a profile or `<team>.<role>` | A fresh launch, resolved exactly as a launch would be. Works without a room. A multi-cell layout is refused. |
 | an `@handle` | What `restart` would run for that recorded agent under the current profile configuration: a resume of the recorded conversation when supported, otherwise a fresh launch with the reason. A fresh-restart plan shows the recorded name and launch id, although a real restart allocates a new id and may pick a new name. Needs existing room state. |
 
-With a profile target, `explain` accepts the launch overrides `--ask`, `--yolo`, `--model`, `--agent`, `--effort`, `--isolation`, `--system-prompt-file`, `--append-system-prompt-file`, `--budget`, and passthrough arguments after `--`, with the same precedence as a launch: `--ask` and `--yolo` fill only an unset permission mode. The report's `overrides` list records the flags you passed, not that each one won. An `@handle` target refuses every override.
+With a profile target, `explain` accepts the launch overrides `--ask`, `--yolo`, `--model`, `--agent`, `--effort`, `--isolation`, `--system-prompt-file`, `--append-system-prompt-file`, `--budget`, and passthrough arguments after `--`, with the same precedence as a launch: `--ask` and `--yolo` replace even a profile's declared permission mode. The report's `overrides` list records the flags you passed, not that each one won. An `@handle` target refuses every override.
 
 The default report shows:
 

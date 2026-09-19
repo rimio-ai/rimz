@@ -990,7 +990,7 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            permission_mode: Some(PermissionMode::Yolo),
+            permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
             isolation: None,
             preset: &preset,
             passthrough: &passthrough,
@@ -1047,7 +1047,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            permission_mode: Some(PermissionMode::Yolo),
+            permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
             isolation: Some(crate::config::Isolation::Sandbox),
             preset: &preset,
             passthrough: &[],
@@ -1075,7 +1075,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            permission_mode: Some(PermissionMode::Auto),
+            permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
             preset: &preset,
             passthrough: &[],
@@ -1102,7 +1102,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     let err = finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            permission_mode: Some(PermissionMode::Auto),
+            permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
             isolation: None,
             preset: &preset,
             passthrough: &[],
@@ -1112,6 +1112,93 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     )
     .expect_err("codex should reject max turns");
     assert_eq!(err.to_string(), "codex does not support --max-turns");
+}
+
+#[test]
+fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
+    for kind in ["claude", "grok", "qwen"] {
+        for (declared, chosen) in [
+            (PermissionMode::Ask, PermissionMode::Ask),
+            (PermissionMode::Yolo, PermissionMode::Yolo),
+            (PermissionMode::Ask, PermissionMode::Yolo),
+            (PermissionMode::Yolo, PermissionMode::Ask),
+        ] {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let mut machine = MachineConfig::default();
+            machine.agents.profiles.0.insert(
+                "profile".to_owned(),
+                configured_profile(kind, Some(declared), None, None, None, None),
+            );
+            let launch = effective_launch(&machine, dir.path());
+            let mut resolved =
+                resolve_launch(&launch, &machine.agents.commands, Some("profile"), None)
+                    .expect("resolve profile");
+            let before = resolved
+                .layout
+                .agent_cells()
+                .next()
+                .expect("cell")
+                .args
+                .clone();
+            finalize_launch_layout(
+                &mut resolved.layout,
+                LaunchFinalizeOptions {
+                    permission_mode: Some(PermissionModeChoice::Explicit(chosen)),
+                    isolation: None,
+                    preset: &crate::agents::LaunchPreset::default(),
+                    passthrough: &[],
+                    budget: None,
+                    max_turns: None,
+                },
+            )
+            .expect("finalize profile");
+            let cell = resolved.layout.agent_cells().next().expect("cell");
+            assert_eq!(cell.launch.mode, Some(chosen));
+            assert_eq!(
+                cell.args,
+                crate::agents::find_definition(kind)
+                    .expect("adapter")
+                    .spec()
+                    .launch
+                    .permission_args(chosen)
+            );
+            if declared == chosen {
+                assert_eq!(cell.args, before);
+            }
+        }
+    }
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let machine = MachineConfig::default();
+    let launch = effective_launch(&machine, dir.path());
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("claude-yolo"), None)
+        .expect("resolve virtual cell");
+    let cell = resolved.layout.agent_cells_mut().next().expect("cell");
+    // Repeated and mixed rendered vectors must all be removed, not just the stamped mode.
+    cell.args.extend(
+        [
+            "--dangerously-skip-permissions",
+            "--permission-mode",
+            "plan",
+            "--verbose",
+        ]
+        .map(str::to_owned),
+    );
+    finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
+            permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Ask)),
+            isolation: None,
+            preset: &crate::agents::LaunchPreset::default(),
+            passthrough: &[],
+            budget: None,
+            max_turns: None,
+        },
+    )
+    .expect("finalize virtual cell");
+    let cell = resolved.layout.agent_cells().next().expect("cell");
+    assert_eq!(cell.launch.mode, Some(PermissionMode::Ask));
+    assert_eq!(cell.args, ["--verbose"]);
 }
 
 #[test]
@@ -1147,7 +1234,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
-            permission_mode: Some(PermissionMode::Yolo),
+            permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
             isolation: None,
             preset: &crate::agents::LaunchPreset {
                 model: Some("override-model".to_owned()),
@@ -1564,7 +1651,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
     finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
-            permission_mode: Some(PermissionMode::Yolo),
+            permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
             isolation: None,
             preset: &Default::default(),
             passthrough: &["--debug".to_owned()],

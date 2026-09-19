@@ -94,6 +94,22 @@ impl LaunchSpec {
         args.iter().map(|arg| (*arg).to_owned()).collect()
     }
 
+    /// Remove all exact rendered permission vectors, longest first.
+    pub fn strip_permission_args(self, args: &mut Vec<String>) {
+        let mut vectors = [
+            self.permission.ask,
+            self.permission.auto,
+            self.permission.yolo,
+            self.permission.plan,
+        ];
+        vectors.sort_by_key(|vector| std::cmp::Reverse(vector.len()));
+        for vector in vectors.into_iter().filter(|vector| !vector.is_empty()) {
+            while let Some(index) = args.windows(vector.len()).position(|part| part == vector) {
+                args.drain(index..index + vector.len());
+            }
+        }
+    }
+
     /// Render the native supervised-turn cap, when supported.
     pub fn max_turns_args(self, limit: u32) -> Option<Vec<String>> {
         self.max_turn_flag

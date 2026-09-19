@@ -693,8 +693,7 @@ impl<'a> TaskFire<'a> {
             .as_deref()
             .filter(|mode| !mode.trim().is_empty())
             .map(parse_mode_value)
-            .transpose()?
-            .unwrap_or(PermissionMode::Auto);
+            .transpose()?;
         let budget = self
             .entry
             .budget

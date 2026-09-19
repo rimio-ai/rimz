@@ -302,7 +302,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         self_cleanup_on_completion: false,
         subagent,
         force_new_tab: false,
-        permission_mode: PermissionMode::Auto,
+        permission_mode: None,
         isolation: None,
         agent: None,
         model: None,

@@ -4,7 +4,7 @@ use crate::cli::supervised;
 use crate::cli::render;
 use rimz::agents::PermissionMode;
 use rimz::agents::transcript::TranscriptCursor;
-use rimz::harness::plan::{LaunchFinalizeOptions, launch_identity_requests};
+use rimz::harness::plan::{LaunchFinalizeOptions, PermissionModeChoice, launch_identity_requests};
 use rimz::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::harness::spec::LayoutSpec;
@@ -96,7 +96,10 @@ pub(super) fn prepare_supervised_launch_layout(
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
-            permission_mode: Some(request.permission_mode),
+            permission_mode: Some(request.permission_mode.map_or(
+                PermissionModeChoice::Default(PermissionMode::Auto),
+                PermissionModeChoice::Explicit,
+            )),
             isolation,
             preset: &preset,
             passthrough: &request.passthrough,
@@ -426,7 +429,7 @@ fn prepare_supervised(
 ) -> Result<Option<PreparedRun>> {
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
-    let mode = request.permission_mode;
+    let mode = request.permission_mode.unwrap_or(PermissionMode::Auto);
     let store = crate::cli::open_store(&workspace)?;
     // Inside a team's lane, a bare role names that team's role, exactly as it
     // does for an interactive launch: in `#forge`, `reviewer` means
