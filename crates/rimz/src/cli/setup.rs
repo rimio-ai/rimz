@@ -70,8 +70,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     report_consensus_copy()?;
     let hook_intro_rendered = hooks::ensure_detected_agent_hooks(interactive)?;
     let config = rimz::config::MachineConfig::load().context("loading per-machine config")?;
-    let defaults = first_run::Defaults::from_config(&config, rimz::tui::truecolor());
-    first_run::run(defaults, config.theme.pets.clone(), hook_intro_rendered)?;
+    first_run::run(&config, hook_intro_rendered)?;
     print_line("Run `rimz start` when ready.")?;
     Ok(())
 }

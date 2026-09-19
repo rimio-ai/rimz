@@ -199,7 +199,7 @@ While the room is **live**, `auto_continue` (off by default) picks a parked turn
 - Overload and transient API-error parks (stalled streams, timeouts, connection drops) fire on the retry ramp: `auto_continue_backoff_secs = [180, 300]` sends the first retry three minutes after the failure, then every five minutes.
 - Every park type stops retrying after `auto_continue_max_retries` (default 12, about an hour on the default ramp), leaving the row parked for you.
 
-First-run setup offers to enable `auto_continue` and `auto_redeem` together.
+First-run setup lists `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` as rows of one consent question: `y` or `n` sets every listed row, `choose` asks one row at a time, and Enter keeps the current state.
 
 Codex reset-credit expiry rescue is always active within 30 minutes of a credit's expiry, and the provider-header reset marker blinks whenever a spent window makes manual redemption useful. `auto_redeem` opts into automatic redemption when a spent duration window recovers enough blocked time and also schedules partial-usage redemptions early enough to use a chain of expiring credits, pacing each scheduled attempt from the last natural or credit-driven window reset. `auto_redeem_min_gain` accepts `s`, `m`, `h`, or `d` and sets the recovered-time threshold (default `12h`); a credit that would retain less than 24 hours after the natural reset redeems regardless of the threshold, while a nearer free reset defers chain scheduling when the credit comfortably survives it.
 
@@ -244,7 +244,7 @@ idle_compact_after = "59m"
 # flip_compact = "180k"
 ```
 
-`idle_compact` is `off` by default. `auto` compacts an eligible idle agent only while another agent in the same channel is running; an open worktree pull request does not qualify. `always` ignores that re-engagement requirement. `idle_compact_after` accepts `s`, `m`, `h`, or `d` and defaults to `59m`. The reflex requires at least 50,000 occupied context tokens, uses each adapter's native compact command with the same `compact_instruction`, and fires at most once in one idle stretch. The behavior model is in [loops.md](./loops.md#idle-compaction), and the durable delivery mechanics are in [messaging.md](../internals/harness/messaging.md#idle-compaction).
+`idle_compact` is `off` by default; first-run setup offers `auto` as one of its hands-off rows. `auto` compacts an eligible idle agent only while another agent in the same channel is running; an open worktree pull request does not qualify. `always` ignores that re-engagement requirement. `idle_compact_after` accepts `s`, `m`, `h`, or `d` and defaults to `59m`. The reflex requires at least 50,000 occupied context tokens, uses each adapter's native compact command with the same `compact_instruction`, and fires at most once in one idle stretch. The behavior model is in [loops.md](./loops.md#idle-compaction), and the durable delivery mechanics are in [messaging.md](../internals/harness/messaging.md#idle-compaction).
 
 ### Garbage collection
 
