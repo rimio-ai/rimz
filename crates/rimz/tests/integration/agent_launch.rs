@@ -936,7 +936,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         .expect("seed resumed session");
 
     let dump = env.home_root.join("codex-resume.env");
-    let resume = ExecRequest {
+    let mut resume = ExecRequest {
         kind: kind.clone(),
         action: ExecAction::Resume {
             session_id: session_id.to_string(),
@@ -954,6 +954,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         subagent: false,
         identity: ExecIdentity::default(),
     };
+    resume.identity.params.isolation = Some(rimz::config::Isolation::Host);
     env.rimz()
         .args(exec_args(&env, &resume))
         .arg("--root")
@@ -977,6 +978,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
     assert_eq!(attaches.len(), 1);
     let attach = &attaches[0];
     assert_eq!(attach.agent_id, session_id);
+    assert_eq!(attach.isolation, Some(rimz::config::Isolation::Host));
     assert_eq!(attach.pane_id.as_str(), "tmux:%4");
     assert_eq!(attach.pane_pid, Some(attach.runtime_owner.pid));
     assert_ne!(attach.runtime_owner.pid, 0);

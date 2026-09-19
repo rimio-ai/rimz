@@ -114,34 +114,17 @@ pub(super) fn launch_layout(
         )
         .ok()
     });
-    for (index, cell) in layout.agent_cells().enumerate() {
-        let adapter = rimz::agents::find_definition(cell.kind.as_str())
-            .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
-        let isolation = cell
-            .launch
-            .isolation
-            .unwrap_or(machine_config.agents.isolation);
-        rimz::sandbox::preflight_skills(
-            isolation,
-            &cell.kind,
-            cell.skills.is_some(),
-            adapter.manual_skill(),
-        )?;
-        let mut request =
-            rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
-        request.skills.clone_from(&cell.skills);
-        request.action = rimz::harness::launch::ExecAction::Launch {
-            prompt: prompt
-                .filter(|_| Some(index) == prompt_agent_index)
-                .map(str::to_owned),
-            extra_args: cell.args.clone(),
-        };
-        rimz::harness::launch::preflight_agent_process(
-            &workspace.project_root,
-            &request,
-            &workspace.worktree_root,
-        )?;
-        rimz::sandbox::preflight(isolation)?;
+    if !args.launch.cohort.resume {
+        for (index, cell) in layout.agent_cells().enumerate() {
+            preflight_cell(
+                workspace,
+                cell,
+                cell.launch
+                    .isolation
+                    .unwrap_or(machine_config.agents.isolation),
+                prompt.filter(|_| Some(index) == prompt_agent_index),
+            )?;
+        }
     }
     // Resolve where the launch lands before any side effect — the live-session
     // probe, worktree creation, the store append, the sidebar build — so an
@@ -374,6 +357,36 @@ pub(super) fn launch_layout(
     Ok(())
 }
 
+fn preflight_cell(
+    workspace: &rimz::ResolvedWorkspace,
+    cell: &rimz::harness::spec::AgentCell,
+    isolation: rimz::config::Isolation,
+    prompt: Option<&str>,
+) -> Result<()> {
+    let adapter = rimz::agents::find_definition(cell.kind.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
+    rimz::sandbox::preflight_skills(
+        isolation,
+        &cell.kind,
+        cell.skills.is_some(),
+        adapter.manual_skill(),
+    )?;
+    let mut request =
+        rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
+    request.skills.clone_from(&cell.skills);
+    request.action = rimz::harness::launch::ExecAction::Launch {
+        prompt: prompt.map(str::to_owned),
+        extra_args: cell.args.clone(),
+    };
+    rimz::harness::launch::preflight_agent_process(
+        &workspace.project_root,
+        &request,
+        &workspace.worktree_root,
+    )?;
+    rimz::sandbox::preflight(isolation)?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn launch_resume_layout(
     args: AgentsArgs,
@@ -416,10 +429,22 @@ fn launch_resume_layout(
         rimz::harness::resume::resume_session_present,
     )
     .map_err(|err| cohort_resume_error(err, spec, scope.as_deref(), &agents, teams))?;
-    for seed in &plan.seeds {
-        if let rimz::harness::plan::CohortSeed::Resume(agent) = seed {
-            rimz::sandbox::preflight(agent.isolation.unwrap_or(machine_config.agents.isolation))?;
-        }
+    for (cell, seed) in layout.agent_cells().zip(&plan.seeds) {
+        let isolation = match seed {
+            rimz::harness::plan::CohortSeed::Resume(agent) => {
+                rimz::harness::plan::effective_resume_isolation(
+                    cell.launch.isolation,
+                    agent.isolation,
+                )
+            }
+            rimz::harness::plan::CohortSeed::Fresh => cell.launch.isolation,
+        };
+        preflight_cell(
+            workspace,
+            cell,
+            isolation.unwrap_or(machine_config.agents.isolation),
+            None,
+        )?;
     }
     let cwd = plan
         .cwd
