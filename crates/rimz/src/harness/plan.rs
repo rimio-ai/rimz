@@ -112,9 +112,10 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
     }
 }
 
-/// Profile-declared values replayed by a resume launch.
+/// Finalized cell values applied by a resume launch.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumeLaunchPosture {
+    pub isolation: Option<crate::config::Isolation>,
     pub args: Vec<String>,
     pub system_prompt_file: Option<crate::config::PromptSource>,
     pub append_system_prompt_files: Vec<crate::config::PromptSource>,
@@ -129,6 +130,7 @@ pub struct ResumeLaunchPosture {
 impl From<&AgentCell> for ResumeLaunchPosture {
     fn from(cell: &AgentCell) -> Self {
         Self {
+            isolation: cell.launch.isolation,
             args: cell.args.clone(),
             system_prompt_file: cell.system_prompt_file.clone(),
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
@@ -140,6 +142,15 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             budget: cell.launch.budget.clone(),
         }
     }
+}
+
+/// A resumed session's isolation: the launch's `--isolation` override, else
+/// the stored value. `None` follows machine `agents.isolation`.
+pub fn effective_resume_isolation(
+    cell: Option<crate::config::Isolation>,
+    stored: Option<crate::config::Isolation>,
+) -> Option<crate::config::Isolation> {
+    cell.or(stored)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -933,7 +944,7 @@ pub(super) fn resume_command(
         launch_ordinal: identity.launch_ordinal,
         channel: channel.map(ToOwned::to_owned),
         mode: posture.mode,
-        isolation: identity.isolation,
+        isolation: effective_resume_isolation(posture.isolation, identity.isolation),
         model: posture.model.clone(),
         effort: posture.effort.clone(),
         budget: posture.budget.clone(),

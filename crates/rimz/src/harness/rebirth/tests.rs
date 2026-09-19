@@ -420,6 +420,87 @@ fn rebirth_recovery_globally_orders_fresher_flat_before_team() {
 }
 
 #[test]
+fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
+    use crate::agents::LaunchParams;
+    use crate::harness::ancestry::{CallerIdentity, resolve_launch_caller};
+    use crate::store::writer::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope};
+
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    let fixture = Fixture::new(&[("live", &live, true)]);
+    let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).unwrap();
+    let kind = AgentKind::new_unchecked("claude");
+    let session = AgentSessionId::from("live");
+    let batch = store
+        .begin_agent_launch_batch(
+            &[AgentLaunchRequest {
+                kind: kind.clone(),
+                agent_id: session.clone(),
+                name: AgentLaunchName::Mint,
+                launch: LaunchParams {
+                    isolation: Some(Isolation::Host),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            }],
+            AgentLaunchScope {
+                session_name: "rimz-test".to_owned(),
+                cwd: live,
+                branch: None,
+                channel: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    let caller = CallerIdentity {
+        kind: kind.clone(),
+        launch_id: Some(batch.single_identity().unwrap().agent_id.clone()),
+        pane_id: None,
+        name: None,
+        profile: None,
+        role: None,
+    };
+    let projection = store
+        .runtime_projection(crate::RuntimeScope::Audit)
+        .unwrap();
+    assert_eq!(
+        resolve_launch_caller(&projection.agents, &caller)
+            .unwrap()
+            .isolation,
+        Some(Isolation::Host)
+    );
+    assert!(!fixture.inspect(false).preview().requires_sandbox());
+
+    store
+        .attach_agent_pane(
+            &kind,
+            &session,
+            caller.launch_id.as_ref(),
+            "rimz-test",
+            &PaneId::from_parts(MuxName::Tmux, "%resumed"),
+            crate::pane::RuntimeOwner::new(
+                crate::pane::RuntimeOwnerKind::Agent,
+                session.as_str(),
+                std::process::id(),
+                None,
+            ),
+            Some(Isolation::Sandbox),
+        )
+        .unwrap();
+    let projection = store
+        .runtime_projection(crate::RuntimeScope::Audit)
+        .unwrap();
+    assert_eq!(
+        resolve_launch_caller(&projection.agents, &caller)
+            .unwrap()
+            .isolation,
+        Some(Isolation::Sandbox)
+    );
+    assert!(fixture.inspect(false).preview().requires_sandbox());
+}
+
+#[test]
 fn sandbox_requirement_follows_resumed_agents_effective_isolation() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");

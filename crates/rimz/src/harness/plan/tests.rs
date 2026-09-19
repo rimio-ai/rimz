@@ -42,6 +42,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
     assert_eq!(
         ResumeLaunchPosture::from(&cell),
         ResumeLaunchPosture {
+            isolation: launch.isolation,
             args,
             system_prompt_file,
             append_system_prompt_files,
@@ -1945,6 +1946,96 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
 }
 
 #[test]
+fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
+    use crate::config::Isolation::{Host, Sandbox};
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    let mut machine = MachineConfig::default();
+    machine.agents.isolation = Sandbox;
+    for (stored, flag, expected) in [
+        (Some(Host), None, Some(Host)),
+        (Some(Host), Some(Sandbox), Some(Sandbox)),
+        (None, None, None),
+    ] {
+        let mut agent = crate::testkit::agent_state("codex", "resumed", Timestamp::now());
+        agent.isolation = stored;
+        agent.mode = Some(PermissionMode::Ask);
+        let mut layout = LayoutSpec::single(Cell::agent(agent.kind.clone()));
+        let preset = crate::agents::LaunchPreset {
+            model: Some("x".to_owned()),
+            ..Default::default()
+        };
+        finalize_launch_layout(
+            &mut layout,
+            LaunchFinalizeOptions {
+                permission_mode: Some(PermissionModeChoice::Explicit(PermissionMode::Yolo)),
+                isolation: flag,
+                preset: &preset,
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+        )
+        .unwrap();
+        let plan = CohortResumePlan {
+            seeds: vec![CohortSeed::Resume(Box::new(agent))],
+            cwd: Some(dir.path().to_owned()),
+            channel: None,
+            fresh: Vec::new(),
+            launch_group: None,
+        };
+        let identities = launch_identity_requests(
+            &layout,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&plan),
+            None,
+        )
+        .unwrap();
+        assert!(identities.is_empty());
+        let panes = compile_layout_panes(
+            &layout,
+            LayoutPaneParams {
+                runtime: &runtime,
+                cwd: dir.path(),
+                cleanup_worktree: false,
+                in_place: false,
+                resume_seeds: Some(&plan.seeds),
+                launch_identities: &[],
+                fallback_channel: None,
+            },
+        )
+        .unwrap();
+        let request = exec_request(&panes.columns[0].panes[0].argv);
+        assert_eq!(request.identity.params.isolation, expected);
+        assert_eq!(
+            request
+                .identity
+                .params
+                .isolation
+                .unwrap_or(machine.agents.isolation),
+            expected.unwrap_or(Sandbox)
+        );
+        assert_eq!(request.identity.params.mode, Some(PermissionMode::Yolo));
+        assert_eq!(request.identity.params.model.as_deref(), Some("x"));
+        let CohortSeed::Resume(agent) = &plan.seeds[0] else {
+            panic!("resume seed")
+        };
+        assert_eq!(agent.mode, Some(PermissionMode::Ask));
+        assert_eq!(agent.isolation, stored);
+    }
+}
+
+#[test]
 fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let dir = tempfile::tempdir().expect("temp dir");
     let runtime = RuntimePaths::under(
@@ -1967,6 +2058,8 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     for (cell, profile) in layout.agent_cells_mut().zip(["opus", "coder"]) {
         cell.launch.profile = Some(profile.to_owned());
     }
+    layout.agent_cells_mut().nth(1).unwrap().launch.isolation =
+        Some(crate::config::Isolation::Sandbox);
     let mut resumed = crate::testkit::agent_state("claude", "sess-resume", Timestamp::now());
     resumed.name = Some("steady-beacon".to_owned());
     resumed.channel = None;
@@ -1978,6 +2071,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
         name_explicit: false,
         launch: crate::agents::LaunchParams {
             channel: Some("fallback".to_owned()),
+            isolation: Some(crate::config::Isolation::Sandbox),
             ..Default::default()
         },
         run_id: None,
@@ -2008,6 +2102,11 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     assert_request_field(&panes[2].argv, RequestField::Name, "bright-river");
     assert_request_field(&panes[2].argv, RequestField::Prompt, "fresh prompt");
     assert_eq!(panes[2].name.as_deref(), Some("coder"));
+    assert_eq!(exec_request(&panes[0].argv).identity.params.isolation, None);
+    assert_eq!(
+        exec_request(&panes[2].argv).identity.params.isolation,
+        Some(crate::config::Isolation::Sandbox)
+    );
 
     let err = compile_layout_panes(
         &layout,

@@ -264,8 +264,10 @@ pub struct ResumeSkip {
 ///
 /// A profile is durable, named configuration, so a session that launched as
 /// `@planner` comes back as a planner. One-off `--model` / `--effort` flags
-/// typed at the original launch stay out — they were a single invocation's
-/// choice, and `--resume` refuses them for the same reason.
+/// typed at the original launch stay out: they were a single invocation's
+/// choice. A resume may pass its own `--model`, `--effort`, and `--ask` /
+/// `--yolo` for that run only; `--isolation` is the one resume override the
+/// exec wrapper records.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePosture {
     pub launch: ResumeLaunchPosture,
