@@ -252,7 +252,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Setup publishes the read-only built-in consensus copy, and `agents explain` names its path.
 # First-run consent offers the auto-redeem row only where its provider is installed.
 # Launch finalize distinguishes typed from default permission modes; cohort resume computes a seed's isolation.
-surface-budget = 540
+# The board run (stage plus ledger times) feeds the sidebar pipeline lane.
+surface-budget = 542
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
