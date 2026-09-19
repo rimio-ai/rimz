@@ -2340,10 +2340,38 @@ fn wait_for_named_agent(
                     )
                 })
                 .collect::<Vec<_>>();
-            panic!("timed out waiting for agent {name}; agents: {agents:?}");
+            panic!(
+                "timed out waiting for agent {name}; agents: {agents:?}\npanes:\n{}",
+                tmux_screens(&managed_socket(&env.runtime_root)),
+            );
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Every pane's screen on the tmux server at `socket`, for a timeout message:
+/// a provisional agent's pane shows whether its shim ran and what the
+/// `SessionStart` feed printed.
+fn tmux_screens(socket: &Path) -> String {
+    let tmux = |args: &[&str]| {
+        Command::new("tmux")
+            .scrub_session_env()
+            .arg("-S")
+            .arg(socket)
+            .args(args)
+            .bounded_output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+            .unwrap_or_else(|err| format!("tmux {args:?}: {err}"))
+    };
+    tmux(&["list-panes", "-a", "-F", "#{pane_id}"])
+        .lines()
+        .map(|pane| {
+            format!(
+                "--- {pane}\n{}",
+                tmux(&["capture-pane", "-p", "-J", "-t", pane])
+            )
+        })
+        .collect()
 }
 
 fn wait_for_named_run(env: &Env, name: &str, budget: Duration) -> rimz::store::run::RunRecord {
