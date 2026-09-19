@@ -127,7 +127,7 @@ Keep the board current. Route implementation to @coder and independent review to
 Send decisions requiring the user to @planner.
 ```
 
-Each selected definition and its kind base must exist. Put shared provider instructions in `agents/<kind>.md`, role craft in the direct definition's body, and the workflow in the team's body. RimZ composes base → ancestor crafts → seat craft → built-in consensus → pipeline. Role fields can override model, tools, and other settings; the [definition reference](../reference/definitions.md#teams-and-seats) lists the supported keys. Run `rimz agents validate` before launching.
+Each selected definition and its kind base must exist. Put shared provider instructions in `agents/<kind>.md`, role craft in the direct definition's body, and the workflow in the team's body. RimZ composes base → ancestor crafts → seat craft → built-in consensus → pipeline; read the consensus in its [read-only copy](../reference/definitions.md#the-built-in-consensus-copy) at `~/.rimz/teams/consensus.md`. Role fields can override model, tools, and other settings; the [definition reference](../reference/definitions.md#teams-and-seats) lists the supported keys. Run `rimz agents validate` before launching.
 
 Every stage needs exactly one owner, and Implement and Review need different owners. `Done` is implicit and never declared or owned. The first `rimz teams flip` creates `blackboard.md` if absent; the leader fills in the goal and the team maintains its notes. The leader receives the initial task and remains the user-facing seat; other seats lose the question tool.
 

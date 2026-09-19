@@ -14,7 +14,7 @@ use rimz::config::{Isolation, SkillName, effective::LaunchAgents};
 use rimz::harness::budget::BudgetSpec;
 use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
-use rimz::harness::team_prompt::{BUILT_IN_CONSENSUS, Consensus};
+use rimz::harness::team_prompt::{self, BUILT_IN_CONSENSUS, Consensus};
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
 
 use super::{LaunchOverrideArgs, launch_resolve, restart};
@@ -296,6 +296,10 @@ struct PromptSource<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     builtin: Option<&'static str>,
     bytes: u64,
+    /// The on-disk inspection copy of built-in text, named in the human
+    /// report only; nothing reads it back, so the JSON shape leaves it out.
+    #[serde(skip)]
+    copy: Option<std::path::PathBuf>,
 }
 #[derive(Serialize)]
 struct PromptReport<'a> {
@@ -364,6 +368,7 @@ impl<'a> ExplainReport<'a> {
             Ok(PromptSource {
                 path: Some(path),
                 builtin: None,
+                copy: None,
                 bytes: std::fs::metadata(path)
                     .with_context(|| format!("reading prompt source {}", path.display()))?
                     .len(),
@@ -375,6 +380,7 @@ impl<'a> ExplainReport<'a> {
                 rimz::config::PromptSource::Text { origin, text } => Ok(PromptSource {
                     path: Some(origin),
                     builtin: None,
+                    copy: None,
                     bytes: text.len() as u64,
                 }),
             }
@@ -391,6 +397,10 @@ impl<'a> ExplainReport<'a> {
                     path: None,
                     builtin: Some("team consensus"),
                     bytes: BUILT_IN_CONSENSUS.len() as u64,
+                    copy: Some(team_prompt::consensus_copy_path(
+                        &rimz::disk::paths::agents_home(),
+                    ))
+                    .filter(|path| path.is_file()),
                 },
                 Consensus::File(path) => file_source(path)?,
             });
@@ -710,7 +720,15 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
             || format!("built-in {}", source.builtin.unwrap_or_default()),
             |path| path.display().to_string(),
         );
-        writeln!(output, "  source: {label} ({} bytes)", source.bytes)?;
+        match &source.copy {
+            Some(copy) => writeln!(
+                output,
+                "  source: {label} ({} bytes; read-only copy at {})",
+                source.bytes,
+                copy.display()
+            )?,
+            None => writeln!(output, "  source: {label} ({} bytes)", source.bytes)?,
+        }
     }
     if let Some(composed) = report.prompt.composed {
         writeln!(

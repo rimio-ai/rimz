@@ -167,7 +167,7 @@ PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` neve
 | --- | --- |
 | `name`, `defined`, `valid` | Team name; whether a definition exists; whether it resolves and validates. |
 | `source`, `layout`, `leader`, `error` | Optional. Definition file (`built-in` for `peer`), layout spec, effective leader role, validation error. |
-| `consensus` | Staged teams only: `"builtin"` or the absolute replacement-file path. |
+| `consensus` | Staged teams only: `"builtin"` or the absolute replacement-file path. RimZ keeps a [read-only copy](../definitions.md#the-built-in-consensus-copy) of the built-in text on disk. |
 | `append_system_prompt_files` | Team-level files composed after the consensus, as absolute paths. Omitted when empty. |
 | `roles[]` | `role`, `profile`, and `signals`, plus optional `kind`, `model`, `effort`, `mode`, `system_prompt_file`, and `append_system_prompt_files`. |
 | `roles[].append_system_prompt_files` | The role's own resolved profile-chain and role fragments, excluding the team layer. Omitted when empty. |

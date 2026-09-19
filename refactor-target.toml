@@ -249,7 +249,8 @@ upward-dependencies = ["sidebar::refresh"]
 # The pipeline strip and the one role resolver are shared with `teams show` and `teams flip`.
 # The launch reminder's resolved team travels from the launch plan into the process compiler.
 # The team prompt layer (built-in consensus, its replacement, team files) rides every launch carrier into composition and `agents explain`.
-surface-budget = 535
+# Setup publishes the read-only built-in consensus copy, and `agents explain` names its path.
+surface-budget = 537
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -663,11 +664,13 @@ allowed-dependencies = [
     "harness::launch_reminders",
     "harness::prompt_compose",
     "harness::subagent_policy",
+    "harness::team_prompt",
     "ids",
     "sandbox",
     "workspace::record",
 ]
 # The exec wrapper and inspection share one read-only compiler and write boundary.
+# Apply refreshes the built-in consensus copy as best-effort enrichment.
 surface-budget = 8
 
 [[module]]

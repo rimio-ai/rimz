@@ -681,6 +681,22 @@ fn missing_trees_and_documentation_are_not_definitions() {
 }
 
 #[test]
+fn the_published_consensus_copy_is_not_a_team_definition() {
+    let root = team_fixture();
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Team.");
+    let copy = crate::harness::team_prompt::consensus_copy_path(root.path());
+    crate::harness::team_prompt::publish_consensus_copy(root.path()).unwrap();
+    let loaded = clean(root.path());
+    assert_eq!(
+        loaded.teams.0.keys().collect::<Vec<_>>(),
+        ["probe"],
+        "{:#?}",
+        loaded.rows
+    );
+    assert!(!source_paths(root.path()).contains(&copy));
+}
+
+#[test]
 fn bases_are_emitted_in_both_namespaces_with_sources() {
     let root = fixture();
     let loaded = clean(root.path());

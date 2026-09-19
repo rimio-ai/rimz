@@ -39,7 +39,7 @@ pub(super) fn load(
         skills,
         children,
     };
-    let paths = match files(&home.join("teams")) {
+    let paths = match files(home, "teams") {
         Ok(paths) => paths,
         Err(error) => {
             loaded.errors.push(error);

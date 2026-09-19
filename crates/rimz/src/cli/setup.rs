@@ -36,6 +36,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
         let editor = ConfigEditor::machine();
         render_merge_report(&editor.merge_defaults()?)?;
         report_remote_template()?;
+        report_consensus_copy()?;
         print_line("No hooks or trust grants were changed by --yes.")?;
         print_line("Run `rimz start` when ready.")?;
         return Ok(());
@@ -66,6 +67,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
         write_fresh_config()?;
     }
     report_remote_template()?;
+    report_consensus_copy()?;
     let hook_intro_rendered = hooks::ensure_detected_agent_hooks(interactive)?;
     let config = rimz::config::MachineConfig::load().context("loading per-machine config")?;
     let defaults = first_run::Defaults::from_config(&config, rimz::tui::truecolor());
@@ -185,6 +187,22 @@ fn report_remote_template() -> Result<()> {
         print_line(&format!(
             "Wrote {}",
             rimz::remote::aliases::RemoteAliases::config_path().display()
+        ))?;
+    }
+    Ok(())
+}
+
+/// Refresh the read-only copy of the built-in team consensus. It is generated
+/// output, not a setting or a definition, so setup rewrites it whenever the
+/// embedded text or the version header changed.
+fn report_consensus_copy() -> Result<()> {
+    let home = rimz::disk::paths::agents_home();
+    if let Some(path) = rimz::harness::team_prompt::publish_consensus_copy(&home)
+        .context("publishing the team consensus copy")?
+    {
+        print_line(&format!(
+            "Wrote {} (read-only copy of the built-in team consensus)",
+            path.display()
         ))?;
     }
     Ok(())

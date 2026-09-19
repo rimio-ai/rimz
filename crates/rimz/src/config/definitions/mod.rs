@@ -82,7 +82,19 @@ struct Namespace {
     failed: BTreeSet<String>,
 }
 
-fn files(directory: &Path) -> Result<Vec<PathBuf>, DefinitionErr> {
+/// Markdown files under `home` that are not definitions: contributor notes in
+/// every namespace, and the inspection copy of the built-in consensus RimZ
+/// publishes into `teams/`.
+fn reserved(home: &Path, path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("AGENTS.md" | "CLAUDE.md" | "README.md")
+    ) || path == crate::harness::team_prompt::consensus_copy_path(home)
+}
+
+fn files(home: &Path, namespace: &str) -> Result<Vec<PathBuf>, DefinitionErr> {
+    let directory = home.join(namespace);
+    let directory = directory.as_path();
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -95,10 +107,7 @@ fn files(directory: &Path) -> Result<Vec<PathBuf>, DefinitionErr> {
             .path();
         if path.is_file()
             && path.extension().is_some_and(|extension| extension == "md")
-            && !matches!(
-                path.file_name().and_then(|name| name.to_str()),
-                Some("AGENTS.md" | "CLAUDE.md" | "README.md")
-            )
+            && !reserved(home, &path)
         {
             paths.push(path);
         }
@@ -110,9 +119,8 @@ fn files(directory: &Path) -> Result<Vec<PathBuf>, DefinitionErr> {
 pub fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for name in ["agents", "subagents", "teams", "traits"] {
-        let directory = agents_home.join(name);
-        paths.extend(files(&directory).unwrap_or_default());
-        paths.push(directory);
+        paths.extend(files(agents_home, name).unwrap_or_default());
+        paths.push(agents_home.join(name));
     }
     paths.sort();
     paths
@@ -130,7 +138,7 @@ pub fn load(
     let mut bases = BTreeSet::new();
     let mut names: BTreeMap<String, PathBuf> = BTreeMap::new();
     for (namespace, tree) in [("agents", &mut agents), ("subagents", &mut subagents)] {
-        let paths = match files(&agents_home.join(namespace)) {
+        let paths = match files(agents_home, namespace) {
             Ok(paths) => paths,
             Err(error) => {
                 loaded.errors.push(error);
