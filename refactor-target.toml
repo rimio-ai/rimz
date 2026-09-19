@@ -250,7 +250,8 @@ upward-dependencies = ["sidebar::refresh"]
 # The launch reminder's resolved team travels from the launch plan into the process compiler.
 # The team prompt layer (built-in consensus, its replacement, team files) rides every launch carrier into composition and `agents explain`.
 # Setup publishes the read-only built-in consensus copy, and `agents explain` names its path.
-surface-budget = 537
+# First-run consent offers the auto-redeem row only where its provider is installed.
+surface-budget = 538
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

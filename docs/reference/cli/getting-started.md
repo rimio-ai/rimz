@@ -72,7 +72,7 @@ A `rimz start` that creates the session, run from a terminal, can ask up to four
 
 | Prompt | When | Default |
 | --- | --- | --- |
-| First-run questions: truecolor, Nerd Font icons, pet, hands-off automation | This start wrote the machine config for the first time | The current settings |
+| First-run questions: truecolor, Nerd Font icons, pet, hands-off automation (`[y/n/choose]` over auto-continue, Codex auto-redeem when `codex` is installed, and idle compaction) | This start wrote the machine config for the first time | The current settings |
 | Install or refresh hooks for the listed agents | A detected agent has no RimZ hooks, or a stale RimZ-owned integration | Enter installs all; `n` or end of input installs none |
 | Trust this project's config | The project ships `.rimz/config.toml` with an ungranted executable surface, and you have not declined this version | No |
 | Recover prior agents | The room is reborn with agents from its previous session | Yes |
@@ -180,7 +180,7 @@ rimz setup [--yes]
 
 | Run | What it changes |
 | --- | --- |
-| From a terminal | If config exists, asks `Keep your current config?` (default yes): yes merges it against the current templates, no overwrites it with fresh templates. Then repairs `~/.rimz` fragments, writes a missing `remote.toml` template, offers one hook install or refresh for detected agents, and asks the truecolor, Nerd Font, pet, and hands-off automation questions. |
+| From a terminal | If config exists, asks `Keep your current config?` (default yes): yes merges it against the current templates, no overwrites it with fresh templates. Then repairs `~/.rimz` fragments, writes a missing `remote.toml` template, offers one hook install or refresh for detected agents, and asks the truecolor, Nerd Font, pet, and hands-off automation questions; the automation question lists one row per behavior and takes `y`, `n`, or `choose`. |
 | `--yes` | Merges config against the templates, repairs `~/.rimz` fragments, and writes missing files. Installs no hooks, grants no trust, and changes no appearance or automation setting. |
 | Without a terminal and without `--yes` | Nothing. Prints the report and `No terminal input is available; setup changed nothing.` |
 

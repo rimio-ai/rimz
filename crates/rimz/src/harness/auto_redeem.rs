@@ -52,6 +52,13 @@ pub struct AutoRedeemRequest {
     pub request_id: uuid::Uuid,
 }
 
+/// Whether auto-redeem has anything to act on here: the Codex CLI, the only
+/// provider with reset credits, is installed on this machine.
+pub fn provider_located() -> bool {
+    crate::agents::spec_by_kind(CODEX_KIND)
+        .is_some_and(|spec| crate::agents::locate_binary(spec).is_some())
+}
+
 impl RedeemReason {
     pub const fn as_str(self) -> &'static str {
         match self {

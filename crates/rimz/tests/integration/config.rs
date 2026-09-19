@@ -832,6 +832,12 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
             .any(|line| line.trim() == "auto_continue = true"),
         "--yes should not opt into auto-continue:\n{text}"
     );
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.trim().starts_with("idle_compact =")),
+        "--yes should not opt into idle compaction:\n{text}"
+    );
     assert!(theme_config_path(&env).exists());
     assert!(!legacy_agents_config_path(&env).exists());
     assert!(loop_config_path(&env).exists());
@@ -891,7 +897,14 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     assert!(output.contains("✓ truecolor"));
     assert!(output.contains("✓ Nerd Font icons"));
     assert!(output.contains("rocky joins the room"));
-    assert!(output.contains("auto-continue + auto-redeem on"));
+    assert!(
+        output.contains("✓ auto-continue + idle compaction on"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("auto-redeem"),
+        "no Codex on PATH:\n{output}"
+    );
     let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
         text.contains("mode = \"truecolor\""),
@@ -911,9 +924,15 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     );
     let text = std::fs::read_to_string(machine_config_path(&env)).expect("read machine config");
     assert!(
-        text.contains("auto_continue = true") && text.contains("auto_redeem = true"),
-        "automation enabled:\n{text}"
+        text.contains("auto_continue = true") && !text.contains("auto_redeem = true"),
+        "automation enabled without Codex's row:\n{text}"
     );
+    let idle_compact = env
+        .rimz()
+        .args(["config", "get", "harness.idle_compact"])
+        .output()
+        .expect("config get idle_compact");
+    assert_eq!(String::from_utf8_lossy(&idle_compact.stdout).trim(), "auto");
 
     let output = run_setup_pty(&env, "\nn\nn\nn\nn\n", None, &[]);
 
@@ -927,7 +946,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     assert!(output.contains("Unicode glyphs"));
     assert!(output.contains("pet disabled"), "setup output:\n{output}");
     assert!(
-        output.contains("hands-off automation off"),
+        output.contains("✓ auto-continue + idle compaction off"),
         "setup output:\n{output}"
     );
     let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
@@ -949,8 +968,30 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     );
     let text = std::fs::read_to_string(machine_config_path(&env)).expect("read machine config");
     assert!(
-        text.contains("auto_continue = false") && text.contains("auto_redeem = false"),
+        text.contains("auto_continue = false") && text.contains("idle_compact = \"off\""),
         "automation disabled:\n{text}"
+    );
+
+    let codex_bin = env.home_root.join("codex-bin");
+    std::fs::create_dir_all(&codex_bin).expect("mkdir codex PATH");
+    let codex = codex_bin.join("codex");
+    std::fs::write(&codex, "#!/bin/sh\nexit 0\n").expect("write codex stub");
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod codex stub");
+
+    let output = run_setup_pty(&env, "\nn\n\n\n\ny\n", Some(&codex_bin), &[]);
+
+    assert!(output.contains("auto-redeem"), "Codex on PATH:\n{output}");
+    assert!(
+        output.contains("✓ auto-continue + auto-redeem + idle compaction on"),
+        "setup output:\n{output}"
+    );
+    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read machine config");
+    assert!(
+        text.contains("auto_continue = true")
+            && text.contains("auto_redeem = true")
+            && text.contains("idle_compact = \"auto\""),
+        "every offered row enabled:\n{text}"
     );
 }
 

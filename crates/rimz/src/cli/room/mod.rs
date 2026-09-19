@@ -507,12 +507,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     } = &entry
         && start_attended()
     {
-        let defaults = first_run::Defaults::from_config(&machine_config, rimz::tui::truecolor());
-        first_run::run(
-            defaults,
-            machine_config.theme.pets.clone(),
-            hook_intro_rendered,
-        )?;
+        first_run::run(&machine_config, hook_intro_rendered)?;
         let mut out = render::err();
         writeln!(out, "Opening the room...")?;
         match rimz::config::MachineConfig::load() {

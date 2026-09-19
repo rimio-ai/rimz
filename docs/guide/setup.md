@@ -25,7 +25,9 @@ cd ~/code/your-project && rimz
 - offers one summarized install or refresh for every detected agent with missing hooks or a stale RimZ-owned whole-file integration,
 - shows separate live truecolor and Nerd Font probes,
 - previews the configured sidebar pet before asking whether to enable it, and
-- offers to enable auto-continue and automatic Codex reset-credit redemption together.
+- lists the hands-off automations, one row each with its current state and what it costs — auto-continue, Codex auto-redeem (only when `codex` is installed), and idle compaction — and asks once: `y` turns every listed row on, `n` turns every listed row off, `choose` asks row by row. Enter keeps the current state, so a fresh machine stays opted out.
+
+Setup asks only what the machine can't answer for itself: a probe (can this terminal draw truecolor or Nerd Font icons?) or consent to something that acts on its own. Preferences live in `rimz config`.
 
 The hook summary names every affected file and points to `rimz hooks install --dry-run` for the exact unified diff before you consent. The first `rimz` run on a terminal asks the same hook, color, glyph, pet, and automation questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs, upgrades, trust grants, appearance changes, or automation opt-ins — which suits a server provisioning script.
 
