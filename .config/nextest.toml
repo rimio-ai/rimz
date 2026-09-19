@@ -28,9 +28,9 @@
 # test phase is one sustained-load window only tens of seconds wide. So the
 # retry budget spans that window with exponential backoff rather than a few
 # fixed-3s tries that all land in the same bad patch — a later attempt fires
-# once the suite's heavy phase has passed. The `query-tab-names` /
-# command-metadata spawn waits in the tests keep the first-try races rare. The
-# deep journey zellij smoke joins the group so the cap bounds the total.
+# once the suite's heavy phase has passed. The `query-tab-names` readiness wait
+# in the tests keeps the first-try races rare. The deep journey zellij smoke
+# joins the group so the cap bounds the total.
 #
 # Live tmux servers are far lighter (one `tmux` process per tempdir socket, no
 # wasm plugin host), so their cap is generous; the group exists to give tmux's
@@ -112,6 +112,14 @@ status-level = "retry"
 failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
 
+# A retried pass hides its failed attempts from the console summary, so the
+# retrying tiers keep a JUnit report (`<target-dir>/nextest/<profile>/junit.xml`)
+# that records every failed attempt with its output. CI uploads it as an artifact.
+[profile.live.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
 # CI runs `journey` as its own step after `live`; the deep mux smokes ride in
 # `live` so the per-backend groups bound their real-server load.
 [profile.journey]
@@ -119,3 +127,8 @@ default-filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep:
 status-level = "retry"
 failure-output = "immediate-final"
 fail-fast = { max-fail = 3 }
+
+[profile.journey.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
