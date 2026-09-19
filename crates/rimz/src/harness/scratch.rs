@@ -148,10 +148,13 @@ fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
         let Some(at) = parse_progress_stamp(stamp, zone) else {
             continue;
         };
-        if run.started_at.is_none() || from == Some(DONE_STAGE) {
+        // A `Done -> Done` re-flip neither restarts the run nor moves its end.
+        let leaves_done = from == Some(DONE_STAGE) && to != DONE_STAGE;
+        let enters_done = from != Some(DONE_STAGE) && to == DONE_STAGE;
+        if run.started_at.is_none() || leaves_done {
             run.started_at = Some(at);
         }
-        if to == DONE_STAGE && run.stage.name == DONE_STAGE {
+        if enters_done && run.stage.name == DONE_STAGE {
             run.done_at = Some(at);
         }
     }
@@ -265,7 +268,7 @@ mod tests {
             }
         }
         let board = format!(
-            "Stage: Done\n## Progress\n{ledger}\n- 2026-09-12 14:06:09 @user: Done -> Plan — restart\n- 2026-09-12 14:07:10 @planner: Plan -> Done — finish again"
+            "Stage: Done\n## Progress\n{ledger}\n- 2026-09-12 14:06:09 @user: Done -> Plan — restart\n- 2026-09-12 14:07:10 @planner: Plan -> Done — finish again\n- 2026-09-12 14:08:11 @planner: Done -> Done — re-flip"
         );
         let run = parse_board_run(&board, &zone).unwrap();
         assert_eq!(
