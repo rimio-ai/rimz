@@ -37,7 +37,7 @@ pub mod team;
 
 pub use fire::last_stamps;
 
-pub const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
+pub(crate) const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
 
 /// Executable action encoded by one loop task entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -730,7 +730,7 @@ const WATCH_EVERY_UNITS: &[DurationUnit] = &[
 
 /// How long a polled watch sleeps between probes; `None` for a run-once
 /// command or an unparseable `every`.
-pub(super) fn watch_interval(spec: &crate::config::WatchSpec) -> Option<std::time::Duration> {
+fn watch_interval(spec: &crate::config::WatchSpec) -> Option<std::time::Duration> {
     use crate::config::WatchSpec;
     match spec {
         WatchSpec::Command(_) => None,

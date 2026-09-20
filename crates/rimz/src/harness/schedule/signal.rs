@@ -37,7 +37,7 @@ pub enum SignalSelector {
 }
 
 impl SignalSelector {
-    pub fn family(&self) -> &str {
+    pub(in crate::harness) fn family(&self) -> &str {
         match self {
             Self::Exact(name) => name.family(),
             Self::Family(family) => family,

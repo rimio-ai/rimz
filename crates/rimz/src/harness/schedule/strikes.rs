@@ -24,7 +24,7 @@ pub(super) enum Signal {
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub struct StrikesError(#[from] OverlayError);
+pub(super) struct StrikesError(#[from] OverlayError);
 
 type Result<T> = std::result::Result<T, StrikesError>;
 
