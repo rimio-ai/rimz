@@ -217,7 +217,7 @@ pub(super) fn row_lines(
                         .saturating_sub(shown.len());
                     if !show_older && folded > 0 {
                         inner.push(CardLine {
-                            line: Line::styled(format!("  +{folded} older"), ctx.theme.muted()),
+                            line: Line::styled(format!("    +{folded} older"), ctx.theme.muted()),
                             target: Some(HitTarget::ToggleDelegationHistory(row.id.clone())),
                         });
                     }

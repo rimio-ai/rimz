@@ -293,7 +293,7 @@ Selecting a card only appends lines below it. When the selected agent belongs to
 ▌    ⣾ Run the test suite                         ◔  5m▐
 ▌      cargo test --workspace                          ▐
 ▌    ⌁ pr.merged · 2h left                        ●  1h▐
-▌  +7 older                                            ▐
+▌    +7 older                                          ▐
 ```
 
 `⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md) plus, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
