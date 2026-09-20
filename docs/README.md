@@ -22,7 +22,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 
 - [Worktrees](./guide/worktrees.md): isolate a layout or team on its own Git branch so several run in parallel without clobbering each other.
 - [Messaging](./guide/messaging.md): reach agents by handle, park text for the turn boundary or steer the live turn, ask an agent a question and print its reply, and group the fleet into channels.
-- [Teams](./guide/teams.md): pair models by role, launch the whole set with one name, and reopen or resume it as a single unit.
+- [Teams](./guide/teams.md): pair models by role, launch the whole set with one name, follow and hand over the stages on its shared board, and reopen or retire the team as a single unit.
 - [Scripting](./guide/scripting.md): supervised one-shot `-p` turns with exit codes, JSON and streaming output, and the background-run primitives that drop agents into scripts and CI.
 - [Loops](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, let agents set their own alarms, and keep the fleet moving with auto-continue.
 - [Notifications](./guide/notifications.md): reach your phone or run your own command when an agent needs you, and let handlers clear routine prompts themselves.
