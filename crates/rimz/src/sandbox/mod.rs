@@ -20,10 +20,10 @@ const SANDBOX_SCRATCH: &str = "/tmp/scratchpad";
 const SANDBOX_SHARED: &str = "/tmp/shared";
 /// The launch's private scratch dir: its host path on every launch, pinned to
 /// `/tmp/scratchpad` under the sandbox.
-pub const ENV_SCRATCH: &str = "RIMZ_SCRATCH";
+pub(crate) const ENV_SCRATCH: &str = "RIMZ_SCRATCH";
 /// The room's shared dir, one for every agent in it: its host path on every
 /// launch, pinned to `/tmp/shared` under the sandbox.
-pub const ENV_SHARED: &str = "RIMZ_SHARED";
+pub(crate) const ENV_SHARED: &str = "RIMZ_SHARED";
 
 /// Where an agent sees room tmp: `/tmp` in a sandbox, with its own scratch dir
 /// at `/tmp/scratchpad`; the host path otherwise.
