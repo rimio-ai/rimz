@@ -33,6 +33,7 @@ fn unchanged_consumer_ticks_only_running_pipeline_clocks() {
         stage: "Build".to_owned(),
         owner: None,
         started_at: Some(jiff::Timestamp::UNIX_EPOCH),
+        stage_started_at: Some(jiff::Timestamp::UNIX_EPOCH),
         done_at: None,
     });
     rig.state.dirty = false;

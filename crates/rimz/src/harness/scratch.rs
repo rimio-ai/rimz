@@ -103,6 +103,7 @@ pub struct BoardStage {
 pub struct BoardRun {
     pub stage: BoardStage,
     pub started_at: Option<Timestamp>,
+    pub stage_started_at: Option<Timestamp>,
     pub done_at: Option<Timestamp>,
 }
 
@@ -116,6 +117,7 @@ fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
     let mut run = BoardRun {
         stage: parse_board_stage(board)?,
         started_at: None,
+        stage_started_at: None,
         done_at: None,
     };
     let progress = parse_board_sections(board, &["Progress", "Progress log"]);
@@ -148,6 +150,9 @@ fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
         let Some(at) = parse_progress_stamp(stamp, zone) else {
             continue;
         };
+        if to == run.stage.name && from != Some(to) {
+            run.stage_started_at = Some(at);
+        }
         // A `Done -> Done` re-flip neither restarts the run nor moves its end.
         let leaves_done = from == Some(DONE_STAGE) && to != DONE_STAGE;
         let enters_done = from != Some(DONE_STAGE) && to == DONE_STAGE;
@@ -249,6 +254,7 @@ mod tests {
         assert_eq!(run.stage.name, "Plan");
         assert_eq!(run.stage.owner.as_deref(), Some("planner"));
         assert_eq!((run.started_at, run.done_at), (None, None));
+        assert_eq!(run.stage_started_at, None);
     }
 
     #[test]
@@ -265,6 +271,10 @@ mod tests {
                 let run = parse_board_run(&board, &zone).unwrap();
                 assert_eq!(run.started_at, Some(first));
                 assert_eq!(run.done_at, (stage == "Done").then_some(finish));
+                assert_eq!(
+                    run.stage_started_at,
+                    Some(if stage == "Done" { finish } else { first })
+                );
             }
         }
         let board = format!(
@@ -276,6 +286,13 @@ mod tests {
             Some("2026-09-12T08:36:09Z".parse().unwrap())
         );
         assert_eq!(run.done_at, Some("2026-09-12T08:37:10Z".parse().unwrap()));
+        assert_eq!(run.stage_started_at, run.done_at);
+        let board = "Stage: Implement\n## Progress\n- 2026-09-12 14:02 @user: opened Plan\n- 2026-09-12 14:03 @planner: Plan -> Implement\n- 2026-09-12 14:04 @coder: Implement -> Review\n- 2026-09-12 14:05 @reviewer: Review -> Implement";
+        let run = parse_board_run(board, &zone).unwrap();
+        assert_eq!(
+            run.stage_started_at,
+            Some("2026-09-12T08:35:00Z".parse().unwrap())
+        );
     }
 
     #[test]
@@ -287,6 +304,7 @@ mod tests {
             Some("2026-09-12T14:02:03Z".parse().unwrap())
         );
         assert_eq!(run.done_at, None);
+        assert_eq!(run.stage_started_at, None);
     }
 
     #[test]

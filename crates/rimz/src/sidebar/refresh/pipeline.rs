@@ -10,7 +10,7 @@ use crate::config::{MachineConfig, TeamsConfig};
 use crate::store::snapshot::{SidebarPipeline, SidebarSnapshot, SidebarWorktreeGroup};
 use crate::utils::path::normalize_path_lexical;
 
-const PIPELINE_CACHE_VERSION: u32 = 1;
+const PIPELINE_CACHE_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::sidebar) struct PipelineCache {
@@ -97,6 +97,7 @@ fn compute_pipelines(
                 stage: run.stage.name,
                 owner: run.stage.owner,
                 started_at: run.started_at,
+                stage_started_at: run.stage_started_at,
                 done_at: run.done_at,
             },
         );
@@ -131,7 +132,7 @@ mod tests {
     }
 
     fn board(path: &Path) {
-        std::fs::write(path.join("blackboard.md"), "Stage: Build (@coder)\n\n## Progress\n- 2026-09-19 12:00:01 @user: opened Plan — start\n").unwrap();
+        std::fs::write(path.join("blackboard.md"), "Stage: Build (@coder)\n\n## Progress\n- 2026-09-19 12:00:01 @user: opened Plan — start\n- 2026-09-19 12:01:02 @planner: Plan -> Build\n").unwrap();
     }
 
     #[test]
@@ -153,6 +154,10 @@ mod tests {
             Some("2026-09-19T12:00:01Z".parse().unwrap())
         );
         assert_eq!(pipeline.done_at, None);
+        assert_eq!(
+            pipeline.stage_started_at,
+            Some("2026-09-19T12:01:02Z".parse().unwrap())
+        );
 
         let mut normalized = group.clone();
         let mut duplicate = normalized.rows[0].clone();
