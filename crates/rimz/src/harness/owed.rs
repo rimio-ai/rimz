@@ -1,5 +1,48 @@
 //! Harness wakes still owed to a supervised agent session.
 
+use crate::ids::{AgentKind, AgentSessionId};
+use crate::message::reply::TurnWaitView;
+use crate::store::StoreErr;
+use crate::{RuntimeScope, Store};
+
+use super::fleet::FleetRuns;
+
+/// Whether this session is still owed a harness wake, read in the order catalog → message queue → runs and agents: a wake publishes its message record before it consumes its catalog row, and a provider's turn start lands before the delivery ack settles that record, so every wake in flight shows in at least one read.
+///
+/// Accepted gap: the digest reporter stamps `report_message_id` on child rows and queues the digest in separate lock holds. A parent Stop between those writes can complete with a digest about to be queued. Keep that tested durability sequence; the stranded-park settle closes its half with a second look.
+pub fn owed_wake(
+    store: &Store,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+) -> Result<Option<OwedWake>, StoreErr> {
+    let view = TurnWaitView::load(store)?;
+    let Some(agent) = view
+        .snapshot
+        .agents
+        .iter()
+        .find(|agent| &agent.kind == kind && &agent.agent_id == agent_id)
+    else {
+        return Ok(None);
+    };
+    if !agent.pending_waits.is_empty() {
+        return Ok(Some(OwedWake::Wait));
+    }
+    if view.wake_in_flight(agent, true) {
+        return Ok(Some(OwedWake::WakeInFlight));
+    }
+    let projection = store.runtime_projection(RuntimeScope::Audit)?;
+    let runs = super::run::list(store.paths())?;
+    let Some(launcher) = projection
+        .agents
+        .iter()
+        .find(|agent| &agent.kind == kind && &agent.agent_id == agent_id)
+    else {
+        return Ok(None);
+    };
+    let fleet = FleetRuns::of(&projection.agents, &runs, launcher);
+    Ok((fleet.any_running() || !fleet.unreported().is_empty()).then_some(OwedWake::Subagents))
+}
+
 /// What still owes an agent session a harness wake, as the run fold sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwedWake {
@@ -14,6 +57,161 @@ impl OwedWake {
             Self::Wait => "wait",
             Self::WakeInFlight => "wake in flight",
             Self::Subagents => "subagents",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode};
+    use crate::store::message::{
+        DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
+    };
+    use crate::store::run::{RunRecord, RunStatus};
+    use crate::store::writer::AgentLifecycleIntent;
+    use crate::{RuntimePaths, StatePaths, WorkspaceId};
+
+    fn fixture() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let state = StatePaths::under(id.clone(), &dir.path().join("state")).unwrap();
+        let runtime = RuntimePaths::under(id, &dir.path().join("runtime")).unwrap();
+        let store = Store::open(state, runtime).unwrap();
+        (dir, store)
+    }
+
+    fn register(store: &Store, name: &str, parent: Option<&str>) {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(name.into()), LifecycleSignal::Registered);
+        observation.agent_name = Some(name.to_owned());
+        observation.pane_id = Some(
+            crate::ids::PaneId::parse(match name {
+                "parent" => "tmux:%1",
+                "child" => "tmux:%2",
+                "other" => "tmux:%3",
+                _ => unreachable!("fixture names have distinct panes"),
+            })
+            .unwrap(),
+        );
+        if let Some(parent) = parent {
+            observation.launch.parent_agent_id = Some(parent.into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
+            observation.launch.launch_depth = Some(1);
+        }
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "owed-test",
+                agent_kind: AgentKind::new_unchecked("codex"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn owed_messages_hold_only_their_card_until_terminal() {
+        for notice in [
+            HarnessNotice::Wait,
+            HarnessNotice::Signal,
+            HarnessNotice::SubagentReport,
+            HarnessNotice::Stage,
+        ] {
+            for status in [
+                MessageStatus::Queued,
+                MessageStatus::Claimed,
+                MessageStatus::Sent,
+                MessageStatus::Delivered,
+                MessageStatus::TimedOut,
+            ] {
+                let (_dir, store) = fixture();
+                register(&store, "parent", None);
+                register(&store, "other", None);
+                let agent = store
+                    .snapshot_cached()
+                    .unwrap()
+                    .agents
+                    .into_iter()
+                    .find(|agent| agent.agent_id.as_str() == "parent")
+                    .unwrap();
+                let mut message = MessageRecord::new(
+                    store.paths().workspace_id.clone(),
+                    &agent,
+                    "wake".to_owned(),
+                    DeliveryGate::Done,
+                )
+                .with_sender(MessageSender::Harness {
+                    notice: notice.clone(),
+                });
+                message.status = status;
+                store.queue_message(&message, "owed-test").unwrap();
+                let expected = (!status.is_terminal() && notice != HarnessNotice::Stage)
+                    .then_some(OwedWake::WakeInFlight);
+                assert_eq!(
+                    owed_wake(&store, &agent.kind, &agent.agent_id).unwrap(),
+                    expected,
+                    "{notice:?} {status:?}"
+                );
+                for id in ["other", "missing"] {
+                    assert_eq!(owed_wake(&store, &agent.kind, &id.into()).unwrap(), None);
+                }
+                assert_eq!(
+                    owed_wake(&store, &AgentKind::new_unchecked("claude"), &agent.agent_id)
+                        .unwrap(),
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn owed_fleet_includes_ended_unreported_children() {
+        for (status, joined, reported, expected) in [
+            (RunStatus::Running, false, false, Some(OwedWake::Subagents)),
+            (
+                RunStatus::Completed,
+                false,
+                false,
+                Some(OwedWake::Subagents),
+            ),
+            (RunStatus::Completed, true, false, None),
+            (RunStatus::Completed, false, true, None),
+        ] {
+            let (dir, store) = fixture();
+            register(&store, "parent", None);
+            register(&store, "child", Some("parent"));
+            let kind = AgentKind::new_unchecked("codex");
+            let mut run = RunRecord::new(
+                store.paths().workspace_id.clone(),
+                kind.clone(),
+                PermissionMode::Auto,
+                "work".to_owned(),
+                dir.path().to_owned(),
+            );
+            run.agent_id = Some("child".into());
+            run.status = status;
+            run.joined_at = joined.then_some(jiff::Timestamp::now());
+            run.report_message_id = reported.then(crate::MessageId::new);
+            super::super::run::create(store.paths(), &run).unwrap();
+            if status.is_terminal() {
+                let observation =
+                    AgentLifecycleObservation::new(Some("child".into()), LifecycleSignal::Ended);
+                store
+                    .append_agent_lifecycle(AgentLifecycleIntent {
+                        session_name: "owed-test",
+                        agent_kind: kind.clone(),
+                        event_name: "test",
+                        observation: &observation,
+                        spawned_subagents: &[],
+                    })
+                    .unwrap();
+            }
+            assert_eq!(
+                owed_wake(&store, &kind, &"parent".into()).unwrap(),
+                expected,
+                "{status:?} joined={joined} reported={reported}"
+            );
         }
     }
 }
