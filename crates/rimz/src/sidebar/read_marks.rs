@@ -43,10 +43,6 @@ pub(crate) struct ReadMarks {
 }
 
 impl ReadMarks {
-    pub(crate) fn empty() -> Self {
-        Self::default()
-    }
-
     pub(crate) fn load_merged(runtime: &RuntimePaths) -> Arc<Self> {
         let directory = StampedPath::of(&runtime.read_marks_dir);
         let generation = StampedPath::of(&read_marks_generation_path(runtime));
@@ -74,14 +70,14 @@ impl ReadMarks {
         MERGED_READ_MARKS_SCANS.with(|scans| scans.set(scans.get().saturating_add(1)));
         let entries = match fs::read_dir(&runtime.read_marks_dir) {
             Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::empty(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::default(),
             Err(err) => {
                 debug!(
                     path = %runtime.read_marks_dir.display(),
                     error = %err,
                     "sidebar read-mark dir unreadable",
                 );
-                return Self::empty();
+                return Self::default();
             }
         };
 
@@ -147,14 +143,14 @@ pub fn write_manual_read_marks(
 }
 
 #[derive(Clone, Debug)]
-pub struct ReadMarkStore {
+pub(crate) struct ReadMarkStore {
     runtime: RuntimePaths,
     instance_id: SidebarInstanceId,
     own: BTreeMap<String, i64>,
 }
 
 impl ReadMarkStore {
-    pub fn new(runtime: RuntimePaths, instance_id: SidebarInstanceId) -> Self {
+    pub(crate) fn new(runtime: RuntimePaths, instance_id: SidebarInstanceId) -> Self {
         let own = read_file(&runtime.sidebar_read_marks_path(&instance_id))
             .map(|file| file.marks)
             .unwrap_or_default();
@@ -173,7 +169,7 @@ impl ReadMarkStore {
         ReadMarks::load_merged(&self.runtime)
     }
 
-    pub fn observe_fold(
+    pub(crate) fn observe_fold(
         &mut self,
         cleared: Vec<String>,
         cleared_at_ms: i64,
@@ -222,13 +218,13 @@ impl ReadMarkStore {
     }
 }
 
-pub(crate) fn read_mark_file_instance_id(path: &Path) -> Option<SidebarInstanceId> {
+pub(super) fn read_mark_file_instance_id(path: &Path) -> Option<SidebarInstanceId> {
     let name = path.file_name()?.to_str()?;
     let id = name.strip_prefix("sidebar.")?.strip_suffix(".json")?;
     SidebarInstanceId::parse(id).ok()
 }
 
-pub(crate) fn is_read_mark_file(path: &Path) -> bool {
+fn is_read_mark_file(path: &Path) -> bool {
     read_mark_file_instance_id(path).is_some()
 }
 
@@ -359,7 +355,7 @@ mod tests {
     fn missing_or_garbage_read_marks_read_empty() {
         let (_missing_dir, missing_runtime) = runtime();
         let missing_store = ReadMarkStore::new(missing_runtime, instance("01"));
-        assert_eq!(*missing_store.load_merged(), ReadMarks::empty());
+        assert_eq!(*missing_store.load_merged(), ReadMarks::default());
 
         let (_dir, runtime) = runtime();
         runtime.ensure_dirs().expect("runtime dirs");
@@ -371,7 +367,7 @@ mod tests {
         fs::write(runtime.read_marks_dir.join("notes.txt"), b"not a mark").expect("other file");
         let garbage_store = ReadMarkStore::new(runtime, instance("01"));
 
-        assert_eq!(*garbage_store.load_merged(), ReadMarks::empty());
+        assert_eq!(*garbage_store.load_merged(), ReadMarks::default());
     }
 
     #[test]
