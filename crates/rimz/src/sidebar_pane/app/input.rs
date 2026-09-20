@@ -142,6 +142,13 @@ pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) 
     Some(wire.to_owned())
 }
 
+#[cfg(feature = "testkit")]
+pub(super) fn encode_click(column: u16, row: u16) -> String {
+    // A left-button press is always encoded by the ordinary mouse input path.
+    encode_mouse(MouseEventKind::Down(MouseButton::Left), column, row)
+        .expect("left-button press is always encoded")
+}
+
 pub(super) fn encode_mouse(kind: MouseEventKind, column: u16, row: u16) -> Option<String> {
     match kind {
         // Only the press fires a click — never the release. A press and its
@@ -287,6 +294,18 @@ mod tests {
 
     fn encode_default(code: KeyCode) -> Option<String> {
         encode_key(&default_keymap(), code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    #[cfg(feature = "testkit")]
+    fn injected_click_decodes_as_mouse_press() {
+        let wire = encode_click(4, 7);
+        let press = encode_mouse(MouseEventKind::Down(MouseButton::Left), 4, 7).unwrap();
+        assert_eq!(wire, press);
+        assert_eq!(
+            decode_wakeup(wire.as_bytes()),
+            Wakeup::MouseClick { column: 4, row: 7 }
+        );
     }
 
     #[test]

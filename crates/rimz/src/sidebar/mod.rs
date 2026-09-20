@@ -60,6 +60,59 @@ use crate::wakeup::heartbeat::{
 const LAUNCH_WAIT_STEP: Duration = Duration::from_millis(25);
 const LAUNCH_WAIT_STEPS: u32 = 60;
 
+/// One live renderer of this workspace, with the side of the election it fell on.
+#[cfg(feature = "testkit")]
+pub struct LiveSidebar {
+    pub heartbeat: SidebarHeartbeat,
+    pub producer: bool,
+}
+
+/// Read the renderer election from outside a renderer: the smallest live instance produces.
+/// Keep the filters and ordering aligned with `ProducerElectionTracker::full_scan`.
+///
+/// Contributor tooling only — `rimz sidebar renderers` labels a room's tabs with it and
+/// `rimz sidebar click` finds a pane's wakeup socket through it. A renderer decides its own
+/// role through [`ProducerElectionTracker`], which memoizes; this rescans every call.
+#[cfg(feature = "testkit")]
+pub fn live_sidebars(runtime: &RuntimePaths) -> Vec<LiveSidebar> {
+    let heartbeats = match read_current_heartbeats(&runtime.heartbeat_dir) {
+        Ok(heartbeats) => heartbeats,
+        Err(err) => {
+            debug!(path = %runtime.heartbeat_dir.display(), error = %err, "sidebar heartbeat dir unreadable");
+            return Vec::new();
+        }
+    };
+    let now = SystemTime::now();
+    order_live_sidebars(
+        heartbeats
+            .into_iter()
+            .filter_map(|(path, heartbeat)| {
+                if heartbeat.workspace_id != runtime.workspace_id
+                    || runtime.sidebar_heartbeat_path(&heartbeat.instance_id) != path
+                {
+                    return None;
+                }
+                let modified = fs::metadata(&path).ok()?.modified().ok()?;
+                let expires_at = modified.checked_add(SIDEBAR_HEARTBEAT_TTL)?;
+                (now <= expires_at).then_some(heartbeat)
+            })
+            .collect(),
+    )
+}
+
+#[cfg(feature = "testkit")]
+fn order_live_sidebars(mut heartbeats: Vec<SidebarHeartbeat>) -> Vec<LiveSidebar> {
+    heartbeats.sort_by(|left, right| left.instance_id.as_str().cmp(right.instance_id.as_str()));
+    heartbeats
+        .into_iter()
+        .enumerate()
+        .map(|(index, heartbeat)| LiveSidebar {
+            heartbeat,
+            producer: index == 0,
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarLaunchOutcome {
     SkippedFresh,

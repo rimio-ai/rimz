@@ -504,3 +504,42 @@ fn sweep_removes_orphan_read_marks_keeps_live_and_fresh() {
     assert!(manual_marks.exists(), "manual API read marks kept");
     assert!(!dead_marks.exists(), "dead owner's read marks swept");
 }
+
+/// The roster `rimz sidebar renderers` and `rimz sidebar click` read applies the
+/// election rule from outside a renderer: smallest live id produces, a stale
+/// heartbeat is not a renderer at all.
+#[cfg(feature = "testkit")]
+#[test]
+fn live_sidebars_elect_the_smallest_live_instance() {
+    use crate::ids::PaneId;
+
+    let h = Harness::new();
+    let elder = instance("a1");
+    let younger = instance("b2");
+    let dead = instance("a0");
+    let elder_pane = PaneId::from_parts(MuxName::Tmux, "%1");
+    let younger_pane = PaneId::from_parts(MuxName::Tmux, "%3");
+    h.write_sidebar_with_pane(&younger, Some(younger_pane.clone()));
+    h.write_sidebar_with_pane(&elder, Some(elder_pane.clone()));
+    make_stale(&h.write_sidebar_for(&dead));
+
+    let roster: Vec<_> = live_sidebars(&h.runtime)
+        .into_iter()
+        .map(|sidebar| {
+            (
+                sidebar.heartbeat.instance_id,
+                sidebar.heartbeat.pane_id,
+                sidebar.producer,
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        roster,
+        [
+            (elder, Some(elder_pane), true),
+            (younger, Some(younger_pane), false),
+        ],
+        "the stale heartbeat is skipped and the smallest live id produces",
+    );
+}
