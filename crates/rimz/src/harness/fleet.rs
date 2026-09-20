@@ -19,6 +19,12 @@ pub(super) fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Optio
         .max_by_key(|run| run.started_at)
 }
 
+/// Whether `launcher` launched anyone at all, answered from the agent rows
+/// alone so a caller can skip reading the runs directory.
+pub(super) fn has_members(agents: &[AgentState], launcher: &AgentState) -> bool {
+    !crate::address::launched_fleet(agents, launcher).is_empty()
+}
+
 /// Newest run per member of `launcher`'s fleet, deduplicated by run id and
 /// ordered as `address::launched_fleet` orders its members.
 pub struct FleetRuns<'a>(Vec<(&'a AgentState, &'a RunRecord)>);
@@ -144,5 +150,7 @@ mod tests {
                 .is_empty()
         );
         assert!(FleetRuns::of(&agents, &[], &parent).is_empty());
+        assert!(has_members(&agents, &parent), "runs are not membership");
+        assert!(!has_members(&agents, &children[0]), "a child launched none");
     }
 }

@@ -7,22 +7,42 @@ use crate::{RuntimeScope, Store};
 
 use super::fleet::FleetRuns;
 
-/// Whether this session is still owed a harness wake, read in the order
-/// catalog → message queue → runs and agents: a wake publishes its message
-/// record before it consumes its catalog row, and a provider's turn start
-/// lands before the delivery ack settles that record, so every wake in flight
-/// shows in at least one read.
+/// Whether this session is still owed a harness wake. Each term is read
+/// before the writes that would hide it.
 ///
-/// Accepted gap: the digest reporter stamps `report_message_id` on child rows
-/// and queues the digest in separate lock holds. A parent Stop between those
-/// writes can complete with a digest about to be queued. Keep that tested
-/// durability sequence; the stranded-park settle closes its half with a second
-/// look.
+/// The fleet term goes first: the digest reporter stamps `report_message_id`
+/// on the child rows and only then queues the digest, so a reader that finds
+/// the rows unstamped is owed, and one that finds them stamped reads the queue
+/// afterwards, where the digest by then is. Reading the queue first would
+/// widen that window by this reader's own projection and runs-directory time.
+///
+/// The wait terms keep `TurnWaitView`'s order, catalog → queue → rollup: a
+/// wake publishes its message record before it consumes its catalog row, and a
+/// provider's turn start lands before the delivery ack settles that record, so
+/// every wake in flight shows in at least one of the three reads.
+///
+/// Accepted gap, now bounded by the reporter's own two lock holds: it stamps
+/// and queues under separate locks, so a parent Stop landing between them can
+/// complete with a digest about to be queued. Keep that tested durability
+/// sequence; the stranded-park settle closes its half with a second look.
 pub fn owed_wake(
     store: &Store,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> Result<Option<OwedWake>, StoreErr> {
+    let projection = store.runtime_projection(RuntimeScope::Audit)?;
+    if let Some(launcher) = projection
+        .agents
+        .iter()
+        .find(|agent| &agent.kind == kind && &agent.agent_id == agent_id)
+        && super::fleet::has_members(&projection.agents, launcher)
+    {
+        let runs = super::run::list(store.paths())?;
+        let fleet = FleetRuns::of(&projection.agents, &runs, launcher);
+        if fleet.any_running() || !fleet.unreported().is_empty() {
+            return Ok(Some(OwedWake::Subagents));
+        }
+    }
     let view = TurnWaitView::load(store)?;
     let Some(agent) = view
         .snapshot
@@ -35,20 +55,9 @@ pub fn owed_wake(
     if !agent.pending_waits.is_empty() {
         return Ok(Some(OwedWake::Wait));
     }
-    if view.wake_in_flight(agent, true) {
-        return Ok(Some(OwedWake::WakeInFlight));
-    }
-    let projection = store.runtime_projection(RuntimeScope::Audit)?;
-    let runs = super::run::list(store.paths())?;
-    let Some(launcher) = projection
-        .agents
-        .iter()
-        .find(|agent| &agent.kind == kind && &agent.agent_id == agent_id)
-    else {
-        return Ok(None);
-    };
-    let fleet = FleetRuns::of(&projection.agents, &runs, launcher);
-    Ok((fleet.any_running() || !fleet.unreported().is_empty()).then_some(OwedWake::Subagents))
+    Ok(view
+        .wake_in_flight(agent, true)
+        .then_some(OwedWake::WakeInFlight))
 }
 
 /// What still owes an agent session a harness wake, as the run fold sees it.
