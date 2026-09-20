@@ -750,6 +750,14 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
     ) -> std::result::Result<Vec<super::AnswerStep>, super::AnswerPlanErr> {
         ask::answer_plan(kind, questions, answers)
     }
+
+    fn tool_call_resolved(&self, payload: &Value, native_key: &str) -> bool {
+        // Every hook payload carries `transcript_path`, so the proof is one
+        // bounded tail read on the event that would otherwise be ignored as a
+        // sibling. A missing or unreadable transcript proves nothing.
+        transcript_tail_from_payload(payload)
+            .is_some_and(|tail| statusline::tool_result_recorded(&tail, native_key))
+    }
 }
 
 impl crate::agents::capabilities::InstallationCapability for ClaudeAdapter {

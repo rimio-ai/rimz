@@ -274,10 +274,36 @@ fn listed_asks(env: &Env) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("asks json")
 }
 
-fn claude_question_hook(session: &str, tool_use_id: &str, question: &str) -> serde_json::Value {
+/// The session's transcript, holding one assistant line and no tool result:
+/// every payload below carries its path, so the resolved-call scan runs on
+/// each event and only the written result can release an ask.
+fn claude_transcript(env: &Env, session: &str) -> std::path::PathBuf {
+    let path = env.home_root.join(format!("{session}.jsonl"));
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-07-13T10:00:01Z",
+                "message": { "role": "assistant", "content": [{ "type": "text", "text": "asking" }] }
+            })
+        ),
+    )
+    .expect("write Claude transcript");
+    path
+}
+
+fn claude_question_hook(
+    session: &str,
+    transcript: &std::path::Path,
+    tool_use_id: &str,
+    question: &str,
+) -> serde_json::Value {
     json!({
         "hook_event_name": "PreToolUse",
         "session_id": session,
+        "transcript_path": transcript,
         "tool_name": "AskUserQuestion",
         "tool_use_id": tool_use_id,
         "tool_input": {
@@ -293,41 +319,119 @@ fn claude_question_hook(session: &str, tool_use_id: &str, question: &str) -> ser
     })
 }
 
+fn claude_tool_hook(
+    event: &str,
+    session: &str,
+    transcript: &std::path::Path,
+    tool_use_id: &str,
+    tool_name: &str,
+) -> serde_json::Value {
+    json!({
+        "hook_event_name": event,
+        "session_id": session,
+        "transcript_path": transcript,
+        "tool_name": tool_name,
+        "tool_use_id": tool_use_id
+    })
+}
+
+/// The transcript line a rejection writes: the feedback returns as the call's
+/// own result, and no completion hook follows it.
+fn append_rejected_tool_result(transcript: &std::path::Path, tool_use_id: &str) {
+    use std::io::Write;
+
+    let line = json!({
+        "type": "user",
+        "timestamp": "2026-07-13T10:00:04Z",
+        "toolDenialKind": "user-rejected",
+        "message": { "role": "user", "content": [{
+            "type": "tool_result",
+            "tool_use_id": tool_use_id,
+            "is_error": true,
+            "content": "The user doesn't want to proceed with this tool use. To tell you how to proceed, the user said:\nneither, read the log first"
+        }]}
+    });
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(transcript)
+            .expect("open Claude transcript"),
+        "{line}"
+    )
+    .expect("append rejected tool result");
+}
+
 #[test]
 fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
     let env = Env::new();
     let session = "sess-claude-question";
+    let transcript = claude_transcript(&env, session);
     let feed = |payload: serde_json::Value| feed_claude_hook(&env, payload);
     let listed = || listed_asks(&env);
 
-    feed(claude_question_hook(session, "toolu_ask", "Which route?"));
+    feed(claude_question_hook(
+        session,
+        &transcript,
+        "toolu_ask",
+        "Which route?",
+    ));
     let asks = listed();
     assert_eq!(asks.as_array().map(Vec::len), Some(1));
     assert_eq!(asks[0]["questions"][0]["question"], "Which route?");
     let ask_id = asks[0]["ask_id"].as_str().expect("ask id").to_owned();
 
     // Claude runs concurrency-safe tools in parallel with the question picker,
-    // so both of a sibling call's edges land while the ask is unanswered.
+    // so both of a sibling call's edges land while the ask is unanswered. The
+    // transcript holds no result for the question, so nothing releases it.
     for event in ["PreToolUse", "PostToolUse"] {
-        feed(json!({
-            "hook_event_name": event,
-            "session_id": session,
-            "tool_name": "Read",
-            "tool_use_id": "toolu_read",
-            "tool_input": { "file_path": "/tmp/notes.md" }
-        }));
+        feed(claude_tool_hook(
+            event,
+            session,
+            &transcript,
+            "toolu_read",
+            "Read",
+        ));
         let asks = listed();
         assert_eq!(asks.as_array().map(Vec::len), Some(1), "{event}");
         assert_eq!(asks[0]["ask_id"], ask_id.as_str(), "{event}");
     }
 
-    feed(json!({
-        "hook_event_name": "PostToolUse",
-        "session_id": session,
-        "tool_name": "AskUserQuestion",
-        "tool_use_id": "toolu_ask"
-    }));
+    feed(claude_tool_hook(
+        "PostToolUse",
+        session,
+        &transcript,
+        "toolu_ask",
+        "AskUserQuestion",
+    ));
     assert_eq!(listed(), json!([]));
+}
+
+/// A question rejected with typed feedback returns to the model as the call's
+/// own result and fires no completion hook, so the next tool would hold the
+/// ask open as a sibling. The transcript's result for the ask's own call is
+/// the proof that releases it.
+#[test]
+fn claude_resolved_call_releases_the_keyed_ask_on_the_next_tool() {
+    let env = Env::new();
+    let session = "sess-claude-rejected";
+    let transcript = claude_transcript(&env, session);
+    feed_claude_hook(
+        &env,
+        claude_question_hook(session, &transcript, "toolu_ask", "Which route?"),
+    );
+    assert_eq!(listed_asks(&env).as_array().map(Vec::len), Some(1));
+
+    append_rejected_tool_result(&transcript, "toolu_ask");
+    feed_claude_hook(
+        &env,
+        claude_tool_hook("PreToolUse", session, &transcript, "toolu_log", "Read"),
+    );
+
+    assert_eq!(listed_asks(&env), json!([]));
+    let snapshot = env.store().snapshot_cached().expect("agent snapshot");
+    let agent = &snapshot.agents[0];
+    assert_eq!(agent.status, AgentStatus::Running);
+    assert!(agent.open_ask.is_none());
 }
 
 /// Escape fires no hook, so the transcript's interruption marker is the only
@@ -337,14 +441,14 @@ fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
 fn claude_escape_releases_the_keyed_ask_on_the_next_statusline_push() {
     let env = Env::new();
     let session = "sess-claude-escape";
+    let transcript = claude_transcript(&env, session);
     feed_claude_hook(
         &env,
-        claude_question_hook(session, "toolu_ask", "Which route?"),
+        claude_question_hook(session, &transcript, "toolu_ask", "Which route?"),
     );
     assert_eq!(listed_asks(&env).as_array().map(Vec::len), Some(1));
 
     let marked_at = jiff::Timestamp::now() + std::time::Duration::from_secs(5);
-    let transcript = env.home_root.join("escape-transcript.jsonl");
     std::fs::write(
         &transcript,
         format!(
