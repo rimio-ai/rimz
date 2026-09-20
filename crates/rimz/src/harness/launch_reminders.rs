@@ -137,7 +137,7 @@ mod tests {
         assert_eq!(text.matches("<system_reminder>").count(), 1);
         assert_eq!(text.matches("</system_reminder>").count(), 1);
         assert!(text.contains(
-            "no run state and no board; your first `rimz teams flip` creates the board."
+            "no run state and no board; you open it with the Goal, then flip to the first stage."
         ));
         request.subagent = true;
         let text = render(&request, &reminders, Path::new("/worktree"));

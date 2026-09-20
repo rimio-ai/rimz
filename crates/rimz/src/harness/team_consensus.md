@@ -42,9 +42,9 @@ Stage: <stage> (@<owner>)
 <verification evidence, the link to what shipped>
 ```
 
-The board is the leader's first product. On its first turn the leader flips to the first stage with the note `board opened; <aim>`, and that flip creates the file with the Stage line and the first Progress record. In the same turn the leader adds the other sections with the Goal filled in, then does the stage work when it owns that stage.
+The board is the leader's first product. On its first turn the leader writes `blackboard.md` with the Goal filled in — the request restated, and the path of any document it arrived as — above the empty Decisions, Progress, and Result sections. Then it flips to the first stage with the note `board opened; <aim>`. The flip adds the Stage line and the first Progress record, and wakes that stage's owner onto a board that already says what the run is for; the leader carries on into the stage work when it owns that stage.
 
-The Stage line and Progress belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Every other section appends: when the picture changes, add a line with the newer truth and leave the old ones standing.
+The Stage line and the Progress records belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Every other section appends: when the picture changes, add a line with the newer truth and leave the old ones standing.
 
 ### Stage files
 

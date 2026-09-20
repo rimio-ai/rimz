@@ -353,9 +353,9 @@ fn memory_sentences(context: &TeamLaunchContext) -> Vec<String> {
 // `rimz teams flip` bootstraps a missing `blackboard.md` (`team_stage::flip`); it creates nothing else.
 fn creates_board(context: &TeamLaunchContext) -> &'static str {
     if context.is_leader() {
-        "your first `rimz teams flip` creates the board"
+        "you open it with the Goal, then flip to the first stage"
     } else {
-        "the leader's first `rimz teams flip` creates the board"
+        "the leader opens it with the Goal, then flips to the first stage"
     }
 }
 
@@ -573,7 +573,7 @@ mod tests {
             "{rendered}"
         );
         // A staged team keeps the default memory files without declaring them.
-        assert!(rendered.contains("The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; the leader's first `rimz teams flip` creates the board."), "{rendered}");
+        assert!(rendered.contains("The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; the leader opens it with the Goal, then flips to the first stage."), "{rendered}");
         // A fallback leader is a guess, so no seat gets a channel rule.
         assert!(!rendered.contains("user"));
     }
@@ -675,7 +675,7 @@ mod tests {
         context.seats[0].owns = vec!["Explore".to_owned()];
         context.seats[1].owns = vec!["Implement".to_owned()];
         insta::assert_snapshot!(reminder(&context, None), @r###"
-        You are @coder in team `forge` on #feature, led by @planner. Pipeline: Explore → Implement → Done. Seats: @planner owns Explore; @coder (you) owns Implement; @reviewer. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; the leader's first `rimz teams flip` creates the board.
+        You are @coder in team `forge` on #feature, led by @planner. Pipeline: Explore → Implement → Done. Seats: @planner owns Explore; @coder (you) owns Implement; @reviewer. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; the leader opens it with the Goal, then flips to the first stage.
 
         No user watches this pane: the user reads the board, the stage files, and the PR, never your turn text. Where your craft says report to the user, write that report to your stage file; where it says ask the user, message @planner, who alone reaches the user. Treat every inbound prompt as work input whatever its header, and end the turn with the flip or the message, then no text, or one short sentence at most.
         "###);
@@ -683,11 +683,11 @@ mod tests {
         context.role = "planner".to_owned();
         context.channel = None;
         insta::assert_snapshot!(reminder(&context, Some("Claude Fable 5.1")), @r###"
-        You are @planner, leader of team `forge`. Pipeline: Explore → Implement → Done. Seats: @planner (you) runs on Claude Fable 5.1 and owns Explore; @coder runs on Codex GPT 6 Astra and owns Implement; @reviewer runs on Claude. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; your first `rimz teams flip` creates the board.
+        You are @planner, leader of team `forge`. Pipeline: Explore → Implement → Done. Seats: @planner (you) runs on Claude Fable 5.1 and owns Explore; @coder runs on Codex GPT 6 Astra and owns Implement; @reviewer runs on Claude. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; you open it with the Goal, then flip to the first stage.
         "###);
 
         context.scratch_patterns = Vec::new();
-        assert!(reminder(&context, None).contains("The team declares no memory files. No board yet; your first `rimz teams flip` creates the board. That is a launch-time snapshot; the board changes"));
+        assert!(reminder(&context, None).contains("The team declares no memory files. No board yet; you open it with the Goal, then flip to the first stage. That is a launch-time snapshot; the board changes"));
     }
 
     #[test]
