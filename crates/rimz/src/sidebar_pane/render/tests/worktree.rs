@@ -57,6 +57,7 @@ fn render_pipeline_states() {
         if width == 22 {
             assert!(!rendered.contains('◉'), "track drops whole: {rendered}");
             assert!(rendered.contains("47:12"));
+            assert!(!rendered.contains("forge"), "team drops first: {rendered}");
         }
         assert_snapshot(name, rendered);
     }
@@ -74,6 +75,13 @@ fn render_pipeline_folded_stage() {
     let rendered = snapshot_to_screen(&snapshot, 54, 20);
     assert!(rendered.contains("forge · Done"), "{rendered}");
     assert!(!rendered.contains('●'));
+    let theme = Theme::fixed(false);
+    assert!(
+        group_lines_at_width(&snapshot, &theme, 0, 54)[0]
+            .spans
+            .iter()
+            .all(|span| !span.content.contains("forge"))
+    );
     assert_snapshot("pipeline_folded", rendered);
 }
 
@@ -115,8 +123,79 @@ fn pipeline_click_and_status_style_follow_visible_owner() {
 }
 
 #[test]
+fn pipeline_completion_styles_and_width_admission() {
+    let mut snapshot = pipeline_snapshot();
+    let theme = Theme::fixed(false);
+    for stage in ["Implement", "Done"] {
+        snapshot.worktree_groups[0].pipeline.as_mut().unwrap().stage = stage.to_owned();
+        let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
+        let line = &lines[1];
+        for role in [GlyphRole::PipelinePassed, GlyphRole::PipelineDone] {
+            let spans = line
+                .spans
+                .iter()
+                .filter(|span| span.content == theme.glyph(role));
+            for span in spans {
+                assert_eq!(
+                    span.style,
+                    theme.styled(Component::PipelinePassed, Modifier::empty())
+                );
+            }
+        }
+        assert!(
+            line.spans
+                .iter()
+                .any(|span| span.content == theme.glyph(GlyphRole::PipelinePassed))
+        );
+        if stage == "Done" {
+            assert!(
+                line.spans
+                    .iter()
+                    .any(|span| span.content == theme.glyph(GlyphRole::PipelineDone))
+            );
+        }
+        let team = line
+            .spans
+            .iter()
+            .find(|span| span.content == " · forge")
+            .unwrap();
+        assert_eq!(
+            team.style,
+            theme.styled(Component::TeamLabel, Modifier::empty())
+        );
+    }
+    let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+    pipeline.stage = "Implement".to_owned();
+    pipeline.stage_started_at = Some(fixed_now() - Duration::from_secs(7));
+    for (width, expected) in [
+        (32, "  ● ● ◉ ○ ○  Implement (00:07)"),
+        (22, "  Implement (00:07)"),
+        (17, "  Impl… (00:07)"),
+    ] {
+        let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+        let text = lines[1]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains(expected), "{width}: {text}");
+        assert!(!text.contains("forge"));
+    }
+    snapshot.worktree_groups[0].label = "pipeline/forge".to_owned();
+    let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
+    assert!(
+        lines[1]
+            .spans
+            .iter()
+            .all(|span| !span.content.contains("forge"))
+    );
+}
+
+#[test]
 fn pipeline_does_not_change_attention_or_animation() {
     let mut snapshot = pipeline_snapshot();
+    // Isolate row rendering from the team badge's header/pipeline hand-off.
+    snapshot.worktree_groups[0].team = None;
     snapshot.worktree_groups[0].rows[0].unread = true;
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -268,6 +347,13 @@ fn render_active_team_header_tolerates_strays_and_yields_to_git_facts() {
     assert!(
         narrow.contains("⑂ main"),
         "git verdict stays pinned: {narrow}"
+    );
+    snapshot.worktree_groups[0].pipeline = pipeline_snapshot().worktree_groups[0].pipeline.clone();
+    assert!(
+        group_lines_at_width(&snapshot, &theme, 0, 48)[0]
+            .spans
+            .iter()
+            .all(|span| !span.content.contains("forge"))
     );
 }
 

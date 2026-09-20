@@ -38,8 +38,11 @@ pub(crate) enum Component {
     WorktreeHeader,
     /// The dim repo qualifier after a colliding worktree group label.
     WorktreeQualifier,
-    /// The `· team` cohort label after an active worktree name.
+    /// The `· team` cohort label on a pipeline line or worktree header.
     TeamLabel,
+    /// A completed pipeline stage — the passed dots and the `Done` seal alike;
+    /// stage completion in its own right, not a borrowed agent status.
+    PipelinePassed,
     /// The `#N` linked-PR badge after a worktree name — steady cool link tone;
     /// state stays on the right marker.
     WorktreePrBadge,
@@ -120,6 +123,7 @@ impl Component {
         Component::WorktreeHeader,
         Component::WorktreeQualifier,
         Component::TeamLabel,
+        Component::PipelinePassed,
         Component::WorktreePrBadge,
         Component::BranchDelta,
         Component::WorktreePristine,
@@ -161,7 +165,7 @@ impl Component {
             LaneSpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
             WorktreePristine | WindowSmall => palette.faint,
-            ProcMem | CacheRead | RemoteControl | PrCiPassing => palette.good,
+            ProcMem | CacheRead | RemoteControl | PrCiPassing | PipelinePassed => palette.good,
             WorktreeReconciling | Compaction | PrCiPending => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
