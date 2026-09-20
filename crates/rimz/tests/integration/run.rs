@@ -1182,6 +1182,108 @@ fn print_stream_json_input_refuses_stdin_flag() {
 
 #[cfg(unix)]
 #[test]
+fn exec_wrapper_exit_ends_session_and_retires_its_subscription() {
+    use rimz::config::{TaskEntry, TaskTarget, Tasks};
+    use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
+
+    let env = Env::new();
+    let store = env.store();
+    let kind = AgentKind::new_unchecked("codex");
+    let session_id = AgentSessionId::from("sess-wrapper-exit");
+    register_running_wait_agent(&env, &store, "wrapper", session_id.as_str());
+    let instances_path = store.paths().root.join("loop-instances.json");
+    let instances = Tasks(BTreeMap::from([(
+        "wrapper-listener".to_owned(),
+        TaskEntry {
+            wait: Some(TaskTarget {
+                kind: kind.clone(),
+                session: session_id.clone(),
+                handle: "wrapper".to_owned(),
+            }),
+            root: env.project_root.clone(),
+            signal: Some("deploy.done".to_owned()),
+            ..TaskEntry::default()
+        },
+    )]));
+    std::fs::write(
+        &instances_path,
+        serde_json::to_vec(&instances).expect("serialize subscription"),
+    )
+    .expect("arm wrapper subscription");
+
+    let request = ExecRequest {
+        kind: kind.clone(),
+        action: ExecAction::Resume {
+            session_id: session_id.to_string(),
+            extra_args: Vec::new(),
+        },
+        system_prompt_file: None,
+        append_system_prompt_files: Vec::new(),
+        team_prompt: None,
+        skills: None,
+        provider_account: ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: true,
+        exit_on_run_completion: false,
+        subagent: false,
+        identity: ExecIdentity {
+            params: LaunchParams {
+                isolation: Some(rimz::config::Isolation::Host),
+                ..LaunchParams::default()
+            },
+            ..ExecIdentity::default()
+        },
+    };
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let shim_dir = write_failing_agent_shim(&env, "codex", 0);
+    let output = env
+        .rimz()
+        .args(crate::common::exec_args(&env, &request))
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&shim_dir))
+        .env(
+            "RIMZ_TEST_IDLE_SHELL_MARKER",
+            env.home_root.join("idle-shell.marker"),
+        )
+        .bounded_output()
+        .expect("wrapper exits");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        store
+            .read_events()
+            .expect("read exit events")
+            .iter()
+            .any(|event| matches!(
+                event.kind(), rimz::store::event::EventKind::AgentLifecycle(payload)
+                    if payload.event_name.as_deref() == Some("rimz.agent-ended")
+                        && payload.observation.signal == LifecycleSignal::Ended
+            ))
+    );
+    let agent = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read ended session")
+        .agents
+        .into_iter()
+        .find(|agent| agent.kind == kind && agent.agent_id == session_id)
+        .expect("wrapper session remains in audit history");
+    assert!(agent.ended_at.is_some());
+    let remaining: Tasks = serde_json::from_slice(
+        &std::fs::read(&instances_path).expect("read subscriptions after wrapper exit"),
+    )
+    .expect("decode subscriptions");
+    assert!(
+        remaining.0.is_empty(),
+        "ended wrapper must not keep listening"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn failed_supervised_run_retries_with_failure_context() {
     let env = Env::new();
     if !init_git_repo(&env.project_root) {
