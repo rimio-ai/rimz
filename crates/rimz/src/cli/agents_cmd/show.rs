@@ -569,6 +569,9 @@ fn render_run_section(
         render::cell(supervised::output::status_label(run.status))
             .fg(render::status::run(run.status)),
     );
+    if let Some(parked_at) = run.parked_at {
+        kv.push("parked", render::cell(render::rel_age(parked_at, now)));
+    }
     kv.push("prompt", render::cell(preview(&run.prompt)));
     kv.push(
         "started",

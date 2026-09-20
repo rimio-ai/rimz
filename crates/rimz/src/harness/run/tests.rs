@@ -702,6 +702,42 @@ fn live_status_joins_agent_state() {
     assert_eq!(live.phase, TurnPhase::Idle);
     assert_eq!(live.pane_id.as_ref(), Some(&pane_id));
     assert_eq!(live.context_pct, Some(42));
+    assert_eq!(live.parked_at, None);
+
+    record.parked_at = Some(Timestamp::UNIX_EPOCH);
+    let parked = live_status(&record, &snapshot).expect("parked live status");
+    assert_eq!(parked.parked_at, Some(Timestamp::UNIX_EPOCH));
+}
+
+#[test]
+fn live_status_projects_the_effective_agent_status() {
+    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+    let mut record = RunRecord::new(
+        workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    );
+    record.status = RunStatus::Running;
+    record.agent_id = Some(AgentSessionId::from("sess-1"));
+    let mut agent = agent_state("claude", "sess-1", AgentStatus::Success);
+    agent.pending_waits.push(crate::agents::PendingWait {
+        name: "wake-me".to_owned(),
+        trigger: crate::agents::PendingWaitTrigger::Pid { pid: 4321 },
+        armed_at: None,
+    });
+    let expected = agent.effective_status();
+    let snapshot =
+        SidebarSnapshot::build_with_agents(workspace_id, vec![agent], Timestamp::UNIX_EPOCH);
+
+    let live = live_status(&record, &snapshot).expect("live status");
+    assert_eq!(
+        expected,
+        AgentStatus::Sleeping,
+        "an armed wait rests asleep"
+    );
+    assert_eq!(live.agent_status, expected);
 }
 
 #[test]

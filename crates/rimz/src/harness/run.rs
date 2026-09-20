@@ -174,6 +174,9 @@ pub struct RunLiveStatus {
     pub pane_id: Option<PaneId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,
+    /// Set while the run is open only because its session is owed a wake.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parked_at: Option<Timestamp>,
 }
 
 pub fn create(paths: &StatePaths, record: &RunRecord) -> Result<()> {
@@ -594,7 +597,9 @@ pub fn live_status(record: &RunRecord, snapshot: &SidebarSnapshot) -> Option<Run
         .iter()
         .find(|agent| agent.kind == record.kind && &agent.agent_id == agent_id)?;
     Some(RunLiveStatus {
-        agent_status: agent.status,
+        // The projection the sidebar and `subagents list` already show, so one
+        // sleeping or paused session reads the same everywhere.
+        agent_status: agent.effective_status(),
         phase: agent.phase,
         pane_id: agent
             .pane
@@ -602,6 +607,7 @@ pub fn live_status(record: &RunRecord, snapshot: &SidebarSnapshot) -> Option<Run
             .map(|pane| pane.pane_id.clone())
             .or_else(|| record.pane_id.clone()),
         context_pct: agent_context_pct(agent),
+        parked_at: record.parked_at,
     })
 }
 
