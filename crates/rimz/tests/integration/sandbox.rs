@@ -1050,6 +1050,7 @@ test "$(cat "$HOME/.agents/skills/c/agents/openai.yaml")" = 'policy:
 test -d "$XDG_RUNTIME_DIR/rimz/ws/$RIMZ_TEST_WORKSPACE_DIR"
 test -c /dev/null
 test "$RIMZ_SCRATCH" = /tmp/scratchpad
+test "$RIMZ_SHARED" = /tmp/shared
 test -d /tmp/shared
 test -d /tmp/rimz-waits
 test -d /tmp/rimz-subagents

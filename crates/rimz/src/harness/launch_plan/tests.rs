@@ -388,6 +388,10 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             plan.process().env.get(ENV_SCRATCH).map(PathBuf::from),
             Some(scratch.clone())
         );
+        assert_eq!(
+            plan.process().env.get(ENV_SHARED).map(PathBuf::from),
+            Some(state.shared_dir.clone())
+        );
         let reminder = &plan.process().reminder;
         assert!(reminder.contains("<system_reminder>"));
         assert_eq!(
@@ -632,6 +636,10 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
     assert_eq!(
         plan.process().env.get(ENV_SCRATCH).map(String::as_str),
         Some("/tmp/scratchpad")
+    );
+    assert_eq!(
+        plan.process().env.get(ENV_SHARED).map(String::as_str),
+        Some("/tmp/shared")
     );
     let sandbox = plan.sandbox.as_ref().expect("sandbox plan");
     let tmp_bind = sandbox

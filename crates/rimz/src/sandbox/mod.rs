@@ -17,9 +17,13 @@ pub use rewrite::PlannedCopy;
 
 const SANDBOX_TMP: &str = "/tmp";
 const SANDBOX_SCRATCH: &str = "/tmp/scratchpad";
+const SANDBOX_SHARED: &str = "/tmp/shared";
 /// The launch's private scratch dir: its host path on every launch, pinned to
 /// `/tmp/scratchpad` under the sandbox.
 pub const ENV_SCRATCH: &str = "RIMZ_SCRATCH";
+/// The room's shared dir, one for every agent in it: its host path on every
+/// launch, pinned to `/tmp/shared` under the sandbox.
+pub const ENV_SHARED: &str = "RIMZ_SHARED";
 
 /// Where an agent sees room tmp: `/tmp` in a sandbox, with its own scratch dir
 /// at `/tmp/scratchpad`; the host path otherwise.
@@ -317,6 +321,10 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
     pins.insert(
         ENV_SCRATCH.to_owned(),
         EnvPin::Set(SANDBOX_SCRATCH.to_owned()),
+    );
+    pins.insert(
+        ENV_SHARED.to_owned(),
+        EnvPin::Set(SANDBOX_SHARED.to_owned()),
     );
     for key in root_keys {
         if let Some(value) = inputs.env.get(key).filter(|value| !value.is_empty()) {

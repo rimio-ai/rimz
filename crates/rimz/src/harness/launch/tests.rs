@@ -826,6 +826,7 @@ fn process_compiler_carries_only_the_scratch_line_when_nothing_else_applies() {
     .expect("process");
     assert!(process.provider_argv.contains(&process.reminder));
     assert!(process.reminder.contains("`$RIMZ_SCRATCH`"));
+    assert!(process.reminder.contains("`$RIMZ_SHARED`"));
     assert!(!process.reminder.contains("You are"));
 }
 

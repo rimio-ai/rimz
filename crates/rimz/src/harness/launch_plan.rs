@@ -9,7 +9,7 @@ use crate::agents::skill_links::{self, Desired, SkillLinkErr, SkillLinkOutcome, 
 use crate::config::effective::LaunchAgents;
 use crate::config::{AccountsConfig, CommandsConfig, Isolation};
 use crate::disk::paths::{RuntimePaths, StatePaths};
-use crate::sandbox::{self, ENV_SCRATCH, SandboxPlan};
+use crate::sandbox::{self, ENV_SCRATCH, ENV_SHARED, SandboxPlan};
 
 use super::launch::{self, AgentProcessStage, CompiledAgentProcess, ExecRequest};
 use super::launch_reminders::{LaunchReminders, TeamReminder};
@@ -121,6 +121,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     extra_env.insert(Isolation::ENV.to_owned(), isolation.to_string());
     let scratch_dir = inputs.state.scratch_dir(request.identity.name.as_deref());
     extra_env.insert(ENV_SCRATCH.to_owned(), scratch_dir.display().to_string());
+    extra_env.insert(
+        ENV_SHARED.to_owned(),
+        inputs.state.shared_dir.display().to_string(),
+    );
     let mut stage = launch::compile_agent_process_stage_with_extra_env(
         inputs.project_root,
         &request,

@@ -90,8 +90,9 @@ The plan pins every environment variable it consulted, so shell startup files ca
 | The adapter's native override keys (`config_home_env_keys`: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `QWEN_HOME`, `KIRO_HOME`, and others) | Same, so a room account's home key is among them. |
 | `TMPDIR` | Always `/tmp`. |
 | `RIMZ_SCRATCH` | Always `/tmp/scratchpad`. |
+| `RIMZ_SHARED` | Always `/tmp/shared`. |
 
-Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host` and `RIMZ_SCRATCH` to the host path of its scratch dir ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces and find its scratch dir in either mode (`Isolation::ambient` is the one reader); the pin above replaces the host path under the sandbox.
+Separately, every launch sets `RIMZ_ISOLATION` to `sandbox` or `host`, `RIMZ_SCRATCH` to the host path of its scratch dir, and `RIMZ_SHARED` to the host path of the room's shared dir ([env application](./harness/trust.md#env-application), layer 5), so a process can tell which view it runs in without probing namespaces and find both directories in either mode (`Isolation::ambient` is the one reader); the pins above replace the host paths under the sandbox.
 
 A key present with an empty value is pinned to the empty value. To move a root, export it before launching RimZ or set it in trusted launch environment config; changing it only in the pane's startup files does not change the planned mounts. Finalized provider-account launches keep their raw argv and get the same pins without another shell.
 
@@ -103,7 +104,7 @@ Room tmp is one directory per workspace, `~/.rimz/ws/<workspace-dir>/tmp/`, crea
 | --- | --- |
 | `agents/<handle>/` | One agent's private scratch files, bound over `/tmp/scratchpad` in that agent's view, as the [launch reminder](#launch-reminder) instructs. |
 | `scratchpad/` | Scratch files of a launch without a handle (a bare `rimz agents exec`, a pre-launch-id resume). |
-| `shared/` | Files agents in the room exchange on purpose. |
+| `shared/` | Files agents in the room exchange on purpose; named to agents as `/tmp/shared` or `$RIMZ_SHARED`, as the [launch reminder](#launch-reminder) instructs. |
 | `rimz-waits/` | Watched-command output ([loops.md](./harness/loops.md#watched-commands)). |
 | `rimz-subagents/` | Settled child responses ([subagents.md](./harness/subagents.md)). |
 
@@ -125,13 +126,13 @@ Copies are immutable and stay for the room's lifetime, so a running mount never 
 
 A sandbox launch adds one paragraph to the agent's launch reminder. `launch_plan::compile` sets `LaunchReminders.sandbox` when the bubblewrap preflight succeeded, and `harness/launch_reminders.rs` renders `SANDBOX_REMINDER_BODY`:
 
-> This pane runs in a bubblewrap sandbox. `/tmp` is all yours, separate from the host's `/tmp`, removed when the room closes; the host state path stays reachable. Every temporary file you make goes under `/tmp/scratchpad`. If your harness names a session-specific scratchpad and says to use `/tmp` only when asked, this is that ask: use `/tmp/scratchpad` in its place.
+> This pane runs in a bubblewrap sandbox. `/tmp` is the room's, separate from the host's `/tmp`, removed when the room closes; the host state path stays reachable. Every temporary file you make goes under `/tmp/scratchpad`, which is yours alone: every other agent and subagent has its own. A file another agent must read goes under `/tmp/shared`, in a subdirectory you name for the task. If your harness names a session-specific scratchpad and says to use `/tmp` only when asked, this is that ask: use `/tmp/scratchpad` in its place.
 
-The paragraph gives the agent one scratch path. A harness such as Claude Code injects its own environment block that names a session-specific scratchpad and reserves `/tmp` for an explicit request. The reminder supplies that request and replaces the private path outright, so the agent never has to reconcile two rules from two sources.
+The paragraph gives the agent two paths and the rule that separates them: `/tmp/scratchpad` is per-handle, so a file a parent names for a child lands in a directory the child cannot see, and `/tmp/shared` is the one directory the whole room reaches. It is room-scoped rather than worktree-scoped, since every worktree of a repo collapses into one workspace, which is why the reminder asks for a task-named subdirectory rather than a bare filename. A harness such as Claude Code injects its own environment block that names a session-specific scratchpad and reserves `/tmp` for an explicit request. The reminder supplies that request and replaces the private path outright, so the agent never has to reconcile two rules from two sources.
 
-The paragraph does not name `rimz-waits/` or `rimz-subagents/`, because every wait message and subagent report carries its own file path. Host launches carry one sentence in its place, naming the variable rather than the path:
+The paragraph does not name `rimz-waits/` or `rimz-subagents/`, because every wait message and subagent report carries its own file path. Host launches carry the same two rules in its place, naming the variables rather than the paths:
 
-> Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room closes; every temporary file you make goes there. If your harness names a session-specific scratchpad and says to use another location only when asked, this is that ask: use `$RIMZ_SCRATCH` in its place.
+> Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room closes; every temporary file you make goes there, and every other agent and subagent has its own. A file another agent must read goes under `$RIMZ_SHARED`, in a subdirectory you name for the task. If your harness names a session-specific scratchpad and says to use another location only when asked, this is that ask: use `$RIMZ_SCRATCH` in its place.
 
 Every launch therefore carries a reminder. Its position among the reminder paragraphs and the providers that receive it (Claude, Qwen, Droid, and Codex, on every launch kind including subagents) are owned by [fleet.md](./harness/fleet.md#launch-reminders).
 

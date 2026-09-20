@@ -343,8 +343,8 @@ allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
 # Host-side output writers share the current agent-visible room tmp view.
 # Exec presents typed skill omissions returned by sandbox preparation.
 # Inspection shares read-only mount/copy plans and explicit application with exec.
-# The launch plan sets the scratch-dir key the sandbox pin overrides.
-surface-budget = 23
+# The launch plan sets the scratch-dir and shared-dir keys the sandbox pins override.
+surface-budget = 24
 
 [[module]]
 path = "crates/rimz/src/room"

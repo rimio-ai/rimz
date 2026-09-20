@@ -31,18 +31,21 @@ impl Default for LaunchReminders {
 }
 
 const SANDBOX_REMINDER_BODY: &str = concat!(
-    "This pane runs in a bubblewrap sandbox. `/tmp` is all yours, separate from the host's ",
+    "This pane runs in a bubblewrap sandbox. `/tmp` is the room's, separate from the host's ",
     "`/tmp`, removed when the room closes; the host state path stays reachable. Every ",
-    "temporary file you make goes under `/tmp/scratchpad`. If your harness names a ",
-    "session-specific scratchpad and says to use `/tmp` only when asked, this is that ask: ",
-    "use `/tmp/scratchpad` in its place."
+    "temporary file you make goes under `/tmp/scratchpad`, which is yours alone: every other ",
+    "agent and subagent has its own. A file another agent must read goes under `/tmp/shared`, ",
+    "in a subdirectory you name for the task. If your harness names a session-specific ",
+    "scratchpad and says to use `/tmp` only when asked, this is that ask: use ",
+    "`/tmp/scratchpad` in its place."
 );
 
 const HOST_SCRATCH_REMINDER_BODY: &str = concat!(
     "Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room ",
-    "closes; every temporary file you make goes there. If your harness names a ",
-    "session-specific scratchpad and says to use another location only when asked, this is ",
-    "that ask: use `$RIMZ_SCRATCH` in its place."
+    "closes; every temporary file you make goes there, and every other agent and subagent has ",
+    "its own. A file another agent must read goes under `$RIMZ_SHARED`, in a subdirectory you ",
+    "name for the task. If your harness names a session-specific scratchpad and says to use ",
+    "another location only when asked, this is that ask: use `$RIMZ_SCRATCH` in its place."
 );
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(
