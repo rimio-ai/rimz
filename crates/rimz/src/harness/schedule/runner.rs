@@ -1440,7 +1440,7 @@ pub struct CheckOutcome {
 }
 
 impl CheckOutcome {
-    pub(crate) fn new(passed: bool, timed_out: bool, output: String, code: Option<i32>) -> Self {
+    pub(super) fn new(passed: bool, timed_out: bool, output: String, code: Option<i32>) -> Self {
         Self {
             passed,
             timed_out,

@@ -121,12 +121,12 @@ pub(crate) fn project_pending_waits(
 /// Armed one-shot deliveries keyed by the session they wake. Turn-completion
 /// waits load these before the message queue and the rollup, since a wake
 /// publishes its message record before its catalog row is consumed.
-pub struct SessionWaits(BTreeMap<(AgentKind, AgentSessionId), Vec<PendingWait>>);
+pub(crate) struct SessionWaits(BTreeMap<(AgentKind, AgentSessionId), Vec<PendingWait>>);
 
 impl SessionWaits {
     /// Read the catalog now. The machine config is loaded only for a
     /// workspace that holds instance rows.
-    pub fn load(project_root: Option<&Path>) -> Self {
+    pub(crate) fn load(project_root: Option<&Path>) -> Self {
         Self::load_at(project_root, || {
             jiff::Zoned::now().with_time_zone(MachineConfig::load_lenient().time_zone())
         })
@@ -149,7 +149,7 @@ impl SessionWaits {
         ))
     }
 
-    pub fn attach(mut self, snapshot: &mut SidebarSnapshot) {
+    pub(crate) fn attach(mut self, snapshot: &mut SidebarSnapshot) {
         for agent in &mut snapshot.agents {
             agent.pending_waits = self
                 .0
