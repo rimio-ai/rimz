@@ -1,55 +1,143 @@
 # Set up your machine
 
-RimZ runs with zero configuration, and one setup pass makes it a comfortable daily driver — on a laptop or on the remote server you SSH into. Picking up where [installation](./installation.md) ends, you'll:
+RimZ runs with no configuration. Every preference has a default, and a room asserts the Zellij or tmux options agents need on its own, so `rimz` in a project directory is already enough. Two things it will not decide alone, because both reach past its own files: writing reporting hooks into your agents' config, and acting on your behalf while you are away.
 
-- initialize the per-machine config,
-- install or refresh the agent hooks that let the sidebar see your agents,
-- check truecolor and Nerd Font support independently, and preview a pet,
-- switch on the hands-off behaviors that keep agents working while you're away,
-- and give your own Zellij or tmux a baseline worth keeping.
-
-The fast path is three commands and a room. The rest of the page is what each step does and the settings worth choosing while you are here.
+`rimz setup` is that conversation, once per machine:
 
 ```sh
-rimz setup            # detect the machine, write config, choose hooks and appearance
-rimz hooks install    # wire every detected agent's hooks into RimZ
-rimz doctor           # confirm the machine is ready
-cd ~/code/your-project && rimz
+rimz setup
 ```
 
-## Initialize the config
+It reads the machine, writes the per-machine config, then asks about hooks, color, glyphs, a pet, and hands-off automation, in that order. The sections below follow it question by question and end with your first room. Nothing it does is one-way: hooks come out with `rimz hooks uninstall`, every other answer is one `rimz config set` away from its opposite, and each file it writes is named as it goes.
 
-`rimz setup` prints a first-run report — the selected multiplexer, workspace root, trust state, config path, detected agent binaries, and hook install status — and writes any missing per-machine config under `~/.rimz/`. On an interactive terminal it also:
+## What setup writes
 
-- offers to keep an existing config and refresh it against the current templates,
-- offers one summarized install or refresh for every detected agent with missing hooks or a stale RimZ-owned whole-file integration,
-- shows separate live truecolor and Nerd Font probes,
-- previews the configured sidebar pet before asking whether to enable it, and
-- lists the hands-off automations, one row each with its current state and what it costs — auto-continue, Codex auto-redeem (only when `codex` is installed), and idle compaction — and asks once: `y` turns every listed row on, `n` turns every listed row off, `choose` asks row by row. Enter keeps the current state, so a fresh machine stays opted out.
+Setup opens with a report of what it found: the multiplexer it selected and its version, the project root you ran it in and whether RimZ [trusts](./security.md#project-trust) it, the path to the core config file and whether that file already exists, then one row per agent adapter giving where RimZ found the binary and whether its hooks are installed.
 
-Setup asks only what the machine can't answer for itself: a probe (can this terminal draw truecolor or Nerd Font icons?) or consent to something that acts on its own. Preferences live in `rimz config`.
-
-The hook summary names every affected file and points to `rimz hooks install --dry-run` for the exact unified diff before you consent. The first `rimz` run on a terminal asks the same hook, color, glyph, pet, and automation questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs, upgrades, trust grants, appearance changes, or automation opt-ins — which suits a server provisioning script.
-
-Three files carry the settings this guide touches:
+Everything it writes goes under `~/.rimz/`, and it writes only what is missing. Three files carry the settings you will edit:
 
 | File | Owns |
 | --- | --- |
 | `~/.rimz/config.toml` | room behavior, agent launch preferences and commands, worktree defaults, attention timing, resume, compaction, notifications |
 | `~/.rimz/theme.toml` | sidebar appearance: scheme, color depth, glyphs, pets |
-| `~/.rimz/loop.toml` | scheduled loop tasks: recurring turns, watchdogs, self-waits |
+| `~/.rimz/loop.toml` | scheduled loop tasks: the recurring turns and watchdogs you configure by hand or with `rimz loop add` |
 
-Agent and team definitions live separately in the [Markdown trees](../reference/definitions.md); edit their sources and run `rimz agents validate`.
+Two generated files land beside them and need nothing from you: `~/.rimz/remote.toml`, a commented template for the [SSH aliases](./remote.md) you may add later, and `~/.rimz/teams/consensus.md`, a read-only copy of the prompt RimZ gives a [team](./teams.md) so you can read it. Nothing reads that copy back, and each setup run rewrites it from the running build. Agent, subagent, and team definitions live under `~/.rimz/` too, as Markdown trees you write yourself; their shape is in [definitions](../reference/definitions.md).
 
-Every preference key ships commented with its default and an inline note, so the generated template is the field reference:
+Rerun setup any time. When a config file already exists it asks `Keep your current config?`, which defaults to yes: your settings stay and the file is merged against the templates of the running build, so keys added since you last ran it appear with their defaults. Answering no overwrites the files with fresh templates. A file RimZ cannot parse is left exactly as it is, and setup stops there and names it rather than guessing.
 
-```sh
-rimz config init --print                     # every key, its default, and what it does
-rimz config get                              # the whole effective config as TOML
-rimz config set theme "Catppuccin Mocha"     # edit one dotted key in the owning file
+`rimz setup --yes` takes the non-interactive path: it prints the report, merges or writes the config files, and stops. No hooks are installed, no trust is granted, and no appearance or automation setting changes, which is what you want from a provisioning script. Without `--yes` and without a terminal to read from, setup prints the report, changes nothing, and tells you which of the two to do.
+
+## Install agent hooks
+
+A stock agent CLI reports to nobody. It runs in its pane, and whether it is thinking, waiting on a permission prompt, or finished twenty minutes ago is visible only by looking at the pane. That is the gap RimZ's sidebar closes, and it closes it from the agent's own event stream rather than by scraping the screen.
+
+A reporting hook is one line in the agent's own config file that runs `rimz hooks feed` when something happens: a session starts, a tool is called, a question blocks the turn, a turn ends. Hooks report and never answer. On a blocking prompt the hook hands the agent back its neutral no-op and the question stays in the agent's own UI, where you answer it.
+
+Setup asks for them first, with a screen naming every file it would touch:
+
+```console
+rimz · first-run setup
+────────────────────────────────────────────────
+
+RimZ found 2 coding agents: claude, codex.
+To show them live in the sidebar, RimZ installs or refreshes reporting hooks in each agent's config.
+
+  claude  13 hooks → ~/.claude/settings.json  updates existing config
+          + sets your statusline to show live context
+  codex   11 hooks → ~/.codex/config.toml     updates existing config
+
+Each hook is one `rimz hooks feed` line — it reports events, never acts or answers for you.
+  undo     rimz hooks uninstall
+  preview  rimz hooks install --dry-run
+
+Install or refresh reporting hooks? [Y/n]
 ```
 
-A commented line keeps following the defaults shipped by future RimZ versions; uncommenting makes it this machine's override. `rimz config set` routes a dotted key to the file that owns it, validates the value, and writes durably. The config model — tiers, merge order, and every behavior section including notifications — is in the [configuration guide](./configuration.md).
+Enter or `y` installs for every agent listed; `n` skips all of them and setup carries on. Only agents whose binary RimZ found appear, and an agent whose hooks are already current is not listed at all.
+
+What the write does depends on the agent. Most are a merge: RimZ adds its entries to the existing JSON or TOML and leaves every other value, your own hooks included. Amp, Copilot, Kiro, OpenCode, and Pi instead get one whole file that belongs to RimZ, marked `_rimz_managed` on its first line; an unmarked file already sitting at that path is yours, and install refuses rather than overwrite it. Where the row shows a statusline note, RimZ claims the agent's statusline slot, which is how the card gets live context. A statusline you had set keeps running, wrapped inside RimZ's, and uninstall puts yours back on its own.
+
+`rimz hooks install` and `rimz hooks uninstall` cover the rest of the lifecycle:
+
+```sh
+rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
+rimz hooks install claude       # one agent kind
+rimz hooks uninstall            # remove every RimZ-managed hook and restore any wrapped statusline
+```
+
+With no agent named, install covers every one of the thirteen built-in adapters whose binary RimZ finds here; naming one installs that kind whether or not its binary is present. Rerunning is safe either way: RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand comes back. Which files each agent takes, and what uninstall restores, is [what install writes](../reference/cli/hooks-trust.md#what-install-writes).
+
+Some agents gate a newly installed hook behind their own trust prompt, Codex among them. RimZ cannot grant that on your behalf, so when it sees installed-but-untrusted hooks it prints the exact fix, and the `HOOKS` row of `rimz doctor` repeats it until you run `/hooks` inside Codex and trust them.
+
+## Truecolor and Nerd Font icons
+
+The sidebar reads best with 24-bit color and Nerd Font icons, and the two are independent: a terminal can have one without the other. Terminals also lie about both, and an SSH hop or a multiplexer can strip either one. So setup draws each capability on screen and asks you what you see, which is the only reliable test.
+
+First a color sweep, one bar of 36 blocks: answer yes if it is a single smooth gradient, no if it breaks into flat bands. Then eight sidebar icons: answer yes if you see eight distinct shapes, no if you see boxes or question marks.
+
+An answer that changes the effective default writes `theme.mode` or `theme.glyphs.set`, and only that one, so either half can fall back without touching the other. An answer matching what the defaults already resolve to writes nothing.
+
+For terminals that qualify and fonts to install, see [installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional); for what each color depth and glyph set changes on screen, see [theming](./theme.md#style-preset).
+
+## A pet in the sidebar
+
+A pet is a small animated companion in the sidebar's provider dashboard that reacts to what your fleet is doing. Setup renders the default pet, `rocky`, at the same tier the dashboard will use, then asks whether you want one. The preview is best-effort: if it cannot draw, the question comes anyway.
+
+Turn one on later with the same key the answer writes:
+
+```sh
+rimz config set theme.pets.enabled true
+rimz list-pets                             # preview every pet you can choose
+```
+
+The [pets guide](./pets.md) covers the rest: picking a different one, installing pets from [petdex.dev](https://petdex.dev/), the pixel and cell-art render tiers, bringing your own sprite sheet, and where the privacy boundary sits.
+
+## Hands-off automation
+
+The last question is the one that matters most, because it is the only one that lets RimZ act without you. An unattended agent stops overnight for reasons that need no judgment: it hits the provider's rate limit mid-turn, or the API drops its stream, or its context sits idle long enough that the provider's warm cache expires and the next message pays to rebuild it. Each stop has a known fix, and RimZ can apply it at the moment it will work. Each fix also spends something of yours: a keystroke into your pane, a credit off your account, or part of a conversation.
+
+So setup lists three behaviors as rows with their current state and what each one costs, and asks once:
+
+| Row | What it does when on |
+| --- | --- |
+| auto-continue | types `continue` into a parked agent's pane after a rate limit or an API error, once the clock says the retry can succeed |
+| auto-redeem | spends one of the reset credits a Codex plan grants, refilling a spent usage window on the spot, when doing so unblocks hours of work. Offered only when `codex` is on the machine |
+| idle compaction | has a long-idle agent summarize its conversation and carry on from the summary, while other agents in its channel are still running. The detail behind the summary is gone |
+
+`y` turns every listed row on, `n` turns every row off, and `choose` walks them one at a time. Enter keeps each row as it is, so on a fresh machine all three stay off. Whatever you pick, every action these take appends a record you can read back with `rimz stats --assists`.
+
+The rules each one follows, down to which park resumes on which clock, are [loops → keep the fleet moving](./loops.md#keep-the-fleet-moving). The keys and their tuning are [configuration → resume](./configuration.md#resume).
+
+## Open your first room
+
+Setup ends by telling you to start one. Go to a project and run `rimz` with no arguments:
+
+```sh
+cd ~/code/your-project
+rimz
+```
+
+That creates or reattaches the Zellij or tmux session for this project, docks the sidebar down the left, and drops you in a shell. Launch an agent the way you always do, `claude` or `codex` straight into a pane, and its card appears in the sidebar as its first hook fires. To read the zones and the cards, see [the sidebar](./sidebar.md); to drive the fleet, see [agents](./fleet.md).
+
+`rimz doctor` re-reads the machine at any time and writes nothing, so it is the check to run when something looks wrong. Skipping `rimz setup` entirely is also fine: the first `rimz` in a project asks the same hook, color, glyph, pet, and automation questions when it finds no config, and writes the same files.
+
+To take all of it back off the machine, `rimz uninstall --all` names every root, room, hook, and binary it is about to touch and waits for a `y` before removing them; [security and trust](./security.md#what-rimz-changes-on-your-machine) lists what it leaves behind on purpose.
+
+## Change a setting later
+
+Every preference key ships commented in the generated templates with a note on what it does, so the file itself is the field list:
+
+```sh
+rimz config init --print                     # the three templates, every key and comment
+rimz config get                              # the whole effective config as TOML
+rimz config get resume.auto_continue         # one dotted key
+rimz config set theme.style modern           # edit one dotted key in the file that owns it
+```
+
+A key left commented keeps following the default the running RimZ build ships, which is what you want for anything you have no opinion about; uncommenting it pins that value as this machine's override. Read the comment before uncommenting: some lines carry an illustrative value rather than the default, `idle_compact = "auto"` among them, where the default is `off`.
+
+`rimz config set` routes a dotted key to whichever of the three files owns it, validates the value, and writes durably in place, keeping your comments and key order. The whole model, tier by tier and section by section, is the [configuration guide](./configuration.md).
 
 ## Shell completion
 
@@ -66,166 +154,15 @@ source <(COMPLETE=zsh rimz)
 COMPLETE=fish rimz | source
 ```
 
-Completion covers the static command and flag surface plus current room data such as live `@handles`, queued `msg_` ids, loop tasks, launch specs, worktrees, channels, sessions, remote aliases, and config keys. Source the registration at shell startup instead of caching its output so it stays compatible when RimZ upgrades.
+Completion covers the static command and flag surface, and adds live room data as you type: `@handles` and pane targets, queued `msg_` ids, loop task names, agent and subagent profiles, team names, worktrees, channels, sessions, remote aliases, and config keys. Source the registration at shell startup rather than caching its output to a file, so it keeps up when RimZ upgrades.
 
-## Install agent hooks
+## See also
 
-Hooks are how a running agent reports to the room: turn starts and ends, permission prompts, and blocking questions reach the sidebar through hook events. Install them into every detected agent's per-user config:
-
-```sh
-rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # every detected installable agent (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, qwen, grok)
-rimz hooks install claude       # one agent kind
-```
-
-Structured installs preserve existing user hooks, and whole-file Amp, Copilot, Pi, and OpenCode integrations replace only a file carrying RimZ's first-line `_rimz_managed` ownership marker; an unmarked file remains user-owned and installation refuses to overwrite it. Each report names every file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, RimZ wraps the command so the sidebar reads live context, and restores yours on uninstall. Cursor shows and commits its hook file and CLI statusline config as one rollback-safe two-file operation. The first `rimz` run and interactive `rimz setup` compare marked Pi and OpenCode integrations with the source embedded in the running RimZ build, include stale sources in the same summarized consent prompt as missing hooks, and point to `rimz hooks install --dry-run` for exact diffs. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
-
-Grok installs one passive global JSON file at `${GROK_HOME:-~/.grok}/hooks/rimz.json`. It preserves unrelated Grok hooks and leaves the blocking `PreToolUse` decision channel to the native TUI.
-
-Newly-born rooms also give direct Copilot launches a private metadata-only OTel file under that workspace's runtime directory, with message-content capture disabled. A room that was already alive when RimZ gained this support keeps its original environment; rebirth it after install or upgrade before expecting a plain `copilot` typed in the work shell to show model and token composition.
-
-Kiro installs one global file at `~/.kiro/hooks/rimz.json`, marked `_rimz_managed`, which Kiro CLI 2.13.0 and later run in every workspace. Install refuses an older Kiro CLI, and it takes over the unmarked hook file that earlier RimZ builds wrote. Kiro reads sessions and global hooks from `~/.kiro` even when `KIRO_HOME` is set.
-
-## True color
-
-The sidebar and agent TUIs render best at 24-bit color, and three layers decide whether you get it:
-
-- **Your terminal.** Pick one that advertises truecolor — Ghostty, WezTerm, Kitty, and Alacritty all do. This is the whole story for local terminal-attached Zellij, which inherits color support from the terminal it runs in.
-- **RimZ.** `[theme] mode = "auto"` (the default) emits truecolor whenever `COLORTERM` or the `$TERM` terminfo advertises it. Inside a RimZ tmux room, RimZ stamps `COLORTERM=truecolor` at birth when the launching terminal advertises it, so `auto` resolves to truecolor despite tmux's `tmux-256color` default; `rimz remote` carries the same stamp over SSH when the local terminal advertises it, and `rimz web` stamps browser-born rooms because xterm.js renders 24-bit color. Pin `mode = "truecolor"` for rooms born before this support or for other stripping hops.
-- **Your own tmux sessions.** tmux needs `default-terminal` and the RGB overrides in [the tmux essentials below](#tmux) for its own color handling outside RimZ rooms.
-
-With a Nerd Font in the terminal, one line upgrades the glyphs too:
-
-```toml
-[theme]
-style = "modern"       # truecolor + Nerd Font icons; "default" = auto color + Unicode
-# mode = "truecolor"   # force RGB when auto-detection is defeated
-```
-
-Schemes, palette slots, and the full display model are in [theming](./theme.md).
-
-First-run setup puts each capability beside its own question: a color sweep checks truecolor, then sampled sidebar icons check the Nerd Font. The detected terminal capability supplies the truecolor default; answers that change the effective defaults write `theme.mode` and `theme.glyphs.set` independently, so either capability can fall back without disabling the other.
-
-## Pets
-
-Pets add a small animated companion to the sidebar's provider dashboard, following the fleet's state. Setup renders the configured pet at the same pixel or cell-art tier the dashboard will use, then asks whether to enable the default `rocky`; when the best-effort preview is unavailable, the question remains. One command turns a pet on later:
-
-```sh
-rimz config set theme.pets.enabled true
-rimz list-pets                             # preview every built-in as cell art
-```
-
-Picking a different pet, [petdex.dev](https://petdex.dev/) installs, crisp pixels vs cell art, bring-your-own sprite sheets, and the privacy boundary are in the [pets guide](./pets.md).
-
-## Keep the fleet moving
-
-RimZ routes attention by default and leaves every decision to you. Four opt-in behaviors keep agents productive through reboots, rate limits, and full context windows — the difference between a fleet that waits for you and one that only needs you for real decisions. All four live in per-machine config.
-
-### Resume agents after a reboot
-
-```toml
-[resume]
-on_rebirth = true    # already the default
-max = 128            # cap on agents one rebirth relaunches
-```
-
-When RimZ rebuilds a room after a reboot or a multiplexer crash — a *rebirth* — it offers to bring back the prior agents from its durable records, each restored agent starting idle in its worktree tab. This is on by default; the knobs bound it, and `rimz start --no-resume` or `on_rebirth = false` gives a clean empty room instead. The mechanics are in [sidebar internals → Resume on rebirth](../internals/sidebar/sidebar.md#resume-on-rebirth).
-
-### Auto-continue interrupted turns
-
-```toml
-[resume]
-auto_continue = true                       # off by default
-# auto_continue_backoff_secs = [180, 300]  # first retry after 3m, then every 5m
-# auto_continue_max_retries = 12           # stop after ~58 minutes of retries
-# auto_continue_text = "continue"          # the nudge typed into the parked pane
-```
-
-A turn that dies mid-flight — a rate limit, a spend limit, a provider overload, or a transient API error such as a stalled stream, timeout, or dropped connection — *parks* its agent: the agent sits waiting for a nudge to continue. `auto_continue` picks those turns back up by typing `continue` into the pane through the same audited path as `rimz message`. Rate-limit and spend-limit parks resume when the provider's budget window resets; overload and transient-error parks retry on the backoff ramp until the retry cap. The model is in [provider internals → Auto-continue](../internals/agents/providers.md#auto-continue).
-
-### Compact before the prompt lands
-
-```toml
-[harness]
-smart_compact = "200k"   # occupied-token count; a percentage of the window such as "70%" works too
-```
-
-`smart_compact` makes `rimz message` sends and scheduled loop waits compact-first: when the target agent's context window has reached the threshold, RimZ submits the agent's compact command ahead of the text so the prompt lands against a fresh window instead of dying at the context ceiling. Agents whose command accepts guidance receive [`compact_instruction`](./configuration.md#smart-compaction); the rest receive their bare command. Unset, compaction stays opt-in per message through `rimz message --smart-compact`. The mechanics are in [message internals → Smart compaction](../internals/harness/messaging.md#smart-compaction).
-
-### Put a turn on a schedule
-
-Scheduled work lives in its own file, `~/.rimz/loop.toml`, one `[tasks.<name>]` entry per job:
-
-```toml
-[tasks.nightly-audit]
-agent = "codex"
-prompt = "Audit the dependency lockfile for advisories and open an issue for anything actionable"
-root = "/home/you/code/app"      # absolute project root whose room hosts the turn
-at = "00:30"                     # 24h time in the configured timezone
-every = "day"
-```
-
-`rimz loop add` writes the same entries, so you never have to hand-edit unless you want to. Two things about the model are worth knowing before you write your first task: the room's sidebar keeps the clock by default, while one opt-in `rimz loop timer install` keeps every task root ticking when its room is closed; and a task that repeats needs `every` or `cron` — a bare `at` fires once and retires itself. The timer is a user-level systemd timer on Linux or launchd agent on macOS, not a resident RimZ daemon. Agent and scheduled check-only fires open the root's room if needed and leave it open; [loops → Who keeps time](./loops.md#who-keeps-time) explains that lifecycle. `rimz loop timer remove` stops the timer without closing rooms already opened.
-
-The same table carries watchdogs and self-waits, where an agent turn runs on an interval behind a shell check such as `cargo test` or `gh run watch`. What you would schedule and why is [loops](./loops.md); the field-by-field shape is [configuration → Loop tasks](./configuration.md#loop-tasks), and every flag is in [the loop CLI](../reference/cli/loop.md).
-
-## Configure your multiplexer
-
-RimZ sets the room's behavior for you: on every session birth and reattach it applies the options agents need — locked mode and single-click sidebar jumps on Zellij; mouse, focus events, OSC passthrough, CSI-u soft-newline keys, clipboard, and clickable OSC 8 links on tmux; 100k-line scrollback on both — so a freshly installed multiplexer works without touching its config. Your own `~/.config/zellij/config.kdl` or `~/.tmux.conf` owns everything RimZ leaves alone — the theme, true color, copy-mode, the status bar, and your keybindings — inside the room and in every session you run outside RimZ.
-
-The fastest path to a good config of your own is copying the shipped baselines under [examples/](../../examples/README.md) — Zellij as a complete starting file, tmux as sourceable modules:
-
-```sh
-# From the rimz checkout
-cp examples/zellij/config.kdl ~/.config/zellij/config.kdl        # Zellij: the whole baseline, one file
-printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-keys,theme-tokyonight}.conf >> ~/.tmux.conf
-```
-
-The essentials below are the settings that matter most for agent sessions. The full walkthrough — recommended quality-of-life options, one `Alt`-chord keybinding set that drives both multiplexers, a themed status bar, and the room overrides in RimZ config — is [Zellij and tmux baselines](./multiplexer.md).
-
-### Zellij
-
-The file is `~/.config/zellij/config.kdl`; `zellij setup --check` validates your edits. These settings make a coding-agent session behave correctly — long output stays readable, the keyboard reaches the agent, and copied text lands where you expect:
-
-```kdl
-default_mode "locked"                  // hand typing straight to the agent; Ctrl+g enters Zellij
-scroll_buffer_size 100000              // keep long agent output scrollable
-mouse_mode true                        // scroll, select, and resize with the mouse
-copy_on_select true                    // selecting text copies it
-copy_clipboard "system"                // yank into the OS clipboard
-support_kitty_keyboard_protocol true   // Shift+Enter and friends reach TUI agents
-```
-
-`default_mode "locked"` is the one that matters most: locked mode passes ordinary keystrokes to the focused pane, so an agent's TUI gets your input until you deliberately press `Ctrl+g` for a Zellij mode. RimZ already opens its room in locked mode; setting it here keeps your own sessions consistent and your muscle memory intact. Zellij inherits true color from the terminal it runs in, so there is no color flag to set.
-
-### tmux
-
-The file is `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`); reload it with `tmux source-file ~/.tmux.conf`. Two groups: **true color** sets your terminal type and RGB passthrough (tmux needs this for its own color handling even though RimZ stamps its rooms), and the rest are behaviors RimZ applies inside its room — set them here so your own sessions behave the same.
-
-```tmux
-# True color + italics: advertise a color terminal, pass RGB and styles through.
-set -g default-terminal "tmux-256color"
-set -ga terminal-overrides ",*256col*:RGB,alacritty:RGB,wezterm:RGB"
-set -ga terminal-features ",*:RGB,*:usstyle,*:clipboard"
-
-# Behaviors a modern TUI agent relies on.
-set -g  mouse on                 # scroll, select panes, resize
-set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
-set -sg escape-time 10           # upstream 3.5+ default; safely joins split ESC sequences
-set -ga terminal-features ",*:sync"   # atomic redraws for tmux sessions outside RimZ
-set -ga terminal-features ",*:hyperlinks" # clickable OSC 8 links
-set -g  focus-events on          # editors and agents see focus changes
-set -g  allow-passthrough on     # let desktop notifications pass through tmux
-set -s  extended-keys on             # distinguish modified Enter from Enter
-set -s  extended-keys-format csi-u   # forward Shift+Enter / Alt+Enter as CSI-u
-set -ga terminal-features "*:extkeys" # ask the outer terminal to send them
-set -s  user-keys[240] "\e[27u"        # name Ghostty's modifier-less CSI-u Esc
-bind-key -n User240 send-keys Escape   # normalize it back to plain Esc
-bind-key -n S-Enter send-keys Escape "[13;2u"
-bind-key -n M-Enter send-keys Escape "[13;3u"
-set -g  set-clipboard on         # yank into the host clipboard over OSC52
-```
-
-Three of these earn a note; the block's comments carry the rest. `escape-time 10` gives tmux a short window to join an ESC byte with the rest of its sequence, avoiding split-ESC misparses over SSH while keeping the delay imperceptible. The extended-keys trio plus the modified-Enter bindings let an agent's composer receive Shift+Enter and Alt+Enter as soft newlines while plain Enter still submits — on tmux 3.5.x this trades clean multiline paste while extended keys are active (use Ctrl+J or tmux 3.6+ for both); the `user-keys` pair keeps plain Esc clean on terminals such as Ghostty that answer the extended-keys request with modifier-less CSI-u. `allow-passthrough on` lets the desktop-notification bytes RimZ emits reach your terminal.
-
-Copy-mode, stable window names, titled pane borders, smart splits, Zellij-parity keys, and the themed status bar continue in [Zellij and tmux baselines](./multiplexer.md#tmux).
+- [The sidebar](./sidebar.md): what the cards, zones, and process rows you just switched on actually show.
+- [Agents](./fleet.md): run the stock CLIs in the room, shape one with a profile, and drive the running fleet.
+- [Zellij and tmux](./multiplexer.md): what the room asserts in your multiplexer, and a baseline worth adopting for the sessions you run outside it.
+- [Configuration](./configuration.md): every key, the file that owns it, and how the tiers combine.
+- [Loops](./loops.md): the hands-off reflexes in full, plus putting agent turns on a clock.
+- [Security and trust](./security.md): everything RimZ changes on your machine, and the command that undoes each one.
+- [Hooks and trust CLI](../reference/cli/hooks-trust.md): `rimz hooks install` and `uninstall` flag by flag, with the per-agent file table.
+- [Troubleshooting](./troubleshooting.md): reading `rimz doctor`, and the fixes when an agent does not report.

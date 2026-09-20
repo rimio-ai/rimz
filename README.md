@@ -322,13 +322,13 @@ What each group does, with the depth one link away:
 - Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction sends the agent's compact command ahead of your text once context passes the threshold, so a long turn lands on a fresh window. Between them the interruptions that would have stalled the fleet until morning clear themselves, and you are left with the decisions that actually need you; cap what that freedom costs with `rimz config set harness.budget 50/day`. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
 - The remote-control toggles are the [answer-from-your-phone move](#everyday-moves) above; the [remote guide](./docs/guide/remote.md#answer-asks-from-your-phone) shows exactly what each one runs.
 
-The [setup guide](./docs/guide/setup.md) walks the whole first pass, including agent hooks and a modern Zellij/tmux baseline with [ready-to-adopt example configs](./examples/README.md); the full key catalog is the [configuration guide](./docs/guide/configuration.md).
+The [setup guide](./docs/guide/setup.md) walks the whole first pass, agent hooks included; the [Zellij and tmux guide](./docs/guide/multiplexer.md) has a modern baseline with [ready-to-adopt example configs](./examples/README.md), and the full key catalog is the [configuration guide](./docs/guide/configuration.md).
 
 ## Documentation
 
 The [documentation index](./docs/README.md) maps the whole set. Highlights:
 
-- [Set up your machine](./docs/guide/setup.md) — install to a working fleet: config, hooks, true color, pets, and the Zellij/tmux baselines
+- [Set up your machine](./docs/guide/setup.md) — one run of `rimz setup`: the config it writes, the agent hooks, the color and glyph probes, the pet, and hands-off automation
 - [Working with agents](./docs/guide/fleet.md) — [agents](./docs/guide/fleet.md) · [the sidebar](./docs/guide/sidebar.md) · [token insight](./docs/guide/insight.md) · [remote](./docs/guide/remote.md) · [web](./docs/guide/web.md)
 - [Harness](./docs/guide/messaging.md) — [messaging](./docs/guide/messaging.md) · [teams](./docs/guide/teams.md) · [worktrees](./docs/guide/worktrees.md) · [scripting agents](./docs/guide/scripting.md) · [loops & schedules](./docs/guide/loops.md)
 - [CLI reference](./docs/reference/cli.md) · [Configuration](./docs/guide/configuration.md) · [Theming](./docs/guide/theme.md) · [Troubleshooting](./docs/guide/troubleshooting.md) · [Changelog](./CHANGELOG.md)

@@ -16,7 +16,7 @@ The one catch is age. Multiplexers predate coding agents by decades, and their d
 
 ## What RimZ changes, and what stays yours
 
-RimZ's room is session-scoped. On every session birth and reattach it applies the settings agents need (locked mode and single-click sidebar jumps on Zellij; mouse, focus events, notification passthrough, soft-newline keys, clipboard, and clickable OSC 8 links on tmux; a deep scrollback on both) and stops there. It does not edit your `~/.config/zellij/config.kdl` or `~/.tmux.conf`. Your theme, keybinds, copy-mode, and status bar are yours, inside the room and in every session you run outside it. The per-setting detail is in [set up your machine](./setup.md#configure-your-multiplexer); the exact keys and defaults are in [configuration](./configuration.md#multiplexer-room-options).
+RimZ's room is session-scoped. On every session birth and reattach it applies the settings agents need (locked mode and single-click sidebar jumps on Zellij; mouse, focus events, notification passthrough, soft-newline keys, clipboard, clickable OSC 8 links, and a 100,000-line scrollback on tmux) and stops there. It does not edit your `~/.config/zellij/config.kdl` or `~/.tmux.conf`. Your theme, keybinds, copy-mode, and status bar are yours, inside the room and in every session you run outside it. The exact keys and defaults are in [configuration](./configuration.md#multiplexer-room-options).
 
 For panes RimZ creates, the outer terminal tab also stays on a short room-and-process title such as `rimz-myrepo-a1b2c3 | zsh` or `rimz-myrepo-a1b2c3 | codex`. Agent and channel panes use their RimZ identity; panes without one show the live process short name. A shell prompt cannot replace it with an SSH host and working path.
 
@@ -68,13 +68,28 @@ An agent is a plain process in an ordinary pane. A layout spec is pane splits: `
 
 The file is `~/.config/zellij/config.kdl`. `zellij setup --dump-config` prints the full default set, and `zellij setup --check` validates your edits. Every key here is catalogued in the [Zellij upstream reference](../externals/mux-adapter/zellij-reference.md#configuration).
 
-[examples/zellij/config.kdl](../../examples/zellij/config.kdl) is the whole baseline, the [essentials](./setup.md#zellij) plus every block below and the `tokyo-night` theme, as one file, since Zellij reads a single config. Starting fresh, copy it; with an existing `config.kdl`, lift the blocks you want. Unlisted keys keep Zellij's defaults either way.
+[examples/zellij/config.kdl](../../examples/zellij/config.kdl) is the whole baseline, the essentials below plus every block after them and the `tokyo-night` theme, as one file, since Zellij reads a single config. Starting fresh, copy it; with an existing `config.kdl`, lift the blocks you want. Unlisted keys keep Zellij's defaults either way.
 
 Clipboard travels over OSC52 by default, so yanking works through SSH to your local clipboard. A terminal that needs a helper can set one explicitly:
 
 ```kdl
 // copy_command "wl-copy"      // Wayland;  "xclip -selection clipboard" on X11;  "pbcopy" on macOS
 ```
+
+### Essentials
+
+These six make a coding-agent session behave correctly: long output stays readable, the keyboard reaches the agent, and copied text lands where you expect.
+
+```kdl
+default_mode "locked"                  // hand typing straight to the agent; Ctrl+g enters Zellij
+scroll_buffer_size 100000              // keep long agent output scrollable
+mouse_mode true                        // scroll, select, and resize with the mouse
+copy_on_select true                    // selecting text copies it
+copy_clipboard "system"                // yank into the OS clipboard
+support_kitty_keyboard_protocol true   // Shift+Enter and friends reach TUI agents
+```
+
+`default_mode "locked"` is the one that matters most: locked mode passes ordinary keystrokes to the focused pane, so an agent's TUI gets your input until you deliberately press `Ctrl+g` for a Zellij mode. RimZ already opens its room in locked mode; setting it here keeps your own sessions consistent and your muscle memory intact. Zellij inherits truecolor from the terminal it runs in, so there is no color option to set.
 
 ### Recommended
 
@@ -138,13 +153,43 @@ RimZ also disables Zellij's session metadata loop inside its room. At roughly 10
 
 The file is `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`); reload it with `tmux source-file ~/.tmux.conf` or the `prefix` + `r` binding below. Every option here is catalogued in the [tmux upstream reference](../externals/mux-adapter/tmux-reference.md#options).
 
-tmux is the spartan one out of the box: no mouse, a short scrollback, and thin, untitled pane borders. The blocks below ship as four self-contained modules under [examples/tmux/](../../examples/README.md#tmux--tmux), [`agents.conf`](../../examples/tmux/agents.conf) (the [essentials](./setup.md#tmux)), [`quality-of-life.conf`](../../examples/tmux/quality-of-life.conf) (copy-mode, window names, splits), [`zellij-keys.conf`](../../examples/tmux/zellij-keys.conf) (the parity chords), and [`theme-tokyonight.conf`](../../examples/tmux/theme-tokyonight.conf) (frames and status bar), so your `~/.tmux.conf` stays yours and adopts by reference:
+tmux is the spartan one out of the box: no mouse, a short scrollback, and thin, untitled pane borders. The blocks below ship as four self-contained modules under [examples/tmux/](../../examples/README.md#tmux--tmux), [`agents.conf`](../../examples/tmux/agents.conf) (the essentials below), [`quality-of-life.conf`](../../examples/tmux/quality-of-life.conf) (copy-mode, window names, splits), [`zellij-keys.conf`](../../examples/tmux/zellij-keys.conf) (the parity chords), and [`theme-tokyonight.conf`](../../examples/tmux/theme-tokyonight.conf) (frames and status bar), so your `~/.tmux.conf` stays yours and adopts by reference:
 
 ```sh
 # From the rimz checkout: source the modules you want; drop any line.
 printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-keys,theme-tokyonight}.conf >> ~/.tmux.conf
 tmux source-file ~/.tmux.conf
 ```
+
+### Essentials
+
+Two groups. Truecolor sets your terminal type and RGB passthrough, which tmux needs for its own color handling even though RimZ stamps `COLORTERM` inside its rooms. The rest are behaviors RimZ applies inside the room; setting them here makes your own sessions match.
+
+```tmux
+# True color + italics: advertise a color terminal, pass RGB and styles through.
+set -g default-terminal "tmux-256color"
+set -ga terminal-overrides ",*256col*:RGB,alacritty:RGB,wezterm:RGB"
+set -ga terminal-features ",*:RGB,*:usstyle,*:clipboard"
+
+# Behaviors a modern TUI agent relies on.
+set -g  mouse on                 # scroll, select panes, resize
+set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
+set -sg escape-time 10           # safely joins split ESC sequences
+set -ga terminal-features ",*:sync"   # atomic redraws for tmux sessions outside RimZ
+set -ga terminal-features ",*:hyperlinks" # clickable OSC 8 links
+set -g  focus-events on          # editors and agents see focus changes
+set -g  allow-passthrough on     # let desktop notifications pass through tmux
+set -s  extended-keys on             # distinguish modified Enter from Enter
+set -s  extended-keys-format csi-u   # forward Shift+Enter / Alt+Enter as CSI-u
+set -ga terminal-features "*:extkeys" # ask the outer terminal to send them
+set -s  user-keys[240] "\e[27u"        # name Ghostty's modifier-less CSI-u Esc
+bind-key -n User240 send-keys Escape   # normalize it back to plain Esc
+bind-key -n S-Enter send-keys Escape "[13;2u"
+bind-key -n M-Enter send-keys Escape "[13;3u"
+set -g  set-clipboard on         # yank into the host clipboard over OSC52
+```
+
+Three of these earn a note; the block's comments carry the rest. `escape-time 10`, the upstream default from tmux 3.5, gives tmux a short window to join an ESC byte with the rest of its sequence, avoiding split-ESC misparses over SSH while keeping the delay imperceptible. The extended-keys trio plus the modified-Enter bindings let an agent's composer receive Shift+Enter and Alt+Enter as soft newlines while plain Enter still submits; on tmux 3.5.x that trades clean multiline paste while extended keys are active, so use Ctrl+J or tmux 3.6+ for both. The `user-keys` pair keeps plain Esc clean on terminals such as Ghostty that answer the extended-keys request with a modifier-less CSI-u sequence. `allow-passthrough on` lets the desktop-notification bytes RimZ emits reach your terminal.
 
 ### Recommended
 
@@ -245,7 +290,7 @@ Swap the hex values for your own scheme's palette; `rimz list-themes` names ever
 
 ## See also
 
-- [Set up your machine → configure your multiplexer](./setup.md#configure-your-multiplexer): the short list of settings the room applies, one by one.
+- [Set up your machine](./setup.md): the one-time pass that writes the per-machine config and installs the agent hooks the sidebar reads.
 - [Configuration → multiplexer room options](./configuration.md#multiplexer-room-options): every `[zellij]` and `[tmux]` key with its default.
 - [examples/](../../examples/README.md): the shipped baseline files these blocks come from.
 - [Security and trust → the Zellij presence plugin](./security.md#the-zellij-presence-plugin): the one permission grant RimZ seeds, and how to revoke it.
