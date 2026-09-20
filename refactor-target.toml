@@ -327,7 +327,7 @@ surface-budget = 103
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
-surface-budget = 11
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/remote"
@@ -359,11 +359,11 @@ surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 310
+surface-budget = 233
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
-surface-budget = 120
+surface-budget = 118
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
@@ -1504,7 +1504,7 @@ reason = "Both caller-varying inputs and the thirteen ordered effects stay: Host
 [[verdict]]
 kind = "item"
 key = "sidebar::refresh::rate_limits::project_rate_limits"
-reason = "Fusion rules pin fixes 6da4f68af, 9a12899e0, 032eebd1b, ecf0350ee, bbfa6b230, 5cf7dd95a, 28dedb821, fe996ea64, 7757ab974, 93d21170f, 08f5c37f0 and c39851bf5; phase extraction adds interfaces without removing policy (pass 15b)."
+reason = "Fusion rules pin fixes 6da4f68af, 9a12899e0, 032eebd1b, ecf0350ee, bbfa6b230, 5cf7dd95a, 28dedb821, fe996ea64, 7757ab974, 93d21170f, 08f5c37f0 and c39851bf5; phase extraction adds interfaces without removing policy (pass 15b). Re-read at pass 23c after the one-transaction and per-account reshapes: still four commented phases that each delegate their rule, and splitting one would thread panel, prior_entry, index, truth, pending and refresh_logins through a new signature without removing a decision."
 
 [[verdict]]
 kind = "item"
@@ -2795,3 +2795,288 @@ reason = "Reached from the binary: the attribution command's tests construct Lan
 kind = "item"
 key = "agents::attribution::new"
 reason = "LaneLifetimes::new is reached from the binary: the attribution command's tests build lifetimes directly (pass 22c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::SidebarLaunchOutcome"
+reason = "Returned by the pub launch_sidebar_if_needed the integration tmux suite drives; the outcome enum is that entry point's signature (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::launch_sidebar_if_needed"
+reason = "The integration crate's tmux sidebar suite is its caller, so it stays pub (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::SidebarMux"
+reason = "The three MuxBackend forwarders (name, open_sidebar, reconcile_sidebars) are the private seam the launch unit tests implement as FakeSidebarMux; collapsing them onto MuxBackend costs the tests their fake (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::SNAPSHOT_CACHE_TTL"
+reason = "A rustdoc link in mux's pub presence-stamp docs resolves against it; narrowing it needs an edit in a module pass 23c does not own (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::SESSION_REFRESH_INTERVAL"
+reason = "A rustdoc link in store::gc's pub docs resolves against it; narrowing it needs an edit in a module pass 23c does not own (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::RESIZE_PAINT_HOLD_CEILING"
+reason = "The journey tier asserts the post-resize paint hold directly, so the ceiling stays pub for the integration crate (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::event_store::EventStore"
+reason = "The hotpath bench builds the overlay store and appends to it, so EventStore and append stay pub; StoredEvent, active and prune narrowed (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::event_store::append"
+reason = "Called by the hotpath bench (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::fuse::fuse"
+reason = "The hotpath bench measures pulled/event fusion directly; fuse and fuse_owned stay pub (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::fuse::fuse_owned"
+reason = "Called by the hotpath bench (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::consumer::rollup_snapshot"
+reason = "Called by the hotpath bench; read_published_snapshot narrowed to the sidebar instead (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::consumer::read_adopting"
+reason = "Called by the hotpath bench (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::workspace_projection::WorkspaceProjectionPublisher"
+reason = "The hotpath bench publishes through it, which floors publish and its WorkspaceProjectionPublish return; the read side narrowed to the crate (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::workspace_projection::publish"
+reason = "Called by the hotpath bench (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::workspace_projection::WorkspaceProjectionPublish"
+reason = "The return type of the bench-reached pub publish (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::frame::PaneFrame"
+reason = "The published pane-frame wire: the bench, the integration crate and daemon_view read it, and its pub fields floor the whole nested family (TabFrame, CarriedPane, PaneState, PaneProcess, PaneMetrics) at pub. The assembly helpers around it narrowed instead (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::frame::assemble_frame"
+reason = "Eight integration sites and the hotpath bench call it; assemble_frame_from_inputs and FrameInputs narrowed behind it (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::frame::TabFrame"
+reason = "A pub field of the pub PaneFrame wire (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::frame::CarriedPane"
+reason = "A pub field of the pub PaneFrame wire (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::frame::PaneState"
+reason = "A pub field of the pub TabFrame wire, and the integration crate and daemon_view tests name it (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::frame::PaneProcess"
+reason = "A pub field of the pub PaneState wire (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::frame::PaneMetrics"
+reason = "A pub field of the pub PaneState wire (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::agent_projection::AgentProjection"
+reason = "A pub field of enrich's pub FoldOpts, which floors its own pub field type WiredAgentProjection; the publication and probe helpers narrowed to the sidebar (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::agent_projection::WiredAgentProjection"
+reason = "A pub field of the floored AgentProjection (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::unread::OpenedUnread"
+reason = "The return payload of the pub mark_rows_unread the renderer and CLI call (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::unread::ReconcileOutcome"
+reason = "The return type of pub(crate) reconcile, so crate reach is its floor (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::cache::presence_stamp_path"
+reason = "Four integration suites stat the presence stamp by path (doctor, presence wake, zellij presence), so it stays pub (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::meter::TickStart"
+reason = "The renderer's cache-refresh and fetch workers pass it between TickMeter::begin and finish, so crate reach is its floor (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::read_marks::cleared_at_ms"
+reason = "Renderer loop-state and state tests assert the clear stamp; narrowing to the sidebar would strand tests in a module pass 23c does not own (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::accounts::read_accounts_cache"
+reason = "Not a collapsible pass-through: it pins T for disk::atomic::read_json_cache, which no call site can infer from a later field read, and it pairs with write_accounts_cache's failure logging. Collapsing removes three lines and adds a turbofish at every reader (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::credits::read_credits_cache"
+reason = "Same as read_accounts_cache: the wrapper is the lane's typed read seam for roughly thirty callers, not a forwarder (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::git_stats::DiffStatsCache"
+reason = "The performance tier deserializes the diff-stats cache file, which floors its pub field types DiffStatsCacheEntry and WorktreeRootsCache; their methods and DiffStats narrowed to the sidebar (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::git_stats::DiffStatsCacheEntry"
+reason = "A pub field of the integration-reached DiffStatsCache, and the performance tier builds it as a struct literal (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::git_stats::WorktreeRootsCache"
+reason = "A pub field of the integration-reached DiffStatsCache (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::ProducerRefreshState"
+reason = "The performance tier constructs the producer memo directly. Its five fields are one process-local memo, not five: git stamps, the rollup cursor, the effort parse memo, the orphan-sweep stamp and the auto-GC memo all live for one long-lived producer and are read on the same tick (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::RefreshedLanes"
+reason = "A pub field of enrich's pub FoldOpts (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::sessions::refresh_session_transcript_context_from_watch"
+reason = "The transcript-watch and hooks integration suites call it, and its re-export in refresh cannot exceed it (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::sessions::ForcedSessionRefresh"
+reason = "The return payload of the pub force_refresh_session_context (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::daemon_reap::CodexDaemonReap"
+reason = "Already at sidebar reach and floored there by read_codex_daemon_reap's return type (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::pipeline::PipelineCache"
+reason = "Already at sidebar reach and floored there by read_pipeline_cache's return type; one board read per team group publishes only on change, which is the lane's whole policy (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::cohort_spend::COHORT_SPEND_CACHE_VERSION"
+reason = "Already at sidebar reach, which enrich's cohort tests need (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "reload::StageBuildErr"
+reason = "The error type of the pub reload_user_sidebars as well as the narrowed stage_current_build (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::animation::Animation"
+reason = "Returned by ResolvedAnimations::role and status and taken by frame_at, all at render reach (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::animation::ShimmerWave"
+reason = "The payload of UnreadAnim::Shimmer (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebStatusPayload"
+reason = "Web's payload and outcome types (WebStatusPayload, WebShareStatus, WebSharePayload, WebAccessOutcome, WebDaemonOutcome, WebShareOutcome, WebUnshareOutcome, WebRestartOutcome, WebReloadOutcome, CredentialSummary, CredentialRotation, TtydDiagnostic) are all returned by the module's pub entry points, so every narrowing trips private_interfaces; WebSharePayload is read by the integration crate too (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebShareStatus"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebSharePayload"
+reason = "Returned by a pub web entry point and read by the integration crate (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebAccessOutcome"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebDaemonOutcome"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebShareOutcome"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebUnshareOutcome"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebRestartOutcome"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::WebReloadOutcome"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::CredentialSummary"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::CredentialRotation"
+reason = "A pub field of CredentialSummary (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::TtydDiagnostic"
+reason = "Returned by a pub web entry point (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "web::preflight"
+reason = "The six delegating entries (preflight, inspect_session, credential_summary, gate_authorization, serve_tunnel_relay, unshare_session) are web's public domain facade over the ttyd and gate interiors; collapsing them would publish those interiors instead (pass 23c)."
