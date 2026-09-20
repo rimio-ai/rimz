@@ -23,6 +23,7 @@ fn pipeline_snapshot() -> SidebarSnapshot {
         stage: "Implement".to_owned(),
         owner: Some("coder".to_owned()),
         started_at: Some(fixed_now() - Duration::from_secs(2_832)),
+        stage_started_at: Some(fixed_now() - Duration::from_secs(2_832)),
         done_at: None,
     });
     snapshot
@@ -46,6 +47,7 @@ fn render_pipeline_states() {
         }
         if !clock {
             pipeline.started_at = None;
+            pipeline.stage_started_at = None;
         }
         if nerd {
             snapshot.theme.glyphs.set = Some("nerd_font".to_owned());
