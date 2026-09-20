@@ -383,7 +383,7 @@ path = "crates/rimz/src/store"
 # The carryover parse counter is re-exported through testkit beside the event-log byte counters.
 # A lifecycle receipt names a side conversation's host so the hook credits the host card's clocks.
 # The sidebar group record carries a team pipeline and its derived position.
-surface-budget = 344
+surface-budget = 312
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1725,6 +1725,116 @@ reason = "GC marker lifetimes are store::gc's by the sidebar contract; the sideb
 kind = "item"
 key = "store::gc::SESSION_PROBE_MARKER_TTL"
 reason = "GC marker lifetimes are store::gc's by the sidebar contract; the sidebar session probe reads them and the integration gc suite pins them (pass 21b)."
+
+[[verdict]]
+kind = "item"
+key = "store::event_log::LogExtent"
+reason = "The freshness stamp is the snapshot wire: SidebarSnapshot.reflects_log is a pub field of the sidebar's published schema (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::event_log::EventLogErr"
+reason = "Public log APIs return it and StoreErr::EventLog carries it #[from]; the alias store::event_log::Result follows it (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::event_log::append"
+reason = "The benches and the performance integration tier append through this exact entry point from outside the library crate (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::event_log::read_from_offset"
+reason = "Narrowed to pub(crate), not the store: the message reply poll reads the log tail from its own fold base (message/reply.rs) (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::event_log::testkit::bytes_read"
+reason = "Always-on byte counter the performance tier and the message reply tests read from outside the library crate (ac096bc) (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::event_log::testkit::bytes_written"
+reason = "Always-on byte counter the performance tier reads from outside the library crate (341796a) (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::event_log::rotation::PruneOutcome"
+reason = "A pub field of store::writer::EventLogRotationOutcome, so it cannot narrow below its owner (private_interfaces) (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::follow::EventFollowErr"
+reason = "EventFollower::open and ::poll return it and the binary's event stream calls both, so it stays at their visibility (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::follow::EventFollowBatch"
+reason = "Returned by the pub EventFollower::poll the binary's event stream calls; it cannot narrow below its own signature (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::follow::SignalEvent"
+reason = "The payload of pub FollowEvent::Signal, which the binary's event renderer matches on (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::run::WakeupFrame"
+reason = "The run-wake wire: the integration crate pins its JSON shape and the binary's supervised tests decode it (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::active_time::ActiveTimeRecord"
+reason = "Returned by pub read_for_keys and accepted by pub SidebarSnapshot::with_active_time, both read by the binary (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::subagent_context::SubagentContextRecord"
+reason = "Named by pub update, read_all and SidebarSnapshot::with_subagent_context; the integration crate's env helper returns it (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::subagent_context::read_all"
+reason = "Called by the sidebar enrichment and by the integration crate's env helper (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::runtime::AgentLiveness"
+reason = "Returned by pub agent_liveness, which the harness and the tmux backend integration suite call (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::runtime::RuntimeProjection"
+reason = "Returned by pub Store::runtime_projection and re-exported from the crate root; the harness rebirth path names it (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::live_roster::publish"
+reason = "Two integration suites publish a roster to prove reap protection and pre-registration addressability (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::process::pane_agent_kind"
+reason = "Pane binding calls the classifier inside the fold; the re-export survives only for the sidebar's pane-field fixtures and is gated on test builds (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarPipeline"
+reason = "A pub field of SidebarWorktreeGroup in the published snapshot schema the renderer decodes (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::PipelinePosition"
+reason = "Returned by pub SidebarPipeline::position, the renderer's read of the board stage (pass 23a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::fold::ResumeOutcome"
+reason = "Carried by the pub fold result and read by the sidebar enrichment as resume evidence (pass 23a)."
+
+[[verdict]]
+kind = "guard"
+key = "$0==AgentStatus::Running"
+reason = "Three decisions, not one predicate: lifecycle normalizes an idle phase, the snapshot stamps turn start, the binary filters display. AgentState::holds_open_turn is richer and not a substitute (pass 23a)."
 
 [[verdict]]
 kind = "item"
