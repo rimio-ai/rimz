@@ -853,3 +853,43 @@ fn task_timing_state_precedence_and_classification() {
         assert!(matches!(timing.state(&entry, &now), Due(_)), "{label}");
     }
 }
+
+/// The retirement predicate: a pinned session is retired on positive evidence
+/// of its own durable end, and on nothing else.
+#[test]
+fn ended_pinned_sessions_selects_only_durably_ended_pinned_targets() {
+    let now = Timestamp::UNIX_EPOCH;
+    let session = crate::ids::AgentSessionId::from;
+    let kind = crate::ids::AgentKind::new_unchecked;
+    let agent = |agent_kind: &str, id: &str, ended: bool| {
+        let mut agent = crate::testkit::agent_state(agent_kind, id, now);
+        agent.ended_at = ended.then_some(now);
+        agent
+    };
+    let pinned = ["ended", "revived", "subagent", "other-kind"]
+        .map(|id| (kind("claude"), session(id)))
+        .into();
+    let mut subagent = agent("claude", "subagent", true);
+    subagent.parent_agent_id = Some(session("parent"));
+    subagent.launch_depth = None;
+    let agents = vec![
+        agent("claude", "ended", true),
+        // A later lifecycle event for the same session clears `ended_at`.
+        agent("claude", "revived", false),
+        subagent,
+        // The pin names `claude`; this end is another provider's.
+        agent("codex", "other-kind", true),
+        // Ended, but nothing is pinned to it.
+        agent("claude", "unpinned", true),
+    ];
+
+    let selected = super::arm::ended_pinned_sessions(&agents, &pinned);
+
+    assert_eq!(
+        selected
+            .iter()
+            .map(|(kind, session)| (kind.as_str(), session.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("claude", "ended")]
+    );
+}
