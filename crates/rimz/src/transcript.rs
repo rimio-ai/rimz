@@ -308,15 +308,7 @@ pub fn read_all(paths: &StatePaths) -> Result<Vec<TranscriptEntry>> {
 
     let mut entries = Vec::new();
     for path in files {
-        let text = fs::read_to_string(&path).map_err(|source| TranscriptLogErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            if let Ok(entry) = serde_json::from_str::<TranscriptEntry>(line) {
-                entries.push(entry);
-            }
-        }
+        entries.extend(read_bucket(&path)?);
     }
     entries.sort_by_key(|entry| entry.at);
     Ok(entries)
@@ -433,6 +425,8 @@ pub fn latest_assistant(
     Ok(None)
 }
 
+/// The one decode point for the log, so every reader — [`read_all`] and the
+/// newest-first bucket walks alike — sees the same entries.
 fn read_bucket(path: &Path) -> Result<Vec<TranscriptEntry>> {
     let text = fs::read_to_string(path).map_err(|source| TranscriptLogErr::Io {
         path: path.to_path_buf(),
@@ -442,7 +436,41 @@ fn read_bucket(path: &Path) -> Result<Vec<TranscriptEntry>> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| serde_json::from_str::<TranscriptEntry>(line).ok())
+        .filter(|entry| !is_legacy_paste_fragment(entry))
         .collect())
+}
+
+/// A prompt entry that is only a provider paste-wrapper tag, written by RimZ
+/// 0.4.3 and earlier.
+///
+/// Claude Code wraps a bracketed paste in `<pasted_content id="X">` /
+/// `</pasted_content id="X">` lines and RimZ delivers every queued prompt by
+/// bracketed paste, so until `agents::payload::sanitize_user_prompt` learned to
+/// peel the envelope each delivery left two tag lines recorded as headerless
+/// human prompts — inflating the "from you" count and unhiding harness turns in
+/// `rimz agents logs`. They are not conversation in any view, so the reader
+/// drops them; the append-only files keep the raw record for forensics.
+///
+/// This is a frozen description of what was written, not a grammar for what
+/// arrives: it never needs to grow, and a genuine prompt carrying a wrapper
+/// pair mid-text is many lines and so never matches.
+fn is_legacy_paste_fragment(entry: &TranscriptEntry) -> bool {
+    entry.entry == TranscriptKind::Prompt
+        && entry.from.is_none()
+        && entry.message_id.is_none()
+        && is_paste_tag(entry.text.trim())
+}
+
+/// Whether `text` is exactly one `pasted_content` open or close tag.
+fn is_paste_tag(text: &str) -> bool {
+    let Some(id) = text
+        .strip_prefix("<pasted_content id=\"")
+        .or_else(|| text.strip_prefix("</pasted_content id=\""))
+        .and_then(|rest| rest.strip_suffix("\">"))
+    else {
+        return false;
+    };
+    !id.is_empty() && !id.contains(['"', '\n'])
 }
 
 pub fn answer_text(decision: &Value) -> String {
@@ -585,6 +613,54 @@ mod tests {
             entry,
             text.to_owned(),
         )
+    }
+
+    #[test]
+    fn reading_skips_legacy_paste_fragments_without_rewriting_the_log() {
+        let (_dir, paths) = paths();
+        // A real prompt carrying a paste pair mid-text is the user's, and a
+        // harness-authored prompt is out of the predicate's reach.
+        let genuine = "here is the trace\n\n<pasted_content id=\"e676\">\nthread panicked\n\
+                       </pasted_content id=\"e676\">\n\nwhat now?";
+        let mut harness = entry(
+            TranscriptKind::Prompt,
+            "<pasted_content id=\"e676\">",
+            "2026-06-01T00:00:05Z",
+        );
+        harness.from = Some(HARNESS_FROM.to_owned());
+        for line in [
+            entry(
+                TranscriptKind::Prompt,
+                "<pasted_content id=\"e676\">",
+                "2026-06-01T00:00:01Z",
+            ),
+            entry(TranscriptKind::Wait, "the delivery", "2026-06-01T00:00:02Z"),
+            entry(
+                TranscriptKind::Prompt,
+                "</pasted_content id=\"e676\">",
+                "2026-06-01T00:00:03Z",
+            ),
+            entry(TranscriptKind::Prompt, genuine, "2026-06-01T00:00:04Z"),
+            harness,
+        ] {
+            append(&paths, &line).expect("append");
+        }
+        let bucket = bucket_path(&paths, ts("2026-06-01T00:00:01Z"));
+        let bytes = fs::read(&bucket).expect("read bucket");
+
+        let read = read_all(&paths).expect("read all");
+
+        assert_eq!(
+            read.iter()
+                .map(|entry| (entry.entry, entry.text.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (TranscriptKind::Wait, "the delivery"),
+                (TranscriptKind::Prompt, genuine),
+                (TranscriptKind::Prompt, "<pasted_content id=\"e676\">"),
+            ],
+        );
+        assert_eq!(fs::read(&bucket).expect("reread bucket"), bytes);
     }
 
     #[test]
