@@ -31,7 +31,7 @@ The panel prints these blocks top to bottom:
 | `Models` | Up to six models ranked by dollars, with input, output, cache-read tokens, cache-hit percentage, and share of the window's dollars. |
 | `Agents` | Up to six agent kinds ranked by sessions, with dollars, tokens, cache-hit percentage, and share of sessions. |
 | Insights | Sessions, spend, cost per session, active days, most active day, streaks, and daily average. |
-| `Assists` | Counts of auto-continues, auto-compactions, credit redemptions, and restored rooms, when any exist. |
+| `Assists` | Counts of auto-continues, auto-compactions, credit redemptions, restored rooms, and automatic gc sweeps, one row per category with a non-zero count. |
 
 A breakdown entry under 1% of its section, and any entry past the row cap, folds into a final `Other` row. A machine with no recorded usage prints the wordmark and `No token usage recorded yet - run an agent and check back.`
 

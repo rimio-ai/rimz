@@ -87,7 +87,7 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `▣ ━━━╺━───  38.2%` | context meter: the share of the context window in use; `▢` while it is 0% |
 | `▤ 76k` | tokens in the context window now |
 | `◌` `◍` `↘` `↗` | cache-read, cache-write, fresh input, and output tokens. The cockpit, dashboard, and fleet store have no `◍` column, so their `↘` includes cache writes. |
-| `◇` | total tokens |
+| `◇` | total tokens: `↘` plus `↗`, with `◌` counted beside it and not in it |
 | `97%` | session cache hit: green from 90%, yellow from 70%, red below |
 | `↻ 2` | completed context compactions |
 | `⟲ 5` | consecutive identical tool calls, shown from 3 through 19 |
@@ -195,7 +195,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 | line | shows |
 |------|-------|
 | 1 | `⌘` and the workspace name in green. The project path sits on the right with your home directory as `~`; when space runs out the path loses its left end behind `…`. |
-| 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, `↘` input including cache creation, `↗` output, `◌` cache-read. |
+| 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
 | 3 | `¤` live agents, `(N)` unread cards when there are any, `⑃ N` open pull requests when there are any, and the room's spend for the window on the right. |
 | 4 | the make-up line: agents by status. |
 | 5 | the `↑ N need you` banner, only while it applies. |
