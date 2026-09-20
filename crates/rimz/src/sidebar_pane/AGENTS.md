@@ -7,6 +7,7 @@ Local contract for `crates/rimz/src/sidebar_pane/` — the pane-resident rendere
 - [`app.rs`](./app.rs) owns the serve loop; [`app/loop_state.rs`](./app/loop_state.rs) owns the renderer's state transitions and the loop-lifetime context. [`render/`](./render/mod.rs) turns a `SidebarSnapshot` into cells, and [`supervise.rs`](./supervise.rs) owns convergence.
 - Snapshots arrive in process on the fetch worker in [`app/fetch.rs`](./app/fetch.rs), which reads through [`sidebar::consumer`](../sidebar/consumer.rs). `rimz sidebar snapshot` is the inspection and scripting delegate over the same library, never this process's data path.
 - Rendering reads the snapshot clock. `cargo xtask invariants` rejects `Timestamp::now()` in non-test render code, which is what keeps a frame reproducible from its snapshot alone.
+- Only the producer refolds every tick. A consumer sidebar holds its last snapshot, the clock in it included, while its inputs stamp is unchanged, up to a 30-second backstop — so a second tab's sidebar can show a frame that is seconds stale and correct. Check anything time-derived on a consumer, not just on the producer, and give any new runtime cache a place in the inputs stamp in [`sidebar::consumer`](../sidebar/consumer.rs) or a frame fed by it will not refresh.
 - Renderer-local state — row and group order holds, selection, width control — stays renderer-local and never travels back into the data plane.
 
 ## Read-only on the store
