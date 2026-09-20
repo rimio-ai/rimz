@@ -44,7 +44,7 @@ impl SidebarEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredEvent {
+pub(super) struct StoredEvent {
     pub sent_at_ms: u64,
     pub received_at_ms: u64,
     pub event: SidebarEvent,
@@ -94,26 +94,18 @@ impl EventStore {
         self.enforce_cap();
     }
 
-    pub fn prune(&mut self, now_ms: u64) {
+    pub(crate) fn prune(&mut self, now_ms: u64) {
         let ttl_ms = EVENT_STORE_TTL.as_millis() as u64;
         self.events
             .retain(|event| now_ms.saturating_sub(event.received_at_ms) <= ttl_ms);
         self.enforce_cap();
     }
 
-    pub fn active(&self, now_ms: u64) -> impl Iterator<Item = &StoredEvent> {
+    pub(super) fn active(&self, now_ms: u64) -> impl Iterator<Item = &StoredEvent> {
         let ttl_ms = EVENT_STORE_TTL.as_millis() as u64;
         self.events
             .iter()
             .filter(move |event| now_ms.saturating_sub(event.received_at_ms) <= ttl_ms)
-    }
-
-    pub fn len(&self) -> usize {
-        self.events.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
     }
 
     fn enforce_cap(&mut self) {
@@ -266,7 +258,7 @@ mod tests {
             13,
             103,
         );
-        assert!(store.is_empty());
+        assert!(store.events.is_empty());
     }
 
     #[test]
@@ -282,7 +274,7 @@ mod tests {
         let ttl = EVENT_STORE_TTL.as_millis() as u64;
         assert_eq!(store.active(100 + ttl).count(), 1);
         store.prune(101 + ttl);
-        assert_eq!(store.len(), 0);
+        assert_eq!(store.events.len(), 0);
     }
 
     #[test]
@@ -297,7 +289,7 @@ mod tests {
                 idx as u64,
             );
         }
-        assert_eq!(store.len(), MAX_EVENTS);
+        assert_eq!(store.events.len(), MAX_EVENTS);
         assert!(!store.active(MAX_EVENTS as u64).any(|event| {
             matches!(
                 &event.event,
