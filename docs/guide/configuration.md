@@ -434,7 +434,7 @@ rimz agents validate
 rimz agents planner
 ```
 
-Direct definitions live in `agents/`, supervised children in `subagents/`, team rosters and pipelines in `teams/`, and shared prompt fragments in `traits/`. To add a craft body, first supply the kind base such as `agents/claude.md`. The [definition reference](../reference/definitions.md) owns every frontmatter key, inheritance rule, and error. Delete the file to remove the preset; already-running agents keep their launch posture.
+Direct definitions live in `agents/`, supervised children in `subagents/`, team rosters and pipelines in `teams/`, and shared prompt fragments in `traits/`. Each provider's definitions share a [kind base](../reference/definitions.md#kind-bases) named after the kind, such as `agents/claude.md`: a preset on a provider that takes a system prompt (Claude, Codex, Pi, and Qwen), a preset carrying a craft body, and every team seat all require it. The [definition reference](../reference/definitions.md) owns every frontmatter key, inheritance rule, and error. Delete the file to remove the preset; already-running agents keep their launch posture.
 
 Raw command panes remain TOML in `config.toml`:
 
@@ -469,7 +469,7 @@ To limit RimZ delegation, put `subagents: [explorer, designer]` on a direct defi
 
 `auto-compact` sets the provider's native window from `100k` through `1M`, not a percentage. Supporting kinds default to `258k` in Markdown definitions. Role-only `flip-compact` is separate: it compacts an outgoing stage owner at a handoff threshold, defaulting to `120k` for owners of `Plan` and `180k` otherwise; `off` disables it. See [compaction fields](../reference/definitions.md#flip-compaction) and the [provider support table](../reference/agent-support.md#auto-compaction-window).
 
-Command-line `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile. Repeated `--append-system-prompt-file` values replace its fragment list for that launch, leaving the team layer intact. `--agent <PROFILE|KIND>` changes the engine while keeping the seat identity; see [fleet profiles](./fleet.md#profiles-shape-an-agent-for-one-job). Markdown definitions do not accept raw `args` or prompt-path keys. Trusted project TOML retains its existing profile fields.
+Command-line `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the resolved profile. Repeated `--append-system-prompt-file` values replace its fragment list for that launch, leaving the team layer intact. `--agent <PROFILE|KIND>` changes the engine while keeping the seat identity; the carry-over rules are in the [launch reference](../reference/cli/agents.md#shared-launch-params). Markdown definitions do not accept raw `args` or prompt-path keys. Trusted project TOML retains its existing profile fields.
 
 #### Commands
 
