@@ -171,13 +171,8 @@ fn group_header_cells(
         if let Some(number) = pr.pr_number {
             cells.push(render::cell(format!("#{number}")).fg(render::palette::accent()));
         }
-        if (pr.pr_state.is_none()
-            || matches!(
-                pr.pr_state,
-                Some(WorktreePrState::Open | WorktreePrState::Merged)
-            ))
-            && let Some(ci) = pr.pr_ci
-        {
+        // The projection decides which lanes carry CI at all, so draw what it gives.
+        if let Some(ci) = pr.pr_ci {
             let (role, style) = match ci {
                 WorktreePrCi::Passing => (GlyphRole::WorktreeCiPassing, render::palette::good()),
                 WorktreePrCi::Pending => (GlyphRole::WorktreeCiPending, render::palette::warn()),

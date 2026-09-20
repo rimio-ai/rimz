@@ -169,6 +169,9 @@ fn pipeline_completion_styles_and_width_admission() {
     pipeline.stage_started_at = Some(fixed_now() - Duration::from_secs(7));
     for (width, expected) in [
         (32, "  ● ● ◉ ○ ○  Implement (00:07)"),
+        // One column narrower the track drops, and the room it frees must not
+        // buy the team badge back.
+        (31, "  Implement (00:07)"),
         (22, "  Implement (00:07)"),
         (17, "  Impl… (00:07)"),
     ] {
@@ -181,6 +184,26 @@ fn pipeline_completion_styles_and_width_admission() {
         assert!(text.contains(expected), "{width}: {text}");
         assert!(!text.contains("forge"));
     }
+    // Too narrow for the clock beside any of the name: it goes whole, never
+    // clipped to a plausible wrong time.
+    let lines = group_lines_at_width(&snapshot, &theme, 0, 11);
+    let text = lines[1]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(!text.contains('('), "{text}");
+    // An undeclared stage has no track to drop, so it keeps its badge at a
+    // width where a tracked stage has just lost both.
+    snapshot.worktree_groups[0].pipeline.as_mut().unwrap().stage = "Investigate".to_owned();
+    let lines = group_lines_at_width(&snapshot, &theme, 0, 31);
+    let text = lines[1]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("Investigate (00:07) · forge"), "{text}");
+    snapshot.worktree_groups[0].pipeline.as_mut().unwrap().stage = "Implement".to_owned();
     snapshot.worktree_groups[0].label = "pipeline/forge".to_owned();
     let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
     assert!(

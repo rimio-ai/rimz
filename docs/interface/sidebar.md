@@ -552,7 +552,7 @@ With `[theme.pets] enabled = true`, the active block narrows and an animated com
 
 ### Narrow panes
 
-The pipeline keeps its clock and stage name ahead of its track and team badge: the team drops first, then the dots disappear as a whole, then the name ellipsizes. It never draws a partial track.
+The pipeline keeps its clock and stage name ahead of its track and team badge: the team drops first, then the dots disappear as a whole, then the name ellipsizes, and the clock goes last. Dropping the track never buys the team badge back, and the line draws neither a partial track nor a clipped clock.
 
 As the pane narrows, a block drops the input and output token split, then the version text. Below 36 columns the provider emblem goes and the bars run the full width. A pet narrows the block further.
 
