@@ -75,7 +75,7 @@ pub struct LiveSidebar {
 ///
 /// Contributor tooling only — `rimz sidebar renderers` labels a room's tabs with it and
 /// `rimz sidebar click` finds a pane's wakeup socket through it. A renderer decides its own
-/// role through [`ProducerElectionTracker`], which memoizes; this rescans every call.
+/// role through `ProducerElectionTracker`, which memoizes; this rescans every call.
 #[cfg(feature = "testkit")]
 pub fn live_sidebars(runtime: &RuntimePaths) -> Vec<LiveSidebar> {
     order_live_sidebars(
@@ -198,7 +198,7 @@ fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
 /// heartbeat yet" as "wedged": two heartbeat windows, so a just-added sidebar
 /// is never closed before its first heartbeat lands — even by a reload run
 /// seconds after the one that added it.
-pub const FRESH_PANE_GRACE: Duration = SIDEBAR_HEARTBEAT_TTL.saturating_mul(2);
+pub(crate) const FRESH_PANE_GRACE: Duration = SIDEBAR_HEARTBEAT_TTL.saturating_mul(2);
 
 /// The live sidebars for one mux session and executable generation: every pane
 /// a fresh, current-protocol heartbeat for `build` claims, plus whether any
@@ -267,7 +267,7 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
 /// the correctness boundary. This tracker only avoids making every long-lived
 /// renderer thread rescan every renderer heartbeat on every lookup.
 #[derive(Clone)]
-pub struct ProducerElectionTracker {
+pub(crate) struct ProducerElectionTracker {
     runtime: RuntimePaths,
     own_id: SidebarInstanceId,
     state: Arc<Mutex<ProducerElectionState>>,
@@ -295,7 +295,7 @@ enum CachedElection {
 }
 
 impl ProducerElectionTracker {
-    pub fn new(runtime: RuntimePaths, own_id: SidebarInstanceId) -> Self {
+    pub(crate) fn new(runtime: RuntimePaths, own_id: SidebarInstanceId) -> Self {
         Self {
             runtime,
             own_id,
@@ -304,7 +304,7 @@ impl ProducerElectionTracker {
     }
 
     /// Return the current elder, or `None` when this renderer is the producer.
-    pub fn elder_instance(&self) -> Option<SidebarInstanceId> {
+    pub(crate) fn elder_instance(&self) -> Option<SidebarInstanceId> {
         self.elder_instance_at(SystemTime::now())
     }
 
@@ -417,7 +417,7 @@ impl ProducerElectionTracker {
 /// gone". A socket is kept while its owner is fresh (paired by short id) or
 /// still starting up (bound before the first heartbeat — guarded by its own
 /// fresh mtime). Best-effort: a removal race is ignored.
-pub fn sweep_orphan_runtime(rt: &RuntimePaths) {
+pub(crate) fn sweep_orphan_runtime(rt: &RuntimePaths) {
     let instances = fresh_sidebar_instances(rt);
     let live: HashSet<String> = instances.iter().map(|id| id.short().to_owned()).collect();
     let live_full: HashSet<String> = instances.iter().map(|id| id.as_str().to_owned()).collect();
@@ -457,7 +457,7 @@ pub fn sweep_orphan_runtime(rt: &RuntimePaths) {
 /// Purge sidebar heartbeats at a session rebirth boundary. Call only while the
 /// workspace's mux session is provably absent: heartbeats are incarnation-scoped
 /// liveness claims and must not outlive their session into a rebirth.
-pub fn purge_rebirth_heartbeats(rt: &RuntimePaths) {
+pub(crate) fn purge_rebirth_heartbeats(rt: &RuntimePaths) {
     let entries = match fs::read_dir(&rt.heartbeat_dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
