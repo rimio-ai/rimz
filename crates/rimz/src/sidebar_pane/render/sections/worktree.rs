@@ -551,19 +551,27 @@ fn group_header(
         (format!(" {}", theme.glyph(role)), component)
     });
     let badge = group.pr_number.map(|number| format!(" #{number}"));
-    let identity_width = badge
-        .as_ref()
-        .map(|badge| text_width(badge))
-        .unwrap_or_default()
-        + ci.as_ref()
-            .map(|(glyph, _)| text_width(glyph))
-            .unwrap_or_default();
-    let (ci, badge, identity_width) =
-        if cw.saturating_sub(right_width.saturating_add(1)) > identity_width {
-            (ci, badge, identity_width)
-        } else {
-            (None, None, 0)
-        };
+    // The name shortens first, then the `#N` badge drops, and the CI verdict
+    // goes last: the identity elements are admitted as a prefix of one ordered
+    // walk against a single budget, so an element is never admitted when an
+    // earlier present one was refused. That is what makes widening the pane
+    // unable to remove an element, whatever the glyph set's cell widths are.
+    let avail = cw.saturating_sub(right_width.saturating_add(1));
+    let mut identity_width = 0;
+    let mut admitted = [false; 2];
+    for (admit, width) in admitted.iter_mut().zip([
+        ci.as_ref().map(|(glyph, _)| text_width(glyph)),
+        badge.as_ref().map(|badge| text_width(badge)),
+    ]) {
+        let Some(width) = width else { continue };
+        if identity_width + width >= avail {
+            break;
+        }
+        identity_width += width;
+        *admit = true;
+    }
+    let ci = ci.filter(|_| admitted[0]);
+    let badge = badge.filter(|_| admitted[1]);
     let label_width = cw
         .saturating_sub(right_width.saturating_add(1).saturating_add(identity_width))
         .max(1);

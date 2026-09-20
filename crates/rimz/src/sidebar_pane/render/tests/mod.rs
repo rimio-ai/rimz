@@ -556,6 +556,24 @@ fn group_lines_at_width(
     block.lines
 }
 
+/// The group's hyperlink regions as the renderer hands them to the painter:
+/// `(line, columns, url)` per link, in the block's own line coordinates.
+fn group_hyperlinks_at_width(
+    snapshot: &SidebarSnapshot,
+    theme: &Theme,
+    selected_index: usize,
+    width: usize,
+) -> Vec<(usize, std::ops::Range<u16>, String)> {
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(snapshot, theme, width, selected_index, 0, &cost_rolls);
+    let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    block
+        .interactions
+        .hyperlinks()
+        .map(|(rows, columns, url)| (rows.start, columns.clone(), url.to_owned()))
+        .collect()
+}
+
 fn worktree_group_block<'render, 'snapshot>(
     ctx: &'render RowCtx<'snapshot>,
     group: &'snapshot crate::store::snapshot::SidebarWorktreeGroup,
