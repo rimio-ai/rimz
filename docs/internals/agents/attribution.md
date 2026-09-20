@@ -47,6 +47,8 @@ Each figure keeps its source boundary.
 
 Matched system nudges are sender-stamped and excluded from prompt counts. System nudges written before sender stamping existed cannot be told apart from user prompts.
 
+"From you" counts exclude legacy paste-fragment prompts because the [transcript reader](../harness/transcript.md#the-log) drops them.
+
 Provider-native child spend arrives inside the parent's transcript; pane-backed child spend comes from each child's own transcript and folds into the same member total. Child transcript entries keep their child id through deduplication, so cost can group by durable task without changing the all-in parent total. A missing, long, or whitespace-bearing task label groups as `other`, so task descriptions are never exposed. The same deduplicated entries split all-in tokens and cost into model rows by transcript model id; blank or missing ids share the unnamed row, and a row with neither tokens nor a price is omitted. The pricing read itself is [spending.md](./spending.md#token-pricing).
 
 A missing source reads `null`, never zero. Runtime GC can remove an active-time sidecar before the audit record or transcript disappears, and a transcript can lack pricing.
