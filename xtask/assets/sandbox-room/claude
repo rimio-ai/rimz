@@ -1,0 +1,7 @@
+#!/bin/sh
+case "$1" in
+  --version) echo "9.9.9 (Claude Code)"; exit 0 ;;
+  auth) echo '{"loggedIn":true,"authMethod":"api","subscriptionType":"max"}'; exit 0 ;;
+esac
+# Outlive any held room: a seat whose command exits looks like a crashed agent.
+exec sleep 86400

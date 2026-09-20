@@ -9,7 +9,39 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
+
+mod join;
+
+pub(crate) const ROOM_RECORD: &str = "room.json";
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct RoomRecord {
+    pub(crate) mux: String,
+    pub(crate) session: String,
+    pub(crate) worktree: PathBuf,
+    pub(crate) repo: PathBuf,
+    pub(crate) stub_dir: PathBuf,
+}
+
+impl RoomRecord {
+    pub(crate) fn read(root: &Path) -> Result<Self> {
+        let path = root.join(ROOM_RECORD);
+        let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "room bring-up lands in slice 3")
+    )]
+    pub(crate) fn write(root: &Path, record: &Self) -> Result<()> {
+        let path = root.join(ROOM_RECORD);
+        std::fs::write(&path, serde_json::to_vec_pretty(record)?)
+            .with_context(|| format!("writing {}", path.display()))
+    }
+}
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const REAPER_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -397,10 +429,10 @@ fn remove_tree_bounded(root: &Path) {
 /// Zellij roots. The command inherits terminal I/O and runs from the workspace
 /// root, so it is suitable for interactive `target/debug/rimz` smoke runs.
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
-    let args = if args.first().is_some_and(|arg| arg == "--") {
-        &args[1..]
-    } else {
-        args
+    let args = match args.first().map(String::as_str) {
+        Some("in") => return join::run(root, &args[1..]),
+        Some("--") => &args[1..],
+        _ => args,
     };
     let Some((program, program_args)) = args.split_first() else {
         bail!(
