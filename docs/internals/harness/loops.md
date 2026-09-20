@@ -220,6 +220,8 @@ A scheduled `Spawn` also gets a timeout it did not ask for. `effective_spawn_tim
 
 Loop-owned runs, both `Spawn` turns and agents a check launches, close their panes on every terminal status unless explicitly kept. The in-pane wrapper defers self-cleanup while the run's waiter is live, which preserves verification re-prompts and failure-tail capture; `store::run::run_waiter_is_live` probes the bound socket instead of trusting a pathname that may be stale. If the waiter dies, including when a check times out, the wrapper reclaims the pane once its record is terminal. The evidence survives the pane: the supervised `RunRecord` keeps the failure tail, transcript path, and status, and the `LoopRunRecord` keeps the fire's outcome and check evidence for `rimz loop logs`.
 
+Loop-owned runs use the same [parked-run rule](./scripting.md#parked-runs): a clean end with an owed wait, wake message, or launched-fleet result stays `Running` and keeps its pane. A stranded park fails through the wrapper's two-look settle; the existing run deadline and terminal cleanup still apply.
+
 ### Checks
 
 `check = "<shell>"` runs through `sh -c` before any agent action, in the task's `dir`, else the linked worktree it was armed from, else the project root.
@@ -456,6 +458,8 @@ A wrapper whose session has moved on ends nothing. `resolve_own_agent_end_trace`
 `delivery_target_alive` rejects a session with `ended_at` set, and gc is the backstop for what the reconcile leaves: rows whose target has no agent row at all. An instance row is runnable or it is garbage: gc also reaps any `Instance` row whose action no longer compiles (a target lost to schema drift can never fire or retire), while machine and project `loop.toml` rows with an invalid action stay listed as `<invalid>` for the user to fix. Hook config, arming, reconcile, and retirement failures are logged as warnings and never fail a fire, hook, exit, or restart, and never reach hook stdout.
 
 `pending::project_pending_waits` projects armed one-shot delivery rows onto their target agents as `pending_waits`, which the sidebar and `rimz agents` read. Timers, PID waits, watched commands, polled checks, file watches, and one-shot or deadline signal deliveries count; standing subscriptions and recurring clocks do not. `WatchSpec` maps directly to pending `command`, `pid`, `check` (`command`), or `file` (`path`, `grep`) kinds; no command string is parsed. What a pending wait does to the displayed status is [model.md § Sleeping](../agents/model.md#sleeping), and how a card draws it is [the interface reference](../../interface/sidebar.md). A live member's pending one-shot wait also withholds `team.idle` ([Team signals](#team-signals)).
+
+Pending waits also feed `harness::owed::owed_wake` through `TurnWaitView::load`, holding the supervised run fold open at a clean end. Reading the catalog before the queue covers the handoff from an armed row to its wake message; consuming a row alone does not imply the run completed.
 
 ### Team bindings
 

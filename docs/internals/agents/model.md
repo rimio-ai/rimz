@@ -135,6 +135,8 @@ Claude wakes a parked parent by injecting the finished background task's notific
 
 A parked row is still `running`, so an `ended` fails it like any other running row.
 
+Separately, a clean turn end does not complete a supervised run while its session is owed a harness wake: an armed one-shot wait, a wake message in flight, or live or unreported launched work. The harness keeps the run `Running` with `parked_at` until the next turn starts; this does not change the provider's turn verdict or `terminal_disposition` ([parked runs](../harness/scripting.md#parked-runs)).
+
 The park bit says only that something is pending. Which background shells run is a separate durable list, `background_shells`, folded from the adapter's `BackgroundShellReport` under its [lifetime row](#the-rollup) (a launch adds one, a task list replaces them, a finish notice drops some). The list never moves status or phase, and the sidebar lists it in the card's waits section ([adapter_claude.md](./adapter_claude.md#background-shells)).
 
 ### Subagents
@@ -226,6 +228,8 @@ The rollup holds the agent-reported lifecycle status, and `rimz sidebar snapshot
 4. A `running` row with a turn-error marker of a pausing class reads `paused`.
 5. A `running` row with a completion marker reads `success`; with an interruption marker, `idle`; in the `parked` phase, `success`.
 6. An `idle` or `success` result with a pending wait reads `sleeping`.
+
+That pending wait also holds a supervised run open at a clean turn end. Agent status and run status remain separate: a sleeping card can have a `Running` run with `parked_at` set.
 
 A marker counts only when it is newer than `last_activity`, so any newer hook event clears it.
 

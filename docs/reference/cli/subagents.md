@@ -25,6 +25,8 @@ rimz subagents codex "find the smallest safe fix" --wait=10m
 
 The bare form and `launch` are the same command. `PROFILE` is a `subagents/<name>.md` profile (or trusted project child profile), an agent kind (`claude`, `codex`, ...), or an `[agents.commands]` command. The launch prints the child's petname on stdout and returns at once, with a receipt on stderr that names the coming fleet report, its response file, and the `wait` command that blocks instead, so a parent can start several children in a row and keep working. A later `rimz subagents wait <petname>` or the [fleet report](#the-fleet-report) delivers the result.
 
+The child is supervised until the work ends, not just its first clean turn end. If it arms a wait and ends its turn, its run stays `running` and the fleet report waits too. A lost wake with nothing else left to wake the child fails its run with exit `1` and a reason beginning `parked on a wake that never arrived`; its timeout still applies.
+
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
 second=$(rimz subagents reviewer "review the proposed API")
@@ -133,6 +135,8 @@ The report lists status and where each answer is, and asks for nothing: reading 
 Rows follow launch order. Under sandbox isolation the path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. The files are removed when the room closes, and opening one does not count as reading the result.
 
 A fleet is every child launched before the report is composed. A child launched while its siblings still run joins that fleet; one launched after composition starts belongs to the next. No report is sent when the parent has ended.
+
+A supervised parent can end its turn while children run without ending its own run. It stays parked while children are live or their results remain unjoined and unreported, and while the report is on its way; the report opens its next turn.
 
 A child drops out of a report that has not been composed yet when:
 

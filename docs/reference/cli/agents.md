@@ -194,7 +194,9 @@ rimz agents forge -w restore-living-team --fresh   # new sessions, same checkout
 
 ### Supervised runs (`-p`)
 
-`-p` (`--print`) launches exactly one agent in a real pane, waits for its turn to finish, prints the result, and exits with the run's status, so a script branches on the outcome. The pane stays watchable and steerable while the script waits. The [scripting guide](../../guide/scripting.md) teaches the workflow.
+`-p` (`--print`) launches exactly one agent in a real pane, waits until the work ends, prints the result, and exits with the run's status, so a script branches on the outcome. The pane stays watchable and steerable while the script waits. The [scripting guide](../../guide/scripting.md) teaches the workflow.
+
+A clean turn end keeps the run `running` while a one-shot wait, a harness wake in flight, or a live or unreported child result is owed. `agents show` adds the parked age; run JSON and live NDJSON status include `parked_at`. The next turn resumes the same run. If nothing remains to wake a parked run, it fails with exit `1` and the reason `parked on a wake that never arrived: no armed wait, no wake in flight, no live subagents` (or an earlier captured failure). `--timeout` still applies while parked; background receipts and `agents wait` joins are unchanged.
 
 ```sh
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
