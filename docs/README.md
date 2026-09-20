@@ -25,7 +25,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 - [Teams](./guide/teams.md): pair models by role, launch the whole set with one name, follow and hand over the stages on its shared board, and reopen or retire the team as a single unit.
 - [Scripting](./guide/scripting.md): drop an agent into a shell script, a cron line, or CI with `rimz agents -p`: one prompt, one exit code, JSON or streaming output, background runs to join later, and agents launching agents.
 - [Loops](./guide/loops.md): fire agent turns on a clock or a room signal, guard them with a shell check, let agents set their own alarms, and keep the fleet moving through rate limits and full contexts.
-- [Notifications](./guide/notifications.md): reach your phone or run your own command when an agent needs you, and let handlers clear routine prompts themselves.
+- [Notifications](./guide/notifications.md): the banner and bell you get for free, a handler that pushes to your phone or runs any command you like, and handlers that answer the routine prompt for you.
 - [Budgets](./guide/budget.md): enforce dollar caps across five scopes — one turn, one agent, one loop task, a room's fleet, or a provider account — and resume the work a cap parked.
 
 ## Customization

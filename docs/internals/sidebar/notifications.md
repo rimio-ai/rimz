@@ -145,7 +145,7 @@ For a coalesced notification each clause may be satisfied by a different agent. 
 
 **Trust.** Handlers live only in the per-machine `~/.rimz/config.toml`, never in a project `.rimz/config.toml`, and sit outside the trust hash: they are personal routing that often carries push credentials, and a cloned repository cannot supply one. The threat model is [security](../../guide/security.md).
 
-A handler can act on the event as well as relay it. With `RIMZ_NOTIFY_ASK` it can read `rimz asks show <id> --json` and answer through `rimz answer <id> <choice>`, which accepts only the supported answers ([transcript.md → Asks and answers](../harness/transcript.md#asks-and-answers)); the user-facing patterns are [the guide → Handlers that act](../../guide/notifications.md#handlers-that-act-not-just-alert). A script that reads pane text is reading agent output and must treat it as untrusted.
+A handler can act on the event as well as relay it. With `RIMZ_NOTIFY_ASK` it can read `rimz asks show <id> --json` and answer through `rimz answer <id> <choice>`, which accepts only the supported answers ([transcript.md → Asks and answers](../harness/transcript.md#asks-and-answers)); the user-facing patterns are [the guide → Handlers that answer](../../guide/notifications.md#handlers-that-answer). A script that reads pane text is reading agent output and must treat it as untrusted.
 
 ## Configuration
 
