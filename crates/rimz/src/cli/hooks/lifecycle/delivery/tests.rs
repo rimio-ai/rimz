@@ -35,6 +35,43 @@ fn turn_started() -> RecordedLifecycle {
 }
 
 #[test]
+fn claude_wrapped_harness_delivery_does_not_record_user_input() {
+    use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let state = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let message = MessageRecord::new(
+        workspace_id(),
+        &state,
+        "Implement is yours.".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::Stage,
+    });
+    let payload = serde_json::json!({
+        "session_id": "sess-1",
+        "prompt": format!("<pasted_content id=\"e676\">\nType: STAGE\nFrom: @rimz\nContent:\n{}\n</pasted_content id=\"e676\">", message.text),
+    });
+    let decoded = agent.decode_hook("UserPromptSubmit", &payload).unwrap();
+    let mut started = turn_started();
+    started.observation.prompt = decoded.lifecycle().unwrap().prompt.clone();
+
+    record_user_input_for_lifecycle(
+        &workspace,
+        agent,
+        &started,
+        &[message],
+        false,
+        Some(dir.path()),
+    );
+
+    assert!(rimz::agents::spending::user_input::load_in(dir.path()).is_empty());
+}
+
+#[test]
 fn turn_started_records_only_unsupervised_user_inputs() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace = workspace();

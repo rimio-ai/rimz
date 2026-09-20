@@ -61,6 +61,13 @@ fn delivery_gates_follow_agent_lifecycle() {
 }
 
 #[test]
+fn normalized_paste_is_harness_delivered() {
+    let raw = "<pasted_content id=\"e676\">\nType: STAGE\nFrom: @rimz\nContent:\nImplement is yours.\n</pasted_content id=\"e676\">";
+    let prompt = crate::agents::sanitize_user_prompt(Some(raw)).unwrap();
+    assert!(prompt_is_harness_delivered(&prompt));
+}
+
+#[test]
 fn prompt_origin_requires_only_non_user_headers() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
     let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
