@@ -330,7 +330,7 @@ pub(in crate::sidebar_pane::render) fn open_pr_worst_ci(
         .filter(|group| group.pr_state == Some(WorktreePrState::Open))
     {
         saw_open = true;
-        match group.pr_ci {
+        match group.ci {
             Some(WorktreeCi::Failing) => return Some(WorktreeCi::Failing),
             Some(WorktreeCi::Pending) => saw_pending = true,
             Some(WorktreeCi::Passing) => saw_passing = true,

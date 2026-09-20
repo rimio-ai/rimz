@@ -546,7 +546,7 @@ fn group_header(
         _ => group_git_spans(theme, group),
     };
     let right_width = spans_width(&right);
-    let ci = group.pr_ci.map(|ci| {
+    let ci = group.ci.map(|ci| {
         let (role, component) = ci_marker(ci);
         (format!(" {}", theme.glyph(role)), component)
     });

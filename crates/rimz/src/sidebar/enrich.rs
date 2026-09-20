@@ -282,14 +282,14 @@ fn project_pr_state_map(
         });
         if trunk {
             group.pr_state = None;
-            group.pr_ci = branch_ci.get(path).copied();
+            group.ci = branch_ci.get(path).copied();
             group.pr_number = None;
             group.pr_url = None;
             continue;
         }
         let link = states.get(path);
         group.pr_state = link.map(|link| link.state);
-        group.pr_ci = match link {
+        group.ci = match link {
             Some(link) if matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged) => {
                 link.ci
             }

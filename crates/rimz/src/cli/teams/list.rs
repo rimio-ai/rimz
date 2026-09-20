@@ -572,13 +572,13 @@ fn live_instances(
                 .filter(|group| {
                     group.pr_number.is_some()
                         || group.pr_state.is_some()
-                        || group.pr_ci.is_some()
+                        || group.ci.is_some()
                         || group.pr_url.is_some()
                 })
                 .map(|group| PrReport {
                     number: group.pr_number,
                     state: group.pr_state,
-                    ci: group.pr_ci,
+                    ci: group.ci,
                     url: group.pr_url.clone(),
                 })
         });

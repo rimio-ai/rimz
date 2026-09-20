@@ -1813,7 +1813,7 @@ mod render {
                 "rows": [],
                 "pr_number": 91,
                 "pr_state": "open",
-                "pr_ci": "passing"
+                "ci": "passing"
             }))
             .unwrap(),
         );

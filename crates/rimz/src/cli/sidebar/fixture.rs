@@ -94,7 +94,7 @@ struct WorktreeGroupSpec {
     landed: Option<bool>,
     trunk_sync: Option<WorktreeTrunkSync>,
     pr_state: Option<WorktreePrState>,
-    pr_ci: Option<WorktreeCi>,
+    ci: Option<WorktreeCi>,
     pr_number: Option<u64>,
 }
 
@@ -112,7 +112,7 @@ impl Default for WorktreeGroupSpec {
             landed: Some(false),
             trunk_sync: None,
             pr_state: None,
-            pr_ci: None,
+            ci: None,
             pr_number: None,
         }
     }
@@ -140,7 +140,7 @@ fn worktree_group(spec: WorktreeGroupSpec) -> SidebarWorktreeGroup {
         landed: spec.landed,
         trunk_sync: spec.trunk_sync,
         pr_state: spec.pr_state,
-        pr_ci: spec.pr_ci,
+        ci: spec.ci,
         pr_number: spec.pr_number,
         pr_url: None,
     }
@@ -552,7 +552,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreeCi::Pending),
+            ci: Some(WorktreeCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -578,7 +578,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             landed: Some(true),
             trunk_sync: Some(WorktreeTrunkSync::Merged),
             pr_state: Some(WorktreePrState::Merged),
-            pr_ci: None,
+            ci: None,
             pr_number: Some(91),
         },
         WorktreeGroupSpec {
@@ -591,7 +591,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_behind: Some(1),
             trunk_sync: Some(WorktreeTrunkSync::Reconciling),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreeCi::Failing),
+            ci: Some(WorktreeCi::Failing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -994,7 +994,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_behind: Some(0),
             trunk_sync: Some(WorktreeTrunkSync::Diverged),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreeCi::Passing),
+            ci: Some(WorktreeCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1018,7 +1018,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreeCi::Pending),
+            ci: Some(WorktreeCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1327,7 +1327,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreeCi::Passing),
+            ci: Some(WorktreeCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1350,7 +1350,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreeCi::Pending),
+            ci: Some(WorktreeCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1377,7 +1377,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             landed: Some(true),
             trunk_sync: Some(WorktreeTrunkSync::Merged),
             pr_state: Some(WorktreePrState::Merged),
-            pr_ci: None,
+            ci: None,
             pr_number: Some(91),
         },
     ]
@@ -1684,7 +1684,7 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreeCi::Passing),
+            ci: Some(WorktreeCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },

@@ -17,7 +17,7 @@ use crate::sidebar::frame::PaneFrame;
 use crate::store::event_log::LogExtent;
 use crate::{RuntimePaths, StatePaths};
 
-pub const WORKSPACE_PROJECTION_SCHEMA_VERSION: u32 = 1;
+pub const WORKSPACE_PROJECTION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceProjectionSource {

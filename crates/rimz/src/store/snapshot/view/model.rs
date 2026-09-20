@@ -262,7 +262,7 @@ pub struct SidebarWorktreeGroup {
     pub pr_state: Option<WorktreePrState>,
     /// Best-effort CI verdict for the trunk's branch or the branch's open/merged pull request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pr_ci: Option<WorktreeCi>,
+    pub ci: Option<WorktreeCi>,
     /// Best-effort linked pull-request number: the forge-resolved PR for the
     /// branch, else the worktree marker's `--from-pr` provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -476,7 +476,7 @@ mod tests {
             landed: None,
             trunk_sync: None,
             pr_state: None,
-            pr_ci: None,
+            ci: None,
             pr_number: None,
             pr_url: None,
         }

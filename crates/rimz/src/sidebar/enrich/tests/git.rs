@@ -48,7 +48,7 @@ fn pr_state_projection_uses_the_given_map() {
         snapshot.worktree_groups[0].pr_url.as_deref(),
         Some("https://github.com/org/repo/pull/91")
     );
-    assert_eq!(snapshot.worktree_groups[0].pr_ci, None);
+    assert_eq!(snapshot.worktree_groups[0].ci, None);
 
     states.insert(
         worktree.display().to_string(),
@@ -69,7 +69,7 @@ fn pr_state_projection_uses_the_given_map() {
         &DiffStatsCache::default(),
     );
     assert_eq!(
-        snapshot.worktree_groups[0].pr_ci,
+        snapshot.worktree_groups[0].ci,
         Some(crate::store::snapshot::WorktreeCi::Passing)
     );
 
@@ -92,7 +92,7 @@ fn pr_state_projection_uses_the_given_map() {
         &DiffStatsCache::default(),
     );
     assert_eq!(
-        snapshot.worktree_groups[0].pr_ci,
+        snapshot.worktree_groups[0].ci,
         Some(crate::store::snapshot::WorktreeCi::Failing)
     );
 
@@ -107,7 +107,7 @@ fn pr_state_projection_uses_the_given_map() {
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(69));
     assert_eq!(snapshot.worktree_groups[0].pr_url, None);
     // A non-trunk branch without a PR does not display its branch CI.
-    assert_eq!(snapshot.worktree_groups[0].pr_ci, None);
+    assert_eq!(snapshot.worktree_groups[0].ci, None);
 }
 
 #[test]
@@ -221,10 +221,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
     assert_eq!(trunk.pr_state, None);
     assert_eq!(trunk.pr_number, None);
     assert_eq!(trunk.pr_url, None);
-    assert_eq!(
-        trunk.pr_ci,
-        Some(crate::store::snapshot::WorktreeCi::Passing)
-    );
+    assert_eq!(trunk.ci, Some(crate::store::snapshot::WorktreeCi::Passing));
     let feature = &snapshot.worktree_groups[1];
     assert_eq!(
         feature.pr_state,

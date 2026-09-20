@@ -90,7 +90,7 @@ pub(super) fn pr_info(group: &SidebarWorktreeGroup) -> Option<PrInfo> {
         number: group.pr_number,
         state,
         ci: (state == WorktreePrState::Open)
-            .then_some(group.pr_ci)
+            .then_some(group.ci)
             .flatten(),
     })
 }
@@ -172,7 +172,7 @@ fn group_header_cells(
             cells.push(render::cell(format!("#{number}")).fg(render::palette::accent()));
         }
         // The projection decides which lanes carry CI at all, so draw what it gives.
-        if let Some(ci) = pr.pr_ci {
+        if let Some(ci) = pr.ci {
             let (role, style) = match ci {
                 WorktreeCi::Passing => (GlyphRole::WorktreeCiPassing, render::palette::good()),
                 WorktreeCi::Pending => (GlyphRole::WorktreeCiPending, render::palette::warn()),
@@ -405,7 +405,7 @@ mod tests {
                 "rows": [],
                 "pr_number": 91,
                 "pr_state": "open",
-                "pr_ci": "passing"
+                "ci": "passing"
             }))
             .unwrap(),
         );
@@ -454,7 +454,7 @@ mod tests {
             "rows": [],
             "pr_number": 91,
             "pr_state": "open",
-            "pr_ci": "passing"
+            "ci": "passing"
         }))
         .unwrap();
         group.rows.push(SidebarRow {

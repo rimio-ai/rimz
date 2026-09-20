@@ -682,23 +682,23 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
 fn cockpit_pr_ci_uses_worst_known_open_verdict() {
     let mut snapshot = make_up_snapshot();
     snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
     snapshot.worktree_groups[1].pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
-    snapshot.worktree_groups[1].pr_ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    snapshot.worktree_groups[1].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
         Some(crate::store::snapshot::WorktreeCi::Passing)
     );
 
-    snapshot.worktree_groups[1].pr_ci = None;
+    snapshot.worktree_groups[1].ci = None;
     assert_eq!(open_pr_worst_ci(&snapshot.worktree_groups), None);
 
-    snapshot.worktree_groups[1].pr_ci = Some(crate::store::snapshot::WorktreeCi::Pending);
+    snapshot.worktree_groups[1].ci = Some(crate::store::snapshot::WorktreeCi::Pending);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
         Some(crate::store::snapshot::WorktreeCi::Pending)
     );
-    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreeCi::Failing);
+    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Failing);
     assert_eq!(
         open_pr_worst_ci(&snapshot.worktree_groups),
         Some(crate::store::snapshot::WorktreeCi::Failing)
