@@ -32,12 +32,12 @@ pub struct AgentProjection {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LocalSessionInputs {
+pub(super) struct LocalSessionInputs {
     by_kind: BTreeMap<AgentKind, Vec<PathBuf>>,
 }
 
 impl LocalSessionInputs {
-    pub fn from_panes(panes: &[PaneRef]) -> Self {
+    pub(super) fn from_panes(panes: &[PaneRef]) -> Self {
         let mut by_kind = BTreeMap::<AgentKind, BTreeSet<PathBuf>>::new();
         for pane in panes {
             let Some(kind) = candidate_pane_agent_kind(pane) else {
@@ -177,7 +177,7 @@ static WIRING_MEMO: Mutex<Option<MemoizedProjection>> = Mutex::new(None);
 /// Probe the current wiring projection. Unchanged provider inputs pay only
 /// metadata checks; a raced edit keeps the last stable projection and retries
 /// on the next call.
-pub fn probe_current() -> WiredAgentProjection {
+pub(super) fn probe_current() -> WiredAgentProjection {
     let login_env = crate::agents::ambient_env();
     let mut paths = crate::agents::all_definitions()
         .flat_map(|adapter| adapter.wiring_input_paths(&login_env))
@@ -260,7 +260,7 @@ fn stamp_inputs(paths: &[PathBuf]) -> Vec<InputStamp> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct AgentProjectionPublication {
+pub(super) struct AgentProjectionPublication {
     pub session_name: String,
     pub wiring: WiredAgentProjection,
     pub inputs: LocalSessionInputs,
@@ -273,7 +273,7 @@ thread_local! {
 
 /// Probe wiring and provider sessions once, publish one semantic cache, and
 /// return fresh values even when its disposable write fails.
-pub fn refresh_published(
+pub(super) fn refresh_published(
     runtime: &RuntimePaths,
     session_name: &str,
     panes: &[PaneRef],
@@ -311,7 +311,7 @@ pub fn refresh_published(
 
 /// Read one same-session publication and filter observations through current
 /// normalized inputs. Every miss fails closed without invoking an adapter.
-pub fn read_published(
+pub(super) fn read_published(
     runtime: &RuntimePaths,
     session_name: &str,
     panes: &[PaneRef],
