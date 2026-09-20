@@ -677,6 +677,22 @@ fn elapsed_millis(started: std::time::Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+/// The durable agent rows of `project_root`, or none when they cannot be read:
+/// retirement acts on positive evidence of an end, never on a failed read.
+fn snapshot_agents(project_root: &Path) -> Vec<crate::agents::AgentState> {
+    let read = || -> anyhow::Result<Vec<crate::agents::AgentState>> {
+        let paths = crate::disk::paths::StatePaths::for_project_root(project_root)?;
+        let runtime = RuntimePaths::for_state(&paths)?;
+        Ok(crate::store::Store::open(paths, runtime)?
+            .snapshot_cached()?
+            .agents)
+    };
+    read().unwrap_or_else(|err| {
+        tracing::warn!(error = %err, "loop: failed to read agent state before firing");
+        Vec::new()
+    })
+}
+
 /// Fire matching tasks in the emitter process. Signal events are never replayed.
 pub fn fire_signal(
     runtime: &RuntimePaths,
@@ -692,6 +708,14 @@ fn fire_signal_with_wait(
     signal: &Signal,
     wait: bool,
 ) -> Result<Vec<String>, serde_json::Error> {
+    // A row pinned to a session that is durably ended must never be selected,
+    // whoever ended it: the sibling-skip branch below returns before the fire
+    // path's only liveness gate, so this is the decision point.
+    if let Err(err) = super::arm::retire_ended_sessions(project_root, || {
+        std::borrow::Cow::Owned(snapshot_agents(project_root))
+    }) {
+        tracing::warn!(error = %err, "loop: failed to retire ended sessions before firing");
+    }
     let tasks = super::fire::runnable_tasks_for(runtime, Some(project_root));
     let arming_entries = arming::load();
     let encoded = serde_json::to_string(signal)?;

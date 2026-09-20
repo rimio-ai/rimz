@@ -142,15 +142,31 @@ pub(in crate::cli) fn restart_resolved(
         .close_pane(&workspace.session_name, &old_pane)
         .context("closing the replaced agent pane")?;
 
+    // The replaced session is over either way: a fresh restart mints a new
+    // identity, and a resumed one re-arms its declared bindings at the
+    // registration that follows. Waits armed against it do not come back.
+    let dropped = match rimz::harness::schedule::arm::retire_session(
+        &workspace.project_root,
+        &agent.kind,
+        &agent.agent_id,
+    ) {
+        Ok(retired) => retired.dropped,
+        Err(err) => {
+            writeln!(crate::cli::render::err(), "rimz: {err}")?;
+            0
+        }
+    };
+    let note = dropped_note(dropped);
+
     if let (Some(identity), Some(reason)) = (fresh_identity, fresh_reason) {
         Ok(format!(
-            "restarted fresh as @{} — {}",
-            identity.name, reason
+            "restarted fresh as @{} — {reason}{note}",
+            identity.name
         ))
     } else {
         let handle = rimz::address::agent_handle(agent, peers, true);
         Ok(format!(
-            "restarted {handle} (resumed session {})",
+            "restarted {handle} (resumed session {}){note}",
             agent.agent_id
         ))
     }
@@ -309,6 +325,17 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
             ..Default::default()
         },
     })
+}
+
+/// What the restart line says about waits the replaced session took with it.
+/// Team-declared bindings come back at the resumed registration, so only the
+/// rest are worth reporting.
+fn dropped_note(dropped: usize) -> String {
+    match dropped {
+        0 => String::new(),
+        1 => "; 1 armed wait dropped".to_owned(),
+        count => format!("; {count} armed waits dropped"),
+    }
 }
 
 fn fresh_reason(resume_support: bool, session_present: bool) -> Option<FreshReason> {

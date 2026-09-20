@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
@@ -194,23 +194,52 @@ pub fn arm_delivery(
 #[error("retiring session deliveries: {0}")]
 pub struct RetireFailure(String);
 
+/// The rows a retirement removed, split by whether anything arms them again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RetiredRows {
+    /// Team-declared bindings, which `team::arm_member` restores at the role's
+    /// next registration.
+    pub declared: usize,
+    /// Self waits and `loop add --wait` rows, which nothing arms again.
+    pub dropped: usize,
+}
+
+impl RetiredRows {
+    pub const fn total(self) -> usize {
+        self.declared + self.dropped
+    }
+
+    const fn merge(self, other: Self) -> Self {
+        Self {
+            declared: self.declared + other.declared,
+            dropped: self.dropped + other.dropped,
+        }
+    }
+}
+
 pub fn retire_session(
-    workspace: &ResolvedWorkspace,
+    project_root: &Path,
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
-) -> Result<usize, RetireFailure> {
-    let paths = crate::disk::paths::StatePaths::for_project_root(&workspace.project_root)
+) -> Result<RetiredRows, RetireFailure> {
+    let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
-    let names = super::instances::retire_session(&paths.root, kind, session)
+    let retired = super::instances::retire_session(&paths.root, kind, session)
         .map_err(|err| RetireFailure(err.to_string()))?;
-    let runtime = crate::disk::paths::RuntimePaths::for_project_root(&workspace.project_root)
+    let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
+    let mut rows = RetiredRows::default();
     let mut failures = Vec::new();
-    for name in &names {
+    for (name, entry) in &retired {
+        if entry.team.is_some() {
+            rows.declared += 1;
+        } else {
+            rows.dropped += 1;
+        }
         let key = super::arming::TaskKey::for_task(
             name,
             super::catalog::TaskSource::Instance,
-            &workspace.project_root,
+            project_root,
         );
         if let Err(err) = super::signal::stop_watcher(&runtime, name) {
             failures.push(format!("{name}: {err}"));
@@ -225,7 +254,58 @@ pub fn retire_session(
     if !failures.is_empty() {
         return Err(RetireFailure(failures.join("; ")));
     }
-    Ok(names.len())
+    Ok(rows)
+}
+
+/// Retire every instance row in this workspace pinned to a durably ended
+/// session, whoever ended it.
+///
+/// This is the one place the retirement predicate is spelled: an agent row that
+/// is not a provider subagent, matches the pinned `(kind, session)`, and carries
+/// an `ended_at`. A session whose latest lifecycle event revived it has no
+/// `ended_at` and stays; a target with no agent row at all is gc's business.
+///
+/// `agents` is read only once this workspace is known to hold a pinned row, so a
+/// caller with no subscriptions pays a single file read.
+pub fn retire_ended_sessions<'a>(
+    project_root: &Path,
+    agents: impl FnOnce() -> std::borrow::Cow<'a, [AgentState]>,
+) -> Result<RetiredRows, RetireFailure> {
+    let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
+        .map_err(|err| RetireFailure(err.to_string()))?;
+    let pinned = super::instances::pinned_sessions(&paths.root);
+    if pinned.is_empty() {
+        return Ok(RetiredRows::default());
+    }
+    let mut rows = RetiredRows::default();
+    let mut failures = Vec::new();
+    for (kind, session) in ended_pinned_sessions(&agents(), &pinned) {
+        match retire_session(project_root, kind, session) {
+            Ok(retired) => rows = rows.merge(retired),
+            Err(err) => failures.push(err.to_string()),
+        }
+    }
+    if !failures.is_empty() {
+        return Err(RetireFailure(failures.join("; ")));
+    }
+    Ok(rows)
+}
+
+/// The retirement predicate: which of the `pinned` sessions `agents` proves
+/// durably ended.
+pub(super) fn ended_pinned_sessions<'a>(
+    agents: &'a [AgentState],
+    pinned: &std::collections::BTreeSet<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
+) -> Vec<(&'a crate::ids::AgentKind, &'a crate::ids::AgentSessionId)> {
+    agents
+        .iter()
+        .filter(|agent| {
+            agent.ended_at.is_some()
+                && !agent.is_provider_subagent()
+                && pinned.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+        })
+        .map(|agent| (&agent.kind, &agent.agent_id))
+        .collect()
 }
 
 #[derive(Debug, thiserror::Error)]

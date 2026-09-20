@@ -169,7 +169,7 @@ pub(super) fn retire_session(
     state_root: &Path,
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
-) -> Result<Vec<String>> {
+) -> Result<Vec<(String, TaskEntry)>> {
     mutate(state_root, |tasks| {
         let names = tasks
             .iter()
@@ -180,12 +180,25 @@ pub(super) fn retire_session(
             })
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
-        for name in &names {
-            tasks.remove(name);
-        }
-        let changed = !names.is_empty();
-        Ok((names, changed))
+        let retired = names
+            .into_iter()
+            .filter_map(|name| tasks.remove(&name).map(|entry| (name, entry)))
+            .collect::<Vec<_>>();
+        let changed = !retired.is_empty();
+        Ok((retired, changed))
     })
+}
+
+/// Every distinct session an instance row in this workspace is pinned to.
+pub(super) fn pinned_sessions(
+    state_root: &Path,
+) -> BTreeSet<(crate::ids::AgentKind, crate::ids::AgentSessionId)> {
+    load_from(state_root)
+        .0
+        .into_values()
+        .filter_map(|entry| entry.wait)
+        .map(|target| (target.kind, target.session))
+        .collect()
 }
 
 #[cfg(test)]

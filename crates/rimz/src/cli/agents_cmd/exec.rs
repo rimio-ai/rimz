@@ -305,6 +305,17 @@ fn settle_after_exit(
     } else {
         None
     };
+    if let Some((kind, agent_id)) = &ended_session {
+        // The stamp above is a durable end no hook will ever report; its
+        // subscriptions die with it here rather than waiting for gc.
+        if let Err(err) = rimz::harness::schedule::arm::retire_session(
+            &invocation.workspace.project_root,
+            kind,
+            agent_id,
+        ) {
+            tracing::warn!(error = %err, "could not retire the exiting session's deliveries");
+        }
+    }
     if should_drop_to_shell(request, abrupt) {
         // The trace above stamps the agent ended; gc reclaims any worktree later.
         drop_to_shell_after_agent_exit(request, &status, startup_failure, ended_session.as_ref());
