@@ -720,7 +720,6 @@ fn fire_signal_with_wait(
     }
     let tasks = super::fire::runnable_tasks_for(runtime, Some(project_root));
     let arming_entries = arming::load();
-    let encoded = serde_json::to_string(signal)?;
     let mut fired = Vec::new();
     for (name, task) in tasks {
         let Ok(parsed) = task.trigger() else { continue };
@@ -753,14 +752,14 @@ fn fire_signal_with_wait(
             continue;
         }
         let outcome = if wait && matches!(parsed.trigger, super::Trigger::Watch(_)) {
-            super::fire::wait_loop_run(runtime, &task, Some(project_root), &name, &encoded)
+            super::fire::wait_loop_run(runtime, &task, Some(project_root), &name, signal)
         } else {
             super::fire::spawn_loop_run(
                 runtime,
                 &task,
                 Some(project_root),
                 &name,
-                Some(&encoded),
+                Some(signal),
                 super::fire::LoopRunHost::Detached,
             )
         };

@@ -1505,10 +1505,11 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     assert_eq!(records.len(), 1, "{records:?}");
     let record = &records[0];
     assert_eq!(record.task, "missing-runner");
-    assert_eq!(record.root.as_deref(), Some(env.project_root.as_path()));
+    let root = canonical(&env.project_root);
+    assert_eq!(record.root.as_deref(), Some(root.as_path()));
     assert_eq!(record.result, LoopRunResult::StartFailed);
     assert_eq!(record.mode, Some(LoopRunMode::Scheduled));
-    assert_eq!(record.duration_ms, Some(0));
+    assert_eq!(record.duration_ms, None);
     assert!(record.error.as_ref().is_some_and(|error| !error.is_empty()));
     let logs = loop_ok(&env, &["loop", "logs", "missing-runner"]);
     assert!(logs.contains("start failed"), "{logs}");
@@ -1535,6 +1536,49 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     assert_eq!(after, stamps);
     assert!(!loop_strikes_path(&env).exists());
     assert!(!loop_arming_path(&env).exists());
+}
+
+#[test]
+fn signal_emit_records_a_spawn_failure_without_reporting_the_task_as_fired() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.missing-runner]\ncheck = \"true\"\nroot = \"{}\"\nsignal = \"deploy.finished\"\n",
+            env.project_root.display(),
+        ),
+    );
+    let payload = json!({"outcome": "failure", "attempt": 2});
+    let output = env
+        .rimz()
+        .args([
+            "events",
+            "emit",
+            "deploy.finished",
+            "--json",
+            &payload.to_string(),
+        ])
+        .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
+        .output()
+        .expect("rimz events emit");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let record = &records[0];
+    assert_eq!(record.task, "missing-runner");
+    assert_eq!(record.result, LoopRunResult::StartFailed);
+    assert_eq!(record.duration_ms, None);
+    let signal = record.signal.as_ref().expect("signal forensics");
+    assert_eq!(signal.name.as_str(), "deploy.finished");
+    assert_eq!(&signal.payload, payload.as_object().unwrap());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("fired 0 tasks"), "{stdout}");
+    assert!(!stdout.contains("missing-runner"), "{stdout}");
 }
 
 #[cfg(unix)]
@@ -1619,10 +1663,12 @@ fn external_tick_does_not_record_a_fast_run_as_a_failed_start() {
         String::from_utf8_lossy(&output.stderr)
     );
 
+    wait_for_path(&loop_runs_path(&env));
     let records = read_loop_run_records(&env);
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(records[0].task, "fast-run");
-    assert_eq!(records[0].root.as_deref(), Some(env.project_root.as_path()));
+    let root = canonical(&env.project_root);
+    assert_eq!(records[0].root.as_deref(), Some(root.as_path()));
     assert_eq!(records[0].result, LoopRunResult::Expired);
     assert_eq!(records[0].mode, Some(LoopRunMode::Scheduled));
     let logs = loop_ok(&env, &["loop", "logs", "fast-run"]);
