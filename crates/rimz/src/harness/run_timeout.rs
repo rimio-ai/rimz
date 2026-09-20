@@ -18,7 +18,7 @@ pub struct RunTimeoutRequest {
 }
 
 /// Detect overdue non-terminal runs and ask short-lived helpers to settle them.
-pub fn enforce(
+pub(crate) fn enforce(
     paths: &StatePaths,
     runtime: &RuntimePaths,
     now: Timestamp,

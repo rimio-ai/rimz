@@ -61,7 +61,7 @@ impl TeamPrompt {
     /// The layer one role of `team` receives. Replacement is the only typed
     /// prompt channel, so a role without a base prompt receives none; an
     /// unstaged team has no pipeline for a consensus to govern.
-    pub(crate) fn for_role(team: &Team, role_has_base: bool) -> Option<Self> {
+    pub(super) fn for_role(team: &Team, role_has_base: bool) -> Option<Self> {
         (team.staged() && role_has_base).then(|| Self {
             consensus: team
                 .consensus_file
@@ -74,7 +74,7 @@ impl TeamPrompt {
 
 /// Whether the team configures its layer explicitly, which makes an
 /// undeliverable layer a refusal instead of a silent omission.
-pub(crate) fn declared(team: &Team) -> bool {
+pub(super) fn declared(team: &Team) -> bool {
     team.consensus_file.is_some() || !team.append_system_prompt_files.is_empty()
 }
 

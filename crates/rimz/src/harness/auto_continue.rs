@@ -109,13 +109,13 @@ enum ParkKind {
 
 /// How a parked root agent's turn may resume.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ResumeArm {
+enum ResumeArm {
     RateLimit { deadline: Timestamp },
     Overloaded { overloaded_at: Timestamp },
 }
 
 /// Pure provider-park decision from normalized agent state and account capacity.
-pub(crate) fn resume_park(
+fn resume_park(
     agent: &AgentState,
     capacity: Option<&ProviderCapacity>,
     now: Timestamp,
@@ -611,7 +611,7 @@ fn park_record_path(
     ))
 }
 
-pub(crate) fn arm_budget_park(
+pub(super) fn arm_budget_park(
     runtime: &RuntimePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
