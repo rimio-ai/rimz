@@ -3,6 +3,8 @@
 //! Adapters own provider-specific shapes; these helpers cover the small common
 //! predicates and string cleanup rules used across those mappings.
 
+use std::borrow::Cow;
+
 use serde_json::Value;
 
 pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
@@ -108,22 +110,92 @@ fn unwrap_user_query(trimmed: &str) -> &str {
     inner.trim()
 }
 
+/// The markup an agent harness wraps a *bracketed paste* in, each tag alone on
+/// its line and the close tag repeating the `id` attribute (not XML):
+///
+/// ```text
+/// <pasted_content id="ce95">
+/// …pasted text…
+/// </pasted_content id="ce95">
+/// ```
+///
+/// Observed in Claude Code 2.1.278. RimZ delivers every queued prompt by
+/// bracketed paste, so a delivery arrives wrapped and the tags would otherwise
+/// reach the transcript, the delivery-confirmation reason, the user-input spend
+/// ledger, the turn-start reset, and the card task as the user's own text. Like
+/// [`USER_QUERY_OPEN`] the envelope carries user-authored text, so it is peeled
+/// and the payload kept.
+const PASTE_OPEN_PREFIX: &str = "<pasted_content id=\"";
+const PASTE_CLOSE_PREFIX: &str = "</pasted_content id=\"";
+const PASTE_TAG_SUFFIX: &str = "\">";
+
+/// The id of a paste tag, when `line` is exactly that tag. Surrounding
+/// horizontal whitespace and a trailing `\r` are ignored; a tag sharing its
+/// line with other text is not a tag.
+fn paste_tag_id<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    let id = line
+        .trim()
+        .strip_prefix(prefix)?
+        .strip_suffix(PASTE_TAG_SUFFIX)?;
+    (!id.is_empty() && !id.contains('"')).then_some(id)
+}
+
+/// Drop the tag lines of every balanced paste envelope, keeping their content
+/// verbatim.
+///
+/// An opener pairs with the nearest following closer of the same id — ids
+/// repeat across the pastes of one session, so sequential envelopes share one.
+/// An opener with no matching closer, a closer with no opener, and a tag
+/// sharing its line with other text all stay as text, which keeps a prompt that
+/// merely quotes the markup intact. Only the tag lines and their own line
+/// breaks go: every other byte, including interior `\r\n`, survives.
+fn unwrap_paste_envelopes(text: &str) -> Cow<'_, str> {
+    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    let mut dropped = vec![false; lines.len()];
+    let mut unwrapped = false;
+    for open in 0..lines.len() {
+        let Some(id) = paste_tag_id(lines[open], PASTE_OPEN_PREFIX) else {
+            continue;
+        };
+        let close = (open + 1..lines.len()).find(|&line| {
+            !dropped[line] && paste_tag_id(lines[line], PASTE_CLOSE_PREFIX) == Some(id)
+        });
+        if let Some(close) = close {
+            dropped[open] = true;
+            dropped[close] = true;
+            unwrapped = true;
+        }
+    }
+    if !unwrapped {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        lines
+            .into_iter()
+            .zip(dropped)
+            .filter_map(|(line, dropped)| (!dropped).then_some(line))
+            .collect(),
+    )
+}
+
 /// Sanitize a raw prompt/task string before it can label a sidebar row. Peels a
-/// `<user_query>` envelope, trims, then returns `None` for an empty string or
-/// for any text carrying a harness control tag (a synthetic, non-user-authored
-/// turn). KISS: a single substring scan, no partial parsing — a control tag
-/// anywhere means the whole string is rejected, so a raw `<task-notification>…`
-/// or `<skill name=…>` can never reach the description.
+/// `<user_query>` envelope and every balanced `<pasted_content id=…>` envelope,
+/// trims, then returns `None` for an empty string or for any text carrying a
+/// harness control tag (a synthetic, non-user-authored turn). KISS: a single
+/// substring scan, no partial parsing — a control tag anywhere means the whole
+/// string is rejected, so a raw `<task-notification>…` or `<skill name=…>` can
+/// never reach the description.
 pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
     let trimmed = raw.map(str::trim).filter(|value| !value.is_empty())?;
-    let trimmed = unwrap_user_query(trimmed);
-    if trimmed.is_empty() {
+    let unwrapped = unwrap_paste_envelopes(unwrap_user_query(trimmed));
+    let cleaned = unwrapped.trim();
+    if cleaned.is_empty() {
         return None;
     }
-    if CONTROL_TAG_PREFIXES.iter().any(|tag| trimmed.contains(tag)) {
+    if CONTROL_TAG_PREFIXES.iter().any(|tag| cleaned.contains(tag)) {
         return None;
     }
-    Some(trimmed.to_owned())
+    Some(cleaned.to_owned())
 }
 
 #[cfg(test)]
@@ -220,6 +292,74 @@ mod tests {
             sanitize_user_prompt(Some("<user_query>  </user_query>")),
             None
         );
+    }
+
+    #[test]
+    fn sanitize_user_prompt_unwraps_paste_envelopes() {
+        // A queued delivery: RimZ pastes it, so the whole message arrives
+        // wrapped and the header must survive to be parsed downstream.
+        assert_eq!(
+            sanitize_user_prompt(Some(
+                "<pasted_content id=\"ce95\">\nType: STAGE\nFrom: @rimz\nContent:\nbody\n</pasted_content id=\"ce95\">",
+            )),
+            Some("Type: STAGE\nFrom: @rimz\nContent:\nbody".to_owned()),
+        );
+        // A human paste inside typed text: all three parts stay, in order.
+        assert_eq!(
+            sanitize_user_prompt(Some(
+                "do you think \n\n<pasted_content id=\"77ca\">\n`cargo x`\n</pasted_content id=\"77ca\">\n\n can be run?",
+            )),
+            Some("do you think \n\n`cargo x`\n\n can be run?".to_owned()),
+        );
+        // Ids repeat across a session, so sequential envelopes share one.
+        assert_eq!(
+            sanitize_user_prompt(Some(
+                "<pasted_content id=\"a\">\nfirst\n</pasted_content id=\"a\">\nmid\n<pasted_content id=\"a\">\nsecond\n</pasted_content id=\"a\">",
+            )),
+            Some("first\nmid\nsecond".to_owned()),
+        );
+        // CRLF tag lines are tags; the content's own line breaks are untouched.
+        assert_eq!(
+            sanitize_user_prompt(Some(
+                "<pasted_content id=\"a\">\r\nkeep\r\nme\r\n</pasted_content id=\"a\">",
+            )),
+            Some("keep\r\nme".to_owned()),
+        );
+        // An envelope with no content carries no description.
+        assert_eq!(
+            sanitize_user_prompt(Some(
+                "<pasted_content id=\"a\">\n \n</pasted_content id=\"a\">"
+            )),
+            None,
+        );
+        // A control tag inside an envelope still rejects the whole string.
+        assert_eq!(
+            sanitize_user_prompt(Some(
+                "<pasted_content id=\"a\">\n<system-reminder>noise</system-reminder>\n</pasted_content id=\"a\">",
+            )),
+            None,
+        );
+    }
+
+    #[test]
+    fn sanitize_user_prompt_keeps_unpaired_and_inline_paste_markup() {
+        for text in [
+            // No closer: not an envelope.
+            "<pasted_content id=\"a\">\nbody",
+            // No opener.
+            "body\n</pasted_content id=\"a\">",
+            // Mismatched ids.
+            "<pasted_content id=\"a\">\nbody\n</pasted_content id=\"b\">",
+            // The tag shares its line, so it is text the user wrote.
+            "what does <pasted_content id=\"a\"> mean?",
+            "<pasted_content id=\"a\"> inline </pasted_content id=\"a\">",
+        ] {
+            assert_eq!(
+                sanitize_user_prompt(Some(text)),
+                Some(text.to_owned()),
+                "{text}"
+            );
+        }
     }
 
     #[test]
