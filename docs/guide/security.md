@@ -108,4 +108,4 @@ When on, it sends RimZ's own `warn!` and `error!` events and the provider condit
 
 ## Unattended runs
 
-An unattended run still decides permissions the agent's own way: either you keep every native prompt (each becomes a waiting row that routes to you) or you pass the agent's own bypass flag. The tradeoffs, and what an out-of-range agent version does to the prompt path, are in [the loops permission posture](./loops.md#the-permission-posture-for-unattended-runs).
+An unattended run still decides permissions the agent's own way: either you keep every native prompt (each becomes a waiting row that routes to you) or you pass the agent's own bypass flag. The tradeoffs, and what an out-of-range agent version does to the prompt path, are in [permissions for an unattended run](./loops.md#permissions-for-an-unattended-run).
