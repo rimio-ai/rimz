@@ -65,7 +65,7 @@ tar -xzf tmux-3.7.tar.gz && cd tmux-3.7
 ./configure && make -j"$(nproc)" && sudo make install
 ```
 
-Nothing needs configuring for RimZ. Every room applies the options agents need on session start and reattach, including the key bindings that turn Shift+Enter and Alt+Enter into soft newlines; your theme, shell, and the rest of your keybinds stay as they are. The room's settings are in [set up your machine](./setup.md#configure-your-multiplexer), and a baseline worth keeping for your own sessions is [Zellij and tmux](./multiplexer.md).
+Nothing needs configuring for RimZ. Every room applies the options agents need on session start and reattach, including the key bindings that turn Shift+Enter and Alt+Enter into soft newlines; your theme, shell, and the rest of your keybinds stay as they are. What the room asserts, and a baseline worth keeping for your own sessions, are both in [Zellij and tmux](./multiplexer.md).
 
 ## Install the agent CLIs
 

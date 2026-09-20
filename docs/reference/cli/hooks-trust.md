@@ -51,11 +51,12 @@ Codex runs a new hook only after you trust it inside Codex. When its installed h
 | `droid` | `~/.factory/settings.json` | Merge |
 | `grok` | `${GROK_HOME:-~/.grok}/hooks/rimz.json` | Merge |
 | `kimi` | `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml` | Merge into `[[hooks]]` |
+| `kiro` | `~/.kiro/hooks/rimz.json` | Whole file; needs Kiro CLI 2.13.0 or later |
 | `opencode` | `${XDG_CONFIG_HOME:-~/.config}/opencode/plugin/rimz.ts` | Whole file |
 | `pi` | `~/.pi/agent/extensions/rimz.ts` | Whole file |
 | `qwen` | `${QWEN_HOME:-~/.qwen}/settings.json` | Merge; wraps the statusline |
 
-Kiro and [plugin agents](../agent-plugins.md) have no installer: `rimz hooks install kiro` fails, and `rimz hooks uninstall kiro` still removes a hook file an older RimZ wrote.
+Kiro CLI runs `~/.kiro/hooks/*.json` in every workspace from 2.13.0; below that they fire only in the home directory, so install refuses with `Kiro CLI <found> runs ~/.kiro/hooks only in the home workspace; upgrade to 2.13.0 or later`, and an install with no `AGENT` skips Kiro silently. Kiro's engine resolves `~/.kiro` from the OS home and ignores `KIRO_HOME`, which moves only the launcher's settings. An unmarked hook file at that path whose every hook runs RimZ's feed command is reclaimed rather than refused. [Plugin agents](../agent-plugins.md) have no installer.
 
 A merge adds RimZ's entries and keeps your own hooks and every other value. Rewriting a JSON settings file can reorder its keys, so a dry-run diff may show more lines than the hook entries.
 
@@ -75,7 +76,7 @@ $ rimz hooks install --dry-run grok
     @@ no changes @@
 ```
 
-A file install would create diffs from `/dev/null` under an `@@ new file @@` header. RimZ builds every preview before printing any, so when one agent fails (an unmarked whole file, or `kiro`), the dry run prints only the error and exits 1.
+A file install would create diffs from `/dev/null` under an `@@ new file @@` header. RimZ builds every preview before printing any, so when one agent fails (an unmarked whole file, or a Kiro CLI below 2.13.0), the dry run prints only the error and exits 1.
 
 ### Uninstall hooks
 
@@ -98,7 +99,7 @@ Both commands exit 0 on success and 1 on any of these:
 | --- | --- |
 | `install` with no `AGENT` finds no agent | `no supported coding agents detected on PATH (KINDS) - install an agent and rerun, or name one: rimz hooks install <agent>` |
 | `AGENT` is not a known kind | ``unknown agent integration `NAME` `` |
-| The kind has no installer | `install failed for kiro: REASON` |
+| The named kind cannot take RimZ hooks (a plugin agent, or a Kiro CLI below 2.13.0) | `install failed for AGENT: REASON` |
 | A whole-file path holds a file without the marker | `refusing to overwrite an unmarked user plugin at PATH; move it aside or remove it to let RimZ manage this file` (`extension` for Pi, `hook file` for Copilot) |
 | `uninstall` with no `AGENT` finds the machine's accounts config invalid | `only the providers' own homes were unhooked; fix the accounts config and rerun`, after unhooking those homes |
 

@@ -89,7 +89,7 @@ rimz: this room's previous session ended with agents still running (2026-07-02 1
 Recover 2 agents (claude, codex)? [Y/n]
 ```
 
-After a reboot the first line reads `rimz: machine rebooted since this room was last open (...)`. The recovered agents are reported on stderr as `rimz: resumed 2 agents: ...`, and any left behind as `rimz: not resumed: <label> (<reason>)`. `--no-resume` skips recovery and brings the room up empty; the durable records stay, so a later rebirth without the flag can still recover them. A healthy running room is never affected. The `[resume]` settings are in the [setup guide](../../guide/setup.md#resume-agents-after-a-reboot).
+After a reboot the first line reads `rimz: machine rebooted since this room was last open (...)`. The recovered agents are reported on stderr as `rimz: resumed 2 agents: ...`, and any left behind as `rimz: not resumed: <label> (<reason>)`. `--no-resume` skips recovery and brings the room up empty; the durable records stay, so a later rebirth without the flag can still recover them. A healthy running room is never affected. The `[resume]` settings are in the [configuration guide](../../guide/configuration.md#resume).
 
 ### Accounts
 
