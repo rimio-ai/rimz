@@ -163,6 +163,6 @@ The recorded row was `row0=8` on both backends. tmux focus moved from `%3` to `%
 - Look is `pane focus` on tmux and `zellij action go-to-tab` on Zellij, and the card prints the right one. `rimz pane focus` never moved the Zellij client: the sidebar stayed ~21 columns wide with its clock stopped at `0:00` until one `go-to-tab`, which widened it to 48 columns and resumed the clock.
 - `sidebar click` is testkit-only. It uses the renderer's wakeup socket, exercising hit testing and focus routing but skipping terminal input and its parsing.
 - The pipeline line renders no owner name; the click's focus target is the evidence for ownership.
-- Read focus from the mux using the card's Focus command, not `rimz pane list`, which reports no focus on Zellij. Zellij's `is_focused` is per-tab and non-unique: inspect the focused set of the team's tab, not a single globally focused pane.
+- Read focus from the mux using the card's Focus command, not `rimz pane list`, which reports no focus on Zellij. Zellij's `is_focused` is per-tab and non-unique ([zellij-reference.md](../externals/mux-adapter/zellij-reference.md#types)): the check reads focus among the team tab's panes, so it proves pane focus inside that tab and not which tab the client is viewing.
 - Stop the room by letting `--for` expire or killing the `xtask sandbox room` PID itself. Killing a wrapper shell leaves the room running.
 
