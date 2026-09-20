@@ -94,20 +94,17 @@ pub fn rotate(events_log: &Path, archive_dir: &Path, min_bytes: u64) -> Result<R
 /// lose data by dropping unrelated content into the archive directory.
 #[must_use = "maintenance report; surface it to the caller"]
 pub fn prune_archive(archive_dir: &Path, older_than: Duration) -> Result<PruneOutcome> {
-    Ok(prune_old_files(archive_dir, older_than)?)
-}
-
-fn prune_old_files(dir: &Path, older_than: Duration) -> atomic::Result<PruneOutcome> {
-    let entries = match fs::read_dir(dir) {
+    let entries = match fs::read_dir(archive_dir) {
         Ok(entries) => entries,
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
             return Ok(PruneOutcome::default());
         }
         Err(source) => {
             return Err(atomic::AtomicErr::Io {
-                path: dir.to_path_buf(),
+                path: archive_dir.to_path_buf(),
                 source,
-            });
+            }
+            .into());
         }
     };
 
@@ -115,7 +112,7 @@ fn prune_old_files(dir: &Path, older_than: Duration) -> atomic::Result<PruneOutc
     let mut report = PruneOutcome::default();
     for entry in entries {
         let entry = entry.map_err(|source| atomic::AtomicErr::Io {
-            path: dir.to_path_buf(),
+            path: archive_dir.to_path_buf(),
             source,
         })?;
         let path = entry.path();
@@ -156,7 +153,7 @@ fn is_archive_name(path: &Path) -> bool {
 }
 
 /// Return up to `limit` newest archive logs in chronological order.
-pub(super) fn newest_archives(archive_dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+pub fn newest_archives(archive_dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(archive_dir) {
         Ok(entries) => entries,
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),

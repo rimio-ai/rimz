@@ -294,7 +294,7 @@ fn create_temp_file(path: &Path, mode: Option<u32>) -> io::Result<File> {
 /// parent-dir sync when the append creates the file (file *existence* stays
 /// durable). The record itself carries no fsync — appended bytes ride the
 /// page cache until the write tail's debounced `sync_file_data` group
-/// barrier, or the pre-rename sync in [`crate::store::event_log::rotate`].
+/// barrier, or the pre-rename sync in `event_log`'s rotation.
 /// Recovery in [`crate::store::event_log::read_all`] tolerates a torn
 /// trailing record, and the frame CRC makes a power-cut's lost writeback
 /// read as deterministic corruption for `repair` to truncate.
