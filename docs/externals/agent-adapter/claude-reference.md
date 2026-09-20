@@ -137,7 +137,7 @@ RimZ installs these 13 events; what each one means to RimZ, and the exact bytes 
 | Event | Fires | Matcher filters | Event-specific input |
 | --- | --- | --- | --- |
 | `SessionStart` | a session starts, resumes, clears, compacts, or forks | `source` | `source` (`startup` \| `resume` \| `clear` \| `compact` \| `fork`; `fork` from 2.1.214, reported as `resume` before), optional `model`, `agent_type`, `session_title` |
-| `UserPromptSubmit` | a prompt is submitted, before processing | none | `prompt` |
+| `UserPromptSubmit` | a prompt is submitted, before processing | none | `prompt`; bracketed pastes arrive as `<pasted_content id="X">`, pasted text, and `</pasted_content id="X">`, each tag alone on its line and the close tag repeating the id, including pastes inside a longer prompt. **Observed in 2.1.278, not sourced**: no upstream documentation of this envelope was found |
 | `PreToolUse` | before a tool call | tool name | `tool_name`, `tool_input`, `tool_use_id`; file-tool paths arrive absolute |
 | `PermissionRequest` | Claude Code is about to show a permission prompt, or would auto-deny a call that cannot prompt | tool name | `tool_name`, `tool_input`, optional `permission_suggestions[]`; no `tool_use_id` |
 | `PostToolUse` | after a tool call succeeds | tool name | `tool_name`, `tool_input`, `tool_response`, `tool_use_id`, optional `duration_ms` |

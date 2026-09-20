@@ -8,6 +8,8 @@ The transcript is a RimZ-owned conversation log, separate from each provider's n
 
 Hook and delivery paths append entries to fixed 7-day buckets (`FILE_DAYS`) at `transcript/<bucket-start>.jsonl` in the workspace store, under the workspace lock. The buckets are append-only and never pruned. Readers sort by recorded timestamp, so a bucket boundary carries no ordering meaning.
 
+Every transcript reader skips legacy paste fragments written by RimZ 0.4.3 and earlier: a `Prompt` with no `from` or `message_id` whose entire trimmed text is one `<pasted_content id="X">` or `</pasted_content id="X">` tag line. These are provider wrappers, not human prompts; genuine prompts containing a wrapper pair mid-text stay. The append-only files are not rewritten.
+
 Three nearby reads use other sources. Supervised-run streaming tails the provider-native transcript through the adapter-owned source ([scripting.md § Output and input projections](./scripting.md#output-and-input-projections)); the context and spend gauges read those same native stores ([model.md § Enrichment](../agents/model.md#enrichment)); and the message audit trail in the event log carries no text ([messaging.md § Storage and audit](./messaging.md#storage-and-audit)).
 
 ## Entry kinds

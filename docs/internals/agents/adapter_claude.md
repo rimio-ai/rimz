@@ -25,7 +25,7 @@ Every installed hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cl
 | Native event | Channel | [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) | Notes |
 | --- | --- | --- | --- |
 | `SessionStart` | lifecycle | `Registered`; `CompactionEnded { auto: None }` for source `compact` | stamps lineage ([conversation replacement](#conversation-replacement)) and the [birth account key](#birth-account-key); model from the payload, tokens from the transcript |
-| `UserPromptSubmit` | lifecycle | `TurnStarted` | sanitized prompt as `task`; a `<task-notification>` prompt drops the [background shells](#background-shells) it reports finished |
+| `UserPromptSubmit` | lifecycle | `TurnStarted` | sanitized text as `task` and `prompt`: balanced `<pasted_content id="X">` / `</pasted_content id="X">` tag lines (observed in Claude Code 2.1.278) are removed, keeping pasted content even inside a longer human prompt; unmatched tags and tags sharing a line with other text stay; a `<task-notification>` prompt drops the [background shells](#background-shells) it reports finished |
 | `Stop` | lifecycle | `TurnEnded { errored, parked_on_background }` | see [turn endings](#turn-endings); `background_tasks` replaces the [background shells](#background-shells) |
 | `StopFailure` | lifecycle | none | writes `AgentContext.turn_error` |
 | `SessionEnd` | lifecycle | `Ended` | stamps `ended_at`; the runtime hides the retained resumable row |
