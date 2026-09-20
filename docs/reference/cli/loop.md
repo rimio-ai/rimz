@@ -338,7 +338,7 @@ A timer fire follows the same rules as a room's:
 
 - An `--agent` fire starts a room for its project and runs the turn there. A scheduled check-only fire opens the room before the check, once the budget, overlap, and deadline gates pass. The room stays open and keeps time for that root from then on; `timer remove` does not close it.
 - A `--wait` task still needs its pinned session, and an untrusted project task stays blocked.
-- On Linux each fire runs in a transient `systemd-run --user --scope`, in its own process group, so it outlives the tick.
+- On Linux each fire runs in a transient `systemd-run --user --scope`, in its own process group, so it outlives the tick. A tick that would take that route checks the systemd user manager is reachable first, and refuses the whole pass naming the fix when it is not: nothing fires, no stamp moves, and the tasks are still due on the next tick.
 - A task the timer sees for the first time arms without firing, so installing the timer replays nothing.
 
 The task model, file shapes, and scheduler are in [loops.md](../../internals/harness/loops.md).

@@ -36,7 +36,7 @@ pub use shim::cargo_bin;
 #[cfg(unix)]
 pub use shim::{
     path_with_front, write_env_dump_shim, write_failing_agent_shim, write_fake_bash_shell,
-    write_fake_login_shell, write_hook_firing_agent,
+    write_fake_login_shell, write_hook_firing_agent, write_path_shim,
 };
 pub use zellij::ZellijNamespace;
 

@@ -210,7 +210,7 @@ There is no RimZ scheduler daemon. While a room for the task's project is open, 
 rimz loop timer install
 ```
 
-That installs one systemd user timer on Linux or launchd agent on macOS. Once a minute it runs a one-off RimZ tick, re-reads every task, and fires only projects without an open room; an open room still wins for its own tasks. On Linux, it launches each fire through `systemd-run --user --scope`; each fire also gets its own process group, so work can outlive the timer tick.
+That installs one systemd user timer on Linux or launchd agent on macOS. Once a minute it runs a one-off RimZ tick, re-reads every task, and fires only projects without an open room; an open room still wins for its own tasks. On Linux, it launches each fire through `systemd-run --user --scope`; each fire also gets its own process group, so work can outlive the timer tick. A tick that cannot reach your systemd user session refuses rather than firing, and tells you how to fix it; nothing is lost, and the due tasks fire on the next tick after that.
 
 Know what a timer fire does before you install it. An `--agent` fire starts a room for that project and runs the turn in it. A scheduled check-only fire also opens its root's room before the check, even if it launches no agent. Both leave the room open, so a 02:00 task means a multiplexer session running on the machine by morning, and that room takes over later occurrences. A `--wait` task cannot be rescued by the timer at all: its target lives in the room, so a closed room means the session is gone and the task is removed. `rimz loop timer status` shows whether it is installed; `rimz loop timer remove` stops future timer ticks but does not close rooms already opened.
 

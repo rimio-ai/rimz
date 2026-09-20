@@ -59,6 +59,10 @@ pub(super) enum TimerErr {
         "loop timer under systemd requires `systemd-run`; install systemd-run and make it available on the timer's PATH"
     )]
     MissingSystemdRun,
+    #[error(
+        "loop tick under systemd cannot reach the systemd user manager that `systemd-run --user` needs: {detail}; run the tick from the user's own systemd instance, which `rimz loop timer install` sets up, or give the calling unit a live user session (a running `systemd --user` and its XDG_RUNTIME_DIR)"
+    )]
+    UnreachableUserManager { detail: String },
     #[error("cannot resolve the RimZ executable: {0}")]
     CurrentExe(#[source] std::io::Error),
     #[error("cannot prepare loop timer file {path}: {source}")]
@@ -97,6 +101,7 @@ pub(super) fn tick(now: &Zoned) -> Result<()> {
     let host = detect_host(
         std::env::var_os("INVOCATION_ID").is_some(),
         which::which("systemd-run").is_ok(),
+        user_manager_reachable,
     )?;
     for root in task_roots() {
         let runtime = match RuntimePaths::for_project_root(&root) {
@@ -118,11 +123,32 @@ pub(super) fn tick(now: &Zoned) -> Result<()> {
     Ok(())
 }
 
-fn detect_host(under_systemd: bool, has_systemd_run: bool) -> Result<LoopRunHost> {
+fn detect_host(
+    under_systemd: bool,
+    has_systemd_run: bool,
+    user_manager: impl FnOnce() -> std::result::Result<(), String>,
+) -> Result<LoopRunHost> {
     match (under_systemd, has_systemd_run) {
-        (true, true) => Ok(LoopRunHost::TransientScope),
+        (true, true) => match user_manager() {
+            Ok(()) => Ok(LoopRunHost::TransientScope),
+            Err(detail) => Err(TimerErr::UnreachableUserManager { detail }),
+        },
         (true, false) => Err(TimerErr::MissingSystemdRun),
         (false, _) => Ok(LoopRunHost::IsolatedProcessGroup),
+    }
+}
+
+/// Ask systemd whether the user manager is reachable, rather than deriving it
+/// from the environment: `systemctl --user` acquires its bus through the same
+/// call as `systemd-run --user --scope`, so the probe tracks systemd's own
+/// fallback rules, which changed at v257. It runs only where its answer decides
+/// the host, so a tick outside systemd spawns nothing.
+fn user_manager_reachable() -> std::result::Result<(), String> {
+    let args = ["--user", "show-environment"];
+    match command_output("systemctl", &args) {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(command_error("systemctl", &args, &output).to_string()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -502,30 +528,47 @@ fn installed_exec(path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    fn unprobed() -> std::result::Result<(), String> {
+        panic!("a tick that cannot take the scope path needs no user-manager probe")
+    }
+
     #[test]
     fn tick_host_requires_scope_support_under_systemd() {
         assert_eq!(
-            detect_host(false, false).unwrap(),
+            detect_host(false, false, unprobed).unwrap(),
             LoopRunHost::IsolatedProcessGroup
         );
         assert_eq!(
-            detect_host(false, true).unwrap(),
+            detect_host(false, true, unprobed).unwrap(),
             LoopRunHost::IsolatedProcessGroup
         );
         assert_eq!(
-            detect_host(true, true).unwrap(),
+            detect_host(true, true, || Ok(())).unwrap(),
             LoopRunHost::TransientScope
         );
         assert!(matches!(
-            detect_host(true, false),
+            detect_host(true, false, unprobed),
             Err(TimerErr::MissingSystemdRun)
         ));
         assert!(
-            detect_host(true, false)
+            detect_host(true, false, unprobed)
                 .unwrap_err()
                 .to_string()
                 .contains("install systemd-run")
         );
+    }
+
+    #[test]
+    fn tick_refuses_when_the_user_manager_is_unreachable() {
+        let err = detect_host(true, true, || {
+            Err("Failed to connect to bus: No such file or directory".to_owned())
+        })
+        .expect_err("an unreachable user manager refuses the tick");
+        assert!(matches!(err, TimerErr::UnreachableUserManager { .. }));
+        let message = err.to_string();
+        assert!(message.contains("Failed to connect to bus"));
+        assert!(message.contains("rimz loop timer install"));
+        assert!(message.contains("XDG_RUNTIME_DIR"));
     }
 
     #[test]

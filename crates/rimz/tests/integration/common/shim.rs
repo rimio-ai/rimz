@@ -48,6 +48,17 @@ pub fn write_failing_agent_shim(env: &Env, agent: &str, code: u8) -> PathBuf {
     dir
 }
 
+/// Write an executable `/bin/sh` shim named `program` into `dir`, for a test
+/// that needs a command found on PATH to behave a fixed way.
+#[cfg(unix)]
+pub fn write_path_shim(dir: &Path, program: &str, body: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).expect("mkdir shim dir");
+    let shim = dir.join(program);
+    std::fs::write(&shim, format!("#!/bin/sh\n{body}\n")).expect("write path shim");
+    chmod_executable(&shim);
+    shim
+}
+
 #[cfg(unix)]
 pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
     assert!(matches!(agent, "codex" | "claude"));
