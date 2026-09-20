@@ -184,6 +184,7 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
             &attach,
         ]),
     )?;
+    room.wait_for_client(&session)?;
     room.rimz(
         "team launch",
         &["teams", "forge", "-w", "probe", "--isolation", "host"],
@@ -201,12 +202,12 @@ pub(super) fn run(workspace: &Path, args: &[String]) -> Result<()> {
         stub_dir,
     };
     let (panes, renderers, snapshot) = room.ready()?;
-    let mut tabs: Vec<_> = panes.tabs.iter().collect();
-    tabs.sort_by_key(|tab| tab.panes.iter().any(|pane| pane.kind == "agent"));
-    for tab in tabs {
-        if let Some(pane) = tab.panes.iter().find(|pane| pane.kind != "sidebar") {
-            room.rimz("visit tab", &["pane", "focus", &pane.pane_id])?;
-        }
+    // Warm every tab, the team's last, so each sidebar has been watched once and hands over
+    // at the client's width.
+    let mut tabs: Vec<_> = panes.tabs.iter().enumerate().collect();
+    tabs.sort_by_key(|(_, tab)| tab.panes.iter().any(|pane| pane.kind == "agent"));
+    for (index, tab) in tabs {
+        room.look(&record.session, index, tab)?;
     }
     RoomRecord::write(root, &record)?;
     let card = render_card(root, &binary, &record, &panes, &renderers, &snapshot)?;
@@ -273,6 +274,50 @@ impl Room<'_> {
                 Err(error) if Instant::now() >= deadline => return Err(error),
                 Err(_) => std::thread::sleep(Duration::from_millis(200)),
             }
+        }
+    }
+
+    /// Bring one tab into the attached client's view, so its sidebar repaints and takes the
+    /// client's width.
+    fn look(&self, session: &str, index: usize, tab: &Tab) -> Result<()> {
+        let anchor = tab
+            .panes
+            .iter()
+            .find(|pane| pane.kind == "sidebar")
+            .or_else(|| tab.panes.first());
+        let Some(anchor) = anchor else {
+            return Ok(());
+        };
+        let argv = look_argv(self.binary, self.mux, session, index, &anchor.pane_id);
+        let (program, args) = argv.split_first().context("look command is empty")?;
+        output("visit tab", self.command(program).args(args))?;
+        Ok(())
+    }
+
+    /// The client attaches asynchronously, and Zellij materializes a new tab's layout panes
+    /// only while one is attached; tmux needs no client, so only Zellij waits.
+    fn wait_for_client(&self, session: &str) -> Result<()> {
+        if self.mux != "zellij" {
+            return Ok(());
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            // A session with no client prints the header row alone.
+            let attached = output(
+                "client list",
+                self.command("zellij")
+                    .args(["--session", session, "action", "list-clients"]),
+            )
+            .is_ok_and(|clients| String::from_utf8_lossy(&clients).lines().count() > 1);
+            if attached {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "no client attached to {session}; Zellij materializes a new tab's layout panes only for one"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
     }
 
@@ -362,6 +407,35 @@ fn quote(value: &OsStr) -> String {
     format!("'{}'", value.to_string_lossy().replace('\'', "'\\''"))
 }
 
+/// The command that brings a tab into the client's view, program first. `rimz pane focus` does
+/// not move a Zellij client across tabs — only its own `go-to-tab` does — so the backends part
+/// here, and the card prints what the room itself ran.
+fn look_argv(
+    binary: &Path,
+    mux: &str,
+    session: &str,
+    index: usize,
+    sidebar: &str,
+) -> Vec<OsString> {
+    if mux == "zellij" {
+        return vec![
+            "zellij".into(),
+            "--session".into(),
+            session.into(),
+            "action".into(),
+            "go-to-tab".into(),
+            (index + 1).to_string().into(),
+        ];
+    }
+    vec![
+        binary.into(),
+        format!("--{mux}").into(),
+        "pane".into(),
+        "focus".into(),
+        sidebar.into(),
+    ]
+}
+
 fn render_card(
     root: &Path,
     binary: &Path,
@@ -377,13 +451,12 @@ fn render_card(
         record.session,
         record.worktree.display()
     );
-    let join = format!(
-        "target/debug/xtask sandbox in {} -- {} --{}",
-        quote(root.as_os_str()),
-        quote(binary.as_os_str()),
-        record.mux
+    let sandbox = format!(
+        "target/debug/xtask sandbox in {} --",
+        quote(root.as_os_str())
     );
-    for tab in &panes.tabs {
+    let join = format!("{sandbox} {} --{}", quote(binary.as_os_str()), record.mux);
+    for (index, tab) in panes.tabs.iter().enumerate() {
         for pane in &tab.panes {
             if pane.kind == "sidebar" {
                 let renderer = renderers
@@ -398,9 +471,14 @@ fn render_card(
                     renderer.role
                 )?;
                 let id = quote(OsStr::new(&pane.pane_id));
+                let look = look_argv(binary, &record.mux, &record.session, index, &pane.pane_id)
+                    .iter()
+                    .map(|argument| quote(argument))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 writeln!(
                     card,
-                    "  Look: {join} pane focus {id}\n  Capture: {join} pane capture {id}\n  Click: {join} sidebar click {id} 2 \"${{ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}}\""
+                    "  Look: {sandbox} {look}\n  Capture: {join} pane capture {id}\n  Click: {join} sidebar click {id} 2 \"${{ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}}\""
                 )?;
             }
             if pane.kind == "agent"
@@ -426,26 +504,22 @@ fn render_card(
         card,
         "Flip: {join} teams flip Review 'live check' --team forge"
     )?;
-    let join = format!(
-        "target/debug/xtask sandbox in {} --",
-        quote(root.as_os_str())
-    );
     if record.mux == "tmux" {
         writeln!(
             card,
-            "Focus: {join} tmux -S {} display -p '#{{pane_id}}'",
+            "Focus: {sandbox} tmux -S {} display -p '#{{pane_id}}'",
             quote(root.join("runtime/rimz/tmux/server").as_os_str())
         )?;
     } else {
         writeln!(
             card,
-            "Focus: {join} zellij --session {} action list-panes -a -j",
+            "Focus: {sandbox} zellij --session {} action list-panes -a -j",
             quote(OsStr::new(&record.session))
         )?;
     }
     writeln!(
         card,
-        "Look at a tab (pane focus), then capture or click its sidebar: an unwatched sidebar holds a stale frame by design."
+        "Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame."
     )?;
     Ok(card)
 }
@@ -506,6 +580,22 @@ mod tests {
         assert!(
             card.contains("tmux -S '/sandbox/runtime/rimz/tmux/server' display -p '#{pane_id}'")
         );
-        assert!(card.contains("unwatched sidebar holds a stale frame"));
+        assert!(card.contains(
+            "Look: target/debug/xtask sandbox in '/sandbox' -- '/dev/rimz' '--tmux' 'pane' 'focus' 'tmux:%3'"
+        ));
+        assert!(card.contains("unwatched sidebar can hold a stale frame"));
+    }
+
+    #[test]
+    fn zellij_looks_at_a_tab_by_index_because_pane_focus_does_not_move_its_client() {
+        let binary = Path::new("/dev/rimz");
+        assert_eq!(
+            look_argv(binary, "zellij", "room", 2, "zellij:terminal_6"),
+            ["zellij", "--session", "room", "action", "go-to-tab", "3"]
+        );
+        assert_eq!(
+            look_argv(binary, "tmux", "room", 2, "tmux:%3"),
+            ["/dev/rimz", "--tmux", "pane", "focus", "tmux:%3"]
+        );
     }
 }
