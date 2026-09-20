@@ -115,7 +115,7 @@ fn row_snapshot_at(
         landed: None,
         trunk_sync: None,
         pr_state: None,
-        pr_ci: None,
+        ci: None,
         pr_number: None,
         pr_url: None,
     }];
@@ -177,7 +177,7 @@ fn snapshot_in_group(
         landed: None,
         trunk_sync: None,
         pr_state: None,
-        pr_ci: None,
+        ci: None,
         pr_number: None,
         pr_url: None,
     };

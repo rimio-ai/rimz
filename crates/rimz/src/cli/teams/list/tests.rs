@@ -183,7 +183,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
         agent.last_seen = jiff::Timestamp::from_second(600).unwrap();
         let mut group: SidebarWorktreeGroup = serde_json::from_value(serde_json::json!({
             "key": lane, "label": lane, "kind": "worktree", "status_counts": [], "rows": [],
-            "pr_number": number, "pr_ci": "passing"
+            "pr_number": number, "ci": "passing"
         }))
         .unwrap();
         group.rows.push(SidebarRow {
@@ -262,6 +262,12 @@ fn catalog_projects_cohort_observability_by_worktree() {
     );
     assert_eq!(first_report.pr.as_ref().unwrap().number, Some(41));
     assert_eq!(first_report.pr.as_ref().unwrap().state, None);
+    // The group is built from a JSON literal and the struct ignores unknown
+    // keys, so without this the next rename of the CI field passes silently.
+    assert_eq!(
+        first_report.pr.as_ref().unwrap().ci,
+        Some(rimz::store::snapshot::WorktreeCi::Passing)
+    );
     assert_eq!(first_report.memory.len(), 2);
     assert_eq!(first_report.memory[1].lines, 3);
     assert!(

@@ -123,7 +123,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
         landed: None,
         trunk_sync: None,
         pr_state: None,
-        pr_ci: None,
+        ci: None,
         pr_number: None,
         pr_url: None,
     }];
@@ -177,7 +177,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         landed: None,
         trunk_sync: None,
         pr_state: None,
-        pr_ci: None,
+        ci: None,
         pr_number: None,
         pr_url: None,
     }];

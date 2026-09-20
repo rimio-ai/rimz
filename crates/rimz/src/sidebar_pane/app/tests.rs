@@ -99,7 +99,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         landed: None,
         trunk_sync: None,
         pr_state: None,
-        pr_ci: None,
+        ci: None,
         pr_number: None,
         pr_url: None,
     }];
@@ -881,7 +881,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             landed: None,
             trunk_sync: None,
             pr_state: None,
-            pr_ci: None,
+            ci: None,
             pr_number: None,
             pr_url: None,
         }];

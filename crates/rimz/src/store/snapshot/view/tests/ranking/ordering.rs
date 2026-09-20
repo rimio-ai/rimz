@@ -328,7 +328,7 @@ fn inactive_groups_sink_below_process_groups() {
         landed: None,
         trunk_sync: None,
         pr_state: None,
-        pr_ci: None,
+        ci: None,
         pr_number: None,
         pr_url: None,
     });
@@ -660,7 +660,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         landed: None,
         trunk_sync: None,
         pr_state: None,
-        pr_ci: None,
+        ci: None,
         pr_number: None,
         pr_url: None,
     }];
