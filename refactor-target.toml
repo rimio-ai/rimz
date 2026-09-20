@@ -60,7 +60,9 @@ layers = [
 [[module]]
 path = "crates/rimz/src/address.rs"
 # The fleet digest and its orphan backstop share one launched-fleet selector.
-surface-budget = 33
+# `role_holders` reopened this by one: the harness takes the Role-tier
+# claimed-wins rule from here instead of matching roles a second time.
+surface-budget = 34
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"

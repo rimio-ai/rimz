@@ -6,7 +6,9 @@
 //! sessions, provisional launch cards, or sessionless lazy targets.
 //!
 //! Handles read like Slack. A role handle names a team launch's current
-//! conversation (`@coder`). A
+//! conversation (`@coder`); an unclaimed launch card — no registered session and
+//! no pane — yields the role to any claimed holder, and still answers to it when
+//! it is the only one. A
 //! *type handle* names a profile to fill — `@<kind>` (`@codex`) or `@<profile>`
 //! (`@planner`) — and matches every such agent in the channel; the same handles
 //! can also create one (see [`create_mention`]). An
@@ -665,6 +667,9 @@ fn select_at_tier<'a, C: Candidate<'a>>(
         .copied()
         .filter(|candidate| tier_matches(tier, selector, *candidate))
         .collect::<Vec<_>>();
+    if tier == SelectorTier::Role {
+        matches = prefer_claimed(matches);
+    }
     if let (SelectorTier::SessionPrefix, AgentSelector::NameOrSession(selector)) = (tier, selector)
     {
         matches = prefer_exact_session(selector, matches);
@@ -776,6 +781,40 @@ fn parse_ordinal_selector(selector: &str) -> Option<(&str, u32)> {
     }
     let ordinal = raw_ordinal.parse::<u32>().ok()?;
     (ordinal > 0).then_some((kind, ordinal))
+}
+
+/// Narrow a role's matches to the ones something holds — a registered session, a
+/// bound pane, or both — so a role handle survives a launch card nobody ever
+/// claimed because the launch died before it bound. With no claimed match the
+/// matches stand, keeping a lone starting card addressable through the
+/// park-then-fold path. Inert on the live-pane source, where every candidate
+/// carries a pane.
+fn prefer_claimed<'a, C: Candidate<'a>>(candidates: Vec<C>) -> Vec<C> {
+    let claimed: Vec<C> = candidates
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.session_id().is_some() || candidate.pane_id().is_some())
+        .collect();
+    if claimed.is_empty() {
+        candidates
+    } else {
+        claimed
+    }
+}
+
+/// The agents holding `role` among `members`, under the same claimed-wins rule
+/// the Role tier applies, so a harness lookup and a `@role` address pick the
+/// same agent.
+pub(crate) fn role_holders<'a>(
+    members: impl IntoIterator<Item = &'a AgentState>,
+    role: &str,
+) -> Vec<&'a AgentState> {
+    prefer_claimed(
+        members
+            .into_iter()
+            .filter(|member| member.role.as_deref() == Some(role))
+            .collect(),
+    )
 }
 
 fn prefer_exact_session<'a, C: Candidate<'a>>(selector: &str, candidates: Vec<C>) -> Vec<C> {
