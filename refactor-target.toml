@@ -258,7 +258,7 @@ upward-dependencies = ["sidebar::refresh"]
 # The board run (stage plus ledger times) feeds the sidebar pipeline lane.
 # The ended-session reconcile and its retired-row split are pulled by the hook, the exec wrapper and restart.
 # The owed-wake predicate and the launched-fleet settlement rule serve the run fold, the hooks, the digest reporter and its sweep backstop.
-surface-budget = 554
+surface-budget = 528
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -849,12 +849,7 @@ reason = "Reached by inference from the binary; narrowing is a private-interface
 [[verdict]]
 kind = "item"
 key = "harness::schedule::arming::ArmingError"
-reason = "Reached by inference from the binary; narrowing is a private-interface lint."
-
-[[verdict]]
-kind = "item"
-key = "harness::schedule::strikes::StrikesError"
-reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+reason = "Error type of pub arming::pause and disable, which the binary calls; atlas caveat 13 (re-tested pass 23b)."
 
 [[verdict]]
 kind = "item"
@@ -3090,3 +3085,218 @@ reason = "Returned by a pub web entry point (pass 23c)."
 kind = "item"
 key = "web::preflight"
 reason = "The six delegating entries (preflight, inspect_session, credential_summary, gate_authorization, serve_tunnel_relay, unshare_session) are web's public domain facade over the ttyd and gate interiors; collapsing them would publish those interiors instead (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::catalog::TaskMutation"
+reason = "Returned by the pub catalog mutation methods (catalog.rs:247-301); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::arm::ArmFailure"
+reason = "Error type of pub arm_delivery (arm.rs:122-125); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::arm::DeliveryScopeFailure"
+reason = "Returned by the pub signal validators (arm.rs:319-325,357-361); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::arm::RetireFailure"
+reason = "Returned by the pub retirement methods (arm.rs:218-223,263-270); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::team::TeamBindingErr"
+reason = "Error type of pub team validation and arming (team.rs:44-49,80-85); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::team::TeamBindingFailure"
+reason = "Carried by the pub TeamBindingErr::Binding.source field (team.rs:14-27); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::ParsedSchedule"
+reason = "Field type of the pub Trigger variants (schedule.rs:346-353,401-405); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::WatchOutcome"
+reason = "Carried by the pub Signal.watch field (signal.rs:80-88,184-194); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::assist_log::log_path"
+reason = "The binary crate's stats unit test scopes the assist window through it (cli/stats/tests.rs:1819); cli sees only pub (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::owed::OwedWake"
+reason = "The binary crate's parked-monitor unit test names the variants (cli/agents_cmd/exec.rs:1715,1735); cli sees only pub (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::team_stage::FlipErr"
+reason = "Error type of pub flip and rewake (team_stage.rs:223-224,276-287); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::team_stage::FlipReceipt"
+reason = "Returned by pub flip (team_stage.rs:223-224); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::ancestry::LaunchAncestryError"
+reason = "Error type of pub resolve_launch_ancestry (ancestry.rs:152-156); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch_reminders::wrap"
+reason = "Private reach strands the held harness/launch reminder-composition test (harness/launch/tests.rs:2,705), which pass 23b may not edit."
+
+[[verdict]]
+kind = "item"
+key = "harness::prompt_compose::SystemPromptPlan"
+reason = "Pub field LaunchPlan.prompt, which cli::agents_cmd::explain reads; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::prompt_compose::SystemPromptSources"
+reason = "Pub field SystemPromptPlan.sources, and cli::agents_cmd::explain names the type directly (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::prompt_compose::MaterializedSystemPrompt"
+reason = "Pub field SystemPromptPlan.materialized; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::prompt_compose::PromptComposeErr"
+reason = "Carried by the pub LaunchPlanErr::Prompt variant; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::rebirth::RebirthPlan"
+reason = "Returned by the held room::RoomContext::inspect_rebirth and carried by NormalRebirth::Selected.plan; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::rebirth::RebirthErr"
+reason = "Error type of the held room::RoomContext::inspect_rebirth; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::scratch::ScratchScan"
+reason = "Returned by pub scratch::scan, which the binary crate calls; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::scratch::ScratchFile"
+reason = "Pub field ScratchScan.files; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::AutoRedeemErr"
+reason = "Error type of pub execute_auto_redeem, the detached helper's CLI entry; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::orphan_sweep::OrphanedSubagent"
+reason = "Returned by pub orphan_sweep::resolve (orphan_sweep.rs:85-97); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::orphan_sweep::OrphanSweepErr"
+reason = "Error type of pub orphan_sweep::resolve (orphan_sweep.rs:85-97); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "worktree::PushDestination"
+reason = "Pub field CreatedWorktree.push_destination (worktree.rs:182), and the binary renders CreatedWorktree (cli/worktree.rs:189); atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "worktree::RequestedName"
+reason = "Returned by pub parse_requested_name, which the binary crate calls; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "worktree::WorktreeMerge"
+reason = "Named by the binary crate's worktree command (cli/worktree.rs:502-503); cli sees only pub (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "worktree::RemovalRetirement"
+reason = "Named by the binary crate's worktree command (cli/worktree.rs:588,594,601); cli sees only pub (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::SandboxErr"
+reason = "The separate integration crate imports it (tests/integration/sandbox.rs:11,52,675) and LaunchPlanErr::Sandbox carries it (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::SkipReason"
+reason = "Pub field SkippedSkill.reason, and the integration crate matches the variants (tests/integration/sandbox.rs:240,321) (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::SandboxDiagnostic"
+reason = "Returned by pub diagnose, which cli::doctor::runtime renders; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::SkillInputs"
+reason = "The integration crate builds it at 22 sites (tests/integration/sandbox.rs); it is also a pub field of SandboxInputs (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::SandboxPlan"
+reason = "Pub field LaunchPlan.sandbox, and the integration crate imports it (tests/integration/sandbox.rs:11,52) (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::SandboxInputs"
+reason = "The integration crate constructs it (tests/integration/sandbox.rs:11,212,1531) (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::ProviderHome"
+reason = "Pub field SandboxInputs.provider_home (sandbox/mod.rs:133); atlas caveat 13 refutes the narrowing atlas proposes (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::MountPlan"
+reason = "Pub field SandboxPlan.plan and a pub bwrap_argv parameter; atlas caveat 13 (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::PlannedCopy"
+reason = "Pub field SandboxPlan.copies; atlas caveat 13 refutes the narrowing atlas proposes (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::apply"
+reason = "Called by the separate integration crate (tests/integration/sandbox.rs:264) (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::plan"
+reason = "Called by the separate integration crate (tests/integration/sandbox.rs:212) (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "sandbox::bwrap_argv"
+reason = "Called by the separate integration crate at six sites (tests/integration/sandbox.rs:74,247,327,741,986,1549) (pass 23b)."
+
+[[verdict]]
+kind = "pass-through"
+key = "sandbox::prepare"
+reason = "plan-then-apply for callers that need both; no production caller remains, but the separate integration crate drives it at six sites, so the seam stays until a pass may edit that crate (pass 23b)."
+
+[[verdict]]
+kind = "pass-through"
+key = "sandbox::rewrite::from"
+reason = "MaterializeErr::from is the `?` conversion from SandboxErr; inlining it rewrites every call site to map_err and is net-additive (pass 23b)."
