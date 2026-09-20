@@ -86,6 +86,85 @@ fn append_launched_agent(
 }
 
 #[test]
+fn claude_wrapped_stage_records_only_the_delivered_notice() {
+    use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+    use rimz::transcript::TranscriptKind;
+
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let state = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let message = MessageRecord::new(
+        workspace.workspace_id.clone(),
+        &state,
+        "Implement is yours.".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::Stage,
+    });
+    let payload = serde_json::json!({
+        "session_id": "sess-1",
+        "prompt": format!("<pasted_content id=\"e676\">\nType: STAGE\nFrom: @rimz\nContent:\n{}\n</pasted_content id=\"e676\">", message.text),
+    });
+    let decoded = agent.decode_hook("UserPromptSubmit", &payload).unwrap();
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+    started.observation.prompt = decoded.lifecycle().unwrap().prompt.clone();
+
+    record_conversation(
+        &workspace,
+        &store,
+        agent,
+        &started,
+        conversation_input(None, &[], std::slice::from_ref(&message)),
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry, TranscriptKind::Wait);
+    assert_eq!(entries[0].from.as_deref(), Some("@rimz"));
+    assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.entry == TranscriptKind::Prompt)
+    );
+}
+
+#[test]
+fn claude_human_paste_keeps_typed_and_pasted_text_in_one_prompt() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let payload = serde_json::json!({
+        "session_id": "sess-1",
+        "prompt": "look at this\n\n<pasted_content id=\"a\">\npanic at foo.rs:1\n</pasted_content id=\"a\">\n\nwhat now?",
+    });
+    let decoded = agent.decode_hook("UserPromptSubmit", &payload).unwrap();
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+    started.observation.prompt = decoded.lifecycle().unwrap().prompt.clone();
+
+    record_conversation(
+        &workspace,
+        &store,
+        agent,
+        &started,
+        conversation_input(None, &[], &[]),
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Prompt);
+    assert_eq!(
+        entries[0].text,
+        "look at this\n\npanic at foo.rs:1\n\nwhat now?"
+    );
+    assert!(!entries[0].text.contains("pasted_content"));
+}
+
+#[test]
 fn one_terminal_extraction_is_shared_when_run_and_conversation_both_need_it() {
     let calls = std::cell::Cell::new(0);
     let terminal = recorded(LifecycleSignal::TurnEnded {

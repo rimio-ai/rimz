@@ -1365,6 +1365,37 @@ fn agents_without_a_recorded_contribution_are_omitted() {
 }
 
 #[test]
+fn transcript_counts_exclude_legacy_paste_fragments() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(Path::new("/repo/lane"));
+    let paths = crate::disk::paths::StatePaths::under(workspace_id, dir.path()).unwrap();
+    let planner = agent(Path::new("/repo/lane"), "planner-session", "claude", 10);
+    let human = crate::agents::sanitize_user_prompt(Some(
+        "<pasted_content id=\"human\">\nplease review\n</pasted_content id=\"human\">",
+    ))
+    .unwrap();
+    for (kind, text) in [
+        (TranscriptKind::Prompt, "<pasted_content id=\"a\">"),
+        (TranscriptKind::Wait, "Implement is yours."),
+        (TranscriptKind::Prompt, "</pasted_content id=\"a\">"),
+        (TranscriptKind::Prompt, human.as_str()),
+    ] {
+        let entry = TranscriptEntry::new(
+            at(50),
+            planner.kind.clone(),
+            planner.agent_id.clone(),
+            kind,
+            text.to_owned(),
+        );
+        crate::transcript::append(&paths, &entry).unwrap();
+    }
+
+    let transcript = crate::transcript::read_all(&paths).unwrap();
+    let report = build_with(&[planner], &[], &transcript);
+    assert_eq!(report.totals.messages.from_user, 1);
+}
+
+#[test]
 fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
     let mut planner = agent(Path::new("/repo/lane"), "planner-session", "claude", 10);
     planner.team = Some("forge".to_owned());
