@@ -17,7 +17,7 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::sidebar::read_marks::ReadMarks;
 use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 
-pub const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
+const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnreadEpisodes {
@@ -26,10 +26,6 @@ pub struct UnreadEpisodes {
 }
 
 impl UnreadEpisodes {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
     pub fn load(runtime: &RuntimePaths) -> Self {
         let path = runtime.unread_path();
         let bytes = match fs::read(&path) {
@@ -42,14 +38,14 @@ impl UnreadEpisodes {
             }
             Err(err) => {
                 debug!(path = %path.display(), error = %err, "sidebar unread episodes unreadable");
-                return Self::empty();
+                return Self::default();
             }
         };
         let file: UnreadEpisodesFile = match serde_json::from_slice(&bytes) {
             Ok(file) => file,
             Err(err) => {
                 debug!(path = %path.display(), error = %err, "sidebar unread episodes invalid");
-                return Self::empty();
+                return Self::default();
             }
         };
         if file.v != UNREAD_EPISODES_VERSION {
@@ -58,7 +54,7 @@ impl UnreadEpisodes {
                 version = file.v,
                 "sidebar unread episodes version ignored",
             );
-            return Self::empty();
+            return Self::default();
         }
         Self {
             episodes: file.episodes,
@@ -66,7 +62,7 @@ impl UnreadEpisodes {
         }
     }
 
-    pub fn was_absent_on_load(&self) -> bool {
+    pub(crate) fn was_absent_on_load(&self) -> bool {
         self.absent_on_load
     }
 
@@ -81,7 +77,7 @@ impl UnreadEpisodes {
         Ok(())
     }
 
-    pub fn open_for_row(&mut self, row: &SidebarRow, episode_ms: i64) -> OpenedUnread {
+    fn open_for_row(&mut self, row: &SidebarRow, episode_ms: i64) -> OpenedUnread {
         self.episodes.insert(row.id.clone(), episode_ms);
         opened_unread(row, episode_ms, false)
     }
@@ -97,7 +93,7 @@ impl UnreadEpisodes {
         true
     }
 
-    pub(crate) fn unread_row_ids(&self, marks: &ReadMarks) -> BTreeSet<String> {
+    pub(super) fn unread_row_ids(&self, marks: &ReadMarks) -> BTreeSet<String> {
         self.episodes
             .iter()
             .filter_map(|(row_id, episode_ms)| {
@@ -218,7 +214,7 @@ pub fn mark_rows_unread(
     Ok(opened)
 }
 
-pub(crate) fn derive(snapshot: &mut SidebarSnapshot, episodes: &UnreadEpisodes, marks: &ReadMarks) {
+pub(super) fn derive(snapshot: &mut SidebarSnapshot, episodes: &UnreadEpisodes, marks: &ReadMarks) {
     for row in snapshot
         .worktree_groups
         .iter_mut()
@@ -326,7 +322,7 @@ impl UnreadClearCause {
     }
 }
 
-pub(crate) fn opened_unread(row: &SidebarRow, episode_ms: i64, silent: bool) -> OpenedUnread {
+pub(super) fn opened_unread(row: &SidebarRow, episode_ms: i64, silent: bool) -> OpenedUnread {
     let status = row
         .status()
         .expect("opened unread rows are agent rows with a status");
@@ -494,9 +490,9 @@ mod tests {
             AgentStatus::Paused,
             AgentStatus::Success,
         ] {
-            let mut episodes = UnreadEpisodes::empty();
+            let mut episodes = UnreadEpisodes::default();
             let mut snapshot = snapshot(vec![row("a", status, 1_000)]);
-            let out = episodes.reconcile(&mut snapshot, &ReadMarks::empty(), false);
+            let out = episodes.reconcile(&mut snapshot, &ReadMarks::default(), false);
 
             assert_eq!(out.opened.len(), 1, "{status:?} opens");
             assert!(snapshot.worktree_groups[0].rows[0].unread);
@@ -505,7 +501,7 @@ mod tests {
 
     #[test]
     fn sleeping_cycle_notifies_only_when_the_result_finishes() {
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let mut notifications = crate::sidebar::notify::NotificationState::default();
         let prefs = crate::config::NotificationsPrefs {
             triggers: vec![crate::config::NotificationTrigger::Success],
@@ -518,7 +514,7 @@ mod tests {
             (AgentStatus::Success, 3_000),
         ] {
             let mut snapshot = snapshot(vec![row("a", status, at)]);
-            let out = episodes.reconcile(&mut snapshot, &ReadMarks::empty(), false);
+            let out = episodes.reconcile(&mut snapshot, &ReadMarks::default(), false);
             let sent = notifications.evaluate(&snapshot, &out.opened, &prefs, at as u64);
             let finished = status == AgentStatus::Success;
             assert_eq!(snapshot.worktree_groups[0].rows[0].unread, finished);
@@ -535,13 +531,13 @@ mod tests {
 
     #[test]
     fn stays_unread_across_return_to_running() {
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let mut waiting = snapshot(vec![row("a", AgentStatus::Waiting, 1_000)]);
-        episodes.reconcile(&mut waiting, &ReadMarks::empty(), false);
+        episodes.reconcile(&mut waiting, &ReadMarks::default(), false);
 
         for status in [AgentStatus::Running, AgentStatus::Sleeping] {
             let mut resumed = snapshot(vec![row("a", status, 2_000)]);
-            let out = episodes.reconcile(&mut resumed, &ReadMarks::empty(), false);
+            let out = episodes.reconcile(&mut resumed, &ReadMarks::default(), false);
 
             assert!(out.opened.is_empty());
             assert!(resumed.worktree_groups[0].rows[0].unread);
@@ -550,9 +546,9 @@ mod tests {
 
     #[test]
     fn read_mark_clears_only_when_it_reaches_episode() {
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let mut first = snapshot(vec![row("a", AgentStatus::Success, 1_000)]);
-        episodes.reconcile(&mut first, &ReadMarks::empty(), false);
+        episodes.reconcile(&mut first, &ReadMarks::default(), false);
 
         let mut old_mark = snapshot(vec![row("a", AgentStatus::Success, 1_000)]);
         episodes.reconcile(
@@ -578,9 +574,9 @@ mod tests {
 
     #[test]
     fn later_activity_after_read_opens_a_new_episode() {
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let mut first = snapshot(vec![row("a", AgentStatus::Success, 1_000)]);
-        episodes.reconcile(&mut first, &ReadMarks::empty(), false);
+        episodes.reconcile(&mut first, &ReadMarks::default(), false);
 
         let marks = ReadMarks::from_entries([("a".to_owned(), 1_500)]);
         let mut later = snapshot(vec![row("a", AgentStatus::Success, 2_000)]);
@@ -598,7 +594,7 @@ mod tests {
 
     #[test]
     fn read_reached_prune_wins_over_row_gone_trace() {
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let row = row("a", AgentStatus::Success, 1_000);
         episodes.open_for_row(&row, 1_000);
         let mut empty = snapshot(Vec::new());
@@ -618,12 +614,12 @@ mod tests {
 
     #[test]
     fn row_gone_clear_does_not_guess_an_agent_id_from_row_id() {
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let row = row("a", AgentStatus::Success, 1_000);
         episodes.open_for_row(&row, 1_000);
         let mut empty = snapshot(Vec::new());
 
-        let out = episodes.reconcile(&mut empty, &ReadMarks::empty(), false);
+        let out = episodes.reconcile(&mut empty, &ReadMarks::default(), false);
 
         assert_eq!(out.cleared.len(), 1);
         assert_eq!(out.cleared[0].cause, UnreadClearCause::RowGone);
@@ -640,13 +636,13 @@ mod tests {
 
     #[test]
     fn frameless_reconcile_neither_opens_nor_prunes() {
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let open_row = row("a", AgentStatus::Success, 1_000);
         episodes.open_for_row(&open_row, 1_000);
         let mut frameless = snapshot(vec![row("b", AgentStatus::Waiting, 2_000)]);
         frameless.panes_produced_at_ms = None;
 
-        let out = episodes.reconcile(&mut frameless, &ReadMarks::empty(), false);
+        let out = episodes.reconcile(&mut frameless, &ReadMarks::default(), false);
 
         assert!(!out.changed);
         assert!(out.opened.is_empty());
@@ -657,9 +653,9 @@ mod tests {
 
     #[test]
     fn cold_start_opens_silently() {
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let mut snapshot = snapshot(vec![row("a", AgentStatus::Waiting, 1_000)]);
-        let out = episodes.reconcile(&mut snapshot, &ReadMarks::empty(), true);
+        let out = episodes.reconcile(&mut snapshot, &ReadMarks::default(), true);
 
         assert!(out.opened[0].silent);
         assert!(snapshot.worktree_groups[0].rows[0].unread);
@@ -705,7 +701,7 @@ mod tests {
     #[test]
     fn load_persist_round_trips_and_garbage_reads_empty() {
         let (_dir, runtime) = runtime();
-        let mut episodes = UnreadEpisodes::empty();
+        let mut episodes = UnreadEpisodes::default();
         let row = row("a", AgentStatus::Waiting, 1_000);
         episodes.open_for_row(&row, 1_000);
         episodes.persist(&runtime).expect("persist");
@@ -714,6 +710,6 @@ mod tests {
         assert_eq!(loaded.episodes.get("a"), Some(&1_000));
 
         fs::write(runtime.unread_path(), b"{ not json").expect("garbage");
-        assert_eq!(UnreadEpisodes::load(&runtime), UnreadEpisodes::empty());
+        assert_eq!(UnreadEpisodes::load(&runtime), UnreadEpisodes::default());
     }
 }
