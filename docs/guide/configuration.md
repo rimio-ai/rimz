@@ -601,7 +601,7 @@ Each task chooses `agent`, `wait`, `check`, or `check` plus one agent action:
 - `max-strikes` auto-disables the task after that many consecutive failed or no-progress fires, defaults to `3`, and accepts `0` to disable the strike gate; `rimz loop enable` clears the machine-local counter.
 - `deadline` is normally written by `rimz loop add --until 30m` into the instance state store for poll-until tasks, not hand-authored in `loop.toml`.
 - `budget` caps each spawned supervised run; `budget-per-day` requires it and skips a fire when today's recorded task spend, plus the next run's cap, would exceed the daily amount.
-- `surplus` requires forward headroom in the provider's longest running budget window; `surplus-after` adds an elapsed floor and implies at least `1.0x` headroom when used alone. Both fields apply to `agent` and `wait` actions and fail closed without a complete window reading; the headroom model is [budgets → the surplus gate](./budget.md#the-surplus-gate).
+- `surplus` requires forward headroom in the provider's longest running budget window; `surplus-after` adds an elapsed floor and implies at least `1.0x` headroom when used alone. Both fields apply to `agent` and `wait` actions and fail closed without a usable window reading; the headroom model is [budgets → the surplus gate](./budget.md#the-surplus-gate).
 
 Field notes:
 
