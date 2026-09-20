@@ -91,7 +91,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 
 ## Testing
 
-- While iterating, the per-commit signal is `cargo xtask check` (singular; `checks` is the non-test gate composite) followed by `cargo xtask lint`. Run `cargo xtask gate` before a PR or hand-off.
+- While iterating, the per-commit signal is `cargo xtask check` (singular; `checks` is the non-test gate composite) followed by `cargo xtask lint`, plus `cargo xtask docs-links` for a change that touches Markdown, which `lint` does not cover. Run `cargo xtask gate` before a PR or hand-off.
 - Compile tests with `cargo xtask check`; a bare `cargo check --tests` misses the `testkit` feature and fails.
 - Batch focused tests with `cargo xtask test --name <test> [--name <test>...]`, exact names only. Run a whole module through a bare nextest filter: `cargo xtask test 'sidebar_pane::app::width_control'`. A filter and `--name` intersect rather than union, so the two run as separate calls; passing both is what "0 tests run" means.
 - `cargo xtask sandbox -- <command>` drives a real multiplexer from disposable roots.
