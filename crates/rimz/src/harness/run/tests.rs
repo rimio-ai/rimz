@@ -139,6 +139,89 @@ fn stranded_park_requires_two_checks_and_preserves_racing_turns() {
             ParkCheck::Live
         );
     }
+
+    // The arm that stops the wrapper failing a run that is legitimately
+    // waiting: with a wake owed, no number of checks settles the park.
+    record.status = RunStatus::Running;
+    record.failure_tail = None;
+    create(store.paths(), &record).unwrap();
+    let mut registered =
+        AgentLifecycleObservation::new(record.agent_id.clone(), LifecycleSignal::Registered);
+    registered.pane_id = Some(crate::ids::PaneId::from_parts(MuxName::Tmux, "%1"));
+    store
+        .append_agent_lifecycle(crate::store::writer::AgentLifecycleIntent {
+            session_name: "park-test",
+            agent_kind: record.kind.clone(),
+            event_name: "test",
+            observation: &registered,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let agent = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|agent| Some(&agent.agent_id) == record.agent_id.as_ref())
+        .expect("the parked run's card");
+    let wake = crate::store::message::MessageRecord::new(
+        record.workspace_id.clone(),
+        &agent,
+        "wake".to_owned(),
+        crate::store::message::DeliveryGate::Done,
+    )
+    .with_sender(crate::store::message::MessageSender::Harness {
+        notice: crate::store::message::HarnessNotice::Wait,
+    });
+    store.queue_message(&wake, "park-test").unwrap();
+    for previous in [None, Some(at)] {
+        assert_eq!(
+            settle_stranded_park(&store, &record, previous).unwrap(),
+            ParkCheck::Live
+        );
+    }
+    assert_eq!(load(store.paths(), &record.run_id).unwrap(), record);
+    assert_eq!(
+        socket.recv(&mut frame).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+/// A park whose turn end carried no transcript path is woken by a turn start
+/// that does: clearing the park cannot swallow the late-path fold the
+/// non-Claude adapters depend on.
+#[test]
+fn parked_wake_turn_folds_its_first_transcript_path() {
+    let (_dir, paths, record) = setup();
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    assert!(
+        record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+            Some(OwedWake::Wait)
+        })
+        .unwrap()
+        .is_none()
+    );
+    let parked = load(&paths, &record.run_id).unwrap();
+    assert!(parked.parked_at.is_some());
+    assert_eq!(parked.transcript_path, None);
+
+    observation.signal = LifecycleSignal::TurnStarted { turn_id: None };
+    observation.transcript_path = Some("/tmp/late.jsonl".to_owned());
+    record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+        panic!("turn start must not read owed")
+    })
+    .unwrap();
+    let woken = load(&paths, &record.run_id).unwrap();
+    assert_eq!(woken.parked_at, None);
+    assert_eq!(woken.status, RunStatus::Running);
+    assert_eq!(woken.transcript_path, observation.transcript_path);
 }
 
 #[test]
@@ -707,37 +790,6 @@ fn live_status_joins_agent_state() {
     record.parked_at = Some(Timestamp::UNIX_EPOCH);
     let parked = live_status(&record, &snapshot).expect("parked live status");
     assert_eq!(parked.parked_at, Some(Timestamp::UNIX_EPOCH));
-}
-
-#[test]
-fn live_status_projects_the_effective_agent_status() {
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let mut record = RunRecord::new(
-        workspace_id.clone(),
-        AgentKind::new_unchecked("claude"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
-    record.status = RunStatus::Running;
-    record.agent_id = Some(AgentSessionId::from("sess-1"));
-    let mut agent = agent_state("claude", "sess-1", AgentStatus::Success);
-    agent.pending_waits.push(crate::agents::PendingWait {
-        name: "wake-me".to_owned(),
-        trigger: crate::agents::PendingWaitTrigger::Pid { pid: 4321 },
-        armed_at: None,
-    });
-    let expected = agent.effective_status();
-    let snapshot =
-        SidebarSnapshot::build_with_agents(workspace_id, vec![agent], Timestamp::UNIX_EPOCH);
-
-    let live = live_status(&record, &snapshot).expect("live status");
-    assert_eq!(
-        expected,
-        AgentStatus::Sleeping,
-        "an armed wait rests asleep"
-    );
-    assert_eq!(live.agent_status, expected);
 }
 
 #[test]

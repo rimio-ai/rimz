@@ -555,16 +555,16 @@ fn fold_lifecycle(
         record.parked_at = None;
         return LifecycleFold::NewlyTerminal;
     }
-    if matches!(observation.signal, LifecycleSignal::TurnStarted { .. })
-        && record.parked_at.is_some()
-    {
+    // The wake turn both clears the park and may carry the run's first
+    // transcript path, so the clear cannot return ahead of that fold.
+    let unparked = matches!(observation.signal, LifecycleSignal::TurnStarted { .. })
+        && record.parked_at.is_some();
+    if unparked {
         record.parked_at = None;
-        record.status = RunStatus::Running;
-        return LifecycleFold::Updated;
     }
     let first_transcript_path =
         record.transcript_path.is_none() && observation.transcript_path.is_some();
-    if record.status != RunStatus::Pending && !first_transcript_path {
+    if !unparked && record.status != RunStatus::Pending && !first_transcript_path {
         return LifecycleFold::Ignored;
     }
     record.status = RunStatus::Running;
@@ -609,9 +609,7 @@ pub fn live_status(record: &RunRecord, snapshot: &SidebarSnapshot) -> Option<Run
         .iter()
         .find(|agent| agent.kind == record.kind && &agent.agent_id == agent_id)?;
     Some(RunLiveStatus {
-        // The projection the sidebar and `subagents list` already show, so one
-        // sleeping or paused session reads the same everywhere.
-        agent_status: agent.effective_status(),
+        agent_status: agent.status,
         phase: agent.phase,
         pane_id: agent
             .pane
