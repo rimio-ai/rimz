@@ -38,9 +38,9 @@ pub(super) fn age_short(at: Timestamp, now: Timestamp) -> String {
 
 pub(super) fn run_clock_label(secs: u64) -> String {
     if secs < 3_600 {
-        format!("{}:{:02}", secs / 60, secs % 60)
+        format!("{:02}:{:02}", secs / 60, secs % 60)
     } else {
-        format!("{}:{:02}:{:02}", secs / 3_600, secs / 60 % 60, secs % 60)
+        format!("{:02}:{:02}:{:02}", secs / 3_600, secs / 60 % 60, secs % 60)
     }
 }
 
@@ -271,12 +271,12 @@ mod tests {
     #[test]
     fn run_clock_boundaries() {
         for (secs, label) in [
-            (0, "0:00"),
-            (7, "0:07"),
+            (0, "00:00"),
+            (7, "00:07"),
             (2_832, "47:12"),
             (3_599, "59:59"),
-            (3_600, "1:00:00"),
-            (6_432, "1:47:12"),
+            (3_600, "01:00:00"),
+            (6_432, "01:47:12"),
         ] {
             assert_eq!(run_clock_label(secs), label);
         }

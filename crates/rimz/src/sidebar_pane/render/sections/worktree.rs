@@ -87,7 +87,15 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     // otherwise), and its dotted `┄` seal shows only then, so an unselected
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
-    let (header, header_link) = group_header(ctx.theme, group, ctx.width, group_selected);
+    let folded = finished_folded(visible_group);
+    let draws_pipeline = group.pipeline.is_some() && !folded;
+    let team = group
+        .team
+        .as_deref()
+        .filter(|team| !group.label.ends_with(&format!("/{team}")));
+    let header_team = if draws_pipeline || folded { None } else { team };
+    let (header, header_link) =
+        group_header(ctx.theme, group, header_team, ctx.width, group_selected);
     let collapses = group.collapses();
     let header_hit = collapses.then(|| (0..u16::MAX, HitTarget::ToggleGroup(group.key.clone())));
     let header_link = header_link.map(|(columns, url)| {
@@ -107,7 +115,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         header_hit.into_iter().chain(header_link),
     );
     if let Some(pipeline) = &group.pipeline
-        && !finished_folded(visible_group)
+        && !folded
     {
         let rows = visible_group.rows(roster);
         let owner = pipeline.owner.as_deref().and_then(|owner| {
@@ -128,7 +136,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         let owner_status = owner.and_then(|index| rows[index].status());
         let line = with_gutter(
             ctx.theme,
-            pipeline_line(ctx, pipeline, owner_status),
+            pipeline_line(ctx, pipeline, owner_status, team),
             lane,
             None,
             ctx.width,
@@ -195,6 +203,7 @@ fn pipeline_line(
     ctx: &RowCtx<'_>,
     pipeline: &SidebarPipeline,
     owner: Option<AgentStatus>,
+    team: Option<&str>,
 ) -> Line<'static> {
     let theme = ctx.theme;
     let position = pipeline.position();
@@ -207,7 +216,7 @@ fn pipeline_line(
             let (role, style) = match position {
                 PipelinePosition::Done if index + 1 == pipeline.stages.len() => (
                     GlyphRole::PipelineDone,
-                    status_rest_style(theme, AgentStatus::Success),
+                    theme.styled(Component::PipelinePassed, Modifier::empty()),
                 ),
                 PipelinePosition::At(current) if index == current => (
                     GlyphRole::PipelineCurrent,
@@ -218,16 +227,20 @@ fn pipeline_line(
                 PipelinePosition::At(current) if index > current => {
                     (GlyphRole::PipelineFuture, theme.muted())
                 }
-                _ => (GlyphRole::PipelinePassed, theme.body()),
+                _ => (
+                    GlyphRole::PipelinePassed,
+                    theme.styled(Component::PipelinePassed, Modifier::empty()),
+                ),
             };
             track.push(Span::styled(theme.glyph(role).to_owned(), style));
         }
     }
-    let right = pipeline.span_secs(ctx.now).map_or_else(Vec::new, |secs| {
-        vec![Span::styled(run_clock_label(secs), theme.muted())]
-    });
+    let clock = pipeline
+        .span_secs(ctx.now)
+        .map(|secs| format!(" ({})", run_clock_label(secs)))
+        .unwrap_or_default();
     let width = content_width(ctx.width);
-    let budget = width.saturating_sub(2 + spans_width(&right) + usize::from(!right.is_empty()));
+    let budget = width.saturating_sub(2 + text_width(&clock));
     let mut left = vec![Span::raw("  ")];
     let track_width = spans_width(&track) + 2;
     let name_budget = if !track.is_empty() && track_width + text_width(&pipeline.stage) <= budget {
@@ -241,7 +254,19 @@ fn pipeline_line(
         ellipsize(&pipeline.stage, name_budget),
         theme.body(),
     ));
-    pin_right(left, right, width)
+    if !clock.is_empty() {
+        left.push(Span::styled(clock, theme.muted()));
+    }
+    if let Some(team) = team {
+        let suffix = format!(" · {team}");
+        if spans_width(&left) + text_width(&suffix) <= width {
+            left.push(Span::styled(
+                suffix,
+                theme.styled(Component::TeamLabel, Modifier::empty()),
+            ));
+        }
+    }
+    pin_right(left, Vec::new(), width)
 }
 
 fn worktree_tail(
@@ -476,6 +501,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
 fn group_header(
     theme: &Theme,
     group: &SidebarWorktreeGroup,
+    team: Option<&str>,
     width: usize,
     sealed: bool,
 ) -> (Line<'static>, Option<(std::ops::Range<u16>, String)>) {
@@ -487,6 +513,9 @@ fn group_header(
     // The lane spine (added by the caller) opens the header, so the label leads
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
+    // The caller hands the team badge here only when no other line names it:
+    // the pipeline line carries it when drawn, the folded roster line when the
+    // group is folded, and this header in every remaining case.
     let cw = content_width(width);
     // The CI marker follows the name — the trunk's branch CI, or the branch's
     // open or merged pull request CI — then any linked PR
@@ -547,11 +576,7 @@ fn group_header(
             format!("{} {}", theme.glyph(role), group.label)
         }
     };
-    let team_suffix = group
-        .team
-        .as_deref()
-        .filter(|team| !group.label.ends_with(&format!("/{team}")))
-        .map(|team| format!(" · {team}"));
+    let team_suffix = team.map(|team| format!(" · {team}"));
     let qualifier_suffix = group
         .label_qualifier
         .as_deref()
