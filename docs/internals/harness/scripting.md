@@ -1,6 +1,6 @@
 # Supervised runs
 
-> One supervised turn end to end: the durable record, the completion signal, the wait, verification and retry, the output projections, and pane reclamation. [fleet.md](./fleet.md) is the map for this area and owns the launch machinery a run rides on; [subagents.md](./subagents.md) owns what a `rimz subagents` child adds on top. For users, the guide is [scripting.md](../../guide/scripting.md) and the flag reference is [cli/agents.md](../../reference/cli/agents.md#supervised-runs--p).
+> A supervised run until the work ends: the durable record, the completion signal, the wait, verification and retry, the output projections, and pane reclamation. [fleet.md](./fleet.md) is the map for this area and owns the launch machinery a run rides on; [subagents.md](./subagents.md) owns what a `rimz subagents` child adds on top. For users, the guide is [scripting.md](../../guide/scripting.md) and the flag reference is [cli/agents.md](../../reference/cli/agents.md#supervised-runs--p).
 
 ## What a supervised run is
 
@@ -45,7 +45,7 @@ The rule that resolves this: **the durable run record is the run; the pane, the 
 | Outcome | `status`, `last_message`, `verify`, `failure_tail`, `transcript_path` |
 | Accounting | `cost_usd`, `input_tokens`, `output_tokens` |
 | Reporting | `joined_at`, `report_message_id` ([subagents.md](./subagents.md#the-lifecycle-end-to-end)) |
-| Timing | `started_at`, `deadline_at`, `updated_at`, `completed_at` |
+| Timing | `started_at`, `deadline_at`, `updated_at`, `completed_at`, `parked_at` |
 
 `agent_id` starts empty. The first lifecycle observation that matches the run fills it, which is how the record binds to a session whose id did not exist when the record was written. `transcript_path` points at the provider's own session file, which streaming reads directly; the RimZ transcript log that `rimz transcript` renders is a different file. The wrapper stamps `provider_pid` and its process-start token when it spawns the provider, so a later signal cannot reach a reused PID.
 
@@ -103,16 +103,28 @@ What passes is classified by `LifecycleSignal::terminal_disposition` in `agents:
 
 | Lifecycle signal | Result |
 | --- | --- |
-| `TurnEnded { errored: false, parked_on_background: false }` | `Completed` |
+| `TurnEnded { errored: false, parked_on_background: false }`, nothing owed | `Completed` |
+| Same clean end, harness wake owed | `Running`, with `parked_at` set; retains transcript and final message without a terminal wake |
 | `TurnEnded { errored: true, parked_on_background: false }` | `Failed` |
 | `TurnEnded { parked_on_background: true }` | not terminal: the agent parked on background work and ends the turn later |
 | `TurnInterrupted` | `Canceled` |
 | `Ended` | `Failed`: the session ended without reporting a turn result |
+| `TurnStarted` on a parked run | clears `parked_at`, stays `Running` |
 | anything else | not terminal: promotes `Pending` to `Running` and records the first transcript path |
 
 A terminal fold also stores the transcript path and the final assistant message. `record_assistant_message` lets an adapter store its declared final output earlier without ending the run.
 
 Process death is a backstop and never reads as success. When the provider process exits, the wrapper waits `RUN_EXIT_TERMINAL_GRACE` (500 ms) for a terminal record. If none lands, it captures its own pane tail, writes `Failed` through `fail_if_nonterminal`, and wakes the waiter. A provider that exits cleanly without a terminal hook is still a failed run.
+
+## Parked runs
+
+`harness::owed::owed_wake` holds a clean end open for an armed one-shot wait, a non-terminal harness `Wait`, `Signal`, or `SubagentReport` message for the card, or a launched fleet member whose newest run is non-terminal or terminal with neither `joined_at` nor `report_message_id`. It reuses `TurnWaitView::load` for catalog → queue → rollup reads and `harness::fleet::FleetRuns` for the Audit fleet. The hook evaluates this input only for a root Completed disposition, before taking the run's workspace lock; a read error logs and yields nothing owed. The signal classifier stays pure, and failures and cancellation are not held open.
+
+The record stays `Running`: `parked_at` is an optional, defaulted timestamp, not a new status. The next `TurnStarted` clears it; every terminal write clears it too. `agents show` displays the park's age, and record JSON and NDJSON live status carry `parked_at`. Live status uses the card's effective status, but a cached snapshot without pending-wait enrichment cannot infer `Sleeping` from a wait row alone; the timestamp is the reliable park evidence.
+
+Every wrapped run checks for a stranded park at most once per `PARK_STRAND_POLL` (5 s), including blocking runs without self-cleanup. Two consecutive nothing-owed checks under the same timestamp call `run::settle_stranded_park`: under the workspace lock it compares `parked_at` and non-terminal status, writes `Failed` and the first failure tail together, then wakes the waiter after unlocking. The reason is `parked on a wake that never arrived: no armed wait, no wake in flight, no live subagents`; an existing failure tail wins. An owed wake, missing bound identity, or read error does not settle the park. The unchanged deadline still bounds it.
+
+The compare-and-swap relies on the hook folding `TurnStarted` before marking its wake message `Delivered`: seeing the wake gone means the park clear already happened. The second look covers the digest reporter's short stamp-then-queue gap across two lock holds. A clean parent end inside that gap can still complete before the digest is queued; the fold accepts that gap rather than reordering the reporter's durability sequence.
 
 ## The wake socket
 
@@ -198,6 +210,8 @@ Cleanup is best-effort and split by who is still alive to do it.
 A blocking run's driver closes the pane after the verify phase unless `--keep`. First, `join_presented_attempt` stamps `joined_at` on a terminal record, since the driver prints that result itself, so a launching agent's fleet digest does not list it again ([subagents.md § Joins](./subagents.md#joins-stops-and-the-digest)). Then `record_failure_tail_before_cleanup` captures a pane tail for a non-completed record that has none; `record_failure_tail` keeps the first tail written, so a tail the wrapper captured as it died is never overwritten. `close_run_pane` closes the recorded `pane_id`, and falls back to the agent row found by `(kind, agent_id)` in the snapshot when no pane was recorded or closing it failed. A `Canceled` record goes through the stop backstop below instead.
 
 The in-pane wrapper reclaims its own pane when the request set `exit_on_run_completion`: every `--bg` run, every `rimz subagents` child, and every loop-owned run, unless `--keep`. `supervise_child` rereads the record every `RUN_MONITOR_POLL` (250 ms). Once the record is terminal and no waiter socket is live (`run_waiter_is_live`), it sends the provider `SIGTERM`, escalates to `SIGKILL` after `CHILD_SIGNAL_GRACE` (300 ms), runs worktree cleanup for a marked worktree, and closes its own pane. The live-waiter check leaves a blocking caller in charge of verification and cleanup; the wrapper takes over only when that caller is gone. The close depends on the record alone, never on whoever launched or joins the run.
+
+The wrapper's second duty is the [stranded-park check](#parked-runs), independent of self-cleanup. Without self-cleanup it reads the record every 5 s; with self-cleanup the 250 ms record tick serves both duties, but owed-state reads remain at least 5 s apart. Settlement leaves the existing waiter or cleanup path to handle the terminal record.
 
 A stop, or a Ctrl+C that cancels a blocking caller, writes `Canceled` through `cancel_and_wake` and then runs `close_stopped_run_pane_after_grace`: if the run's pane is still listed after `STOP_BACKSTOP_GRACE` (3 seconds), it closes it. A stop on a terminal `--keep` record leaves the status alone and only reclaims the pane, whether the reference was the run id or the agent name. The timeout helper ends with the same backstop, so a wedged wrapper cannot leave an overdue pane behind.
 

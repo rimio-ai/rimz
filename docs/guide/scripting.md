@@ -1,6 +1,6 @@
 # Scripting
 
-> `rimz agents -p` is `claude -p` for every agent RimZ supports: one prompt, one supervised turn, one exit code — with the turn running in a real pane you can watch, answer, and steer. This page is how you drop an agent into a shell script, a `Makefile`, a cron line, or a CI job. The run records, wakeup socket, and pane cleanup underneath it are [scripting.md](../internals/harness/scripting.md).
+> `rimz agents -p` is `claude -p` for every agent RimZ supports: one prompt, supervision until the work ends, one exit code — in a real pane you can watch, answer, and steer. This page is how you drop an agent into a shell script, a `Makefile`, a cron line, or a CI job. The run records, wakeup socket, and pane cleanup underneath it are [scripting.md](../internals/harness/scripting.md).
 
 ## Why `rimz agents -p`
 
@@ -23,15 +23,15 @@ rimz agents codex "Prepare the release checklist." -p             # the same gra
 `-p` adds no engine of its own; it sequences pieces this guide set already covers:
 
 1. It checks pre-launch dollar gates and any exact managed-launch provider quota, then writes a durable run record — a JSON file under `~/.rimz/ws/<workspace-dir>/runs/` — before anything opens.
-2. It opens one pane in your Zellij or tmux (a split beside you when you run it inside the room, a new tab when the caller is outside it) running the official agent CLI with your prompt: the same launch as an interactive `rimz agents <kind>`, one supervised turn instead of a session.
-3. It blocks until the agent's own reporting hooks say the root turn ended — hooks are the completion signal, which is why they are a [prerequisite](#prerequisites).
+2. It opens one pane in your Zellij or tmux (a split beside you when you run it inside the room, a new tab when the caller is outside it) running the official agent CLI with your prompt: the same launch as an interactive `rimz agents <kind>`, supervised until the work ends.
+3. It blocks until the agent's own reporting hooks say the work ended, keeping the run open across clean turn ends while a wait or child result is still owed. Hooks are the completion signal, which is why they are a [prerequisite](#prerequisites).
 4. It prints the answer, exits with the run's code, and closes the pane. The agent's session file stays where the CLI always puts it, so `claude --resume` and the provider's own apps keep working, and `rimz agents show` and `rimz transcript` read the run back after it ends.
 
 Nothing else moves: no daemon, no forked agent, no RimZ-private copy of the session. Ctrl+C cancels cleanly — exit `130`, agent stopped, pane reclaimed — and `rimz agents stop <ref>` does the same from any other pane. Add `--keep` to leave the finished pane open for inspection.
 
 ## One turn, one exit code
 
-`-p` (`--print`) is the whole contract: run once, print the answer to stdout, exit with the status code.
+`-p` (`--print`) is the whole contract: run until the work ends, print the answer to stdout, exit with the status code. A turn ending while a wake is still owed is not the end of the run.
 
 | Code | Meaning |
 | --- | --- |
@@ -121,6 +121,8 @@ The pane `-p` opens runs the stock CLI exactly as if you had launched it yoursel
 **You steer it mid-turn.** The run answers to a handle like any agent, so `rimz message --steer` injects new instructions into a turn a cron job started, and `rimz agents show` or `logs -f` reads its progress from any pane. A drifting unattended run is a one-line correction, not a kill-and-retry.
 
 **It works your harness.** `--worktree` isolates the run's changes on their own branch, a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) or `--model`/`--effort`/`--system-prompt-file` shapes the turn, [`rimz loop`](./loops.md) fires the same path on a clock, and the run messages your interactive agents — and is messaged by them — like any teammate.
+
+**It can wait without finishing.** An agent can arm `rimz wait` or launch children and end its turn while it waits. The supervised run stays `running`, its pane stays alive, and your script keeps waiting until the work ends. `rimz agents show` displays how long the run has been parked. If the wake is lost and nothing remains to wake it, the run fails with exit `1` and a reason beginning `parked on a wake that never arrived`; `--retries` can retry that failure. `--timeout` still bounds the run, including time spent parked.
 
 Permissions are a per-run choice, rendered through the agent's own flags: `-p` defaults to the provider's auto-accept mode for routine actions, `--ask` keeps every native prompt (each one routes to you as a waiting row), and `--yolo` passes the provider's bypass flag. The tradeoffs are [Loops → the permission posture for unattended runs](./loops.md#the-permission-posture-for-unattended-runs) and [security.md](./security.md).
 
