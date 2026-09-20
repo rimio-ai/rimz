@@ -166,6 +166,8 @@ A daemon-routed hook cannot trust its environment. Codex fires hooks from the sh
 | Pane-owned (`resolve_participant_with_pin_recovery`) | `--root`, env pin, recovered sibling pin, static ladder |
 | Daemon-owned (`resolve_daemon_participant_with_pin_recovery`) | `--root`, recovered sibling pin, static ladder |
 
+That resolution is also the trap in driving a hook by hand. Feeding a payload to `rimz hooks feed` from a pane inside a live room writes into *that* room whatever `HOME` says: the identity pin and the multiplexer detection come from the environment and the process tree, not from `HOME`, so the fake session registers as a real agent row beside the ones you are working with. Clear the `RIMZ_*` pin and the `ZELLIJ*` / `TMUX*` detection variables along with the home and runtime directories; the integration harness is the worked example (`crates/rimz/tests/integration/common`, `ScrubSessionEnvExt`, which every `Env` applies before it spawns `rimz`).
+
 ## Hook install
 
 Installing hooks edits the agent's own config, so it is a visible security step. `rimz hooks install --dry-run` prints a per-agent summary and a unified diff without writing, and the commands are in [hooks-trust.md](../../reference/cli/hooks-trust.md#agent-hooks). `rimz start` checks every detected agent on each run and asks once for all agents whose hooks are missing or have an upgrade available: Enter installs or refreshes every listed agent, and `n` or EOF changes nothing. An unattended start prints a notice and installs nothing ([`ensure_detected_agent_hooks`](../../../crates/rimz/src/cli/hooks/hook_install.rs)).
