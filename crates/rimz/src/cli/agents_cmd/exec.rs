@@ -729,6 +729,9 @@ pub(super) struct RunExecContext {
     pub(super) run_id: rimz::RunId,
     pub(super) store: rimz::Store,
     pub(super) session_name: String,
+    /// What the fleet digest reporter needs when a parked run repairs its own
+    /// lost digest.
+    pub(super) workspace: rimz::ResolvedWorkspace,
 }
 
 impl RunExecContext {
@@ -780,6 +783,7 @@ impl RunMonitor {
             self.previous = None;
         } else if now >= self.next_park_check {
             self.next_park_check = now + PARK_STRAND_POLL;
+            self.repair_digest(context, &record);
             self.previous = match rimz::harness::run::settle_stranded_park(
                 &context.store,
                 &record,
@@ -795,6 +799,27 @@ impl RunMonitor {
         }
         self.self_cleanup && context.ready_for_self_cleanup(&record)
     }
+
+    /// The strand settle exits a park that is owed nothing; a settled fleet
+    /// whose digest was lost is owed something no one else will deliver, since
+    /// the child's reporter does not retry and `orphan_sweep`'s backstop needs
+    /// a live sidebar producer. So the parked run repairs its own fleet before
+    /// each strand check. The repair is idempotent and its stamp CAS tolerates
+    /// a concurrent reporter, so every outcome and error is logged and ignored:
+    /// it never gates the check that follows it.
+    fn repair_digest(&self, context: &RunExecContext, record: &rimz::store::run::RunRecord) {
+        let Some(agent_id) = record.agent_id.as_ref() else {
+            return;
+        };
+        match super::subagent_report::report_fleet(&context.workspace, &context.store, agent_id) {
+            Ok(outcome) => {
+                tracing::debug!(run_id = %context.run_id, ?outcome, "repaired a parked run's fleet digest");
+            }
+            Err(error) => {
+                tracing::debug!(run_id = %context.run_id, %error, "could not repair a parked run's fleet digest");
+            }
+        }
+    }
 }
 
 fn run_exec_context(
@@ -809,6 +834,7 @@ fn run_exec_context(
         run_id,
         store,
         session_name: invocation.workspace.session_name.clone(),
+        workspace: invocation.workspace.clone(),
     }))
 }
 
@@ -1555,6 +1581,20 @@ mod tests {
         );
     }
 
+    /// The reporter's workspace, scoped to a fixture's own tempdir.
+    fn test_workspace(root: &std::path::Path) -> rimz::ResolvedWorkspace {
+        rimz::ResolvedWorkspace {
+            workspace_id: rimz::WorkspaceId::from_project_root(root),
+            project_root: root.to_owned(),
+            cwd_project_root: None,
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: root.to_owned(),
+            worktree_branch: None,
+            session_name: "room".to_owned(),
+            mux_hint: None,
+        }
+    }
+
     #[test]
     fn monitor_settles_stranded_park_with_and_without_self_cleanup() {
         for self_cleanup in [false, true] {
@@ -1579,6 +1619,7 @@ mod tests {
                 run_id: record.run_id.clone(),
                 store,
                 session_name: "room".to_owned(),
+                workspace: test_workspace(state.path()),
             };
             let now = Instant::now();
             let mut monitor = RunMonitor {
@@ -1606,6 +1647,102 @@ mod tests {
         }
     }
 
+    /// The one park nothing else can end is a settled fleet whose digest was
+    /// lost: the child's reporter swallowed its error and the parent is at
+    /// rest waiting for exactly that digest. The parked wrapper therefore
+    /// repairs the fleet before each strand check, and the run lives to
+    /// complete on the digest's turn instead of failing stranded.
+    #[test]
+    fn parked_monitor_repairs_a_lost_fleet_digest_instead_of_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+        let paths =
+            rimz::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let runtime =
+            rimz::RuntimePaths::under(workspace_id.clone(), &dir.path().join("rt")).unwrap();
+        let store = rimz::Store::open(paths, runtime).unwrap();
+        let kind = AgentKind::new_unchecked("codex");
+        let register = |name: &str, pane: &str, parent: Option<&str>| {
+            let mut observation = rimz::agents::AgentLifecycleObservation::new(
+                Some(AgentSessionId::from(name)),
+                rimz::agents::LifecycleSignal::Registered,
+            );
+            observation.agent_name = Some(name.to_owned());
+            observation.pane_id = Some(rimz::ids::PaneId::parse(pane).unwrap());
+            if let Some(parent) = parent {
+                observation.launch.parent_agent_id = Some(AgentSessionId::from(parent));
+                observation.launch.parent_agent_kind = Some(kind.clone());
+                observation.launch.launch_depth = Some(1);
+            }
+            store
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: "room",
+                    agent_kind: kind.clone(),
+                    event_name: "test",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        };
+        register("parent", "tmux:%1", None);
+        register("child", "tmux:%2", Some("parent"));
+
+        let run = |session: &str, status: rimz::store::run::RunStatus| {
+            let mut record = rimz::store::run::RunRecord::new(
+                workspace_id.clone(),
+                kind.clone(),
+                PermissionMode::Auto,
+                "work".to_owned(),
+                dir.path().to_owned(),
+            );
+            record.status = status;
+            record.agent_id = Some(AgentSessionId::from(session));
+            record.agent_name = Some(session.to_owned());
+            record
+        };
+        let mut parent_run = run("parent", rimz::store::run::RunStatus::Running);
+        parent_run.parked_at = Some(jiff::Timestamp::now());
+        let mut child_run = run("child", rimz::store::run::RunStatus::Completed);
+        child_run.subagent = true;
+        for record in [&parent_run, &child_run] {
+            rimz::harness::run::create(store.paths(), record).unwrap();
+        }
+        let parent_id = AgentSessionId::from("parent");
+        assert_eq!(
+            rimz::harness::owed::owed_wake(&store, &kind, &parent_id).unwrap(),
+            Some(rimz::harness::owed::OwedWake::Subagents),
+            "a settled child nobody reported holds the park",
+        );
+
+        let context = RunExecContext {
+            run_id: parent_run.run_id.clone(),
+            store,
+            session_name: "room".to_owned(),
+            workspace: test_workspace(dir.path()),
+        };
+        let now = Instant::now();
+        let mut monitor = RunMonitor {
+            self_cleanup: false,
+            next_park_check: now,
+            previous: None,
+        };
+        assert!(!monitor.poll(&context, now));
+
+        assert_eq!(
+            rimz::harness::owed::owed_wake(&context.store, &kind, &parent_id).unwrap(),
+            Some(rimz::harness::owed::OwedWake::WakeInFlight),
+            "the repair turns the owed fleet into a digest in flight",
+        );
+        assert_eq!(context.store.list_messages().unwrap().len(), 1);
+        let parked = context.load_record().unwrap();
+        assert_eq!(parked.status, rimz::store::run::RunStatus::Running);
+        assert_eq!(parked.parked_at, parent_run.parked_at);
+        assert_eq!(
+            monitor.previous, None,
+            "a repaired park is live, not stranded"
+        );
+    }
+
     #[test]
     fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
         let state = tempfile::tempdir().unwrap();
@@ -1628,6 +1765,7 @@ mod tests {
             run_id: record.run_id.clone(),
             store: rimz::Store::open(paths, runtime).unwrap(),
             session_name: "room".to_owned(),
+            workspace: test_workspace(state.path()),
         };
         assert!(
             context.ready_for_self_cleanup(&context.load_record().unwrap()),

@@ -1572,6 +1572,16 @@ mod runs {
             run_id: run_id.clone(),
             store: rimz::Store::open(paths.clone(), runtime).expect("store"),
             session_name: "rimz-test".to_owned(),
+            workspace: rimz::ResolvedWorkspace {
+                workspace_id: workspace_id.clone(),
+                project_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                cwd_project_root: None,
+                root_class: rimz::workspace::RootClass::Directory,
+                worktree_root: Path::new("/tmp/rimz-run").to_path_buf(),
+                worktree_branch: None,
+                session_name: "rimz-test".to_owned(),
+                mux_hint: None,
+            },
         };
         let waiter = rimz::harness::run_wake::RunWaiter::bind(
             context.store.runtime_paths(),
