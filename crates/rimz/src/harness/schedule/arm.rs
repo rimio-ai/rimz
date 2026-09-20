@@ -204,19 +204,6 @@ pub struct RetiredRows {
     pub dropped: usize,
 }
 
-impl RetiredRows {
-    pub const fn total(self) -> usize {
-        self.declared + self.dropped
-    }
-
-    const fn merge(self, other: Self) -> Self {
-        Self {
-            declared: self.declared + other.declared,
-            dropped: self.dropped + other.dropped,
-        }
-    }
-}
-
 pub fn retire_session(
     project_root: &Path,
     kind: &crate::ids::AgentKind,
@@ -281,7 +268,10 @@ pub fn retire_ended_sessions<'a>(
     let mut failures = Vec::new();
     for (kind, session) in ended_pinned_sessions(&agents(), &pinned) {
         match retire_session(project_root, kind, session) {
-            Ok(retired) => rows = rows.merge(retired),
+            Ok(retired) => {
+                rows.declared += retired.declared;
+                rows.dropped += retired.dropped;
+            }
             Err(err) => failures.push(err.to_string()),
         }
     }

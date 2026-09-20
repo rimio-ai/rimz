@@ -679,13 +679,15 @@ fn elapsed_millis(started: std::time::Instant) -> u64 {
 
 /// The durable agent rows of `project_root`, or none when they cannot be read:
 /// retirement acts on positive evidence of an end, never on a failed read.
-fn snapshot_agents(project_root: &Path) -> Vec<crate::agents::AgentState> {
+///
+/// The audit scope is load-bearing. A runtime-scoped snapshot expels every row
+/// carrying `ended_at` (`store::runtime`'s visibility rule), which is precisely
+/// the evidence the retirement predicate needs, so it would see an ended session
+/// as merely absent and leave its rows standing.
+fn audit_agents(project_root: &Path) -> Vec<crate::agents::AgentState> {
     let read = || -> anyhow::Result<Vec<crate::agents::AgentState>> {
         let paths = crate::disk::paths::StatePaths::for_project_root(project_root)?;
-        let runtime = RuntimePaths::for_state(&paths)?;
-        Ok(crate::store::Store::open(paths, runtime)?
-            .snapshot_cached()?
-            .agents)
+        Ok(crate::store::runtime::audit_projection(&paths)?.agents)
     };
     read().unwrap_or_else(|err| {
         tracing::warn!(error = %err, "loop: failed to read agent state before firing");
@@ -712,7 +714,7 @@ fn fire_signal_with_wait(
     // whoever ended it: the sibling-skip branch below returns before the fire
     // path's only liveness gate, so this is the decision point.
     if let Err(err) = super::arm::retire_ended_sessions(project_root, || {
-        std::borrow::Cow::Owned(snapshot_agents(project_root))
+        std::borrow::Cow::Owned(audit_agents(project_root))
     }) {
         tracing::warn!(error = %err, "loop: failed to retire ended sessions before firing");
     }
