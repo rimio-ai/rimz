@@ -905,6 +905,8 @@ fn interactive_live_status(agent: &AgentState) -> rimz::harness::run::RunLiveSta
         context_pct: agent
             .context_fill_pct()
             .map(|pct| pct.round().clamp(0.0, 100.0) as u8),
+        // An interactive agent has no supervised run to be parked.
+        parked_at: None,
     }
 }
 
