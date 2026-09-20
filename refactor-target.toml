@@ -257,7 +257,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Launch finalize distinguishes typed from default permission modes; cohort resume computes a seed's isolation.
 # The board run (stage plus ledger times) feeds the sidebar pipeline lane.
 # The ended-session reconcile and its retired-row split are pulled by the hook, the exec wrapper and restart.
-surface-budget = 544
+# The owed-wake predicate and the launched-fleet settlement rule serve the run fold, the hooks, the digest reporter and its sweep backstop.
+surface-budget = 554
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -287,7 +288,8 @@ upward-dependencies = [
     "sidebar::produce",
 ]
 # The turn-completion wait view is shared by reply waits and `agents wait`.
-surface-budget = 70
+# Its wake-in-flight predicate is shared with the supervised run's owed-wake read.
+surface-budget = 71
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -691,11 +693,13 @@ allowed-dependencies = [
     "disk::paths",
     "forge",
     "harness::budget",
+    "harness::owed",
     "ids",
     "proc",
     "store",
 ]
-surface-budget = 30
+# The lifecycle fold parks on an owed wake, and the stranded-park settle reads the same predicate.
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

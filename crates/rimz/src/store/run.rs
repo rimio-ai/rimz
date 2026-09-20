@@ -177,7 +177,9 @@ pub struct RunRecord {
     pub updated_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<Timestamp>,
-    /// When a clean turn end left this run open because its session was still owed a harness wake. Cleared by the next turn start and by every terminal write.
+    /// When a clean turn end left this run open because its session was still
+    /// owed a harness wake. Cleared by the next turn start and by every
+    /// terminal write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_at: Option<Timestamp>,
 }

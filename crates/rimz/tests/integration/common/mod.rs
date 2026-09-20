@@ -18,7 +18,7 @@ mod payloads;
 mod shim;
 #[cfg(unix)]
 pub(crate) mod ssh_trace;
-pub mod wait;
+pub(crate) mod wait;
 mod zellij;
 
 #[cfg(unix)]

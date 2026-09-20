@@ -210,9 +210,14 @@ pub enum ParkCheck {
 
 /// Settle only after two nothing-owed checks under the same park timestamp.
 ///
-/// The CAS protects a wake turn starting between the read and lock: the lifecycle hook folds `TurnStarted` (clearing `parked_at`) before settling the wake message to `Delivered`, so a queue read showing the wake gone implies the clear already happened.
+/// The CAS protects a wake turn starting between the read and lock: the
+/// lifecycle hook folds `TurnStarted` (clearing `parked_at`) before settling
+/// the wake message to `Delivered`, so a queue read showing the wake gone
+/// implies the clear already happened.
 ///
-/// The second look covers producer sequences shorter than the check cadence: the digest reporter stamps child `report_message_id` fields and queues the digest in two separate lock holds.
+/// The second look covers producer sequences shorter than the check cadence:
+/// the digest reporter stamps child `report_message_id` fields and queues the
+/// digest in two separate lock holds.
 pub fn settle_stranded_park(
     store: &Store,
     record: &RunRecord,
@@ -459,7 +464,10 @@ fn mark_terminal(
 ///
 /// Returns `Some(record)` only when this observation newly makes the run
 /// terminal, so callers can send exactly one wakeup datagram.
-/// The owed callback runs only for a root observation classified Completed, before `update_record` takes the workspace lock; its lock-free reads must never run inside that lock.
+///
+/// The owed callback runs only for a root observation classified Completed,
+/// before `update_record` takes the workspace lock; its lock-free reads must
+/// never run inside that lock.
 pub fn record_lifecycle(
     paths: &StatePaths,
     run_id: &RunId,
@@ -531,7 +539,11 @@ fn fold_lifecycle(
         {
             record.status = RunStatus::Running;
             record.parked_at = Some(now);
-            tracing::info!(run_id = %record.run_id, owed = owed.as_str(), "supervised run parked on an owed wake");
+            tracing::info!(
+                run_id = %record.run_id,
+                owed = owed.as_str(),
+                "supervised run parked on an owed wake",
+            );
             return LifecycleFold::Updated;
         }
         record.status = match disposition {
