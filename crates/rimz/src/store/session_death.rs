@@ -15,9 +15,9 @@ use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 /// without a TTL it would linger forever; a few hours is long enough that a
 /// genuinely live but pidless session (rare) survives, short enough that an
 /// abandoned one clears on its own.
-pub(crate) const GHOST_SESSION_TTL_SECS: i64 = 3 * 60 * 60;
+pub(super) const GHOST_SESSION_TTL_SECS: i64 = 3 * 60 * 60;
 
-pub(crate) fn agent_is_pidless(agent: &AgentState) -> bool {
+pub(super) fn agent_is_pidless(agent: &AgentState) -> bool {
     match agent.runtime_owner.as_ref().map(|owner| owner.kind) {
         Some(RuntimeOwnerKind::Agent | RuntimeOwnerKind::Script) => false,
         Some(RuntimeOwnerKind::Daemon) => true,
@@ -28,16 +28,16 @@ pub(crate) fn agent_is_pidless(agent: &AgentState) -> bool {
 /// The pid the hook recorded as this session's owner. In daemon mode this is
 /// the shared app-server daemon; in standalone mode it is the session's own
 /// process.
-pub(crate) fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
+pub(super) fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
     agent.runtime_owner.as_ref().map(|owner| owner.pid)
 }
 
-pub(crate) fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
+pub(super) fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
     now.duration_since(agent.last_activity).as_secs()
 }
 
 /// Whether `newer` proves that `older` no longer owns its session slot.
-pub(crate) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
+pub(super) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
     newer.kind == older.kind
         && newer.agent_id != older.agent_id
         && newer.last_activity > older.last_activity
