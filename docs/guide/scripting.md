@@ -1,151 +1,206 @@
 # Scripting
 
-> `rimz agents -p` is `claude -p` for every agent RimZ supports: one prompt, supervision until the work ends, one exit code — in a real pane you can watch, answer, and steer. This page is how you drop an agent into a shell script, a `Makefile`, a cron line, or a CI job. The run records, wakeup socket, and pane cleanup underneath it are [scripting.md](../internals/harness/scripting.md).
+You already script agents. `claude -p "explain this diff"` in a pipeline, `codex exec` in a Makefile: a prompt goes in, an answer comes out on stdout, and an exit code tells the script what happened. That contract is right, and `rimz agents -p` keeps it. Same flag, same shape, nothing to relearn.
 
-## Why `rimz agents -p`
+What headless mode gives up is everything around the run. The turn is an invisible process, so when it stalls, wanders, or stops to ask a permission question, the pipeline hangs with nothing to look at and nowhere to type an answer. And every CLI spells the mode its own way, which costs you one wrapper script per provider.
 
-You already script agents. `claude -p "explain this diff"` in a pipeline, `codex exec` in a Makefile: prompt in, answer out, an exit code the script branches on. The contract is right, and RimZ keeps it — same flag, same shape, nothing to relearn.
-
-What headless mode gives up is everything around the run. The turn is an invisible process: when it stalls, wanders, or stops to ask a permission question, the pipeline hangs with nothing to look at and nowhere to type an answer. And every CLI spells the mode its own way — different flags, different output framing, one wrapper script per provider.
-
-`rimz agents -p` is the same contract without those limits:
+`rimz agents -p` runs the same turn in a real pane in your room, with a card in the sidebar you can watch, answer, and steer while the script blocks. One grammar covers every agent RimZ supports, so swapping the model behind a pipeline is a one-word change.
 
 ```sh
-rimz agents claude "Summarize what changed on this branch." -p    # the claude -p you know
-rimz agents codex "Prepare the release checklist." -p             # the same grammar, any agent
+rimz agents claude -p "Summarize what changed on this branch."   # the claude -p you know
+rimz agents codex -p "Prepare the release checklist."            # the same grammar, any agent
 ```
 
-- **One grammar for every fully scripted adapter.** The same flags, exit codes, and output formats drive Claude, Codex, Amp, Pi, OpenCode, Droid, and Qwen; swapping the model behind a pipeline is a one-word change. (Kiro reports no hook for a cancelled or errored turn, so give `rimz agents kiro -p` a `--timeout`.)
-- **A pane instead of a headless process.** The turn runs the stock CLI in your room with a live card in the sidebar, so a scripted run is exactly as observable — and as steerable — as one you launched by hand ([a real agent, not a background job](#a-real-agent-not-a-background-job)).
+Two things have to be true before the first run. RimZ's reporting hooks must be installed and trusted for that agent, because the hook is how a run learns its turn ended; `rimz doctor` reports their state, and [set up your machine](./setup.md#install-agent-hooks) walks the one-time consent. And a Codex run needs a recorded directory-trust decision for the checkout: open `codex` there once and answer its trust prompt. RimZ refuses an unattended launch that would stop at that screen rather than granting the trust for you.
 
 ## What a run does on your machine
 
-`-p` adds no engine of its own; it sequences pieces this guide set already covers:
+`-p` adds no engine of its own. It sequences pieces RimZ already has, in this order:
 
-1. It checks pre-launch dollar gates and any exact managed-launch provider quota, then writes a durable run record — a JSON file under `~/.rimz/ws/<workspace-dir>/runs/` — before anything opens.
-2. It opens one pane in your Zellij or tmux (a split beside you when you run it inside the room, a new tab when the caller is outside it) running the official agent CLI with your prompt: the same launch as an interactive `rimz agents <kind>`, supervised until the work ends.
-3. It blocks until the agent's own reporting hooks say the work ended, keeping the run open across clean turn ends while a wait or child result is still owed. Hooks are the completion signal, which is why they are a [prerequisite](#prerequisites).
-4. It prints the answer, exits with the run's code, and closes the pane. The agent's session file stays where the CLI always puts it, so `claude --resume` and the provider's own apps keep working, and `rimz agents show` and `rimz transcript` read the run back after it ends.
+1. It checks the preconditions: the agent's hooks installed and trusted, Codex's directory trust, and the provider's command resolving on your `PATH` after your shell starts. A failure here stops the command before the multiplexer is touched.
+2. It checks your dollar caps and the provider account's quota window, then writes a durable run record, a JSON file under `~/.rimz/ws/<workspace-dir>/runs/`.
+3. It opens one pane in your Zellij or tmux running the agent's own CLI with your prompt: a split beside you when you run it inside the room, a new tab when the caller is outside it. This is the same launch as an interactive `rimz agents <kind>`.
+4. It blocks until the work ends, then prints the answer, exits with the run's code, and closes the pane.
 
-Nothing else moves: no daemon, no forked agent, no RimZ-private copy of the session. Ctrl+C cancels cleanly — exit `130`, agent stopped, pane reclaimed — and `rimz agents stop <ref>` does the same from any other pane. Add `--keep` to leave the finished pane open for inspection.
+Nothing else moves: no daemon, no forked agent, no RimZ-private copy of the session. The agent CLI writes its own session file where it always does, and `rimz agents show` and `rimz transcript` read the run back from the record after the pane is gone.
+
+Because it is the same launch, the flags you already use still apply. `--worktree` isolates the run's changes on their own branch, a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) or `--model`, `--effort`, and `--system-prompt-file` shape the turn, and [`rimz loop`](./loops.md) fires the same path on a clock.
+
+Ctrl+C on a blocking run cancels it cleanly: exit `130`, the agent stopped, the pane reclaimed. `rimz agents stop <name>` does the same from any other pane. `--keep` leaves the finished pane open for inspection, and the same `rimz agents stop` closes it when you have read enough.
 
 ## One run, one exit code
 
-`-p` (`--print`) is the whole contract: run until the work ends, print the answer to stdout, exit with the status code. A turn ending while a wake is still owed is not the end of the run.
+`-p` (`--print`) is the whole contract: run until the work ends, print the answer to stdout, exit with the status.
 
 | Code | Meaning |
 | --- | --- |
 | `0` | The run completed. |
 | `1` | The run failed. |
-| `123` | The run exhausted `--max-attempts` while its `--verify` command was still red. |
+| `2` | The run never started: RimZ rejected the command line, or a precondition failed. |
+| `123` | The run exhausted `--max-attempts` with its `--verify` command still red. |
 | `124` | The run hit its `--timeout`. |
-| `125` | The run reached its `--budget` or an exact managed-launch provider quota. |
-| `130` | The run was canceled (Ctrl+C on a blocking `-p`). |
+| `125` | A dollar cap or a spent provider quota window stopped it. |
+| `130` | The run was canceled, by Ctrl+C or `rimz agents stop`. |
+
+A few flag-combination refusals exit `1` rather than `2`, but either way nothing ran, no run record was written, and the reason is on stderr. Caps are the exception to the whole split: a cap exits `125` whether it refused the launch or stopped a turn already under way.
+
+On success, stdout carries the final assistant answer and nothing else, so it pipes cleanly. A failed, timed-out, or canceled run prints its status, the captured pane tail, and the transcript path on stderr, leaving stdout uncontaminated. Branch on the code first, then on the text:
 
 ```sh
-if rimz agents claude "Run the migration audit; reply PASS or FAIL." -p | grep -q PASS; then
-  echo "audit clean"
+if answer=$(rimz agents claude -p "Run the migration audit; reply PASS or FAIL."); then
+  case "$answer" in
+    PASS*) echo "audit clean" ;;
+    *)     echo "audit needs a human"; exit 1 ;;
+  esac
 else
-  echo "audit needs a human" && exit 1
+  echo "the run itself failed; see stderr"; exit 1
 fi
 ```
 
-On success, stdout is the final assistant answer and nothing else, so it pipes cleanly. A failed, timed-out, or canceled run prints its status, the captured pane tail, and the transcript path on stderr, keeping stdout uncontaminated for the happy path.
-
-**Cap the wall clock.** `--timeout` bounds the run and turns a wedged turn into exit `124` your wrapper can handle.
+**Cap the wall clock.** `--timeout` bounds the run and turns a wedged turn into exit `124` your wrapper can handle. Kiro needs one: it fires no hook for a cancelled or errored turn, so a `rimz agents kiro -p` run that goes wrong waits out its deadline instead of failing at `1`.
 
 ```sh
-rimz agents codex "Update dependencies and run the test suite." -p --timeout 30m
+rimz agents codex -p --timeout 30m "Update dependencies and run the test suite."
 ```
 
-**Cap the dollars.** `--budget 2` records `budget_exceeded` and exits `125`, distinct from a timeout or agent failure. A spent provider subscription quota exits `125` the same way, before the run record or the pane exists, so a script sees one code for "this run was not affordable" whichever limit stopped it. Both caps are the [budgets guide](./budget.md).
+**Cap the dollars.** `--budget 2` records the run as `budget_exceeded` and exits `125`, distinct from a timeout or an agent failure. A provider subscription whose quota window is already spent exits `125` the same way, before the run record or the pane exists, so a script reads one code for "this run was not affordable" whichever limit stopped it. Both caps are the [budgets guide](./budget.md).
 
-Two more flags, `--verify` and `--retries`, gate what counts as done and rerun what failed; they have [their own section below](#verify-and-retry).
+**Cap the turns.** `--max-turns <N>` bounds how many agentic turns the prompt gets, where the agent's CLI has a native limit for it. Claude, Grok, and Qwen have one today; any other agent refuses the flag rather than running unbounded.
 
-Long-running commands animate their current phase and elapsed time on an interactive stderr terminal. Set `RIMZ_NO_PROGRESS=1` to disable the status line everywhere; non-TTY stderr and RimZ-launched agent shells carrying `RIMZ_AGENT_KIND` disable it automatically.
+Two more flags, `--verify` and `--retries`, decide what counts as done and rerun what failed; they have [their own section below](#verify-and-retry).
 
 ## Feed the prompt in
 
-The positional prompt is the base, and `--stdin` appends stdin to it — so build output, a diff, or a log becomes context without a temp file.
+The positional prompt is the base, and `--stdin` appends stdin to it, so build output, a diff, or a log becomes context without a temp file.
 
 ```sh
-cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause'          # stdin folds in after the prompt
+cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause'
 git diff --staged | rimz agents codex -p --stdin 'review this diff; reply SHIP or HOLD'
 ```
 
-`--stdin` reads to EOF. When both a prompt and stdin are present, RimZ wraps the stdin bytes in `<stdin>…</stdin>` so the agent reads them as attached material. For a fully programmatic feed, `--input-format stream-json` reads user messages from stdin until EOF instead of taking a positional prompt; it already declares stdin as its source, so omit `--stdin`.
+`--stdin` reads to EOF. When both a prompt and stdin are present, RimZ puts the prompt first and wraps the stdin bytes in `<stdin>…</stdin>` so the agent reads them as attached material. For a fully programmatic feed, `--input-format stream-json` reads user messages from stdin until EOF. It names stdin as its prompt source, so it refuses both `--stdin` and a positional prompt alongside it.
 
-For a long brief, use `rimz agents codex -p --stdin < brief.md`, or `rimz subagents codex --prompt-file brief.md` from an agent. The complete launch prompt, including attached stdin and any subagent instructions RimZ adds, must fit within 120 KiB (122,880 bytes). Larger prompts fail before the agent pane opens; keep the brief short and ask the agent to read the larger file instead.
+For a long brief, redirect a file: `rimz agents codex -p --stdin < brief.md`. The complete launch prompt, including attached stdin and any instructions RimZ adds for the agent, must fit within 120 KiB (122,880 bytes). A larger prompt is refused before the run record is written, so keep the brief short and tell the agent to read the larger file itself.
 
 ## Shape the output
 
 `--output-format` chooses what `-p` prints, so the same run serves a human, a `jq` filter, or a live UI.
 
 ```sh
-rimz agents codex "Prepare the release checklist." -p --output-format json      # full run record as JSON
-rimz agents claude "Refactor the parser." -p --output-format stream-json        # NDJSON run events as they land
+rimz agents codex -p --output-format json "Prepare the release checklist."
+rimz agents claude -p --output-format stream-json "Refactor the parser."
 ```
 
 | Format | Prints | Use it for |
 | --- | --- | --- |
 | `text` (default) | the final assistant message | humans, and simple `grep`/`case` gates |
-| `json` | the full run record | parsing `run_id` (feeds `rimz transcript <run_id>`) and `transcript_path` (the provider-native session file) |
+| `json` | the full run record | reading `run_id` (which `rimz transcript <run_id>` opens) and `transcript_path` (the provider's own session file) |
 | `stream-json` | run events as newline-delimited JSON while the turn runs | a pipeline that wants progress rather than a final blob |
-
-Where the adapter exposes a native cap, `--max-turns <N>` bounds the agentic turn count (Claude today); an agent without one refuses the flag rather than running unbounded.
 
 ## Verify and retry
 
-An exit code tells you the turn ended; these two flags let the run prove the work and repair itself before your script ever sees a failure.
+An exit code tells you the turn ended. These two flags let the run prove the work and repair itself before your script ever sees a failure.
 
-**Verify the work.** `--verify <CMD>` runs a shell command in the run's working directory after each completed agent turn. A non-zero exit, signal, or timeout re-prompts the same live session with the command, status, and output tail, then waits for that session's next turn; `--max-attempts <N>` counts total agent turns and defaults to `3`. The verify command and every re-prompted wait use `--timeout` when set; without it, the command has a five-minute cap, and a timed-out verify is red. Exhausting the attempt cap records `verify_failed` and exits `123`.
-
-```sh
-rimz agents codex "Fix the failing auth test." -p --verify "cargo xtask test auth" --max-attempts 3
-```
-
-**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times and appends the previous attempt's captured pane tail to the original prompt in a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code.
+**Verify the work.** `--verify <CMD>` runs a shell command in the run's working directory after each completed agent turn. A non-zero exit, a signal, or a timeout re-prompts the same live session with the command, its status, and an output tail, then waits for that session's next turn. `--max-attempts <N>` counts total agent turns and defaults to `3`; exhausting it records `verify_failed` and exits `123`. The verify command runs under `--timeout` when you set one and under a five-minute cap otherwise, and a timed-out verify counts as red.
 
 ```sh
-rimz agents codex "Fix the failing checks." -p --retries 1 --timeout 30m
+rimz agents codex -p --verify "cargo xtask test auth" --max-attempts 3 "Fix the failing auth test."
 ```
 
-The two compose: verification repairs stay in the same session after a completed turn, while an agent turn that fails with exit `1` starts a fresh-session retry and resets the verify attempt count. Both need a blocking run, so both refuse `--bg` and `--output-format stream-json`; use `text` or `json` output and wait on the run. To verify work you started in the background, wait for it first and run the check on the result.
+**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times in a fresh session, appending the previous attempt's captured pane tail to the original prompt inside a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code.
 
-## A real agent, not a background job
+```sh
+rimz agents codex -p --retries 1 --timeout 30m "Fix the failing checks."
+```
 
-The pane `-p` opens runs the stock CLI exactly as if you had launched it yourself and pasted the prompt, and the room cannot tell the difference. So everything the room does with an agent, it does with a scripted run — who started the turn stops mattering the moment it starts.
+The two compose. A verification repair stays in the same session after a completed turn, while a turn that fails with exit `1` starts a fresh-session retry and resets the verify attempt count. Both need a blocking run, so both refuse `--bg` and `--output-format stream-json`; use `text` or `json` output. To verify work you started in the background, join it first and run the check on the result.
 
-**It asks, you answer.** A run that stops on a permission prompt or a real design question takes the room's normal waiting path: the row flips to `? waiting`, the cockpit counts it, a [notification handler](./notifications.md) fires. You answer in the agent's own UI — from the room, or over SSH from your phone — while the script stays blocked on the exit code. A failing migration at 3 a.m. becomes a push notification, a one-line answer, and a green pipeline by morning; the run never had to guess.
+## Answer and steer a run in flight
 
-**You steer it mid-turn.** The run answers to a handle like any agent, so `rimz message --steer` injects new instructions into a turn a cron job started, and `rimz agents show` or `logs -f` reads its progress from any pane. A drifting unattended run is a one-line correction, not a kill-and-retry.
+The pane `-p` opens runs the agent's own CLI in your room, as a fleet member with a card and a handle. So everything the room does with an agent, it does with a scripted run, and who started the turn stops mattering the moment it starts.
 
-**It works your harness.** `--worktree` isolates the run's changes on their own branch, a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) or `--model`/`--effort`/`--system-prompt-file` shapes the turn, [`rimz loop`](./loops.md) fires the same path on a clock, and the run messages your interactive agents — and is messaged by them — like any teammate.
+The permission mode decides how often the run stops to ask, and it is a per-run choice rendered into the agent's own flags. `-p` defaults to the provider's automatic-approval mode for routine actions, `--ask` keeps the native prompts so each one reaches you as a waiting row, and `--yolo` passes the bypass flag. An agent whose CLI has no flag for a mode launches unchanged: Pi and Amp take neither switch. The tradeoffs for an unattended run are in [Loops](./loops.md#the-permission-posture-for-unattended-runs) and [Security](./security.md).
 
-**It can wait without finishing.** An agent can arm `rimz wait` or launch children and end its turn while it waits. The supervised run stays `running`, its pane stays alive, and your script keeps waiting until the work ends. `rimz agents show` displays how long the run has been parked. If the wake is lost and nothing remains to wake it, the run fails with exit `1` and a reason beginning `parked on a wake that never arrived`; `--retries` can retry that failure. `--timeout` still bounds the run, including time spent parked.
+**It asks, you answer.** A run that stops on a permission prompt or a real design question takes the room's normal waiting path: the row flips to `? waiting`, the cockpit counts it, a [notification handler](./notifications.md) fires. You answer in the agent's own UI, from the room or over SSH from your phone, while the script stays blocked on the exit code. A failing migration at 3 a.m. becomes a push notification, a one-line answer, and a green pipeline by morning; the run never had to guess.
 
-Permissions are a per-run choice, rendered through the agent's own flags: `-p` defaults to the provider's auto-accept mode for routine actions, `--ask` keeps every native prompt (each one routes to you as a waiting row), and `--yolo` passes the provider's bypass flag. The tradeoffs are [Loops → the permission posture for unattended runs](./loops.md#the-permission-posture-for-unattended-runs) and [security.md](./security.md).
+**You steer it mid-turn.** The run answers to a handle like any agent, so `rimz message --steer @<name>` injects new instructions into a turn a cron job started, and `rimz agents show` or `rimz agents logs -f` reads its progress from any pane. A drifting unattended run is a one-line correction rather than a kill and a rerun.
+
+**It can wait without finishing.** An agent can arm a [`rimz wait`](./loops.md#wake-a-running-agent) or launch children of its own and end its turn while they run. The run stays open, its pane stays alive, and your script keeps blocking; `rimz agents show` reports how long it has been parked. If nothing is left that could wake it, the run fails with exit `1` and a reason beginning `parked on a wake that never arrived`, which `--retries` can retry. `--timeout` bounds the run either way, parked time included.
 
 ## Fire now, collect later
 
-For orchestration, decouple starting a run from waiting on it. `--bg` launches the supervised run and prints its agent name, returning immediately; `rimz agents wait` blocks on one or several names whenever you are ready.
+For orchestration, split starting a run from waiting on it. `--bg` launches the run, prints its agent name on stdout, and returns immediately; `rimz agents wait` blocks on one or several names whenever you are ready.
 
 ```sh
-name=$(rimz agents claude "Run the migration audit." -p --bg)   # returns now, prints e.g. swift-otter
+name=$(rimz agents claude -p --bg "Run the migration audit.")   # returns now, prints e.g. swift-otter
 # ... kick off other work ...
 rimz agents wait "$name" --stream                               # block on it, tailing the transcript
 ```
 
-- `rimz agents wait <ref>...` blocks until every named run lands; `--stream` tails one run's answer as it lands.
-- `rimz agents wait a b c --json` returns one labeled result map `{name: {status, exit, cost, transcript_path, last_message}}` after the join settles.
+A `<ref>` below is the printed name, a run id, or any [agent address](./messaging.md#address-an-agent), so one identity threads through every verb here; `rimz message` wants it as a handle, `@swift-otter`.
+
+- `rimz agents wait <ref>...` blocks until every named run lands, printing each answer under a `--- <name> ---` header. `--stream` tails one run's answer as it lands, and `--any` returns as soon as the first one finishes.
+- `rimz agents wait a b c --json` prints one result map, `{name: {status, exit, cost, transcript_path, last_message}}`, once the join settles.
 - `rimz agents show <ref>` reports a run's activity, context, and recent transcript.
 - `rimz agents stop <ref>` cancels a live run or closes its pane.
 
-A reference is the printed name, a run id, or any [agent address](./messaging.md#address-an-agent), so the same handle threads through `wait`, `show`, `stop`, and `message`. Every flag on these verbs is in the [agent-control reference](../reference/cli/agents.md).
+`wait --timeout` stops the waiting, not the run. It exits `124` with the run still going, which is the code a timed-out run exits with too, so a script that has to tell the two apart rereads the record with `rimz agents show`. Ending the run itself takes `rimz agents stop`. Every flag on these verbs is in the [agent control reference](../reference/cli/agents.md#supervised-runs--p).
+
+## In a pipeline
+
+**Refresh dependencies overnight from cron.** The worktree isolates the work; the exit code gates the notification.
+
+```sh
+# 02:00 nightly
+rimz agents codex -p --worktree=deps --timeout 4h \
+  "Update dependencies, run the full test suite, and open a PR. Stop and ask if a major version bumps." \
+  || notify-send "deps run needs a human"
+```
+
+**Gate a CI job on SHIP or HOLD.** The turn joins whatever room the runner attaches to, so a design question still reaches a human.
+
+```sh
+verdict=$(rimz agents claude -p "Review the canary metrics in ./metrics.json and reply SHIP or HOLD") || exit 1
+case "$verdict" in
+  SHIP*) exit 0 ;;
+  *)     echo "held: $verdict" >&2; exit 1 ;;
+esac
+```
+
+**Fan out, then join.** Start several background runs, each in its own worktree, and collect them by name.
+
+```sh
+for pkg in api web worker; do
+  rimz agents codex -p --bg --worktree="audit-$pkg" "Audit $pkg for the CVE and reply with the fix." >> runs.txt
+done
+rimz agents wait $(cat runs.txt)
+```
+
+**Race two providers.** Give each one its own worktree and let whichever finishes first win. `--any` prints the winner's answer under its header and leaves the loser running, so read the name from the JSON map, which holds only the run that won.
+
+```sh
+a=$(rimz agents claude -p --bg --worktree=race-claude "Fix the failing parser test.")
+b=$(rimz agents codex  -p --bg --worktree=race-codex  "Fix the failing parser test.")
+winner=$(rimz agents wait "$a" "$b" --any --json | jq -r 'keys[0]')
+if [ "$winner" = "$a" ]; then rimz agents stop "$b"; else rimz agents stop "$a"; fi
+```
+
+## Drive the room from a script
+
+A wrapper sometimes has to read or nudge a pane itself, and the commands that do it are the ones you already type by hand.
+
+- `rimz pane capture <ref>` reads a pane's visible text. Treat it as untrusted: match it against patterns your script controls, never act on whatever the terminal happened to print.
+- `rimz pane send <ref>` types literal text and named keys into the agent's own UI as a keyboard would, without the bracketed-paste wrapper a terminal paste adds, and it waits for any in-flight `rimz message` write to the same pane ([send text and keys](../reference/cli/pane.md#send-text-and-keys)).
+- `rimz message --steer @<name> "continue"` is the first-class nudge for wrapper scripts, and a plain `rimz message @<name> "open a PR summary"` hands follow-up work to a running agent at its next turn boundary. The full delivery model is [Messaging](./messaging.md).
+- `rimz transcript <ref>` reads back what happened as a timestamped log.
+
+Because these are public CLI, a wrapper composes them freely: read a prompt with `pane capture`, decide with a bounded matcher, answer with `pane send`, and escalate anything it does not recognize by leaving the row `? waiting` for you.
+
+A few of these commands, `rimz message --wait` and `rimz providers` among them, animate a status line while they work. It only ever reaches an interactive stderr terminal, so a redirected or piped stderr never sees it; `RIMZ_NO_PROGRESS=1` turns it off everywhere.
 
 ## Agents scripting agents
 
-`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. `rimz subagents` packages that path for a RimZ-launched agent: single launches and JSON fanouts run in the background by default, inherit the parent's launch checkout even when its shell has changed directories, and print petnames for a later join. Add `--wait` to either form to wait for its result. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The calling agent sees only commands and durable answers, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
+`rimz agents -p` is a plain shell command and agents have shell tools, so the caller does not have to be you. `rimz subagents` packages that path for an agent RimZ launched: one command, the parent's checkout and channel inherited even when its shell has changed directories, and a petname printed for a later join. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The caller sees only commands and durable answers, so its children mix providers freely, the same way a [team](./teams.md) does.
 
 ```sh
 # inside a planner turn: launch three bounded audits, then join all three
@@ -158,74 +213,17 @@ rimz subagents fanout --wait <<'JSON'
 JSON
 ```
 
-Each child gets its own deadline and durable run record. Pane opens serialize safely, but the audits run in parallel. By default the command returns the child names for a later `rimz subagents wait`; `--wait` prints each answer under a child-name header as it finishes and exits nonzero if any child fails. Once every child settles, RimZ sends the parent a status summary of results it has not collected inline or dismissed. A background join that finishes after the parent's turn ended still leaves its results for that summary, bringing the parent back to collect them ([The fleet report](../reference/cli/subagents.md#the-fleet-report)). The full task schema and timeout precedence are in the [`subagents` reference](../reference/cli/subagents.md#fan-out-a-task-list).
+Each child is a full agent: its own pane beside the parent's, a nested row in the sidebar, a durable run record and transcript that outlive the turn, its own deadline, and a question that routes to you instead of failing silently. Launches return at once and print petnames; RimZ opens the panes one at a time, but the children work in parallel. `--wait` on either form blocks instead and prints each answer under a `--- <petname> ---` header as it lands, exiting nonzero if any child failed. A parent that does not join gets one `SUBAGENT_REPORT` message from `@rimz` once every child has settled, which brings it back to collect the results ([the fleet report](../reference/cli/subagents.md#the-fleet-report)). The task schema, every flag, and where the panes open are in the [`subagents` reference](../reference/cli/subagents.md).
 
-To keep a team fanout readable, its children share a companion tab rather than one growing stack. RimZ opens two side-by-side columns first, then adds rows while balancing pane areas. Eight children fill a four-row, two-column grid; further children use numbered companion tabs, or move there earlier if the terminal is too small. The sidebar keeps its own column. Sizes are approximate on Zellij, and closing children does not trigger a full rearrangement. A solo agent still gets children beside its own pane, with companion tabs as fallback. Finished child panes normally close themselves; the final child takes its now-empty companion tab with it. Use `--keep` when you want the panes to remain for inspection.
-
-Compare that with an agent's built-in subagents, which run headless inside the parent's harness. A child launched through `rimz subagents` is a first-class member of your room: its own pane, a nested sidebar row, a transcript that outlives the turn, and a question that routes to you instead of failing silently. When the work needs controls that tailored doorway omits, such as `--stdin` or a separate worktree, use `rimz agents -p` directly. From inside an agent, that command starts an independent peer with its own card and counts against `[agents] max-chain-length`; join a background run later through `rimz agents wait <name>` rather than the caller's `rimz subagents` verbs. A background run you leave unjoined still reports back: it rides the same `SUBAGENT_REPORT` your subagents send once they have all settled. When the task belongs to a teammate that is already running, hand it over with [`rimz message`](./messaging.md) instead of spawning a fresh turn.
-
-## In a pipeline
-
-**Cron — refresh dependencies overnight and open a PR.** The worktree isolates the work; the exit code gates the notification.
-
-```sh
-# 02:00 nightly
-rimz agents codex --worktree=deps --timeout 4h -p \
-  "Update dependencies, run the full test suite, and open a PR. Stop and ask if a major version bumps." \
-  || notify-send "deps run needs a human"
-```
-
-**CI — a review gate that reads SHIP or HOLD.** The turn joins whatever room the runner attaches to, so a design question still reaches a human.
-
-```sh
-verdict=$(rimz agents claude -p "Review the canary metrics in ./metrics.json and reply SHIP or HOLD")
-case "$verdict" in
-  SHIP*) exit 0 ;;
-  *)     echo "held: $verdict" >&2; exit 1 ;;
-esac
-```
-
-**Fan out, then join.** Start several background runs, each in its own worktree, and collect them by name.
-
-```sh
-for pkg in api web worker; do
-  rimz agents codex --worktree="audit-$pkg" -p --bg "Audit $pkg for the CVE and reply with the fix." >> runs.txt
-done
-rimz agents wait $(cat runs.txt)
-```
-
-Race providers on isolated worktrees when the first finished result wins. `--any` prints that run's name and leaves the loser running for an explicit stop.
-
-```sh
-a=$(rimz agents claude --worktree=race-claude -p --bg "Fix the failing parser test.")
-b=$(rimz agents codex --worktree=race-codex -p --bg "Fix the failing parser test.")
-winner=$(rimz agents wait "$a" "$b" --any)
-if [ "$winner" = "$a" ]; then rimz agents stop "$b"; else rimz agents stop "$a"; fi
-```
-
-## Drive the room from a script
-
-The commands you type interactively are the same primitives a script calls, so anything you do at the keyboard runs on a schedule or in CI unchanged.
-
-- `rimz pane capture <ref>` reads a pane's visible text — untrusted terminal output your script matches against bounded patterns before acting on it.
-- `rimz pane send <ref>` types literal text and named keys into the agent's own UI, raw with no paste markers, and waits for any in-flight `rimz message` write to the same pane ([send text and keys](../reference/cli/pane.md#send-text-and-keys)).
-- `rimz message --steer @<agent> "continue"` is the first-class nudge for wrapper scripts; `rimz message @<agent> --on done "open a PR summary"` hands follow-up work to a running agent at its next turn boundary. The full delivery model is [Messaging](./messaging.md).
-- `rimz transcript <ref>` reads back what happened as a timestamped log.
-
-Because these are public CLI, a wrapper composes them freely: read a prompt with `pane capture`, decide with a bounded matcher, answer with `pane send`, and escalate anything it does not recognize by leaving the row `? waiting` for you.
-
-## Prerequisites
-
-Supervised runs need installed and trusted hooks, because hooks are the completion signal — a run with no hooks has no way to know its turn ended. `rimz doctor` confirms the hook state, and [Troubleshooting](./troubleshooting.md) covers a run that never completes. Installing hooks is a one-time consent step, walked in [set up your machine](./setup.md#install-agent-hooks).
-
-Codex also needs a recorded directory-trust decision before a supervised run: open `codex` interactively in the checkout once and answer its trust prompt. RimZ refuses unattended launches that would stop at that prompt; it never grants trust for you.
+Compare that with an agent's built-in subagents, which run headless inside the parent's harness and vanish with the turn. When the work needs a control that doorway omits, such as `--stdin`, `--verify`, or a separate worktree, the agent calls `rimz agents -p` directly. That starts an independent peer rather than a child: it gets its own card, it is joined with `rimz agents wait <name>` rather than the caller's `rimz subagents` verbs, and it counts toward the launch chain, which stops at three successive agent-started launches by default (`[agents] max-chain-length`). A background peer left unjoined still comes back in the fleet report. When the task belongs to a teammate that is already running, [`rimz message`](./messaging.md) hands it over instead of spawning a fresh turn.
 
 ## See also
 
-- [Loops and schedules](./loops.md) — put these runs on a clock: schedules, watchdogs, and self-waking agents.
-- [Notifications](./notifications.md) — the push routes and handlers that reach you when a run needs an answer.
-- [Messaging](./messaging.md) — the `--steer` / `--on done` delivery model wrappers lean on.
-- [Agents](./fleet.md) — the profile, handle, and layout vocabulary these examples use.
-- [Worktrees](./worktrees.md) — the isolated branches behind `--worktree` runs.
-- [Agent control CLI](../reference/cli/agents.md#supervised-runs--p) — every flag on `-p`, `wait`, `show`, `stop`, and `pane`.
-- [scripting.md](../internals/harness/scripting.md) — run records, the wakeup socket, streaming, and pane cleanup.
+- [Loops and schedules](./loops.md): put these runs on a clock: schedules, watchdogs, and self-waking agents.
+- [Notifications](./notifications.md): the push routes and handlers that reach you when a run needs an answer.
+- [Messaging](./messaging.md): the steer and park delivery model wrapper scripts lean on.
+- [Agents](./fleet.md): the profile, handle, and layout vocabulary these examples use.
+- [Worktrees](./worktrees.md): the isolated branches behind `--worktree` runs.
+- [Agent control CLI](../reference/cli/agents.md#supervised-runs--p): every flag on `-p`, `wait`, `show`, and `stop`.
+- [Subagents CLI](../reference/cli/subagents.md): the child launch surface in full: fields, flags, panes, and the fleet report.
+- [Supervised runs (internals)](../internals/harness/scripting.md): run records, the wake socket, streaming, and pane cleanup.
