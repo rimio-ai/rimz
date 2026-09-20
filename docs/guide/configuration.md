@@ -70,7 +70,7 @@ Two environment variables move the directory. `RIMZ_HOME` moves the whole home. 
 
 Everything RimZ keeps for itself across a reboot lives under the home: the config files at the top, `ws/<name>/` for each project's room state, `accounts/<kind>/<name>/` for the provider homes RimZ placed, and machine-wide `logs/`, `loops/`, `web/`, `builds/`, and `cache/`. What RimZ writes outside the home it writes into other programs' config: the reporting hooks `rimz hooks install` adds to each agent CLI, and the [skill links](#skills) a host launch makes in a provider's own skill directory.
 
-Two of those are worth knowing by name. `cache/` holds only what RimZ can rebuild: downloaded assets, the presence plugin, and the provider caches under `cache/providers/`. Deleting it costs a cold provider dashboard and one full spending walk, nothing more. `accounts/` holds provider logins with their credentials and transcripts, which nothing regenerates and no RimZ command removes.
+Two of those are worth knowing by name. `cache/` holds only what RimZ can rebuild: downloaded assets, the presence plugin, and the provider caches under `cache/providers/`. Deleting it costs a cold provider dashboard and one full spending walk, nothing more. `accounts/` holds provider account homes with their credentials and transcripts, which nothing regenerates and no RimZ command removes.
 
 Room files that only matter while the machine is up (sockets, locks, wakeup pipes) sit on tmpfs under `$XDG_RUNTIME_DIR/rimz/ws/<name>/`, or `/tmp/rimz-<uid>/rimz/ws/<name>/` without a runtime dir, and `~/.rimz/run` links there once a room is born. Panes, sandboxes, and hooks all inherit the `RIMZ_HOME` the room was born with.
 

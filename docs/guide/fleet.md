@@ -295,7 +295,7 @@ rimz agents planner --model opus --effort high --budget 5
 rimz agents planner --append-system-prompt-file ./local.md --append-system-prompt-file ./task.md
 ```
 
-A repeated `--append-system-prompt-file` keeps command-line order and replaces the profile's entire fragment list for that launch; fragments need a base `system-prompt-file`. `--effort` is passed to the provider's own effort flag without validation, so the levels are whatever that CLI accepts. `--budget 5` parks the agent when its session cost reaches $5 and `--budget 20/day` caps each local calendar day instead; the same dollar-cap model scales up to loop tasks, the room, and a provider login in the [budgets guide](./budget.md).
+A repeated `--append-system-prompt-file` keeps command-line order and replaces the profile's entire fragment list for that launch; fragments need a base `system-prompt-file`. `--effort` is passed to the provider's own effort flag without validation, so the levels are whatever that CLI accepts. `--budget 5` parks the agent when its session cost reaches $5 and `--budget 20/day` caps each local calendar day instead; the same dollar-cap model scales up to loop tasks, the room, and a provider account in the [budgets guide](./budget.md).
 
 To try a profile on a different provider without changing it, add `--agent`:
 
@@ -333,7 +333,7 @@ The same choice is `--ask` or `--yolo` on the command line, and the `mode` field
 - [Messaging](./messaging.md): reach agents by handle, and park, steer, schedule, and use channels.
 - [The sidebar](./sidebar.md): how the room reads the cards, worktrees, and teams you launch.
 - [Token Insight](./insight.md): fleet-wide token and dollar insight, the cockpit, the provider dashboard, and `rimz stats`.
-- [Budgets](./budget.md): dollar caps on an agent, a task, a room, or a provider login, and what a park means.
+- [Budgets](./budget.md): dollar caps on an agent, a task, a room, or a provider account, and what a park means.
 - [Scripting agents](./scripting.md): the same launcher as a supervised, exit-coded run (`-p`).
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams): where reusable profiles and teams live.
 - [Agent-control reference](../reference/cli/agents.md): the complete `rimz agents` surface.
