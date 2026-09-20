@@ -642,7 +642,7 @@ If the alert persists, see [troubleshooting](../guide/troubleshooting.md#the-sid
 
 ## Keys and mouse
 
-These keys work while the sidebar has focus. From any other pane, `Alt+p` focuses the sidebar, and pressing it again returns to the pane you left. `Alt+g` zooms the focused work pane to fullscreen and never zooms the sidebar. Both are set by `[sidebar] focus_key` and `zoom_key` ([configuration](../guide/configuration.md#sidebar-rendering)).
+These keys work while the sidebar has focus. From any other pane, `Alt+p` focuses the sidebar, and pressing it again returns to a work pane in the sidebar's tab: Zellij returns to the exact pane you left, and tmux takes the first work pane in that tab. `Alt+g` zooms the focused work pane to fullscreen and never zooms the sidebar. Both are set by `[sidebar] focus_key` and `zoom_key` ([configuration](../guide/configuration.md#sidebar-rendering)).
 
 | key | action |
 |-----|--------|
@@ -658,7 +658,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `m` | mark the selected card read or unread, without jumping |
 | `M` | mark every card read |
 | `←` / `→` | switch the dashboard tab |
-| `a` / `d` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#bottom-chrome)) |
+| `a` / `d` | make the sidebar one step narrower or wider in every tab of the room; the width holds through terminal resizes, reloads, and reattaches until the session ends ([width rules](../guide/sidebar.md#setting-the-width)) |
 | `r` | reload this tab's sidebar |
 | `x` | dismiss a recovered alert |
 | `?` | open the help overlay |
