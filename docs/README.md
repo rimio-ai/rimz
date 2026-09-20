@@ -7,7 +7,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 ## Getting started
 
 - [Introduction](../README.md): what RimZ is, what it does, and the everyday moves, with a runnable get-started block.
-- [Installation](./guide/installation.md): prerequisites and every install path (Homebrew, prebuilt binary, Cargo, source), verified with `rimz doctor`.
+- [Installation](./guide/installation.md): the install script, a current Zellij or tmux, and a clean `rimz doctor`, plus Homebrew, prebuilt archives, Cargo, source, Docker, updating, and uninstalling.
 - [Set up your machine](./guide/setup.md): the one-time pass that makes RimZ a daily driver, covering config init, agent hooks, true color, pets, and the hands-off loop settings.
 
 ## Working with agents
