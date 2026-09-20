@@ -418,6 +418,13 @@ mod tests {
     }
 
     #[test]
+    fn restart_reports_only_the_waits_no_registration_arms_again() {
+        assert_eq!(dropped_note(0), "");
+        assert_eq!(dropped_note(1), "; 1 armed wait dropped");
+        assert_eq!(dropped_note(3), "; 3 armed waits dropped");
+    }
+
+    #[test]
     fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
         let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
         agent.name = Some("otter".to_owned());
