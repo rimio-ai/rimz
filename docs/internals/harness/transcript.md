@@ -10,6 +10,8 @@ Hook and delivery paths append entries to fixed 7-day buckets (`FILE_DAYS`) at `
 
 Every transcript reader skips legacy paste fragments written by RimZ 0.4.3 and earlier: a `Prompt` with no `from` or `message_id` whose entire trimmed text is one `<pasted_content id="X">` or `</pasted_content id="X">` tag line. These are provider wrappers, not human prompts; genuine prompts containing a wrapper pair mid-text stay. The append-only files are not rewritten.
 
+The test is unconditional, not version-scoped: it applies to every entry read, including ones written after the adapter learned to peel the envelope. A prompt whose whole text is a single tag line is therefore indistinguishable from a fragment and is dropped as well, which in practice means only a human pasting the tag itself while discussing this behaviour. Matching a whole entry exactly is the narrowest form that is safe against text RimZ never normalized, and that residue is its accepted cost.
+
 Three nearby reads use other sources. Supervised-run streaming tails the provider-native transcript through the adapter-owned source ([scripting.md § Output and input projections](./scripting.md#output-and-input-projections)); the context and spend gauges read those same native stores ([model.md § Enrichment](../agents/model.md#enrichment)); and the message audit trail in the event log carries no text ([messaging.md § Storage and audit](./messaging.md#storage-and-audit)).
 
 ## Entry kinds
