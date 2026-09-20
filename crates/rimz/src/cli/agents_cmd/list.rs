@@ -9,7 +9,7 @@ use rimz::config::{GlyphRole, ThemeConfig};
 #[cfg(test)]
 use rimz::store::snapshot::{AgentCard, PaneAgent, RowCard, SidebarRow};
 use rimz::store::snapshot::{
-    AgentWorktreeGroup, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi,
+    AgentWorktreeGroup, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreeCi,
     WorktreePrState, group_live_agents_by_worktree,
 };
 use rimz::theme::theme_glyphs;
@@ -174,9 +174,9 @@ fn group_header_cells(
         // The projection decides which lanes carry CI at all, so draw what it gives.
         if let Some(ci) = pr.pr_ci {
             let (role, style) = match ci {
-                WorktreePrCi::Passing => (GlyphRole::WorktreeCiPassing, render::palette::good()),
-                WorktreePrCi::Pending => (GlyphRole::WorktreeCiPending, render::palette::warn()),
-                WorktreePrCi::Failing => (GlyphRole::WorktreeCiFailing, render::palette::alarm()),
+                WorktreeCi::Passing => (GlyphRole::WorktreeCiPassing, render::palette::good()),
+                WorktreeCi::Pending => (GlyphRole::WorktreeCiPending, render::palette::warn()),
+                WorktreeCi::Failing => (GlyphRole::WorktreeCiFailing, render::palette::alarm()),
             };
             cells.push(render::cell(glyph(role)).fg(style));
         }
@@ -481,7 +481,7 @@ mod tests {
             Some(PrInfo {
                 number: Some(91),
                 state: WorktreePrState::Open,
-                ci: Some(WorktreePrCi::Passing),
+                ci: Some(WorktreeCi::Passing),
             })
         );
         assert_eq!(agent_pr(&snapshot, &snapshot.agents[1]), None);

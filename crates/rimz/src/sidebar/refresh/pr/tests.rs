@@ -95,7 +95,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
             state: WorktreePrState::Merged,
             number: Some(80),
             url: None,
-            ci: Some(WorktreePrCi::Failing),
+            ci: Some(WorktreeCi::Failing),
             merge_sha: Some("terminal-sha".to_owned()),
         },
     );
@@ -119,7 +119,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
             state: WorktreePrState::Merged,
             number: Some(79),
             url: None,
-            ci: Some(WorktreePrCi::Pending),
+            ci: Some(WorktreeCi::Pending),
             merge_sha: Some("pending-sha".to_owned()),
         },
     );
@@ -143,7 +143,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
             state: WorktreePrState::Open,
             number: Some(81),
             url: None,
-            ci: Some(WorktreePrCi::Pending),
+            ci: Some(WorktreeCi::Pending),
             merge_sha: None,
         },
     );
@@ -182,7 +182,7 @@ fn tea_assign_states_handles_open_terminal_transition_closed_and_absent() {
             state: WorktreePrState::Merged,
             number: Some(80),
             url: Some("https://gitea.example.test/org/repo/pulls/80".to_owned()),
-            ci: Some(WorktreePrCi::Failing),
+            ci: Some(WorktreeCi::Failing),
             merge_sha: Some("terminal-sha".to_owned()),
         })
     );
@@ -314,7 +314,7 @@ fn prior_links_do_not_cross_managed_worktree_incarnations() {
                 state: WorktreePrState::Merged,
                 number: Some(40),
                 url: None,
-                ci: Some(WorktreePrCi::Passing),
+                ci: Some(WorktreeCi::Passing),
                 merge_sha: Some("merge-40".to_owned()),
             },
         ),
@@ -377,7 +377,7 @@ fn trunk_targets_never_attach_pr_links() {
             state: WorktreePrState::Open,
             number: Some(91),
             url: None,
-            ci: Some(WorktreePrCi::Passing),
+            ci: Some(WorktreeCi::Passing),
             merge_sha: None,
         },
     )]);
@@ -475,7 +475,7 @@ fn github_projection_refreshes_pr_and_branch_verdicts_from_one_response() {
                 number: 10,
                 state: WorktreePrState::Open,
                 created_at: None,
-                head_ci: Some(WorktreePrCi::Pending),
+                head_ci: Some(WorktreeCi::Pending),
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -483,23 +483,23 @@ fn github_projection_refreshes_pr_and_branch_verdicts_from_one_response() {
                 number: 11,
                 state: WorktreePrState::Merged,
                 created_at: None,
-                head_ci: Some(WorktreePrCi::Failing),
+                head_ci: Some(WorktreeCi::Failing),
                 merge_sha: Some("merge-11".to_owned()),
-                merge_ci: Some(WorktreePrCi::Passing),
+                merge_ci: Some(WorktreeCi::Passing),
             }),
             Some(forge::GhBulkPr {
                 number: 12,
                 state: WorktreePrState::Merged,
                 created_at: None,
-                head_ci: Some(WorktreePrCi::Passing),
+                head_ci: Some(WorktreeCi::Passing),
                 merge_sha: Some("merge-12".to_owned()),
-                merge_ci: Some(WorktreePrCi::Failing),
+                merge_ci: Some(WorktreeCi::Failing),
             }),
             Some(forge::GhBulkPr {
                 number: 13,
                 state: WorktreePrState::Closed,
                 created_at: None,
-                head_ci: Some(WorktreePrCi::Failing),
+                head_ci: Some(WorktreeCi::Failing),
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -508,39 +508,39 @@ fn github_projection_refreshes_pr_and_branch_verdicts_from_one_response() {
                 number: 14,
                 state: WorktreePrState::Merged,
                 created_at: None,
-                head_ci: Some(WorktreePrCi::Passing),
+                head_ci: Some(WorktreeCi::Passing),
                 merge_sha: Some("merge-14".to_owned()),
                 merge_ci: None,
             }),
         ],
         commits: vec![
-            Some(WorktreePrCi::Failing),
-            Some(WorktreePrCi::Failing),
-            Some(WorktreePrCi::Passing),
-            Some(WorktreePrCi::Passing),
-            Some(WorktreePrCi::Passing),
-            Some(WorktreePrCi::Pending),
-            Some(WorktreePrCi::Failing),
+            Some(WorktreeCi::Failing),
+            Some(WorktreeCi::Failing),
+            Some(WorktreeCi::Passing),
+            Some(WorktreeCi::Passing),
+            Some(WorktreeCi::Passing),
+            Some(WorktreeCi::Pending),
+            Some(WorktreeCi::Failing),
         ],
     };
 
     let (states, branch_ci) = project_github_group(&group, &[(plan, response)]);
 
-    assert_eq!(states["/repo/open"].ci, Some(WorktreePrCi::Pending));
+    assert_eq!(states["/repo/open"].ci, Some(WorktreeCi::Pending));
     assert_eq!(
         states["/repo/merged-now-passing"].ci,
-        Some(WorktreePrCi::Passing),
+        Some(WorktreeCi::Passing),
         "a prior failing verdict is replaced by the fresh merge rollup"
     );
     assert_eq!(
         states["/repo/merged-now-failing"].ci,
-        Some(WorktreePrCi::Failing),
+        Some(WorktreeCi::Failing),
         "a prior passing verdict is replaced by the fresh merge rollup"
     );
     assert_eq!(states["/repo/closed"].ci, None);
     assert_eq!(
         states["/repo/merged-fallback"].ci,
-        Some(WorktreePrCi::Passing)
+        Some(WorktreeCi::Passing)
     );
     assert_eq!(
         states["/repo/merged-fallback"].merge_sha.as_deref(),
@@ -551,8 +551,8 @@ fn github_projection_refreshes_pr_and_branch_verdicts_from_one_response() {
     assert_eq!(
         branch_ci,
         BTreeMap::from([
-            ("/repo/main".to_owned(), WorktreePrCi::Pending),
-            ("/repo/no-pr".to_owned(), WorktreePrCi::Passing),
+            ("/repo/main".to_owned(), WorktreeCi::Pending),
+            ("/repo/no-pr".to_owned(), WorktreeCi::Passing),
         ])
     );
 }
@@ -580,7 +580,7 @@ fn github_projection_rejects_terminal_prs_from_an_old_incarnation() {
                 created_at: Some(old_pr_created_at),
                 head_ci: None,
                 merge_sha: Some("merge-10".to_owned()),
-                merge_ci: Some(WorktreePrCi::Passing),
+                merge_ci: Some(WorktreeCi::Passing),
             }),
             Some(forge::GhBulkPr {
                 number: 11,
@@ -588,13 +588,13 @@ fn github_projection_rejects_terminal_prs_from_an_old_incarnation() {
                 created_at: Some(old_pr_created_at),
                 head_ci: None,
                 merge_sha: Some("merge-11".to_owned()),
-                merge_ci: Some(WorktreePrCi::Passing),
+                merge_ci: Some(WorktreeCi::Passing),
             }),
             Some(forge::GhBulkPr {
                 number: 12,
                 state: WorktreePrState::Open,
                 created_at: Some(old_pr_created_at),
-                head_ci: Some(WorktreePrCi::Pending),
+                head_ci: Some(WorktreeCi::Pending),
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -607,16 +607,13 @@ fn github_projection_rejects_terminal_prs_from_an_old_incarnation() {
                 merge_ci: None,
             }),
         ],
-        commits: vec![Some(WorktreePrCi::Failing); 4],
+        commits: vec![Some(WorktreeCi::Failing); 4],
     };
 
     let (states, branch_ci) = project_github_group(&group, &[(plan, response)]);
 
     assert!(!states.contains_key("/repo/rejected"));
-    assert_eq!(
-        branch_ci.get("/repo/rejected"),
-        Some(&WorktreePrCi::Failing)
-    );
+    assert_eq!(branch_ci.get("/repo/rejected"), Some(&WorktreeCi::Failing));
     assert_eq!(states["/repo/from-pr"].incarnation, Some(marker_created_at));
     assert_eq!(states["/repo/open"].incarnation, Some(marker_created_at));
     assert_eq!(states["/repo/markerless"].incarnation, None);
@@ -636,11 +633,11 @@ fn github_group_failure_carries_complete_prior_truth() {
             state: WorktreePrState::Merged,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(WorktreePrCi::Failing),
+            ci: Some(WorktreeCi::Failing),
             merge_sha: Some("merge-sha".to_owned()),
         },
     )]);
-    let prior_branch_ci = BTreeMap::from([("/repo/no-pr".to_owned(), WorktreePrCi::Passing)]);
+    let prior_branch_ci = BTreeMap::from([("/repo/no-pr".to_owned(), WorktreeCi::Passing)]);
 
     let probe = failed_repo_group_probe("gh:github.com:org/repo", &group, &prior, &prior_branch_ci);
 
@@ -773,7 +770,7 @@ fn legacy_cache_defaults_and_leaves_repos_due() {
 #[test]
 fn branch_ci_cache_round_trips_and_defaults_for_old_files() {
     let cache = PrStateCache {
-        branch_ci: BTreeMap::from([("/repo/main".to_owned(), WorktreePrCi::Passing)]),
+        branch_ci: BTreeMap::from([("/repo/main".to_owned(), WorktreeCi::Passing)]),
         ..PrStateCache::default()
     };
     let encoded = serde_json::to_vec(&cache).unwrap();
@@ -862,7 +859,7 @@ fn pending_ci_keeps_repo_on_hot_ttl() {
                 state,
                 number: Some(91),
                 url: None,
-                ci: Some(WorktreePrCi::Pending),
+                ci: Some(WorktreeCi::Pending),
                 merge_sha: (state == WorktreePrState::Merged).then(|| "merged-sha".to_owned()),
             },
         );
@@ -887,7 +884,7 @@ fn pending_ci_keeps_repo_on_hot_ttl() {
     cache.states.clear();
     cache
         .branch_ci
-        .insert(needed[0].clone(), WorktreePrCi::Pending);
+        .insert(needed[0].clone(), WorktreeCi::Pending);
     assert!(
         cached_due_repo_keys(
             &cache,
@@ -1005,7 +1002,7 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
     );
     cache
         .branch_ci
-        .insert("/repo/a".to_owned(), WorktreePrCi::Passing);
+        .insert("/repo/a".to_owned(), WorktreeCi::Passing);
     cache
         .path_repos
         .insert("/repo/a".to_owned(), "gh:github.com:org/repo".to_owned());
@@ -1061,8 +1058,8 @@ fn unsupported_reconcile_drops_state_and_marks_head_seen() {
 fn reconcile_prunes_stale_branch_ci_paths() {
     let cache = PrStateCache {
         branch_ci: BTreeMap::from([
-            ("/repo/a".to_owned(), WorktreePrCi::Passing),
-            ("/repo/stale".to_owned(), WorktreePrCi::Failing),
+            ("/repo/a".to_owned(), WorktreeCi::Passing),
+            ("/repo/stale".to_owned(), WorktreeCi::Failing),
         ]),
         ..PrStateCache::default()
     };
@@ -1077,7 +1074,7 @@ fn reconcile_prunes_stale_branch_ci_paths() {
 
     assert_eq!(
         cache.branch_ci,
-        BTreeMap::from([("/repo/a".to_owned(), WorktreePrCi::Passing)])
+        BTreeMap::from([("/repo/a".to_owned(), WorktreeCi::Passing)])
     );
 }
 

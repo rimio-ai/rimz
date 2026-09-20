@@ -9,7 +9,7 @@ use super::list::{
 };
 use rimz::config::Isolation;
 use rimz::harness::schedule::run_log::LoopRunResult;
-use rimz::store::snapshot::{WorktreePrCi, WorktreePrState};
+use rimz::store::snapshot::{WorktreeCi, WorktreePrState};
 
 pub(super) fn run(
     name: Option<&str>,
@@ -262,9 +262,9 @@ fn pr_facts(pr: &PrReport) -> Vec<(String, anstyle::Style)> {
     }
     if let Some(ci) = pr.ci {
         let label = match ci {
-            WorktreePrCi::Passing => "passing",
-            WorktreePrCi::Pending => "pending",
-            WorktreePrCi::Failing => "failing",
+            WorktreeCi::Passing => "passing",
+            WorktreeCi::Pending => "pending",
+            WorktreeCi::Failing => "failing",
         };
         facts.push((format!("ci {label}"), ci_style(ci)));
     }
@@ -582,7 +582,7 @@ mod tests {
         instance.pr = Some(super::super::list::PrReport {
             number: Some(412),
             state: Some(WorktreePrState::Open),
-            ci: Some(WorktreePrCi::Passing),
+            ci: Some(WorktreeCi::Passing),
             url: Some("https://example.com/pull/412".into()),
         });
         instance.memory = vec![super::super::list::MemoryReport {
@@ -664,7 +664,7 @@ mod tests {
         idle.pr = Some(super::super::list::PrReport {
             number: Some(412),
             state: Some(WorktreePrState::Open),
-            ci: Some(WorktreePrCi::Failing),
+            ci: Some(WorktreeCi::Failing),
             url: Some("https://example.com/pull/412".into()),
         });
         insta::assert_snapshot!(rendered(&report(vec![live_instance(), idle]), None));

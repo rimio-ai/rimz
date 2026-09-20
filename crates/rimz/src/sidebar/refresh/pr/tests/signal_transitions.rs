@@ -15,8 +15,8 @@ fn open_pr_emits_only_its_terminal_transition() {
         (WorktreePrState::Merged, "pr.merged"),
         (WorktreePrState::Closed, "pr.closed"),
     ] {
-        let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
-        let next = pr_cache(state, Some(WorktreePrCi::Pending));
+        let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
+        let next = pr_cache(state, Some(WorktreeCi::Pending));
 
         let signals = production_transitions(&prior, &next);
         let (name, payload) = &signals[0];
@@ -42,10 +42,10 @@ fn open_pr_emits_only_its_terminal_transition() {
 #[test]
 fn pending_ci_emits_passed_and_failed_signals() {
     for (ci, name) in [
-        (WorktreePrCi::Passing, "ci.passed"),
-        (WorktreePrCi::Failing, "ci.failed"),
+        (WorktreeCi::Passing, "ci.passed"),
+        (WorktreeCi::Failing, "ci.failed"),
     ] {
-        let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
+        let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
         let next = pr_cache(WorktreePrState::Open, Some(ci));
 
         let signals = production_transitions(&prior, &next);
@@ -59,9 +59,9 @@ fn pending_ci_emits_passed_and_failed_signals() {
 
 #[test]
 fn changed_final_ci_on_a_new_head_emits_again() {
-    let mut prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Passing));
+    let mut prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Passing));
     prior.head_seen.insert(PATH.to_owned(), "head-1".to_owned());
-    let next = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Failing));
+    let next = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Failing));
 
     let signals = production_transitions(&prior, &next);
     let (_, payload) = &signals[0];
@@ -73,8 +73,8 @@ fn changed_final_ci_on_a_new_head_emits_again() {
 
 #[test]
 fn terminal_pr_and_finished_ci_emit_both_transitions() {
-    let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
-    let next = pr_cache(WorktreePrState::Merged, Some(WorktreePrCi::Passing));
+    let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
+    let next = pr_cache(WorktreePrState::Merged, Some(WorktreeCi::Passing));
 
     let signals = production_transitions(&prior, &next);
 
@@ -83,14 +83,14 @@ fn terminal_pr_and_finished_ci_emit_both_transitions() {
 
 #[test]
 fn first_sight_reset_and_failed_probe_carry_forward_emit_nothing() {
-    let next = pr_cache(WorktreePrState::Merged, Some(WorktreePrCi::Passing));
+    let next = pr_cache(WorktreePrState::Merged, Some(WorktreeCi::Passing));
     assert!(production_transitions(&PrStateCache::default(), &next).is_empty());
 
-    let mut reset = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
+    let mut reset = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
     reset.target_seen.clear();
     assert!(production_transitions(&reset, &next).is_empty());
 
-    let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
+    let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
     let mut carried = prior.clone();
     carried.repos.get_mut(REPO).unwrap().ok = false;
     assert!(production_transitions(&prior, &carried).is_empty());
@@ -102,9 +102,9 @@ fn first_sight_reset_and_failed_probe_carry_forward_emit_nothing() {
 
 #[test]
 fn transitions_require_branch_and_incarnation_continuity() {
-    let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
+    let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
 
-    let mut changed_branch = pr_cache(WorktreePrState::Merged, Some(WorktreePrCi::Passing));
+    let mut changed_branch = pr_cache(WorktreePrState::Merged, Some(WorktreeCi::Passing));
     changed_branch.target_seen.get_mut(PATH).unwrap().branch = "other".to_owned();
     changed_branch.states.get_mut(PATH).unwrap().branch = Some("other".to_owned());
     assert!(
@@ -112,7 +112,7 @@ fn transitions_require_branch_and_incarnation_continuity() {
         "branch reuse must not replay the old worktree's terminal state"
     );
 
-    let mut changed_incarnation = pr_cache(WorktreePrState::Merged, Some(WorktreePrCi::Passing));
+    let mut changed_incarnation = pr_cache(WorktreePrState::Merged, Some(WorktreeCi::Passing));
     let incarnation = jiff::Timestamp::from_second(2_000).unwrap();
     changed_incarnation
         .target_seen
@@ -133,12 +133,9 @@ fn transitions_require_branch_and_incarnation_continuity() {
 #[test]
 fn branch_only_ci_uses_cached_target_continuity() {
     let mut prior = base_cache();
-    prior
-        .branch_ci
-        .insert(PATH.to_owned(), WorktreePrCi::Pending);
+    prior.branch_ci.insert(PATH.to_owned(), WorktreeCi::Pending);
     let mut next = base_cache();
-    next.branch_ci
-        .insert(PATH.to_owned(), WorktreePrCi::Passing);
+    next.branch_ci.insert(PATH.to_owned(), WorktreeCi::Passing);
 
     let signals = production_transitions(&prior, &next);
     let (_, payload) = &signals[0];
@@ -163,8 +160,7 @@ fn branch_only_ci_uses_cached_target_continuity() {
 fn tracked_none_to_final_ci_emits_but_identical_final_ci_does_not() {
     let prior = base_cache();
     let mut next = base_cache();
-    next.branch_ci
-        .insert(PATH.to_owned(), WorktreePrCi::Failing);
+    next.branch_ci.insert(PATH.to_owned(), WorktreeCi::Failing);
     assert_eq!(
         signal_names(&production_transitions(&prior, &next)),
         vec!["ci.failed"]
@@ -196,13 +192,12 @@ fn checks_urls_use_remote_slug_and_observed_head() {
         for with_pr in [true, false] {
             let (prior, mut next) = if with_pr {
                 (
-                    pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending)),
-                    pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Failing)),
+                    pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending)),
+                    pr_cache(WorktreePrState::Open, Some(WorktreeCi::Failing)),
                 )
             } else {
                 let mut next = base_cache();
-                next.branch_ci
-                    .insert(PATH.to_owned(), WorktreePrCi::Failing);
+                next.branch_ci.insert(PATH.to_owned(), WorktreeCi::Failing);
                 (base_cache(), next)
             };
             let signals = super::super::transitions::transitions(&prior, &next, &groups);
@@ -220,8 +215,8 @@ fn checks_urls_use_remote_slug_and_observed_head() {
             }
         }
     }
-    let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
-    let next = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Failing));
+    let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
+    let next = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Failing));
     let signals = super::super::transitions::transitions(&prior, &next, &BTreeMap::new());
     let (_, payload) = &signals[0];
     assert!(!payload.contains_key("checks_url"));
@@ -238,8 +233,8 @@ fn target_stamps_round_trip_with_the_cache() {
 
 #[test]
 fn forge_signal_argv_keeps_root_name_and_payload_as_distinct_values() {
-    let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
-    let next = pr_cache(WorktreePrState::Closed, Some(WorktreePrCi::Pending));
+    let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
+    let next = pr_cache(WorktreePrState::Closed, Some(WorktreeCi::Pending));
     let (name, expected_payload) = production_transitions(&prior, &next).remove(0);
 
     let args = transition_argv(Path::new("/project with spaces"), name, &expected_payload);
@@ -274,7 +269,7 @@ fn signal_names(signals: &[(&'static str, Map<String, Value>)]) -> Vec<&'static 
     signals.iter().map(|(name, _)| *name).collect()
 }
 
-fn pr_cache(state: WorktreePrState, ci: Option<WorktreePrCi>) -> PrStateCache {
+fn pr_cache(state: WorktreePrState, ci: Option<WorktreeCi>) -> PrStateCache {
     let mut cache = base_cache();
     cache.states.insert(
         PATH.to_owned(),

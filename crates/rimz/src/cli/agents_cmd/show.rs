@@ -549,9 +549,9 @@ pub(super) fn format_pr_info(pr: PrInfo) -> String {
         .map(|number| format!("#{number} "))
         .unwrap_or_default();
     let ci = pr.ci.map(|ci| match ci {
-        rimz::store::snapshot::WorktreePrCi::Pending => " · ci pending",
-        rimz::store::snapshot::WorktreePrCi::Passing => " · ci passing",
-        rimz::store::snapshot::WorktreePrCi::Failing => " · ci failing",
+        rimz::store::snapshot::WorktreeCi::Pending => " · ci pending",
+        rimz::store::snapshot::WorktreeCi::Passing => " · ci passing",
+        rimz::store::snapshot::WorktreeCi::Failing => " · ci failing",
     });
     format!("{number}{state}{}", ci.unwrap_or_default())
 }

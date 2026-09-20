@@ -1859,7 +1859,7 @@ mod render {
             Some(super::report::PrInfo {
                 number: Some(91),
                 state: rimz::store::snapshot::WorktreePrState::Open,
-                ci: Some(rimz::store::snapshot::WorktreePrCi::Failing),
+                ci: Some(rimz::store::snapshot::WorktreeCi::Failing),
             }),
             &peers,
             None,

@@ -60,12 +60,13 @@ pub(crate) enum Component {
     WorktreePrOpen,
     /// A closed, unmerged pull request for the worktree branch — alarm verdict.
     WorktreePrClosed,
-    /// A passing open pull request's CI verdict — success tone.
-    PrCiPassing,
-    /// A still-running open pull request's CI verdict — warning tone.
-    PrCiPending,
-    /// A failing open pull request's CI verdict — alarm tone.
-    PrCiFailing,
+    /// A passing CI verdict for the worktree — the trunk's branch CI, or the
+    /// branch's open or merged pull request — success tone.
+    WorktreeCiPassing,
+    /// A still-running CI verdict for the worktree — warning tone.
+    WorktreeCiPending,
+    /// A failing CI verdict for the worktree — alarm tone.
+    WorktreeCiFailing,
     /// The `◌` cache-read token marker.
     CacheRead,
     /// The `W:`/`M:` timeframe label on a store row.
@@ -131,9 +132,9 @@ impl Component {
         Component::WorktreeReconciling,
         Component::WorktreePrOpen,
         Component::WorktreePrClosed,
-        Component::PrCiPassing,
-        Component::PrCiPending,
-        Component::PrCiFailing,
+        Component::WorktreeCiPassing,
+        Component::WorktreeCiPending,
+        Component::WorktreeCiFailing,
         Component::CacheRead,
         Component::StoreLabel,
         Component::TokenTotal,
@@ -165,13 +166,15 @@ impl Component {
             LaneSpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
             WorktreePristine | WindowSmall => palette.faint,
-            ProcMem | CacheRead | RemoteControl | PrCiPassing | PipelinePassed => palette.good,
-            WorktreeReconciling | Compaction | PrCiPending => palette.warn,
+            ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
+                palette.good
+            }
+            WorktreeReconciling | Compaction | WorktreeCiPending => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }
             TeamLabel | SubagentHeader | WaitHeader | ProcIo | CacheWrite => palette.meta,
-            RemoteControlDown | WorktreePrClosed | PrCiFailing => palette.alarm,
+            RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
             WorktreeQualifier | WorktreeMerged | WindowMedium => palette.muted,
         })

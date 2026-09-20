@@ -4,7 +4,7 @@ use rimz::ids::LinkTier;
 use rimz::store::snapshot::{
     AgentCard, ProcessCard, ProcessState, RemoteControlBadge, RowCard, SNAPSHOT_VERSION,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
-    SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi,
+    SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreeCi,
     WorktreePrState, WorktreeTrunkSync,
 };
 use std::path::PathBuf;
@@ -94,7 +94,7 @@ struct WorktreeGroupSpec {
     landed: Option<bool>,
     trunk_sync: Option<WorktreeTrunkSync>,
     pr_state: Option<WorktreePrState>,
-    pr_ci: Option<WorktreePrCi>,
+    pr_ci: Option<WorktreeCi>,
     pr_number: Option<u64>,
 }
 
@@ -552,7 +552,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreePrCi::Pending),
+            pr_ci: Some(WorktreeCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -591,7 +591,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_behind: Some(1),
             trunk_sync: Some(WorktreeTrunkSync::Reconciling),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreePrCi::Failing),
+            pr_ci: Some(WorktreeCi::Failing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -994,7 +994,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_behind: Some(0),
             trunk_sync: Some(WorktreeTrunkSync::Diverged),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreePrCi::Passing),
+            pr_ci: Some(WorktreeCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1018,7 +1018,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreePrCi::Pending),
+            pr_ci: Some(WorktreeCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1327,7 +1327,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreePrCi::Passing),
+            pr_ci: Some(WorktreeCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1350,7 +1350,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreePrCi::Pending),
+            pr_ci: Some(WorktreeCi::Pending),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
@@ -1684,7 +1684,7 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_ahead: Some(1),
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
-            pr_ci: Some(WorktreePrCi::Passing),
+            pr_ci: Some(WorktreeCi::Passing),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
         },
