@@ -1434,7 +1434,7 @@ fn ref_resolves(cwd: &Path, name: &str) -> bool {
     .is_ok()
 }
 
-pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> LandedVerdict {
+pub(crate) fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> LandedVerdict {
     let Some(ancestry_count) = rev_list_count(cwd, &format!("{comparison_ref}..{head_ref}")) else {
         return LandedVerdict::Unknown;
     };
@@ -1540,7 +1540,7 @@ pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Lande
 /// tracked the trunk by fresh fork, rebase onto a newer trunk, or fast-forward.
 /// Landed side-branch tips stay off this lineage. Scan capped at
 /// `LANDED_BASE_SCAN_CAP`.
-pub fn on_trunk_first_parent(cwd: &Path, trunk: &str, head: &str) -> bool {
+pub(crate) fn on_trunk_first_parent(cwd: &Path, trunk: &str, head: &str) -> bool {
     let cap = LANDED_BASE_SCAN_CAP.to_string();
     let Ok(commits) = git_stdout(
         cwd,
