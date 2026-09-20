@@ -1409,12 +1409,16 @@ impl AgentState {
     /// markers cover native dialogs without inventing a durable ask record.
     /// A keyed open ask waits for its durable completion edge because parallel
     /// sibling tools also touch activity. Newer activity self-clears keyless
-    /// and derived asks.
+    /// and derived asks. A durable ask holds only while the row still owns its
+    /// turn, so a provider interruption marker releases it keyed or not: Esc
+    /// cancels a native prompt without firing any hook, and the row the
+    /// sidebar already shows as `idle` must not reserve pane input.
     pub fn is_awaiting_input(&self) -> bool {
         matches!(
             settled_outcome(self.status, self.context.as_ref(), self.last_activity),
             Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
         ) || (self.status == AgentStatus::Waiting
+            && self.holds_open_turn()
             && (self
                 .open_ask
                 .as_ref()
