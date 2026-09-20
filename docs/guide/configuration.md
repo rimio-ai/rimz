@@ -507,7 +507,7 @@ Three rules decide whether a list loads. It requires the `Skill` tool, except on
 
 Host mode ignores every `skills` list, `[]` included, and linked skills use the provider's native discovery and invocation. In sandbox mode, Antigravity, Amp, OpenCode, Kiro, Grok, and plugins refuse a list outright; remove the field to launch them. Changing a trusted project's skill list means granting trust again. The provider-by-provider table is [agent support](../reference/agent-support.md), and the mount order and markers are in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 
-An unlisted skill RimZ cannot prepare for the user-only view, because its source is unreadable or its metadata will not rewrite, is left out of that agent's launch and the pane says so at startup. The installed skill is untouched and every other skill stays available. Listing that skill binds it exactly as installed, which is one way around the problem; the others are in [troubleshooting](./troubleshooting.md).
+An unlisted skill RimZ cannot prepare for the user-only view, because its source is unreadable or its metadata will not rewrite, is left out of that agent's launch and the pane says so at startup. The installed skill is untouched and every other skill stays available. The rewriter takes block mappings and block sequences with no anchors, aliases, or tags; inline lists and mappings work as values when they open and close on one line, quoted values stay on one line, and a multiline description needs a block scalar. Listing the skill binds it exactly as installed and skips the rewrite altogether ([the startup warning](./troubleshooting.md#an-agent-pane-says-starting-without-skill-)).
 
 #### Commands
 

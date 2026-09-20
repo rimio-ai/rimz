@@ -38,7 +38,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 
 ## Help
 
-- [Troubleshooting](./guide/troubleshooting.md): start with `rimz doctor`, then the fixes for a room that will not start, agents not reporting, degraded banners, version drift, and resetting state.
+- [Troubleshooting](./guide/troubleshooting.md): start with `rimz doctor`, then the symptom catalogue: a room or agent that will not start, an agent that will not report, a sidebar or terminal drawing wrong, notifications and messages that never arrive, scheduled work that never runs, a setting that did nothing, and resetting state.
 - [Security and Trust](./guide/security.md): what RimZ changes on your machine and how to undo it, the two places config can run a command (project trust and notification handlers), and what leaves the box.
 
 ## Reference

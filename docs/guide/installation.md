@@ -78,7 +78,7 @@ rimz --version
 rimz doctor
 ```
 
-`rimz doctor` reads the whole machine in one pass: the multiplexer it selected and whether the version clears the floor, the agent CLIs it found and the state of their hooks, the terminal's color depth, and the health of RimZ's own files. A normal run writes nothing, so run it as often as you like. Every row it can print, and what to do about a `✗`, is in [troubleshooting](./troubleshooting.md#reading-the-report).
+`rimz doctor` reads the whole machine in one pass: the multiplexer it selected and whether the version clears the floor, the agent CLIs it found and the state of their hooks, the terminal's color depth, and the health of RimZ's own files. It only reads, so run it as often as you like. Every row it can print, and what to do about a `✗`, is in [troubleshooting](./troubleshooting.md#reading-the-report).
 
 Next: [set up your machine](./setup.md), which writes the per-machine config, installs the agent hooks that let the sidebar see your agents, and opens your first room.
 

@@ -120,7 +120,7 @@ rimz
 
 That creates or reattaches the Zellij or tmux session for this project, docks the sidebar down the left, and drops you in a shell. Launch an agent the way you always do, `claude` or `codex` straight into a pane, and its card appears in the sidebar as its first hook fires. To read the zones and the cards, see [the sidebar](./sidebar.md); to drive the fleet, see [agents](./fleet.md).
 
-`rimz doctor` re-reads the machine at any time and writes nothing, so it is the check to run when something looks wrong. Skipping `rimz setup` entirely is also fine: the first `rimz` in a project asks the same hook, color, glyph, pet, and automation questions when it finds no config, and writes the same files.
+`rimz doctor` re-reads the machine at any time and only reads, so it is the check to run when something looks wrong. Skipping `rimz setup` entirely is also fine: the first `rimz` in a project asks the same hook, color, glyph, pet, and automation questions when it finds no config, and writes the same files.
 
 To take all of it back off the machine, `rimz uninstall --all` names every root, room, hook, and binary it is about to touch and waits for a `y` before removing them; [security and trust](./security.md#what-rimz-changes-on-your-machine) lists what it leaves behind on purpose.
 
