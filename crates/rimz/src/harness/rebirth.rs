@@ -86,16 +86,10 @@ enum CrashCacheEntry {
     File { path: PathBuf, bytes: Vec<u8> },
 }
 
-#[derive(Clone, Debug)]
-pub struct RebirthOutcome {
-    pub resume: ResumePlan,
-    pub death: Option<LastDeathMarker>,
-}
-
 impl RebirthPlan {
     /// Inspect prior state without changing markers, archives, event logs, or
     /// the persisted live roster.
-    pub fn inspect(
+    pub(crate) fn inspect(
         backend: &dyn MuxBackend,
         workspace_id: &WorkspaceId,
         session_name: &str,
@@ -132,7 +126,7 @@ impl RebirthPlan {
     }
 
     /// Commit post-choice side effects after the multiplexer session exists.
-    pub fn materialize(self, choice: RebirthChoice, session_name: &str) -> RebirthOutcome {
+    pub(crate) fn materialize(self, choice: RebirthChoice, session_name: &str) -> ResumePlan {
         let planned_labels = self.planned.labels();
         let death_cause = self.death.as_ref().map(|death| death.cause);
         if let Some(boot) = self.boot_token.as_deref() {
@@ -217,18 +211,17 @@ impl RebirthPlan {
                 },
             });
         }
-        let death = self.death.map(|mut death| {
+        if let Some(mut death) = self.death {
             death.recovered = Some(recovered);
             write_last_death_marker(&self.paths, &death);
-            death
-        });
+        }
         append_rebirth_and_consume(
             store.as_ref(),
             &self.paths,
             &self.paths.workspace_id,
             session_name,
         );
-        RebirthOutcome { resume, death }
+        resume
     }
 }
 
@@ -576,7 +569,7 @@ fn append_rebirth_and_consume(
     clear_live_roster(&paths.live_roster);
 }
 
-pub fn record_boundary(workspace_id: &WorkspaceId, session_name: &str) {
+pub(crate) fn record_boundary(workspace_id: &WorkspaceId, session_name: &str) {
     let result = (|| -> Result<()> {
         let paths = StatePaths::for_workspace(workspace_id.clone())?;
         let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;

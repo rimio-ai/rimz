@@ -177,9 +177,7 @@ impl RoomContext {
                     ResumePlan::default()
                 }
                 NormalRebirth::Selected { plan, choice } => {
-                    (*plan)
-                        .materialize(choice, &self.workspace.session_name)
-                        .resume
+                    (*plan).materialize(choice, &self.workspace.session_name)
                 }
             },
             None => {
