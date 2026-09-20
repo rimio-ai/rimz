@@ -74,15 +74,9 @@ pub(super) fn release_resolved_keyed_ask(
         return None;
     }
     let agent_id = observation.agent_id.as_ref()?;
-    let kind = agent.spec().kind;
-    let open_key = store
-        .snapshot_cached()
-        .ok()?
-        .agents
-        .iter()
-        .find(|state| state.kind.as_str() == kind && state.agent_id == *agent_id)
+    let open_key = agent_state(store, agent, agent_id)
         .filter(|state| state.status == rimz::agents::AgentStatus::Waiting)
-        .and_then(|state| state.open_ask.as_ref()?.native_key.clone())?;
+        .and_then(|state| state.open_ask?.native_key)?;
     if open_key == *key || !agent.tool_call_resolved(payload, &open_key) {
         return None;
     }

@@ -549,7 +549,7 @@ pub(super) fn record_turn_error_entry(
     }
 }
 
-fn agent_state(
+pub(super) fn agent_state(
     store: &Store,
     agent: &AgentDefinition,
     agent_id: &rimz::ids::AgentSessionId,
