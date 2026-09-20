@@ -7,9 +7,17 @@ use crate::{RuntimeScope, Store};
 
 use super::fleet::FleetRuns;
 
-/// Whether this session is still owed a harness wake, read in the order catalog → message queue → runs and agents: a wake publishes its message record before it consumes its catalog row, and a provider's turn start lands before the delivery ack settles that record, so every wake in flight shows in at least one read.
+/// Whether this session is still owed a harness wake, read in the order
+/// catalog → message queue → runs and agents: a wake publishes its message
+/// record before it consumes its catalog row, and a provider's turn start
+/// lands before the delivery ack settles that record, so every wake in flight
+/// shows in at least one read.
 ///
-/// Accepted gap: the digest reporter stamps `report_message_id` on child rows and queues the digest in separate lock holds. A parent Stop between those writes can complete with a digest about to be queued. Keep that tested durability sequence; the stranded-park settle closes its half with a second look.
+/// Accepted gap: the digest reporter stamps `report_message_id` on child rows
+/// and queues the digest in separate lock holds. A parent Stop between those
+/// writes can complete with a digest about to be queued. Keep that tested
+/// durability sequence; the stranded-park settle closes its half with a second
+/// look.
 pub fn owed_wake(
     store: &Store,
     kind: &AgentKind,
@@ -52,7 +60,7 @@ pub enum OwedWake {
 }
 
 impl OwedWake {
-    pub const fn as_str(self) -> &'static str {
+    pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Wait => "wait",
             Self::WakeInFlight => "wake in flight",

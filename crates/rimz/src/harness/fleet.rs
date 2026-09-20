@@ -6,7 +6,7 @@ use crate::agents::AgentState;
 use crate::store::run::RunRecord;
 
 /// Newest run of one launched child.
-pub fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Option<&'a RunRecord> {
+pub(super) fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Option<&'a RunRecord> {
     runs.iter()
         .filter(|run| {
             run.kind == child.kind
@@ -19,7 +19,8 @@ pub fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Option<&'a R
         .max_by_key(|run| run.started_at)
 }
 
-/// Newest run per member of `launcher`'s fleet, deduplicated by run id and ordered as `address::launched_fleet` orders its members.
+/// Newest run per member of `launcher`'s fleet, deduplicated by run id and
+/// ordered as `address::launched_fleet` orders its members.
 pub struct FleetRuns<'a>(Vec<(&'a AgentState, &'a RunRecord)>);
 
 impl<'a> FleetRuns<'a> {
@@ -36,7 +37,7 @@ impl<'a> FleetRuns<'a> {
         )
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
@@ -44,11 +45,7 @@ impl<'a> FleetRuns<'a> {
         self.0.iter().any(|(_, run)| !run.status.is_terminal())
     }
 
-    pub fn rows(&self) -> &[(&'a AgentState, &'a RunRecord)] {
-        &self.0
-    }
-
-    /// Settled rows no digest carried and no caller joined.
+    /// Settled rows no digest carried and no caller joined, in member order.
     pub fn unreported(&self) -> Vec<(&'a AgentState, &'a RunRecord)> {
         self.0
             .iter()
@@ -128,9 +125,6 @@ mod tests {
             .collect::<Vec<_>>();
         let agents = [vec![parent.clone()], children.to_vec()].concat();
         let fleet = FleetRuns::of(&agents, &runs, &parent);
-        assert_eq!(fleet.rows().len(), 2);
-        let ordered = crate::address::launched_fleet(&agents, &parent);
-        assert_eq!(fleet.rows()[0].0.agent_id, ordered[0].agent_id);
         assert!(fleet.any_running());
         assert!(fleet.unreported().is_empty());
         for run in &mut runs {
@@ -138,7 +132,10 @@ mod tests {
         }
         let fleet = FleetRuns::of(&agents, &runs, &parent);
         assert!(!fleet.any_running());
-        assert_eq!(fleet.unreported().len(), 2);
+        let settled = fleet.unreported();
+        assert_eq!(settled.len(), 2, "the alias shares its run with `first`");
+        let ordered = crate::address::launched_fleet(&agents, &parent);
+        assert_eq!(settled[0].0.agent_id, ordered[0].agent_id);
         runs[0].joined_at = Some(Timestamp::UNIX_EPOCH);
         runs[1].report_message_id = Some(crate::MessageId::new());
         assert!(
