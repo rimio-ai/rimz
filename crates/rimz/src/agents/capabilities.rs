@@ -87,6 +87,17 @@ pub trait HookCapability: CoreCapability {
         None
     }
 
+    /// Prove from this hook payload that the call behind `native_key` already
+    /// resolved. A keyed ask holds through sibling tools until its own
+    /// completion edge, and a user who answers a native prompt with typed
+    /// feedback rejects the call instead: the provider returns the feedback as
+    /// the call's result and fires no completion hook. An agent that can read
+    /// that result reports it here and the hook path closes the ask; one that
+    /// cannot abstains, and the ask keeps waiting.
+    fn tool_call_resolved(&self, _payload: &Value, _native_key: &str) -> bool {
+        false
+    }
+
     /// Map validated semantic answers to this agent's native TUI choreography.
     fn answer_plan(
         &self,

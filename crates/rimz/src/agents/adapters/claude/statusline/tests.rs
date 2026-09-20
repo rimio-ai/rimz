@@ -252,6 +252,37 @@ fn subagent_interruption_scan_accepts_only_the_named_sidechain() {
 }
 
 #[test]
+fn tool_result_scan_accepts_only_the_root_result_for_the_named_call() {
+    let result = |id: &str, sidechain: &str| {
+        format!(
+            r#"{{"type":"user"{sidechain},"timestamp":"2026-06-04T03:02:00.000Z","message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}","is_error":true}}]}}}}"#
+        )
+    };
+    let answered = result("toolu_ask", "");
+    assert!(tool_result_recorded(&answered, "toolu_ask"));
+
+    // A sibling's result, and a child's replay of this call, both leave the
+    // root call open.
+    assert!(!tool_result_recorded(
+        &result("toolu_read", ""),
+        "toolu_ask"
+    ));
+    assert!(!tool_result_recorded(
+        &result("toolu_ask", r#","isSidechain":true"#),
+        "toolu_ask"
+    ));
+
+    // The tail's torn leading record proves nothing, and the assistant entry
+    // that requested the call is not its result.
+    let torn = format!("ser\":\"toolu_ask\"}}]}}}}\n{NORMAL_ASSISTANT_ENTRY}\n");
+    assert!(!tool_result_recorded(&torn, "toolu_ask"));
+    assert!(tool_result_recorded(
+        &format!("{torn}{answered}\n"),
+        "toolu_ask"
+    ));
+}
+
+#[test]
 fn turn_error_label_classifies_paused_and_failed_errors() {
     let entry = |text: &str| {
         format!(

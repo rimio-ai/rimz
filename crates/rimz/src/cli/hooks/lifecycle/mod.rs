@@ -17,7 +17,9 @@ use delivery::*;
 use identity::{
     agent_identity_env, env_run_id, validate_agent_name_env, validate_non_empty_identity_env,
 };
-use observe::{record_derived_lifecycle_observation, record_lifecycle_observation};
+use observe::{
+    record_derived_lifecycle_observation, record_lifecycle_observation, release_resolved_keyed_ask,
+};
 use reactors::ReactorCtx;
 use transcript::*;
 
@@ -33,6 +35,15 @@ pub(super) fn handle_lifecycle_hook(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let agent_id = decoded.event_agent_id().cloned();
+    let released = release_resolved_keyed_ask(
+        workspace,
+        store,
+        agent,
+        decoded,
+        payload,
+        ingress_owner,
+        globals,
+    );
     let recorded =
         record_lifecycle_observation(workspace, store, agent, decoded, ingress_owner, globals);
     if let Some(recorded) = recorded.as_ref()
@@ -62,10 +73,11 @@ pub(super) fn handle_lifecycle_hook(
         return Ok(());
     }
     let event_name = decoded.event_name().to_owned();
-    let mut events = recorded
-        .as_ref()
-        .map(|recorded| recorded.events.clone())
-        .unwrap_or_default();
+    let mut events: Vec<_> = released
+        .iter()
+        .chain(recorded.as_ref())
+        .flat_map(|recorded| recorded.events.clone())
+        .collect();
     let (derived_events, derived_rotation_due) = if recorded.as_ref().is_some_and(|recorded| {
         recorded.observation.agent_id.is_some() && recorded.observation.parent_agent_id.is_none()
     }) {
@@ -74,7 +86,7 @@ pub(super) fn handle_lifecycle_hook(
         (Vec::new(), false)
     };
     events.extend(derived_events);
-    if derived_rotation_due {
+    if derived_rotation_due || released.is_some_and(|released| released.rotation_due) {
         spawn_auto_rotation(workspace);
     }
     let assistant_message =

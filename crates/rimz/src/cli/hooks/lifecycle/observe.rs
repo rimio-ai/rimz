@@ -42,6 +42,70 @@ pub(super) fn record_lifecycle_observation(
     ))
 }
 
+/// Close a keyed ask whose own call the transcript already resolved, before
+/// the tool event that would otherwise be ignored as its sibling. Hooks alone
+/// cannot separate a parallel sibling from a successor — both arrive as a tool
+/// with a different key — and an ask rejected with typed feedback fires no
+/// completion edge of its own, so the ask's call id in the provider's
+/// transcript is the proof. The derived answer edge is the same shape Store
+/// derives for a child's keyed completion (`SubagentAskAnswered`), recorded
+/// first so the fold closes the ask before the incoming event registers work.
+/// Fails safe: no proof leaves the ask open for the next event to retry.
+pub(super) fn release_resolved_keyed_ask(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentDefinition,
+    decoded: &HookOutput,
+    payload: &Value,
+    ingress_owner: HookIngressOwner,
+    globals: &GlobalFlags,
+) -> Option<RecordedLifecycle> {
+    let observation = decoded.lifecycle()?;
+    let LifecycleSignal::ToolUsed {
+        native_key: Some(key),
+        ..
+    } = &observation.signal
+    else {
+        return None;
+    };
+    // A child's tool never answers its parent's ask on this path: Store
+    // derives that edge from the child observation itself.
+    if observation.parent_agent_id.is_some() {
+        return None;
+    }
+    let agent_id = observation.agent_id.as_ref()?;
+    let kind = agent.spec().kind;
+    let open_key = store
+        .snapshot_cached()
+        .ok()?
+        .agents
+        .iter()
+        .find(|state| state.kind.as_str() == kind && state.agent_id == *agent_id)
+        .filter(|state| state.status == rimz::agents::AgentStatus::Waiting)
+        .and_then(|state| state.open_ask.as_ref()?.native_key.clone())?;
+    if open_key == *key || !agent.tool_call_resolved(payload, &open_key) {
+        return None;
+    }
+    Some(record_derived_lifecycle_observation(
+        workspace,
+        store,
+        agent,
+        "AskCallResolved",
+        AgentLifecycleObservation::new(
+            Some(agent_id.clone()),
+            LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+                name: None,
+                native_key: Some(open_key),
+                turn_id: None,
+            },
+        ),
+        ingress_owner,
+        globals,
+    ))
+}
+
 fn context_window_is_unset(
     store: &Store,
     kind: &str,
