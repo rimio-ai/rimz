@@ -169,20 +169,20 @@ impl PaneFrame {
             .collect()
     }
 
-    pub fn pane_metrics(&self) -> impl Iterator<Item = (PaneId, PaneMetrics)> + '_ {
+    pub(super) fn pane_metrics(&self) -> impl Iterator<Item = (PaneId, PaneMetrics)> + '_ {
         self.pane_states()
             .map(|pane| (pane.pane_id.clone(), pane.metrics))
     }
 
-    pub fn pane_states(&self) -> impl Iterator<Item = &PaneState> {
+    pub(super) fn pane_states(&self) -> impl Iterator<Item = &PaneState> {
         self.tabs.iter().flat_map(|tab| tab.panes.iter())
     }
 
-    pub fn pane_states_mut(&mut self) -> impl Iterator<Item = &mut PaneState> {
+    pub(super) fn pane_states_mut(&mut self) -> impl Iterator<Item = &mut PaneState> {
         self.tabs.iter_mut().flat_map(|tab| tab.panes.iter_mut())
     }
 
-    pub fn rotate_against_prior(&mut self, prior: &PaneFrame) {
+    pub(super) fn rotate_against_prior(&mut self, prior: &PaneFrame) {
         let prior_by_pane: HashMap<PaneId, &PaneState> = prior
             .pane_states()
             .map(|pane| (pane.pane_id.clone(), pane))
@@ -235,7 +235,7 @@ impl PaneState {
     /// metrics-layer derivation, and only that layer's `starttime` pid-reuse
     /// guard may restore it ([`super::produce`]'s metrics module) — a rotation
     /// carry would republish a stale binding without ever revalidating it.
-    pub(in crate::sidebar) fn rotate_on_process_change(&mut self, prior: &PaneState) {
+    fn rotate_on_process_change(&mut self, prior: &PaneState) {
         let spawn_changed = match (
             self.current.spawn_command.as_deref(),
             prior.current.spawn_command.as_deref(),
@@ -295,7 +295,7 @@ impl PaneState {
 // the `SidebarOwnView` type in `store/snapshot` — the store read path stays
 // free of sidebar imports and only the sidebar fold derives an own-view.
 impl SidebarOwnView {
-    pub fn from_frame(own: &PaneId, frame: &PaneFrame) -> Option<Self> {
+    pub(super) fn from_frame(own: &PaneId, frame: &PaneFrame) -> Option<Self> {
         let tab = frame
             .tabs
             .iter()
@@ -330,7 +330,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-pub struct FrameInputs<'a> {
+pub(super) struct FrameInputs<'a> {
     pub panes: Vec<PaneRef>,
     pub produced_at_ms: u64,
     pub observed_at_ms: u64,
@@ -361,7 +361,7 @@ pub fn assemble_frame(
     .0
 }
 
-pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<DiagEvent>) {
+pub(super) fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<DiagEvent>) {
     let FrameInputs {
         panes,
         produced_at_ms,
