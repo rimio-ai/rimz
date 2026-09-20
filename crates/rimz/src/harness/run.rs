@@ -20,6 +20,8 @@ use crate::store::run::{RunRecord, RunStatus, RunStoreErr, RunVerify};
 use crate::store::{Store, snapshot::SidebarSnapshot};
 
 const FAILURE_TAIL_CAP: usize = 4 * 1024;
+const STRANDED_PARK_REASON: &str =
+    "parked on a wake that never arrived: no armed wait, no wake in flight, no live subagents";
 
 type Result<T> = std::result::Result<T, RunStoreErr>;
 
@@ -190,6 +192,60 @@ pub fn list(paths: &StatePaths) -> Result<Vec<RunRecord>> {
 enum RecordMutation<T> {
     Keep(T),
     Write(T),
+}
+
+/// One strand check of a parked run, as the in-pane wrapper sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParkCheck {
+    /// Not parked, or still owed a wake.
+    Live,
+    /// Nothing owed under this `parked_at`; an identical second check settles.
+    Stranded(Timestamp),
+    /// This check failed the run.
+    Settled,
+}
+
+/// Settle only after two nothing-owed checks under the same park timestamp.
+///
+/// The CAS protects a wake turn starting between the read and lock: the lifecycle hook folds `TurnStarted` (clearing `parked_at`) before settling the wake message to `Delivered`, so a queue read showing the wake gone implies the clear already happened.
+///
+/// The second look covers producer sequences shorter than the check cadence: the digest reporter stamps child `report_message_id` fields and queues the digest in two separate lock holds.
+pub fn settle_stranded_park(
+    store: &Store,
+    record: &RunRecord,
+    previous: Option<Timestamp>,
+) -> Result<ParkCheck> {
+    let Some(parked_at) = record.parked_at.filter(|_| !record.status.is_terminal()) else {
+        return Ok(ParkCheck::Live);
+    };
+    let Some(agent_id) = record.agent_id.as_ref() else {
+        return Ok(ParkCheck::Live);
+    };
+    match crate::harness::owed::owed_wake(store, &record.kind, agent_id) {
+        Ok(Some(_)) => return Ok(ParkCheck::Live),
+        Err(error) => {
+            tracing::debug!(run_id = %record.run_id, %error, "could not check parked run wake");
+            return Ok(ParkCheck::Live);
+        }
+        Ok(None) => {}
+    }
+    if previous != Some(parked_at) {
+        return Ok(ParkCheck::Stranded(parked_at));
+    }
+    let (record, check) = update_record(store.paths(), &record.run_id, |record, now| {
+        if record.parked_at != Some(parked_at) || record.status.is_terminal() {
+            return Ok(RecordMutation::Keep(ParkCheck::Live));
+        }
+        if record.failure_tail.is_none() {
+            record.failure_tail = Some(STRANDED_PARK_REASON.to_owned());
+        }
+        record.mark_terminal(RunStatus::Failed, now);
+        Ok(RecordMutation::Write(ParkCheck::Settled))
+    })?;
+    if check == ParkCheck::Settled {
+        crate::store::run::wake_run(store.runtime_paths(), &record);
+    }
+    Ok(check)
 }
 
 fn update_record<T>(

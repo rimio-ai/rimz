@@ -3,6 +3,8 @@ use crate::cli::{open_store, worktree};
 use std::cell::RefCell;
 use std::sync::mpsc;
 
+const PARK_STRAND_POLL: Duration = Duration::from_secs(5);
+
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
@@ -240,13 +242,13 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         launch_identity.as_ref(),
         keep,
     );
-    let monitor = if request.exit_on_run_completion {
-        run_context.as_ref()
-    } else {
-        None
-    };
-    let outcome =
-        supervise_child(child, monitor, parent_watchdog).context("supervising agent process")?;
+    let outcome = supervise_child(
+        child,
+        run_context.as_ref(),
+        request.exit_on_run_completion,
+        parent_watchdog,
+    )
+    .context("supervising agent process")?;
     settle_after_exit(
         &request,
         globals,
@@ -730,8 +732,8 @@ pub(super) struct RunExecContext {
 }
 
 impl RunExecContext {
-    fn ready_for_self_cleanup(&self) -> bool {
-        self.is_terminal()
+    fn ready_for_self_cleanup(&self, record: &rimz::store::run::RunRecord) -> bool {
+        record.status.is_terminal()
             && match rimz::store::run::run_waiter_is_live(self.store.runtime_paths(), &self.run_id)
             {
                 Ok(live) => !live,
@@ -743,17 +745,55 @@ impl RunExecContext {
     }
 
     fn is_terminal(&self) -> bool {
+        self.load_record()
+            .is_some_and(|record| record.status.is_terminal())
+    }
+
+    fn load_record(&self) -> Option<rimz::store::run::RunRecord> {
         match rimz::harness::run::load(self.store.paths(), &self.run_id) {
-            Ok(record) => record.status.is_terminal(),
+            Ok(record) => Some(record),
             Err(err) => {
                 tracing::debug!(
                     run_id = %self.run_id,
                     error = %err,
                     "could not read supervised run record while monitoring pane",
                 );
-                false
+                None
             }
         }
+    }
+}
+
+struct RunMonitor {
+    self_cleanup: bool,
+    next_park_check: Instant,
+    previous: Option<jiff::Timestamp>,
+}
+
+impl RunMonitor {
+    fn poll(&mut self, context: &RunExecContext, now: Instant) -> bool {
+        let Some(record) = context.load_record() else {
+            self.previous = None;
+            return false;
+        };
+        if record.parked_at.is_none() || record.status.is_terminal() {
+            self.previous = None;
+        } else if now >= self.next_park_check {
+            self.next_park_check = now + PARK_STRAND_POLL;
+            self.previous = match rimz::harness::run::settle_stranded_park(
+                &context.store,
+                &record,
+                self.previous,
+            ) {
+                Ok(rimz::harness::run::ParkCheck::Stranded(at)) => Some(at),
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::debug!(run_id = %context.run_id, %error, "could not settle parked run");
+                    None
+                }
+            };
+        }
+        self.self_cleanup && context.ready_for_self_cleanup(&record)
     }
 }
 
@@ -1247,6 +1287,7 @@ struct ExecOutcome {
 fn supervise_child(
     child: Child,
     run_monitor: Option<&RunExecContext>,
+    self_cleanup: bool,
     parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
 ) -> Result<ExecOutcome> {
     let (wake_tx, wake_rx) = mpsc::channel();
@@ -1267,6 +1308,11 @@ fn supervise_child(
     let mut run_completed = false;
     let mut parent_ended = false;
     let mut next_run_check = Instant::now();
+    let mut monitor_state = RunMonitor {
+        self_cleanup,
+        next_park_check: next_run_check,
+        previous: None,
+    };
     loop {
         let now = Instant::now();
         match child.try_wait() {
@@ -1310,8 +1356,13 @@ fn supervise_child(
             && let Some(monitor) = run_monitor
             && now >= next_run_check
         {
-            next_run_check = now + RUN_MONITOR_POLL;
-            if monitor.ready_for_self_cleanup() {
+            next_run_check = now
+                + if self_cleanup {
+                    RUN_MONITOR_POLL
+                } else {
+                    PARK_STRAND_POLL
+                };
+            if monitor_state.poll(monitor, now) {
                 run_completed = true;
                 child.signal_term();
                 term_sent_at = Some(now);
@@ -1505,6 +1556,57 @@ mod tests {
     }
 
     #[test]
+    fn monitor_settles_stranded_park_with_and_without_self_cleanup() {
+        for self_cleanup in [false, true] {
+            let state = tempfile::tempdir().unwrap();
+            let workspace_id = rimz::WorkspaceId::from_project_root(state.path());
+            let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).unwrap();
+            let runtime =
+                rimz::RuntimePaths::under(workspace_id.clone(), &state.path().join("rt")).unwrap();
+            let store = rimz::Store::open(paths, runtime).unwrap();
+            let mut record = rimz::store::run::RunRecord::new(
+                workspace_id,
+                AgentKind::new_unchecked("claude"),
+                PermissionMode::Auto,
+                "check".to_owned(),
+                state.path().to_owned(),
+            );
+            record.status = rimz::store::run::RunStatus::Running;
+            record.agent_id = Some("session".into());
+            record.parked_at = Some(jiff::Timestamp::now());
+            rimz::harness::run::create(store.paths(), &record).unwrap();
+            let context = RunExecContext {
+                run_id: record.run_id.clone(),
+                store,
+                session_name: "room".to_owned(),
+            };
+            let now = Instant::now();
+            let mut monitor = RunMonitor {
+                self_cleanup,
+                next_park_check: now,
+                previous: None,
+            };
+            assert!(!monitor.poll(&context, now));
+            assert_eq!(monitor.previous, record.parked_at);
+            assert!(!monitor.poll(&context, now + RUN_MONITOR_POLL));
+            assert!(
+                !context.is_terminal(),
+                "record ticks must not accelerate strand checks"
+            );
+            assert!(!monitor.poll(&context, now + PARK_STRAND_POLL));
+            let failed = context.load_record().unwrap();
+            assert_eq!(failed.status, rimz::store::run::RunStatus::Failed);
+            assert!(failed.failure_tail.is_some());
+            assert_eq!(failed.parked_at, None);
+            assert_eq!(monitor.previous, None);
+            assert_eq!(
+                monitor.poll(&context, now + PARK_STRAND_POLL + RUN_MONITOR_POLL),
+                self_cleanup
+            );
+        }
+    }
+
+    #[test]
     fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
         let state = tempfile::tempdir().unwrap();
         let runtime_root = tempfile::tempdir_in("/tmp").unwrap();
@@ -1528,7 +1630,7 @@ mod tests {
             session_name: "room".to_owned(),
         };
         assert!(
-            context.ready_for_self_cleanup(),
+            context.ready_for_self_cleanup(&context.load_record().unwrap()),
             "background run has no waiter"
         );
         let waiter = rimz::harness::run_wake::RunWaiter::bind(
@@ -1541,20 +1643,20 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !context.ready_for_self_cleanup(),
+            !context.ready_for_self_cleanup(&context.load_record().unwrap()),
             "live waiter owns verification and evidence capture"
         );
         record.status = rimz::store::run::RunStatus::Running;
         rimz::harness::run::create(context.store.paths(), &record).unwrap();
         drop(waiter);
         assert!(
-            !context.ready_for_self_cleanup(),
+            !context.ready_for_self_cleanup(&context.load_record().unwrap()),
             "rearmed run remains active even without a waiter"
         );
         record.status = rimz::store::run::RunStatus::Completed;
         rimz::harness::run::create(context.store.paths(), &record).unwrap();
         assert!(
-            context.ready_for_self_cleanup(),
+            context.ready_for_self_cleanup(&context.load_record().unwrap()),
             "terminal run is reclaimed once waiter leaves"
         );
     }
