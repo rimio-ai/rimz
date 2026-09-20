@@ -2326,11 +2326,14 @@ fn claude_subagent_ask_waits_and_clears_on_the_child() {
     assert_eq!(child["open_ask"]["kind"], "permission");
     assert_eq!(child["parent_agent_id"], "sess-claude-parent");
 
+    // A permission ask is keyless — the wire carries no `tool_use_id` for it —
+    // so the approved tool's keyed completion must still clear it.
     run(json!({
         "hook_event_name": "PostToolUse",
         "session_id": "sess-claude-parent",
         "agent_id": "child-1",
         "tool_name": "Bash",
+        "tool_use_id": "toolu_child_bash",
     }));
 
     let parsed = env.snapshot_json();

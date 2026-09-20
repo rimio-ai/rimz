@@ -30,21 +30,27 @@ Every installed hook runs `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cl
 | `StopFailure` | lifecycle | none | writes `AgentContext.turn_error` |
 | `SessionEnd` | lifecycle | `Ended` | stamps `ended_at`; the runtime hides the retained resumable row |
 | `Notification` | lifecycle | none | |
-| `PreToolUse` | lifecycle | `ToolUsed { mutates: false, edits: false, name: None }` | proof of work only |
-| `PostToolUse` | lifecycle | `ToolUsed { mutates, edits, name }` | every tool, named; answered asks record their answers; a backgrounded `Bash` starts a [background shell](#background-shells) |
+| `PreToolUse` | lifecycle | `ToolUsed { mutates: false, edits: false, name: None }` | proof of work only; keyed by `tool_use_id` |
+| `PostToolUse` | lifecycle | `ToolUsed { mutates, edits, name }` | every tool, named, keyed by `tool_use_id`; answered asks record their answers; a backgrounded `Bash` starts a [background shell](#background-shells) |
 | `PreCompact` | lifecycle | `Compacting` | opens the [compaction bracket](./model.md#the-compaction-bracket) |
 | `PostCompact` | lifecycle | `CompactionEnded { auto }` | carries the manual or auto trigger |
 | `SubagentStart` | lifecycle | `SubagentStarted` | see [Subagents](#subagents) |
 | `SubagentStop` | lifecycle | `SubagentStopped { errored: false }` | see [Subagents](#subagents) |
-| `PermissionRequest` | awaiting-user | `AwaitingInput { Permission }` | synchronous |
-| `PreToolUse` for `ExitPlanMode` | awaiting-user | `AwaitingInput { PlanApproval }` | |
-| `PreToolUse` for `AskUserQuestion` | awaiting-user | `AwaitingInput { Question }` | structured questions from `tool_input` |
+| `PermissionRequest` | awaiting-user | `AwaitingInput { Permission }` | synchronous; keyless |
+| `PreToolUse` for `ExitPlanMode` | awaiting-user | `AwaitingInput { PlanApproval }` | keyed by `tool_use_id` |
+| `PreToolUse` for `AskUserQuestion` | awaiting-user | `AwaitingInput { Question }` | structured questions from `tool_input`; keyed by `tool_use_id` |
 
 A payload carrying `cursor_version` decodes as unknown and records nothing. Cursor can run Claude-compatible hook commands with Cursor-shaped payloads, and this check keeps them from double-recording.
 
 ### Ask classification
 
 The two ask tools ride the broad `PreToolUse` hook and classify from `tool_name` through the spec's `ToolClassification.blocking` list, so the catalog installs no matcher for them (Claude runs every matching matcher group, and a dedicated one would fire twice). Claude 2.1.205 in manual mode also sends `PermissionRequest` for those two tools. `decode_hook` recognizes the tool name and returns no signal for that duplicate, so it cannot replace the structured ask the `PreToolUse` recorded.
+
+### Native keys
+
+Every signal derived from a `PreToolUse` or a `PostToolUse` carries that payload's `tool_use_id` as its [native key](./model.md#waiting-and-asks). Claude stamps one id per tool call, identical on the call's two edges and distinct across parallel calls (observed on Claude Code 2.1.278), so a question the user has not answered survives the tool calls Claude runs in parallel with the picker and clears on its own `PostToolUse`. A build that omits the field degrades to the keyless behaviour, where any tool edge clears the wait.
+
+`PermissionRequest` has no `tool_use_id` on the wire and stays keyless. Its clearing edge is the approved tool's own keyed `PostToolUse`, which still clears it because the sibling rule only holds a wait whose *open ask* is keyed.
 
 ### Tool events
 

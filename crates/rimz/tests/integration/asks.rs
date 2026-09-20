@@ -251,6 +251,78 @@ fn pi_parallel_sibling_completion_keeps_the_keyed_ask_open() {
 }
 
 #[test]
+fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
+    let env = Env::new();
+    let session = "sess-claude-question";
+    let feed = |payload: serde_json::Value| {
+        let body = serde_json::to_string(&payload).expect("claude payload");
+        let output = env.run_hook("claude", &body);
+        assert!(
+            output.status.success(),
+            "{body}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    let listed = || {
+        let output = env
+            .rimz()
+            .args(["asks", "--json"])
+            .bounded_output()
+            .expect("list claude asks");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).expect("asks json")
+    };
+
+    feed(json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": session,
+        "tool_name": "AskUserQuestion",
+        "tool_use_id": "toolu_ask",
+        "tool_input": {
+            "questions": [{
+                "question": "Which route?",
+                "options": [
+                    { "label": "Safe", "description": "Stage it" },
+                    { "label": "Fast", "description": "Ship it" }
+                ],
+                "multiSelect": false
+            }]
+        }
+    }));
+    let asks = listed();
+    assert_eq!(asks.as_array().map(Vec::len), Some(1));
+    assert_eq!(asks[0]["questions"][0]["question"], "Which route?");
+    let ask_id = asks[0]["ask_id"].as_str().expect("ask id").to_owned();
+
+    // Claude runs concurrency-safe tools in parallel with the question picker,
+    // so both of a sibling call's edges land while the ask is unanswered.
+    for event in ["PreToolUse", "PostToolUse"] {
+        feed(json!({
+            "hook_event_name": event,
+            "session_id": session,
+            "tool_name": "Read",
+            "tool_use_id": "toolu_read",
+            "tool_input": { "file_path": "/tmp/notes.md" }
+        }));
+        let asks = listed();
+        assert_eq!(asks.as_array().map(Vec::len), Some(1), "{event}");
+        assert_eq!(asks[0]["ask_id"], ask_id.as_str(), "{event}");
+    }
+
+    feed(json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": session,
+        "tool_name": "AskUserQuestion",
+        "tool_use_id": "toolu_ask"
+    }));
+    assert_eq!(listed(), json!([]));
+}
+
+#[test]
 fn asks_ignores_newer_transcript_question_with_a_different_id() {
     let env = Env::new();
     let hook = env.run_hook("claude", &question_payload(&env));
