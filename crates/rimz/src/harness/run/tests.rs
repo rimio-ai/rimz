@@ -84,16 +84,153 @@ fn fold_lifecycle_maps_each_disposition_to_its_run_status() {
             LifecycleSignal::TurnInterrupted { turn_id: None },
             RunStatus::Canceled,
         ),
+        (LifecycleSignal::Ended, RunStatus::Failed),
     ] {
-        let (_dir, paths, record) = setup();
-        let observation =
-            AgentLifecycleObservation::new(Some(AgentSessionId::from("sess-1")), signal);
-        let completed = record_lifecycle(&paths, &record.run_id, "claude", &observation, None)
+        for owed in [None, Some(OwedWake::Wait)] {
+            let (_dir, paths, record) = setup();
+            let observation = AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("sess-1")),
+                signal.clone(),
+            );
+            let mut consulted = false;
+            let completed =
+                record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+                    let _guard = WorkspaceLock::try_acquire(&paths.workspace_lock)
+                        .unwrap()
+                        .expect("owed reads must precede the workspace lock");
+                    consulted = true;
+                    owed
+                })
+                .unwrap();
+            assert_eq!(consulted, expected == RunStatus::Completed);
+            let parked = expected == RunStatus::Completed && owed.is_some();
+            assert_eq!(completed.is_none(), parked);
+            let persisted = load(&paths, &record.run_id).unwrap();
+            assert_eq!(
+                persisted.status,
+                if parked { RunStatus::Running } else { expected },
+                "{:?}",
+                observation.signal
+            );
+            assert_eq!(persisted.parked_at.is_some(), parked);
+            assert_eq!(persisted.completed_at.is_none(), parked);
+        }
+    }
+}
+
+#[test]
+fn parked_run_resumes_and_completes_once() {
+    let (_dir, paths, record) = setup();
+    let mut ended = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+    ended.transcript_path = Some("/tmp/parked.jsonl".to_owned());
+    assert!(
+        record_lifecycle(
+            &paths,
+            &record.run_id,
+            "claude",
+            &ended,
+            Some("waiting".to_owned()),
+            || Some(OwedWake::Wait)
+        )
+        .unwrap()
+        .is_none()
+    );
+    let parked = load(&paths, &record.run_id).unwrap();
+    assert_eq!(parked.status, RunStatus::Running);
+    assert!(parked.parked_at.is_some());
+    assert_eq!(parked.completed_at, None);
+    assert_eq!(parked.transcript_path, ended.transcript_path);
+    assert_eq!(parked.last_message.as_deref(), Some("waiting"));
+
+    let mut observation = ended.clone();
+    observation.signal = LifecycleSignal::ToolUsed {
+        mutates: false,
+        edits: false,
+        name: None,
+        native_key: None,
+        turn_id: None,
+    };
+    record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+        panic!("non-completion must not read owed")
+    })
+    .unwrap();
+    assert_eq!(
+        load(&paths, &record.run_id).unwrap().parked_at,
+        parked.parked_at
+    );
+    observation.signal = LifecycleSignal::TurnStarted { turn_id: None };
+    record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+        panic!("turn start must not read owed")
+    })
+    .unwrap();
+    let running = load(&paths, &record.run_id).unwrap();
+    assert_eq!(running.parked_at, None);
+    assert_eq!(running.status, RunStatus::Running);
+
+    let completed = record_lifecycle(
+        &paths,
+        &record.run_id,
+        "claude",
+        &ended,
+        Some("done".to_owned()),
+        || None,
+    )
+    .unwrap()
+    .expect("terminal update");
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(completed.parked_at, None);
+    assert_eq!(completed.last_message.as_deref(), Some("done"));
+    assert!(
+        record_lifecycle(&paths, &record.run_id, "claude", &ended, None, || None)
             .unwrap()
-            .expect("terminal update");
-        assert_eq!(completed.status, expected, "{:?}", observation.signal);
-        let persisted = load(&paths, &record.run_id).unwrap();
-        assert_eq!(persisted.status, expected, "{:?}", observation.signal);
+            .is_none()
+    );
+    assert_eq!(load(&paths, &record.run_id).unwrap(), completed);
+}
+
+#[test]
+fn terminal_writes_clear_parked_runs() {
+    for status in [RunStatus::Canceled, RunStatus::TimedOut, RunStatus::Failed] {
+        let (_dir, paths, record) = setup();
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        );
+        record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+            Some(OwedWake::Subagents)
+        })
+        .unwrap();
+        assert!(load(&paths, &record.run_id).unwrap().parked_at.is_some());
+        match status {
+            RunStatus::Canceled => {
+                cancel(&paths, &record.run_id).unwrap();
+            }
+            RunStatus::TimedOut => {
+                timeout(&paths, &record.run_id).unwrap();
+            }
+            _ => {
+                observation.signal = LifecycleSignal::Ended;
+                record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+                    panic!("failure must not read owed")
+                })
+                .unwrap()
+                .expect("terminal update");
+            }
+        }
+        let terminal = load(&paths, &record.run_id).unwrap();
+        assert_eq!(terminal.status, status);
+        assert_eq!(terminal.parked_at, None);
     }
 }
 
@@ -114,6 +251,7 @@ fn lifecycle_completion_writes_terminal_record_once() {
         "claude",
         &observation,
         Some("done".to_owned()),
+        || None,
     )
     .unwrap()
     .expect("terminal update");
@@ -127,6 +265,7 @@ fn lifecycle_completion_writes_terminal_record_once() {
         "claude",
         &observation,
         Some("done".to_owned()),
+        || None,
     )
     .unwrap();
     assert!(repeated.is_none());
@@ -151,6 +290,7 @@ fn subagent_observation_does_not_complete_parent_run() {
         "claude",
         &observation,
         Some("child done".to_owned()),
+        || panic!("subagent observation must not read owed"),
     )
     .unwrap();
     assert!(update.is_none());
@@ -166,7 +306,7 @@ fn same_kind_child_process_does_not_complete_bound_parent_run() {
         Some(AgentSessionId::from("sess-parent")),
         LifecycleSignal::TurnStarted { turn_id: None },
     );
-    record_lifecycle(&paths, &record.run_id, "claude", &parent, None).unwrap();
+    record_lifecycle(&paths, &record.run_id, "claude", &parent, None, || None).unwrap();
 
     let child = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-child")),
@@ -182,6 +322,7 @@ fn same_kind_child_process_does_not_complete_bound_parent_run() {
         "claude",
         &child,
         Some("child done".to_owned()),
+        || None,
     )
     .unwrap();
 
@@ -247,7 +388,7 @@ fn verify_transitions_reopen_completed_runs_and_finish_once() {
             turn_id: None,
         },
     );
-    record_lifecycle(&paths, &record.run_id, "claude", &completed, None)
+    record_lifecycle(&paths, &record.run_id, "claude", &completed, None, || None)
         .unwrap()
         .expect("completed run");
     let first = RunVerify {
@@ -265,7 +406,7 @@ fn verify_transitions_reopen_completed_runs_and_finish_once() {
     assert_eq!(reopened.verify.as_ref(), Some(&first));
     assert!(reopen_for_verify(&paths, &record.run_id, first.clone()).is_err());
 
-    record_lifecycle(&paths, &record.run_id, "claude", &completed, None)
+    record_lifecycle(&paths, &record.run_id, "claude", &completed, None, || None)
         .unwrap()
         .expect("second completed turn");
     let second = RunVerify {
@@ -316,7 +457,7 @@ fn lifecycle_and_assistant_messages_require_matching_live_root_run() {
     );
 
     assert!(
-        record_lifecycle(&paths, &record.run_id, "codex", &started, None)
+        record_lifecycle(&paths, &record.run_id, "codex", &started, None, || None)
             .unwrap()
             .is_none()
     );
@@ -325,7 +466,7 @@ fn lifecycle_and_assistant_messages_require_matching_live_root_run() {
         RunStatus::Pending
     );
 
-    record_lifecycle(&paths, &record.run_id, "claude", &started, None).unwrap();
+    record_lifecycle(&paths, &record.run_id, "claude", &started, None, || None).unwrap();
     record_assistant_message(
         &paths,
         &record.run_id,
@@ -363,7 +504,7 @@ fn record_lifecycle_folds_transcript_path_on_run_writes() {
     );
     started.transcript_path = Some("/tmp/first.jsonl".to_owned());
     assert!(
-        record_lifecycle(&paths, &record.run_id, "claude", &started, None)
+        record_lifecycle(&paths, &record.run_id, "claude", &started, None, || None)
             .unwrap()
             .is_none()
     );
@@ -382,7 +523,7 @@ fn record_lifecycle_folds_transcript_path_on_run_writes() {
         },
     );
     tool.transcript_path = Some("/tmp/second.jsonl".to_owned());
-    record_lifecycle(&paths, &record.run_id, "claude", &tool, None).unwrap();
+    record_lifecycle(&paths, &record.run_id, "claude", &tool, None, || None).unwrap();
     assert_eq!(
         load(&paths, &record.run_id)
             .unwrap()
@@ -407,6 +548,7 @@ fn record_lifecycle_folds_transcript_path_on_run_writes() {
         "claude",
         &stopped,
         Some("done".to_owned()),
+        || None,
     )
     .unwrap();
     assert_eq!(
@@ -426,7 +568,7 @@ fn record_lifecycle_folds_first_late_transcript_path() {
         Some(AgentSessionId::from("sess-1")),
         LifecycleSignal::TurnStarted { turn_id: None },
     );
-    record_lifecycle(&paths, &record.run_id, "codex", &started, None).unwrap();
+    record_lifecycle(&paths, &record.run_id, "codex", &started, None, || None).unwrap();
     let running = load(&paths, &record.run_id).unwrap();
     assert_eq!(running.status, RunStatus::Running);
     assert_eq!(running.transcript_path, None);
@@ -442,7 +584,7 @@ fn record_lifecycle_folds_first_late_transcript_path() {
         },
     );
     tool.transcript_path = Some("/tmp/late.jsonl".to_owned());
-    record_lifecycle(&paths, &record.run_id, "codex", &tool, None).unwrap();
+    record_lifecycle(&paths, &record.run_id, "codex", &tool, None, || None).unwrap();
     assert_eq!(
         load(&paths, &record.run_id)
             .unwrap()

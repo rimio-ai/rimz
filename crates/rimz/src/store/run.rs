@@ -177,6 +177,9 @@ pub struct RunRecord {
     pub updated_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<Timestamp>,
+    /// When a clean turn end left this run open because its session was still owed a harness wake. Cleared by the next turn start and by every terminal write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_at: Option<Timestamp>,
 }
 
 impl RunRecord {
@@ -219,6 +222,7 @@ impl RunRecord {
             deadline_at: None,
             updated_at: now,
             completed_at: None,
+            parked_at: None,
         }
     }
 
@@ -230,6 +234,7 @@ impl RunRecord {
         }
         self.status = status;
         self.completed_at = Some(now);
+        self.parked_at = None;
         self.updated_at = now;
         true
     }
@@ -443,6 +448,10 @@ mod tests {
             .as_object_mut()
             .expect("run object")
             .remove("provider_process_start");
+        old_json
+            .as_object_mut()
+            .expect("run object")
+            .remove("parked_at");
 
         let old: RunRecord = serde_json::from_value(old_json).expect("deserialize old run");
 
@@ -452,6 +461,7 @@ mod tests {
         assert_eq!(old.report_message_id, None);
         assert_eq!(old.provider_pid, None);
         assert_eq!(old.provider_process_start, None);
+        assert_eq!(old.parked_at, None);
     }
 
     #[test]
