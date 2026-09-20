@@ -129,6 +129,17 @@ enum SidebarSubcmd {
         #[arg(long)]
         pets: bool,
     },
+    /// List live sidebar renderers and their election roles.
+    #[cfg(feature = "testkit")]
+    #[command(hide = true)]
+    Renderers {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Click a sidebar at 0-based cells of the captured frame. Use a fresh capture for the row: selecting a row expands it and shifts every row below it.
+    #[cfg(feature = "testkit")]
+    #[command(hide = true)]
+    Click { pane_id: PaneId, col: u16, row: u16 },
     /// Render the live sidebar gallery compositor. Hidden — launched by
     /// `sidebar gallery`, not a user-facing sidebar verb.
     #[cfg(feature = "testkit")]
@@ -374,6 +385,10 @@ impl SidebarArgs {
             #[cfg(feature = "testkit")]
             SidebarSubcmd::Gallery { .. } => "sidebar gallery",
             #[cfg(feature = "testkit")]
+            SidebarSubcmd::Renderers { .. } => "sidebar renderers",
+            #[cfg(feature = "testkit")]
+            SidebarSubcmd::Click { .. } => "sidebar click",
+            #[cfg(feature = "testkit")]
             SidebarSubcmd::GalleryRender { .. } => "sidebar gallery-render",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
@@ -451,6 +466,10 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
         } => fixture(state, width, height, watch, theme_mode, theme_scheme),
         #[cfg(feature = "testkit")]
         SidebarSubcmd::Gallery { pets } => gallery(globals, pets),
+        #[cfg(feature = "testkit")]
+        SidebarSubcmd::Renderers { json } => renderers(globals, json),
+        #[cfg(feature = "testkit")]
+        SidebarSubcmd::Click { pane_id, col, row } => click(globals, pane_id, col, row),
         #[cfg(feature = "testkit")]
         SidebarSubcmd::GalleryRender { pets } => gallery_render(pets),
         SidebarSubcmd::Wake(args) => {
@@ -631,6 +650,7 @@ pub(crate) fn repair(_globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
+#[derive(Default)]
 struct SnapshotCommand {
     workspace_id: Option<String>,
     mux: Option<MuxName>,
@@ -665,6 +685,70 @@ fn snapshot(globals: &GlobalFlags, command: SnapshotCommand) -> Result<()> {
     }
     let snapshot = producer_snapshot(&context, command.mux, globals)?;
     emit_snapshot(&snapshot, command.json)
+}
+
+#[cfg(feature = "testkit")]
+fn renderers(globals: &GlobalFlags, json: bool) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Renderer {
+        role: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pane_id: Option<PaneId>,
+        instance_id: rimz::ids::SidebarInstanceId,
+        session_name: String,
+    }
+
+    let context = resolve_snapshot_context(globals, &SnapshotCommand::default())?;
+    let renderers: Vec<_> = rimz::sidebar::live_sidebars(&context.runtime)
+        .into_iter()
+        .map(|sidebar| Renderer {
+            role: if sidebar.producer {
+                "producer"
+            } else {
+                "consumer"
+            },
+            pane_id: sidebar.heartbeat.pane_id,
+            instance_id: sidebar.heartbeat.instance_id,
+            session_name: sidebar.heartbeat.session_name,
+        })
+        .collect();
+    if json {
+        return render::json(&renderers);
+    }
+    let mut out = render::out();
+    for renderer in renderers {
+        writeln!(
+            out,
+            "{}  {}  {}",
+            renderer.role,
+            renderer.pane_id.as_ref().map_or("-", PaneId::as_str),
+            renderer.instance_id,
+        )?;
+    }
+    render::finish(out.flush())
+}
+
+#[cfg(feature = "testkit")]
+fn click(globals: &GlobalFlags, pane_id: PaneId, column: u16, row: u16) -> Result<()> {
+    let context = resolve_snapshot_context(globals, &SnapshotCommand::default())?;
+    let sidebars = rimz::sidebar::live_sidebars(&context.runtime);
+    let sidebar = sidebars
+        .iter()
+        .find(|sidebar| sidebar.heartbeat.pane_id.as_ref() == Some(&pane_id))
+        .ok_or_else(|| {
+            let panes = sidebars
+                .iter()
+                .filter_map(|sidebar| sidebar.heartbeat.pane_id.as_ref().map(PaneId::as_str))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow!(
+                "no live sidebar for {pane_id} in {}; choose a live sidebar pane: {}",
+                context.runtime.heartbeat_dir.display(),
+                if panes.is_empty() { "(none)" } else { &panes },
+            )
+        })?;
+    rimz::sidebar_pane::app::send_click(&sidebar.heartbeat.wakeup_socket, column, row)
+        .with_context(|| format!("sending click to sidebar {pane_id}"))
 }
 
 fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
