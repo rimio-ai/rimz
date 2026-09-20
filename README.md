@@ -189,10 +189,10 @@ rimz message @all "summarize what changed at the next boundary"
 
 ### Automate the routine
 
-**Script an agent like any CLI.** [`rimz agents -p`](./docs/guide/scripting.md) is `claude -p` with one grammar for every agent that can run headless: one supervised turn, one exit code a script or CI job branches on, and swapping the provider behind a pipeline is a one-word change. The turn still runs in a real pane you can watch, answer, and steer while the pipeline waits on it.
+**Script an agent like any CLI.** [`rimz agents -p`](./docs/guide/scripting.md) is `claude -p` with one grammar for every agent that can run headless: one prompt, supervision until the work ends, one exit code a script or CI job branches on, and swapping the provider behind a pipeline is a one-word change. It still runs in a real pane you can watch, answer, and steer while the pipeline waits on it.
 
 ```sh
-# One supervised turn, one exit code, one JSON result to branch on
+# One supervised run, one exit code, one JSON result to branch on
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
 
 # stdin appends to the prompt

@@ -42,7 +42,7 @@ rimz agents budget @coder +5      # add headroom
 rimz agents budget @coder clear   # remove it
 ```
 
-A supervised `-p` run treats its `--budget` as a run outcome instead of a park: the run records `budget_exceeded` and exits `125`, distinct from a timeout or failure, so a pipeline branches on it ([scripting](./scripting.md#one-turn-one-exit-code)).
+A supervised `-p` run treats its `--budget` as a run outcome instead of a park: the run records `budget_exceeded` and exits `125`, distinct from a timeout or failure, so a pipeline branches on it ([scripting](./scripting.md#one-run-one-exit-code)).
 
 ### Cap every turn
 
