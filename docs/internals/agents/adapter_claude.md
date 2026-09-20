@@ -88,7 +88,7 @@ Claude's neutral reply is empty stdout, so every permission, plan, and question 
 | Permission | `allow` only | digit `1`, the stable first menu action |
 | Plan approval | `approve` only, marked with a caution | Shift-Tab, which also turns on accept-edits mode |
 
-Rejecting any of the three with Escape fires neither `PostToolUse` nor `Stop` (Claude Code 2.1.205). When the user types a new prompt after Escape, its `UserPromptSubmit` clears the wait and closes the open question with that prompt as the answer. Deny, keep-planning, refinement text, persistent grants, and manual-review approval without a new prompt are left to the pane.
+Rejecting any of the three with Escape fires neither `PostToolUse` nor `Stop` (Claude Code 2.1.205). The only evidence is the transcript's `[Request interrupted by user` marker, which the next statusline push stamps as an interruption settle; that releases the ask, so the row leaves `rimz asks` and stops reserving pane input ([model.md](./model.md#waiting-and-asks)). The durable question record still closes on the next prompt: its `UserPromptSubmit` clears the wait and records that prompt as the answer. Deny, keep-planning, refinement text, persistent grants, and manual-review approval without a new prompt are left to the pane.
 
 ### Install
 

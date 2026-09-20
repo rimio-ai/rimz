@@ -250,41 +250,39 @@ fn pi_parallel_sibling_completion_keeps_the_keyed_ask_open() {
     );
 }
 
-#[test]
-fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
-    let env = Env::new();
-    let session = "sess-claude-question";
-    let feed = |payload: serde_json::Value| {
-        let body = serde_json::to_string(&payload).expect("claude payload");
-        let output = env.run_hook("claude", &body);
-        assert!(
-            output.status.success(),
-            "{body}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    let listed = || {
-        let output = env
-            .rimz()
-            .args(["asks", "--json"])
-            .bounded_output()
-            .expect("list claude asks");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).expect("asks json")
-    };
+fn feed_claude_hook(env: &Env, payload: serde_json::Value) {
+    let body = serde_json::to_string(&payload).expect("claude payload");
+    let output = env.run_hook("claude", &body);
+    assert!(
+        output.status.success(),
+        "{body}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
-    feed(json!({
+fn listed_asks(env: &Env) -> serde_json::Value {
+    let output = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("list asks");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("asks json")
+}
+
+fn claude_question_hook(session: &str, tool_use_id: &str, question: &str) -> serde_json::Value {
+    json!({
         "hook_event_name": "PreToolUse",
         "session_id": session,
         "tool_name": "AskUserQuestion",
-        "tool_use_id": "toolu_ask",
+        "tool_use_id": tool_use_id,
         "tool_input": {
             "questions": [{
-                "question": "Which route?",
+                "question": question,
                 "options": [
                     { "label": "Safe", "description": "Stage it" },
                     { "label": "Fast", "description": "Ship it" }
@@ -292,7 +290,17 @@ fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
                 "multiSelect": false
             }]
         }
-    }));
+    })
+}
+
+#[test]
+fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
+    let env = Env::new();
+    let session = "sess-claude-question";
+    let feed = |payload: serde_json::Value| feed_claude_hook(&env, payload);
+    let listed = || listed_asks(&env);
+
+    feed(claude_question_hook(session, "toolu_ask", "Which route?"));
     let asks = listed();
     assert_eq!(asks.as_array().map(Vec::len), Some(1));
     assert_eq!(asks[0]["questions"][0]["question"], "Which route?");
@@ -320,6 +328,53 @@ fn claude_parallel_sibling_tool_keeps_the_keyed_ask_open() {
         "tool_use_id": "toolu_ask"
     }));
     assert_eq!(listed(), json!([]));
+}
+
+/// Escape fires no hook, so the transcript's interruption marker is the only
+/// evidence that a keyed ask is gone: the next statusline push must take the
+/// question out of `rimz asks`.
+#[test]
+fn claude_escape_releases_the_keyed_ask_on_the_next_statusline_push() {
+    let env = Env::new();
+    let session = "sess-claude-escape";
+    feed_claude_hook(
+        &env,
+        claude_question_hook(session, "toolu_ask", "Which route?"),
+    );
+    assert_eq!(listed_asks(&env).as_array().map(Vec::len), Some(1));
+
+    let marked_at = jiff::Timestamp::now() + std::time::Duration::from_secs(5);
+    let transcript = env.home_root.join("escape-transcript.jsonl");
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n{}\n",
+            json!({
+                "type": "assistant",
+                "timestamp": marked_at.to_string(),
+                "message": { "role": "assistant", "content": [{ "type": "text", "text": "asking" }] }
+            }),
+            json!({
+                "type": "user",
+                "timestamp": marked_at.to_string(),
+                "message": { "role": "user", "content": "[Request interrupted by user for tool use]" }
+            })
+        ),
+    )
+    .expect("write Claude escape transcript");
+    let payload = serde_json::to_string(&json!({
+        "session_id": session,
+        "transcript_path": transcript
+    }))
+    .expect("statusline payload");
+    let output = env.run_statusline_feed("claude", &payload);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(listed_asks(&env), json!([]));
 }
 
 #[test]
