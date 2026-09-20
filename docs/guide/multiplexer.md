@@ -1,80 +1,100 @@
 # Zellij and tmux
 
-RimZ runs your agents inside Zellij or tmux, the terminal multiplexer you may already use. If you already live in one, that sentence is the whole integration: your keybinds, your theme, and every session you run outside RimZ stay exactly as they were. If you have barely touched a multiplexer, this page sets you up with a comfortable one and explains what it is doing under RimZ.
+RimZ runs your agents inside Zellij or tmux, and ships no terminal of its own. If you already live in one, that is most of the integration: a room is an ordinary session, the agents run their stock CLIs in ordinary panes, and detach, reattach, scrollback, and copy-mode work exactly as they always have, because they are your multiplexer doing them. Every session you run outside RimZ is untouched.
 
-## Why a multiplexer is under RimZ
+The defaults are the exception. Multiplexers were tuned for shells and editors decades before an agent TUI streamed tokens, wanted Shift+Enter for a soft newline, and expected 24-bit color and a deep scrollback. So a room asserts a short list of settings agents need and leaves the rest to you. This page is that list, then a baseline configuration worth adopting for the sessions you run outside a room.
 
-A coding agent is long-running. It thinks for minutes, works for hours, and you want to close the laptop and pick the run back up from another machine. A plain terminal tab cannot do that: quit the terminal and the agent dies with it. A multiplexer is the tool that already solved this, decades before agents existed. Every agent in a RimZ room needs what it provides:
+## What the room changes, and what stays yours
 
-- a **persistent session** that outlives the terminal window, so you detach, walk away, and reattach from anywhere,
-- a **pseudo-terminal per pane**, so each agent's TUI runs in a real terminal with full color, resize, and key handling,
-- **panes, tabs, and windows** to arrange a whole fleet on one screen.
+A room is one Zellij or tmux session. Every time RimZ opens or reattaches it, RimZ asserts the settings agents need and stops there; it never edits `~/.config/zellij/config.kdl` or `~/.tmux.conf`. Detach the way you always do, and `rimz start` in the project directory, or `rimz attach <session>` from anywhere, brings you back to the same panes.
 
-RimZ needs all three, so rather than reimplement a terminal, a session manager, and a window system, it drives the one you already run. Some tools in this space ship their own terminal UI and reinvent that stack; RimZ builds on Zellij and tmux instead. The agents keep running their stock CLIs in ordinary panes, detach and reattach and scrollback and copy-mode stay exactly as your multiplexer already does them, and nothing about your terminal becomes RimZ-specific.
+On Zellij the room starts in locked mode, so your keystrokes reach the agent until you press `Ctrl+g` for a Zellij mode. A single click on a sidebar card jumps to that agent whatever your own mouse settings say. A new pane opened with no direction splits the focused pane along its longer visual edge, and closing it returns the space to that sibling.
 
-The one catch is age. Multiplexers predate coding agents by decades, and their defaults were tuned for shells and editors, not for a TUI that streams tokens, wants Shift+Enter for a soft newline, and expects 24-bit color and a deep scrollback. So RimZ asserts a short list of room settings agents need, and the baseline configs below make the rest of day-to-day work pleasant.
+Three more Zellij differences have nothing to do with typing. Session serialization is off, because RimZ rebuilds a room after a crash or reboot itself rather than letting Zellij resurrect a wall of suspended command panes that come back dead. Zellij's per-second session-metadata loop is off too, because at around 100 panes it costs a visible share of the Zellij server's CPU. And because RimZ supplies the room's tab layout, a RimZ tab carries Zellij's one-row compact bar instead of the status chrome your own `default_layout` would draw.
 
-## What RimZ changes, and what stays yours
+On tmux the room turns on the mouse, focus events, a 100,000-line scrollback, notification passthrough, the OSC 52 clipboard, clickable OSC 8 links, atomic redraws, and the extended-keys handling that makes Shift+Enter and Alt+Enter soft newlines while plain Enter still submits. It sets `escape-time` to 10 ms, keeps window numbering compact, resizes panes per attached client, and titles the outer terminal.
 
-RimZ's room is session-scoped. On every session birth and reattach it applies the settings agents need (locked mode and single-click sidebar jumps on Zellij; mouse, focus events, notification passthrough, soft-newline keys, clipboard, clickable OSC 8 links, and a 100,000-line scrollback on tmux) and stops there. It does not edit your `~/.config/zellij/config.kdl` or `~/.tmux.conf`. Your theme, keybinds, copy-mode, and status bar are yours, inside the room and in every session you run outside it. The exact keys and defaults are in [configuration](./configuration.md#multiplexer-room-options).
+Everything else is yours, inside the room and out: your theme, your prefix, your copy-mode bindings, your status bar, your keybinds. `~/.tmux.conf` and `config.kdl` are still read in a room, and the settings above layer over them. The one place the room reaches into your key tables is tmux's root table. It binds `S-Enter` and `M-Enter` there for soft newlines, plus a `User240` that turns a bare `ESC[27u` back into plain Escape; some terminals, Ghostty among them, answer the extended-keys request with that sequence.
 
-For panes RimZ creates, the outer terminal tab also stays on a short room-and-process title such as `rimz-myrepo-a1b2c3 | zsh` or `rimz-myrepo-a1b2c3 | codex`. Agent and channel panes use their RimZ identity; panes without one show the live process short name. A shell prompt cannot replace it with an SSH host and working path.
+For the panes RimZ creates, the outer terminal's title is the room and a short pane identity: `rimz-myrepo-a1b2c3 | zsh`, `rimz-myrepo-a1b2c3 | codex`. Agent and channel panes carry their RimZ identity; any other pane shows its running command on tmux, and on Zellij the name it was launched with. Applications cannot overwrite it, so the shell that likes to set your title to an SSH host and a working path does not, and you can still pick the room's window out of a taskbar.
 
-One thing more happens on Zellij: RimZ seeds a permission grant for the presence plugin it ships, so the first attach is not interrupted by Zellij's plugin prompt. Your `config.kdl` stays untouched and the grant is yours to revoke; the full boundary is in [security and trust](./security.md#the-zellij-presence-plugin).
+Closing every RimZ room undoes all of this. The settings live in the session, nothing was written to your config, and on tmux the whole server they live in exits with its last room. One thing outlives the room: on Zellij, RimZ seeds a permission grant for the presence plugin it ships, in Zellij's own permission cache, so your first attach is not interrupted by a plugin prompt. Revoking it stops the plugin until the next room birth seeds it again. The full boundary, and what the plugin may do, are in [security and trust](./security.md#the-zellij-presence-plugin).
 
-`rimz config init --print` lists every room option RimZ applies, with its default. Nothing outside the room changes, so undoing RimZ is closing the room.
+### Your tmux rooms run on their own server
 
-RimZ also binds `Alt+g` as a room-only smart zoom on both backends: it toggles fullscreen for the focused work pane, but when the sidebar holds focus it first moves to a working sibling and fullscreens that instead. Configure `[sidebar] zoom_key` to change or disable it. On Zellij 0.44, plugin-routed room keys may pause briefly while they dispatch; rebinding smart zoom to `Ctrl+g` also shadows Zellij's locked-mode escape chord, so choose that only when another chord still reaches Zellij modes.
-
-### Room overrides in RimZ config
-
-The `[zellij]` and `[tmux]` tables in `~/.rimz/config.toml` tune the room-scoped settings, and `[mux] default` picks the backend when both are installed:
-
-```toml
-[mux]
-default = "zellij"              # unset resolves to tmux when both are installed
-
-[zellij]
-pane_frames = true              # optional override; unset, your config.kdl wins
-
-[tmux]
-# pane_border_status = "top"    # optional override; unset, your ~/.tmux.conf wins
-# pane_border_lines = "heavy"
-```
-
-An optional key left unset falls through to your own Zellij or tmux config. A key you set here wins inside the room, because RimZ reasserts room options on every attach. Setting `[tmux] pane_border_status` makes RimZ own `pane-border-format` too, so it titles work panes and blanks the sidebar's border row; unset, your `~/.tmux.conf` format applies and may title the sidebar. The full model is in [configuration → Multiplexer room options](./configuration.md#multiplexer-room-options).
-
-## Adopt the baseline
-
-You need none of the configuration on this page: a freshly installed multiplexer works because the room sets its own options. The baselines are for your comfort and for the sessions you run outside RimZ. The fastest good config is the one RimZ ships under [examples/](../../examples/README.md), Zellij as a complete starting file and tmux as sourceable modules:
+RimZ rooms are not on your default tmux server. They run on a second one, on a socket under the runtime root. That is what keeps the settings tmux scopes to a whole server (clipboard, focus events, extended keys, escape time, the three root bindings) out of your own sessions: they stop at that socket. `tmux ls` in your own terminal does not list a RimZ room, and your `tmux kill-server` cannot touch one. Address the RimZ server with `-S`:
 
 ```sh
-# From the rimz checkout
-cp examples/zellij/config.kdl ~/.config/zellij/config.kdl        # Zellij: the whole baseline, one file
-printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-keys,theme-tokyonight}.conf >> ~/.tmux.conf
+tmux -S "${XDG_RUNTIME_DIR:-/tmp/rimz-$(id -u)}/rimz/tmux/server" ls
 ```
 
-Copy the whole thing if you are starting fresh; lift the blocks you want if you already have a config. The rest of this page walks through what each block does and why.
+It holds one session per project and exits when the last one closes. `rimz paths` prints the same directory as `runtime root`.
 
-## Layouts and messages are ordinary pane operations
+Zellij has no such split: a RimZ room is an ordinary session in `zellij ls`, named `rimz-<project>-<hash>`, and `zellij action` addresses it with no extra flag.
 
-Everything RimZ does inside the room reduces to multiplexer commands you could run by hand, which is worth knowing before you trust it with your fleet.
+### Two keys that work from any pane
 
-An agent is a plain process in an ordinary pane. A layout spec is pane splits: `rimz agents claude,codex` asks the multiplexer to split two panes side by side, then launches a CLI in each, exactly the splits you would make yourself, in one command instead of several. The grammar (commas split columns, plus signs tile rows, slashes stack rows) is in [agents → compose a layout](./fleet.md#compose-a-layout).
+The sidebar's own keys fire only when the sidebar has focus, so RimZ registers two chords with the multiplexer itself. `Alt+p` focuses the sidebar and pressing it again returns you to the pane you left, which is the whole [jump loop](./sidebar.md#glance-jump-answer). `Alt+g` fullscreens the focused work pane, and picks a working sibling first when the sidebar is what has focus.
 
-`rimz message @coder "rebase first"` types that text into the agent's pane through the multiplexer's own send primitive, the same bytes as if you typed them at the keyboard, and `rimz pane capture @coder` reads the pane's visible text the same way. The sidebar is one more pane. You could list, focus, and drive every pane in the room with `zellij action` or `tmux` directly, and RimZ uses exactly those primitives. How messages route and when they land is in [messaging](./messaging.md).
+tmux takes them as root-table bindings on RimZ's server; on Zellij the presence plugin installs them at runtime, so your `config.kdl` is unchanged. Either way they end with the session. `sidebar.focus_key` and `sidebar.zoom_key` change or disable them ([configuration](./configuration.md#sidebar-rendering)). Choose a chord your agents do not use, and on Zellij leave `Ctrl+g` alone unless some other chord still reaches Zellij's modes, because it is the default escape from locked mode.
+
+### Change what the room asserts
+
+The `[zellij]` and `[tmux]` tables in `~/.rimz/config.toml` set the values the room asserts:
+
+```toml
+[zellij]
+pane_frames = true              # unset, your config.kdl decides
+
+[tmux]
+history_limit = 200000
+pane_border_status = "top"      # unset, your ~/.tmux.conf decides
+```
+
+The backends differ in what an unset key means. `[tmux]` carries a RimZ value for every key but the two pane-border ones, so leaving a key out means RimZ's default rather than yours. `[zellij]` passes only the keys you set, plus the four it always passes: `mouse_click_through` and `focus_follows_mouse` behind single-click jumps, `session_serialization`, and `disable_session_metadata`. Every key with its default is in [configuration → multiplexer room options](./configuration.md#multiplexer-room-options).
+
+A changed value reaches the room the next time RimZ opens or reattaches its session. tmux's window-scoped settings are the exception: the pane borders, passthrough, and per-client resize reach only windows opened after the change. When an edit looks ignored, restart the room.
+
+A Zellij boolean is a request rather than a setting. Zellij XORs a boolean command-line option against the same key in your `config.kdl`, so `pane_frames = true` here while `config.kdl` already says `pane_frames true` turns frames off. Set a Zellij boolean in one file, not both.
+
+## Everything in the room is an ordinary pane operation
+
+What RimZ does inside the room reduces to multiplexer commands you could run yourself, which is worth knowing before you hand it a room full of agents.
+
+An agent is a plain process in an ordinary pane. A layout is pane splits: `rimz agents claude,codex` asks the multiplexer to split two panes side by side and launches a CLI in each, exactly the splits you would make by hand, in one command instead of several. The layout grammar is in [agents → compose a layout](./fleet.md#compose-a-layout).
+
+`rimz message @coder "rebase first"` resolves the handle to one live pane and writes the text into it as a single bracketed paste, then presses Enter as a separate key, using the multiplexer's own primitives. `rimz pane capture @coder` reads the pane's visible text with `capture-pane`. The sidebar is one more pane. You can list, focus, and drive every pane in a room yourself, with `zellij action` or with `tmux -S` against the socket above, and RimZ is calling exactly those commands. What a message carries and when it lands is in [messaging](./messaging.md).
+
+## Which backend a room uses
+
+With both installed, RimZ takes the first of these that answers:
+
+1. `--mux zellij` or `--mux tmux` on the command, or their `--zellij` and `--tmux` shorthands;
+2. the multiplexer you are already inside;
+3. `[mux] default` in `~/.rimz/config.toml`, which makes `rimz start` refuse when it names a backend that is not installed;
+4. whichever one is installed; tmux when both are.
+
+A room that already exists keeps the backend it was born on, whatever that resolution says. The floors are Zellij 0.44.2 and tmux 3.5, with 3.6 or newer preferred; [installation](./installation.md#install-zellij-or-tmux) has the versions and how to get a current build on your platform.
+
+## Adopt a baseline
+
+You need none of the configuration below. A freshly installed multiplexer works, because the room sets its own options. These baselines are for your comfort, and for the sessions you run outside RimZ. The fastest good config is the one RimZ ships under [examples/](../../examples/README.md): Zellij as one complete file, tmux as four sourceable modules.
+
+```sh
+# From the rimz checkout. Run the line for the multiplexer you use.
+mkdir -p ~/.config/zellij && cp examples/zellij/config.kdl ~/.config/zellij/config.kdl
+
+printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-keys,theme-tokyonight}.conf >> ~/.tmux.conf
+tmux source-file ~/.tmux.conf
+```
+
+Take that path if you are starting fresh. The `cp` replaces an existing `config.kdl`, so with a config you care about, lift the blocks you want instead; the tmux line only appends, and dropping a `source-file` line undoes it. The rest of this page is what each block does and why.
 
 ## Zellij
 
 The file is `~/.config/zellij/config.kdl`. `zellij setup --dump-config` prints the full default set, and `zellij setup --check` validates your edits. Every key here is catalogued in the [Zellij upstream reference](../externals/mux-adapter/zellij-reference.md#configuration).
 
-[examples/zellij/config.kdl](../../examples/zellij/config.kdl) is the whole baseline, the essentials below plus every block after them and the `tokyo-night` theme, as one file, since Zellij reads a single config. Starting fresh, copy it; with an existing `config.kdl`, lift the blocks you want. Unlisted keys keep Zellij's defaults either way.
-
-Clipboard travels over OSC52 by default, so yanking works through SSH to your local clipboard. A terminal that needs a helper can set one explicitly:
-
-```kdl
-// copy_command "wl-copy"      // Wayland;  "xclip -selection clipboard" on X11;  "pbcopy" on macOS
-```
+Zellij reads a single config file, so [examples/zellij/config.kdl](../../examples/zellij/config.kdl) ships as one: the essentials below, every block after them, and the `tokyo-night` theme. Keys it does not list keep Zellij's defaults.
 
 ### Essentials
 
@@ -89,7 +109,13 @@ copy_clipboard "system"                // yank into the OS clipboard
 support_kitty_keyboard_protocol true   // Shift+Enter and friends reach TUI agents
 ```
 
-`default_mode "locked"` is the one that matters most: locked mode passes ordinary keystrokes to the focused pane, so an agent's TUI gets your input until you deliberately press `Ctrl+g` for a Zellij mode. RimZ already opens its room in locked mode; setting it here keeps your own sessions consistent and your muscle memory intact. Zellij inherits truecolor from the terminal it runs in, so there is no color option to set.
+`default_mode "locked"` is the one that matters most. Locked mode passes ordinary keystrokes to the focused pane, so an agent's TUI gets your input until you deliberately press `Ctrl+g` for a Zellij mode. A RimZ room already opens in locked mode; setting it here keeps your own sessions consistent and your muscle memory intact. Zellij inherits truecolor from the terminal it runs in, so there is no color option to set.
+
+Clipboard travels over OSC 52, which means a yank inside an SSH session still reaches your local clipboard. A terminal that needs a helper instead can name one:
+
+```kdl
+// copy_command "wl-copy"      // Wayland;  "xclip -selection clipboard" on X11;  "pbcopy" on macOS
+```
 
 ### Recommended
 
@@ -103,17 +129,15 @@ osc8_hyperlinks true                   // clickable links in command output
 show_startup_tips false                // skip the startup tip banner
 show_release_notes false               // skip the release-notes pane on upgrade
 mouse_hover_effects false              // no hover frames or help text; calmer with many panes
-session_serialization false            // prefer clean session births over held resurrection panes
+session_serialization false            // start clean instead of resurrecting suspended panes
 // default_shell "zsh"                 // uncomment to pin a shell; unset uses $SHELL
 ```
 
-`pane_frames true` draws a titled border around each pane so you can always see which one holds focus, the single most useful upgrade for a multi-agent layout. RimZ enforces its room's own mouse behavior, so your personal `focus_follows_mouse` and `mouse_click_through` settings no longer break single-click sidebar jumps.
-
-Inside a RimZ room, opening a new pane splits the focused pane along its longer visual edge, and closing that pane returns the space to its split sibling.
+`pane_frames true` draws a titled border around each pane so you can always see which one holds focus, which matters once a dozen panes look alike. `session_serialization false` gives your own sessions the clean-birth posture RimZ rooms already have: running panes on the next start instead of a wall of suspended ones.
 
 ### Alt chords in locked mode
 
-RimZ opens its room in Zellij's locked mode, which hands every keystroke straight to the focused pane, so an agent's TUI gets your typing until you press `Ctrl+g` for a Zellij mode. That is what you want almost always, and it puts Zellij's own shortcuts one extra keypress away. A `locked` keybinds block keeps the chords you use constantly reachable while everything else still flows to the agent; the block merges with Zellij's defaults, so nothing else changes.
+Locked mode hands every keystroke to the pane, which is what you want almost always, and it puts Zellij's own shortcuts one extra keypress away. A `locked` keybinds block keeps the chords you use constantly reachable while everything else still flows to the agent. The block merges with Zellij's defaults, so no other mode changes.
 
 ```kdl
 keybinds {
@@ -141,29 +165,17 @@ keybinds {
 }
 ```
 
-A chord bound here no longer reaches the app in the pane, so it shadows zsh's `Alt` keys (`Alt-f` forward-word, `Alt-.` last-arg) and any agent-TUI `Alt` binding. Trim the set to the chords you actually use. The [tmux parity block below](#zellij-parity-alt-chords) mirrors these same chords, so one set of muscle memory drives both multiplexers.
-
-### A note on resurrection
-
-RimZ disables Zellij session serialization inside its room, because it owns rebuilding a room after a reboot or crash: it re-seeds the prior agents itself ([resume on rebirth](../internals/sidebar/sidebar.md#resume-on-rebirth)) rather than resurrecting a wall of suspended command panes that come back dead. Setting `session_serialization false` in your own `config.kdl` gives non-RimZ sessions the same clean-birth posture when you prefer running panes over resurrection.
-
-RimZ also disables Zellij's session metadata loop inside its room. At roughly 100 panes on Zellij 0.44.3 that loop rewrites `session-metadata.kdl` every few seconds and runs process discovery through `ps`, a visible share of the Zellij server CPU. RimZ starts and attaches rooms with `disable_session_metadata true` so that work stays out of the room.
+A chord bound here stops reaching the app in the pane, so it shadows zsh's `Alt` keys (`Alt-f` forward-word, `Alt-.` last-arg) and any agent-TUI `Alt` binding. Trim the set to the chords you actually use. The [tmux parity block below](#zellij-parity-alt-chords) mirrors these same chords, so one set of muscle memory drives both multiplexers.
 
 ## tmux
 
 The file is `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`); reload it with `tmux source-file ~/.tmux.conf` or the `prefix` + `r` binding below. Every option here is catalogued in the [tmux upstream reference](../externals/mux-adapter/tmux-reference.md#options).
 
-tmux is the spartan one out of the box: no mouse, a short scrollback, and thin, untitled pane borders. The blocks below ship as four self-contained modules under [examples/tmux/](../../examples/README.md#tmux--tmux), [`agents.conf`](../../examples/tmux/agents.conf) (the essentials below), [`quality-of-life.conf`](../../examples/tmux/quality-of-life.conf) (copy-mode, window names, splits), [`zellij-keys.conf`](../../examples/tmux/zellij-keys.conf) (the parity chords), and [`theme-tokyonight.conf`](../../examples/tmux/theme-tokyonight.conf) (frames and status bar), so your `~/.tmux.conf` stays yours and adopts by reference:
-
-```sh
-# From the rimz checkout: source the modules you want; drop any line.
-printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-keys,theme-tokyonight}.conf >> ~/.tmux.conf
-tmux source-file ~/.tmux.conf
-```
+tmux is the spartan one out of the box: no mouse, a short scrollback, and thin, untitled pane borders. The blocks below ship as four self-contained modules under [examples/tmux/](../../examples/README.md#tmux--tmux), so your `~/.tmux.conf` stays yours and adopts by reference: [`agents.conf`](../../examples/tmux/agents.conf) (the essentials), [`quality-of-life.conf`](../../examples/tmux/quality-of-life.conf) (copy-mode, window names, splits), [`zellij-keys.conf`](../../examples/tmux/zellij-keys.conf) (the parity chords), and [`theme-tokyonight.conf`](../../examples/tmux/theme-tokyonight.conf) (frames and status bar).
 
 ### Essentials
 
-Two groups. Truecolor sets your terminal type and RGB passthrough, which tmux needs for its own color handling even though RimZ stamps `COLORTERM` inside its rooms. The rest are behaviors RimZ applies inside the room; setting them here makes your own sessions match.
+The first three lines advertise a color terminal and pass RGB and styles through, which tmux needs for its own color handling. The rest are the behaviors a RimZ room applies for you, so setting them here is what makes the sessions you run outside a room match.
 
 ```tmux
 # True color + italics: advertise a color terminal, pass RGB and styles through.
@@ -172,28 +184,30 @@ set -ga terminal-overrides ",*256col*:RGB,alacritty:RGB,wezterm:RGB"
 set -ga terminal-features ",*:RGB,*:usstyle,*:clipboard"
 
 # Behaviors a modern TUI agent relies on.
-set -g  mouse on                 # scroll, select panes, resize
-set -g  history-limit 100000     # long Claude/Codex output stays in scrollback
-set -sg escape-time 10           # safely joins split ESC sequences
-set -ga terminal-features ",*:sync"   # atomic redraws for tmux sessions outside RimZ
-set -ga terminal-features ",*:hyperlinks" # clickable OSC 8 links
-set -g  focus-events on          # editors and agents see focus changes
-set -g  allow-passthrough on     # let desktop notifications pass through tmux
-set -s  extended-keys on             # distinguish modified Enter from Enter
-set -s  extended-keys-format csi-u   # forward Shift+Enter / Alt+Enter as CSI-u
-set -ga terminal-features "*:extkeys" # ask the outer terminal to send them
+set -g  mouse on                      # scroll, select panes, resize
+set -g  history-limit 100000          # long Claude/Codex output stays in scrollback
+set -sg escape-time 10                # upstream 3.5+ default; safely joins split ESC sequences
+set -ga terminal-features ",*:sync"   # atomic redraws: no torn frames
+set -ga terminal-features ",*:hyperlinks"  # clickable OSC 8 links
+set -g  focus-events on               # editors and agents see focus changes
+set -g  allow-passthrough on          # desktop notifications pass through tmux
+set -g  set-clipboard on              # yank into the host clipboard over OSC 52
+
+# Modified Enter: soft newlines for agents, plain Enter still submits.
+set -s  extended-keys on
+set -s  extended-keys-format csi-u
+set -ga terminal-features "*:extkeys"
 set -s  user-keys[240] "\e[27u"        # name Ghostty's modifier-less CSI-u Esc
 bind-key -n User240 send-keys Escape   # normalize it back to plain Esc
 bind-key -n S-Enter send-keys Escape "[13;2u"
 bind-key -n M-Enter send-keys Escape "[13;3u"
-set -g  set-clipboard on         # yank into the host clipboard over OSC52
 ```
 
-Three of these earn a note; the block's comments carry the rest. `escape-time 10`, the upstream default from tmux 3.5, gives tmux a short window to join an ESC byte with the rest of its sequence, avoiding split-ESC misparses over SSH while keeping the delay imperceptible. The extended-keys trio plus the modified-Enter bindings let an agent's composer receive Shift+Enter and Alt+Enter as soft newlines while plain Enter still submits; on tmux 3.5.x that trades clean multiline paste while extended keys are active, so use Ctrl+J or tmux 3.6+ for both. The `user-keys` pair keeps plain Esc clean on terminals such as Ghostty that answer the extended-keys request with a modifier-less CSI-u sequence. `allow-passthrough on` lets the desktop-notification bytes RimZ emits reach your terminal.
+Three of these earn a note; the comments carry the rest. `escape-time 10` is the upstream default from tmux 3.5, down from 500 ms: it gives tmux a short window to join an ESC byte with the rest of its sequence, which avoids split-ESC misparses over SSH while staying imperceptible. The extended-keys trio and the two Enter bindings let an agent's composer receive Shift+Enter and Alt+Enter as soft newlines; on tmux 3.5.x that trades clean multiline paste while extended keys are active, so use Ctrl+J for a soft newline there, or tmux 3.6 and up for both. `allow-passthrough on` is what lets the desktop-notification bytes RimZ writes reach your terminal.
 
 ### Recommended
 
-These tune copy-mode, window behavior, and splits. None are required; each makes day-to-day work nicer.
+These tune copy-mode, window behavior, and splits. None are required; each makes day-to-day work nicer. Two of them, `renumber-windows` and `aggressive-resize`, a RimZ room already sets for itself.
 
 ```tmux
 # Copy-mode: vi keys, mouse-drag yanks and exits, gentler scroll.
@@ -215,7 +229,7 @@ setw -g automatic-rename off     # keep windows at the name they were given
 setw -g allow-rename off         # ignore app title escapes renaming them
 
 # Reload, and splits that keep the current directory and follow the pane's
-# longer visual edge (the split behavior RimZ rooms give Zellij).
+# longer visual edge, the way Zellij splits.
 bind r source-file ~/.tmux.conf \; display "tmux.conf reloaded"
 set -g @smart_split_is_wide '#{?#{&&:#{window_cell_width},#{window_cell_height}},#{e|>=:#{e|*:#{pane_width},#{window_cell_width}},#{e|*:#{pane_height},#{window_cell_height}}},#{e|>=:#{pane_width},#{pane_height}}}'
 bind | if -F '#{E:@smart_split_is_wide}' 'split-window -h -c "#{pane_current_path}"' 'split-window -v -c "#{pane_current_path}"'
@@ -223,13 +237,13 @@ bind - if -F '#{E:@smart_split_is_wide}' 'split-window -h -c "#{pane_current_pat
 bind c new-window -c "#{pane_current_path}"
 ```
 
-The root `MouseDrag1Pane` override opens copy-mode and begins the selection in one step. tmux's default opens copy-mode with `copy-mode -M` alone, which can leave the first drag unanchored: the highlight appears but the release copies nothing, so you press `q` and drag again to get it. Beginning the selection on entry makes the first drag copy and exit like the rest. The `pane_in_mode`/`mouse_any_flag` guard keeps the defaults intact, so a drag inside a mouse-aware TUI or an already-open copy-mode still forwards to that app.
+The root `MouseDrag1Pane` override opens copy-mode and begins the selection in one step. tmux's default opens copy-mode with `copy-mode -M` alone, which can leave the first drag unanchored: the highlight appears but the release copies nothing, so you press `q` and drag again to get it. Beginning the selection on entry makes the first drag copy and exit like the rest. The `pane_in_mode` and `mouse_any_flag` guard keeps the defaults intact, so a drag inside a mouse-aware TUI or an already-open copy-mode still forwards to that app.
 
-`automatic-rename off` with `allow-rename off` keeps window names where they were set: RimZ titles agent windows when it opens them, and your own windows keep the name you give them instead of tracking the foreground command. The `@smart_split_is_wide` splits mirror RimZ's Zellij rooms, so a wide pane splits left and right, a tall pane splits top and bottom, comparing pixel dimensions when tmux knows the terminal cell size.
+`automatic-rename off` with `allow-rename off` keeps window names where they were set: RimZ titles agent windows when it opens them, and your own windows keep the name you gave them instead of tracking the foreground command. The `@smart_split_is_wide` splits give tmux the placement Zellij does natively, so a wide pane splits left and right and a tall pane top and bottom, comparing pixel dimensions when tmux knows the terminal's cell size. Both `|` and `-` run it, so either key gives you the sensible split rather than a fixed direction.
 
 ### Zellij-parity Alt chords
 
-If you move between tmux and Zellij, mirroring the [locked-mode `Alt` chords above](#alt-chords-in-locked-mode) lets the same keys drive both. These are no-prefix bindings, so they shadow zsh's `Alt` keys, the same trade the Zellij block already makes.
+If you move between tmux and Zellij, mirroring the [locked-mode `Alt` chords above](#alt-chords-in-locked-mode) lets the same keys drive both. These are no-prefix bindings, so they shadow zsh's `Alt` keys, the same trade the Zellij block makes.
 
 ```tmux
 # Tabs == tmux windows.
@@ -264,17 +278,16 @@ bind -n M-Down  resize-pane -D 2
 bind -n M-d detach-client
 ```
 
-`Alt+[` and `Alt+]` (Zellij's other tab-cycle pair) are left out on purpose: `Alt+[` sends `ESC [`, which collides with CSI escape sequences in some terminals.
+`Alt+[` and `Alt+]`, Zellij's other tab-cycle pair, are left out on purpose: `Alt+[` sends `ESC [`, which collides with CSI escape sequences in some terminals.
 
 ### Titled pane borders and a themed status bar
 
-tmux draws thin, untitled pane borders and a plain status bar by default. This module gives panes titled frames, the closest tmux gets to Zellij's, and styles the status bar as Powerline tabs in TokyoNight Night, the palette of RimZ's default sidebar scheme, so the whole room reads as one surface. It assumes the outer terminal uses a Nerd Font or another Powerline-capable face. The full palette is [theme-tokyonight.conf](../../examples/tmux/theme-tokyonight.conf); the pieces that carry it:
+tmux draws thin, untitled pane borders and a plain status bar by default. This module gives panes titled frames, the closest tmux gets to Zellij's, and styles the status bar as Powerline tabs in TokyoNight Night, the palette of RimZ's default sidebar scheme, so the whole room reads as one surface. It assumes the outer terminal uses a Nerd Font or another Powerline-capable face.
 
 ```tmux
 # Titled pane borders: the tmux analog of Zellij's pane frames.
 set -g pane-border-status top
 set -g pane-border-lines heavy               # solid frame lines instead of thin ACS
-set -g pane-border-format " #{pane_index} #{pane_current_command} "
 set -g pane-border-style "fg=#414868"
 set -g pane-active-border-style "fg=#7aa2f7"
 
@@ -284,14 +297,17 @@ set -g status-left  "#[fg=#1a1b26,bg=#7aa2f7,bold] #S "
 set -g window-status-separator ""
 ```
 
-`pane-border-status top` labels each pane's border with its index and running command, so a grid of agents stays legible at a glance. RimZ inherits this setting when its [`[tmux] pane_border_status`](./configuration.md#multiplexer-room-options) override is unset; set that override and RimZ titles work panes and blanks the sidebar's own border row. tmux does not draw a pane's outer window edge, so panes are not fully boxed like Zellij frames.
+`pane-border-status top` labels each pane's border, so a grid of agents stays legible at a glance. The module's own `pane-border-format` puts the pane index and running command on that row and colors it by focus; it is one long line, so read it in [theme-tokyonight.conf](../../examples/tmux/theme-tokyonight.conf) rather than here. tmux does not draw a pane's outer window edge, so panes are not fully boxed the way Zellij frames are.
 
-Swap the hex values for your own scheme's palette; `rimz list-themes` names every scheme RimZ bundles if you want the sidebar and status bar to match.
+A RimZ room inherits these borders while [`[tmux] pane_border_status`](./configuration.md#multiplexer-room-options) is unset. Set that override to `top` or `bottom` and RimZ owns `pane-border-format` too: it titles work panes and blanks the sidebar's border row, so the sidebar reads frameless.
+
+Swap the hex values for your own scheme's palette. `rimz list-themes` names every scheme RimZ bundles, if you want the sidebar and the status bar to match.
 
 ## See also
 
 - [Set up your machine](./setup.md): the one-time pass that writes the per-machine config and installs the agent hooks the sidebar reads.
-- [Configuration → multiplexer room options](./configuration.md#multiplexer-room-options): every `[zellij]` and `[tmux]` key with its default.
+- [Configuration → multiplexer room options](./configuration.md#multiplexer-room-options): every `[mux]`, `[zellij]`, and `[tmux]` key with its default.
 - [examples/](../../examples/README.md): the shipped baseline files these blocks come from.
-- [Security and trust → the Zellij presence plugin](./security.md#the-zellij-presence-plugin): the one permission grant RimZ seeds, and how to revoke it.
+- [Security and trust → the Zellij presence plugin](./security.md#the-zellij-presence-plugin): the one permission grant RimZ seeds, and what the plugin may do with it.
+- [Troubleshooting → Zellij or tmux is missing or too old](./troubleshooting.md#zellij-or-tmux-is-missing-or-too-old): what `rimz doctor` says about your backend, and how to read it.
 - [Zellij](../externals/mux-adapter/zellij-reference.md) and [tmux](../externals/mux-adapter/tmux-reference.md) upstream references: every option catalogued at the source.

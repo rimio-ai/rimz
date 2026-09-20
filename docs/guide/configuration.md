@@ -353,7 +353,9 @@ The two backends differ in what an unset key means.
 | `session_serialization` | `false` | RimZ owns rebirth; a resurrected Zellij room comes back with dead panes. |
 | `disable_session_metadata` | `true` | Stops Zellij's per-second metadata and `ps` loop. |
 
-Every other key, `pane_frames` and `copy_clipboard` among them, is passed only when you set it and otherwise falls through to your `~/.config/zellij/config.kdl`. Two behaviours are not keys at all: the room starts in locked mode, and the sidebar pane is always borderless so its hit-testing stays stable whatever `pane_frames` says.
+Every other key, `pane_frames` and `copy_clipboard` among them, is passed only when you set it and otherwise falls through to your `~/.config/zellij/config.kdl`. Four behaviours are not keys at all: the room starts in locked mode, a directionless new pane splits the focused pane rather than the largest one, swap layouts are off, and the sidebar pane is always borderless so its hit-testing stays stable whatever `pane_frames` says.
+
+A boolean you set here is a request, not a guarantee. Zellij XORs a boolean command-line option against the same key in your `config.kdl`, so `pane_frames = true` on top of a `config.kdl` that already says `pane_frames true` turns frames off. Set a Zellij boolean in one file, not both; RimZ works around the XOR for the two mouse keys its sidebar depends on.
 
 `[tmux]` carries a RimZ default for every key and applies all of them on every birth, so an unset key means RimZ's value rather than yours. The two pane-border keys are the exception, falling through to your `~/.tmux.conf` or tmux's defaults when unset. Setting `pane_border_status` also hands RimZ `pane-border-format`, which blanks the sidebar's border row and overrides any format in `~/.tmux.conf`; leave it unset and your tmux config wins, which may put a title on the sidebar. The table spans session, window, and server scope, clipboard and rich-key handling included, because tmux has no per-session form for those.
 

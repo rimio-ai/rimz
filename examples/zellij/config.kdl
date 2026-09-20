@@ -8,8 +8,8 @@
 // alone, and keys not listed here keep Zellij's defaults either way. Validate
 // the result with `zellij setup --check`.
 //
-// docs/guide/setup.md walks through every choice; the [zellij] table in
-// ~/.config/rimz/config.toml can override the room-scoped keys per machine.
+// docs/guide/multiplexer.md walks through every choice; the [zellij] table in
+// ~/.rimz/config.toml can override the room-scoped keys per machine.
 
 // --- Correct behavior for agent sessions ------------------------------------
 
