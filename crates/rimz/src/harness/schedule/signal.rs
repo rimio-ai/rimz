@@ -752,18 +752,21 @@ fn fire_signal_with_wait(
             super::run_log::record_transition(&task, &record);
             continue;
         }
-        if wait && matches!(parsed.trigger, super::Trigger::Watch(_)) {
-            super::fire::wait_loop_run(runtime, Some(project_root), &name, &encoded);
+        let outcome = if wait && matches!(parsed.trigger, super::Trigger::Watch(_)) {
+            super::fire::wait_loop_run(runtime, &task, Some(project_root), &name, &encoded)
         } else {
             super::fire::spawn_loop_run(
                 runtime,
+                &task,
                 Some(project_root),
                 &name,
                 Some(&encoded),
                 super::fire::LoopRunHost::Detached,
-            );
+            )
+        };
+        if outcome == super::fire::LaunchOutcome::Started {
+            fired.push(name);
         }
-        fired.push(name);
     }
     Ok(fired)
 }

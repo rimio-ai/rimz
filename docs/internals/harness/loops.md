@@ -12,11 +12,11 @@ Four rules follow from having no daemon, and they explain most of the module.
 
 **Arming is not firing.** A task the elder has never seen is stamped with the current time and does not fire. A room opened hours late never replays the occurrences it missed.
 
-**Every fire is at-most-once per occurrence.** The elder writes the fire stamp before it spawns the runner, so a hot tick cannot spawn the same occurrence twice, and a per-task advisory run lock stops two runs from overlapping.
+**Every fire is at-most-once per occurrence.** The elder writes the fire stamp before it spawns the runner, so a hot tick cannot spawn the same occurrence twice, and a per-task advisory run lock stops two runs from overlapping. A start that fails keeps that stamp: the occurrence is spent, the next tick does not retry it, and the failure is recorded instead (below).
 
 **An event fires in the process that produced it.** A clock needs a timekeeper and an event does not: whoever emits a signal resolves the subscribers and spawns their runs itself. Signal and watch triggers therefore work with no room open and never touch `loop-fire.json`. The cost is that nothing queues a signal, so a signal is never replayed ([The signal vocabulary](#the-signal-vocabulary)).
 
-**Every fire appends exactly one history row.** Gated, skipped, overlapped, expired, delivered, completed, or errored, a fire records one `LoopRunRecord`. That log is the durable trace of what automation did, so it must be complete.
+**Every fire appends exactly one history row.** Gated, skipped, overlapped, expired, delivered, completed, or errored, a fire records one `LoopRunRecord`. That log is the durable trace of what automation did, so it must be complete. A fire whose runner never started is no exception: the launch site appends a `start failed` row in-process, because no helper that failed to spawn can report its own failure.
 
 ## Module layout
 
@@ -155,7 +155,7 @@ The arming stamp sets the edge each shape reads. A calendar task first seen afte
 1. Load the runnable tasks for the room's project root, dropping untrusted project rows.
 2. Keep only tasks whose normalized `root` maps to this room's `WorkspaceId`, so each room fires only its own tasks. `rimz loop add` writes a canonical absolute root; a hand-edited `~` or relative root is expanded and canonicalized before the ownership check, display, and execution.
 3. Plan every task against `loop-fire.json`, the per-room map from task name to last-fire timestamp in the workspace runtime directory.
-4. Write the new state, then spawn a detached `rimz loop run <name>` with null stdio for each fire.
+4. Write the new state, then spawn a detached `rimz loop run <name>` with null stdio for each fire. A spawn that fails records a `start failed` row for that task and is left off the fired list; the stamp written in this step stays as it is.
 
 The plan decides each task from its stamp, first matching row wins:
 
@@ -178,6 +178,8 @@ The tick finds roots from machine and instance task entries plus the trust grant
 The runners must outlive the tick. Under systemd the tick starts each one through `systemd-run --user --scope`, moving it out of the timer service's cgroup so the runner and any multiplexer server it births survive, and waits up to five seconds to see the child's cgroup change. That route needs the systemd user manager, which a system-level unit, a container, or a sandbox does not have, so before it walks any root the tick asks `systemctl --user show-environment` — the same bus connection `systemd-run --user` makes, so it tracks systemd's own rules instead of re-deriving them from the environment. Failing that, the whole pass refuses with the fix named, rather than falling back to a host the runners would not survive: no stamp moves and no row is written, so every due task fires on the first tick after the host is fixed. External runners also get their own process group, on launchd too. Elder and signal fires keep their inherited process group, so interactive launch probes cannot stall on background-terminal job control.
 
 An external fire opens the room it needs. A `Spawn` fire births a room through the supervised-run path. A scheduled check-only fire, including a pure shell check, ensures its root's room is open after the budget, run-lock, and deadline gates and before it runs the check: a fresh heartbeat skips the repair, and otherwise it uses the normal detached room entry (durable ownership, the `rimzd` loop zone, closed-agent resume off, no confirmation prompt). The runner stays a per-fire supervisor outside the panes, and the room hosts any agents it launches. Both paths leave the room open, so later ticks yield to its elder. A `Deliver` fire still requires its pinned live session. A manual `rimz loop fire` stays in the foreground, with no transient scope and no room birth for a check-only task.
+
+A hand-off that fails records what happened. Because `systemd-run --scope` enrols its own pid and execs in place, a runner that loaded is indistinguishable by pid alone from one that never started: the poll is 25 ms, so a fire that ends at once — overlapped, gated, expired — migrates and exits inside a single poll window, and the tick sees the same "child gone" it sees when the scope was never created. The run log settles it, because a runner that loaded appends its own row before exiting. After a child-gone the tick looks for a scheduled row for that task and root stamped at or after the instant it captured before spawning: a row means the run happened and nothing is added, and no row means the start failed and one `start failed` row is appended. One fire, one row, in both directions. The five-second cgroup timeout stays a warning only — the child is alive there and its outcome is unknown, so claiming either result would be a guess.
 
 A room can be born between the tick's heartbeat check and its state write. That one-tick race is covered by the same defenses as hot elder ticks: the shared fire stamp and the per-task run lock.
 
@@ -296,15 +298,15 @@ A record carries:
 
 Append caps the stored copies: 4 KiB of check output, 2 KiB each of error text and last message, and a signal payload over 4 KiB collapses to a single `_truncated` field. `watch` and `output_path` are `#[serde(default)]`, so a record without them reads back as `None`. A renderer that finds `watch` set uses `WatchVerdict::label` for the outcome words and `elapsed_ms()` for the duration; any other row renders the `exit <n>`, `timeout`, or `signal` segments. `rimz loop show` reads the log for a health verdict plus a separate rollup of agent runs for check-gated work, and `rimz loop logs` prints the stored forensics in full, including the output path above the check gutter.
 
-`LoopRunResult` has fifteen variants, and `strikes::classify` sorts each record into one of three outcomes. A record whose `watch` verdict is nonterminal (a `Running` check-in) is neutral before the result is read. `CheckSkipped` and `SignalSkipped` both render as `skipped` and serialize distinctly (`check_skipped`, `signal_skipped`): one is a guard that declined, the other a sibling signal the subscription observed without delivering.
+`LoopRunResult` has sixteen variants, and `strikes::classify` sorts each record into one of three outcomes. A record whose `watch` verdict is nonterminal (a `Running` check-in) is neutral before the result is read. `CheckSkipped` and `SignalSkipped` both render as `skipped` and serialize distinctly (`check_skipped`, `signal_skipped`): one is a guard that declined, the other a sibling signal the subscription observed without delivering.
 
 | Outcome | Results |
 | --- | --- |
 | Strike | `failed`, `verify failed`, `timed out`, `error`, `budget exceeded`; `completed` or `delivered` whose check did not pass |
 | Reset | `completed` or `delivered` with a passing or absent check; `skipped` from a check that passed |
-| Neutral | `budget skipped`, `surplus skipped`, `overlapped`, `canceled`, `expired`, `target gone`; `skipped` from a failed or absent check; `skipped` from a sibling signal; any nonterminal watch check-in |
+| Neutral | `budget skipped`, `surplus skipped`, `overlapped`, `canceled`, `expired`, `target gone`, `start failed`; `skipped` from a failed or absent check; `skipped` from a sibling signal; any nonterminal watch check-in |
 
-The table encodes two judgements. A turn that completed but left its check red is a failure, because the task is not doing its job. A gate that declined to spend money is not a failure at all.
+The table encodes three judgements. A turn that completed but left its check red is a failure, because the task is not doing its job. A gate that declined to spend money is not a failure at all. And a host that could not start a runner says nothing about the task, so `start failed` is neutral even though every renderer shows it as a failure: a broken timer must not auto-disable the work it failed to run.
 
 `record_transition` appends the history row and then updates the overlays. It is the only writer to the log: a fire, an observed sibling signal, and `rimz loop stop` all reach it, and no CLI code appends a row. The append is best-effort, since `disk::rotating` logs its own failure at debug and returns, so the `RunTransition::Recorded` it returns means the append was attempted before the overlays moved, not that the row reached disk.
 

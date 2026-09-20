@@ -60,6 +60,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         LoopRunResult::BudgetSkipped
         | LoopRunResult::SurplusSkipped
         | LoopRunResult::Overlapped
+        | LoopRunResult::StartFailed
         | LoopRunResult::Canceled
         | LoopRunResult::SignalSkipped
         | LoopRunResult::Expired
@@ -254,6 +255,14 @@ mod tests {
         assert_eq!(encoded, serde_json::json!({"machine::nightly": 1}));
         assert_eq!(note_in(dir.path(), KEY, Signal::Strike).expect("strike"), 2);
         assert_eq!(load_from(dir.path()).get(KEY), Some(&2));
+        let signal = classify(&record(LoopRunResult::StartFailed, None));
+        assert_eq!(signal, Signal::Neutral);
+        let before = std::fs::read(path(dir.path())).expect("strikes before failed start");
+        assert_eq!(note_in(dir.path(), KEY, signal).expect("neutral"), 2);
+        assert_eq!(
+            std::fs::read(path(dir.path())).expect("unchanged strikes"),
+            before
+        );
         assert_eq!(note_in(dir.path(), KEY, Signal::Reset).expect("reset"), 0);
         assert!(!load_from(dir.path()).contains_key(KEY));
     }

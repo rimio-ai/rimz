@@ -192,6 +192,7 @@ pub enum LoopRunResult {
     SignalSkipped,
     Expired,
     Errored,
+    StartFailed,
     Overlapped,
 }
 
@@ -223,6 +224,7 @@ impl LoopRunResult {
             Self::CheckSkipped | Self::SignalSkipped => "skipped",
             Self::Expired => "expired",
             Self::Errored => "error",
+            Self::StartFailed => "start failed",
             Self::Overlapped => "overlapped",
         }
     }
@@ -288,6 +290,25 @@ pub fn task_records(state_root: &Path, task: &str, root: Option<&Path>) -> Vec<L
         }
     });
     records
+}
+
+pub(super) fn has_scheduled_row_since(
+    state_root: &Path,
+    task: &str,
+    root: &Path,
+    since: Timestamp,
+) -> bool {
+    let mut found = false;
+    crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
+        if record.task == task
+            && matches_root(&record, Some(root))
+            && record.mode == Some(LoopRunMode::Scheduled)
+            && record.at >= since
+        {
+            found = true;
+        }
+    });
+    found
 }
 
 fn matches_root(record: &LoopRunRecord, root: Option<&Path>) -> bool {
@@ -478,6 +499,52 @@ mod tests {
             cost_usd: None,
             input_tokens: None,
             output_tokens: None,
+        }
+    }
+
+    #[test]
+    fn start_failed_round_trips_and_has_no_spawn_exit_code() {
+        let result = LoopRunResult::StartFailed;
+        let encoded = serde_json::to_string(&result).expect("serialize result");
+        assert_eq!(encoded, r#""start_failed""#);
+        assert_eq!(
+            serde_json::from_str::<LoopRunResult>(&encoded).expect("parse result"),
+            result
+        );
+        assert_eq!(result.label(), "start failed");
+        assert_eq!(result.spawn_exit_code(), None);
+    }
+
+    #[test]
+    fn scheduled_row_query_matches_task_root_mode_and_inclusive_time() {
+        let root = Path::new("/project");
+        let since = Timestamp::from_second(10).expect("timestamp");
+        for (task, recorded_root, second, mode, expected) in [
+            ("task", root, 10, Some(LoopRunMode::Scheduled), true),
+            ("task", root, 11, Some(LoopRunMode::Scheduled), true),
+            ("task", root, 9, Some(LoopRunMode::Scheduled), false),
+            ("other", root, 10, Some(LoopRunMode::Scheduled), false),
+            (
+                "task",
+                Path::new("/other"),
+                10,
+                Some(LoopRunMode::Scheduled),
+                false,
+            ),
+            ("task", root, 10, Some(LoopRunMode::Manual), false),
+            ("task", root, 10, None, false),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            assert!(!has_scheduled_row_since(dir.path(), "task", root, since));
+            let mut row = record(task, second, LoopRunResult::Expired);
+            row.root = Some(recorded_root.to_path_buf());
+            row.mode = mode;
+            append_to(dir.path(), &row);
+            assert_eq!(
+                has_scheduled_row_since(dir.path(), "task", root, since),
+                expected,
+                "{row:?}"
+            );
         }
     }
 

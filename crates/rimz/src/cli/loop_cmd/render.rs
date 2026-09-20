@@ -1017,7 +1017,8 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
             | LoopRunResult::VerifyFailed
             | LoopRunResult::TimedOut
             | LoopRunResult::BudgetExceeded
-            | LoopRunResult::Errored,
+            | LoopRunResult::Errored
+            | LoopRunResult::StartFailed,
         ) => {
             format!("{} ({})", record.result.label(), verdict.label())
         }
@@ -1142,6 +1143,7 @@ fn failure_note_visible(result: LoopRunResult) -> bool {
             | LoopRunResult::BudgetSkipped
             | LoopRunResult::SurplusSkipped
             | LoopRunResult::Errored
+            | LoopRunResult::StartFailed
     )
 }
 
@@ -1158,7 +1160,8 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut
         | LoopRunResult::BudgetExceeded
-        | LoopRunResult::Errored => ("✗", ui::palette::alarm()),
+        | LoopRunResult::Errored
+        | LoopRunResult::StartFailed => ("✗", ui::palette::alarm()),
         LoopRunResult::Expired
         | LoopRunResult::Canceled
         | LoopRunResult::TargetGone
@@ -1275,6 +1278,7 @@ fn record_is_failure(record: &LoopRunRecord) -> bool {
     matches!(
         record.result,
         LoopRunResult::Errored
+            | LoopRunResult::StartFailed
             | LoopRunResult::Failed
             | LoopRunResult::VerifyFailed
             | LoopRunResult::TimedOut

@@ -441,7 +441,7 @@ fn signal_fire(fired: Option<&SignalFire>, now: jiff::Timestamp) -> (String, ans
     let (label, style) = match fired.result {
         LoopRunResult::Delivered => ("fired", render::palette::good()),
         LoopRunResult::SignalSkipped => ("skipped", render::palette::muted()),
-        LoopRunResult::TargetGone | LoopRunResult::Errored => {
+        LoopRunResult::TargetGone | LoopRunResult::Errored | LoopRunResult::StartFailed => {
             (fired.result.label(), render::palette::alarm())
         }
         other => (other.label(), render::palette::muted()),
