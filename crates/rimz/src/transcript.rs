@@ -454,6 +454,13 @@ fn read_bucket(path: &Path) -> Result<Vec<TranscriptEntry>> {
 /// This is a frozen description of what was written, not a grammar for what
 /// arrives: it never needs to grow, and a genuine prompt carrying a wrapper
 /// pair mid-text is many lines and so never matches.
+///
+/// It is not version-scoped, though: it runs against every entry ever read,
+/// including ones written after the peel landed. A prompt whose entire text is
+/// one tag line is indistinguishable from a fragment and is dropped too — a
+/// human pasting the tag itself, while discussing this bug, is the only way to
+/// produce one. That is the deliberate cost of matching a whole entry exactly,
+/// which is the only form safe to apply to text RimZ did not normalize.
 fn is_legacy_paste_fragment(entry: &TranscriptEntry) -> bool {
     entry.entry == TranscriptKind::Prompt
         && entry.from.is_none()
