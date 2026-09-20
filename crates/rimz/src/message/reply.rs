@@ -518,15 +518,7 @@ impl TurnWaitView {
     /// still between its consumed catalog row and its delivered turn.
     fn status(&self, agent: &AgentState) -> AgentStatus {
         let status = agent.effective_status();
-        let waking = self.messages.iter().any(|message| {
-            matches!(
-                message.sender,
-                MessageSender::Harness {
-                    notice: HarnessNotice::Wait | HarnessNotice::Signal
-                }
-            ) && !message.status.is_terminal()
-                && message.same_agent_card(agent)
-        });
+        let waking = self.wake_in_flight(agent, false);
         if waking && matches!(status, AgentStatus::Idle | AgentStatus::Success) {
             AgentStatus::Sleeping
         } else {
@@ -536,6 +528,22 @@ impl TurnWaitView {
 
     pub fn completion(&self, agent: &AgentState) -> TurnCompletion {
         TurnCompletion::of(self.status(agent), agent.turn_started_at)
+    }
+
+    /// A harness wake between its publication and the turn it opens. Reply waits count `Wait` and `Signal`; a supervised run also counts the `SubagentReport` digest a launcher is owed.
+    pub(crate) fn wake_in_flight(&self, agent: &AgentState, digest: bool) -> bool {
+        self.messages.iter().any(|message| {
+            let wake = match message.sender {
+                MessageSender::Harness {
+                    notice: HarnessNotice::Wait | HarnessNotice::Signal,
+                } => true,
+                MessageSender::Harness {
+                    notice: HarnessNotice::SubagentReport,
+                } => digest,
+                _ => false,
+            };
+            wake && !message.status.is_terminal() && message.same_agent_card(agent)
+        })
     }
 
     fn card(&self, agent: &AgentState) -> CardView {

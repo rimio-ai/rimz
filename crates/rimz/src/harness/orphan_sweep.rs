@@ -14,6 +14,8 @@ use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::store::run::RunRecord;
 use crate::{RuntimePaths, StatePaths};
 
+use super::fleet::{FleetRuns, newest_run};
+
 const ORPHAN_GRACE: Duration = Duration::from_secs(10 * 60);
 #[cfg(any(test, feature = "testkit"))]
 const TEST_GRACE_MS_ENV: &str = "RIMZ_TEST_SUBAGENT_ORPHAN_GRACE_MS";
@@ -137,19 +139,6 @@ fn orphaned_child(
     })
 }
 
-fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Option<&'a RunRecord> {
-    runs.iter()
-        .filter(|run| {
-            run.kind == child.kind
-                && (run.agent_id.as_ref() == Some(&child.agent_id)
-                    || child
-                        .name
-                        .as_ref()
-                        .is_some_and(|name| run.agent_name.as_ref() == Some(name)))
-        })
-        .max_by_key(|run| run.started_at)
-}
-
 fn digest_parents(
     paths: &StatePaths,
     runs: &[RunRecord],
@@ -163,20 +152,9 @@ fn digest_parents_from(agents: &[AgentState], runs: &[RunRecord]) -> Vec<AgentSe
         .iter()
         .filter(|parent| parent.ended_at.is_none())
         .filter_map(|parent| {
-            let children = crate::address::launched_fleet(agents, parent);
-            if children.is_empty() {
-                return None;
-            }
-            let newest = children
-                .into_iter()
-                .filter_map(|child| newest_run(child, runs))
-                .collect::<Vec<_>>();
-            (!newest.is_empty()
-                && newest.iter().all(|run| run.status.is_terminal())
-                && newest
-                    .iter()
-                    .any(|run| run.report_message_id.is_none() && run.joined_at.is_none()))
-            .then(|| parent.agent_id.clone())
+            let fleet = FleetRuns::of(agents, runs, parent);
+            (!fleet.is_empty() && !fleet.any_running() && !fleet.unreported().is_empty())
+                .then(|| parent.agent_id.clone())
         })
         .collect()
 }

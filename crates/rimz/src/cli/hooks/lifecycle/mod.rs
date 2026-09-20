@@ -434,7 +434,16 @@ fn record_run_lifecycle(
         agent.spec().kind,
         &recorded.observation,
         assistant_message.map(ToOwned::to_owned),
-        || None, // slice 2 supplies the owed answer
+        || {
+            let agent_id = recorded.observation.agent_id.as_ref()?;
+            match rimz::harness::owed::owed_wake(store, &agent.spec().kind_id(), agent_id) {
+                Ok(owed) => owed,
+                Err(err) => {
+                    tracing::warn!(error = %err, "could not read wakes owed to supervised run");
+                    None
+                }
+            }
+        },
     ) {
         Ok(Some(record)) => {
             let cost_usd = recorded

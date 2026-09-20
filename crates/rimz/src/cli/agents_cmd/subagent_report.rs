@@ -4,7 +4,6 @@
 //! queue. This makes the complete row set visible to inline join cancellation
 //! and lets the wrapper fast path race safely with the producer backstop.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -12,8 +11,9 @@ use rimz::agents::AgentState;
 use rimz::disk::atomic::{AtomicErr, write_bytes_atomically};
 use rimz::disk::paths::{PathErr, StatePaths};
 use rimz::disk::summary::FileSummary;
+use rimz::harness::fleet::FleetRuns;
 use rimz::harness::run;
-use rimz::ids::{AgentKind, AgentSessionId, MessageId, RunId};
+use rimz::ids::{AgentKind, AgentSessionId, MessageId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
 use rimz::sandbox::TmpView;
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
@@ -136,21 +136,11 @@ fn report_fleet_with_kind(
     }
 
     let runs = run::list(store.paths())?;
-    let mut seen = HashSet::<RunId>::new();
-    let children = rimz::address::launched_fleet(&projection.agents, parent)
-        .into_iter()
-        .filter_map(|child| {
-            let run = newest_run_for_agent(&runs, child)?;
-            seen.insert(run.run_id.clone()).then_some((child, run))
-        })
-        .collect::<Vec<_>>();
-    if children.iter().any(|(_, run)| !run.status.is_terminal()) {
+    let fleet = FleetRuns::of(&projection.agents, &runs, parent);
+    if fleet.any_running() {
         return Ok(ReportOutcome::SiblingsRunning);
     }
-    let rows = children
-        .into_iter()
-        .filter(|(_, run)| run.report_message_id.is_none() && run.joined_at.is_none())
-        .collect::<Vec<_>>();
+    let rows = fleet.unreported();
     if rows.is_empty() {
         return Ok(ReportOutcome::NothingToReport);
     }
@@ -347,15 +337,6 @@ fn compose_digest_row(
         None => row.push_str(", no response"),
     }
     row
-}
-
-fn newest_run_for_agent<'a>(runs: &'a [RunRecord], agent: &AgentState) -> Option<&'a RunRecord> {
-    runs.iter()
-        .filter(|run| {
-            run.agent_id.as_ref() == Some(&agent.agent_id)
-                || run.agent_name.as_deref() == agent.name.as_deref()
-        })
-        .max_by_key(|run| run.started_at)
 }
 
 fn format_compact_duration(mut seconds: u64) -> String {
