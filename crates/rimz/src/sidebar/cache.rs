@@ -73,7 +73,7 @@ fn normalize_observed_stamp(frame: &mut PaneFrame) {
 /// clock ahead of this reader serves (age 0) rather than re-producing every
 /// call. Pure over its inputs so every caller — the fast path, the
 /// single-flight `fresh` closure, the loser re-check — applies one verdict.
-pub fn snapshot_cache_is_fresh(
+pub(crate) fn snapshot_cache_is_fresh(
     cache: &PaneFrame,
     now_ms: u64,
     min_produced_at_ms: Option<u64>,
@@ -86,7 +86,7 @@ pub fn snapshot_cache_is_fresh(
 
 /// The producer and observation timestamps of the published same-session pane
 /// frame. `None` when no usable same-session frame exists.
-pub fn published_frame_stamps(runtime: &RuntimePaths, session: &str) -> Option<(u64, u64)> {
+pub(crate) fn published_frame_stamps(runtime: &RuntimePaths, session: &str) -> Option<(u64, u64)> {
     let cache_path = runtime.pane_frame_path();
     read_snapshot_cache(&cache_path, session)
         .map(|cache| (cache.produced_at_ms, cache.observed_at_ms))
@@ -95,7 +95,7 @@ pub fn published_frame_stamps(runtime: &RuntimePaths, session: &str) -> Option<(
 /// Whether the published same-session frame shows no attached client viewing any
 /// pane. An absent frame reads as watched so cold starts keep the responsive
 /// poll-mode cadence until a producer publishes real focus state.
-pub fn published_frame_unwatched(runtime: &RuntimePaths, session: &str) -> bool {
+pub(super) fn published_frame_unwatched(runtime: &RuntimePaths, session: &str) -> bool {
     let cache_path = runtime.pane_frame_path();
     read_snapshot_cache(&cache_path, session).is_some_and(|cache| cache.viewed_panes.is_empty())
 }
@@ -132,7 +132,7 @@ fn presence_probe_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("client-presence-probe.stamp")
 }
 
-pub fn write_presence_probe_stamp(
+pub(super) fn write_presence_probe_stamp(
     runtime: &RuntimePaths,
     written_at_ms: u64,
 ) -> crate::disk::atomic::Result<()> {
@@ -142,7 +142,7 @@ pub fn write_presence_probe_stamp(
     )
 }
 
-pub fn read_presence_probe_stamp(runtime: &RuntimePaths) -> Option<u64> {
+pub(super) fn read_presence_probe_stamp(runtime: &RuntimePaths) -> Option<u64> {
     let bytes = std::fs::read(presence_probe_stamp_path(runtime)).ok()?;
     let stamp: PresenceProbeStamp = serde_json::from_slice(&bytes).ok()?;
     Some(stamp.written_at_ms)
@@ -151,7 +151,11 @@ pub fn read_presence_probe_stamp(runtime: &RuntimePaths) -> Option<u64> {
 /// Refresh the presence stamp. Best-effort and cache-class (rename atomicity,
 /// no fsync — it is rewritten every poke and survives no power cut by design);
 /// a failed write only delays the channel reading as alive by one poke.
-pub fn write_presence_stamp(runtime: &RuntimePaths, mux: MuxName, session_name: Option<&str>) {
+pub(crate) fn write_presence_stamp(
+    runtime: &RuntimePaths,
+    mux: MuxName,
+    session_name: Option<&str>,
+) {
     let stamp = PresenceStamp {
         written_at_ms: unix_now_ms(),
         mux: Some(mux),
@@ -173,7 +177,7 @@ pub fn read_presence_stamp(runtime: &RuntimePaths) -> Option<PresenceStamp> {
     serde_json::from_slice(&bytes).ok()
 }
 
-pub fn presence_stamp_age_ms(runtime: &RuntimePaths) -> Option<u64> {
+pub(super) fn presence_stamp_age_ms(runtime: &RuntimePaths) -> Option<u64> {
     read_presence_stamp(runtime).map(|stamp| unix_now_ms().saturating_sub(stamp.written_at_ms))
 }
 
@@ -191,7 +195,7 @@ pub fn presence_event_mode(stamp_age_ms: Option<u64>) -> bool {
 /// closure, and the loser re-check — so they agree on one verdict and a loser
 /// never produces what the winner skipped (the diff-stats "one shared stale()
 /// closure" rule).
-pub fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duration {
+pub(super) fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duration {
     if unwatched || presence_event_mode(stamp_age_ms) {
         EVENT_PANE_TTL
     } else {
@@ -201,7 +205,7 @@ pub fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duratio
 
 /// Publish the sidebar supervisor's shared authoritative pane observation.
 /// Cache-class: rename atomic, no fsync, and safe to discard between probes.
-pub fn write_authoritative_pane_probe<T: Serialize>(
+pub(crate) fn write_authoritative_pane_probe<T: Serialize>(
     runtime: &RuntimePaths,
     probe: &T,
 ) -> crate::disk::atomic::Result<()> {
