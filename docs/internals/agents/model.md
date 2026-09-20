@@ -153,7 +153,7 @@ A blocking hook classifies as [awaiting-user](./adapter.md#two-channels) and rec
 - The row is `waiting` on a keyed ask (one carrying a native key). A keyed ask holds through newer activity until a tool with the same native key completes, because a parallel sibling tool also advances the heartbeat.
 - A `running` row's context sidecar carries a provider native-wait or plan-proposal marker newer than `last_activity`. This covers native dialogs without inventing a durable ask.
 
-The activity heartbeat those rules read is written by hook events only: a child's hook also touches its parent's heartbeat, and statusline pushes never advance it. A CLI snapshot attaches the context sidecars, so every consumer of the guard sees the provider's markers.
+The heartbeat those rules read comes from hook events only ([activity clocks](#activity-clocks)); statusline pushes never advance it. A snapshot read through `snapshot_cached` attaches the context sidecars, so every consumer of the guard sees the provider's markers.
 
 A transition off `waiting` sets `waiting_cleared`, and Store appends it even for a proof-of-work tool it would otherwise skip, so a non-mutating approved tool still clears the row on replay. A compaction open or close also clears a waiting row, because a compaction runs only after the native prompt releases the pane ([the compaction bracket](#the-compaction-bracket)). A provider interruption marker newer than `last_activity` displays a waiting row as `idle` and releases its ask, keyed or not, which is how RimZ learns that Esc cancelled a native prompt when no hook reports it: the row leaves `rimz asks` and stops reserving pane input, while the durable question record still closes on the next prompt.
 
