@@ -62,6 +62,86 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
 }
 
 #[test]
+fn stranded_park_requires_two_checks_and_preserves_racing_turns() {
+    let (dir, paths, mut record) = setup();
+    let runtime =
+        crate::RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let socket = std::os::unix::net::UnixDatagram::bind(crate::store::run::run_socket_path(
+        store.runtime_paths(),
+        &record.run_id,
+    ))
+    .unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let mut frame = [0; 1024];
+    record.status = RunStatus::Running;
+    record.agent_id = Some("session".into());
+    create(store.paths(), &record).unwrap();
+    assert_eq!(
+        settle_stranded_park(&store, &record, None).unwrap(),
+        ParkCheck::Live
+    );
+    assert_eq!(load(store.paths(), &record.run_id).unwrap(), record);
+
+    let at = Timestamp::now();
+    record.parked_at = Some(at);
+    create(store.paths(), &record).unwrap();
+    assert_eq!(
+        settle_stranded_park(&store, &record, None).unwrap(),
+        ParkCheck::Stranded(at)
+    );
+    assert_eq!(load(store.paths(), &record.run_id).unwrap(), record);
+
+    for parked_at in [None, Some(at + std::time::Duration::from_secs(1))] {
+        let mut revived = record.clone();
+        revived.parked_at = parked_at;
+        create(store.paths(), &revived).unwrap();
+        assert_eq!(
+            settle_stranded_park(&store, &record, Some(at)).unwrap(),
+            ParkCheck::Live
+        );
+        assert_eq!(load(store.paths(), &record.run_id).unwrap(), revived);
+    }
+    assert_eq!(
+        socket.recv(&mut frame).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+
+    for tail in [None, Some("earlier evidence".to_owned())] {
+        record.failure_tail = tail.clone();
+        create(store.paths(), &record).unwrap();
+        assert_eq!(
+            settle_stranded_park(&store, &record, Some(at)).unwrap(),
+            ParkCheck::Settled
+        );
+        let failed = load(store.paths(), &record.run_id).unwrap();
+        assert_eq!(failed.status, RunStatus::Failed);
+        assert_eq!(failed.parked_at, None);
+        let count = socket.recv(&mut frame).unwrap();
+        let crate::store::run::WakeupFrame::RunCompleted {
+            workspace_id,
+            run_id,
+            status,
+        } = serde_json::from_slice(&frame[..count]).unwrap();
+        assert_eq!(workspace_id, record.workspace_id);
+        assert_eq!(run_id, record.run_id);
+        assert_eq!(status, RunStatus::Failed);
+        assert_eq!(
+            failed.failure_tail.as_deref(),
+            Some(tail.as_deref().unwrap_or(STRANDED_PARK_REASON))
+        );
+        assert_eq!(
+            settle_stranded_park(&store, &failed, Some(at)).unwrap(),
+            ParkCheck::Live
+        );
+        assert_eq!(
+            settle_stranded_park(&store, &record, Some(at)).unwrap(),
+            ParkCheck::Live
+        );
+    }
+}
+
+#[test]
 fn fold_lifecycle_maps_each_disposition_to_its_run_status() {
     for (signal, expected) in [
         (
