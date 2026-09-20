@@ -369,6 +369,12 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
             "budget exceeded",
         ),
         (LoopRunResult::Errored, "✗", ui::palette::alarm(), "error"),
+        (
+            LoopRunResult::StartFailed,
+            "✗",
+            ui::palette::alarm(),
+            "start failed",
+        ),
         (LoopRunResult::Expired, "○", ui::palette::warn(), "expired"),
         (
             LoopRunResult::Canceled,
@@ -619,6 +625,7 @@ fn record_exit_maps_terminal_spawn_results_only_with_run_id() {
         (LoopRunResult::SignalSkipped, None),
         (LoopRunResult::Expired, None),
         (LoopRunResult::Errored, None),
+        (LoopRunResult::StartFailed, None),
         (LoopRunResult::Overlapped, None),
     ] {
         let mut run = record(10, result);

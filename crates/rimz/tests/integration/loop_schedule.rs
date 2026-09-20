@@ -1480,6 +1480,157 @@ fn external_tick_refuses_when_the_systemd_user_manager_is_unreachable() {
 }
 
 #[test]
+fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.missing-runner]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            env.project_root.display(),
+        ),
+    );
+    let prior = Timestamp::now() - SignedDuration::from_hours(2);
+    write_loop_fire_state(&env, BTreeMap::from([("missing-runner".to_owned(), prior)]));
+    let mut tick = env.rimz();
+    tick.args(["loop", "tick"])
+        .env("RIMZ_BIN", env.home_root.join("missing-rimz"));
+    let output = tick.output().expect("rimz loop tick");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let record = &records[0];
+    assert_eq!(record.task, "missing-runner");
+    assert_eq!(record.root.as_deref(), Some(env.project_root.as_path()));
+    assert_eq!(record.result, LoopRunResult::StartFailed);
+    assert_eq!(record.mode, Some(LoopRunMode::Scheduled));
+    assert_eq!(record.duration_ms, Some(0));
+    assert!(record.error.as_ref().is_some_and(|error| !error.is_empty()));
+    let logs = loop_ok(&env, &["loop", "logs", "missing-runner"]);
+    assert!(logs.contains("start failed"), "{logs}");
+    let show = loop_ok(&env, &["loop", "show", "missing-runner"]);
+    assert!(show.contains("start failed"), "{show}");
+    let fire_path = env.runtime_paths().root.join("loop-fire.json");
+    let stamps: BTreeMap<String, Timestamp> =
+        serde_json::from_slice(&std::fs::read(&fire_path).expect("fire state"))
+            .expect("fire state json");
+    assert!(stamps["missing-runner"] > prior);
+    assert!(!loop_strikes_path(&env).exists());
+    assert!(!loop_arming_path(&env).exists());
+
+    let output = tick.output().expect("second rimz loop tick");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(read_loop_run_records(&env), records);
+    let after: BTreeMap<String, Timestamp> =
+        serde_json::from_slice(&std::fs::read(&fire_path).expect("fire state"))
+            .expect("fire state json");
+    assert_eq!(after, stamps);
+    assert!(!loop_strikes_path(&env).exists());
+    assert!(!loop_arming_path(&env).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn external_tick_records_a_failed_scope_handoff() {
+    let env = Env::new();
+    let shims = env.home_root.join("tick-shims");
+    write_path_shim(&shims, "systemctl", "exit 0");
+    write_path_shim(&shims, "systemd-run", "exit 1");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.failed-handoff]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            env.project_root.display(),
+        ),
+    );
+    let prior = Timestamp::now() - SignedDuration::from_hours(2);
+    write_loop_fire_state(&env, BTreeMap::from([("failed-handoff".to_owned(), prior)]));
+
+    let output = env
+        .rimz()
+        .args(["loop", "tick"])
+        .env("INVOCATION_ID", "fixture-timer-unit")
+        .env("PATH", path_with_front(&shims))
+        .output()
+        .expect("rimz loop tick");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let record = &records[0];
+    assert_eq!(record.task, "failed-handoff");
+    assert_eq!(record.result, LoopRunResult::StartFailed);
+    assert_eq!(record.mode, Some(LoopRunMode::Scheduled));
+    let error = record.error.as_deref().expect("handoff failure reason");
+    assert!(error.contains("scope hand-off"), "{error}");
+    assert!(error.contains("no history row"), "{error}");
+    let logs = loop_ok(&env, &["loop", "logs", "failed-handoff"]);
+    assert!(logs.contains("start failed"), "{logs}");
+    let stamps: BTreeMap<String, Timestamp> = serde_json::from_slice(
+        &std::fs::read(env.runtime_paths().root.join("loop-fire.json")).expect("fire state"),
+    )
+    .expect("fire state json");
+    assert!(stamps["failed-handoff"] > prior);
+}
+
+#[cfg(unix)]
+#[test]
+fn external_tick_does_not_record_a_fast_run_as_a_failed_start() {
+    let env = Env::new();
+    let shims = env.home_root.join("tick-shims");
+    write_path_shim(&shims, "systemctl", "exit 0");
+    write_path_shim(
+        &shims,
+        "systemd-run",
+        "while [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = -- ]; then\n    shift\n    exec \"$@\"\n  fi\n  shift\ndone\nexit 1",
+    );
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.fast-run]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"1h\"\ndeadline = \"1970-01-01T00:00:01Z\"\n",
+            env.project_root.display(),
+        ),
+    );
+    let prior = Timestamp::now() - SignedDuration::from_hours(2);
+    write_loop_fire_state(&env, BTreeMap::from([("fast-run".to_owned(), prior)]));
+
+    let output = env
+        .rimz()
+        .args(["loop", "tick"])
+        .env("INVOCATION_ID", "fixture-timer-unit")
+        .env("PATH", path_with_front(&shims))
+        .output()
+        .expect("rimz loop tick");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].task, "fast-run");
+    assert_eq!(records[0].root.as_deref(), Some(env.project_root.as_path()));
+    assert_eq!(records[0].result, LoopRunResult::Expired);
+    assert_eq!(records[0].mode, Some(LoopRunMode::Scheduled));
+    let logs = loop_ok(&env, &["loop", "logs", "fast-run"]);
+    assert!(logs.contains("expired"), "{logs}");
+    assert!(!logs.contains("start failed"), "{logs}");
+}
+
+#[test]
 fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     let env = Env::new();
     let Some(real_git) = find_real_git() else {

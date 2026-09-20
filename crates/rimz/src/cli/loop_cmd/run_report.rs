@@ -584,6 +584,7 @@ pub(super) fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
             | LoopRunResult::TimedOut
             | LoopRunResult::BudgetExceeded
             | LoopRunResult::Errored
+            | LoopRunResult::StartFailed
     ) {
         return None;
     }

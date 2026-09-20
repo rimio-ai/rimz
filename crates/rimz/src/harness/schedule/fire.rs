@@ -16,10 +16,11 @@ use super::{
     Trigger,
     arming::{self, ArmState, Arming},
     catalog::{LoadedTask, TaskCatalog},
+    run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult},
 };
 use crate::RuntimePaths;
 use crate::disk::atomic::write_temp_then_rename_cache;
-use crate::disk::paths::StatePaths;
+use crate::disk::paths::{StatePaths, logs_dir};
 use crate::ids::WorkspaceId;
 use crate::workspace::record;
 
@@ -31,6 +32,15 @@ enum Action {
 }
 
 const WATCH_LOST_GRACE_SECS: i64 = 30;
+
+/// Whether a launch actually put a runner on the host. A `NotStarted` launch
+/// has already recorded its own `start failed` row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub(super) enum LaunchOutcome {
+    Started,
+    NotStarted,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoopRunHost {
@@ -83,8 +93,11 @@ fn fire_tasks(
         match action {
             Action::Arm => {}
             Action::Fire => {
-                spawn_loop_run(runtime, project_root, &name, None, host);
-                fired.push(name);
+                if spawn_loop_run(runtime, &tasks[&name], project_root, &name, None, host)
+                    == LaunchOutcome::Started
+                {
+                    fired.push(name);
+                }
             }
             Action::WatchLost => {
                 let signal_name = match format!("wait.{name}").parse() {
@@ -116,8 +129,16 @@ fn fire_tasks(
                     source: crate::store::event::SignalSource::Watch,
                     watch: Some(watch),
                 };
-                if let Ok(encoded) = serde_json::to_string(&signal) {
-                    spawn_loop_run(runtime, project_root, &name, Some(&encoded), host);
+                if let Ok(encoded) = serde_json::to_string(&signal)
+                    && spawn_loop_run(
+                        runtime,
+                        &tasks[&name],
+                        project_root,
+                        &name,
+                        Some(&encoded),
+                        host,
+                    ) == LaunchOutcome::Started
+                {
                     fired.push(name);
                 }
             }
@@ -296,11 +317,12 @@ fn state_path(runtime: &RuntimePaths) -> PathBuf {
 
 pub(super) fn spawn_loop_run(
     runtime: &RuntimePaths,
+    task: &LoadedTask,
     project_root: Option<&Path>,
     name: &str,
     signal_json: Option<&str>,
     host: LoopRunHost,
-) {
+) -> LaunchOutcome {
     let args = loop_run_args(project_root, name, signal_json);
     let (program, args) = loop_run_command(host, &crate::proc::rimz_exe(), &args, name);
     tracing::info!(
@@ -308,21 +330,49 @@ pub(super) fn spawn_loop_run(
         task = name,
         "loop scheduler firing task",
     );
+    let before = Timestamp::now();
     let spawned = if host == LoopRunHost::Detached {
         crate::child_process::spawn_detached_rimz(runtime, &args, "loop-run").map(|()| None)
     } else {
         crate::child_process::spawn_detached_program(&program, &args, runtime, "loop-run")
     };
     match spawned {
-        Ok(Some(pid)) if host == LoopRunHost::TransientScope => wait_for_scope(pid, name),
+        Ok(Some(pid)) if host == LoopRunHost::TransientScope => {
+            if wait_for_scope(pid, name) == ScopeHandoff::ChildGone
+                && !run_log::has_scheduled_row_since(
+                    &logs_dir(),
+                    name,
+                    &task.entry().resolved_root(),
+                    before,
+                )
+            {
+                return record_start_failed(
+                    task,
+                    name,
+                    "runner exited before the scope hand-off and left no history row".to_owned(),
+                );
+            }
+        }
         Ok(_) => {}
-        Err(err) => tracing::warn!(
-            task = name,
-            tags.operation = "loop_fire.spawn",
-            error = &err as &dyn std::error::Error,
-            "sidebar: failed to spawn loop task",
-        ),
+        Err(err) => {
+            tracing::warn!(
+                task = name,
+                tags.operation = "loop_fire.spawn",
+                error = &err as &dyn std::error::Error,
+                "sidebar: failed to spawn loop task",
+            );
+            return record_start_failed(task, name, err.to_string());
+        }
     }
+    LaunchOutcome::Started
+}
+
+fn record_start_failed(task: &LoadedTask, name: &str, reason: String) -> LaunchOutcome {
+    let mut record =
+        LoopRunRecord::new(name, LoopRunResult::StartFailed, LoopRunMode::Scheduled, 0);
+    record.error = Some(reason);
+    run_log::record_transition(task, &record);
+    LaunchOutcome::NotStarted
 }
 
 fn loop_run_command(
@@ -369,7 +419,7 @@ fn scope_handoff(parent: Option<&[u8]>, child: Option<&[u8]>, live: bool) -> Sco
     ScopeHandoff::Pending
 }
 
-fn wait_for_scope(pid: u32, name: &str) {
+fn wait_for_scope(pid: u32, name: &str) -> ScopeHandoff {
     use std::time::{Duration, Instant};
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -382,14 +432,14 @@ fn wait_for_scope(pid: u32, name: &str) {
             child.as_deref(),
             crate::proc::process_is_live(pid, None),
         ) {
-            ScopeHandoff::HandedOff => return,
+            ScopeHandoff::HandedOff => return ScopeHandoff::HandedOff,
             ScopeHandoff::ChildGone => {
                 tracing::warn!(
                     task = name,
                     pid,
                     "loop run exited before the timer scope hand-off was confirmed"
                 );
-                return;
+                return ScopeHandoff::ChildGone;
             }
             ScopeHandoff::Pending => {}
         }
@@ -400,7 +450,7 @@ fn wait_for_scope(pid: u32, name: &str) {
                 pid,
                 "loop run did not leave the timer cgroup within 5 seconds"
             );
-            return;
+            return ScopeHandoff::Pending;
         }
         std::thread::sleep(remaining.min(Duration::from_millis(25)));
     }
@@ -408,17 +458,22 @@ fn wait_for_scope(pid: u32, name: &str) {
 
 pub(super) fn wait_loop_run(
     runtime: &RuntimePaths,
+    task: &LoadedTask,
     project_root: Option<&Path>,
     name: &str,
     signal_json: &str,
-) {
+) -> LaunchOutcome {
     let mut command = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
     command.args(loop_run_args(project_root, name, Some(signal_json)));
     match command.status() {
         Ok(status) if status.success() => {}
         Ok(status) => tracing::warn!(task = name, %status, "watched wait delivery failed"),
-        Err(err) => tracing::warn!(task = name, error = %err, "running watched wait delivery"),
+        Err(err) => {
+            tracing::warn!(task = name, error = %err, "running watched wait delivery");
+            return record_start_failed(task, name, err.to_string());
+        }
     }
+    LaunchOutcome::Started
 }
 
 fn loop_run_args(
@@ -538,7 +593,17 @@ mod tests {
             LoopRunHost::IsolatedProcessGroup,
             LoopRunHost::TransientScope,
         ] {
-            spawn_loop_run(&runtime, Some(root), NAME, None, host);
+            assert_eq!(
+                spawn_loop_run(
+                    &runtime,
+                    &task("/missing-loop-test-root", "1m"),
+                    Some(root),
+                    NAME,
+                    None,
+                    host
+                ),
+                LaunchOutcome::Started
+            );
         }
     }
 
