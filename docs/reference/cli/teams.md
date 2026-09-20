@@ -130,7 +130,7 @@ A lane block reads top to bottom:
 | Header | `<team>#<lane> · <state>`, the [cohort state](#cohort-state) followed by the time since any member's last activity, except while `working`. |
 | `stage` | Always present. The [board stage](#board-stage) with ` (@owner)` when the board names one, then ` for <age>`, the time since the flip into that stage; `Done for <age>` once the board is flipped to `Done`; `none` without a board stage. The age is omitted when no recorded flip matches (a hand-edited board, or a flip rotated out of the event log). |
 | `pipeline` | The declared `stages` with the implicit `Done` last, bracketing the board stage when it matches a name exactly. Omitted when the team declares no `stages`. |
-| `pr` | Cached PR number, state (`open`, `merged`, `closed`), `ci passing`, `ci pending`, or `ci failing`, and URL, as far as known; `none` when nothing is cached. |
+| `pr` | The cached pull request: number, state (`open`, `merged`, `closed`), its `ci passing`, `ci pending`, or `ci failing` verdict, and URL, as far as known; `none` when no pull request is cached. A trunk lane has no pull request, so it reads `none` however its branch CI stands; that verdict shows on the [sidebar](../../interface/sidebar.md). |
 | Member table | `MEMBER STATUS AGE ACTIVITY CTX COST`, members in the team's declared role order. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` is the time since the member's last activity, and `COST` is each role's lifetime spend in this worktree. |
 | `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `never fired`, `fired <age> ago` when the last firing delivered, `skipped <age> ago` when it matched the family but not the subscription, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` gives the total run count once it has run more than once. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
@@ -157,7 +157,7 @@ A cohort's state is the first rule that matches its members' statuses:
 
 The stage comes from the first line starting `Stage:` in `<worktree>/blackboard.md`, for example `Stage: Implement (@coder)`. Only a final ` (@owner)` splits off as the owner; other parenthesized text stays part of the stage name. A missing or unreadable board shows no stage, even when the team declares a pipeline. [`flip`](#flip-the-board-to-the-next-stage) writes this line, and a hand-edited board parses the same way. The stage is advisory: RimZ never infers it from member status, and it is not proof that work finished.
 
-PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` never contact the forge, so `pr none` means nothing is cached, not that no PR exists. Before the room publishes its first snapshot, live cohorts still appear without PR facts or activity.
+PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` never contact the forge, so `pr none` means no pull request is cached, not that no PR exists. Before the room publishes its first snapshot, live cohorts still appear without PR facts or activity.
 
 ### JSON report
 
@@ -183,7 +183,7 @@ PR and CI facts come from the room's sidebar cache. `rimz teams` and `show` neve
 | `isolation`, `tmp_dir` | `host` or `sandbox`; `/tmp` for host, the absolute room tmp directory mounted at `/tmp` for sandbox. |
 | `stages` | Declared stage names in order; `[]` when undeclared or the team is no longer defined. |
 | `stage` | `{ "name": "Implement", "owner": "coder", "since": "2026-09-15T08:33:23Z" }`; `null` when the board has no stage. `name` is `Done` once the board is flipped to `Done`, so `.stage.name` is the field to script against. `owner` is without `@` and nullable; `since` is the UTC time of the flip into this stage, `null` when no recorded flip matches. |
-| `pr` | `number`, `state` (`open`, `merged`, `closed`), `ci` (`passing`, `pending`, `failing`), and `url`, each nullable; `null` when nothing is cached. |
+| `pr` | `number`, `state` (`open`, `merged`, `closed`), `ci` (`passing`, `pending`, `failing`), and `url`, each nullable; `null` when no pull request is cached. |
 | `memory[]` | `path` (absolute), `lines`, and `modified_at` (UTC timestamp or `null`). |
 | `members[]` | In declared role order: `role` (nullable), `handle`, `kind`, `status`, `phase`, `activity` (nullable), `last_activity_at` (UTC timestamp), `signals`, and optional `context_fill_pct` and `cost_usd`. |
 | `members[].signals[]` | Armed subscriptions: `name` (the loop task name), `selector`, `matches`, and optional `fired`, the task's latest loop run: `at` (UTC timestamp), `result` (the snake_case run result, `delivered` for a delivered firing), and `runs`. These keys differ from the declared `roles[].signals[]`. |

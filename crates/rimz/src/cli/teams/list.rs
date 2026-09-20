@@ -569,11 +569,11 @@ fn live_instances(
                                 .any(|agent| row.id == agent.agent_id.as_str())
                     })
                 })
+                // Real PR identity only. A trunk lane carries a branch CI
+                // verdict with no pull request behind it, and a cached verdict
+                // on an open or merged PR always arrives with its state.
                 .filter(|group| {
-                    group.pr_number.is_some()
-                        || group.pr_state.is_some()
-                        || group.ci.is_some()
-                        || group.pr_url.is_some()
+                    group.pr_number.is_some() || group.pr_state.is_some() || group.pr_url.is_some()
                 })
                 .map(|group| PrReport {
                     number: group.pr_number,

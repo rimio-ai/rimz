@@ -325,6 +325,84 @@ fn catalog_projects_cohort_observability_by_worktree() {
     assert!(instance.memory.is_empty());
 }
 
+/// A trunk lane carries a branch CI verdict with no pull request behind it:
+/// `sidebar::enrich` clears the PR fields for a trunk checkout and leaves `ci`
+/// alone. The verdict belongs to the sidebar, so the lane reports no PR at all
+/// — which is what renders the `pr` line's `none` and the `PR` column's `-`.
+#[test]
+fn catalog_reports_no_pull_request_for_a_trunk_lane() {
+    use rimz::store::snapshot::{RowCard, SidebarRow, SidebarWorktreeGroup};
+
+    let root = "/repo";
+    let mut agent = AgentState::stub("codex", "main", AgentStatus::Running);
+    agent.team = Some("forge".into());
+    agent.role = Some("planner".into());
+    agent.channel = Some("main".into());
+    agent.worktree_path = Some(root.to_owned());
+    agent.worktree_branch = Some("main".into());
+    agent.last_activity = jiff::Timestamp::UNIX_EPOCH;
+    let mut group: SidebarWorktreeGroup = serde_json::from_value(serde_json::json!({
+        "key": "main", "label": "main", "kind": "worktree", "status_counts": [], "rows": [],
+        "ci": "passing"
+    }))
+    .unwrap();
+    // The struct ignores unknown keys, so without this the test would pass on a
+    // group that carries no verdict at all and prove nothing.
+    assert_eq!(
+        group.ci,
+        Some(rimz::store::snapshot::WorktreeCi::Passing),
+        "the trunk group must carry the CI verdict this test is about"
+    );
+    group.rows.push(SidebarRow {
+        id: agent.agent_id.to_string(),
+        name: "main".into(),
+        pane: None,
+        worktree_path: Some(root.to_owned()),
+        worktree_branch: agent.worktree_branch.clone(),
+        channel: Some("main".into()),
+        unread: false,
+        inactive: false,
+        archived: false,
+        attention_score: 0,
+        last_activity: agent.last_activity,
+        card: RowCard::Agent(Box::default()),
+    });
+    let mut snapshot = snapshot(vec![agent]);
+    snapshot.worktree_groups = vec![group];
+    let reports = build_catalog(
+        &TeamsConfig(BTreeMap::from([("forge".into(), team())])),
+        &ProfilesConfig::default(),
+        &CommandsConfig::default(),
+        LiveCatalog {
+            isolation: Isolation::Host,
+            tmp_dir: Path::new("/tmp"),
+            tasks: &BTreeMap::new(),
+            flips: &[],
+            runs: &BTreeMap::new(),
+            snapshot: &snapshot,
+            audit_agents: &[],
+            lifetimes: &rimz::worktree::lane_lifetimes([]),
+            prices: &rimz::agents::PriceBook::default(),
+            worktree: None,
+        },
+        |_| None,
+    );
+    let instance = &reports[0].instances[0];
+    assert_eq!(instance.worktree.as_deref(), Some(Path::new(root)));
+    assert!(instance.pr.is_none(), "{:?}", instance.pr);
+    assert!(serde_json::to_value(&reports).unwrap()[0]["instances"][0]["pr"].is_null());
+    let mut rendered = anstream::StripStream::new(Vec::new());
+    write_catalog(&mut rendered, &reports, &ThemeConfig::default()).unwrap();
+    let row = String::from_utf8(rendered.into_inner()).unwrap();
+    let cells = row
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    assert_eq!(cells, ["forge", "#main", "-", "-", "working"], "{row}");
+}
+
 #[test]
 fn catalog_merges_definition_and_live_instance() {
     let mut definition = team();
