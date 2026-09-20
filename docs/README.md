@@ -32,7 +32,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 
 - [Configuration](./guide/configuration.md): every setting and the file that owns it, across config, agent profiles and teams, loop tasks, and project trust.
 - [Provider accounts](./guide/accounts.md): run a room's Claude or Codex agents under a second account, with its own limits, budget, and sessions.
-- [Theming](./guide/theme.md): palettes, color depth, glyph styles, animations, and provider branding.
+- [Theming](./guide/theme.md): the palette, color depth, color slots, glyph sets, status-head animations, the sidebar's sizing and meter stops, and provider branding.
 - [Pets](./guide/pets.md): the dashboard companion — built-in and petdex pets, your own sprite sheets, and the pixel and cell-art render tiers.
 - [Zellij and tmux](./guide/multiplexer.md): recommended multiplexer options, parity keybindings, and a themed status bar, shipped ready to adopt under [examples/](../examples/README.md).
 
