@@ -590,11 +590,11 @@ surplus-after = "3d"
 
 Loop tasks live in `~/.rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and need both `rimz trust grant` and a machine-local `rimz loop enable <name>` before they run unattended. The scheduling model (shapes, watchdogs, self-waits) is [loops.md](./loops.md); this section is the field shape.
 
-`default-timeout` bounds scheduled supervised turns whose task omits `timeout`; it accepts positive `s`, `m`, `h`, and `d` durations and defaults to `2h`. Set it with `rimz config set loop.default-timeout 3h`. Task-specific `timeout` wins, and a manual `rimz loop fire` without one remains unbounded.
+`default-timeout` bounds scheduled supervised runs whose task omits `timeout`; it accepts positive `s`, `m`, `h`, and `d` durations and defaults to `2h`. Set it with `rimz config set loop.default-timeout 3h`. Task-specific `timeout` wins, and a manual `rimz loop fire` without one remains unbounded.
 
 Each task chooses `agent`, `wait`, `check`, or `check` plus one agent action:
 
-- `agent` drives one supervised turn for a single agent cell on a calendar, interval, cron, or one-shot schedule.
+- `agent` drives one supervised run for a single agent cell on a calendar, interval, cron, or one-shot schedule.
 - `rimz loop add --wait @handle` pins delivery to one live agent session in workspace instance state, never `loop.toml`; bare `--wait` or `--wait @me` targets the caller. Its stored target carries `kind`, durable `session`, and display-only `handle`.
 - `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, `on = "success"` on zero exit. Check output is appended to the agent prompt when the guard fires.
 - `verify` runs a shell command after a spawned agent turn and re-prompts that same supervised session on failure; `max-attempts` is the total agent-turn cap and defaults to `3`.

@@ -266,7 +266,7 @@ Without an instruction, it uses your [configured compaction brief](./configurati
 Two everyday tasks have their own guides, with the depth this page leaves out:
 
 - **Steer or queue an agent** — send text that parks at the turn boundary, interrupts the live turn, or arrives on a schedule: the [messaging guide](./messaging.md).
-- **Script an agent** — run one supervised, exit-coded turn for a pipeline or CI job with `rimz agents … -p`: the [scripting guide](./scripting.md).
+- **Script an agent** — one prompt, supervised until the work ends, one exit code for a pipeline or CI job with `rimz agents … -p`: the [scripting guide](./scripting.md).
 
 The complete `rimz agents` surface is the [agent-control reference](../reference/cli/agents.md).
 
