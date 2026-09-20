@@ -1,10 +1,12 @@
 //! Integration coverage for the agent-facing `rimz wait` doorway.
 
+use crate::common::wait::{
+    agent_wait, loop_instances_path, register_agent, register_calling_agent,
+    register_calling_agent_with_launch, wait_instances, wait_ok,
+};
 use crate::common::{Env, canonical};
 use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
-use rimz::config::Tasks;
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
 use rimz::store::writer::AgentLifecycleIntent;
 
@@ -1505,32 +1507,8 @@ fn wait_for_no_wait_instances(env: &Env) {
     });
 }
 
-fn wait_ok(env: &Env, args: &[&str]) -> String {
-    let output = agent_wait(env)
-        .args(args)
-        .output()
-        .expect("run wait command");
-    assert!(
-        output.status.success(),
-        "{args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
-
-fn loop_instances_path(env: &Env) -> std::path::PathBuf {
-    env.state_path_for(&env.project_root)
-        .root
-        .join("loop-instances.json")
-}
-
 fn loop_runs_path(env: &Env) -> std::path::PathBuf {
     env.rimz_home().join("logs/loop-runs.log.jsonl")
-}
-
-fn wait_instances(env: &Env) -> Tasks {
-    let path = loop_instances_path(env);
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
 fn wait_records(env: &Env) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
@@ -1558,63 +1536,4 @@ fn wait_for_wait_records(
         );
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
-}
-
-fn register_calling_agent(env: &Env) {
-    register_calling_agent_with_launch(env, LaunchParams::default());
-}
-
-fn register_calling_agent_with_launch(env: &Env, launch: LaunchParams) {
-    register_agent(env, "provider-session", "launch-session", "planner", launch);
-}
-
-fn register_agent(env: &Env, session_id: &str, launch_id: &str, name: &str, launch: LaunchParams) {
-    let store = env.store();
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
-    store
-        .append_event(&EventEnvelope::agent_launched(
-            workspace.workspace_id,
-            &workspace.session_name,
-            &AgentKind::new_unchecked("claude"),
-            AgentLaunchPayload {
-                agent_id: AgentSessionId::from(session_id),
-                launch_id: Some(AgentSessionId::from(launch_id)),
-                agent_name: name.to_owned(),
-                agent_name_explicit: true,
-                launch,
-                state: AgentLaunchState::Bound,
-                run_id: None,
-                pane_id: None,
-                runtime_owner: None,
-                worktree_path: Some(env.project_root.display().to_string()),
-                worktree_branch: Some(name.to_owned()),
-                prompt: None,
-                description: None,
-            },
-        ))
-        .expect("seed launched target");
-    let mut observation = AgentLifecycleObservation::new(
-        Some(AgentSessionId::from(session_id)),
-        LifecycleSignal::Registered,
-    );
-    observation.agent_name = Some(name.to_owned());
-    store
-        .append_agent_lifecycle(AgentLifecycleIntent {
-            session_name: "rimz-test",
-            agent_kind: AgentKind::new_unchecked("claude"),
-            event_name: "test",
-            observation: &observation,
-            spawned_subagents: &[],
-        })
-        .expect("register target");
-}
-
-fn agent_wait(env: &Env) -> std::process::Command {
-    let mut command = env.rimz();
-    command
-        .env("RIMZ_AGENT_KIND", "claude")
-        .env("RIMZ_AGENT_ID", "launch-session")
-        .env("RIMZ_AGENT_NAME", "planner");
-    command
 }

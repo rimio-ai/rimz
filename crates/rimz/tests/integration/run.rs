@@ -845,6 +845,289 @@ fn hooks_bind_and_complete_supervised_run() {
     );
 }
 
+mod parked {
+    use super::*;
+    use crate::common::wait::{register_calling_agent, wait_instances, wait_ok};
+    use rimz::harness::run::{ParkCheck, RunCancellation, settle_stranded_park};
+    use rimz::harness::run_wake::{ExpectedRunFrame, RunWaiter};
+    use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+
+    struct Fixture {
+        env: Env,
+        store: rimz::Store,
+        run_id: RunId,
+        waiter: RunWaiter,
+        runtime: tokio::runtime::Runtime,
+    }
+
+    impl Fixture {
+        fn new(env: Env) -> Self {
+            register_calling_agent(&env);
+            let store = env.store();
+            let record = RunRecord::new(
+                env.workspace_id.clone(),
+                AgentKind::new_unchecked("claude"),
+                PermissionMode::Auto,
+                "finish after the wake".to_owned(),
+                env.project_root.clone(),
+            );
+            rimz::harness::run::create(store.paths(), &record).expect("create parent run");
+            let waiter = RunWaiter::bind(
+                store.runtime_paths(),
+                ExpectedRunFrame {
+                    workspace_id: env.workspace_id.clone(),
+                    run_id: record.run_id.clone(),
+                },
+                RunCancellation::new(),
+            )
+            .expect("bind parent waiter");
+            let fixture = Self {
+                env,
+                store,
+                run_id: record.run_id,
+                waiter,
+                runtime: tokio::runtime::Builder::new_current_thread()
+                    .enable_io()
+                    .enable_time()
+                    .build()
+                    .expect("waiter runtime"),
+            };
+            fixture.hook("UserPromptSubmit", "finish after the wake");
+            fixture
+        }
+
+        fn hook(&self, event: &str, prompt: &str) {
+            let mut command = self.env.hook_command("claude");
+            command
+                .env(rimz::harness::launch::ENV_RUN_ID, self.run_id.as_str())
+                .env("RIMZ_AGENT_ID", "launch-session")
+                .env("RIMZ_AGENT_NAME", "planner");
+            let output = self
+                .env
+                .spawn_payload(
+                    command,
+                    &json!({
+                        "hook_event_name": event,
+                        "session_id": "provider-session",
+                        "prompt": prompt,
+                        "last_assistant_message": "finished",
+                        "cwd": self.env.project_root,
+                    })
+                    .to_string(),
+                )
+                .wait_with_output()
+                .expect("run lifecycle hook");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        fn record(&self) -> RunRecord {
+            rimz::harness::run::load(self.store.paths(), &self.run_id).expect("load parent run")
+        }
+
+        fn arm(&self) -> String {
+            wait_ok(&self.env, &["wait", "--in", "5m"]);
+            let tasks = wait_instances(&self.env);
+            assert_eq!(tasks.0.len(), 1);
+            tasks.0.into_keys().next().expect("armed wait name")
+        }
+
+        fn assert_parked(&self) -> RunRecord {
+            let record = self.record();
+            assert_eq!(record.status, RunStatus::Running);
+            assert!(record.parked_at.is_some());
+            assert!(record.completed_at.is_none());
+            // The waiter's own timeout settles the run; cancel only this probe.
+            self.runtime.block_on(async {
+                assert!(
+                    tokio::time::timeout(
+                        Duration::from_millis(30),
+                        self.waiter.wait_terminal(&self.store, None, None),
+                    )
+                    .await
+                    .is_err(),
+                    "parked run released its caller"
+                );
+            });
+            assert_eq!(self.record(), record);
+            record
+        }
+
+        fn wake(&self, notice: HarnessNotice) -> MessageRecord {
+            let agent = self
+                .store
+                .snapshot()
+                .expect("parent snapshot")
+                .agents
+                .into_iter()
+                .find(|agent| agent.agent_id.as_str() == "provider-session")
+                .expect("parent card");
+            let message = MessageRecord::new(
+                self.env.workspace_id.clone(),
+                &agent,
+                "wake now".to_owned(),
+                DeliveryGate::Done,
+            )
+            .with_sender(MessageSender::Harness { notice });
+            self.store
+                .queue_message(&message, "rimz-test")
+                .expect("publish wake before retiring source");
+            message
+        }
+
+        fn resume(&self, message: &MessageRecord, submitted: &str) {
+            self.store
+                .record_sent_batch(std::slice::from_ref(message), "rimz-test")
+                .expect("send wake");
+            self.hook("UserPromptSubmit", submitted);
+            assert_eq!(self.record().status, RunStatus::Running);
+            assert_eq!(self.record().parked_at, None);
+            assert!(
+                !self
+                    .store
+                    .list_messages()
+                    .expect("pending wakes")
+                    .iter()
+                    .any(|pending| pending.message_id == message.message_id),
+                "turn start did not acknowledge its wake"
+            );
+            self.hook("Stop", "");
+            self.assert_terminal(RunStatus::Completed);
+        }
+
+        fn assert_terminal(&self, status: RunStatus) -> RunRecord {
+            let terminal = self.runtime.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(1),
+                    self.waiter.wait_terminal(&self.store, None, None),
+                )
+                .await
+                .expect("waiter released")
+                .expect("terminal run")
+            });
+            assert_eq!(terminal.status, status);
+            assert_eq!(terminal.parked_at, None);
+            terminal
+        }
+    }
+
+    #[test]
+    fn armed_wait_keeps_run_open_until_wake_turn_finishes() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        let fixture = Fixture::new(env);
+        let name = fixture.arm();
+        fixture.hook("Stop", "");
+        fixture.assert_parked();
+        let message = fixture.wake(HarnessNotice::Wait);
+        wait_ok(&fixture.env, &["wait", "cancel", &name]);
+        assert!(wait_instances(&fixture.env).0.is_empty());
+        // With the row gone, the published wake alone must hold the fold.
+        fixture.hook("Stop", "");
+        fixture.assert_parked();
+        fixture.resume(&message, "Type: WAIT\nFrom: @rimz\nContent:\nwake now");
+    }
+
+    #[test]
+    fn lost_wait_fails_parked_run_and_releases_waiter() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        let fixture = Fixture::new(env);
+        let name = fixture.arm();
+        fixture.hook("Stop", "");
+        let parked = fixture.assert_parked();
+        wait_ok(&fixture.env, &["wait", "cancel", &name]);
+        assert!(wait_instances(&fixture.env).0.is_empty());
+        assert!(
+            fixture
+                .store
+                .list_pending_messages()
+                .expect("no replacement wake")
+                .is_empty()
+        );
+        let at = parked.parked_at.expect("park timestamp");
+        assert_eq!(
+            settle_stranded_park(&fixture.store, &parked, None).expect("first check"),
+            ParkCheck::Stranded(at)
+        );
+        fixture.assert_parked();
+        assert_eq!(
+            settle_stranded_park(&fixture.store, &parked, Some(at)).expect("second check"),
+            ParkCheck::Settled
+        );
+        let failed = fixture.assert_terminal(RunStatus::Failed);
+        assert_eq!(failed.status.exit_code(), 1);
+        assert_eq!(
+            failed.failure_tail.as_deref(),
+            Some(
+                "parked on a wake that never arrived: no armed wait, no wake in flight, no live subagents"
+            )
+        );
+    }
+
+    #[test]
+    fn live_child_keeps_parent_open_until_report_turn_finishes() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        let fixture = Fixture::new(env);
+        let mut child = RunRecord::new(
+            fixture.env.workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "child task".to_owned(),
+            fixture.env.project_root.clone(),
+        );
+        child.agent_id = Some("child-session".into());
+        child.agent_name = Some("helper".to_owned());
+        child.subagent = true;
+        child.status = RunStatus::Running;
+        rimz::harness::run::create(fixture.store.paths(), &child).expect("create live child");
+        let mut observation =
+            AgentLifecycleObservation::new(child.agent_id.clone(), LifecycleSignal::Registered);
+        observation.agent_name = child.agent_name.clone();
+        observation.pane_id = Some(PaneId::parse("tmux:%2").expect("child pane"));
+        observation.launch = LaunchParams {
+            parent_agent_id: Some("launch-session".into()),
+            parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+            launch_depth: Some(1),
+            ..LaunchParams::default()
+        };
+        fixture
+            .store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: child.kind.clone(),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("register launched child");
+        fixture.hook("Stop", "");
+        fixture.assert_parked();
+        write_run_status(&fixture.store, &mut child, RunStatus::Completed);
+        fixture.hook("Stop", "");
+        fixture.assert_parked();
+        let message = fixture.wake(HarnessNotice::SubagentReport);
+        child.report_message_id = Some(message.message_id.clone());
+        rimz::harness::run::create(fixture.store.paths(), &child).expect("stamp child report");
+        fixture.hook("Stop", "");
+        fixture.assert_parked();
+        fixture.resume(
+            &message,
+            "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nwake now",
+        );
+    }
+}
+
 #[test]
 fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
     let env = Env::new();
