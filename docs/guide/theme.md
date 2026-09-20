@@ -303,7 +303,7 @@ enabled = true
 pet = "rocky"
 ```
 
-Turning them on also widens the automatic sidebar share to 30% at any view width. The [pets guide](./pets.md) covers the rest: what the pet acts out, the built-in and [petdex.dev](https://petdex.dev/) catalogs, bringing your own sprite sheet, the pixel and cell-art render tiers, and the offline and privacy story.
+The [pets guide](./pets.md) covers them: what the pet acts out, the built-in and [petdex.dev](https://petdex.dev/) catalogs, bringing your own sprite sheet, the pixel and cell-art render tiers, the widened sidebar that comes with them, and the offline and privacy story.
 
 ## See also
 
