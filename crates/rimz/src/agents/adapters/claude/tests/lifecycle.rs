@@ -433,6 +433,99 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
 }
 
 #[test]
+fn tool_signals_carry_the_call_id_as_the_native_key() {
+    fn native_key(signal: &LifecycleSignal) -> Option<&str> {
+        match signal {
+            LifecycleSignal::AwaitingInput { native_key, .. }
+            | LifecycleSignal::ToolUsed { native_key, .. } => native_key.as_deref(),
+            other => panic!("expected an ask or tool signal, got {other:?}"),
+        }
+    }
+
+    for (event, payload, expected) in [
+        // One call's Pre and Post share the id, so the ask and its completion
+        // edge carry the same key.
+        (
+            "PreToolUse",
+            json!({
+                "session_id": "sess-1",
+                "tool_name": "AskUserQuestion",
+                "tool_use_id": "toolu_ask",
+                "tool_input": {},
+            }),
+            Some("toolu_ask"),
+        ),
+        (
+            "PostToolUse",
+            json!({
+                "session_id": "sess-1",
+                "tool_name": "AskUserQuestion",
+                "tool_use_id": "toolu_ask",
+            }),
+            Some("toolu_ask"),
+        ),
+        (
+            "PreToolUse",
+            json!({
+                "session_id": "sess-1",
+                "tool_name": "ExitPlanMode",
+                "tool_use_id": "toolu_plan",
+                "tool_input": {},
+            }),
+            Some("toolu_plan"),
+        ),
+        (
+            "PreToolUse",
+            json!({
+                "session_id": "sess-1",
+                "tool_name": "Read",
+                "tool_use_id": "toolu_read",
+            }),
+            Some("toolu_read"),
+        ),
+        (
+            "PostToolUse",
+            json!({
+                "session_id": "sess-1",
+                "tool_name": "Read",
+                "tool_use_id": "toolu_read",
+            }),
+            Some("toolu_read"),
+        ),
+        // A build that omits the id, or sends it empty, degrades to keyless.
+        (
+            "PostToolUse",
+            json!({ "session_id": "sess-1", "tool_name": "Read" }),
+            None,
+        ),
+        (
+            "PreToolUse",
+            json!({
+                "session_id": "sess-1",
+                "tool_name": "AskUserQuestion",
+                "tool_use_id": "",
+                "tool_input": {},
+            }),
+            None,
+        ),
+        // `PermissionRequest` has no id on the wire; a stray one never keys it,
+        // because its clearing edge is the approved tool's own `PostToolUse`.
+        (
+            "PermissionRequest",
+            json!({
+                "session_id": "sess-1",
+                "tool_name": "Bash",
+                "tool_use_id": "toolu_stray",
+            }),
+            None,
+        ),
+    ] {
+        let observed = hook_lifecycle(&ClaudeAdapter, event, &payload);
+        assert_eq!(native_key(&observed.signal), expected, "{event} {payload}");
+    }
+}
+
+#[test]
 fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
     for (source, expected_signal, expected_origin) in [
         (

@@ -283,10 +283,11 @@ const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
 /// the broad `PreToolUse` hook. A dedicated `ExitPlanMode|AskUserQuestion`
 /// matcher would only double-fire — Claude runs every matching matcher group,
 /// and the broad entry already matches those tools. The broad
-/// `PreToolUse`/`PostToolUse` hooks also keep the sidebar's enrichment current,
-/// with their payload content gated by `[privacy] payload_mode`. The matcher
-/// field stays explicit because the reclaim path still reasons about
-/// on-disk matchers left by users or older builds.
+/// `PreToolUse`/`PostToolUse` hooks also keep the sidebar's enrichment current.
+/// The matcher field stays explicit because the reclaim path still reasons
+/// about on-disk matchers left by users or older builds. Every sample payload
+/// mirrors the shipped wire, so the `PreToolUse` and `PostToolUse` entries
+/// carry the `tool_use_id` that keys their signals.
 const CLAUDE_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle(
         "SessionStart",
@@ -314,11 +315,11 @@ const CLAUDE_HOOKS: &[HookEventSpec] = &[
     .with_lifecycle_fallback(),
     HookEventSpec::lifecycle(
         "PreToolUse",
-        r#"{"session_id":"sess-1","tool_name":"Bash"}"#,
+        r#"{"session_id":"sess-1","tool_name":"Bash","tool_use_id":"toolu_bash"}"#,
     ),
     HookEventSpec::lifecycle(
         "PostToolUse",
-        r#"{"session_id":"sess-1","tool_name":"Edit"}"#,
+        r#"{"session_id":"sess-1","tool_name":"Edit","tool_use_id":"toolu_edit"}"#,
     )
     .progress(),
     // Subagent lifecycle (Claude Code's Task-tool children, parity with Codex's
@@ -494,13 +495,21 @@ impl crate::agents::capabilities::CoreCapability for ClaudeAdapter {
             ),
             ClassificationSample::new(
                 "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
+                serde_json::json!({
+                    "session_id": "sess-1",
+                    "tool_name": "ExitPlanMode",
+                    "tool_use_id": "toolu_plan",
+                }),
                 AgentHookClass::AwaitingUser,
                 Some(AskKind::PlanApproval),
             ),
             ClassificationSample::new(
                 "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
+                serde_json::json!({
+                    "session_id": "sess-1",
+                    "tool_name": "AskUserQuestion",
+                    "tool_use_id": "toolu_question",
+                }),
                 AgentHookClass::AwaitingUser,
                 Some(AskKind::Question),
             ),
@@ -511,6 +520,7 @@ impl crate::agents::capabilities::CoreCapability for ClaudeAdapter {
                     "tool_name": "Bash",
                     "tool_input": { "command": "cargo test", "run_in_background": true },
                     "tool_response": { "backgroundTaskId": "b1" },
+                    "tool_use_id": "toolu_bg",
                 }),
                 AgentHookClass::Lifecycle,
                 None,
@@ -1033,6 +1043,14 @@ fn map_claude_lifecycle_signal(
     payload: &Value,
     parts: &ClaudeLifecycleParts,
 ) -> Option<LifecycleSignal> {
+    // Claude stamps the same `tool_use_id` on a call's `PreToolUse` and
+    // `PostToolUse`, and a distinct one per parallel call, so it is the native
+    // key that keeps an open ask alive across a sibling tool's edge. A build
+    // that omits it degrades to the keyless behaviour. `PermissionRequest` has
+    // no id on the wire and stays keyless on purpose: its clearing edge is the
+    // approved tool's keyed `PostToolUse`, which the sibling guard admits
+    // because the guard needs the *open ask* to be keyed.
+    let tool_use_id = optional_payload_string(payload, &["tool_use_id"]);
     match event_name {
         "SessionStart" => Some(parts.session_start.as_ref()?.source.session_start_signal()),
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
@@ -1071,7 +1089,7 @@ fn map_claude_lifecycle_signal(
                 .post_tool_use
                 .as_ref()
                 .and_then(|tool| tool.tool_name.clone()),
-            native_key: None,
+            native_key: tool_use_id,
             turn_id: None,
         }),
         "PreToolUse" => {
@@ -1085,13 +1103,13 @@ fn map_claude_lifecycle_signal(
                     kind,
                     ask_id: None,
                     detail: None,
-                    native_key: None,
+                    native_key: tool_use_id,
                 }),
                 None => Some(LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
                     name: None,
-                    native_key: None,
+                    native_key: tool_use_id,
                     turn_id: None,
                 }),
             }
