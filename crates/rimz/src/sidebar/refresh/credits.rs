@@ -231,7 +231,7 @@ pub(super) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
     }
 }
 
-pub fn merge_provider_realtime_usage(
+pub(crate) fn merge_provider_realtime_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
     scope: ProviderAccountScope,

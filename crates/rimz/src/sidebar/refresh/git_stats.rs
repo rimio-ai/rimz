@@ -33,7 +33,7 @@ const DIFF_STATS_WAIT_STEP: Duration = Duration::from_millis(20);
 const DIFF_STATS_WAIT_STEPS: u32 = 75;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DiffStats {
+pub(in crate::sidebar) struct DiffStats {
     pub added: u32,
     pub removed: u32,
 }
@@ -41,7 +41,7 @@ pub struct DiffStats {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DiffStatsCache {
     pub entries: BTreeMap<String, DiffStatsCacheEntry>,
-    /// The repo's worktree checkout roots, cached under [`WORKTREE_ROOTS_TTL`]
+    /// The repo's worktree checkout roots, cached under `WORKTREE_ROOTS_TTL`
     /// (with a session-boundary refresh floor). The set changes only on
     /// `git worktree add/remove`, so grouping reuses it across ticks instead
     /// of forking `git worktree list` every snapshot.
@@ -92,7 +92,7 @@ pub struct WorktreeRootsCache {
 impl WorktreeRootsCache {
     /// Saturating, so a clock that ran backwards reads fresh rather than
     /// re-enumerating every tick.
-    pub fn is_fresh(&self, now_ms: u64) -> bool {
+    pub(in crate::sidebar) fn is_fresh(&self, now_ms: u64) -> bool {
         now_ms.saturating_sub(self.refreshed_at_ms) <= WORKTREE_ROOTS_TTL.as_millis() as u64
     }
 }
@@ -174,7 +174,7 @@ impl DiffStatsCacheEntry {
             .is_some_and(|stamp| now_ms.saturating_sub(stamp) <= ttl.as_millis() as u64)
     }
 
-    pub fn stats(&self) -> Option<DiffStats> {
+    pub(in crate::sidebar) fn stats(&self) -> Option<DiffStats> {
         self.added
             .zip(self.removed)
             .map(|(added, removed)| DiffStats { added, removed })
