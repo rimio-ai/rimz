@@ -297,7 +297,7 @@ A handle falls into one of three classes, narrowing from group to instance.
 
 | Class | Examples | Matches | Can create? |
 | --- | --- | --- | --- |
-| Role | `@coder` | every agent launched under that team role in the channel, except an unclaimed launch card (no registered session, no pane) while a claimed holder matches | no |
+| Role | `@coder` | every agent launched under that team role in the channel, except an unclaimed launch card (no registered session, no pane) while a claimed holder matches in its own lane | no |
 | Type | `@codex` (kind), `@planner` (profile) | every agent of that kind or profile in the channel | yes |
 | Instance | `@writer` (explicit `--name`), `@swift-otter` (petname), `@claude-2` (kind ordinal), a session-id prefix, `tmux:%1` (pane address) | exactly one running agent | no |
 
@@ -325,7 +325,7 @@ Resolution has two sources and one matcher set over both: rollup sessions (`&Age
 
 The petname is the stable per-instance fallback name. The store mints an adjective-noun pair at registration through [`agents::petname`](../../../crates/rimz/src/agents/petname.rs). It refuses reserved command words and kind-shaped names, so a petname can never shadow `@all` or `@claude-2`, and it is collision-checked against every name in the rollup (retained ended rows keep their names reserved) and against existing session-id prefixes. A session with no stored name re-derives one deterministically from its session id, so old logs still render a stable name.
 
-The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. The renderer tries, in order: the role when unique in scope — a launch card nobody claimed yields it to a claimed holder, so a role survives a card left behind by a launch that died before binding — the explicit `--name`, the profile when unique, the kind, `@<kind>-<n>`, then the petname. A listing therefore always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. Every agent-bearing listing shares this one renderer; `address.rs` owns both it and the parser, and tests them against each other.
+The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. The renderer tries, in order: the role when unique in scope — a launch card nobody claimed yields it to a claimed holder in its own lane, so a role survives a card left behind by a launch that died before binding, while across lanes both still match — the explicit `--name`, the profile when unique, the kind, `@<kind>-<n>`, then the petname. A listing therefore always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. Every agent-bearing listing shares this one renderer; `address.rs` owns both it and the parser, and tests them against each other.
 
 ## Resume and rebirth
 
