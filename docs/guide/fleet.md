@@ -1,6 +1,6 @@
 # Agents
 
-RimZ watches the agents you already run. Type `claude` into any pane and it joins the room; `rimz agents` earns its keystrokes later, when you want an agent tuned for one job or several agents launched in one line. This page covers both ways in and the commands that read and drive the fleet once it is working; the field-level detail behind profiles and permission modes waits at the [end of the page](#profiles-shape-an-agent-for-one-job).
+RimZ works with the agent CLIs you already run: type `claude` or `codex` into a pane and the room picks it up. `rimz agents` is the other way in, for the sessions where one stock CLI is not enough: an agent shaped for one job, several launched in one line, and the commands that read and drive them once they are working.
 
 ## Run the CLI you already run
 
@@ -11,73 +11,66 @@ claude          # the stock Claude CLI
 codex           # the stock Codex CLI
 ```
 
-The agent appears in the sidebar, reporting from its first line. No `rimz` command sits in the path: the CLI runs with your flags, your config, your session files, and the reporting hooks you approved when you [installed hooks](./setup.md#install-agent-hooks) tell RimZ what it does — status, task, context health, live cost. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents RimZ drives, and what each integration reports, is [agent support](../reference/agent-support.md).
-
-For a single agent in the pane you are standing in, this is the whole story. Everything below is for the sessions where it isn't.
+The agent's card appears in the sidebar as its first hook fires. No `rimz` command sits in the path: the CLI runs with your flags, your config, and your session files, and the [reporting hooks](./setup.md#install-agent-hooks) you approved during setup tell RimZ what it is doing. From that the agent gets a live card, a handle you can message, and a place in the attention ranking. Which agents RimZ drives, and what each one reports, is [agent support](../reference/agent-support.md).
 
 ## Why `rimz agents`
 
-A bare `claude` is a general-purpose agent, and most work is not general: a planner should reason hard and edit nothing, a reviewer should read the diff and propose rather than commit, a test-writer should stay in the test tree. Even the everyday default is worth shaping — a trimmed system prompt, an explicit tool list, the effort and permission posture you actually want — and the stock CLI takes all of it through its own flags:
+A bare `claude` is a general-purpose agent, and most work is not general. A planner should reason hard and edit nothing, a reviewer should read the diff and propose rather than commit, a test-writer should stay in the test tree. Even the everyday default is worth shaping, and the stock CLI takes all of it through its own flags:
 
 ```sh
-claude --permission-mode auto --effort xhigh \
-       --system-prompt-file ~/.rimz/prompts/claude-slim.md \
-       --strict-mcp-config \
-       --tools 'Agent,AskUserQuestion,Bash,Edit,EnterPlanMode,ExitPlanMode,LSP,Read,Skill,TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,WebFetch,WebSearch,Write'
+claude --permission-mode auto --effort high \
+       --system-prompt-file ~/.rimz/prompts/slim.md \
+       --tools 'Bash,Edit,Glob,Grep,Read,Skill,WebFetch,WebSearch,Write'
 ```
 
-A shaped agent beats a general one steered by hand — fewer wrong turns, less context spent wandering, a lower bill for the same result. What doesn't scale is the typing: that flag stack, re-entered in every pane, kept in sync across sessions, remembered per provider because Codex spells the same ideas differently.
+A shaped agent beats a general one steered by hand: fewer wrong turns, less context spent wandering, a lower bill for the same result. What does not scale is the typing. That stack has to be re-entered in every pane, kept in sync across sessions, and remembered per provider, because Codex spells the same ideas differently.
 
-That flag stack is what `rimz agents` bottles. A [profile](#profiles-shape-an-agent-for-one-job) — here named `claude`, the same as the kind, so it becomes the tuned default — gives it one word, and the launcher replays it:
+`rimz agents` bottles the stack. Save it once as a [profile](#profiles-shape-an-agent-for-one-job) named `slim`, and the launcher replays it:
 
 ```sh
-rimz agents claude            # the flag stack above, as one word — and a @claude handle
-rimz agents launch claude     # explicit launch verb, same agent payload
-rimz agents claude,codex      # two agents, side by side in one line
+rimz agents slim              # the flag stack above, as one word, plus a @slim handle
+rimz agents launch slim       # explicit launch verb, same agent payload
+rimz agents slim,codex        # two agents, side by side in one line
 rimz agents forge -w feat-x   # a whole team, isolated in its own worktree
 ```
 
-The wrapper stays thin. `rimz agents claude` does exactly two things on your machine: it renders the profile into the stock CLI's own flags (the `claude --permission-mode auto …` line above, nothing you couldn't type yourself), and it runs that command in your Zellij or tmux — in the pane you are standing in for a single agent, in a fresh tab for a layout or worktree — under a small RimZ launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI; its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. Closing the pane or `rimz agents stop @claude` ends it the same way Ctrl+C would.
+**The wrapper stays thin.** `rimz agents slim` does exactly two things on your machine. It renders the profile into the stock CLI's own flags, the `claude --permission-mode auto …` line above and nothing you could not type yourself. Then it runs that command in your Zellij or tmux, in the pane you are standing in for a single agent and in a fresh tab for a layout or a worktree, under a small RimZ launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI, and its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. A launch into your current pane also renames that tab after the profile or channel, and the name stays after the agent exits and you are back in the shell.
 
-An agent launched in your current pane also names that tab using the same profile or channel label as a new-tab launch. The label stays readable while the agent runs, including when sandboxing is enabled, rather than following the wrapper process name. It remains when the agent exits and you return to the shell; tmux does not resume automatic process-based naming for that tab.
+## Reach an agent by handle
 
-Beyond the preset, the launcher carries three habits that build on it, each with its own guide:
-
-- **several agents at once**, arranged in a [layout](#compose-a-layout) from one spec,
-- **an isolated [worktree](./worktrees.md)** per line of work, one `-w` flag away,
-- **a named [team](./teams.md)** of profiles, launched, messaged, and resumed as a unit.
-
-## Compose a layout
-
-Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell ([permission modes](#set-a-permission-mode)), a [profile](#profiles-shape-an-agent-for-one-job), a configured command, any executable on your PATH, or `term` for a plain shell; configured commands and profiles win over a same-named binary. Suffix an agent cell with `:role` to give it an ad-hoc role handle. An optional trailing prompt goes to one leader: a named team's configured `leader` role, its first declared role by default, or otherwise the first agent cell. Give a repeated first cell an inline role to make that target unambiguous; use `rimz message @all` after launch when every agent needs the same text.
-
-```sh
-rimz agents claude,codex                     # two agents, side by side
-rimz agents claude:planner,codex:coder -w feat-x   # ad-hoc role handles, no saved team
-rimz agents claude,codex+term                # Claude | Codex tiled over a shell
-rimz agents claude/codex/term                # one stack of three rows
-rimz agents 'vim,codex+term'                 # your editor beside an agent stacked over a shell
-rimz agents claude,codex "Draft the API shape."   # the prompt lands on the first cell, Claude
-```
-
-Quote a spec whenever it contains a `+`, a space, or anything your shell would otherwise expand. Profiles and kinds compose the same way, so `rimz agents planner,coder+reviewer` lays out three of your presets. The full grammar and how cells compile to panes is [fleet.md → The layout IR](../internals/harness/fleet.md#the-layout-ir).
-
-Add `-w` and the whole layout lands in an isolated Git worktree, the pattern for running several agents in parallel without stepping on each other: see [Worktrees](./worktrees.md).
-
-## Handles, in brief
-
-Every agent answers to a handle: `@claude` names a kind, `@planner` names a profile or an inline `cell:planner` role, and `forge.reviewer` names one role of a team. RimZ gives each bare launch a stable pet name too (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes the handle to one channel — every worktree gets one, and named channels and teams have their own — defaulting to the one you are standing in.
+Every agent answers to a handle, and the launcher decides it. `@claude` names a kind, `@planner` names a profile, and `forge.reviewer` names one role of a team. RimZ gives each launch a stable pet name as well (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes a handle to one channel: every worktree has one, named channels and teams have their own, and a bare handle means the channel you are standing in.
 
 ```sh
 rimz agents focus @claude-2#feat-a   # jump to a specific agent's pane
 rimz agents show swift-otter         # its activity, context, placement, and transcript tail
 ```
 
-That is enough to launch, re-add, and jump to agents. Routing text to them — parking at the turn boundary, steering the live turn, broadcasting to a channel — is the [Messaging guide](./messaging.md), which owns the full address grammar and delivery rules.
+Every verb on this page takes one. Routing text to a handle, parking at the turn boundary, steering the live turn, broadcasting to a channel, is the [messaging guide](./messaging.md), which owns the full address grammar and the delivery rules.
+
+## Compose a layout
+
+Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line. A comma splits columns, a plus tiles rows, a slash stacks rows (a Zellij stack; tmux tiles them):
+
+```sh
+rimz agents claude,codex                     # two agents, side by side
+rimz agents claude,codex+term                # Claude | Codex tiled over a shell
+rimz agents claude/codex/term                # one stack of three rows
+rimz agents 'vim,codex+term'                 # your editor beside an agent tiled over a shell
+rimz agents claude:planner,codex:coder -w feat-x   # ad-hoc role handles, no saved team
+rimz agents claude,codex "Draft the API shape."    # the prompt lands on the first cell, Claude
+```
+
+Each cell is an agent kind, a `<kind>-<mode>` cell ([permission modes](#set-a-permission-mode)), a [profile](#profiles-shape-an-agent-for-one-job), a command you configured, any executable on your `PATH`, or `term` for a plain shell; a configured command or profile wins over a same-named binary. Suffix an agent cell with `:role` and it answers to `@role` for this launch, without a saved team.
+
+A trailing prompt goes to exactly one agent: the leader when you launched a named team, and the first agent cell otherwise. Give a repeated first cell an inline role to make that target unambiguous, and use `rimz message @all` after launch when every agent needs the same text.
+
+Quote a spec whenever it contains a `+`, a space, or anything else your shell would expand. Profiles and kinds compose the same way, so `rimz agents planner,coder+reviewer` lays out three of your presets. Every cell form and every launch flag are in the [launch reference](../reference/cli/agents.md#launch-a-layout).
+
+Add `-w` and the whole layout lands in an isolated Git worktree, the pattern for running several agents in parallel without stepping on each other: see [Worktrees](./worktrees.md). A set of roles you keep relaunching together earns a name of its own: see [Teams](./teams.md).
 
 ## Manage a running room
 
-Once a few agents are working, the same `rimz agents` command reads the room and drives it: inspect, focus, stop, restart, or compact one agent. Every verb below takes a [handle](#handles-in-brief), so `@coder` is the codex you launched into a team and `@swift-otter` the bare Claude you started in the corner. These commands run from any pane in the room, or from a script anywhere that resolves to the same workspace.
+Once a few agents are working, the same `rimz agents` command reads the room and drives it: inspect, focus, stop, restart, or compact one agent. Every verb below takes a [handle](#reach-an-agent-by-handle), and they all run from any pane in the room, or from a script anywhere that resolves to the same workspace.
 
 **See the whole room at a glance.** Bare `rimz agents` lists the current channel's cards, grouped by the worktree each lives in and ordered so whoever needs you sits on top:
 
@@ -86,23 +79,23 @@ $ rimz agents
 AGENT         STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
-@planner      waiting  opus@high      42%     78k   2m
+@planner      waiting  opus@high     42%     78k   2m
   which rotation strategy should we use?
 
-@coder        running  gpt-5.5@high   31%     54k   0s
+@coder        running  gpt-5.5@high  31%     54k   0s
   wire up the refresh-token path
 
-@reviewer     idle     opus@high       3%     12k  15m
+@reviewer     idle     opus@high      3%     12k  15m
   review the diff once coder lands
 
 query-engine
-@swift-otter  success  opus@high      78%    120k   8m
+@swift-otter  success  opus@high     78%    120k   8m
   store refactor
 ```
 
-`@planner` sits first because it stopped to ask you something; the columns read its status, model and effort, how full its context window is, tokens used, and how long since it last moved, while the indented line below says what it is on. Add `--all` to widen past the current channel to every lane in the room, or a scope like `rimz agents '#auth-refresh'` to read one.
+`@planner` sits first because it stopped to ask you something. `CTX` is how full each agent's context window is and `AGE` how long since it last moved; the indented line under a row is what that agent is working on. `rimz agents list --all` widens past the current channel to every lane in the room, and a scope like `rimz agents '#auth-refresh'` reads one.
 
-**Ask why one agent is where it is.** When a card raises a question you can't answer from one line, `rimz agents show` prints the full report for a single agent, so you see what you asked it, what it is spending, and where its pane lives without switching to it:
+**Ask why one agent is where it is.** When a card raises a question you cannot answer from one line, `rimz agents show` prints the full report for a single agent, so you see what you asked it, what it is spending, and where its pane lives without switching to it:
 
 ```console
 $ rimz agents show @coder
@@ -118,72 +111,72 @@ Activity
   status:        running
   phase:         acting
   turn_started:  2026-07-08T15:41:02Z
-  turn_elapsed:  3m
-  last_activity: 0s
+  turn_elapsed:  3m ago
+  last_activity: 0s ago
 
 Context
-  model:               gpt-5.5@high
-  fill:                31%
-  window:              272000
-  total_tokens:        54210
-  fresh_input_tokens:  4180
-  cache_read_tokens:   47600
-  cache_write_tokens:  1920
-  output_tokens:       510
-  compactions:         0
-  active:              12m
-  cost:                $0.87
+  model:              gpt-5.5@high
+  fill:               31%
+  window:             272000
+  total_tokens:       54210
+  fresh_input_tokens: 4180
+  cache_read_tokens:  47600
+  cache_write_tokens: 1920
+  output_tokens:      510
+  compactions:        0
+  tools:              12 · Bash 9, Read 3
+  active:             12m
+  cost:               $0.8700
+  budget:             -
 
 Placement
   channel:  auth-refresh
-  worktree: ~/code/query-engine-auth-refresh
+  worktree: /home/you/code/query-engine-auth-refresh
+  pr:       #91 open · ci passing
   pane:     tmux:%14
 
-Recent transcript
-you  15:38
-  after your turn, add coverage for the expiry edge cases
-
-coder  15:41
-  Wiring the rotation path first, then the expiry tests.
+…
 ```
 
-Add `--capture` to append the pane's visible text, or `--json` to hand the same report to a script.
+The report ends with the agent's recent transcript, cut from the block above. Add `--capture` to append the pane's visible text, or `--json` for the structured record a script can read.
 
-**See what a profile will actually run.** With a bare CLI, you can read the flags you typed; after a profile inherits settings and adds prompt fragments, that final command is harder to see. Run `rimz agents explain coder` to inspect the resolved command, settings, prompt, and sandbox view without launching an agent or writing launch artifacts. Use `rimz agents explain coder --prompt > prompt.md` to read the composed configured prompt and RimZ reminder in a file, or `rimz agents explain @coder` to see its restart posture under current configuration. The [explain reference](../reference/cli/agents.md#explain-a-launch) covers overrides, redaction, and reminders a provider cannot receive.
-
-**Read along without leaving your pane.** `rimz agents logs` tails an agent's transcript; `-f` follows new lines as the turn writes them, so you watch a long run from the pane you are already in:
+**Read along without leaving your pane.** `rimz agents logs` tails an agent's transcript. Your own prompts appear as `user → @coder`, the agent's replies under its handle, so you watch a long run from the pane you are already in:
 
 ```console
-$ rimz agents logs @coder -n 4
-coder  15:36
-  Rotating the refresh token first, then wiring the retry path.
+$ rimz agents logs @coder -n 3
+#auth-refresh
 
-you  15:38
-  after your turn, add coverage for the expiry edge cases
+@coder  15:36
+Rotating the refresh token first, then wiring the retry path.
 
-coder  15:41
-  Added tests/auth/refresh_expiry.rs covering sliding and hard expiry.
+ user  → @coder  15:38
+after your turn, add coverage for the expiry edge cases
 
-$ rimz agents logs @coder -f    # follow new lines as they land
+@coder  15:41
+Added tests/auth/refresh_expiry.rs covering sliding and hard expiry.
 ```
+
+`-f` follows new lines as the turn writes them, and `--all` reaches back into the agent's earlier sessions.
 
 **Read what each turn cost.** `rimz agents history` joins the conversation's user turns to the provider's token and price records, so you can see which request consumed the session without leaving the agent view. `-n` keeps the newest rows and `--json` returns the same records to a script:
 
 ```console
 $ rimz agents history @coder -n 3
-START             DUR  TOKENS       COST     OUTCOME  PROMPT
-2026-07-08 15:12   8m  ↘4k ↗510     $0.4210  done     implement refresh-token rotation
-2026-07-08 15:38   3m  ↘1k ↗284     $0.2870  done     add coverage for expiry edge cases
-2026-07-08 15:44  12s  ↘320 ↗0      $0.0310  open     run the focused integration tests
+START             DUR    TOKENS     COST  OUTCOME  PROMPT
+2026-07-08 15:12   8m  ↘4k ↗510  $0.4210  done     implement refresh-token rotation
+2026-07-08 15:38   3m  ↘1k ↗284  $0.2870  done     add coverage for the expiry edge cases
+2026-07-08 15:44  12s   ↘320 ↗0  $0.0310  open     run the focused integration tests
 3 turns · 54k tokens · $0.7390
 ```
 
-**Credit the people and models behind the change.** A pull request usually opens after the first teammate has already exited, so live agent cards cannot supply a complete byline. `rimz agents attribution` reads the lane's audit records and provider transcripts instead; `--md` prints a collapsed block ready to append to the pull-request body, while the default panel is useful before you ship:
+`↘` is the fresh input the turn sent and `↗` the tokens it produced; the `TOKENS` total on the last line counts cache reads and writes too, which is why it dwarfs the rows.
+
+**Credit the people and models behind the change.** A pull request usually opens after the first teammate has already exited, so live agent cards cannot supply a complete byline. `rimz agents attribution` reads the lane's audit records and provider transcripts instead:
 
 ```console
 $ rimz agents attribution
-since 2026-09-06 21:26
-forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
+branch feat/auth · since 2026-09-06 21:26
+forge team · 3 agents · 59m active · $42.72 · 10 messages (1 from you)
 
   @planner · Claude · claude-fable-5-1@high
       effort:    17m active · $9.66
@@ -205,38 +198,25 @@ forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
       messages: 1 from teammates · 1 to teammates
       tokens:   62 input, 37k output, 256.7k cache write, 3.4m cache read
 
-Other agents · 1 agent · 4m active · $2.09 · 1 messages (1 from you)
-
-  @debugger · Codex · gpt-6-astra@high
-      effort:    4m active · $2.09
-      subagents: 1 × explorer · $0.61
-      activity:  29 tool calls
-      messages:  1 from you · 1 to teammates
-      tokens:    220.3k input, 14.5k output, 1.5m cache read
-
 Models
   gpt-6-astra:      $27.32 · 763.1k input, 81k output, 15.6m cache read
-  claude-opus-5:    $9.03 · 192 input, 65.5k output, 355.1k cache write, 7.7m cache read
+  claude-opus-5:    $6.93 · 192 input, 65.5k output, 355.1k cache write, 7.7m cache read
   claude-fable-5-1: $6.15 · 90 input, 45.5k output, 142.1k cache write, 4.1m cache read
   gpt-5.6-terra:    $2.32 · 527k input, 39.1k output, 4m cache read
-
-Total · 4 agents · 1h03m active · $44.82 · 11 messages (2 from you)
 ```
 
-The report covers contributors observed on the checkout's current branch within the worktree's current life, teammates that exited on the way included, and nothing from an earlier worktree that carried the same name. Use `--branch BRANCH` to credit another branch. Remove the worktree and its sessions leave the report, though the records themselves survive. A checkout RimZ did not create, your main clone included, has no creation-time boundary but still filters by branch. Figures cover each included session's whole effort, not a per-branch split; the [attribution reference](../reference/cli/agents.md#attribution) covers branch evidence and unfiltered reports.
-
-Every dollar and token figure is all-in for the member or team, including subagents; each `subagents` line breaks part of the effort figure above down by task rather than adding to it. `Models` splits that same spend by the model id each provider transcript recorded, including native subagents and launched children. Unlike the member heading, which names its latest session's model, these rows show every model used, ordered by cost largest first. Entries whose transcript named no model collect under `unknown`. The `--md` form turns the same figures and wording into a collapsed pull-request receipt whose summary links RimZ to its repository and omits the `since` timestamp, with member bullets under `**Agents**` followed by a `**Models**` bullet list.
+The report covers the agents that worked the checkout's current branch within the worktree's current life, teammates that exited on the way included. Every dollar and token figure is all-in for the member, its subagents counted in rather than added on, and `Models` splits that same spend by model, largest first. `--md` prints a collapsed block ready to paste into a pull-request body, and the [attribution reference](../reference/cli/agents.md#attribution) covers the other scopes, the branch evidence, and what the Markdown form leaves out.
 
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 
 ```console
 $ rimz agents top --once
-4 agents · 2 running · 143% CPU · 1.9G MEM · 248k tokens
-AGENT         STATUS   CPU   MEM  IO/S  PROCS  CTX  TOKENS  AGE
-@coder        running  96%  892M  4M/s     12  31%     54k  0s
-@planner      waiting   2%  410M     -      6  42%     78k  2m
-@reviewer     idle      1%  180M     -      4   3%     12k  15m
-@swift-otter  success    -     -     -      -  78%    120k  8m
+4 agents · 1 running · 99.0% CPU · 1.4 GB MEM · 264k tokens
+AGENT         STATUS     CPU     MEM    IO/S  PROCS  CTX  TOKENS  AGE
+@coder        running  96.0%  892 MB  4 MB/s     12  31%     54k  0s
+@planner      waiting   2.0%  410 MB       -      6  42%     78k  2m
+@reviewer     idle      1.0%  180 MB       -      4   3%     12k  15m
+@swift-otter  success      -       -       -      -  78%    120k  8m
 ```
 
 **Jump in, or shut one down.** A row you want to answer is one `focus` away; a pane you are done with is one `stop`:
@@ -247,45 +227,39 @@ rimz agents stop @reviewer      # close the idle reviewer's pane
 rimz agents stop @claude --all  # close every Claude in scope
 ```
 
-`stop` closes the agent's pane, ending the CLI process the way Ctrl+C would; sessions stay on disk in the provider's own format, so a stopped agent is one `--resume` away. To keep the conversation but change how the next run works, [`rimz agents <spec> --resume`](../reference/cli/agents.md#resume-a-cohort) accepts permission, model, and effort overrides for that run, or an isolation override that also carries into later relaunches and children.
+`stop` closes the agent's pane, which ends the CLI process with it, and stops any supervised children that agent launched. Sessions stay on disk in the provider's own format, so a stopped agent is one `--resume` away. To keep the conversation but change how the next run works, [`rimz agents <spec> --resume`](../reference/cli/agents.md#resume-a-cohort) accepts permission, model, and effort overrides for that run.
 
-**Restore a lane by place.** `rimz agents resume '#auth-refresh'` focuses the lane when every member is live, adds only closed members when part of it remains live, and rebuilds the saved team and stray panes when all are closed. Use `--from-pr 42` for a locally developed pull-request lane; bare `resume` targets the current worktree or lists resumable lanes at the project root.
+**Restore a lane by place.** `rimz agents resume '#auth-refresh'` focuses the lane when every member is live, adds only the closed members when part of it remains live, and rebuilds the saved team and stray panes when all are closed. Use `--from-pr 42` for a locally developed pull-request lane; bare `resume` targets the current worktree, or lists the resumable lanes when you run it at the project root.
 
-**Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current Markdown definitions, so edits take effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the allocated replacement handle instead of hiding a possible rename.
+**Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current Markdown definitions, so an edit takes effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the replacement handle rather than hiding a rename.
 
-**Fork an agent to try another approach.** `rimz agents fork @coder` takes over the launching pane with the full conversation under a new provider-assigned session id in the source worktree, leaving the original session untouched and preserving its permission mode. Pass `--new-pane` to keep the launching pane, or `--new-tab` for a separate view. RimZ gives the fork a fresh pet name; use `rimz agents fork @coder --name twin` to pin `@twin` when you want both approaches to have memorable handles.
+**Fork an agent to try another approach.** `rimz agents fork @coder` takes over the launching pane with the full conversation under a new provider-assigned session id, in the source worktree, leaving the original session untouched and keeping its permission mode. Pass `--new-pane` to keep the launching pane, or `--new-tab` for a separate view. The fork gets a fresh pet name; `rimz agents fork @coder --name twin` pins `@twin` when you want both approaches to have memorable handles.
 
-**Compact context before the next task.** You can type the agent's native compaction command in its pane; `rimz agents compact @coder` submits that same command from wherever you are, immediately when idle or queued until the next turn boundary. To choose what survives the summary, pass an instruction on an agent that supports it (Claude today; in this example, `@coder` is a Claude profile):
+**Compact context before the next task.** You can type the agent's native compaction command in its pane; `rimz agents compact @coder` submits that same command from wherever you are: at once on an idle agent, and queued until the next turn boundary on a busy one. To choose what survives the summary, pass an instruction on an agent whose CLI accepts one (Claude, Grok, and Droid today):
 
 ```sh
 rimz agents compact @coder "keep the open questions and the exact file list"
 ```
 
-Without an instruction, it uses your [configured compaction brief](./configuration.md#smart-compaction). RimZ refuses another compaction until the agent takes a new user turn, and refuses while one is already queued or running. The [command reference](../reference/cli/agents.md#compact) covers instruction support and delivery output.
+Without an instruction it uses your [configured compaction brief](./configuration.md#smart-compaction). There is no way to force a compaction into a live turn, and RimZ refuses a second one until the agent has taken a new user turn. The [command reference](../reference/cli/agents.md#compact) covers instruction support and the delivery output.
 
-Two everyday tasks have their own guides, with the depth this page leaves out:
-
-- **Steer or queue an agent** — send text that parks at the turn boundary, interrupts the live turn, or arrives on a schedule: the [messaging guide](./messaging.md).
-- **Script an agent** — one prompt, supervised until the work ends, one exit code for a pipeline or CI job with `rimz agents … -p`: the [scripting guide](./scripting.md).
+Three everyday tasks have their own guides, with the depth this page leaves out. The [messaging guide](./messaging.md) sends text that parks at the turn boundary, interrupts the live turn, or arrives on a schedule. The [scripting guide](./scripting.md) turns the same launcher into one prompt, supervised until the work ends, with one exit code for a pipeline or CI job (`rimz agents … -p`). And when you are away from the terminal, [remote → answer asks from your phone](./remote.md#answer-asks-from-your-phone) keeps the bridge behind the Claude and Codex mobile apps up with every room, so an agent's question reaches you as a push.
 
 The complete `rimz agents` surface is the [agent-control reference](../reference/cli/agents.md).
 
-## Answer asks from your phone
-
-An agent that stops to ask while you are away does not have to wait for your terminal. Claude Code and Codex ship **remote control**, the bridge behind their official mobile apps, and two toggles keep it up with every room:
-
-```sh
-rimz config set remote_control.claude true
-rimz config set remote_control.codex true
-```
-
-The ask reaches your phone as a push from the provider's own app, and your answer lands in the same session as if you had typed it in the pane. Both toggles are off by default; exactly what each one runs, the preconditions, and the undo are in [remote → answer asks from your phone](./remote.md#answer-asks-from-your-phone).
-
-That is the whole daily workflow. The two sections below are the detail it names — the profile fields and the permission-mode suffixes — here for when you need a specific field rather than on your way in.
-
 ## Profiles: shape an agent for one job
 
-A **profile** saves the shaping you would otherwise repeat at the CLI: model, reasoning effort, permission mode, tools, and optional craft. Store it as `~/.rimz/agents/claude-planner.md`:
+A **profile** saves the shaping you would otherwise retype: model, reasoning effort, permission mode, tools, and an optional craft prompt. Profiles are Markdown files under `~/.rimz/agents/`, and each provider's profiles share one **kind base**, a file named after the kind that holds the system prompt they all inherit. Write the base first, as `~/.rimz/agents/claude.md`:
+
+```markdown
+---
+description: Claude, shaped for this machine
+---
+
+Prefer small, reviewable changes. Name what you are unsure about.
+```
+
+A base takes no settings, only a description and a prompt body. The settings go in the profile beside it, `~/.rimz/agents/planner.md`:
 
 ```markdown
 ---
@@ -298,64 +272,69 @@ subagents: []
 ```
 
 ```sh
-rimz agents validate
-rimz agents explain claude-planner
-rimz agents claude-planner
+rimz agents validate          # check every definition on this machine
+rimz agents planner           # launch it
 ```
 
-This bodyless preset needs no custom prompt. To add a craft body, supply a shared kind base in `agents/claude.md` first; the base and craft then compose in order. The [Markdown definition reference](../reference/definitions.md) covers the frontmatter, inheritance, tool translation, and defaults. Edit the source to change future launches; remove it to retire the profile.
+This profile has no body of its own, so it runs on the base's prompt alone; give it one and the two compose, base first. The base file is not optional on a provider whose CLI takes a system prompt, which covers Claude, Codex, Pi, and Qwen. Without it, `rimz agents validate` fails with `runs on claude, whose kind base agents/claude.md is missing`. Edit a file to change future launches, and delete it to retire the profile. The [Markdown definition reference](../reference/definitions.md) covers the frontmatter, inheritance, tool translation, and defaults; a field the provider cannot express fails the launch before any pane opens instead of being dropped in silence.
 
-For Codex, leaving `model` unset preserves its own configured model. Markdown `tools:` is translated to provider flags; it is not a raw `args` field. Presets that require unsupported provider capabilities fail at launch rather than silently dropping the setting.
-
-Override a field for one launch with its matching launch flag, which wins over the profile; `auto-compact` is profile-only:
+**See what a profile will actually run.** With a bare CLI you can read the flags you typed; after a profile inherits a base and adds prompt fragments, that final command is harder to see. `rimz agents explain planner` prints the resolved command, settings, prompt, and sandbox view without launching anything:
 
 ```sh
-rimz agents claude --model opus --effort xhigh --budget 5 --system-prompt-file ./review.md
-rimz agents claude-planner --append-system-prompt-file ./local.md --append-system-prompt-file ./task.md
+rimz agents explain planner                  # the command this profile resolves to
+rimz agents explain planner --prompt > prompt.md   # the composed prompt and RimZ reminder
+rimz agents explain @coder                   # a live agent's restart posture under current config
 ```
 
-A repeated `--append-system-prompt-file` preserves command-line order and replaces the profile's entire fragment list for that launch. Fragments require a base `system-prompt-file`.
+The [explain reference](../reference/cli/agents.md#explain-a-launch) covers overrides, redaction, and reminders a provider cannot receive.
+
+Override a profile field for one launch with its matching flag, which wins over the file:
+
+```sh
+rimz agents planner --model opus --effort high --budget 5
+rimz agents planner --append-system-prompt-file ./local.md --append-system-prompt-file ./task.md
+```
+
+A repeated `--append-system-prompt-file` keeps command-line order and replaces the profile's entire fragment list for that launch; fragments need a base `system-prompt-file`. `--effort` is passed to the provider's own effort flag without validation, so the levels are whatever that CLI accepts. `--budget 5` parks the agent when its session cost reaches $5 and `--budget 20/day` caps each local calendar day instead; the same dollar-cap model scales up to loop tasks, the room, and a provider login in the [budgets guide](./budget.md).
 
 To try a profile on a different provider without changing it, add `--agent`:
 
 ```sh
-rimz agents claude-planner --agent codex --model gpt-5.3-codex
+rimz agents planner --agent codex --model gpt-5.3-codex
 ```
 
-The launched handle is still `@claude-planner`. The selected base supplies the engine: its provider, and its model and effort whenever it sets them, so `rimz agents fixer --agent opus` runs the fixer role on the `opus` profile's model and effort. Mode, budget, `auto-compact`, skills, and prompt files carry from the original profile, and so does its effort wherever the base leaves effort unset. Its model carries only when a same-provider base leaves the model unset. Because model names and raw `args` belong to a provider, a provider change silently replaces their old values with those from the selected base; a named Codex definition can hold those defaults. `--agent` accepts any profile name as that base as well as a registered kind, and command-line overrides still win. This override is fresh-launch only and is not written back to the profile; a later interactive restart refuses the provider mismatch and points to an explicit fresh `--agent` launch.
+The launched handle is still `@planner`. The profile or kind you name supplies the engine, and the original keeps the job: its permission mode, budget, skills, and prompt files all carry over. The swap applies to that launch alone and is never written back, so a later restart refuses the provider mismatch and points at a fresh `--agent` launch. Which field wins when both sides set one is in the [launch reference](../reference/cli/agents.md#shared-launch-params).
 
-On budgets specifically: `--budget 5` parks the agent when its session cost reaches $5, `--budget 20/day` caps each local calendar day instead, and `rimz agents budget @coder` inspects or changes the cap while the agent runs. The same dollar-cap model scales up to loop tasks, the room, and a provider login: the [budgets guide](./budget.md) owns it.
-
-Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi to `xhigh`. The full profile shape, inheritance between profiles, and per-field rules are in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams); pairing several profiles by role is a [team](./teams.md).
+Where profiles live, how they inherit from each other, and the per-field rules are in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams); pairing several profiles by role is a [team](./teams.md).
 
 ## Set a permission mode
 
-A suffix sets how much the agent may do before it stops to ask. Like every profile field, it renders into the provider's own flags — the suffix is shorthand for a flag you already know:
+The permission mode is the setting you change per task rather than per profile: the reviewer you trust to read should still ask before it writes. A `<kind>-<mode>` cell sets it at launch, and like every profile field it renders into the provider's own flags, so the suffix is shorthand for a flag you already know:
 
-| Suffix | What it does | For example |
+| Suffix | What the agent may do | For Claude |
 | --- | --- | --- |
-| `-auto` | the provider's auto-accept mode for routine actions | `claude --permission-mode auto` |
 | `-ask` | keep the provider's native permission prompts | no flag at all |
-| `-plan` | start in plan mode | `claude --permission-mode plan` |
-| `-yolo` | pass the provider's bypass flag, skipping its prompts | `claude --dangerously-skip-permissions` |
+| `-auto` | auto-accept the provider's routine actions | `--permission-mode auto` |
+| `-plan` | start in plan mode | `--permission-mode plan` |
+| `-yolo` | skip the provider's prompts entirely | `--dangerously-skip-permissions` |
 
 ```sh
-rimz agents codex-yolo      # codex --dangerously-bypass-approvals-and-sandbox
 rimz agents claude-plan     # start in plan mode
+rimz agents codex-yolo      # codex --dangerously-bypass-approvals-and-sandbox
 rimz agents claude --yolo   # the same mode as a flag
 ```
 
-Not every provider defines every mode: the built-in set is `claude-{auto,ask,plan,yolo}`, `codex-{auto,ask,plan,yolo}`, `cursor-{auto,ask,plan,yolo}`, `antigravity-{auto,ask,plan,yolo}`, `grok-{auto,ask,plan,yolo}`, `opencode-{plan,yolo}`, and `pi-{ask,plan}`, and a mode a given provider has no equivalent for keeps that provider's default behavior. Cursor's Auto posture uses its classifier-backed `--auto-review` mode; Antigravity maps Auto to `--mode accept-edits` and keeps sandboxing a separate provider flag. Grok maps Ask to `--permission-mode default`, Auto to `--permission-mode auto`, and Yolo to `--yolo`; Grok Plan adds no argv because `/plan` is interactive rather than an enforced launch posture. On the command line the same choice is a flag, `--ask` or `--yolo`, and in a profile it is the `mode` field. The exact flag each mode becomes, per provider, is in [agent support](../reference/agent-support.md).
+The same choice is `--ask` or `--yolo` on the command line, and the `mode` field in a profile, where it becomes that profile's default. Every kind takes `-ask` and `-plan`; `-auto` and `-yolo` exist wherever the provider ships a flag for them, and a mode a provider has no equivalent for launches with that provider's own default. The exact flag each mode becomes, per agent, is the [permission-mode table](../reference/agent-support.md#permission-modes).
 
 ## See also
 
-- [Worktrees](./worktrees.md) — isolate a layout on its own branch so several agents run in parallel.
-- [Teams](./teams.md) — pair profiles by role and launch, reopen, and resume the whole set as one unit.
-- [Messaging](./messaging.md) — reach agents by handle: park, steer, schedule, and channels.
-- [The sidebar](./sidebar.md) — how the room reads the cards, worktrees, and teams you launch.
-- [Token Insight](./insight.md) — fleet-wide token and dollar insight: the cockpit, the provider dashboard, and `rimz stats`.
-- [Budgets](./budget.md) — dollar caps on an agent, a task, a room, or a provider login, and what a park means.
-- [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
-- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — where reusable profiles and teams live.
-- [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents` surface.
-- [Agent support](../reference/agent-support.md) — which agents RimZ drives and what each integration adds.
+- [Worktrees](./worktrees.md): isolate a layout on its own branch so several agents run in parallel.
+- [Teams](./teams.md): pair profiles by role and launch, reopen, and resume the whole set as one unit.
+- [Messaging](./messaging.md): reach agents by handle, and park, steer, schedule, and use channels.
+- [The sidebar](./sidebar.md): how the room reads the cards, worktrees, and teams you launch.
+- [Token Insight](./insight.md): fleet-wide token and dollar insight, the cockpit, the provider dashboard, and `rimz stats`.
+- [Budgets](./budget.md): dollar caps on an agent, a task, a room, or a provider login, and what a park means.
+- [Scripting agents](./scripting.md): the same launcher as a supervised, exit-coded run (`-p`).
+- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams): where reusable profiles and teams live.
+- [Agent-control reference](../reference/cli/agents.md): the complete `rimz agents` surface.
+- [Agent support](../reference/agent-support.md): which agents RimZ drives and what each integration adds.
