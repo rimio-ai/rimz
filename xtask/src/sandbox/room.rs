@@ -21,6 +21,7 @@ struct Panes {
 
 #[derive(Deserialize)]
 struct Tab {
+    view_id: Option<String>,
     name: Option<String>,
     panes: Vec<Pane>,
 }
@@ -288,7 +289,13 @@ impl Room<'_> {
         let Some(anchor) = anchor else {
             return Ok(());
         };
-        let argv = look_argv(self.binary, self.mux, session, index, &anchor.pane_id);
+        let argv = look_argv(
+            self.binary,
+            self.mux,
+            session,
+            tab_number(tab, index),
+            &anchor.pane_id,
+        );
         let (program, args) = argv.split_first().context("look command is empty")?;
         output("visit tab", self.command(program).args(args))?;
         Ok(())
@@ -344,6 +351,13 @@ impl Room<'_> {
                 })
                 .map(|pane| pane.pane_id.as_str())
                 .collect();
+            // `pane list` lags a fresh sidebar by seconds, and a sidebar it still omits gets no
+            // tab warm-up and no card block, so wait for the listing to name every live renderer.
+            let unlisted: Vec<_> = renderers
+                .iter()
+                .filter_map(|renderer| renderer.pane_id.as_deref())
+                .filter(|pane_id| !sidebars.iter().any(|pane| pane.pane_id == *pane_id))
+                .collect();
             let pipeline = snapshot
                 .worktree_groups
                 .iter()
@@ -355,12 +369,17 @@ impl Room<'_> {
                 .flat_map(|tab| &tab.panes)
                 .filter(|pane| pane.kind == "agent")
                 .count();
-            if !sidebars.is_empty() && missing.is_empty() && pipeline.is_some() && agents == 2 {
+            if !sidebars.is_empty()
+                && missing.is_empty()
+                && unlisted.is_empty()
+                && pipeline.is_some()
+                && agents == 2
+            {
                 return Ok((panes, renderers, snapshot));
             }
             if started.elapsed() >= Duration::from_secs(30) {
                 bail!(
-                    "room readiness timed out: {} sidebars, missing live renderer for {missing:?}; {} agents (need 2); Build pipeline present: {}; stages seen: {:?}",
+                    "room readiness timed out: {} sidebars, missing live renderer for {missing:?}, renderers on unlisted panes {unlisted:?}; {} agents (need 2); Build pipeline present: {}; stages seen: {:?}",
                     sidebars.len(),
                     agents,
                     pipeline.is_some(),
@@ -407,6 +426,19 @@ fn quote(value: &OsStr) -> String {
     format!("'{}'", value.to_string_lossy().replace('\'', "'\\''"))
 }
 
+/// The tab number `zellij action go-to-tab` counts from one. A tab carries its own position in
+/// `view_id` (`mux/zellij/pane_topology.rs` builds it as `tab_<position>`); the listing groups
+/// tabs in first-seen pane order, which is not promised to match, so the index is only the
+/// fallback for a tab the mux left unidentified.
+fn tab_number(tab: &Tab, index: usize) -> usize {
+    tab.view_id
+        .as_deref()
+        .and_then(|view| view.strip_prefix("tab_"))
+        .and_then(|position| position.parse::<usize>().ok())
+        .unwrap_or(index)
+        + 1
+}
+
 /// The command that brings a tab into the client's view, program first. `rimz pane focus` does
 /// not move a Zellij client across tabs — only its own `go-to-tab` does — so the backends part
 /// here, and the card prints what the room itself ran.
@@ -414,7 +446,7 @@ fn look_argv(
     binary: &Path,
     mux: &str,
     session: &str,
-    index: usize,
+    number: usize,
     sidebar: &str,
 ) -> Vec<OsString> {
     if mux == "zellij" {
@@ -424,7 +456,7 @@ fn look_argv(
             session.into(),
             "action".into(),
             "go-to-tab".into(),
-            (index + 1).to_string().into(),
+            number.to_string().into(),
         ];
     }
     vec![
@@ -471,11 +503,17 @@ fn render_card(
                     renderer.role
                 )?;
                 let id = quote(OsStr::new(&pane.pane_id));
-                let look = look_argv(binary, &record.mux, &record.session, index, &pane.pane_id)
-                    .iter()
-                    .map(|argument| quote(argument))
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let look = look_argv(
+                    binary,
+                    &record.mux,
+                    &record.session,
+                    tab_number(tab, index),
+                    &pane.pane_id,
+                )
+                .iter()
+                .map(|argument| quote(argument))
+                .collect::<Vec<_>>()
+                .join(" ");
                 writeln!(
                     card,
                     "  Look: {sandbox} {look}\n  Capture: {join} pane capture {id}\n  Click: {join} sidebar click {id} 2 \"${{ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}}\""
@@ -587,15 +625,35 @@ mod tests {
     }
 
     #[test]
-    fn zellij_looks_at_a_tab_by_index_because_pane_focus_does_not_move_its_client() {
+    fn zellij_looks_at_a_tab_by_number_because_pane_focus_does_not_move_its_client() {
         let binary = Path::new("/dev/rimz");
         assert_eq!(
-            look_argv(binary, "zellij", "room", 2, "zellij:terminal_6"),
+            look_argv(binary, "zellij", "room", 3, "zellij:terminal_6"),
             ["zellij", "--session", "room", "action", "go-to-tab", "3"]
         );
         assert_eq!(
-            look_argv(binary, "tmux", "room", 2, "tmux:%3"),
+            look_argv(binary, "tmux", "room", 3, "tmux:%3"),
             ["/dev/rimz", "--tmux", "pane", "focus", "tmux:%3"]
         );
+    }
+
+    #[test]
+    fn tab_number_follows_the_view_id_not_the_listing_order() {
+        let panes: Panes = serde_json::from_str(
+            r##"{"session":"private","tabs":[
+                {"view_id":"tab_1","name":"rimzd","panes":[]},
+                {"view_id":"tab_0","name":"rimz","panes":[]},
+                {"name":"#probe","panes":[]}
+            ]}"##,
+        )
+        .unwrap();
+        let numbers: Vec<_> = panes
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| tab_number(tab, index))
+            .collect();
+        // The first two follow their own position; the unidentified tab falls back to its index.
+        assert_eq!(numbers, [2, 1, 3]);
     }
 }

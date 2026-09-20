@@ -68,7 +68,10 @@ pub struct LiveSidebar {
 }
 
 /// Read the renderer election from outside a renderer: the smallest live instance produces.
-/// Keep the filters and ordering aligned with `ProducerElectionTracker::full_scan`.
+/// It shares `full_scan`'s protocol and TTL filters through `fresh_sidebar_heartbeats`, its
+/// workspace filter, and its instance-id ordering; keep those aligned. It deliberately drops
+/// `full_scan`'s check that a heartbeat's file name matches its own instance id, which the
+/// shared scan does not expose and which only a hand-planted file can trip.
 ///
 /// Contributor tooling only — `rimz sidebar renderers` labels a room's tabs with it and
 /// `rimz sidebar click` finds a pane's wakeup socket through it. A renderer decides its own

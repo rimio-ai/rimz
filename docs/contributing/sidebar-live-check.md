@@ -10,9 +10,9 @@ Build the testkit binary first:
 cargo build -p rimz --bin rimz --features testkit
 ```
 
-`cargo xtask sandbox room --mux <tmux|zellij> [--for <duration>]` holds a disposable room and prints its room card; the room verb is Linux-only. Keep it running while you check the room.
+`cargo xtask sandbox room --mux <tmux|zellij> [--for <duration>]` holds a disposable room and prints its room card; the room verb is Linux-only. Keep it running while you check the room. The room dies after 30 minutes unless `--for` says otherwise (`--for 45m`, or `--for off` to hold it until you stop it).
 
-`cargo xtask sandbox in <root> -- <command>` runs one command inside that held room. Use the ready-to-paste commands from your own card; the cards below record real runs, not reusable roots or pane IDs.
+`cargo xtask sandbox in <root> -- <command>` runs one command inside that held room. Every command on the card spells that verb `target/debug/xtask` instead: the held room's own `cargo xtask` owns the target-directory lock for as long as it runs, so a joined `cargo` command waits for it rather than doing anything. Use the ready-to-paste commands from your own card; the cards below record real runs, so their roots, pane IDs, and the long absolute `rimz` path — one machine's resolved `target/debug/rimz` — are not reusable.
 
 ## Room cards
 
