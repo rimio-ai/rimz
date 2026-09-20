@@ -157,6 +157,7 @@ fn stop_live_agent_tree(
                 &workspace.project_root,
                 &agent.kind,
                 &agent.agent_id,
+                rimz::harness::schedule::arm::RetireScope::Session,
             ) {
                 failures.push(format!("{parent_label}: {err}"));
             }

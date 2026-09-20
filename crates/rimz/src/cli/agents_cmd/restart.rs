@@ -142,15 +142,22 @@ pub(in crate::cli) fn restart_resolved(
         .close_pane(&workspace.session_name, &old_pane)
         .context("closing the replaced agent pane")?;
 
-    // The replaced session is over either way: a fresh restart mints a new
-    // identity, and a resumed one re-arms its declared bindings at the
-    // registration that follows. Waits armed against it do not come back.
+    // A fresh restart leaves the old identity behind, so every row pinned to it
+    // is dead. A resumed one is the same session continuing: its declared
+    // bindings carry over rather than depending on a re-arm nothing orders
+    // against this removal, and only the rows no registration restores go.
+    let scope = if fresh_reason.is_some() {
+        rimz::harness::schedule::arm::RetireScope::Session
+    } else {
+        rimz::harness::schedule::arm::RetireScope::UnrestorableOnly
+    };
     let dropped = match rimz::harness::schedule::arm::retire_session(
         &workspace.project_root,
         &agent.kind,
         &agent.agent_id,
+        scope,
     ) {
-        Ok(retired) => retired.dropped,
+        Ok(dropped) => dropped,
         Err(err) => {
             writeln!(crate::cli::render::err(), "rimz: {err}")?;
             0
