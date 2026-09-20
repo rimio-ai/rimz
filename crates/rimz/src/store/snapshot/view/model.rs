@@ -132,7 +132,7 @@ pub enum WorktreePrState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WorktreePrCi {
+pub enum WorktreeCi {
     Pending,
     Passing,
     Failing,
@@ -262,7 +262,7 @@ pub struct SidebarWorktreeGroup {
     pub pr_state: Option<WorktreePrState>,
     /// Best-effort CI verdict for the trunk's branch or the branch's open/merged pull request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pr_ci: Option<WorktreePrCi>,
+    pub pr_ci: Option<WorktreeCi>,
     /// Best-effort linked pull-request number: the forge-resolved PR for the
     /// branch, else the worktree marker's `--from-pr` provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]

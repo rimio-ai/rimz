@@ -54,7 +54,7 @@ pub(in crate::sidebar_pane::render) struct CockpitBadges {
     pub unread_agents: usize,
     pub unread_picked: bool,
     pub open_prs: usize,
-    pub open_pr_ci: Option<crate::store::snapshot::WorktreePrCi>,
+    pub open_pr_ci: Option<crate::store::snapshot::WorktreeCi>,
     pub pr_picked: bool,
 }
 
@@ -137,9 +137,9 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     let mut open_pr_range = None;
     if open_prs > 0 {
         let component = match open_pr_ci {
-            Some(crate::store::snapshot::WorktreePrCi::Passing) => Component::PrCiPassing,
-            Some(crate::store::snapshot::WorktreePrCi::Pending) => Component::PrCiPending,
-            Some(crate::store::snapshot::WorktreePrCi::Failing) => Component::PrCiFailing,
+            Some(crate::store::snapshot::WorktreeCi::Passing) => Component::WorktreeCiPassing,
+            Some(crate::store::snapshot::WorktreeCi::Pending) => Component::WorktreeCiPending,
+            Some(crate::store::snapshot::WorktreeCi::Failing) => Component::WorktreeCiFailing,
             None => Component::WorktreePrOpen,
         };
         let tone = theme.component(component);

@@ -20,7 +20,7 @@ use crate::sidebar::refresh::git_stats::{
     needed_worktree_paths,
 };
 use crate::sidebar::timing::{PR_STATE_HOT_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL};
-use crate::store::snapshot::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
+use crate::store::snapshot::{SidebarSnapshot, WorktreeCi, WorktreePrState};
 use crate::utils::time::unix_now_ms;
 
 mod transitions;
@@ -228,8 +228,8 @@ fn repo_tier_ttl(repo_hot: bool) -> Duration {
 fn path_has_pending_ci(cache: &PrStateCache, path: &str) -> bool {
     cache.states.get(path).is_some_and(|link| {
         matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged)
-            && link.ci == Some(WorktreePrCi::Pending)
-    }) || cache.branch_ci.get(path) == Some(&WorktreePrCi::Pending)
+            && link.ci == Some(WorktreeCi::Pending)
+    }) || cache.branch_ci.get(path) == Some(&WorktreeCi::Pending)
 }
 
 fn repo_due(
@@ -288,7 +288,7 @@ impl Target {
         &self,
         state: WorktreePrState,
         number: u64,
-        ci: Option<WorktreePrCi>,
+        ci: Option<WorktreeCi>,
         merge_sha: Option<String>,
     ) -> PrLink {
         PrLink {
@@ -526,7 +526,7 @@ fn assign_states(
         {
             match link.state {
                 WorktreePrState::Merged
-                    if matches!(link.ci, Some(WorktreePrCi::Passing | WorktreePrCi::Failing))
+                    if matches!(link.ci, Some(WorktreeCi::Passing | WorktreeCi::Failing))
                         || (link.ci.is_none() && link.merge_sha.is_some()) =>
                 {
                     states.insert(target.path.clone(), link);
@@ -617,7 +617,7 @@ struct RepoGroupProbe {
     repo_key: String,
     targets: Vec<Target>,
     states: BTreeMap<String, PrLink>,
-    branch_ci: BTreeMap<String, WorktreePrCi>,
+    branch_ci: BTreeMap<String, WorktreeCi>,
     ok: bool,
 }
 
@@ -625,7 +625,7 @@ fn probe_repo_group(
     repo_key: &str,
     group: &RepoGroup,
     prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreePrCi>,
+    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
     match group.forge_cli {
         ForgeCli::Gh => probe_github_repo_group(repo_key, group, prior, prior_branch_ci),
@@ -692,7 +692,7 @@ fn probe_github_repo_group(
     repo_key: &str,
     group: &RepoGroup,
     prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreePrCi>,
+    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
     if group.repo_slug.is_none() {
         return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
@@ -732,7 +732,7 @@ fn probe_github_repo_group(
 fn project_github_group(
     group: &RepoGroup,
     batches: &[(GhQueryPlan, forge::GhBulkResponse)],
-) -> (BTreeMap<String, PrLink>, BTreeMap<String, WorktreePrCi>) {
+) -> (BTreeMap<String, PrLink>, BTreeMap<String, WorktreeCi>) {
     let mut prs = BTreeMap::new();
     let mut commits = BTreeMap::new();
     for (plan, response) in batches {
@@ -785,7 +785,7 @@ fn failed_repo_group_probe(
     repo_key: &str,
     group: &RepoGroup,
     prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreePrCi>,
+    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
     RepoGroupProbe {
         repo_key: repo_key.to_owned(),
@@ -800,7 +800,7 @@ fn probe_tea_repo_group(
     repo_key: &str,
     group: &RepoGroup,
     prior: &BTreeMap<String, PrLink>,
-    prior_branch_ci: &BTreeMap<String, WorktreePrCi>,
+    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
     let open_map = match query_open_tea_prs(group) {
         Some(open_map) => open_map,
@@ -880,8 +880,8 @@ fn carry_prior_states(
 
 fn carry_prior_branch_ci(
     targets: &[Target],
-    prior: &BTreeMap<String, WorktreePrCi>,
-) -> BTreeMap<String, WorktreePrCi> {
+    prior: &BTreeMap<String, WorktreeCi>,
+) -> BTreeMap<String, WorktreeCi> {
     targets
         .iter()
         .filter_map(|target| {
@@ -1018,7 +1018,7 @@ fn probe_tea_detail_with(
     })
 }
 
-fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<WorktreePrCi> {
+fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<WorktreeCi> {
     let endpoint = forge::tea_commit_status_endpoint(repo_slug, branch);
     let output = command_stdout(worktree, "tea", &["api", &endpoint])?;
     forge::parse_tea_combined_status(&output)

@@ -16,7 +16,7 @@ use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
 use rimz::harness::schedule::run_log::{self, LoopRunResult, LoopRunStats};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
 use rimz::harness::team_stage::StageSignal;
-use rimz::store::snapshot::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
+use rimz::store::snapshot::{SidebarSnapshot, WorktreeCi, WorktreePrState};
 use rimz::utils::path::normalize_path_lexical;
 use rimz::workspace::WorkspaceResolver;
 
@@ -115,7 +115,7 @@ impl CohortState {
 pub(super) struct PrReport {
     pub number: Option<u64>,
     pub state: Option<WorktreePrState>,
-    pub ci: Option<WorktreePrCi>,
+    pub ci: Option<WorktreeCi>,
     pub url: Option<String>,
 }
 
@@ -759,9 +759,9 @@ fn write_catalog(w: &mut impl Write, reports: &[TeamReport], theme: &ThemeConfig
                 .and_then(|pr| pr.ci)
             {
                 let role = match ci {
-                    WorktreePrCi::Passing => rimz::config::GlyphRole::WorktreeCiPassing,
-                    WorktreePrCi::Pending => rimz::config::GlyphRole::WorktreeCiPending,
-                    WorktreePrCi::Failing => rimz::config::GlyphRole::WorktreeCiFailing,
+                    WorktreeCi::Passing => rimz::config::GlyphRole::WorktreeCiPassing,
+                    WorktreeCi::Pending => rimz::config::GlyphRole::WorktreeCiPending,
+                    WorktreeCi::Failing => rimz::config::GlyphRole::WorktreeCiFailing,
                 };
                 if !pr_text.is_empty() {
                     pr_text.push(' ');
@@ -821,11 +821,11 @@ pub(super) fn stage_label(stage: &StageReport) -> String {
     )
 }
 
-pub(super) fn ci_style(ci: WorktreePrCi) -> anstyle::Style {
+pub(super) fn ci_style(ci: WorktreeCi) -> anstyle::Style {
     match ci {
-        WorktreePrCi::Passing => render::palette::good(),
-        WorktreePrCi::Pending => render::palette::warn(),
-        WorktreePrCi::Failing => render::palette::alarm(),
+        WorktreeCi::Passing => render::palette::good(),
+        WorktreeCi::Pending => render::palette::warn(),
+        WorktreeCi::Failing => render::palette::alarm(),
     }
 }
 

@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use super::RepoGroup;
 use crate::forge::RemoteRepo;
 use crate::forge::pr_state::{PrLink, PrStateCache, TargetStamp};
-use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
+use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
 pub(super) fn transitions(
     prior: &PrStateCache,
@@ -116,11 +116,11 @@ fn successful_repo<'a>(cache: &'a PrStateCache, path: &str) -> Option<&'a str> {
         .then_some(repo)
 }
 
-fn final_verdict_name(ci: Option<WorktreePrCi>) -> Option<&'static str> {
+fn final_verdict_name(ci: Option<WorktreeCi>) -> Option<&'static str> {
     match ci {
-        Some(WorktreePrCi::Passing) => Some("ci.passed"),
-        Some(WorktreePrCi::Failing) => Some("ci.failed"),
-        Some(WorktreePrCi::Pending) | None => None,
+        Some(WorktreeCi::Passing) => Some("ci.passed"),
+        Some(WorktreeCi::Failing) => Some("ci.failed"),
+        Some(WorktreeCi::Pending) | None => None,
     }
 }
 

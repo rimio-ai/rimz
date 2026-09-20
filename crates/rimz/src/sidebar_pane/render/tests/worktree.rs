@@ -784,7 +784,7 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(91);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Failing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreeCi::Failing);
 
     for state in [
         crate::store::snapshot::WorktreePrState::Open,
@@ -799,7 +799,7 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
             .expect("PR CI span");
         assert_eq!(
             ci.style,
-            theme.styled(Component::PrCiFailing, Modifier::empty())
+            theme.styled(Component::WorktreeCiFailing, Modifier::empty())
         );
     }
 }
@@ -808,7 +808,7 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
 fn render_branch_ci_without_a_pr_badge() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreeCi::Passing);
 
     let lines = group_lines(&snapshot, &theme, 0);
     let header = &lines[0];
@@ -820,7 +820,7 @@ fn render_branch_ci_without_a_pr_badge() {
 
     assert_eq!(
         ci.style,
-        theme.styled(Component::PrCiPassing, Modifier::empty())
+        theme.styled(Component::WorktreeCiPassing, Modifier::empty())
     );
     assert!(
         header.spans.iter().all(|span| !span.content.contains('#')),
@@ -833,7 +833,7 @@ fn render_pr_badge_leads_with_ci_glyph() {
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(888);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreeCi::Passing);
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
@@ -852,7 +852,7 @@ fn render_pr_badge_is_a_diff_safe_sanitized_hyperlink() {
     let mut linked =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     linked.worktree_groups[0].pr_number = Some(91);
-    linked.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
+    linked.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreeCi::Passing);
     let unsafe_url = "https://github.com/org/repo/pull/91\x1b]8;;https://evil.test\u{7}";
     linked.worktree_groups[0].pr_url = Some(unsafe_url.to_owned());
     let mut plain = linked.clone();
@@ -927,7 +927,7 @@ fn render_pr_badge_yields_to_the_name_at_extreme_width() {
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(91);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreeCi::Passing);
 
     let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
     let text = header
@@ -948,7 +948,7 @@ fn render_pr_badge_yields_to_the_name_at_extreme_width() {
 fn render_bare_branch_ci_yields_to_the_name_at_extreme_width() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);
-    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreePrCi::Passing);
+    snapshot.worktree_groups[0].pr_ci = Some(crate::store::snapshot::WorktreeCi::Passing);
 
     let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
     let text = header

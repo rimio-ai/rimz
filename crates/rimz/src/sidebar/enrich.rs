@@ -19,7 +19,7 @@ use crate::store::snapshot::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, RemoteControlBadge, ResumeOutcome,
     RuntimeReapInputs, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarPresence,
     SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
-    TruthNotice, WorktreePrCi, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
+    TruthNotice, WorktreeCi, WorktreePrState, WorktreeTrunkSync, compute_lazy_agent_pairings,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -261,7 +261,7 @@ fn cached_git_backed_worktree_path<'a>(
 fn project_pr_state_map(
     snapshot: &mut SidebarSnapshot,
     states: &BTreeMap<String, PrLink>,
-    branch_ci: &BTreeMap<String, WorktreePrCi>,
+    branch_ci: &BTreeMap<String, WorktreeCi>,
     diff_cache: &DiffStatsCache,
 ) {
     for group in &mut snapshot.worktree_groups {

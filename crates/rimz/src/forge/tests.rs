@@ -418,7 +418,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 number: 12,
                 state: WorktreePrState::Open,
                 created_at: Some("2026-07-18T01:25:14Z".parse().unwrap()),
-                head_ci: Some(WorktreePrCi::Pending),
+                head_ci: Some(WorktreeCi::Pending),
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -426,15 +426,15 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 number: 20,
                 state: WorktreePrState::Merged,
                 created_at: Some("2026-07-18T01:26:14Z".parse().unwrap()),
-                head_ci: Some(WorktreePrCi::Failing),
+                head_ci: Some(WorktreeCi::Failing),
                 merge_sha: Some("merge-sha".to_owned()),
-                merge_ci: Some(WorktreePrCi::Passing),
+                merge_ci: Some(WorktreeCi::Passing),
             }),
             Some(GhBulkPr {
                 number: 30,
                 state: WorktreePrState::Closed,
                 created_at: None,
-                head_ci: Some(WorktreePrCi::Failing),
+                head_ci: Some(WorktreeCi::Failing),
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -443,7 +443,7 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
                 number: 40,
                 state: WorktreePrState::Merged,
                 created_at: None,
-                head_ci: Some(WorktreePrCi::Pending),
+                head_ci: Some(WorktreeCi::Pending),
                 merge_sha: None,
                 merge_ci: None,
             }),
@@ -452,8 +452,8 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
     assert_eq!(
         response.commits,
         vec![
-            Some(WorktreePrCi::Passing),
-            Some(WorktreePrCi::Failing),
+            Some(WorktreeCi::Passing),
+            Some(WorktreeCi::Failing),
             None,
             None,
         ]
@@ -463,11 +463,11 @@ fn parses_github_bulk_prs_and_commits_by_alias() {
 #[test]
 fn github_rollup_state_mapping_is_aggregate_only() {
     for (state, expected) in [
-        ("SUCCESS", Some(WorktreePrCi::Passing)),
-        ("failure", Some(WorktreePrCi::Failing)),
-        ("ERROR", Some(WorktreePrCi::Failing)),
-        ("PENDING", Some(WorktreePrCi::Pending)),
-        ("expected", Some(WorktreePrCi::Pending)),
+        ("SUCCESS", Some(WorktreeCi::Passing)),
+        ("failure", Some(WorktreeCi::Failing)),
+        ("ERROR", Some(WorktreeCi::Failing)),
+        ("PENDING", Some(WorktreeCi::Pending)),
+        ("expected", Some(WorktreeCi::Pending)),
         ("NEUTRAL", None),
         ("", None),
     ] {
@@ -639,11 +639,11 @@ fn forge_cli_builds_and_decodes_head_commands() {
 #[test]
 fn parses_tea_combined_commit_status() {
     for (state, expected) in [
-        ("success", WorktreePrCi::Passing),
-        ("pending", WorktreePrCi::Pending),
-        ("failure", WorktreePrCi::Failing),
-        ("error", WorktreePrCi::Failing),
-        ("warning", WorktreePrCi::Failing),
+        ("success", WorktreeCi::Passing),
+        ("pending", WorktreeCi::Pending),
+        ("failure", WorktreeCi::Failing),
+        ("error", WorktreeCi::Failing),
+        ("warning", WorktreeCi::Failing),
     ] {
         let raw = format!(r#"{{"state":"{state}"}}"#);
         assert_eq!(parse_tea_combined_status(&raw).unwrap(), Some(expected));

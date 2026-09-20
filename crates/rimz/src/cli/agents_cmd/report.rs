@@ -10,7 +10,7 @@ use rimz::agents::{
 };
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::store::snapshot::{
-    AgentCard, SidebarRow, SidebarSnapshot, WorktreePrCi, WorktreePrState,
+    AgentCard, SidebarRow, SidebarSnapshot, WorktreeCi, WorktreePrState,
     group_live_agents_by_worktree,
 };
 #[cfg(test)]
@@ -132,7 +132,7 @@ pub(super) struct PlacementReport {
 pub(super) struct PrInfo {
     pub number: Option<u64>,
     pub state: WorktreePrState,
-    pub ci: Option<WorktreePrCi>,
+    pub ci: Option<WorktreeCi>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -797,7 +797,7 @@ mod tests {
             Some(PrInfo {
                 number: Some(91),
                 state: WorktreePrState::Open,
-                ci: Some(WorktreePrCi::Passing),
+                ci: Some(WorktreeCi::Passing),
             }),
             &peers,
             Some(&state.agent_id),

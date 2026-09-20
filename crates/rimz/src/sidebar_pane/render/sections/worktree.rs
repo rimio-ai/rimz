@@ -11,7 +11,7 @@ use crate::agents::AgentStatus;
 use crate::config::GlyphRole;
 use crate::store::snapshot::{
     PipelinePosition, SidebarPipeline, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind, WorktreePrCi, WorktreePrState, WorktreeTrunkSync,
+    SidebarWorktreeKind, WorktreeCi, WorktreePrState, WorktreeTrunkSync,
 };
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -547,7 +547,7 @@ fn group_header(
     };
     let right_width = spans_width(&right);
     let ci = group.pr_ci.map(|ci| {
-        let (role, component) = pr_ci_marker(ci);
+        let (role, component) = ci_marker(ci);
         (format!(" {}", theme.glyph(role)), component)
     });
     let badge = group.pr_number.map(|number| format!(" #{number}"));
@@ -740,11 +740,11 @@ fn pr_state_marker(state: WorktreePrState) -> (GlyphRole, Component) {
     }
 }
 
-fn pr_ci_marker(ci: WorktreePrCi) -> (GlyphRole, Component) {
+fn ci_marker(ci: WorktreeCi) -> (GlyphRole, Component) {
     match ci {
-        WorktreePrCi::Pending => (GlyphRole::WorktreeCiPending, Component::PrCiPending),
-        WorktreePrCi::Passing => (GlyphRole::WorktreeCiPassing, Component::PrCiPassing),
-        WorktreePrCi::Failing => (GlyphRole::WorktreeCiFailing, Component::PrCiFailing),
+        WorktreeCi::Pending => (GlyphRole::WorktreeCiPending, Component::WorktreeCiPending),
+        WorktreeCi::Passing => (GlyphRole::WorktreeCiPassing, Component::WorktreeCiPassing),
+        WorktreeCi::Failing => (GlyphRole::WorktreeCiFailing, Component::WorktreeCiFailing),
     }
 }
 

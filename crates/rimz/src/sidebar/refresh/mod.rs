@@ -88,7 +88,7 @@ pub struct RefreshedLanes {
     pub spending: SpendingCaches,
     pub accounts: BTreeMap<String, AgentAccount>,
     pub pr_states: BTreeMap<String, PrLink>,
-    pub branch_ci: BTreeMap<String, crate::store::snapshot::WorktreePrCi>,
+    pub branch_ci: BTreeMap<String, crate::store::snapshot::WorktreeCi>,
 }
 
 /// Process-local memo state owned by one long-lived cache producer.

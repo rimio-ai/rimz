@@ -1,7 +1,7 @@
 //! The fleet make-up line — the cockpit's status buckets.
 
 use crate::agents::AgentStatus;
-use crate::store::snapshot::{SidebarWorktreeGroup, WorktreePrCi, WorktreePrState};
+use crate::store::snapshot::{SidebarWorktreeGroup, WorktreeCi, WorktreePrState};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -320,7 +320,7 @@ pub(in crate::sidebar_pane::render) fn open_pr_total(groups: &[SidebarWorktreeGr
 
 pub(in crate::sidebar_pane::render) fn open_pr_worst_ci(
     groups: &[SidebarWorktreeGroup],
-) -> Option<WorktreePrCi> {
+) -> Option<WorktreeCi> {
     let mut saw_open = false;
     let mut saw_unknown = false;
     let mut saw_pending = false;
@@ -331,14 +331,14 @@ pub(in crate::sidebar_pane::render) fn open_pr_worst_ci(
     {
         saw_open = true;
         match group.pr_ci {
-            Some(WorktreePrCi::Failing) => return Some(WorktreePrCi::Failing),
-            Some(WorktreePrCi::Pending) => saw_pending = true,
-            Some(WorktreePrCi::Passing) => saw_passing = true,
+            Some(WorktreeCi::Failing) => return Some(WorktreeCi::Failing),
+            Some(WorktreeCi::Pending) => saw_pending = true,
+            Some(WorktreeCi::Passing) => saw_passing = true,
             None => saw_unknown = true,
         }
     }
     if saw_pending {
-        return Some(WorktreePrCi::Pending);
+        return Some(WorktreeCi::Pending);
     }
-    (saw_open && saw_passing && !saw_unknown).then_some(WorktreePrCi::Passing)
+    (saw_open && saw_passing && !saw_unknown).then_some(WorktreeCi::Passing)
 }

@@ -18,7 +18,7 @@ fn pr_state_projection_uses_the_given_map() {
 
     let branch_ci = BTreeMap::from([(
         worktree.display().to_string(),
-        crate::store::snapshot::WorktreePrCi::Failing,
+        crate::store::snapshot::WorktreeCi::Failing,
     )]);
     let mut states = BTreeMap::new();
     states.insert(
@@ -29,7 +29,7 @@ fn pr_state_projection_uses_the_given_map() {
             state: crate::store::snapshot::WorktreePrState::Closed,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(crate::store::snapshot::WorktreePrCi::Failing),
+            ci: Some(crate::store::snapshot::WorktreeCi::Failing),
             merge_sha: None,
         },
     );
@@ -58,7 +58,7 @@ fn pr_state_projection_uses_the_given_map() {
             state: crate::store::snapshot::WorktreePrState::Open,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(crate::store::snapshot::WorktreePrCi::Passing),
+            ci: Some(crate::store::snapshot::WorktreeCi::Passing),
             merge_sha: None,
         },
     );
@@ -70,7 +70,7 @@ fn pr_state_projection_uses_the_given_map() {
     );
     assert_eq!(
         snapshot.worktree_groups[0].pr_ci,
-        Some(crate::store::snapshot::WorktreePrCi::Passing)
+        Some(crate::store::snapshot::WorktreeCi::Passing)
     );
 
     states.insert(
@@ -81,7 +81,7 @@ fn pr_state_projection_uses_the_given_map() {
             state: crate::store::snapshot::WorktreePrState::Merged,
             number: Some(91),
             url: Some("https://github.com/org/repo/pull/91".to_owned()),
-            ci: Some(crate::store::snapshot::WorktreePrCi::Failing),
+            ci: Some(crate::store::snapshot::WorktreeCi::Failing),
             merge_sha: Some("merged-sha".to_owned()),
         },
     );
@@ -93,7 +93,7 @@ fn pr_state_projection_uses_the_given_map() {
     );
     assert_eq!(
         snapshot.worktree_groups[0].pr_ci,
-        Some(crate::store::snapshot::WorktreePrCi::Failing)
+        Some(crate::store::snapshot::WorktreeCi::Failing)
     );
 
     snapshot.worktree_groups[0].pr_number = Some(69);
@@ -188,7 +188,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
                 state: crate::store::snapshot::WorktreePrState::Merged,
                 number: Some(number),
                 url: Some(format!("https://github.com/org/repo/pull/{number}")),
-                ci: Some(crate::store::snapshot::WorktreePrCi::Passing),
+                ci: Some(crate::store::snapshot::WorktreeCi::Passing),
                 merge_sha: Some(format!("sha-{number}")),
             },
         );
@@ -213,7 +213,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
 
     let branch_ci = BTreeMap::from([(
         trunk.display().to_string(),
-        crate::store::snapshot::WorktreePrCi::Passing,
+        crate::store::snapshot::WorktreeCi::Passing,
     )]);
     project_pr_state_map(&mut snapshot, &states, &branch_ci, &diff_cache);
 
@@ -223,7 +223,7 @@ fn pr_state_projection_keeps_trunk_pr_free_but_projects_branch_ci() {
     assert_eq!(trunk.pr_url, None);
     assert_eq!(
         trunk.pr_ci,
-        Some(crate::store::snapshot::WorktreePrCi::Passing)
+        Some(crate::store::snapshot::WorktreeCi::Passing)
     );
     let feature = &snapshot.worktree_groups[1];
     assert_eq!(

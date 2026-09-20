@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
+use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
 pub mod pr_state;
 
@@ -68,15 +68,15 @@ pub(crate) struct GhBulkPr {
     pub(crate) number: u64,
     pub(crate) state: WorktreePrState,
     pub(crate) created_at: Option<jiff::Timestamp>,
-    pub(crate) head_ci: Option<WorktreePrCi>,
+    pub(crate) head_ci: Option<WorktreeCi>,
     pub(crate) merge_sha: Option<String>,
-    pub(crate) merge_ci: Option<WorktreePrCi>,
+    pub(crate) merge_ci: Option<WorktreeCi>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GhBulkResponse {
     pub(crate) prs: Vec<Option<GhBulkPr>>,
-    pub(crate) commits: Vec<Option<WorktreePrCi>>,
+    pub(crate) commits: Vec<Option<WorktreeCi>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -647,11 +647,11 @@ fn github_bulk_pr_state_rank(state: WorktreePrState) -> u8 {
     }
 }
 
-fn ci_from_gh_rollup_state(raw: &str) -> Option<WorktreePrCi> {
+fn ci_from_gh_rollup_state(raw: &str) -> Option<WorktreeCi> {
     match raw.trim().to_ascii_uppercase().as_str() {
-        "SUCCESS" => Some(WorktreePrCi::Passing),
-        "FAILURE" | "ERROR" => Some(WorktreePrCi::Failing),
-        "PENDING" | "EXPECTED" => Some(WorktreePrCi::Pending),
+        "SUCCESS" => Some(WorktreeCi::Passing),
+        "FAILURE" | "ERROR" => Some(WorktreeCi::Failing),
+        "PENDING" | "EXPECTED" => Some(WorktreeCi::Pending),
         _ => None,
     }
 }
@@ -732,7 +732,7 @@ pub fn tea_commit_status_endpoint(repo_slug: &str, branch: &str) -> String {
 }
 
 /// Parse Gitea's combined commit status into the sidebar CI vocabulary.
-pub fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreePrCi>, String> {
+pub fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreeCi>, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let object = value
         .as_object()
@@ -743,9 +743,9 @@ pub fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreePrCi>, Stri
         .map(str::trim)
         .map(str::to_ascii_lowercase)
         .and_then(|state| match state.as_str() {
-            "success" => Some(WorktreePrCi::Passing),
-            "pending" => Some(WorktreePrCi::Pending),
-            "failure" | "error" | "warning" => Some(WorktreePrCi::Failing),
+            "success" => Some(WorktreeCi::Passing),
+            "pending" => Some(WorktreeCi::Pending),
+            "failure" | "error" | "warning" => Some(WorktreeCi::Failing),
             _ => None,
         });
     Ok(verdict)

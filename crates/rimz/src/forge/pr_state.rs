@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
+use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct PrStateCache {
@@ -14,7 +14,7 @@ pub struct PrStateCache {
     pub states: BTreeMap<String, PrLink>,
     /// Commit-level CI verdict for paths without a PR link.
     #[serde(default)]
-    pub branch_ci: BTreeMap<String, WorktreePrCi>,
+    pub branch_ci: BTreeMap<String, WorktreeCi>,
     /// Probe freshness by origin repo key.
     #[serde(default)]
     pub(crate) repos: BTreeMap<String, RepoProbe>,
@@ -65,7 +65,7 @@ pub struct PrLink {
     #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]
-    pub ci: Option<WorktreePrCi>,
+    pub ci: Option<WorktreeCi>,
     #[serde(default)]
     pub merge_sha: Option<String>,
 }
@@ -103,7 +103,7 @@ impl<'de> Deserialize<'de> for PrStateCache {
             #[serde(default)]
             states: BTreeMap<String, PrLink>,
             #[serde(default)]
-            branch_ci: Option<BTreeMap<String, WorktreePrCi>>,
+            branch_ci: Option<BTreeMap<String, WorktreeCi>>,
             #[serde(default)]
             repos: BTreeMap<String, RepoProbe>,
             #[serde(default)]
