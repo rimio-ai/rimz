@@ -16,7 +16,7 @@ Three things, each previewable before it happens and reversible after.
 
 **Disposable Copilot telemetry.** A newly-born room can hold `agent-telemetry/copilot-otel.jsonl` under its mode-`0700` runtime root. RimZ forces message-content capture off for this managed exporter and reads only allow-listed model/token metadata for the exact Copilot conversation. Reset and runtime GC remove the cache; RimZ neither rotates a live exporter file nor derives account history from it. An explicit user exporter remains user-owned and takes precedence.
 
-**A permission grant for its Zellij plugin.** On Zellij, RimZ seeds a permission grant for the presence plugin it ships, so the first attach runs without an interrupting prompt. Your `config.kdl` stays untouched, and the grant is yours to revoke. Details in [The Zellij presence plugin](#the-zellij-presence-plugin).
+**A permission grant for its Zellij plugin.** On Zellij, RimZ seeds a permission grant for the presence plugin it ships, so the first attach runs without an interrupting prompt. Your `config.kdl` stays untouched, and the grant is yours to revoke, though the next room birth seeds it again. Details in [The Zellij presence plugin](#the-zellij-presence-plugin).
 
 ## What can run commands
 
@@ -71,7 +71,7 @@ On Zellij, RimZ loads a small presence plugin into each session so the sidebar l
 
 The vendored plugin is reproducibly built from the checked-in source on the repository's pinned Rust toolchain. Its source digest, wasm digest, and producing toolchain are committed beside it; every vendored embed verifies the wasm checksum, and CI rebuilds the source with that toolchain and requires byte-for-byte equality.
 
-The plugin's code, argv, and configuration are all RimZ-owned, never your `config.kdl`, and it ships no pane content anywhere. The grant lives in Zellij's own permission store, where its plugin manager can revoke it; revoking stops pane discovery until you restore it, and `rimz doctor` names the fix.
+The plugin's code, argv, and configuration are all RimZ-owned, never your `config.kdl`, and it ships no pane content anywhere. The grant lives in Zellij's own permission store, where its plugin manager can revoke it. Revoking stops pane discovery until the next room birth, which seeds the grant again; `rimz doctor` names the fix while discovery is down.
 
 ### Browser listener
 

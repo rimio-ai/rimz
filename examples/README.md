@@ -20,7 +20,7 @@ printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-ke
 tmux source-file ~/.tmux.conf
 ```
 
-`agents.conf` needs tmux 3.5 or newer — the same floor RimZ enforces. On a machine with an older distro tmux, upgrade first ([installation](../docs/guide/installation.md#install-zellij-or-tmux)).
+`agents.conf` needs tmux 3.5 or newer, the same floor RimZ requires. On a machine with an older distro tmux, upgrade first ([installation](../docs/guide/installation.md#install-zellij-or-tmux)).
 
 ## Zellij — `zellij/`
 
