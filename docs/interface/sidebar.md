@@ -106,7 +106,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `⑂ name` | a worktree group, named by its branch |
 | `⮌ name` | a worktree group whose work has landed |
 | `# name` | a named channel with no git state |
-| `✓` `✕` `◌` beside the name | CI at the branch's HEAD commit: passing, failing, running |
+| `✓` `✕` `◌` beside the name | the trunk's HEAD-commit CI, or a branch's open or merged pull request's CI: passing, failing, running |
 | `#91` | the branch's pull request |
 | `⇡3 ⇣1` | commits ahead of and behind the trunk |
 | `+127 -43` | lines added and removed against the trunk |
@@ -379,7 +379,7 @@ Each group starts with a header. Its left side names the work, and its right sid
 ▎⮌ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main🮇    ← merged: safe to remove
 ```
 
-On the left: `⑂` or `⮌`, the branch name, the team working in it as `· forge`, the CI verdict at the branch's HEAD commit (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a branch without one shows the bare CI glyph. In terminals that support hyperlinks, `#91` opens the pull request. When two groups have the same branch name, each adds a muted `· repo` qualifier, the shortest path suffix that tells the checkouts apart. When the header runs out of room, the pull request number is the first thing dropped.
+On the left: `⑂` or `⮌`, the branch name, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge `· forge` goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, `#91` opens the pull request. When two groups have the same branch name, each adds a muted `· repo` qualifier, the shortest path suffix that tells the checkouts apart. When the header runs out of room, the pull request number is the first thing dropped.
 
 On the right: commits ahead of and behind the trunk with zero counts left out, then lines added and removed, then the trunk marker. The line counts include committed, staged, unstaged, and untracked work, so work that `git diff` does not show still counts. The first marker that applies is shown:
 
@@ -433,14 +433,14 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
 A group with one staged team and a readable worktree `blackboard.md` containing a `Stage:` line gets a pipeline line directly below its header, above the first card. The team's members must identify one worktree:
 
 ```
-▎⑂ pipeline · forge ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▎  ● ● ◉ ○ ○  Implement                         47:12🮇
+▎⑂ pipeline ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▎  ● ● ◉ ○ ○  Implement (47:12) · forge              🮇
 ▌⣾ planner                                           ▐
 ```
 
-The dots follow declared stage order: passed, current, then future. Flipping backward moves the current dot back. At `Done`, every dot is passed and the last becomes the done seal; the word `Done` keeps the meaning visible without color. A board stage outside the declared pipeline shows its name without a track. The current dot takes the visible stage owner's status color and animation phase, or stays muted when that owner has no visible card. The line never creates `!`, unread state, attention ranking, tab status, or a notification.
+The dots follow declared stage order: passed, current, then future. Passed dots are green and future dots are muted. Flipping backward moves the current dot back. At `Done`, every dot is passed and the last becomes the green done seal; the word `Done` keeps the meaning visible without color. A board stage outside the declared pipeline shows its name without a track. The current dot takes the visible stage owner's status color and animation phase, or stays muted when that owner has no visible card. The line never creates `!`, unread state, attention ranking, tab status, or a notification.
 
-The right-pinned clock is the whole run's elapsed time, `m:ss` below an hour and `h:mm:ss` thereafter, not time in the current stage. It starts at the first parseable entry in the board's `## Progress` (or `## Progress log`) ledger, restarts at each later flip out of `Done`, and freezes at the last `-> Done` entry when the board says `Done`. No parseable start, a future start, or `Done` without a valid stop means no clock. Clicking the line focuses the visible stage owner's pane, otherwise the first actionable team member, otherwise the group's first visible row.
+The clock sits in muted parentheses after the stage name, followed by the team badge; the whole line is left-aligned, with no right-pinned clock. It measures time in the current stage while running and the whole run's total at `Done`, with a zero-padded leading field: `03:11` below an hour, `01:47:12` thereafter. The stage clock starts at the latest parseable entry into that stage in the board's `## Progress` (or `## Progress log`) ledger, including an `opened` entry. A backward flip restarts the stage it enters; a same-stage re-flip does not. No recorded stage entry means no running clock, not a fallback to run time. At `Done`, the total runs from the first parseable ledger entry (or the latest flip out of `Done`) to the last `-> Done` entry; a `Done -> Done` re-flip does not move the stop. A missing or future start, or `Done` without a valid stop, omits the clock and its parentheses. Clicking the line focuses the visible stage owner's pane, otherwise the first actionable team member, otherwise the group's first visible row.
 
 ### Row cap and finished groups
 
@@ -472,7 +472,7 @@ Click the header or either receipt line, press `s`, or focus a member to show th
 A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
 
 ```
- ⑂ pipeline · forge
+ ⑂ pipeline
  ▸ forge · Done  ✓ planner  ✓ coder
 ```
 
@@ -552,7 +552,7 @@ With `[theme.pets] enabled = true`, the active block narrows and an animated com
 
 ### Narrow panes
 
-The pipeline keeps its clock and stage name ahead of its track: the dots disappear as a whole first, then the name ellipsizes. It never draws a partial track.
+The pipeline keeps its clock and stage name ahead of its track and team badge: the team drops first, then the dots disappear as a whole, then the name ellipsizes. It never draws a partial track.
 
 As the pane narrows, a block drops the input and output token split, then the version text. Below 36 columns the provider emblem goes and the bars run the full width. A pet narrows the block further.
 
