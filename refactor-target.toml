@@ -254,7 +254,8 @@ upward-dependencies = ["sidebar::refresh"]
 # First-run consent offers the auto-redeem row only where its provider is installed.
 # Launch finalize distinguishes typed from default permission modes; cohort resume computes a seed's isolation.
 # The board run (stage plus ledger times) feeds the sidebar pipeline lane.
-surface-budget = 542
+# The ended-session reconcile and its retired-row split are pulled by the hook, the exec wrapper and restart.
+surface-budget = 544
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
