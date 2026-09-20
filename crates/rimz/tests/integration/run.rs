@@ -1180,17 +1180,22 @@ fn print_stream_json_input_refuses_stdin_flag() {
     );
 }
 
+/// Arm one subscription on a session the store binds to Zellij pane 11, then
+/// run a `Resume` exec wrapper for that session in `wrapper_pane` — `None` for
+/// a wrapper outside any pane — and let it exit. Returns the instance file to
+/// read the surviving rows from.
 #[cfg(unix)]
-#[test]
-fn exec_wrapper_exit_ends_session_and_retires_its_subscription() {
+fn run_exiting_resume_wrapper(
+    env: &Env,
+    store: &rimz::Store,
+    kind: &AgentKind,
+    session_id: &AgentSessionId,
+    wrapper_pane: Option<&str>,
+) -> std::path::PathBuf {
     use rimz::config::{TaskEntry, TaskTarget, Tasks};
     use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 
-    let env = Env::new();
-    let store = env.store();
-    let kind = AgentKind::new_unchecked("codex");
-    let session_id = AgentSessionId::from("sess-wrapper-exit");
-    register_running_wait_agent(&env, &store, "wrapper", session_id.as_str());
+    register_running_wait_agent(env, store, "wrapper", session_id.as_str());
     let instances_path = store.paths().root.join("loop-instances.json");
     let instances = Tasks(BTreeMap::from([(
         "wrapper-listener".to_owned(),
@@ -1235,24 +1240,43 @@ fn exec_wrapper_exit_ends_session_and_retires_its_subscription() {
             ..ExecIdentity::default()
         },
     };
-    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let shim_dir = write_failing_agent_shim(&env, "codex", 0);
-    let output = env
-        .rimz()
-        .args(crate::common::exec_args(&env, &request))
+    let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
+    let shim_dir = write_failing_agent_shim(env, "codex", 0);
+    let mut wrapper = env.rimz();
+    wrapper
+        .args(crate::common::exec_args(env, &request))
         .env("SHELL", shell)
         .env("PATH", path_with_front(&shim_dir))
         .env(
             "RIMZ_TEST_IDLE_SHELL_MARKER",
             env.home_root.join("idle-shell.marker"),
-        )
-        .bounded_output()
-        .expect("wrapper exits");
+        );
+    if let Some(pane) = wrapper_pane {
+        wrapper.env("ZELLIJ_PANE_ID", pane);
+    }
+    let output = wrapper.bounded_output().expect("wrapper exits");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    instances_path
+}
+
+/// The pane the session is bound to is the wrapper's own, so the wrapper owns
+/// the session it is exiting: it stamps the end no hook will report and takes
+/// the subscriptions down with it.
+#[cfg(unix)]
+#[test]
+fn exec_wrapper_exit_ends_session_and_retires_its_subscription() {
+    use rimz::config::Tasks;
+
+    let env = Env::new();
+    let store = env.store();
+    let kind = AgentKind::new_unchecked("codex");
+    let session_id = AgentSessionId::from("sess-wrapper-exit");
+    let instances_path = run_exiting_resume_wrapper(&env, &store, &kind, &session_id, Some("11"));
+
     assert!(
         store
             .read_events()
@@ -1279,6 +1303,52 @@ fn exec_wrapper_exit_ends_session_and_retires_its_subscription() {
     assert!(
         remaining.0.is_empty(),
         "ended wrapper must not keep listening"
+    );
+}
+
+/// The argv-identity fallback claims the session named in the wrapper's own
+/// `Resume` argv, which is also the id a same-session `agents restart` gives
+/// its replacement. A wrapper that cannot show a pane of its own therefore
+/// cannot show that the binding is its: it ends nothing and leaves the
+/// session's subscriptions alone rather than risk killing a live agent's.
+#[cfg(unix)]
+#[test]
+fn exec_wrapper_without_its_own_pane_binding_ends_nothing() {
+    use rimz::config::Tasks;
+
+    let env = Env::new();
+    let store = env.store();
+    let kind = AgentKind::new_unchecked("codex");
+    let session_id = AgentSessionId::from("sess-wrapper-exit");
+    let instances_path = run_exiting_resume_wrapper(&env, &store, &kind, &session_id, None);
+
+    assert!(
+        !store
+            .read_events()
+            .expect("read exit events")
+            .iter()
+            .any(|event| matches!(
+                event.kind(), rimz::store::event::EventKind::AgentLifecycle(payload)
+                    if payload.event_name.as_deref() == Some("rimz.agent-ended")
+            )),
+        "a superseded wrapper must not end the session that moved on"
+    );
+    let agent = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read the resumed session")
+        .agents
+        .into_iter()
+        .find(|agent| agent.kind == kind && agent.agent_id == session_id)
+        .expect("the resumed session is still in the projection");
+    assert!(agent.ended_at.is_none());
+    let remaining: Tasks = serde_json::from_slice(
+        &std::fs::read(&instances_path).expect("read subscriptions after wrapper exit"),
+    )
+    .expect("decode subscriptions");
+    assert_eq!(
+        remaining.0.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["wrapper-listener"],
+        "the live session kept listening"
     );
 }
 
