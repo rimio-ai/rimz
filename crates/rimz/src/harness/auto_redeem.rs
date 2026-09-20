@@ -26,13 +26,13 @@ use crate::ids::{LoginKey, WorkspaceId};
 use crate::store::snapshot::SidebarProviderPanel;
 
 const CODEX_KIND: &str = "codex";
-pub(crate) const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
-pub(crate) const MIN_HOLD: Duration = Duration::from_secs(24 * 60 * 60);
-pub(crate) const ATTEMPT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
-pub(crate) const POST_SUCCESS_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
+const MIN_HOLD: Duration = Duration::from_secs(24 * 60 * 60);
+const ATTEMPT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
+const POST_SUCCESS_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 const RATE_HALF_LIFE: Duration = Duration::from_secs(3 * 24 * 60 * 60);
-pub(crate) const RATE_FLOOR: f64 = 0.5;
-pub(crate) const T_MIN: Duration = Duration::from_secs(6 * 60 * 60);
+const RATE_FLOOR: f64 = 0.5;
+const T_MIN: Duration = Duration::from_secs(6 * 60 * 60);
 const SECONDS_PER_DAY: f64 = 24.0 * 60.0 * 60.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +60,7 @@ pub fn provider_located() -> bool {
 }
 
 impl RedeemReason {
-    pub const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::ExpiryRescue => "expiry_rescue",
             Self::BlockedGain => "blocked_gain",
@@ -128,7 +128,7 @@ pub struct RedeemReport {
 /// Decide whether current provider-neutral capacity and reset credits warrant
 /// one consume attempt. Expiry rescue is unconditional; limit redemption
 /// follows the user's opt-in.
-pub(crate) fn redeem_verdict(
+fn redeem_verdict(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
     rate_pct_per_day: Option<f64>,

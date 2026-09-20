@@ -50,7 +50,12 @@ pub enum OrphanSweepErr {
 }
 
 /// Detect durable parent orphans and delegate each repair to a hidden helper.
-pub fn enforce(paths: &StatePaths, runtime: &RuntimePaths, runs: &[RunRecord], now: Timestamp) {
+pub(crate) fn enforce(
+    paths: &StatePaths,
+    runtime: &RuntimePaths,
+    runs: &[RunRecord],
+    now: Timestamp,
+) {
     let orphans = match find_with_runs(paths, runs, now) {
         Ok(orphans) => orphans,
         Err(err) => {

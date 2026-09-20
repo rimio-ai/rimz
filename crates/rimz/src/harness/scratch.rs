@@ -100,7 +100,7 @@ pub struct BoardStage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BoardRun {
+pub(crate) struct BoardRun {
     pub stage: BoardStage,
     pub started_at: Option<Timestamp>,
     pub stage_started_at: Option<Timestamp>,
@@ -108,7 +108,7 @@ pub struct BoardRun {
 }
 
 /// Read the current stage and run times from one blackboard snapshot.
-pub fn board_run(root: &Path, zone: &TimeZone) -> Option<BoardRun> {
+pub(crate) fn board_run(root: &Path, zone: &TimeZone) -> Option<BoardRun> {
     let board = std::fs::read_to_string(root.join("blackboard.md")).ok()?;
     parse_board_run(&board, zone)
 }

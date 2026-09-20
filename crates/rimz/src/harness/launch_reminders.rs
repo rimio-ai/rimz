@@ -9,7 +9,7 @@ use crate::agents::{LaunchParams, model_display::display_model};
 
 pub use super::launch_context::TeamReminder;
 
-pub struct LaunchReminders {
+pub(super) struct LaunchReminders {
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
     /// The launch runs inside the RimZ sandbox view: adds the sandbox reminder
