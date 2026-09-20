@@ -154,7 +154,7 @@ fn stop_live_agent_tree(
         Ok(()) => {
             tracker.stopped.insert(key);
             if let Err(err) = rimz::harness::schedule::arm::retire_session(
-                workspace,
+                &workspace.project_root,
                 &agent.kind,
                 &agent.agent_id,
             ) {
