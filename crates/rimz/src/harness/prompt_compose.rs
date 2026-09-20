@@ -82,6 +82,11 @@ pub enum PromptComposeErr {
     Write(#[from] crate::disk::atomic::AtomicErr),
 }
 
+/// Compose one complete replacement prompt and decide the artifact to write.
+///
+/// Profile validation has already settled support and the prompt fields. A read
+/// here can still fail if a file disappears between that check and the launch;
+/// that race is a launch failure, never a silent fallback.
 pub(super) fn plan_system_prompt(
     kind: &AgentKind,
     sources: &SystemPromptSources,
