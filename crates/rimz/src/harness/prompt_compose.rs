@@ -21,7 +21,7 @@ pub struct SystemPromptSources {
 }
 
 impl SystemPromptSources {
-    pub fn from_cell(cell: &crate::harness::spec::AgentCell) -> Self {
+    pub(super) fn from_cell(cell: &crate::harness::spec::AgentCell) -> Self {
         Self {
             system_prompt_file: cell.system_prompt_file.clone(),
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
@@ -29,7 +29,7 @@ impl SystemPromptSources {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         !self.composes() && self.system_prompt_file.is_none()
     }
 
@@ -82,22 +82,7 @@ pub enum PromptComposeErr {
     Write(#[from] crate::disk::atomic::AtomicErr),
 }
 
-/// Materialize and render one complete replacement prompt.
-///
-/// Launch planning has already validated support and file existence. Reads can
-/// still fail if a file disappears between planning and process spawn; that
-/// race is a launch failure, never a silent fallback.
-pub fn materialize_system_prompt(
-    kind: &AgentKind,
-    sources: &SystemPromptSources,
-    runtime: &RuntimePaths,
-) -> Result<MaterializedSystemPrompt, PromptComposeErr> {
-    let plan = plan_system_prompt(kind, sources, runtime)?;
-    apply_system_prompt(&plan)?;
-    Ok(plan.materialized)
-}
-
-pub fn plan_system_prompt(
+pub(super) fn plan_system_prompt(
     kind: &AgentKind,
     sources: &SystemPromptSources,
     runtime: &RuntimePaths,
@@ -142,7 +127,7 @@ pub fn plan_system_prompt(
     })
 }
 
-pub fn apply_system_prompt(plan: &SystemPromptPlan) -> Result<(), PromptComposeErr> {
+pub(super) fn apply_system_prompt(plan: &SystemPromptPlan) -> Result<(), PromptComposeErr> {
     if let Some(path) = &plan.artifact {
         let contents = plan
             .composed
@@ -153,7 +138,7 @@ pub fn apply_system_prompt(plan: &SystemPromptPlan) -> Result<(), PromptComposeE
     Ok(())
 }
 
-pub fn validate_text_prompt_size(
+pub(super) fn validate_text_prompt_size(
     kind: &AgentKind,
     sources: &SystemPromptSources,
 ) -> Result<(), PromptComposeErr> {
@@ -322,6 +307,19 @@ pub fn verify_reprompt(cmd: &str, code_label: &str, output: &str) -> String {
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+
+    /// Plan and apply in one step: the shape a caller had before launch
+    /// planning split the decision from the write, kept here so the
+    /// per-provider rendering assertions read as one call.
+    fn materialize_system_prompt(
+        kind: &AgentKind,
+        sources: &SystemPromptSources,
+        runtime: &RuntimePaths,
+    ) -> Result<MaterializedSystemPrompt, PromptComposeErr> {
+        let plan = plan_system_prompt(kind, sources, runtime)?;
+        apply_system_prompt(&plan)?;
+        Ok(plan.materialized)
+    }
 
     #[test]
     fn composition_normalizes_boundaries_to_one_blank_line() {
