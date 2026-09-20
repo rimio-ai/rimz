@@ -89,7 +89,7 @@ rimz loop add standup --wait @planner --prompt "Post today's plan to #dev" --eve
 rimz loop add ci-red --wait @me --signal ci.failed
 ```
 
-`@me`, or a bare `--wait`, pins the calling agent; a user shell names a live target. Every delivery pins one exact session and retires when that session ends, is lost, or is stopped. A chain of self waits stops naturally when the agent no longer arms another. The [wait reference](../reference/cli/wait.md) owns the complete flag and output contract.
+`@me`, or a bare `--wait`, pins the calling agent; a user shell names a live target. Every delivery pins one exact session and retires the moment that session ends, however it ends: a stop, a lost pane, a closed agent, a reaped one, or a `rimz agents restart`, which replaces the session even when it resumes the same conversation. A team's declared bindings come back when the replacement registers; a wait an agent armed for itself is gone, and restart says how many it dropped. A chain of self waits stops naturally when the agent no longer arms another. The [wait reference](../reference/cli/wait.md) owns the complete flag and output contract.
 
 ## Signals: the room's event bus
 
