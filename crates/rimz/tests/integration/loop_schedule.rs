@@ -849,6 +849,199 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
 }
 
 #[test]
+fn non_hook_end_retires_matching_subscription_before_delivery() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-ended", "feature-loop");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ended",
+            "--wait",
+            "@claude",
+            "--signal",
+            "deploy.done",
+            "--match",
+            "branch=feature-loop",
+        ],
+    );
+    register_running_agent(&env, "sess-live", "feature-loop");
+    let mut instances = read_loop_instances(&env);
+    let mut live = instances.0["ended"].clone();
+    live.wait.as_mut().unwrap().session = AgentSessionId::from("sess-live");
+    instances.0.insert("live".to_owned(), live.clone());
+    write_loop_instances(&env, instances);
+    loop_ok(&env, &["loop", "enable", "ended"]);
+    let key = project_task_key(&env.project_root, "ended");
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&BTreeMap::from([(key.clone(), 1_u32)])).unwrap(),
+    )
+    .unwrap();
+    stamp_session_ended(&env, "sess-ended");
+    loop_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "deploy.done",
+            "--json",
+            r#"{"branch":"feature-loop"}"#,
+        ],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].task, "live");
+    assert_eq!(records[0].result, LoopRunResult::Delivered);
+    assert_pending_message(&env, "sess-live", "deploy.done");
+    assert_eq!(
+        read_loop_instances(&env).0,
+        BTreeMap::from([("live".to_owned(), live)])
+    );
+    assert!(!read_loop_arming(&env).contains_key(&key));
+    assert!(!read_loop_strikes(&env).contains_key(&key));
+}
+
+/// The reported symptom: a listener whose family mostly fires siblings never
+/// reaches the delivering path's liveness gate, so the sibling fire itself has
+/// to refuse a durably ended target. A live sibling session and a target with no
+/// agent row at all still record their skip — the latter stays gc's business.
+#[test]
+fn sibling_fire_retires_only_the_durably_ended_subscription() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-ended", "feature-loop");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ended",
+            "--wait",
+            "@claude",
+            "--signal",
+            "deploy.done",
+        ],
+    );
+    register_running_agent(&env, "sess-live", "feature-loop");
+    let mut instances = read_loop_instances(&env);
+    let template = instances.0["ended"].clone();
+    for (name, session) in [("live", "sess-live"), ("absent", "sess-never-registered")] {
+        let mut row = template.clone();
+        row.wait.as_mut().unwrap().session = AgentSessionId::from(session);
+        instances.0.insert(name.to_owned(), row);
+    }
+    write_loop_instances(&env, instances.clone());
+    loop_ok(&env, &["loop", "enable", "ended"]);
+    let key = project_task_key(&env.project_root, "ended");
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&BTreeMap::from([(key.clone(), 2_u32)])).unwrap(),
+    )
+    .unwrap();
+    stamp_session_ended(&env, "sess-ended");
+
+    // Same family, different exact name: the skip branch, which returns before
+    // the fire path's only liveness gate.
+    loop_ok(&env, &["events", "emit", "deploy.started"]);
+
+    let records = read_loop_run_records(&env);
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| (record.task.as_str(), record.result))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([
+            ("live", LoopRunResult::SignalSkipped),
+            ("absent", LoopRunResult::SignalSkipped),
+        ]),
+        "{records:?}"
+    );
+    instances.0.remove("ended");
+    assert_eq!(read_loop_instances(&env), instances);
+    assert!(!read_loop_arming(&env).contains_key(&key));
+    assert!(!read_loop_strikes(&env).contains_key(&key));
+}
+
+#[test]
+fn other_session_hook_retires_non_hook_ended_subscription() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-ended", "feature-loop");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ended",
+            "--wait",
+            "@claude",
+            "--signal",
+            "deploy.done",
+        ],
+    );
+    register_running_agent(&env, "sess-live", "feature-loop");
+    let mut instances = read_loop_instances(&env);
+    let mut live = instances.0["ended"].clone();
+    live.wait.as_mut().unwrap().session = AgentSessionId::from("sess-live");
+    instances.0.insert("live".to_owned(), live.clone());
+    write_loop_instances(&env, instances);
+    stamp_session_ended(&env, "sess-ended");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-live"}),
+        &env.project_root,
+    );
+    assert_eq!(
+        read_loop_instances(&env).0,
+        BTreeMap::from([("live".to_owned(), live)])
+    );
+}
+
+#[test]
+fn revived_session_subscription_survives_matching_signal() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-revived", "feature-loop");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "revived",
+            "--wait",
+            "@claude",
+            "--signal",
+            "deploy.done",
+        ],
+    );
+    let instances = read_loop_instances(&env);
+    stamp_session_ended(&env, "sess-revived");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-revived"}),
+        &env.project_root,
+    );
+    loop_ok(&env, &["events", "emit", "deploy.done"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].task, "revived");
+    assert_eq!(records[0].result, LoopRunResult::Delivered);
+    assert_pending_message(&env, "sess-revived", "deploy.done");
+    assert_eq!(read_loop_instances(&env), instances);
+}
+
+#[test]
 fn retired_delivery_runner_preserves_replacement_session_subscription() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -3939,6 +4132,23 @@ fn assert_pending_message(env: &Env, session: &str, text_fragment: &str) {
     assert_eq!(message.agent_id.as_str(), session);
     assert_eq!(message.status, MessageStatus::Queued);
     assert!(message.text.contains(text_fragment), "{}", message.text);
+}
+
+fn stamp_session_ended(env: &Env, session_id: &str) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let observation = rimz::agents::AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(session_id)),
+        rimz::agents::LifecycleSignal::Ended,
+    );
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "rimz.agent-ended",
+            &observation,
+        ))
+        .expect("stamp session ended without a hook");
 }
 
 fn register_running_agent(env: &Env, session_id: &str, branch: &str) {
