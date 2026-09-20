@@ -75,27 +75,10 @@ pub struct LiveSidebar {
 /// role through [`ProducerElectionTracker`], which memoizes; this rescans every call.
 #[cfg(feature = "testkit")]
 pub fn live_sidebars(runtime: &RuntimePaths) -> Vec<LiveSidebar> {
-    let heartbeats = match read_current_heartbeats(&runtime.heartbeat_dir) {
-        Ok(heartbeats) => heartbeats,
-        Err(err) => {
-            debug!(path = %runtime.heartbeat_dir.display(), error = %err, "sidebar heartbeat dir unreadable");
-            return Vec::new();
-        }
-    };
-    let now = SystemTime::now();
     order_live_sidebars(
-        heartbeats
+        fresh_sidebar_heartbeats(runtime)
             .into_iter()
-            .filter_map(|(path, heartbeat)| {
-                if heartbeat.workspace_id != runtime.workspace_id
-                    || runtime.sidebar_heartbeat_path(&heartbeat.instance_id) != path
-                {
-                    return None;
-                }
-                let modified = fs::metadata(&path).ok()?.modified().ok()?;
-                let expires_at = modified.checked_add(SIDEBAR_HEARTBEAT_TTL)?;
-                (now <= expires_at).then_some(heartbeat)
-            })
+            .filter(|heartbeat| heartbeat.workspace_id == runtime.workspace_id)
             .collect(),
     )
 }
