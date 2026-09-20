@@ -537,7 +537,7 @@ dir = "../{repo}-worktrees"
 base = "fresh"
 ```
 
-`rimz worktree` and `rimz agents --worktree` create RimZ-owned Git worktrees here. A relative `dir` resolves from the repository root and `{repo}` expands to the root basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Seeding untracked files into a new worktree and symlink-sharing directories are committed, repo-level concerns covered in the [worktrees guide](./worktrees.md); the seeding, symlink, and cleanup mechanics are in [worktrees.md](../internals/harness/worktrees.md).
+`rimz worktree` and `rimz agents --worktree` create RimZ-owned Git worktrees here. A relative `dir` resolves from the main repository root and `{repo}` expands to the root basename. `base = "head"` branches from the main checkout's `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Both read the main repository even when you launch from one of its linked worktrees. Seeding files into a new worktree and symlink-sharing directories are committed, repo-level concerns covered in the [worktrees guide](./worktrees.md); the seeding, symlink, and cleanup mechanics are in [worktrees.md](../internals/harness/worktrees.md).
 
 ### Team signal bindings
 

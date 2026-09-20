@@ -1,35 +1,37 @@
 # Worktrees
 
-Agents working in parallel need isolation, and Git already ships the primitive for it: a worktree (`git worktree`) is a second checkout of your repository, in its own directory, on its own branch, sharing the same history. RimZ turns that primitive into a one-flag habit: add `-w` to any launch and the whole layout — agents, your editor, a shell — opens inside a fresh tree, seeded and ready to work.
+Agents working in parallel need isolation, and Git already ships the primitive: a worktree (`git worktree`) is a second checkout of your repository, in its own directory, on its own branch, sharing the same history. RimZ puts that primitive behind one flag. Add `-w` to any launch and the whole layout (agents, your editor, a shell) opens inside a fresh tree, seeded and ready to work.
 
 ```sh
 rimz agents claude,codex -w feat-a    # a pair, isolated on their own branch
-rimz agents forge -w feat-b           # a whole team, its own worktree
+rimz teams forge -w feat-b            # a whole team, its own worktree
 rimz agents codex --from-pr 42        # a tree checked out from a pull request
 ```
 
-## Why worktrees
+## Why a tree per task
 
-Your repository normally has one working directory with one branch checked out, and every agent you start shares it. Two agents in one checkout overwrite each other's edits, trip each other's builds, and braid two tasks into one diff — with your own uncommitted work sitting in the blast radius.
+Your repository normally has one working directory with one branch checked out, and every agent you start shares it. Two agents in one checkout overwrite each other's edits, trip each other's builds, and braid two tasks into one diff, with your own uncommitted work sitting in the blast radius.
 
-A worktree gives each line of work its own directory and branch, backed by the same repository: edits in one tree stay invisible to its siblings until you merge, builds and test runs stop colliding, and you keep as many trees side by side as you have tasks. Point one agent at a bug fix and another at a refactor and let both run. Agents that should collaborate, like a [team](./teams.md), share one tree; nothing touches your main checkout.
+A worktree gives each line of work its own directory and branch, backed by the same repository. Edits in one tree stay invisible to its siblings until you merge, and you keep as many trees side by side as you have tasks. Point one agent at a bug fix and another at a refactor and let both run. Agents that should collaborate, like a [team](./teams.md), share one tree; nothing touches your main checkout.
 
-## What RimZ adds
+Because each tree is a real branch, the natural unit of work is one worktree to one pull request. Launch a team into a tree, let it carry the change from plan to reviewed diff, open a PR from the branch, and reclaim the tree once the PR merges.
 
-`git worktree` hands you the tree and nothing else. Around it sits a repetitive lifecycle: create the tree, copy in the untracked files it needs (`.env`, local config), point your editor and a shell at the new directory, and tear tree and branch down once the work merges — once per task, several times a day when agents do the work.
+## What RimZ adds to `git worktree`
 
-Claude Code ships a taste of the fix: `claude --worktree` opens the session in a fresh tree, minimal and genuinely useful, but Claude's alone. RimZ gives every agent it drives the same flag and runs the whole lifecycle behind it:
+`git worktree` hands you the tree and nothing else. Around it sits a lifecycle you run once per task, several times a day once agents do the work: create the tree, copy in the untracked files it needs (`.env`, local config), point your editor and a shell at the new directory, and tear tree and branch down once the work merges.
 
-- **The whole layout lands in the tree.** `vim,codex+term` roots your editor, the agent, and a shell in one checkout, and a [team](./teams.md) isolates as a unit — everyone in the tree works on the same files.
-- **The tree opens ready to run.** Two committed manifests seed every new tree with the untracked files and branch-independent shared directories it needs ([seed the tree](#seed-the-tree)).
-- **The tree is addressable.** Its name names a [channel](./messaging.md#channels), so `@coder#feat-a` reaches the coder in that tree, and the sidebar groups the tree's panes as one block.
-- **Cleanup proves the work landed.** A tree is reclaimed only once its content is verifiably on its base branch; dirty or pending work is kept ([cleanup](#cleanup-once-work-lands)).
+Claude Code solves part of this. `claude --worktree` opens the session in a fresh tree, minimal and genuinely useful, but Claude's alone. RimZ gives every agent it drives the same flag and runs the whole lifecycle behind it:
 
-The wrapper stays thin. Each step is plain Git plus a file copy, inspectable and tunable ([under the hood](#under-the-hood)), and RimZ manages only trees it created: worktrees from your own workflow keep running beside the managed ones, untouched.
+- **The whole layout lands in the tree.** `vim,codex+term` roots your editor, the agent, and a shell in one checkout, and a [team](./teams.md) isolates as a unit. Everyone in the tree works on the same files, so you edit what the agent edits and run its build in the shared shell.
+- **The tree opens ready to run.** Two committed manifests seed every new tree with the local files and shared directories a fresh checkout does not carry ([seed the tree](#seed-the-tree)).
+- **The tree is addressable.** Its name is also a [channel](./messaging.md#channels) name, so `@coder#feat-a` reaches the coder in that tree, and the sidebar groups the tree's panes as one block.
+- **Cleanup proves the work landed.** RimZ reclaims a tree only once its content is verifiably on its base branch, and only a tree it created itself; worktrees from your own workflow keep running beside RimZ's, untouched ([cleanup](#cleanup-once-work-lands)).
+
+The wrapper stays thin: every step is plain Git or a file copy you could run by hand ([what `-w` does on your machine](#what--w-does-on-your-machine)).
 
 ## Open a worktree
 
-`-w` (`--worktree`) puts the whole layout in a fresh RimZ-owned worktree. Pass a name to create or reuse a specific one, or a bare `-w` for a generated two-word name. The layout grammar (`,` `+` `/`) is the same one [Agents](./fleet.md#compose-a-layout) covers; `-w` only decides where it lands.
+`-w` (`--worktree`) puts the whole layout in a fresh RimZ-owned worktree. Pass a name to create or reuse a specific one, or a bare `-w` for a generated name like `brisk-harbor`. The layout grammar (`,` `+` `/`) is the same one [Agents](./fleet.md#compose-a-layout) covers; `-w` only decides where it lands.
 
 ```sh
 rimz agents claude,codex -w feat-a            # two agents in one isolated tree
@@ -38,95 +40,61 @@ rimz agents claude -w                         # bare -w: a generated name
 rimz agents codex -w feat/login               # branch feat/login, tree feat-login
 ```
 
-Give the name without the channel's `#`: `-w feat-a` creates the tree `feat-a` and names its channel `#feat-a`. Quoting the prefix does not help: `-w '#feat-a'` is rejected as an invalid worktree name. With shell comments enabled, an unquoted `#feat-a` starts a comment and the shell drops it, so RimZ sees a bare `-w` and generates a name. If a launch lands in a generated tree you did not ask for, look for a `#` on the name you typed.
+Give the name without the channel's `#`: `-w feat-a` creates the tree `feat-a` and names its channel `#feat-a`. A `#` on the name never helps. Unquoted, your shell eats `#feat-a` as a comment, so RimZ sees a bare `-w` and generates a name; quoted, `-w '#feat-a'` is rejected as an invalid worktree name. If a launch lands in a generated tree you did not ask for, look for a `#` on the name you typed.
 
-A branch-style name with a `/` names the branch directly and maps to `-` for the tree directory and channel. By default the branch is cut from your local `HEAD`, so the tree starts from the code you are looking at; `base = "fresh"` branches from the remote's default instead ([under the hood](#under-the-hood)).
+A `/` in the name goes into the branch and becomes `-` everywhere else: `-w feat/login` puts branch `feat/login` in a tree called `feat-login`, on channel `#feat-login`.
 
-`rimz worktree new <name>` creates the same tree without launching anything into it — for work of your own, or a tree you will fill with agents later.
+`rimz worktree new <name>` creates an empty tree, launching nothing into it, for work of your own or a tree you will fill with agents later. [`rimz worktree`](../reference/cli/worktree.md) is the whole verb surface: `new`, `list`, `cd`, `merge`, `remove`, and `sweep`.
 
-Already made the tree with `git worktree add`? If it is in the configured worktree directory and belongs to this repository, `rimz agents <spec> -w <name>` and `rimz teams <team> -w <name>` ask whether to enter it. Answer `y` to launch there; Enter or `n` cancels. RimZ keeps your files and branch as they are, does not seed or adopt the tree, and leaves cleanup to you. Confirmation needs a terminal; unattended launches refuse. `--from-pr` still requires a matching RimZ-managed PR checkout.
+Already made the tree with `git worktree add`? If it is in the configured worktree directory and belongs to this repository, `rimz agents <spec> -w <name>` and `rimz teams <team> -w <name>` ask whether to enter it. Answer `y` to launch there; Enter or `n` prints `Launch aborted; nothing changed.` RimZ keeps your files and branch as they are, does not mark or seed the tree, and leaves cleanup to you. Confirmation needs a terminal; an unattended launch refuses instead of guessing.
 
-### From a pull request
+### Start from a pull request
 
-`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree. A PR URL must name the same host and repository as `origin`. On GitHub, Gitea, and Forgejo, the authenticated forge CLI identifies whether the head belongs to the origin repository or a fork: same-repository branches track `origin`, while fork branches pull from and push to the fork, and the create report prints the push command when the local branch name differs from the PR's ([pull request checkouts](../reference/cli/worktree.md#check-out-a-pull-request)). Without a supported forge CLI, RimZ creates a review-only local branch at the exact PR head and leaves pushes unconfigured.
+`--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree. Reach for it to address review comments or chase a failing check: the agent works the PR's own branch, and on a forge RimZ can ask, its fixes push straight back to the PR.
 
 ```sh
 rimz agents claude --from-pr 42               # review PR 42 in its own tree
 rimz agents codex --from-pr 42 -w review-42   # name the tree yourself
-rimz agents resume --from-pr 42               # resume that PR's local lane later
+rimz agents resume --from-pr 42               # come back to that PR's tree later
 ```
 
-It resolves the host's PR ref for you: GitHub, Gitea, and Forgejo use `refs/pull/<N>/head`, GitLab uses `refs/merge-requests/<N>/head`.
+The fetch works on any host. RimZ knows each one's PR ref, `refs/pull/<N>/head` on GitHub, Gitea, and Forgejo and `refs/merge-requests/<N>/head` on GitLab, and a PR URL must name the same host and repository as your `origin`.
+
+Whether the tree can push back is the part that varies, because it depends on an authenticated forge CLI that can say who owns the PR's head branch. RimZ asks `gh` when `origin` is on `github.com`, and `tea` when the `origin` hostname contains `gitea`, `forgejo`, or `codeberg`. The CLI reports whether the head branch lives in the origin repository or in a fork, and RimZ configures pushes to whichever it is, so your fixes go straight back to the PR.
+
+Everywhere else you get a review-only checkout: the exact PR head on a local branch, with no push destination configured, and a `review :` line on the create report saying why. That covers GitLab, a self-hosted forge whose hostname carries none of those names, and a host whose CLI is simply not installed. A CLI that is installed but cannot answer, usually because you are not logged in, refuses the checkout instead of quietly downgrading it; log in, or pass `--branch <name>` to ask for review-only on purpose. The full table of checkout shapes and refusals is in [pull request checkouts](../reference/cli/worktree.md#check-out-a-pull-request).
 
 ### Seed the tree
 
-A tracked checkout alone rarely runs. Two committed, optional files at the repository root tell RimZ what else every new tree carries, so an agent can start working immediately:
+A tracked checkout alone rarely runs. `git worktree add` checks out tracked files at the base ref and nothing else, so the `.env` an agent needs and the fixture cache its tests read never follow it. Two committed, optional files at the repository root tell RimZ what else every new tree carries:
 
-- **`.worktreeinclude`** lists globs for untracked files to copy in: `.env`, local config, credentials the tests need. One pattern per line.
-- **`.worktreelink`** lists directories to symlink-share rather than copy: heavy machine-local data whose contents are intentionally branch-independent, such as downloaded model or fixture caches. One path per line. Sharing them keeps a new tree cheap instead of duplicating gigabytes. Keep build outputs branch-local: Cargo contributors share compiler work through `sccache` and leave `target/` out of this file because divergent worktrees can overwrite its fingerprints and executables ([contributor cache setup](../../CONTRIBUTING.md#fast-local-builds)).
+- **`.worktreeinclude`** lists globs for files to copy in: `.env`, local config, credentials the tests need. `*` stays inside a path component and `**` crosses directories, so `.env*` matches the root only and `**/*.key` recurses.
+- **`.worktreelink`** lists directories to symlink-share rather than copy: heavy machine-local data whose contents are intentionally branch-independent, such as downloaded model or fixture caches. Sharing them keeps a new tree cheap instead of duplicating gigabytes. Leave build output directories out of it. A shared one is written by every tree at once, so branches overwrite each other's artifacts; share the compiler's work through a content-addressed cache instead, the way RimZ's own contributors use `sccache` and keep `target/` local ([contributor cache setup](../../CONTRIBUTING.md#fast-local-builds)).
 
-Because both files are committed, every teammate's worktrees seed the same way, and every create reports what it brought in:
+Both files take one entry per line and ignore blank lines and `#` comments. Because both are committed, every teammate's worktrees seed the same way, and every create reports what it brought in:
 
 ```console
 $ rimz worktree new feat-a
 created feat-a
-  path   : ~/code/query-engine-worktrees/feat-a
+  path   : /home/you/code/query-engine/../query-engine-worktrees/feat-a
   branch : feat-a
   base branch: main
-  base   : bece28e8adc3d54ed07a03764b25452117cdce6d
+  base   : c175274596fd0148c7ad1b8376d4f69f55160b9a
   seeded : 2 file(s) from .worktreeinclude
   linked : 1 dir(s) from .worktreelink
 ```
 
-Neither file runs a command; sources are confined to the project root, and a pattern that matches nothing skips with a warning while the launch continues. The exact copy, symlink, and safety rules are in [the worktree internals](../internals/harness/worktrees.md#seeding-worktreeinclude-and-worktreelink).
+Cover every `.worktreeinclude` path in `.gitignore`. A copied file that Git can see makes the tree permanently dirty, and a dirty tree is one RimZ refuses to reclaim. Linked directories need no such care: RimZ writes each one into the new tree's `.git/info/exclude` as it links it.
 
-## Common workflows
+Neither file runs a command. Sources are confined to the project root, absolute patterns and patterns reaching out with `..` are skipped, and a pattern that matches nothing prints a warning and is skipped while the launch continues. The exact copy, symlink, and safety rules are in [the worktree internals](../internals/harness/worktrees.md#seeding-worktreeinclude-and-worktreelink).
 
-**One tree per parallel line of work.** Give each independent task its own `-w` name and the tasks never step on each other; the room groups panes by the tree they live in, so your main checkout plus two feature trees read as three groups in one room. Agents that should collaborate belong in one shared tree together.
-
-```sh
-rimz agents forge -w auth       # the forge team on the auth feature
-rimz agents forge -w ingest     # a second forge team, fully isolated
-```
-
-**A branch per worktree, a PR at the end.** Each tree is a real branch, so the natural unit of work is one worktree to one pull request. Launch a [team](./teams.md) into a tree, let it carry the change from plan to reviewed diff, then open a PR from the branch. Once the PR merges, [cleanup](#cleanup-once-work-lands) proves the content landed and reclaims the tree.
-
-**Start from a PR, push back to it.** The same loop in reverse: `--from-pr` drops an agent onto an existing pull request to address review comments or chase a failing check. With an authenticated `gh` or `tea`, the fixes push straight back to the PR; review-only fallback checkouts require you to configure a push destination deliberately.
-
-**You, your editor, and the agents in one tree.** A layout cell can be `term` for a shell or the name of your editor, so `rimz agents 'vim,claude+term' -w feat-x` opens your editor, an agent, and a shell all rooted in the same fresh tree. You edit the same files the agent does, run its build in the shared shell, and review as you go.
-
-## Cleanup, once work lands
-
-RimZ reclaims a tree only after proving its work landed, so a merged feature cleans itself up and unmerged work is never lost. When a worktree's agents finish and their panes close while the room stays live, RimZ checks the tree: a clean one whose content has reached its base branch is removed along with its branch; a dirty, pending, or unproven one is kept, behind a `keep / remove / shell` prompt when you are watching. "Landed" is measured against the trunk and recognizes merge, squash, and rebase alike.
-
-`rimz worktree list` shows every RimZ-owned tree with the agents inside it, its dirty state, and the landed verdict. The other lifecycle commands let you enter, land, reclaim, or explicitly remove one:
-
-```console
-$ rimz worktree list
-WORKTREE  BRANCH  AGENTS   DIRTY  MERGED  PATH
-auth      auth    @coder   dirty  pending ~/code/query-engine-worktrees/auth
-feat-a    feat-a  -        -      yes     ~/code/query-engine-worktrees/feat-a
-
-$ rimz worktree remove auth
-error: worktree `auth` is in use by @coder; use --force to remove it
-
-$ rimz worktree remove feat-a
-removed feat-a
-```
-
-`rimz worktree cd auth` opens your user shell rooted in that checkout; exit the shell to return to the directory where you started. Once a worktree is ready, `rimz worktree merge auth` takes the deliberately narrow landing path: both checkouts must be clean, no other pane or agent may occupy the worktree, the branch rebases onto `main`, and the main checkout advances by fast-forward only. A conflict aborts the rebase and leaves `main` unchanged rather than creating a merge commit.
-
-`remove` guards three things, in that order: an agent or a shell still working in the tree, uncommitted changes, and work not proven landed. Once `@coder` is gone, the same command refuses again for the dirty tree, this time with `worktree `auth` has local changes or work not proven landed`. A stale record left behind by a crashed agent does not count as in use, so a crash never leaves you unable to reclaim the tree.
-
-`--force` overrides the refusal when you have decided the work is disposable, and warns first when it is overriding a live agent. `rimz worktree sweep` reclaims only worktrees left by a crash or made safe by a later merge or fetch: it removes every clean, landed tree that no live pane or agent occupies, reports what it reclaimed, and previews with `--dry-run`. `rimz gc` runs the same worktree sweep alongside the other maintenance areas. The full landed-content proof is in [the worktree internals](../internals/harness/worktrees.md#the-content-landed-ladder).
-
-## Under the hood
+## What `-w` does on your machine
 
 `-w feat-a` runs four steps, each plain Git or a file operation you could rerun by hand:
 
-1. **Add the tree.** `git worktree add ../<repo>-worktrees/feat-a -b feat-a <base>` — the directory template and the base ref are the two knobs below.
-2. **Seed it.** Copy the `.worktreeinclude` matches, symlink the `.worktreelink` directories, and register each link in the tree's `git info/exclude`.
-3. **Mark it.** Write `rimz-worktree.json` into the worktree's Git admin directory, recording the name, branch, and the base branch and commit that cleanup later measures against. The checkout itself stays free of RimZ metadata, and the marker is the ownership boundary: cleanup, `remove`, and `gc` act only on marked trees, so a checkout you made by hand is never touched.
+1. **Add the tree.** `git worktree add -b feat-a ../<repo>-worktrees/feat-a <base>`. The directory template and the base ref are the two knobs below.
+2. **Mark it.** Write `rimz-worktree.json` into the tree's Git admin directory, at `.git/worktrees/feat-a/rimz-worktree.json` under the main repository, recording the name, branch, and the base branch and commit that cleanup later measures against. That file is the whole of RimZ's claim on the tree: the checkout itself stays free of RimZ metadata, and every verb that can delete something reads the marker first and does nothing without it.
+3. **Seed it.** Copy the `.worktreeinclude` matches, symlink the `.worktreelink` directories, and register each link in the tree's `.git/info/exclude`.
 4. **Open the layout.** Every pane starts with its working directory in the tree, on a channel named after it.
 
 Two per-machine keys under `[agents.worktree]` in `config.toml` tune the first step:
@@ -136,12 +104,69 @@ rimz config set agents.worktree.dir "../{repo}-worktrees"   # where sibling tree
 rimz config set agents.worktree.base fresh                  # branch from origin/HEAD, not local HEAD
 ```
 
-`dir` is a directory template: a relative path resolves from the current directory's main repository root, and `{repo}` expands to its basename. That remains the main repository when you launch from one of its linked worktrees. If the current repository differs from the active room root, RimZ shows both paths and asks before creating anything; non-interactive callers can make the choice explicit with `--root <current-git-root>`. `base` is `head` (branch from local `HEAD`, the default), `fresh` (branch from `origin/HEAD`), or any Git ref; `rimz worktree new --base <ref> --branch <name>` overrides both for a single tree. The full field reference is [configuration → worktrees](./configuration.md#worktrees), and the complete mechanics live in [the worktree internals](../internals/harness/worktrees.md).
+`base` is `head` (the default), `fresh`, or any Git ref you name. Both keys read the main repository even when you launch from one of its linked worktrees, so `head` means the branch checked out in your main clone, not the one under your cursor, and `dir` puts the new tree beside that clone. `rimz worktree new --base <ref> --branch <name>` overrides the base and the branch name for one tree; the directory always comes from `dir`. Both fields are written up in [configuration → worktrees](./configuration.md#worktrees).
+
+If the repository you are standing in differs from the active room's, RimZ prints both paths and asks before creating anything, and warns that this room will not list, remove, or garbage-collect a tree made under the other root. A non-interactive caller states the choice with `--root <git-root>` instead of answering.
+
+## Cleanup, once work lands
+
+RimZ reclaims a tree only after proving its work landed, so a merged feature cleans itself up and unmerged work is never lost. "Landed" is measured against the base branch the marker recorded, falling back to the trunk once that base has itself merged away, and it recognizes merge, squash, and rebase alike.
+
+What happens when the last agent in a tree exits depends on how it exits, and the three cases differ enough to be worth knowing:
+
+- **The pane closes, or you kill it.** RimZ checks the tree. A clean one whose work has landed goes, branch and all, and says so on stderr: `rimz: removed clean worktree <path>`. A dirty or unproven one raises a `Choose (keep/remove/shell) [keep]:` prompt if you are there to answer it, and is kept if you are not.
+- **An unattended run finishes.** Same check, same outcomes. This is the path a [scripted `-p` run](./scripting.md) or a [scheduled loop turn](./loops.md) takes, and it is why a fleet that works while you sleep does not leave trees behind.
+- **You quit the agent normally.** Nothing is reclaimed. The pane drops to a shell inside the tree so you can commit, push, or look around, and the tree waits for a sweep.
+
+`rimz worktree list` is the status read. Two of its columns decide everything: a tree that is clean under `DIRTY` and `yes` under `MERGED` is one RimZ can reclaim, and anything else is the reason it cannot.
+
+```console
+$ rimz worktree list
+WORKTREE  BRANCH  AGENTS  DIRTY  MERGED   PATH
+auth      auth    @coder  dirty  pending  ~/code/query-engine-worktrees/auth
+feat-a    feat-a  -       -      yes      ~/code/query-engine-worktrees/feat-a
+```
+
+`rimz worktree merge auth` takes the deliberately narrow landing path: with no agent or pane left in the worktree and both checkouts clean, the branch rebases onto `main` and the main checkout advances by fast-forward only. A conflict aborts the rebase and leaves `main` unchanged rather than creating a merge commit. Your main checkout must have a branch named `main` out, so a repository whose trunk is `master` lands its branches with Git or a pull request instead.
+
+```console
+$ rimz worktree merge auth
+merged auth into main
+  branch : auth
+  head   : f0c10e649367adc7a6a82bbbe07549e5ea1f805b
+```
+
+Merging leaves the tree in place. `rimz worktree sweep` is the routine that takes it away: it removes every marked tree that is clean, proven landed, and unoccupied, reports what it reclaimed and why it kept the rest, and previews with `--dry-run`. `rimz gc` runs the same sweep alongside the other maintenance areas. A sweep never forces, so a tree you are still working in survives it.
+
+```console
+$ rimz worktree sweep
+sweep — removed 1 · 203 B · 1 kept
+  removed: auth — /home/you/code/query-engine-worktrees/auth
+  kept: feat-a — uncommitted changes
+```
+
+`rimz worktree remove <name>` reclaims one tree on demand, and refuses twice before it does:
+
+```console
+$ rimz worktree remove auth
+error: worktree `auth` is in use by @coder; use --force to remove it
+
+$ rimz worktree remove feat-a
+removed feat-a
+```
+
+The first refusal is for an agent or an open pane still working in the tree, naming what holds it. A stale record left by a crashed agent does not count, so a crash never leaves you unable to reclaim the tree. Once the tree is empty, a dirty or unlanded one refuses again with ``worktree `auth` has local changes or work not proven landed; use --force to remove it``, one message for both conditions; `rimz worktree list` says which.
+
+Removal deletes the branch with the tree when Git considers it merged or RimZ proves its work landed. Otherwise the branch stays and the report adds `branch kept: work not proven merged into its base`, so the commits are still reachable by name. `--force` skips both refusals and deletes the branch regardless, taking any unlanded commits on it with no further warning; when a live agent is in the tree it warns first, then removes anyway.
+
+`rimz worktree cd auth` opens your user shell rooted in that checkout, for the times you want to look before you decide. Exit the shell to return to the directory where you started.
+
+The full landed-content proof is in [the worktree internals](../internals/harness/worktrees.md#the-content-landed-ladder), and every refusal each verb can print is in [the worktree CLI reference](../reference/cli/worktree.md).
 
 ## See also
 
-- [Agents](./fleet.md) — launch agents by name and compose the layout that lands in the worktree.
-- [Teams](./teams.md) — a named team is the common unit to isolate on its own branch.
-- [Messaging](./messaging.md) — a worktree's name is its channel; reach agents there by handle.
-- [Worktree CLI reference](../reference/cli/worktree.md) — the complete `rimz worktree` and `rimz gc` surface.
-- [Worktree internals](../internals/harness/worktrees.md) — the ownership marker, file seeding, and the landed-content proof.
+- [Agents](./fleet.md): launch agents by name and compose the layout that lands in the worktree.
+- [Teams](./teams.md): a named team is the common unit to isolate on its own branch.
+- [Messaging](./messaging.md): a worktree's name is its channel; reach agents there by handle.
+- [Worktree CLI reference](../reference/cli/worktree.md): the complete `rimz worktree` and `rimz gc` surface.
+- [Worktree internals](../internals/harness/worktrees.md): the ownership marker, file seeding, and the landed-content proof.

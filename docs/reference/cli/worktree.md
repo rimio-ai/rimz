@@ -35,7 +35,7 @@ Named channels and worktrees share one namespace in a repository room ([channel 
 ```console
 $ rimz worktree new feat-a
 created feat-a
-  path   : ~/code/query-engine-worktrees/feat-a
+  path   : /home/you/code/query-engine/../query-engine-worktrees/feat-a
   branch : feat-a
   base branch: main
   base   : bece28e8adc3d54ed07a03764b25452117cdce6d
@@ -95,9 +95,9 @@ A same-repository checkout reuses an existing local branch of that name when the
 
 ```console
 $ rimz worktree list
-WORKTREE  BRANCH  AGENTS   DIRTY  MERGED  PATH
-auth      auth    @coder   dirty  pending ~/code/query-engine-worktrees/auth
-feat-a    feat-a  -        -      yes     ~/code/query-engine-worktrees/feat-a
+WORKTREE  BRANCH  AGENTS  DIRTY  MERGED   PATH
+auth      auth    @coder  dirty  pending  ~/code/query-engine-worktrees/auth
+feat-a    feat-a  -       -      yes      ~/code/query-engine-worktrees/feat-a
 ```
 
 `list` prints one row per RimZ-owned worktree of the repository, sorted by name.
