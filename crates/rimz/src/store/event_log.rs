@@ -20,8 +20,9 @@ mod recovery;
 mod rotation;
 
 pub use recovery::RepairOutcome;
-pub(crate) use recovery::repair;
-pub use rotation::{PruneOutcome, RotationOutcome, prune_archive, rotate};
+pub(super) use recovery::repair;
+pub use rotation::{PruneOutcome, RotationOutcome};
+pub(super) use rotation::{newest_archives, prune_archive, rotate};
 
 pub const DEFAULT_RETENTION_ARG: &str = "14d";
 pub const DEFAULT_RETENTION: Duration = Duration::from_secs(14 * 86_400);
@@ -87,7 +88,7 @@ pub fn append<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 /// Append one ordered group with a single filesystem write.
 #[must_use = "durability barrier; check the result"]
-pub(crate) fn append_batch(path: &Path, events: &[EventEnvelope]) -> Result<()> {
+pub(super) fn append_batch(path: &Path, events: &[EventEnvelope]) -> Result<()> {
     if events.is_empty() {
         return Ok(());
     }
@@ -102,7 +103,7 @@ pub(crate) fn append_batch(path: &Path, events: &[EventEnvelope]) -> Result<()> 
 }
 
 #[must_use = "durability barrier; check the result"]
-pub(crate) fn replace_all(path: &Path, events: &[EventEnvelope]) -> Result<()> {
+pub(super) fn replace_all(path: &Path, events: &[EventEnvelope]) -> Result<()> {
     let mut bytes = Vec::new();
     for event in events {
         let payload = serde_json::to_vec(event).map_err(atomic::AtomicErr::Json)?;
@@ -128,7 +129,7 @@ pub fn read_all(path: &Path) -> Result<Vec<EventEnvelope>> {
 /// power-cut corpse), so reading stops in front of it and the returned offset
 /// never claims bytes the fold skipped. A torn record followed by more frames
 /// is corruption and stays a hard error.
-pub fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, u64)> {
+pub(crate) fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, u64)> {
     if !path.exists() {
         // No log, no extent — a fresh workspace folds nothing.
         return Ok((Vec::new(), 0));
@@ -158,11 +159,6 @@ pub fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, 
         }
     }
     Ok((events, end))
-}
-
-/// Return the newest archived generations in chronological order.
-pub fn newest_archives(archive_dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
-    rotation::newest_archives(archive_dir, limit)
 }
 
 /// Always-on observability seam: bytes the row scan actually read, so the
