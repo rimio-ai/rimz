@@ -32,7 +32,7 @@ The bare command, `list`, and `ls` print one row per live cohort, and one row fo
 | `TEAM` | Team name. | Team name. |
 | `LANE` | `#<lane>`. | `-` |
 | `STAGE` | The board stage, with ` (@owner)` when the board names one. | `-` |
-| `PR` | `#<number>` from the room's cached PR facts, followed by the CI glyph unless the PR is closed; `-` when nothing is cached. | `-` |
+| `PR` | `#<number>` from the room's cached PR facts, followed by the CI glyph unless the PR is closed; `-` when no pull request is cached. | `-` |
 | `STATUS` | The cohort [state](#cohort-state). | `ready` |
 
 A broken definition replaces `STATUS` with `broken: <error>` on every row of that team. A live cohort whose team is no longer defined keeps its state with ` · not defined` appended. Resolved roles and models appear in [`show`](#inspect-one-team).
