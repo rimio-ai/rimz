@@ -341,7 +341,7 @@ A process plugin connects a third-party agent through a shim that speaks RimZ's 
 ## See also
 
 - [Agents](../guide/fleet.md): launching agents and profiles.
-- [Configuration](../guide/configuration.md#agent-profiles-commands-and-teams): profile fields, effort, and raw `args`.
+- [Configuration](../guide/configuration.md#agent-profiles-commands-and-teams): where profiles, teams, and the skill library live on disk.
 - [Token insight](../guide/insight.md): where the `live$` and `spend` figures surface.
 - [Hooks and trust](./cli/hooks-trust.md): what `rimz hooks install` writes per agent.
 - [The agent model](../internals/agents/model.md): the rollup, state machine, and adapter boundary.

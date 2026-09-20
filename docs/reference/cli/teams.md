@@ -2,7 +2,7 @@
 
 `rimz teams` lists, inspects, launches, resumes, and drives named teams, hands a team's board from stage to stage, and installs team bundles.
 
-A team is a configured set of roles and a layout. Each role keeps its own model, prompt, and `@role` handle, and every member of one launch shares one lane; that group of live members is a cohort, addressed as `team#lane` (for example `forge#feat-rate-limits`). The [teams guide](../../guide/teams.md) explains how to design and run a team, and [configuration → teams](../../guide/configuration.md#teams) owns the definition fields (`roles`, `leader`, `layout`, `stages`, `scratch-files`, `consensus-file`, `append-system-prompt-files`, and each role's `owns`, `signals`, and `flip-compact`). This page owns the command forms.
+A team is a configured set of roles and a layout. Each role keeps its own model, prompt, and `@role` handle, and every member of one launch shares one lane; that group of live members is a cohort, addressed as `team#lane` (for example `forge#feat-rate-limits`). The [teams guide](../../guide/teams.md) explains how to design and run a team, [configuration → teams](../../guide/configuration.md#teams) covers where the definition files live, and the [definition reference](../definitions.md#teams-and-seats) owns every field (`roles`, `leader`, `layout`, `stages`, `scratch-files`, `consensus-file`, `append-system-prompt-files`, and each role's `owns`, `signals`, and `flip-compact`). This page owns the command forms.
 
 | Command | Does |
 | --- | --- |
@@ -418,7 +418,7 @@ The signal's source is `team`, and `rimz events emit` cannot produce it.
 
 ### Flip compaction
 
-A flip can compact the flipper's own context once it hands off. Set `[harness] flip_compact = "180k"` for a machine default, or `flip-compact` on a role to override it (`"off"` disables it for that role); both accept token counts or percentages such as `"70%"`, and unset means off. The fields are documented in [configuration → profiles](../../guide/configuration.md#profiles).
+A flip can compact the flipper's own context once it hands off. Set `[harness] flip_compact = "180k"` for a machine default, or `flip-compact` on a role to override it (`"off"` disables it for that role); both accept token counts or percentages such as `"70%"`, and unset means off. The machine default is documented in [configuration → hand-off compaction](../../guide/configuration.md#hand-off-compaction) and the role field in the [definition reference](../definitions.md#flip-compaction).
 
 Only a hand-off (the same predicate as the clean-worktree rule) to a stage another role owns is eligible; a flip to `Done` never compacts, because no member works after it. RimZ checks the member's occupied context against the threshold first; below it, or with occupancy unknown, nothing happens and nothing is recorded. At or above it, RimZ queues or sends the compact command for the flipper's next turn boundary. A missing pane or a compact-command error prints `skipped` and never fails the flip. Each attempt writes a `flip compaction` assist record shown in `rimz stats`. A launch refuses a team whose effective threshold falls on an adapter with no compact command; set `flip-compact = "off"` on that role.
 
