@@ -1787,3 +1787,153 @@ fn parent_launch_selects_the_live_occupant_and_keeps_legacy_children() {
     assert_eq!(parent.agent_id, "z-new");
     assert_eq!(parent.ended_at, agents[1].ended_at);
 }
+
+/// The two rows of the incident lane: a registered reviewer with a bound pane,
+/// and a launch card from an earlier launch that died in `starting` —
+/// provisional id, no pane, no process, same role.
+fn claimed_and_unclaimed_reviewers() -> (AgentState, AgentState) {
+    let mut registered = agent(
+        "claude",
+        "76b7c2b6",
+        Some("attribution-counts"),
+        "terminal_65",
+    );
+    registered.name = Some("zesty-river".to_owned());
+    registered.kind_ordinal = Some(85);
+    registered.role = Some("reviewer".to_owned());
+    registered.profile = Some("forge.reviewer".to_owned());
+    registered.channel = Some("attribution-counts".to_owned());
+    registered.launch_id = Some(AgentSessionId::from("launch_01a0bc87a5"));
+
+    let mut unclaimed = agent(
+        "claude",
+        "launch_01a0bc81e1",
+        Some("attribution-counts"),
+        "terminal_0",
+    );
+    unclaimed.pane = None;
+    unclaimed.runtime_owner = None;
+    unclaimed.name = Some("expert-meter".to_owned());
+    unclaimed.kind_ordinal = Some(76);
+    unclaimed.role = Some("reviewer".to_owned());
+    unclaimed.profile = Some("forge.reviewer".to_owned());
+    unclaimed.channel = Some("attribution-counts".to_owned());
+    unclaimed.launch_id = Some(AgentSessionId::from("launch_01a0bc81e1"));
+    (registered, unclaimed)
+}
+
+#[test]
+fn role_handle_survives_an_unclaimed_launch_card_in_the_lane() {
+    let mut snapshot = empty_snapshot();
+    let (registered, unclaimed) = claimed_and_unclaimed_reviewers();
+    snapshot.agents = vec![registered, unclaimed];
+    let peers = addressable_agents(&snapshot);
+
+    for raw in ["@reviewer", "@reviewer#attribution-counts"] {
+        let matched = resolve_many(&snapshot, raw, None, Some("attribution-counts")).unwrap();
+        let ids: Vec<&str> = matched
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            ["76b7c2b6"],
+            "{raw} reaches the claimed reviewer alone"
+        );
+    }
+
+    let handles: Vec<String> = peers
+        .iter()
+        .map(|agent| agent_handle(agent, &peers, true))
+        .collect();
+    assert_eq!(
+        handles,
+        [
+            "@reviewer#attribution-counts",
+            "@claude-76#attribution-counts"
+        ]
+    );
+    for (agent, handle) in peers.iter().zip(&handles) {
+        assert_eq!(
+            resolve_one(&snapshot, handle, None, None).unwrap().agent_id,
+            agent.agent_id,
+            "{handle} round-trips"
+        );
+    }
+
+    for raw in ["@claude", "@all"] {
+        assert_eq!(
+            resolve_many(&snapshot, raw, None, Some("attribution-counts"))
+                .unwrap()
+                .len(),
+            2,
+            "{raw} still fans out to both rows"
+        );
+    }
+}
+
+#[test]
+fn a_role_with_no_claimed_holder_keeps_every_match() {
+    let mut snapshot = empty_snapshot();
+    let (_, unclaimed) = claimed_and_unclaimed_reviewers();
+    snapshot.agents = vec![unclaimed.clone()];
+    assert_eq!(
+        resolve_one(&snapshot, "@reviewer", None, Some("attribution-counts"))
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "launch_01a0bc81e1",
+        "a lone starting card still answers to its role"
+    );
+
+    let mut second = unclaimed.clone();
+    second.agent_id = AgentSessionId::from("launch_01a0bc81e2");
+    second.launch_id = Some(AgentSessionId::from("launch_01a0bc81e2"));
+    second.kind_ordinal = Some(77);
+    second.name = Some("keen-lantern".to_owned());
+    snapshot.agents = vec![unclaimed, second];
+    assert_eq!(
+        resolve_many(&snapshot, "@reviewer", None, Some("attribution-counts"))
+            .unwrap()
+            .len(),
+        2,
+        "two unclaimed cards invent no winner"
+    );
+}
+
+#[test]
+fn a_bound_launch_card_still_rivals_a_registered_holder_of_the_role() {
+    let mut snapshot = empty_snapshot();
+    let (registered, mut bound) = claimed_and_unclaimed_reviewers();
+    bound.pane = Some(PaneRef::from_id(PaneId::from_parts(
+        MuxName::Zellij,
+        "terminal_66",
+    )));
+    snapshot.agents = vec![registered, bound];
+
+    assert_eq!(
+        resolve_many(&snapshot, "@reviewer", None, Some("attribution-counts"))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(matches!(
+        resolve_one(&snapshot, "@reviewer", None, Some("attribution-counts")),
+        Err(TargetErr::Ambiguous { .. })
+    ));
+}
+
+#[test]
+fn role_holders_pick_the_claimed_member_whatever_the_order() {
+    let (registered, unclaimed) = claimed_and_unclaimed_reviewers();
+    let members = vec![unclaimed, registered];
+
+    assert_eq!(
+        role_holders(&members, "reviewer")
+            .iter()
+            .map(|member| member.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["76b7c2b6"]
+    );
+    assert!(role_holders(&members, "coder").is_empty());
+}

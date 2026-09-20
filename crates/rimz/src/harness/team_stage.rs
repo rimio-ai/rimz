@@ -455,11 +455,14 @@ fn open_stage(
     if opening.self_owned {
         return Ok((event, Delivery::SelfOwned));
     }
-    let Some(member) = opening.members.iter().find(|member| {
-        member.role.as_deref() == Some(owner)
-            && member.team.as_deref() == Some(opening.team_name)
+    let cohort = opening.members.iter().filter(|member| {
+        member.team.as_deref() == Some(opening.team_name)
             && member.channel().as_deref() == Some(opening.channel)
-    }) else {
+    });
+    let Some(member) = crate::address::role_holders(cohort, owner)
+        .into_iter()
+        .next()
+    else {
         return Ok((
             event,
             Delivery::OwnerNotLive {
