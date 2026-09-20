@@ -1937,3 +1937,54 @@ fn role_holders_pick_the_claimed_member_whatever_the_order() {
     );
     assert!(role_holders(&members, "coder").is_empty());
 }
+
+#[test]
+fn the_yield_never_crosses_lanes() {
+    let mut snapshot = empty_snapshot();
+    let (registered, mut elsewhere) = claimed_and_unclaimed_reviewers();
+    elsewhere.channel = Some("other-lane".to_owned());
+    elsewhere.worktree_path = Some("/repo/other-lane".to_owned());
+    snapshot.agents = vec![registered, elsewhere];
+
+    assert_eq!(
+        resolve_many(&snapshot, "@reviewer", None, None)
+            .unwrap()
+            .len(),
+        2,
+        "with no channel in scope a claimed holder in one lane does not silence another lane's card"
+    );
+    assert!(matches!(
+        resolve_one(&snapshot, "@reviewer", None, None),
+        Err(TargetErr::Ambiguous { .. })
+    ));
+
+    // Rendering is lane-scoped either way (`agent_handle` sets `scoped` for both
+    // the suffixed and the grouped form), so each row keeps the role under its
+    // own lane and the handle it shows still names exactly one agent.
+    let peers = addressable_agents(&snapshot);
+    let handles: Vec<String> = peers
+        .iter()
+        .map(|agent| agent_handle(agent, &peers, true))
+        .collect();
+    assert_eq!(
+        handles,
+        ["@reviewer#attribution-counts", "@reviewer#other-lane"]
+    );
+    for (agent, handle) in peers.iter().zip(&handles) {
+        assert_eq!(
+            resolve_one(&snapshot, handle, None, None).unwrap().agent_id,
+            agent.agent_id,
+            "{handle} round-trips"
+        );
+    }
+
+    assert_eq!(
+        resolve_many(&snapshot, "@reviewer", None, Some("attribution-counts"))
+            .unwrap()
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["76b7c2b6"],
+        "in one lane the claimed holder still wins"
+    );
+}

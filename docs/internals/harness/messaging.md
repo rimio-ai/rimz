@@ -345,7 +345,7 @@ An unknown harness notice keeps its string and takes ordinary harness delivery (
 
 A handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched teammate in the same lane does not gain a spurious suffix before pane capture lands.
 
-The handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder ([fleet.md § Handle classes](./fleet.md#handle-classes)).
+The handle is the shortest unique selector over addressable agents ([fleet.md § Handle classes](./fleet.md#handle-classes) gives the ladder). A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down that ladder.
 
 The receiver's turn-start hook parses the header into transcript entries ([transcript.md § Writing entries](./transcript.md#writing-entries)).
 

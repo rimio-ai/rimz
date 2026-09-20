@@ -7,8 +7,8 @@
 //!
 //! Handles read like Slack. A role handle names a team launch's current
 //! conversation (`@coder`); an unclaimed launch card — no registered session and
-//! no pane — yields the role to any claimed holder, and still answers to it when
-//! it is the only one. A
+//! no pane — yields the role to a claimed holder in its lane, and still answers
+//! to it while it is the only one there. A
 //! *type handle* names a profile to fill — `@<kind>` (`@codex`) or `@<profile>`
 //! (`@planner`) — and matches every such agent in the channel; the same handles
 //! can also create one (see [`create_mention`]). An
@@ -783,23 +783,35 @@ fn parse_ordinal_selector(selector: &str) -> Option<(&str, u32)> {
     (ordinal > 0).then_some((kind, ordinal))
 }
 
-/// Narrow a role's matches to the ones something holds — a registered session, a
-/// bound pane, or both — so a role handle survives a launch card nobody ever
-/// claimed because the launch died before it bound. With no claimed match the
-/// matches stand, keeping a lone starting card addressable through the
-/// park-then-fold path. Inert on the live-pane source, where every candidate
+/// Whether something holds this launch: a registered session, a bound pane, or
+/// both. A card with neither is one nobody ever claimed, because the launch died
+/// before it bound.
+fn is_claimed<'a, C: Candidate<'a>>(candidate: C) -> bool {
+    candidate.session_id().is_some() || candidate.pane_id().is_some()
+}
+
+/// Drop a role's unclaimed matches in the lanes where a claimed match answers
+/// for the role, so a role handle survives a launch card left behind in its own
+/// lane. A role is singular within a lane and nowhere wider, so the yield never
+/// crosses one: with no channel in scope, a claimed holder in one lane leaves an
+/// unclaimed card in another standing, and the send refuses as ambiguous rather
+/// than delivering silently to the wrong lane. An unclaimed card with no claimed
+/// lane-mate likewise stands, keeping a lone starting card addressable through
+/// the park-then-fold path. Inert on the live-pane source, where every candidate
 /// carries a pane.
 fn prefer_claimed<'a, C: Candidate<'a>>(candidates: Vec<C>) -> Vec<C> {
-    let claimed: Vec<C> = candidates
+    let claimed_lanes: Vec<String> = candidates
         .iter()
         .copied()
-        .filter(|candidate| candidate.session_id().is_some() || candidate.pane_id().is_some())
+        .filter(|candidate| is_claimed(*candidate))
+        .map(|candidate| candidate.channel_label())
         .collect();
-    if claimed.is_empty() {
-        candidates
-    } else {
-        claimed
-    }
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            is_claimed(*candidate) || !claimed_lanes.contains(&candidate.channel_label())
+        })
+        .collect()
 }
 
 /// The agents holding `role` among `members`, under the same claimed-wins rule
