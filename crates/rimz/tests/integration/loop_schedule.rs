@@ -22,9 +22,9 @@ use rimz::store::message::{AutoCompact, MessageStatus};
 use rimz::store::run::{RunRecord, RunStatus};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
 
-#[cfg(unix)]
-use crate::common::write_fake_login_shell;
 use crate::common::{Env, ScrubSessionEnvExt, canonical};
+#[cfg(unix)]
+use crate::common::{path_with_front, write_fake_login_shell, write_path_shim};
 
 #[test]
 fn team_signal_binding_registers_delivers_and_retires() {
@@ -1427,6 +1427,56 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
             .workspace_record
             .exists()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn external_tick_refuses_when_the_systemd_user_manager_is_unreachable() {
+    let env = Env::new();
+    let shims = env.home_root.join("tick-shims");
+    write_path_shim(&shims, "systemd-run", "exit 0");
+    write_path_shim(
+        &shims,
+        "systemctl",
+        "echo 'Failed to connect to bus: No medium found' >&2\nexit 1",
+    );
+    let marker = env.project_root.join("unreachable-bus-tick-ran");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.unreachable-bus]\ncheck = \"touch {}\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            marker.display(),
+            env.project_root.display(),
+        ),
+    );
+    let prior = Timestamp::now() - SignedDuration::from_mins(2);
+    write_loop_fire_state(
+        &env,
+        BTreeMap::from([("unreachable-bus".to_owned(), prior)]),
+    );
+
+    let output = env
+        .rimz()
+        .args(["loop", "tick"])
+        .env("INVOCATION_ID", "fixture-timer-unit")
+        .env("PATH", path_with_front(&shims))
+        .output()
+        .expect("rimz loop tick");
+
+    assert!(
+        !output.status.success(),
+        "an unreachable user manager must refuse the tick"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Failed to connect to bus"), "{stderr}");
+    assert!(stderr.contains("rimz loop timer install"), "{stderr}");
+    assert!(!marker.exists());
+    let stamps: BTreeMap<String, Timestamp> = serde_json::from_slice(
+        &std::fs::read(env.runtime_paths().root.join("loop-fire.json")).expect("fire state"),
+    )
+    .expect("fire state json");
+    assert_eq!(stamps.get("unreachable-bus"), Some(&prior));
+    assert!(read_loop_run_records(&env).is_empty());
 }
 
 #[test]
