@@ -94,9 +94,9 @@ forge
   source: ~/.rimz/teams/forge.md
   layout: planner,coder+reviewer
 
-  @planner   claude  fable        <- leader
-  @coder     codex   gpt-6-astra
-  @reviewer  claude  opus
+  @planner    claude  fable        <- leader
+  @coder      codex   gpt-6-astra
+  @reviewer   claude  opus
   signals   ci.failed → @coder
   (prompt stack: rimz teams show forge --json)
 ```
@@ -108,9 +108,9 @@ forge
   source: ~/.rimz/teams/forge.md
   layout: planner,coder+reviewer
 
-  @planner   claude  fable        <- leader
-  @coder     codex   gpt-6-astra
-  @reviewer  claude  opus
+  @planner    claude  fable        <- leader
+  @coder      codex   gpt-6-astra
+  @reviewer   claude  opus
   signals   ci.failed → @coder
   (prompt stack: rimz teams show forge --json)
 
@@ -224,9 +224,9 @@ launched forge in worktree #feat-rate-limits
   board     blackboard.md
   prompt    → @planner  "add rate limiting"
 
-  @planner   claude  fable        <- leader
-  @coder     codex   gpt-6-astra
-  @reviewer  claude  opus
+  @planner    claude  fable        <- leader
+  @coder      codex   gpt-6-astra
+  @reviewer   claude  opus
   signals   ci.failed → @coder
 ```
 

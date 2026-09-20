@@ -7,50 +7,38 @@ A team launches several agents as one unit, each in a named role with its own co
   <br/><sub>The loop mid-conversation: <code>@coder</code> finds a gap in the plan and messages <code>@planner</code> with evidence; the planner (center pane) verifies and updates the plan.</sub>
 </p>
 
-Define the roles once in `teams/<name>.md`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
+You can already do this by hand: open three agent CLIs in three panes, tell each one what it is for, and carry the plan and the diff between them yourself. A team makes that arrangement something you declare once. The roles live in `teams/<name>.md`, one command launches the whole set, and each member gets a role handle, so you address `@planner` and `@coder` rather than panes, and so do they. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a set of roles you keep relaunching earns a named team.
 
 ```sh
-rimz teams forge -w feat-complex          # planner, coder, reviewer on one feature
+rimz teams forge -w feat-rate-limits      # planner, coder, and reviewer on one feature
 rimz message @planner "ship the plan"     # each member answers to its role handle
-rimz teams resume forge                   # reopen the newest closed forge team
+rimz teams show forge#feat-rate-limits    # where the run stands
 ```
 
 ## Why split the work
 
-Every agent works inside one context window, and everything it does fills it: files read, tool output, discussion, dead ends. A filling window costs more per turn and reasons less sharply, so the window is the real budget a long task runs against. And inside the window, attention is the scarcer resource still: a model weighs everything it holds against everything else, and when everything claims importance, nothing receives it.
+Every agent works inside one context window, and everything it does fills it: files read, tool output, discussion, dead ends. A filling window costs more per turn and reasons less sharply, so the window is the real budget a long task runs against. Inside that window attention is divided too: a model weighs everything it holds against everything else, so a design conversation still sitting in context competes with the file being edited.
 
-Subagents are the first tool against that, and a good one. The parent dispatches an explore subagent to locate the relevant code and folds back a summary instead of the whole search; plan subagents draft competing directions in parallel. Provider-native children and pane-backed children launched through [`rimz subagents`](../reference/cli/subagents.md) share that product role: one parent delegates bounded work and collects the result. The pane-backed form adds a durable petname, result joins, and lifecycle control, but it is still a supervised one-prompt assignment rather than a peer conversation.
+Subagents are the first tool against that, and a good one. The parent sends an explorer to locate the relevant code and folds back a summary instead of the whole search, and [`rimz subagents`](../reference/cli/subagents.md) adds a durable handle, a result join, and lifecycle control to that child. It stays one window handing out bounded assignments: the child answers once and is finished, and nothing wakes it for a second round.
 
-A team splits the task itself across independent windows:
+A team splits the task itself across windows that stay open:
 
-- Each member keeps its own context and its own attention, the way specialists on a human team do. Each member still uses its own subagents, so a team stacks on that architecture rather than replacing it.
-- Each member can run a different provider. Model capability is jagged (brilliant at one kind of work, mediocre at the next), the peaks and valleys sit in different places per model, and each model has a comfort zone shaped by its size and training. Matching phases of the work to models lets one model's peak cover another's valley: better results for fewer tokens.
-- Members talk both ways, over as many rounds as the work needs: a downstream role can ask, push back, and escalate. A supervised subagent remains parent-directed; messages can park against its address, but v1 does not wake a finished child into another round.
+- Each member keeps its own context and its own attention, the way specialists on a human team do, and each member still runs its own subagents.
+- Each member can run a different provider. Models differ in what they are good at, and they differ from each other, so putting each phase of the work on the model that handles it best beats running all of it on one.
+- Members talk both ways, for as many rounds as the work needs. A downstream role can ask, push back, and escalate; the role that holds the design answers.
 
-That is what a team manages: which window holds which part of the problem, and what each window's attention is spent on. The split itself is yours to design: two roles or five, one provider or several, whatever shape the work divides into. The rest of this page walks one split that has proven itself.
+The split itself is yours to design: two roles or five, one provider or several, whatever shape the work divides into.
 
-## The forge loop
+## Run the forge team
 
-`forge` is the team RimZ builds itself with, shipped ready to copy under [`examples/teams/forge/`](https://github.com/rimio-ai/rimz/tree/main/examples/teams): three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system-prompt file. Two siblings ship beside it for the other shapes of work — `mill`, which leads with an architect on a refactor that has to remove surface, and `spot`, a coder and a reviewer on a fix with no design left to do — and both run the machinery this section describes. The [teams README](https://github.com/rimio-ai/rimz/tree/main/examples/teams) covers all three.
-
-- **@planner** (Claude, on Fable) talks with you. It explores the code through subagents, drafts directions, confirms the design choices with you, and writes the plan. Planning is where a deep model earns its price: Fable reads the intention behind a question, holds a large design in view, and writes implementation plans precise enough to execute. On a complex problem that conversation alone fills 200k to 300k tokens, and by hand-off the window holds the whole design history: the exploration, the alternatives weighed, your decisions. That context is exactly what good design calls for, and exactly what execution doesn't need. Asking the same window to also type the code would push it toward 400k to 600k tokens, where every turn gets slower and pricier and a big model's reasoning starts to dull.
-- **@coder** (Codex, on Astra, the current GPT) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. Astra is fast, cheap, and writes robust code once the details are pinned down, and a precise plan makes its context loading precise too: it pulls in just the code the change touches and implements from there. It verifies the plan against the real code as it goes rather than trusting it.
-- **@reviewer** (Claude, on Opus) is a third fresh window. It reads the plan, reviews the full diff blind before opening the coder's report, so its findings form from the code rather than the coder's narrative, then reconciles that report claim by claim.
-
-By the time implementation starts, two windows understand the problem from different sides: the planner's holds the design history, the coder's holds the code as it stands, and each catches what the other misses. So the roles keep talking. The coder hits a choice the plan left open and takes it to the planner, whose full design context makes it the right desk for the call. Coder and reviewer argue findings with `file:line` evidence, fix or push back, and escalate to the planner when a dispute turns out to be a design call. Three independent windows, each with its own focus, cooperating as one team.
-
-The split reads like it should multiply cost; in practice it divides it. Building RimZ with forge, a complex change that a single Fable window would carry to 400k or 500k tokens and well past $100 lands around $10 of planning, $20 of coding, and $10 of review, and the quality rises as the price falls, because each window spends its whole budget inside its comfort zone.
-
-## Set up forge
-
-Install the release-matched bundle from GitHub, then launch it into a worktree:
+`forge` is the team RimZ is built with: three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system prompt. Its roles run the `claude` and `codex` CLIs, so both must be on your `PATH`. Install the bundle that matches your RimZ release, then check what it wrote:
 
 ```sh
 rimz teams install forge
-rimz teams forge -w feat-complex            # the whole team, one isolated worktree
+rimz agents validate
 ```
 
-From a repository checkout, copy the team and its direct definitions when you want to edit that checkout's version directly:
+`install` writes `~/.rimz/teams/forge.md` and the three role definitions it selects under `~/.rimz/agents/`, adding the shared `claude.md` and `codex.md` kind bases only if your machine has none. If one of those files already exists, the install stops rather than overwriting it, and `rimz teams install forge --force` replaces them. From a repository checkout you can copy the same files instead, which is the version to edit in place:
 
 ```sh
 mkdir -p ~/.rimz/teams ~/.rimz/agents
@@ -59,85 +47,96 @@ cp examples/teams/forge/agents/*.md ~/.rimz/agents/
 rimz agents validate
 ```
 
-Then hand the task to the planner and let the loop carry it: type into the planner's pane, or message it.
+Launch the team with the task in the same command. `-w` puts every member in a fresh [worktree](./worktrees.md) on its own branch, which is where a team belongs: the three of them edit the same files all day.
 
-```sh
-rimz message @planner "add rate limiting to the ingest API"
+```console
+$ rimz teams forge -w feat-rate-limits "add rate limiting to the ingest API"
+launched forge in worktree #feat-rate-limits
+  path      /home/you/code/ingest-worktrees/feat-rate-limits
+  board     blackboard.md
+  prompt    → @planner  "add rate limiting to the ingest API"
+
+  @planner    claude  fable        <- leader
+  @coder      codex   gpt-6-astra
+  @reviewer   claude  opus
+  signals   ci.failed → @coder
 ```
 
-The planner comes back to you at its design gates; the sidebar lifts the whole team the moment any role needs you ([one team, one line of work](#one-team-one-line-of-work)). The `claude` and `codex` CLIs must be on `PATH`; models, feature flags, and the rest of the install fine print are in the [examples README](../../examples/README.md#agent-teams--teams).
+RimZ opens a tab holding the three panes in the team's layout, in the worktree at `path`. The prompt goes to the **leader**: the seat that receives the launch task, keeps the tool that asks you questions, and takes anything the other roles need you to decide. `board` is where the team will keep its progress, and the `signals` line names the events routed to a role rather than to you ([below](#send-events-to-the-responsible-role)). Members start asynchronously, so the receipt says what was launched, not that everyone is up yet.
+
+The whole team shares one channel, `#feat-rate-limits`, named after the worktree; a team launched in place without `-w` gets `<directory>/<team>` instead. Inside that channel each role answers to its bare handle, so `@planner` is unambiguous. Run two cohorts of forge at once and the channel tells them apart: `rimz message @planner#feat-rate-limits` reaches this one's planner.
+
+Each role is on the model that suits its stage:
+
+- **@planner** (Claude on Fable) is the seat that talks with you. It explores the code, settles the design choices with you, and writes the plan to `plan-notes.md`, on the deep model that holds a large design in view.
+- **@coder** (Codex on Astra) starts from that plan in a clean window, on a fast model that writes solid code once the details are pinned down. It checks the plan against the real code as it goes rather than trusting it.
+- **@reviewer** (Claude on Opus) is a third fresh window. It reviews the full diff blind before opening the coder's report, so its findings form from the code rather than the coder's narrative.
+
+None of the three is a relay for the others. The coder takes a choice the plan left open back to the planner, coder and reviewer argue findings with `file:line` evidence, and a dispute that turns out to be a design call goes to the planner. What reaches you is the decisions only you can make, and they come from the leader. Answer in its pane, or from anywhere:
+
+```sh
+rimz message @planner "use the token bucket from the gateway, not a new one"
+```
+
+Two siblings ship beside forge and work exactly the same way. `mill` leads with an architect on a refactor that has to remove surface, and `spot` pairs a coder and a reviewer on a fix with no design left to do; [the bundle guide](../../examples/teams/README.md) walks all three pipelines and the prompts behind them.
 
 ## See and drive your teams
 
-To follow a staged run without opening each pane, read the [sidebar pipeline line](./sidebar.md#the-agent-cards) below its worktree header. It shows the board's stage and time in that stage; click it to reach the stage owner. At `Done`, the clock switches to the whole run's total and stops.
+A team is one line of work, so the room treats it as one. The sidebar names the group with `· forge`, keeps its members in one contiguous block with a single derived state, and lets one member asking for you lift the whole block ([the sidebar guide](./sidebar.md#teams-read-as-one)).
 
-When several copies of a team are working in parallel, checking each pane loses the overview. The team catalogue gives each live cohort its own row with lane, stage, PR/CI, and status; `show` opens the detail for one line of work:
+`rimz teams` lists every definition on the machine, with one row per live copy. A live copy is a cohort, and its address is `team#worktree`:
 
 ```sh
-rimz teams                              # every definition and live instance
-rimz teams show forge#feat-query        # stage, liveness, PR/CI, members, signal fires, memory files
+rimz teams                              # every definition, and every cohort now live
+rimz teams show forge#feat-rate-limits  # one cohort in detail
 rimz teams show forge                   # the definition, then one row per live cohort
-rimz teams show '#feat-query'           # every team live in this lane
-rimz teams forge -w feat-query          # launch or reconcile one cohort
-rimz teams resume forge                 # reopen its newest closed cohort
-rimz teams focus forge                  # jump to the role that needs attention
-rimz teams restart forge                # restart every role in declared order
-rimz teams stop forge                   # close the whole live cohort
-rimz teams wait forge#feat-query        # block until the board reaches Done, then print its Result
+rimz teams show '#feat-rate-limits'     # every team live in that worktree
 ```
 
-Add `--json` to `rimz teams` or `show` for the structured report. Named-team inspection returns one record; lane-only inspection returns an array of team records.
-The bare team name and the longer `launch` form use the same reconciliation engine as `rimz agents <team>`, while `resume`, `focus`, `restart`, and `stop` keep the cohort lifecycle together.
+`show` on a cohort answers "where does this run stand" without opening three panes:
 
-Fresh launches that open a new pane or tab print the worktree lane, absolute path, `board blackboard.md`, and each member's handle and resolved model, marking the effective leader with `<- leader`. When signal bindings are configured, a `signals` line closes the member list. If you supplied a task, the receipt names its recipient and echoes a shortened version of that prompt. This tells you how the team was launched, not whether its providers are ready: startup is asynchronous, and members may not yet appear in `teams show`.
+```console
+$ rimz teams show forge#feat-rate-limits
+forge#feat-rate-limits · working
+  stage:    Implement (@coder) for 28m
+  pipeline: Explore → Plan → [Implement] → Review → Submit → Reflect → Done
+  pr:       none
 
-Run `rimz teams show forge#feat-query` to check on a run. It leads with what that question needs: the cohort's state and, unless it is working, how long since any member did anything; a `stage:` line with how long the board has sat in that stage (`Done for 2h` once finished); the pipeline and PR/CI; then each member's status, time since last activity, activity, context fill, and cost; and whether each armed signal subscription has fired. The definition follows at the end. `rimz teams show forge` answers the other question, what the team is: the definition first, then one row per live cohort with its stage, PR, and state. The lane report shows the absolute worktree path once and lists existing memory files relative to the worktree with line counts and modification ages, so you can open the board or notes directly rather than read every pane. The isolation line shows the members' isolation (the `--isolation` given at launch, else the machine setting) and their temporary directory. Stage comes from the `Stage:` line that `rimz teams flip` updates in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
+  MEMBER     STATUS   AGE  ACTIVITY           CTX   COST
+  @planner   success  28m  -                  61%  $1.84
+  @coder     running  48s  editing ingest.rs  42%  $0.95
+  @reviewer  idle     31m  -                   8%  $0.12
 
-Use `rimz message @planner#feat-query '<text>'` to message the leader. To block a shell or script until the work is done, run `rimz teams wait forge#feat-query`: it returns when the board reaches `Done` (at once if it already has), prints the board's Result section, and exits `1` if the cohort ends first ([teams reference](../reference/cli/teams.md#wait-for-a-cohort-to-finish)). An agent that must end its turn while it waits arms a signal subscription on the cohort's next idle transition instead:
+  signals: ci.failed → @coder · never fired · team-forge-feat-rate-limits-coder-ci-failed
+
+  worktree:  /home/you/code/ingest-worktrees/feat-rate-limits
+  isolation: host · tmp /tmp
+  memory:    blackboard.md   41 lines · 2m ago
+             plan-notes.md  120 lines · 18m ago
+
+…
+```
+
+The header state folds the members' statuses, so one member waiting on you reads `blocked` however busy the others are. `stage:` is the board's own `Stage:` line and the time since the flip that opened it, an advisory note the team writes rather than a state RimZ infers from idle or running panes; `pipeline:` puts that stage in the declared sequence, brackets and all. `memory:` lists the files the team keeps in the worktree, so you can read the board instead of every pane. `pr:` reports what the room last cached from GitHub, so `none` means nothing is cached, not that no pull request exists. The team's definition follows in the same report, cut from the block above; [the reference](../reference/cli/teams.md#inspect-one-team) reads every line, and `--json` gives the same report to a script.
+
+The sidebar draws the same stage as a line under the worktree header, with the current stage, how long the run has been in it, and a click that takes you to the role that owns it ([the agent cards](./sidebar.md#the-agent-cards)). At `Done` its clock switches to the whole run's total and stops.
+
+Four verbs drive a live cohort, each acting on the cohort in your current worktree unless you name one with `team#worktree` or `-w NAME`:
 
 ```sh
-rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-query --once
+rimz teams focus forge     # jump to the member that needs attention
+rimz teams restart forge   # relaunch every member in declared order, resuming its session
+rimz teams stop forge      # close every member, and their subagents
+rimz teams wait forge      # block until the board reaches Done, then print its Result
 ```
 
-This arms a future notification, not a startup or completion barrier. Signals are transition-only and never replay: if the team was already idle before you armed the subscription, that event is missed. Check current state too, and do not treat idle as proof that the work is complete. The [loop reference](../reference/cli/loop.md#signals) covers signal subscriptions and delivery.
+`wait` is the one for a script. It needs the cohort live when it starts, then polls the board and returns when the stage is exactly `Done`, printing the board's `## Result` section; it exits `1` if every member ends first, and `--timeout 4h` caps it at exit `124`. Idle members are not the finish line, and neither is a quiet room: only the board says the work is done.
 
-When the same team is live in several lanes, run the lifecycle command inside the lane you mean or select it with `team#worktree` or `-w NAME`.
-The `COST` in `rimz teams show`, the team's collapsed finished sidebar receipt, and attribution use the same all-in lifetime fold across every resumed session of each role and every subagent it spawned. Attribution's `subagents` line breaks that spend down by task. Expanding a finished receipt puts each role's lifetime cost on its card, and those cards add back to the receipt; live cards remain scoped to the current provider session.
-All three figures cover the worktree's current life, so a name reused by a later cohort in a recreated worktree reports that cohort alone, and a removed worktree contributes nothing anywhere.
-Use [`rimz agents attribution --md`](../reference/cli/agents.md#attribution) when the team's pull request is ready; it credits contributing roles observed on the checkout's current branch, including members that exited before the PR opened. Add `--branch BRANCH` to credit another branch; this branch filter applies only to attribution, not team or sidebar lifetime costs.
-The full flag surface lives in the [teams CLI reference](../reference/cli/teams.md).
+`COST` is each role's whole spend in this worktree, across every session it resumed and every subagent it launched. When the pull request is ready, [`rimz agents attribution --md`](../reference/cli/agents.md#attribution) credits the roles that worked on the current branch, including members that exited before the PR opened, as a footnote you paste into the body.
 
-## Define your own team
+## Hand off with one command
 
-A team puts a repeatable division of work in one file, `teams/<name>.md`. Its roles select direct definitions from `agents/`; its Markdown body tells the seats how to work together. Start with the installed forge definitions, then adapt the roster and pipeline:
-
-```markdown
----
-name: forge
-leader: planner
-layout: planner,coder+reviewer
-stages: [Explore, Plan, Implement, Review, Submit, Reflect]
-roles:
-  - agent: planner
-    owns: [Explore, Plan, Reflect]
-  - agent: coder
-    owns: [Implement]
-  - agent: reviewer
-    owns: [Review, Submit]
----
-Keep the board current. Route implementation to @coder and independent review to @reviewer.
-Send decisions requiring the user to @planner.
-```
-
-Each selected definition and its kind base must exist. Put shared provider instructions in `agents/<kind>.md`, role craft in the direct definition's body, and the workflow in the team's body. RimZ composes base → ancestor crafts → seat craft → built-in consensus → pipeline; read the consensus in its [read-only copy](../reference/definitions.md#the-built-in-consensus-copy) at `~/.rimz/teams/consensus.md`. Role fields can override model, tools, and other settings; the [definition reference](../reference/definitions.md#teams-and-seats) lists the supported keys. Run `rimz agents validate` before launching.
-
-Every stage needs exactly one owner, and Implement and Review need different owners. `Done` is implicit and never declared or owned. The first `rimz teams flip` creates `blackboard.md` if absent; the leader fills in the goal and the team maintains its notes. The leader receives the initial task and remains the user-facing seat; other seats lose the question tool.
-
-The team uses `/blackboard.md` and `/*-notes.md` as ephemeral-memory patterns. Launch and resume add missing patterns to the repository's `.git/info/exclude`, commonly shared by linked worktrees. Remove those lines to undo the exclusions. Excluded scratch files do not keep a worktree dirty and are deleted with it during cleanup.
-
-Launching the team opens every member in its layout. Members answer to `@<role>` within the channel; `rimz agents forge.reviewer` launches or re-adds just that seat. A team launched by another agent is still a top-level peer cohort, not a supervised child. To retire a definition, stop its live cohort and remove its Markdown file; direct definitions shared by other teams can stay.
-
-### Hand off with one command
+A staged team keeps its state in files at the worktree root rather than in any one window, which is what lets a member that crashed, restarted, or compacted pick the run back up. `blackboard.md` is the board: the `Stage:` line, the goal, the decisions, an append-only progress ledger, and the result. Beside it sit the stage files the pipeline names, `plan-notes.md` and the rest. Both patterns (`/blackboard.md` and `/*-notes.md`) are registered in the repository's `.git/info/exclude` at launch and resume, so the files never show up in `git status` or a commit, and they are deleted with the worktree. Delete those lines to undo the exclusion.
 
 Editing the board and separately messaging the next owner leaves two steps to forget. Once your stage's work is saved, hand it off with one command:
 
@@ -145,15 +144,53 @@ Editing the board and separately messaging the next owner leaves two steps to fo
 rimz teams flip Implement "plan ready in plan-notes.md; three advisories carried in"
 ```
 
-RimZ updates the worktree's `blackboard.md` Stage line, appends the required progress note to `## Progress`, records the stage opening, and sends a prose `Type: STAGE` notice to the configured owner at its next turn boundary. The note records where the work stands, not a request to the receiver; no separate message is needed. Run the command in the team's worktree, and use `--team NAME` if several teams live there. Use exact stage names and put qualifiers in the note. Handing your own stage to another role requires a clean worktree: commit or discard what `git status` lists first, or the flip is refused with those paths; your own flip from outside the team is not held to this. To correct a hand-off, flip back to the intended stage; both actions stay in the ledger. `rimz teams flip Done "reflection recorded; run complete"` closes the board without waking anyone.
+RimZ rewrites the board's `Stage:` line, appends the note to `## Progress` as a timestamped ledger entry, fires a `team.stage` signal for anything subscribed, and sends the new owner a prose `Type: STAGE` notice at its next turn boundary. The note says where the work stands; it is not a request to the receiver, and no separate message is needed. Run the command in the team's worktree, and add `--team NAME` if several teams live there. Stage names must match the definition exactly, so put qualifiers like "delta round" in the note.
 
-The launch reminder distinguishes three starts: a fresh worktree has no board, so the leader writes `blackboard.md` with the Goal and the empty sections, then opens the first stage with `rimz teams flip Explore "board opened; sweep aimed at the request"`; an unfinished board is a continuation, with its owner woken to reread it while everyone else rests; a board at `Done` belongs to a finished run, so the leader either clears the old board and memory files for a new request or keeps them and flips out of `Done` for a follow-up. On resume or restart, the current owner's registration re-wait says nothing flipped since the last Progress line; it adds no ledger entry.
+Handing your own stage to another role requires a clean worktree: commit or discard everything `git status` lists first, or the flip is refused and names those paths. The board itself is exempt, as are the excluded memory files. A flip you make yourself, from outside the team, skips the check. To correct a mistaken flip, flip back to the intended stage; both entries stay in the ledger. `rimz teams flip Done "reflection recorded; run complete"` closes the board without waking anyone.
 
-Markdown roles default to `flip-compact: 120k` when they own Plan, or `180k` otherwise; a role can override that threshold. After it leaves a stage it owns for one another role owns, RimZ compacts its own context at the next turn boundary only if occupied context has reached the threshold. The threshold is checked before pane availability; below-threshold flips make no attempt and write no assist record. Moving between stages it owns, or flipping to `Done`, does not compact. Set the role to `"off"` to disable it; removing the override restores the Markdown role default. A skipped compaction does not fail the hand-off. A team member's compaction uses the [team brief](./configuration.md#smart-compaction), which leaves the board and stage files to carry the run, unless `compact_instruction` is set. See the [command reference](../reference/cli/teams.md#flip-the-board-to-the-next-stage) for selection, delivery, and recovery details.
+A role that hands off can compact its own context on the way out, so it comes back to its next stage light. Markdown roles default to `flip-compact: 120k` when they own Plan and `180k` otherwise, and a role can override the threshold or set it to `"off"`. RimZ checks the outgoing member's occupied context against the threshold first and does nothing below it; at or above, the compaction command goes to that pane for its next turn boundary. A move between two stages the same role owns never compacts, and neither does a flip to `Done`. A compaction that fails never fails the hand-off. The command carries a [brief written for team members](./configuration.md#smart-compaction), which lets the summary drop what the board and the stage files already hold.
+
+## Define your own team
+
+A team puts a repeatable division of work in one file, `teams/<name>.md`: YAML frontmatter declares the roster, and the Markdown body is the pipeline every member reads. The shipped `forge` definition is the one to copy from:
+
+```markdown
+---
+name: forge
+leader: planner
+layout: planner,coder+reviewer
+stages: ["Explore","Plan","Implement","Review","Submit","Reflect"]
+roles:
+  - agent: forge-planner
+    role: planner
+    owns: ["Explore","Plan","Reflect"]
+    flip-compact: 180k
+  - agent: forge-coder
+    role: coder
+    owns: ["Implement"]
+    signals: [ci.failed]
+  - agent: forge-reviewer
+    role: reviewer
+    owns: ["Review","Submit"]
+---
+
+# The pipeline
+
+Explore → Plan → Implement → Review → Submit → Reflect, owners per the roster.
+…
+```
+
+The roster names the seats. `agent:` selects a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) from `agents/` and `role:` is the handle it answers to inside the team, defaulting to the profile name, so one profile can sit in several teams under different handles. `layout` places every role exactly once, with the same `,` `+` `/` grammar as any other [layout](./fleet.md#compose-a-layout). A role can also override the model, tools, and other profile fields for its seat.
+
+The stages decide who is woken when. `leader` names the seat that receives the launch prompt and keeps the question tool; the other seats lose it, which is what keeps one voice pointed at you. `owns` assigns stages, and the rules are strict enough to catch a broken roster at launch: every declared stage needs exactly one owner, Implement and Review need different owners, and `Done` is implicit, never declared and never owned. [The definition reference](../reference/definitions.md#teams-and-seats) lists every key and rule, and [configuration](./configuration.md#teams) covers where the files live.
+
+Put shared provider instructions in the kind base `agents/<kind>.md`, each role's craft in its own profile, and the workflow the seats share in the team's body. RimZ composes them in that order, slipping one layer of its own, a built-in consensus on how teammates cooperate, between each role's craft and the team's body. You can read that consensus in the copy RimZ writes to `~/.rimz/teams/consensus.md` ([read-only](../reference/definitions.md#the-built-in-consensus-copy); editing it changes nothing).
+
+Run `rimz agents validate` before launching: a definition that fails to resolve refuses the launch rather than quietly substituting a profile. Launching then opens every member in the layout, and the first `rimz teams flip` writes `blackboard.md` if the leader has not. `rimz agents forge.reviewer` launches or re-adds a single seat into the same channel, and a team launched by an agent is still a top-level peer cohort, not that agent's subagent.
 
 ### Send events to the responsible role
 
-A PR script knows who pushed, not who owns the repair. Declare signals on the role that receives them, so a failed check reaches the coder without the reviewer relaying it:
+A CI script knows who pushed, not who owns the repair. Declare a signal on the role that should receive it, and a failed check reaches the coder without the reviewer relaying it:
 
 ```yaml
 # Within the coder role mapping:
@@ -161,46 +198,36 @@ signals:
   - ci.failed
 ```
 
-Launch with `rimz teams forge -w feat-x`, or from an existing linked worktree. RimZ refuses a fresh root-checkout launch of this binding because its forge poll watches worktree branches; an explicit branch or worktree-path match is the alternative. When the coder registers, RimZ writes a standing subscription pinned to that session and scoped to its worktree. Failed CI sends the coder a `Type: SIGNAL` message with the branch, PR when known, and event payload. A busy coder takes it at the next turn boundary; this is not a self-alarm interrupt.
+When the coder registers, RimZ arms a standing subscription pinned to that session and scoped to its worktree. A failing run then sends that member a `Type: SIGNAL` message with the branch, the pull request when known, and the event payload. A busy coder takes it at its next turn boundary rather than as an interrupt.
 
-`rimz teams show forge#feat-x` separates declared bindings from live subscriptions. Resume, restart, and re-adding a role arm at registration too; subagents do not inherit bindings. Stopping or losing the session removes its subscriptions, and missed signals are not replayed. Use `rimz loop remove <name>` to remove an individual subscription or `rimz teams stop forge#feat-x` to stop the cohort. The rows live in workspace state, not the team file.
+The subscription lives with the session, not with the definition. Resume, restart, and re-adding a role arm it again; stopping or losing the session removes it, and a signal that fires in between is never replayed. `rimz teams show forge#feat-rate-limits` separates what the definition declares from what is armed right now and whether it has fired, and `rimz loop remove <name>` takes one down by the task name shown there.
 
-## Relaunch reconciles instead of duplicating
+A `ci.*` or `pr.*` binding needs a branch to watch, so launch that team with `-w NAME` or from a linked worktree. RimZ refuses the binding on a fresh root-checkout launch, before it creates anything, since it tracks checks only on worktree branches; an explicit `match` on a branch or path is the other way through. [Loops](./loops.md#signals-the-rooms-event-bus) covers the signal families, matches, and everything else a subscription can do.
 
-Point any co-launched layout — a named team or an inline multi-agent spec — at an explicit worktree name, and RimZ reads the state first: a live cohort focuses its tab, and a closed cohort asks what you want done with the worktree it left behind.
+## Come back to a team, or take it down
 
-`rimz agents claude:planner,codex:coder -w feat-once` focuses the existing pair when the same command runs again.
-
-When the cohort is closed and the tree still carries work, `rimz teams forge -w feat-rate-limits` asks whether to resume the team's closed sessions, launch new agents into the same checkout, or cancel, offering `(resume/fresh/cancel)` with `resume` as the default.
-
-Choose `fresh` when you want new sessions without losing the previous run's work. The branch, uncommitted changes, and declared scratch files such as `blackboard.md` and `plan-notes.md` stay in the same checkout. The new members receive a reminder of existing scratch files so they can read the old run before acting.
-
-When the tree is instead clean and its content has landed, the choices are `remove`, `fresh`, and `cancel`, defaulting to `cancel`, because removing a merged worktree deletes the checkout and its branch. Pressing Enter takes the default, and any answer the prompt does not recognize cancels.
-
-`rimz teams forge -w feat-rate-limits --fresh` (or `rimz agents claude:planner,codex:coder -w feat-once --fresh`) skips the prompt and takes the fresh path directly, which is also what a non-interactive run prints as the command to use. It needs the worktree named, and it never duplicates a live cohort: if the team is still running there, the command focuses it as usual.
-
-`--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume keeps identity, working directory, and channel and reads each role's settings from its current profile. To move a closed team out of the sandbox without losing its conversations, run `rimz teams resume forge --isolation host` (or `rimz teams forge --resume --isolation host`); the new isolation is recorded for later relaunches and children. Omitting the flag keeps the recorded isolation. Per-run permission, model, and effort changes use [`rimz agents forge --resume`](../reference/cli/agents.md#resume-a-cohort). A prompt cannot ride with resume: send it afterward with `rimz message`, or choose fresh at the worktree prompt. Channel changes remain refused.
-
-For one agent, a kind resumes its newest closed root conversation; a profile such as `rimz agents astra --resume` selects only conversations launched from that profile. Subagents never compete with their parent, and a matching root that is still live refuses the command.
+Run the same launch command twice and RimZ reads the state before it creates anything. A live cohort just gets its tab focused. A closed one asks what to do with the worktree it left behind: `(resume/fresh/cancel)` while the tree still holds work, defaulting to `resume`, or `(remove/fresh/cancel)` once the work has landed and the tree is clean, defaulting to `cancel` because `remove` deletes the checkout and its branch. Enter takes the default and an unrecognized answer cancels; `--fresh` and `--resume` answer in advance. [The reference](../reference/cli/agents.md#relaunch-into-a-named-worktree) has the full table.
 
 ```sh
-rimz teams resume forge            # reopen the newest closed forge team
-rimz agents claude,codex --resume  # reopen the newest matching inline pair
-rimz agents claude --resume        # resume the freshest closed Claude session
+rimz teams resume forge                  # reopen the team's newest closed cohort
+rimz teams resume forge#feat-rate-limits # reopen the one in that worktree
+rimz teams forge -w feat-rate-limits --fresh
 ```
 
-When the place is easier to name than the spec, `rimz agents resume '#feat-x'` restores the lane's saved team layout and stray agents without requiring the team name. This place-first form converges a partially live team by adding only its closed members; the spec-first `--resume` form selects a cohort by team or layout.
+`resume` keeps each member's conversation, identity, working directory, and channel, and rereads its launch settings from the current profile, so an edit to a role takes effect on the way back in. It refuses while a matching member is still live.
 
-## One team, one line of work
+Name the worktree whenever the team has run in more than one: unscoped, each role matches its own newest session rather than one cohort. A prompt cannot ride along with a resume either, so send it afterward with `rimz message`. To move a closed team out of the sandbox without losing its conversations, add `--isolation host`; the replacement is recorded and holds for later relaunches.
 
-The room treats a team as a single line of work: the sidebar names the active group with `· <team>`, keeps its members as one contiguous block with one derived state, and lets one member asking for you lift the whole block ([the sidebar guide → Teams read as one](./sidebar.md#teams-read-as-one)).
+`fresh` starts new sessions in the same checkout when you want the work but not the conversations. The branch, the uncommitted changes, and the memory files all stay, and the new members are told which scratch files are already there so they can read the old run before acting.
+
+Taking a team down is three steps, in this order. `rimz teams stop forge` closes every member and its subagents, and drops the signal subscriptions they armed. `rimz worktree remove feat-rate-limits` reclaims the checkout and its branch once the work has landed, taking the memory files with it ([worktrees](./worktrees.md#cleanup-once-work-lands)). Deleting `~/.rimz/teams/forge.md` retires the definition; profiles that other teams share can stay.
 
 ## See also
 
-- [Agents](./fleet.md) — launch agents by name and compose the layout a team fills.
-- [Worktrees](./worktrees.md) — isolate a team on its own branch for parallel work.
-- [Messaging](./messaging.md) — reach a role by handle: park, steer, schedule, and channels.
-- [Examples → forge](../../examples/README.md) — the shipped forge definitions: install, prerequisites, and try-before-install.
-- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — where reusable profiles and teams live.
-- [Teams CLI reference](../reference/cli/teams.md) — discover, inspect, install, launch, resume, and drive named teams.
-- [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents` surface.
+- [Agents](./fleet.md): launch agents by name and compose the layout a team fills.
+- [Worktrees](./worktrees.md): isolate a team on its own branch for parallel work.
+- [Messaging](./messaging.md): reach a role by handle: park, steer, schedule, and channels.
+- [Examples → forge](../../examples/README.md#agent-teams--teams): the shipped definitions: install, prerequisites, and try-before-install.
+- [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams): where reusable profiles and teams live.
+- [Teams CLI reference](../reference/cli/teams.md): discover, inspect, install, launch, resume, and drive named teams.
+- [Definitions reference](../reference/definitions.md#teams-and-seats): every roster key, stage rule, and signal-binding field.
