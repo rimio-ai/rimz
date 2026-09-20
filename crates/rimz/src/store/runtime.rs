@@ -34,7 +34,7 @@ pub struct RuntimeProjection {
 ///
 /// Producer-side repair detectors use this entry point so the sidebar import
 /// graph stays read-only while still retaining ended rows.
-pub fn audit_projection(
+pub(crate) fn audit_projection(
     paths: &crate::StatePaths,
 ) -> crate::store::snapshot::Result<RuntimeProjection> {
     let (_, agents, _) = super::snapshot::catch_up_rollup(paths)?;
@@ -42,7 +42,7 @@ pub fn audit_projection(
 }
 
 impl RuntimeProjection {
-    pub fn from_parts(agents: Vec<AgentState>, scope: RuntimeScope) -> Self {
+    pub(super) fn from_parts(agents: Vec<AgentState>, scope: RuntimeScope) -> Self {
         match scope {
             RuntimeScope::Audit => Self {
                 ended: ended_keys(&agents),
@@ -120,7 +120,7 @@ pub fn process_owner(
     RuntimeOwner::new(kind, subject_id, pid, crate::proc::process_start_token(pid))
 }
 
-pub fn owner_is_live(owner: &RuntimeOwner) -> bool {
+pub(super) fn owner_is_live(owner: &RuntimeOwner) -> bool {
     crate::proc::process_is_live(owner.pid, owner.process_start.as_deref())
 }
 
