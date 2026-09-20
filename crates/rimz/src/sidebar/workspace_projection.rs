@@ -17,10 +17,10 @@ use crate::sidebar::frame::PaneFrame;
 use crate::store::event_log::LogExtent;
 use crate::{RuntimePaths, StatePaths};
 
-pub const WORKSPACE_PROJECTION_SCHEMA_VERSION: u32 = 2;
+pub(super) const WORKSPACE_PROJECTION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceProjectionSource {
+pub(crate) struct WorkspaceProjectionSource {
     pub rollup_generation: u64,
     pub rollup_offset: u64,
     pub frame_topology_stamp: u64,
@@ -29,12 +29,12 @@ pub struct WorkspaceProjectionSource {
 }
 
 impl WorkspaceProjectionSource {
-    pub fn from_fold(workspace: &WorkspaceSnapshot, frame: &PaneFrame) -> Option<Self> {
+    fn from_fold(workspace: &WorkspaceSnapshot, frame: &PaneFrame) -> Option<Self> {
         let extent = workspace.snapshot().reflects_log?;
         Some(Self::new(extent, frame))
     }
 
-    pub fn current(state: &StatePaths, frame: &PaneFrame) -> Option<Self> {
+    pub(super) fn current(state: &StatePaths, frame: &PaneFrame) -> Option<Self> {
         let before = StampedPath::of(&state.events_log);
         let published_extent = read_latest_extent(&state.latest_snapshot)?;
         let after = StampedPath::of(&state.events_log);
@@ -64,13 +64,13 @@ impl WorkspaceProjectionSource {
         }
     }
 
-    pub fn is_matchable(self) -> bool {
+    pub(super) fn is_matchable(self) -> bool {
         self.frame_topology_stamp != 0 && self.frame_metrics_stamp != 0
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PublishedWorkspaceProjection {
+pub(crate) struct PublishedWorkspaceProjection {
     pub schema_version: u32,
     pub session: String,
     pub source: WorkspaceProjectionSource,
@@ -143,11 +143,11 @@ fn content_hash(bytes: &[u8]) -> u64 {
     hasher.finish()
 }
 
-pub fn workspace_projection_path(runtime: &RuntimePaths) -> PathBuf {
+pub(super) fn workspace_projection_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("workspace-projection.json")
 }
 
-pub fn read_workspace_projection(
+pub(crate) fn read_workspace_projection(
     runtime: &RuntimePaths,
 ) -> Option<Arc<PublishedWorkspaceProjection>> {
     WORKSPACE_PROJECTION_PARSE_CACHE
