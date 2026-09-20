@@ -235,15 +235,20 @@ fn pipeline_line(
             track.push(Span::styled(theme.glyph(role).to_owned(), style));
         }
     }
+    let width = content_width(ctx.width);
     let clock = pipeline
         .span_secs(ctx.now)
         .map(|secs| format!(" ({})", run_clock_label(secs)))
+        // All or nothing, as the track is: a clock clipped mid-token would read
+        // as a plausible wrong time.
+        .filter(|clock| 2 + text_width(clock) < width)
         .unwrap_or_default();
-    let width = content_width(ctx.width);
     let budget = width.saturating_sub(2 + text_width(&clock));
     let mut left = vec![Span::raw("  ")];
+    let has_track = !track.is_empty();
     let track_width = spans_width(&track) + 2;
-    let name_budget = if !track.is_empty() && track_width + text_width(&pipeline.stage) <= budget {
+    let draws_track = has_track && track_width + text_width(&pipeline.stage) <= budget;
+    let name_budget = if draws_track {
         left.extend(track);
         left.push(Span::raw("  "));
         budget - track_width
@@ -257,7 +262,9 @@ fn pipeline_line(
     if !clock.is_empty() {
         left.push(Span::styled(clock, theme.muted()));
     }
-    if let Some(team) = team {
+    // The team drops before the track, so the room a dropped track frees never
+    // buys the badge back. A stage with no track of its own keeps it.
+    if let Some(team) = team.filter(|_| draws_track || !has_track) {
         let suffix = format!(" · {team}");
         if spans_width(&left) + text_width(&suffix) <= width {
             left.push(Span::styled(
