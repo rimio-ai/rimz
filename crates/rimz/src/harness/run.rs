@@ -14,6 +14,7 @@ use crate::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode, 
 use crate::agents::{AgentState, AgentStatus};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
+use crate::harness::owed::OwedWake;
 use crate::ids::{AgentSessionId, PaneId, RunId};
 use crate::store::run::{RunRecord, RunStatus, RunStoreErr, RunVerify};
 use crate::store::{Store, snapshot::SidebarSnapshot};
@@ -399,12 +400,14 @@ fn mark_terminal(
 ///
 /// Returns `Some(record)` only when this observation newly makes the run
 /// terminal, so callers can send exactly one wakeup datagram.
+/// The owed callback runs only for a root observation classified Completed, before `update_record` takes the workspace lock; its lock-free reads must never run inside that lock.
 pub fn record_lifecycle(
     paths: &StatePaths,
     run_id: &RunId,
     kind: &str,
     observation: &AgentLifecycleObservation,
     last_message: Option<String>,
+    owed: impl FnOnce() -> Option<OwedWake>,
 ) -> Result<Option<RunRecord>> {
     if observation.parent_agent_id.is_some()
         || matches!(
@@ -414,9 +417,15 @@ pub fn record_lifecycle(
     {
         return Ok(None);
     }
+    let owed = if observation.signal.terminal_disposition() == Some(TerminalDisposition::Completed)
+    {
+        owed()
+    } else {
+        None
+    };
     let (record, transition) = update_record(paths, run_id, |record, now| {
         Ok(
-            match fold_lifecycle(record, kind, observation, last_message, now) {
+            match fold_lifecycle(record, kind, observation, last_message, now, owed) {
                 LifecycleFold::Ignored => RecordMutation::Keep(LifecycleFold::Ignored),
                 LifecycleFold::Updated => RecordMutation::Write(LifecycleFold::Updated),
                 LifecycleFold::NewlyTerminal => RecordMutation::Write(LifecycleFold::NewlyTerminal),
@@ -439,6 +448,7 @@ fn fold_lifecycle(
     observation: &AgentLifecycleObservation,
     last_message: Option<String>,
     now: Timestamp,
+    owed: Option<OwedWake>,
 ) -> LifecycleFold {
     if record.kind.as_str() != kind || record.status.is_terminal() {
         return LifecycleFold::Ignored;
@@ -453,17 +463,33 @@ fn fold_lifecycle(
         (None, None) | (Some(_), Some(_)) => {}
     }
     if let Some(disposition) = observation.signal.terminal_disposition() {
+        if let Some(path) = observation.transcript_path.as_ref() {
+            record.transcript_path = Some(path.clone());
+        }
+        record.last_message = last_message.or(record.last_message.take());
+        if disposition == TerminalDisposition::Completed
+            && let Some(owed) = owed
+        {
+            record.status = RunStatus::Running;
+            record.parked_at = Some(now);
+            tracing::info!(run_id = %record.run_id, owed = owed.as_str(), "supervised run parked on an owed wake");
+            return LifecycleFold::Updated;
+        }
         record.status = match disposition {
             TerminalDisposition::Completed => RunStatus::Completed,
             TerminalDisposition::Failed => RunStatus::Failed,
             TerminalDisposition::Canceled => RunStatus::Canceled,
         };
-        if let Some(path) = observation.transcript_path.as_ref() {
-            record.transcript_path = Some(path.clone());
-        }
-        record.last_message = last_message.or(record.last_message.take());
         record.completed_at = Some(now);
+        record.parked_at = None;
         return LifecycleFold::NewlyTerminal;
+    }
+    if matches!(observation.signal, LifecycleSignal::TurnStarted { .. })
+        && record.parked_at.is_some()
+    {
+        record.parked_at = None;
+        record.status = RunStatus::Running;
+        return LifecycleFold::Updated;
     }
     let first_transcript_path =
         record.transcript_path.is_none() && observation.transcript_path.is_some();

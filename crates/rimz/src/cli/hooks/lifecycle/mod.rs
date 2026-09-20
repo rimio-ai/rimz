@@ -434,6 +434,7 @@ fn record_run_lifecycle(
         agent.spec().kind,
         &recorded.observation,
         assistant_message.map(ToOwned::to_owned),
+        || None, // slice 2 supplies the owed answer
     ) {
         Ok(Some(record)) => {
             let cost_usd = recorded
