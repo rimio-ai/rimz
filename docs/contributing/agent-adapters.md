@@ -12,6 +12,8 @@ A third-party agent normally ships as a [process plugin](../reference/agent-plug
 
 The integration starts as a document, not code. `docs/externals/agent-adapter/<kind>-reference.md` maps the agent's upstream protocol surface, pinned to source URLs: hooks and their payloads, session identity and resume, transcripts, auth and account, headless modes. The recent references are the template — [kiro-reference.md](../externals/agent-adapter/kiro-reference.md) records a validated provider-owned store, excluded session classes, negative hook evidence, and the boundary for new claims. The reference is the artifact every later step reads, and it outlives the integration as the drift-check target.
 
+The pinned reference mirrors upstream prose, not observed behaviour. Before you rest a design on which hook a provider does or does not fire, read the provider's own recorded sessions on disk; they carry the outcome fields upstream never documented.
+
 Read alongside it, in order: [adapter.md](../internals/agents/adapter.md) end to end (the boundary, the capability traits, the hook path, context sources, declared coverage), [model.md](../internals/agents/model.md) (the state machine and displayed status your observations drive), [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) (the authoring contract), then one small worked adapter ([`pi/`](../../crates/rimz/src/agents/adapters/pi/mod.rs) with its internals doc [adapter_pi.md](../internals/agents/adapter_pi.md)) and one large ([`claude/`](../../crates/rimz/src/agents/adapters/claude/mod.rs) with [adapter_claude.md](../internals/agents/adapter_claude.md)).
 
 ## Step 2 — Map the protocol onto the model
