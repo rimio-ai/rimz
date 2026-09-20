@@ -175,17 +175,28 @@ fn record_mapped_lifecycle_observation(
     } else {
         log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
     }
-    let audit = store
-        .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
-        .inspect_err(|err| {
-            warn!(error = %err, "lifecycle: failed to read team member state");
+    // The commit above publishes and runs the session reaper only when it
+    // appended an event, and it appends one exactly when the receipt carries a
+    // primary id or a derived event. So an observation with neither found no
+    // end that was not already there, and pays for neither the projection nor
+    // the reconcile below: the repeat side-conversation hook and the read-only
+    // tool use, the two frequent ones, both land here.
+    let appended_an_event = receipt.primary_event_id.is_some() || !receipt.events.is_empty();
+    let audit = appended_an_event
+        .then(|| {
+            store
+                .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
+                .inspect_err(|err| {
+                    warn!(error = %err, "lifecycle: failed to read team member state");
+                })
+                .ok()
         })
-        .ok();
+        .flatten();
     // Every durable end in this workspace retires its rows here, whichever
     // producer stamped it: the store reaper, the exec wrapper, and rebirth
     // append `Ended` without ever reaching a hook. It sits above the side
-    // conversation's return because the commit above can trigger a reaper
-    // pass either way, and that pass is a producer nothing else follows.
+    // conversation's return because that conversation's own first hook appends
+    // its registration, and that commit reaps like any other.
     if let Some(audit) = &audit
         && let Err(err) =
             rimz::harness::schedule::arm::retire_ended_sessions(&workspace.project_root, || {

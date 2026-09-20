@@ -1004,6 +1004,58 @@ fn other_session_hook_retires_non_hook_ended_subscription() {
     );
 }
 
+/// The hook reconcile is a price every observation pays, so one whose commit
+/// appends nothing must not pay it: nothing was published, the session reaper
+/// never ran, and no end appeared that was not already there. A side
+/// conversation's repeat hook is that case — the store returns before it stages
+/// anything — and the next observation that does append still takes the row.
+#[test]
+fn repeat_side_conversation_hook_reconciles_nothing() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-ended", "feature-loop");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ended",
+            "--wait",
+            "@claude",
+            "--signal",
+            "deploy.done",
+        ],
+    );
+    let armed = read_loop_instances(&env);
+    // A side conversation's first hook registers it, so that one does append.
+    run_agent_hook(
+        &env,
+        "codex",
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "codex-side",
+            "source": "fork",
+            "transcript_path": null,
+        }),
+        &env.project_root,
+    );
+    stamp_session_ended(&env, "sess-ended");
+    run_agent_hook(
+        &env,
+        "codex",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "codex-side",
+            "transcript_path": null,
+            "prompt": "a side question",
+        }),
+        &env.project_root,
+    );
+    assert_eq!(read_loop_instances(&env), armed);
+    register_running_agent(&env, "sess-live", "feature-loop");
+    assert!(read_loop_instances(&env).0.is_empty());
+}
+
 #[test]
 fn revived_session_subscription_survives_matching_signal() {
     let env = Env::new();
@@ -4178,11 +4230,15 @@ fn register_running_agent_at(env: &Env, session_id: &str, branch: &str, cwd: &Pa
 }
 
 fn run_hook(env: &Env, payload: serde_json::Value, cwd: &Path) {
+    run_agent_hook(env, "claude", payload, cwd);
+}
+
+fn run_agent_hook(env: &Env, source: &str, payload: serde_json::Value, cwd: &Path) {
     let payload = serde_json::to_string(&payload).expect("payload");
     let owner = dummy_agent_process();
     let owner_pid = owner.id();
     reap_later(owner);
-    let mut cmd = env.hook_command("claude");
+    let mut cmd = env.hook_command(source);
     cmd.current_dir(cwd)
         .env("RIMZ_AGENT_PID", owner_pid.to_string());
     if let Some(channel) =

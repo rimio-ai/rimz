@@ -287,6 +287,8 @@ The same durable rollup answers two questions, and [`runtime.rs`](../../crates/r
 
 **Audit** scope bypasses the filter and reads durable history as written. `rimz doctor --audit`, explicit resume, launch name allocation, and message dispatch read it, and explicit resume is the reason ended rows are retained at all.
 
+Pick the scope by the question, because the wrong one is silent. `Store::snapshot_cached` and `Store::runtime_projection(RuntimeScope::Runtime)` answer "who is here now". `Store::runtime_projection(RuntimeScope::Audit)` answers every question where an ended session is itself the evidence — a liveness gate, a retirement predicate, a resume check. Asking the runtime scope whether a session has ended returns a clean empty answer, since the row that carries the proof is the one that scope removed.
+
 ## Session death
 
 Two mechanisms end sessions in the store. The reap converges individual sessions RimZ can prove are gone; the `session.death` record captures the loss of a whole room.
