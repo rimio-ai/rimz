@@ -108,7 +108,7 @@ fn task_budget(task: &str) -> Option<Duration> {
     }
 }
 
-fn parse_budget(raw: &str) -> Result<Option<Duration>> {
+pub(crate) fn parse_budget(raw: &str) -> Result<Option<Duration>> {
     let raw = raw.trim();
     if matches!(raw, "off" | "none" | "never" | "0") {
         return Ok(None);

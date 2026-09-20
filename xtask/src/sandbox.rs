@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 mod join;
+mod room;
 
 pub(crate) const ROOM_RECORD: &str = "room.json";
 
@@ -32,10 +33,6 @@ impl RoomRecord {
         serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "room bring-up lands in slice 3")
-    )]
     pub(crate) fn write(root: &Path, record: &Self) -> Result<()> {
         let path = root.join(ROOM_RECORD);
         std::fs::write(&path, serde_json::to_vec_pretty(record)?)
@@ -431,6 +428,7 @@ fn remove_tree_bounded(root: &Path) {
 pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
     let args = match args.first().map(String::as_str) {
         Some("in") => return join::run(root, &args[1..]),
+        Some("room") => return room::run(root, &args[1..]),
         Some("--") => &args[1..],
         _ => args,
     };
