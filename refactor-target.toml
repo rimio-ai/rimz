@@ -3164,7 +3164,7 @@ reason = "Pub field LaunchPlan.prompt, which cli::agents_cmd::explain reads; atl
 [[verdict]]
 kind = "item"
 key = "harness::prompt_compose::SystemPromptSources"
-reason = "Pub field SystemPromptPlan.sources, and cli::agents_cmd::explain names the type directly (pass 23b)."
+reason = "Pub field SystemPromptPlan.sources, so private_interfaces pins it at its owner; the binary reads that field at cli/agents_cmd/explain.rs:366 without naming the type (pass 23b)."
 
 [[verdict]]
 kind = "item"
@@ -3300,3 +3300,8 @@ reason = "plan-then-apply for callers that need both; no production caller remai
 kind = "pass-through"
 key = "sandbox::rewrite::from"
 reason = "MaterializeErr::from is the `?` conversion from SandboxErr; inlining it rewrites every call site to map_err and is net-additive (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch_context::TeamLaunchContext"
+reason = "Atlas proposes private, but launch_reminders.rs:73-81 names it and team_launch_context/reminder carry it in their signatures; rustc refuses (pass 23b)."
