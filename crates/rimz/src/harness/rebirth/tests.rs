@@ -213,7 +213,6 @@ fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
 
     assert_eq!(
         outcome
-            .resume
             .tabs
             .iter()
             .map(ResumeTab::pane_count)
@@ -262,7 +261,7 @@ fn fresh_archives_crash_and_records_zero_recovered_without_tabs() {
 
     let outcome = plan.materialize(RebirthChoice::Fresh, "rimz-test");
 
-    assert!(outcome.resume.tabs.is_empty());
+    assert!(outcome.tabs.is_empty());
     assert!(!fixture.paths.live_roster.exists());
     let marker: LastDeathMarker =
         serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).unwrap())
@@ -338,7 +337,7 @@ fn recover_ends_only_agents_not_resumed_without_overwriting_worktree_gone_reason
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
 
-    assert_eq!(outcome.resume.resumed, resumed);
+    assert_eq!(outcome.resumed, resumed);
     let projection = Store::open(fixture.paths.clone(), fixture.runtime.clone())
         .expect("store")
         .runtime_projection(crate::RuntimeScope::Audit)
@@ -395,9 +394,9 @@ fn disabled_recovery_restores_empty_channels_without_seeding_agents() {
 
     assert_eq!(plan.preview().pane_count(), 0);
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
-    assert_eq!(outcome.resume.tabs.len(), 1);
-    assert_eq!(outcome.resume.tabs[0].label, "#auth");
-    assert_eq!(outcome.resume.tabs[0].pane_count(), 0);
+    assert_eq!(outcome.tabs.len(), 1);
+    assert_eq!(outcome.tabs[0].label, "#auth");
+    assert_eq!(outcome.tabs[0].pane_count(), 0);
 }
 
 #[test]
@@ -415,8 +414,8 @@ fn rebirth_recovery_globally_orders_fresher_flat_before_team() {
 
     assert_eq!(plan.preview().labels()[0], "#flat");
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
-    assert_eq!(outcome.resume.tabs[0].cwd, flat_worktree);
-    assert_eq!(outcome.resume.tabs[1].cwd, team_worktree);
+    assert_eq!(outcome.tabs[0].cwd, flat_worktree);
+    assert_eq!(outcome.tabs[1].cwd, team_worktree);
 }
 
 #[test]
@@ -552,8 +551,8 @@ fn rebirth_recovers_flat_tabs_when_store_is_unavailable() {
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
 
-    assert_eq!(outcome.resume.tabs.len(), 1);
-    assert_eq!(outcome.resume.tabs[0].cwd, flat_worktree);
+    assert_eq!(outcome.tabs.len(), 1);
+    assert_eq!(outcome.tabs[0].cwd, flat_worktree);
 }
 
 #[test]
@@ -591,17 +590,10 @@ fn team_recovery_allocates_fresh_role_and_keeps_other_tabs_after_team_failure() 
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
 
-    assert!(outcome.resume.tabs.iter().any(|tab| tab.label == "#forge"));
-    assert!(
-        outcome
-            .resume
-            .tabs
-            .iter()
-            .any(|tab| tab.cwd == flat_worktree)
-    );
-    assert!(!outcome.resume.tabs.iter().any(|tab| tab.label == "#broken"));
+    assert!(outcome.tabs.iter().any(|tab| tab.label == "#forge"));
+    assert!(outcome.tabs.iter().any(|tab| tab.cwd == flat_worktree));
+    assert!(!outcome.tabs.iter().any(|tab| tab.label == "#broken"));
     let team = outcome
-        .resume
         .tabs
         .iter()
         .find(|tab| tab.label == "#forge")
@@ -675,7 +667,7 @@ fn failed_team_materialization_ends_its_resume_seeds() {
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
 
-    assert!(outcome.resume.tabs.is_empty());
+    assert!(outcome.tabs.is_empty());
     assert_eq!(
         ended_events(&fixture),
         vec![("rimz.not-resumed".to_owned(), "planner".into())]
