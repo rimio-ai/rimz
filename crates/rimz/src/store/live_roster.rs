@@ -17,13 +17,13 @@ use crate::ids::{AgentKind, AgentSessionId};
 const LIVE_ROSTER_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LiveRoster {
+pub(crate) struct LiveRoster {
     pub version: u32,
     pub written_at: Timestamp,
     pub agents: BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
-pub fn read(path: &Path) -> Option<LiveRoster> {
+pub(crate) fn read(path: &Path) -> Option<LiveRoster> {
     let bytes = std::fs::read(path).ok()?;
     let roster: LiveRoster = serde_json::from_slice(&bytes).ok()?;
     (roster.version == LIVE_ROSTER_VERSION).then_some(roster)
