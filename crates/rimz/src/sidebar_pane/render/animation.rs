@@ -15,7 +15,7 @@ const THINKING_FRAMES: &[&str] = &[
     "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",
     "⣿", "⡿", "⠿", "⢟", "⠟", "⡛", "⠛", "⠫", "⢋", "⠋", "⠍", "⡉", "⠉", "⠑", "⠡", "⢁",
 ];
-pub(crate) const DEFAULT_BREATH_PERIOD: f32 = 24.0;
+const DEFAULT_BREATH_PERIOD: f32 = 24.0;
 const FRESH_ATTENTION_PERIOD: f32 = 26.0;
 const HOT_ATTENTION_PERIOD: f32 = 12.0;
 const BREATH_MIDPOINT: f32 = 0.35;
@@ -40,7 +40,7 @@ const BLINK_PEAK_LIFT: f32 = 0.08;
 /// resting breathe, sampled near the base grid without paying the full spinner
 /// cadence for calm rooms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AnimationCadence {
+pub(in crate::sidebar_pane) enum AnimationCadence {
     None,
     Breath,
     Fast,
@@ -61,7 +61,7 @@ pub(crate) enum AnimationCadence {
 /// Deliberately unfiltered by the make-up filter: the cockpit's attention
 /// buckets still animate (and the counts still tick) for rows a filter hides,
 /// so the gate must track the whole room, not the narrowed body.
-pub(crate) fn animation_cadence(
+pub(in crate::sidebar_pane) fn animation_cadence(
     snapshot: &SidebarSnapshot,
     animations: &ResolvedAnimations,
 ) -> AnimationCadence {
@@ -248,14 +248,14 @@ pub(crate) struct BreathSample {
 }
 
 impl BreathSample {
-    pub(crate) fn new(phase: u64, period: f32, amplitude: f32) -> Self {
+    pub(super) fn new(phase: u64, period: f32, amplitude: f32) -> Self {
         Self {
             level: breath_unit(breath_theta(phase, period)),
             amplitude,
         }
     }
 
-    pub(crate) fn blink_for_age(phase: u64, age_secs: i64, amplitude: f32) -> Self {
+    pub(super) fn blink_for_age(phase: u64, age_secs: i64, amplitude: f32) -> Self {
         Self {
             level: blink_level(phase, breath_tempo(age_secs)),
             amplitude,
@@ -322,17 +322,17 @@ impl BreathSample {
     }
 }
 
-pub(crate) fn breath_tempo(age_secs: i64) -> f32 {
+pub(super) fn breath_tempo(age_secs: i64) -> f32 {
     let heat = (age_secs.max(0) as f32 / ATTENTION_AGE_CEILING_SECS as f32).clamp(0.0, 1.0);
     FRESH_ATTENTION_PERIOD - ((FRESH_ATTENTION_PERIOD - HOT_ATTENTION_PERIOD) * heat)
 }
 
-pub(crate) fn breath_theta(phase: u64, period: f32) -> f32 {
+fn breath_theta(phase: u64, period: f32) -> f32 {
     let period = period.max(1.0);
     std::f32::consts::TAU * ((phase as f32 / period) % 1.0) - std::f32::consts::FRAC_PI_2
 }
 
-pub(crate) fn breath_unit(theta: f32) -> f32 {
+fn breath_unit(theta: f32) -> f32 {
     let floor = (-1.0_f32).exp();
     ((theta.sin().exp() - floor) / (std::f32::consts::E - floor)).clamp(0.0, 1.0)
 }
@@ -341,7 +341,7 @@ pub(crate) fn breath_unit(theta: f32) -> f32 {
 /// half of each cycle, off the second — a hard square swing between the resting
 /// tone and the bright crest, no easing between them. `period` is the age tempo
 /// the calm breath also rides, so an older ask blinks faster.
-pub(crate) fn blink_level(phase: u64, period: f32) -> f32 {
+fn blink_level(phase: u64, period: f32) -> f32 {
     let frac = (phase as f32 / period.max(1.0)) % 1.0;
     if frac < 0.5 { 1.0 } else { 0.0 }
 }
@@ -383,11 +383,11 @@ impl Animation {
         self.color
     }
 
-    pub(crate) fn color_overridden(&self) -> bool {
+    fn color_overridden(&self) -> bool {
         self.color_overridden
     }
 
-    pub(crate) fn attention_breath_phase(&self, phase: u64) -> Option<u64> {
+    fn attention_breath_phase(&self, phase: u64) -> Option<u64> {
         match (self.effect, self.effect_overridden) {
             (AnimationEffect::Static, true) => None,
             _ => Some(speed_effect_phase(self.speed, phase)),
@@ -417,7 +417,7 @@ impl Animation {
         })
     }
 
-    pub(crate) fn has_motion(&self) -> bool {
+    fn has_motion(&self) -> bool {
         self.frames.len() > 1 || self.effect != AnimationEffect::Static
     }
 
@@ -500,7 +500,7 @@ impl ResolvedAnimations {
         }
     }
 
-    pub(crate) fn has_resting_motion(&self) -> bool {
+    fn has_resting_motion(&self) -> bool {
         [
             AnimationRole::Paused,
             AnimationRole::Sleeping,

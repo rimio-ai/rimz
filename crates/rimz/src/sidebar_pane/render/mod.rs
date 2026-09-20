@@ -26,7 +26,7 @@ mod sections;
 mod theme;
 mod ui_state;
 
-pub(crate) use self::animation::{AnimationCadence, animation_cadence};
+pub(in crate::sidebar_pane) use self::animation::{AnimationCadence, animation_cadence};
 use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::{hairline_rule, help_lines};
 #[cfg(test)]
