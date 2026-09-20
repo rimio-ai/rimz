@@ -906,6 +906,10 @@ fn open_turn_and_effective_status_are_consistent() {
             !agent.holds_open_turn() || status_is_open,
             "an open turn must render active: {agent:?}"
         );
+        assert!(
+            !agent.is_awaiting_input() || agent.holds_open_turn(),
+            "a row awaiting input must still hold its turn: {agent:?}"
+        );
         if !resting_running_exception {
             assert_eq!(
                 agent.holds_open_turn(),
@@ -996,6 +1000,36 @@ fn keyed_wait_outranks_newer_activity_while_keyless_wait_self_clears() {
     let mut keyless = keyed;
     keyless.open_ask.as_mut().unwrap().native_key = None;
     assert!(!keyless.is_awaiting_input());
+}
+
+#[test]
+fn an_admitted_interruption_marker_releases_a_waiting_ask() {
+    let waiting_since = Timestamp::from_second(1_000).unwrap();
+    let mut keyed = test_agent(AgentStatus::Waiting, 1_000);
+    keyed.waiting_since = Some(waiting_since);
+    keyed.open_ask = Some(OpenAsk {
+        id: AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: AskKind::Question,
+        detail: Some("Which route?".to_owned()),
+        native_key: Some("toolu_ask".to_owned()),
+        since: waiting_since,
+    });
+    let mut keyless = keyed.clone();
+    keyless.open_ask.as_mut().unwrap().native_key = None;
+
+    for mut agent in [keyed, keyless] {
+        let has_key = agent.open_ask.as_ref().unwrap().native_key.is_some();
+        assert!(agent.is_awaiting_input(), "keyed: {has_key}");
+
+        // Escape fires no hook, so the interruption marker on the next
+        // statusline push is the only evidence the prompt is gone.
+        agent.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
+        assert!(!agent.is_awaiting_input(), "keyed: {has_key}");
+
+        // A marker older than the heartbeat belongs to a past turn.
+        agent.context = Some(context_settle(Some(990), TurnSettleOutcome::Interrupted));
+        assert!(agent.is_awaiting_input(), "keyed: {has_key}");
+    }
 }
 
 #[test]
