@@ -1226,6 +1226,109 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
     assert_eq!(wait_for_wait_messages(&env, 3).len(), 3);
 }
 
+/// A watcher fires in its own process, and that fire reconciles before it
+/// selects anything, so a watcher whose subscriber died retires its own row
+/// mid-fire. It has to survive doing so: `watcher_info` opens its own
+/// descriptor and reads the holder's pid back out of the lock, so an
+/// unguarded `stop_watcher` would `killpg` the firing watcher's own group and
+/// take the fire — and every live sibling's delivery — with it.
+#[test]
+fn watcher_survives_retiring_its_own_row_mid_fire() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    register_agent(
+        &env,
+        "sibling-session",
+        "sibling-launch",
+        "scout",
+        LaunchParams::default(),
+    );
+    wait_ok(
+        &env,
+        &[
+            "loop", "add", "audit", "--signal", "wait.*", "--wait", "@me",
+        ],
+    );
+    let mut tasks = wait_instances(&env);
+    tasks
+        .0
+        .get_mut("audit")
+        .expect("sibling subscriber")
+        .wait
+        .as_mut()
+        .expect("pinned target")
+        .session = AgentSessionId::from("sibling-session");
+    std::fs::write(
+        loop_instances_path(&env),
+        serde_json::to_vec(&tasks).unwrap(),
+    )
+    .unwrap();
+
+    let release = env.home_root.join("release");
+    let receipt = wait_ok(
+        &env,
+        &[
+            "wait",
+            "--json",
+            "--",
+            "sh",
+            "-c",
+            "while [ ! -e \"$1\" ]; do sleep 0.05; done",
+            "watched",
+            release.to_str().unwrap(),
+        ],
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    let name = receipt["name"].as_str().unwrap().to_owned();
+    wait_until("watcher did not start", || {
+        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), &name)
+            .unwrap()
+            .is_some()
+    });
+    // The watcher's own subscriber dies while it watches, stamped by a
+    // producer that reaches no hook.
+    stamp_session_ended(&env, "provider-session");
+    std::fs::write(&release, "").unwrap();
+
+    let records = wait_for_wait_records(&env, 1);
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.task.as_str())
+            .collect::<Vec<_>>(),
+        vec!["audit"],
+        "the fire reached its live sibling and not the dead subscriber: {records:?}"
+    );
+    assert_eq!(wait_for_wait_messages(&env, 1).len(), 1);
+    wait_until(
+        "the dead subscriber's watch row survived its own fire",
+        || !wait_instances(&env).0.contains_key(&name),
+    );
+    assert!(
+        wait_instances(&env).0.contains_key("audit"),
+        "the live sibling's subscription was retired"
+    );
+}
+
+fn stamp_session_ended(env: &Env, session_id: &str) {
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    let observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(session_id)),
+        LifecycleSignal::Ended,
+    );
+    env.store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "rimz.agent-ended",
+            &observation,
+        ))
+        .expect("stamp session ended without a hook");
+}
+
 #[test]
 fn wait_cancel_before_watcher_start_prevents_command() {
     let env = Env::new();
@@ -1462,6 +1565,10 @@ fn register_calling_agent(env: &Env) {
 }
 
 fn register_calling_agent_with_launch(env: &Env, launch: LaunchParams) {
+    register_agent(env, "provider-session", "launch-session", "planner", launch);
+}
+
+fn register_agent(env: &Env, session_id: &str, launch_id: &str, name: &str, launch: LaunchParams) {
     let store = env.store();
     let workspace =
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
@@ -1471,9 +1578,9 @@ fn register_calling_agent_with_launch(env: &Env, launch: LaunchParams) {
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             AgentLaunchPayload {
-                agent_id: AgentSessionId::from("provider-session"),
-                launch_id: Some(AgentSessionId::from("launch-session")),
-                agent_name: "planner".to_owned(),
+                agent_id: AgentSessionId::from(session_id),
+                launch_id: Some(AgentSessionId::from(launch_id)),
+                agent_name: name.to_owned(),
                 agent_name_explicit: true,
                 launch,
                 state: AgentLaunchState::Bound,
@@ -1481,17 +1588,17 @@ fn register_calling_agent_with_launch(env: &Env, launch: LaunchParams) {
                 pane_id: None,
                 runtime_owner: None,
                 worktree_path: Some(env.project_root.display().to_string()),
-                worktree_branch: Some("planner".to_owned()),
+                worktree_branch: Some(name.to_owned()),
                 prompt: None,
                 description: None,
             },
         ))
         .expect("seed launched target");
     let mut observation = AgentLifecycleObservation::new(
-        Some(AgentSessionId::from("provider-session")),
+        Some(AgentSessionId::from(session_id)),
         LifecycleSignal::Registered,
     );
-    observation.agent_name = Some("planner".to_owned());
+    observation.agent_name = Some(name.to_owned());
     store
         .append_agent_lifecycle(AgentLifecycleIntent {
             session_name: "rimz-test",

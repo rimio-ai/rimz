@@ -838,6 +838,15 @@ pub fn stop_watcher(runtime: &RuntimePaths, name: &str) -> std::io::Result<bool>
     let Some(info) = watcher_info(runtime, name)? else {
         return Ok(false);
     };
+    // `watcher_info` opens its own descriptor, so flock reports the lock held
+    // even to the process holding it and hands back that holder's own pid. A
+    // watcher that retires its own row mid-fire — the reconcile at the top of
+    // `fire_signal_with_wait` reaches here through `arm::retire_session` — would
+    // otherwise `killpg` its own group and take the fire, its delivery, and the
+    // watched command with it.
+    if info.pid == std::process::id() {
+        return Ok(false);
+    }
     let Ok(pid) = i32::try_from(info.pid) else {
         return Ok(false);
     };
