@@ -664,7 +664,7 @@ The replacement renders the agent's profile from current configuration, so profi
 
 When the provider has no resume command or no recorded conversation, restart launches fresh and prints `restarted fresh as @<name> — <reason>`. The fresh agent may get a new name, because the old card still holds its handle while the replacement starts.
 
-Closing the old pane ends the replaced session, so its session-pinned loop rows retire with it, resumed session included. Declared [team bindings](../../internals/harness/loops.md#team-bindings) come back when the replacement registers; waits the agent armed for itself do not, and the result line ends with `; <n> armed wait(s) dropped` when any were. A restart that fails before the old pane closes leaves every row intact.
+Closing the old pane ends the replaced session, so its session-pinned loop rows retire with it. A restart that resumes keeps the same session id and is a continuation, so its declared [team bindings](../../internals/harness/loops.md#team-bindings) carry straight over to the replacement; a restart that launches fresh leaves the old identity behind and retires its rows whole, and the replacement's registration re-arms the role's bindings under the new session. Either way, waits the agent armed for itself are gone, and the result line ends with `; <n> armed wait(s) dropped` when any were. A restart that fails before the old pane closes leaves every row intact.
 
 #### `compact`
 
