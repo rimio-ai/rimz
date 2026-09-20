@@ -40,7 +40,7 @@ pub(crate) mod testkit {
     }
 }
 
-pub(crate) trait SidecarRecord: Serialize + DeserializeOwned + Clone {
+pub(super) trait SidecarRecord: Serialize + DeserializeOwned + Clone {
     const FILE_PREFIX: &'static str;
 
     fn kind(&self) -> &str;
@@ -53,7 +53,7 @@ struct ParsedSidecar<R> {
     record: Option<R>,
 }
 
-pub(crate) struct ParseCache<R>(std::cell::RefCell<HashMap<PathBuf, ParsedSidecar<R>>>);
+pub(super) struct ParseCache<R>(std::cell::RefCell<HashMap<PathBuf, ParsedSidecar<R>>>);
 
 impl<R> Default for ParseCache<R> {
     fn default() -> Self {
@@ -70,7 +70,7 @@ pub(crate) fn digest(kind: &str, agent_id: &str) -> String {
     digest[..32].to_owned()
 }
 
-pub(crate) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
+pub(super) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
     dir.join(format!("{prefix}.{}.json", digest(kind, agent_id)))
 }
 
@@ -126,7 +126,7 @@ fn write_record<R: SidecarRecord>(dir: &Path, record: &R) -> Result<(), atomic::
     )
 }
 
-pub(crate) fn read_one<R: SidecarRecord>(dir: &Path, kind: &str, agent_id: &str) -> Option<R> {
+pub(super) fn read_one<R: SidecarRecord>(dir: &Path, kind: &str, agent_id: &str) -> Option<R> {
     let path = path(dir, R::FILE_PREFIX, kind, agent_id);
     let record: R = fs::read(&path)
         .ok()
@@ -137,7 +137,7 @@ pub(crate) fn read_one<R: SidecarRecord>(dir: &Path, kind: &str, agent_id: &str)
 /// Mutate one record against its latest published bytes under the canonical
 /// per-record lock. Missing, malformed, or key-mismatched bytes use `default`;
 /// returning `false` leaves the file untouched.
-pub(crate) fn update<R: SidecarRecord>(
+pub(super) fn update<R: SidecarRecord>(
     dir: &Path,
     kind: &str,
     agent_id: &str,
@@ -155,7 +155,7 @@ pub(crate) fn update<R: SidecarRecord>(
     Ok(true)
 }
 
-pub(crate) fn remove_locked<R: SidecarRecord>(
+pub(super) fn remove_locked<R: SidecarRecord>(
     dir: &Path,
     kind: &str,
     agent_id: &str,
@@ -172,7 +172,7 @@ pub(crate) fn remove_locked<R: SidecarRecord>(
     }
 }
 
-pub(crate) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> Vec<R> {
+pub(super) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> Vec<R> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -217,7 +217,7 @@ pub(crate) fn read_all<R: SidecarRecord>(dir: &Path, cache: &ParseCache<R>) -> V
 /// Read only requested live identities, deduplicating their canonical paths.
 /// Each unchanged `(mtime, len)` serves the per-thread cached parse, including
 /// cached failures; dropped keys and vanished files leave no cache entry.
-pub(crate) fn read_for_keys<'a, R: SidecarRecord>(
+pub(super) fn read_for_keys<'a, R: SidecarRecord>(
     dir: &Path,
     keys: impl IntoIterator<Item = (&'a str, &'a str)>,
     cache: &ParseCache<R>,
