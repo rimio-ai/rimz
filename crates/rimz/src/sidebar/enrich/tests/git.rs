@@ -106,10 +106,8 @@ fn pr_state_projection_uses_the_given_map() {
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(69));
     assert_eq!(snapshot.worktree_groups[0].pr_url, None);
-    assert_eq!(
-        snapshot.worktree_groups[0].pr_ci,
-        Some(crate::store::snapshot::WorktreePrCi::Failing)
-    );
+    // A non-trunk branch without a PR does not display its branch CI.
+    assert_eq!(snapshot.worktree_groups[0].pr_ci, None);
 }
 
 #[test]

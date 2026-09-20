@@ -693,16 +693,6 @@ fn render_open_and_merged_pr_badges_carry_ci_glyph_and_tone() {
             theme.styled(Component::PrCiFailing, Modifier::empty())
         );
     }
-
-    snapshot.worktree_groups[0].pr_state = Some(crate::store::snapshot::WorktreePrState::Closed);
-    let lines = group_lines(&snapshot, &theme, 0);
-    assert!(
-        lines[0]
-            .spans
-            .iter()
-            .all(|span| span.content.as_ref() != " ✕"),
-        "stale CI stays off a closed PR badge"
-    );
 }
 
 #[test]

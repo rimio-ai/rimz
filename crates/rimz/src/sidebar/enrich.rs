@@ -293,8 +293,7 @@ fn project_pr_state_map(
             Some(link) if matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged) => {
                 link.ci
             }
-            Some(_) => None,
-            None => branch_ci.get(path).copied(),
+            _ => None,
         };
         group.pr_url = None;
         if let Some(link) = link

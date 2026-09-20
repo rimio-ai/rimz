@@ -260,7 +260,7 @@ pub struct SidebarWorktreeGroup {
     /// Best-effort pull-request state for this worktree's branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_state: Option<WorktreePrState>,
-    /// Best-effort CI verdict for the branch's open pull request.
+    /// Best-effort CI verdict for the trunk's branch or the branch's open/merged pull request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_ci: Option<WorktreePrCi>,
     /// Best-effort linked pull-request number: the forge-resolved PR for the

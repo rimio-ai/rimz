@@ -488,7 +488,8 @@ fn group_header(
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's branch/PR CI marker follows the name, then any linked PR
+    // The CI marker follows the name — the trunk's branch CI, or the branch's
+    // open or merged pull request CI — then any linked PR
     // number in a steady link tone. Its git story pins right: live local
     // reconciling leads, then a PR verdict, then
     // the local trunk verdict; diverged/reconciling keeps the `⇡/⇣` commit delta
@@ -509,14 +510,7 @@ fn group_header(
         _ => group_git_spans(theme, group),
     };
     let right_width = spans_width(&right);
-    let ci = (group.pr_state.is_none()
-        || matches!(
-            group.pr_state,
-            Some(WorktreePrState::Open | WorktreePrState::Merged)
-        ))
-    .then_some(group.pr_ci)
-    .flatten()
-    .map(|ci| {
+    let ci = group.pr_ci.map(|ci| {
         let (role, component) = pr_ci_marker(ci);
         (format!(" {}", theme.glyph(role)), component)
     });
