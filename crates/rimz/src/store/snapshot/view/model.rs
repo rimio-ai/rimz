@@ -568,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_span_uses_the_run_start_and_done_stop() {
+    fn pipeline_span_uses_the_stage_start_and_the_run_at_done() {
         let now = jiff::Timestamp::from_second(200).unwrap();
         let mut run = pipeline("Implement");
         assert_eq!(run.span_secs(now), Some(80));
