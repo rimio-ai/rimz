@@ -2828,6 +2828,11 @@ reason = "The journey tier asserts the post-resize paint hold directly, so the c
 
 [[verdict]]
 kind = "item"
+key = "sidebar::timing::BREATH_ANIMATION_FRAME"
+reason = "Renderer app tests assert the breath cadence against this constant; narrowing to the sidebar would strand tests in a module pass 23c does not own, so it stays pub(crate) (pass 23c)."
+
+[[verdict]]
+kind = "item"
 key = "sidebar::event_store::EventStore"
 reason = "The hotpath bench builds the overlay store and appends to it, so EventStore and append stay pub; StoredEvent, active and prune narrowed (pass 23c)."
 
@@ -2870,6 +2875,11 @@ reason = "Called by the hotpath bench (pass 23c)."
 kind = "item"
 key = "sidebar::workspace_projection::WorkspaceProjectionPublish"
 reason = "The return type of the bench-reached pub publish (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::workspace_projection::read_workspace_projection"
+reason = "Renderer fetch tests read the published projection through it; narrowing to the sidebar would strand tests in a module pass 23c does not own, so it stays pub(crate) and floors PublishedWorkspaceProjection there (pass 23c)."
 
 [[verdict]]
 kind = "item"
