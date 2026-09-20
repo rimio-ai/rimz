@@ -189,7 +189,7 @@ Inside whatever shape the agent's config takes, the installed form stays minimal
 - Install reclaims every RimZ-owned entry before rewriting the canonical set, so duplicate or stale blocks never accumulate and user-authored hooks stay untouched. JSON-merge entries are owned by a `_rimz_managed` marker key ([`managed_json_hooks.rs`](../../../crates/rimz/src/agents/managed_json_hooks.rs)); an unmarked entry counts as RimZ's when its command contains the hook command substring.
 - Claude, Codex, Droid, Qwen, and Grok have no wildcard event key, so install writes one block per wired event. Copilot, Amp, Pi, and OpenCode instead get one whole integration file that RimZ authors, so the payload schema is RimZ's by design ([adapter_copilot.md](./adapter_copilot.md), [adapter_amp.md](./adapter_amp.md), [adapter_pi.md](./adapter_pi.md), [adapter_opencode.md](./adapter_opencode.md)).
 
-Every hook command enters the executable-surface hash, so a tampered hook config demotes project trust to stale ([trust.md](../harness/trust.md)). Hook payloads can carry prompts, tool inputs, and file paths; no config filters that content today, and the planned `[privacy]` controls are described in [security.md](../../guide/security.md).
+Every hook command enters the executable-surface hash, so a tampered hook config demotes project trust to stale ([trust.md](../harness/trust.md)). Hook payloads can carry prompts, tool inputs, and file paths; no config filters that content today, and nothing forwards it off the box ([security.md](../../guide/security.md#what-leaves-your-machine)).
 
 ## Context sources
 
