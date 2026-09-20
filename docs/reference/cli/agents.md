@@ -664,6 +664,8 @@ The replacement renders the agent's profile from current configuration, so profi
 
 When the provider has no resume command or no recorded conversation, restart launches fresh and prints `restarted fresh as @<name> — <reason>`. The fresh agent may get a new name, because the old card still holds its handle while the replacement starts.
 
+Closing the old pane ends the replaced session, so its session-pinned loop rows retire with it, resumed session included. Declared [team bindings](../../internals/harness/loops.md#team-bindings) come back when the replacement registers; waits the agent armed for itself do not, and the result line ends with `; <n> armed wait(s) dropped` when any were. A restart that fails before the old pane closes leaves every row intact.
+
 #### `compact`
 
 `rimz agents compact <REF> [INSTRUCTION]` queues the agent's native context-compaction command and delivers it at a turn boundary: at once for an idle agent, or when a running or waiting agent's turn ends. There is no way to force it into a live turn.

@@ -167,7 +167,11 @@ Account-global provider caches live under `~/.rimz/cache/providers/` (`accounts.
 
 ### Framing
 
-Each record is one newline-terminated line: `<payload length> <crc32, 8 lowercase hex> <json payload>`. The CRC covers the payload alone, and the length is validated structurally on read. A bare JSON line without the length and CRC also decodes, because a payload always opens with `{` and cannot be mistaken for the hex token ([`event_log/frame.rs`](../../crates/rimz/src/store/event_log/frame.rs)).
+Each record is one newline-terminated line: `<payload length> <crc32, 8 lowercase hex> <json payload>`. The CRC covers the payload alone, and the length is validated structurally on read. A bare JSON line without the length and CRC also decodes, because a payload always opens with `{` and cannot be mistaken for the hex token ([`event_log/frame.rs`](../../crates/rimz/src/store/event_log/frame.rs)). That prefix also means a bare `jq` over the file fails; strip it first to read frames by hand:
+
+```sh
+sed -E 's/^[0-9]+ [0-9a-f]{8} //' events.log.jsonl | jq 'select(.method == "agent.lifecycle")'
+```
 
 The payload is an `EventEnvelope`: schema version, event id, workspace id, session name, mux name, source and source kind, method, timestamp, and a method-specific `params` blob kept as raw JSON, so a reducer parses only the events it folds.
 
