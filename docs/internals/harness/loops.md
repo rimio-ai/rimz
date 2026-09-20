@@ -220,7 +220,7 @@ A scheduled `Spawn` also gets a timeout it did not ask for. `effective_spawn_tim
 
 Loop-owned runs, both `Spawn` turns and agents a check launches, close their panes on every terminal status unless explicitly kept. The in-pane wrapper defers self-cleanup while the run's waiter is live, which preserves verification re-prompts and failure-tail capture; `store::run::run_waiter_is_live` probes the bound socket instead of trusting a pathname that may be stale. If the waiter dies, including when a check times out, the wrapper reclaims the pane once its record is terminal. The evidence survives the pane: the supervised `RunRecord` keeps the failure tail, transcript path, and status, and the `LoopRunRecord` keeps the fire's outcome and check evidence for `rimz loop logs`.
 
-Loop-owned runs use the same [parked-run rule](./scripting.md#parked-runs): a clean end with an owed wait, wake message, or launched-fleet result stays `Running` and keeps its pane. A stranded park fails through the wrapper's two-look settle; the existing run deadline and terminal cleanup still apply.
+Loop-owned runs use the same [parked-run rule](./scripting.md#parked-runs): a clean end with an owed wait, wake message, or launched-fleet result stays `Running` and keeps its pane. A stranded park fails through the wrapper's two-look settle; the existing run deadline and terminal cleanup still apply. A park keeps the task's run active, so `newest_active_run` suppresses the next scheduled fire as `Overlapped` for as long as the wait runs: a loop whose agent arms `rimz wait --in 30m` skips the fires inside that half hour.
 
 ### Checks
 

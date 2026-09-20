@@ -29,7 +29,7 @@ rimz agents codex "Prepare the release checklist." -p             # the same gra
 
 Nothing else moves: no daemon, no forked agent, no RimZ-private copy of the session. Ctrl+C cancels cleanly — exit `130`, agent stopped, pane reclaimed — and `rimz agents stop <ref>` does the same from any other pane. Add `--keep` to leave the finished pane open for inspection.
 
-## One turn, one exit code
+## One run, one exit code
 
 `-p` (`--print`) is the whole contract: run until the work ends, print the answer to stdout, exit with the status code. A turn ending while a wake is still owed is not the end of the run.
 

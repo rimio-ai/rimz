@@ -41,7 +41,7 @@ A handler fires with the pane and root in hand, and everything it might do next 
 - `rimz answer "$RIMZ_NOTIFY_ASK" <choice>` validates and types one atomic supported answer into the agent's own UI. Claude permission notifications offer `allow`, and plan approvals offer caution-marked `approve`; the remaining menu actions route the human to the pane.
 - `rimz pane capture @<handle>` and `rimz pane send @<handle>` remain the escape hatch for an unsupported prompt shape.
 - `rimz message @<other>` hands the situation to a different agent.
-- `rimz agents <kind> -p` runs a one-shot [supervised turn](./scripting.md) to decide.
+- `rimz agents <kind> -p` runs a [supervised run](./scripting.md) to decide.
 
 A handler can match the prompt against patterns your script owns and answer only the shapes it recognizes — a bounded-pattern approver, a one-shot agent delegate, or a standing in-room guardian you steer with `rimz message --steer @guardian`. Anything the handler leaves alone stays `? waiting` in the sidebar and still routes to you. Attention bandwidth then scales with what you automate rather than with the agent count. Because pane text is agent output and can contain anything, treat it as untrusted: match known shapes, do nothing on the unknown ([security](./security.md)).
 
