@@ -98,7 +98,7 @@ When a window does empty mid-turn, the agent parks rather than fails, and with a
 
 #### Cap the spend you read here
 
-Everything on this page reads; the same numbers can also enforce. A dollar cap on one turn, one agent, one loop task, the room's whole fleet, or a provider login parks the work when it crosses the line. A crossed room or account cap announces itself right here, turning the cockpit or the provider row alarm-red and explaining the stop as `$50.21 of $50/day`; a turn, agent, or task cap says so on that agent's card. The caps, the park, and what resumes the parked work are the [budgets guide](./budget.md).
+Everything on this page reads; the same numbers can also enforce. A dollar cap on one turn, one agent, one loop task, the room's whole fleet, or a provider account parks the work when it crosses the line. A crossed room or account cap announces itself right here, turning the cockpit or the provider row alarm-red and explaining the stop as `$50.21 of $50/day`; a turn, agent, or task cap says so on that agent's card. The caps, the park, and what resumes the parked work are the [budgets guide](./budget.md).
 
 ## How the numbers are calculated
 
@@ -139,7 +139,7 @@ Three settings change what these figures mean or where you see them, all plain T
 
 - [`rimz stats` reference](../reference/cli/stats.md): every flag, the JSON fields, and the assist timeline.
 - [The sidebar](./sidebar.md): the column these figures sit in, and how it routes your attention.
-- [Budgets](./budget.md): turn the spend read into an enforced cap, per turn, agent, task, room, or login.
+- [Budgets](./budget.md): turn the spend read into an enforced cap, per turn, agent, task, room, or account.
 - [Agents](./fleet.md#manage-a-running-room): one agent's cost, turn by turn and across its whole life.
 - [The sidebar on screen](../interface/sidebar.md#the-provider-dashboard): every bar, tone, and glyph drawn exactly.
 - [Spending internals](../internals/agents/spending.md): the transcript walk, the caches, and the price table in depth.

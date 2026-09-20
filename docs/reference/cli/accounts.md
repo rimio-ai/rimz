@@ -80,11 +80,11 @@ rimz accounts list [--json]
 
 ```console
 $ rimz accounts list
-KIND    NAME      HOME                               STATUS
-claude  default   ~/.claude                          native
+KIND    NAME      HOME                          STATUS
+claude  default   ~/.claude                     native
 claude  work      ~/.rimz/accounts/claude/work  ready
-codex   default   ~/.codex                           native
-codex   personal  ~/codex-me                         hooks missing
+codex   default   ~/.codex                      native
+codex   personal  ~/codex-me                    hooks missing
 RimZ hooks are missing for codex account `personal` at `/home/me/codex-me`; run `rimz accounts add codex personal`
 ```
 
