@@ -307,11 +307,14 @@ fn settle_after_exit(
     };
     if let Some((kind, agent_id)) = &ended_session {
         // The stamp above is a durable end no hook will ever report; its
-        // subscriptions die with it here rather than waiting for gc.
+        // subscriptions die with it here rather than waiting for gc. A wrapper
+        // whose session has moved to another pane stamps nothing and so reaches
+        // none of this (`resolve_own_agent_end_trace`).
         if let Err(err) = rimz::harness::schedule::arm::retire_session(
             &invocation.workspace.project_root,
             kind,
             agent_id,
+            rimz::harness::schedule::arm::RetireScope::Session,
         ) {
             tracing::warn!(error = %err, "could not retire the exiting session's deliveries");
         }
@@ -1014,13 +1017,18 @@ fn resolve_own_agent_end_trace(
     invocation: &ExecInvocationContext<'_>,
     request: &rimz::harness::launch::ExecRequest,
 ) -> Result<Option<(AgentKind, AgentSessionId)>> {
-    if let Some(pane_id) = rimz::mux::ambient_pane_id() {
-        let store = invocation
-            .store()
-            .context("opening store for agent exit end stamp")?;
-        let mut projection = store
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .context("reading audit projection for agent exit end stamp")?;
+    let own_pane = rimz::mux::ambient_pane_id();
+    let attach_target = exec_attach_target(request);
+    if own_pane.is_none() && attach_target.is_none() {
+        return Ok(None);
+    }
+    let store = invocation
+        .store()
+        .context("opening store for agent exit end stamp")?;
+    let mut projection = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .context("reading audit projection for agent exit end stamp")?;
+    if let Some(pane_id) = own_pane.clone() {
         for agent in &mut projection.agents {
             if agent.ended_at.is_some()
                 || agent.is_provider_subagent()
@@ -1057,8 +1065,38 @@ fn resolve_own_agent_end_trace(
         }
     }
     // A resumed pane owns the resumed session and can safely fall back to the
-    // same argv identity used by its pre-start attach.
-    Ok(exec_attach_target(request))
+    // same argv identity used by its pre-start attach — unless the store now
+    // binds that session to a different pane. A same-session `agents restart`
+    // is a continuation: the replacement stamps its own pane binding
+    // (`record_own_resume_pane`) before it spawns its provider, so a wrapper
+    // that sees the session bound elsewhere has been superseded, and ending it
+    // would mark a live agent dead and retire the rows it is still listening on.
+    let Some((kind, session)) = attach_target else {
+        return Ok(None);
+    };
+    if session_bound_to_another_pane(&projection.agents, &kind, &session, own_pane.as_ref()) {
+        return Ok(None);
+    }
+    Ok(Some((kind, session)))
+}
+
+/// Whether `agents` binds `(kind, session)` to a pane that is not `own_pane`.
+/// A wrapper with no ambient pane of its own cannot claim any binding as its
+/// own, so any binding at all supersedes it.
+fn session_bound_to_another_pane(
+    agents: &[rimz::agents::AgentState],
+    kind: &AgentKind,
+    session: &AgentSessionId,
+    own_pane: Option<&rimz::ids::PaneId>,
+) -> bool {
+    agents.iter().any(|agent| {
+        &agent.kind == kind
+            && &agent.agent_id == session
+            && agent
+                .pane
+                .as_ref()
+                .is_some_and(|bound| Some(&bound.pane_id) != own_pane)
+    })
 }
 
 fn append_agent_lifecycle_trace(
@@ -1417,6 +1455,54 @@ fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A resumed session is bound to exactly one pane at a time, and the
+    /// replacement stamps that binding before it spawns its provider. The
+    /// exiting wrapper's argv-identity fallback therefore reads the binding to
+    /// tell itself apart from a replacement that already took the session
+    /// over: superseded, it ends nothing and retires nothing.
+    #[test]
+    fn a_session_bound_to_another_pane_supersedes_the_exiting_wrapper() {
+        let kind = AgentKind::new_unchecked("claude");
+        let session = AgentSessionId::from("resumed");
+        let pane = |id: &str| rimz::ids::PaneId::parse(id).expect("normalized pane id");
+        let bound = |id: Option<&str>| {
+            let mut agent = rimz::testkit::agent_state("claude", "resumed", jiff::Timestamp::now());
+            agent.pane = id.map(|id| rimz::pane::PaneRef::from_id(pane(id)));
+            agent
+        };
+        let own = pane("tmux:%1");
+
+        assert!(
+            session_bound_to_another_pane(&[bound(Some("tmux:%2"))], &kind, &session, Some(&own)),
+            "the replacement's pane supersedes this wrapper"
+        );
+        assert!(
+            !session_bound_to_another_pane(&[bound(Some("tmux:%1"))], &kind, &session, Some(&own)),
+            "the wrapper's own binding is not a supersession"
+        );
+        assert!(
+            !session_bound_to_another_pane(&[bound(None)], &kind, &session, Some(&own)),
+            "an unbound session leaves the fallback to decide"
+        );
+        assert!(
+            !session_bound_to_another_pane(&[], &kind, &session, Some(&own)),
+            "no row for the session is no evidence of a replacement"
+        );
+        assert!(
+            session_bound_to_another_pane(&[bound(Some("tmux:%1"))], &kind, &session, None),
+            "a wrapper with no pane of its own can claim no binding"
+        );
+        assert!(
+            !session_bound_to_another_pane(
+                &[bound(Some("tmux:%2"))],
+                &AgentKind::new_unchecked("codex"),
+                &session,
+                Some(&own)
+            ),
+            "another provider's binding on the same session id is not this one"
+        );
+    }
 
     #[test]
     fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {

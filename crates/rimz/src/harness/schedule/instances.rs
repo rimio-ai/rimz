@@ -169,10 +169,12 @@ pub(super) fn retire_session(
     state_root: &Path,
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
+    scope: super::arm::RetireScope,
 ) -> Result<Vec<(String, TaskEntry)>> {
     mutate(state_root, |tasks| {
         let names = tasks
             .iter()
+            .filter(|(_, entry)| entry.team.is_none() || scope == super::arm::RetireScope::Session)
             .filter(|(_, entry)| {
                 entry.wait.as_ref().is_some_and(|target| {
                     target.kind == kind.as_str() && target.session == session.as_str()
@@ -203,6 +205,7 @@ pub(super) fn pinned_sessions(
 
 #[cfg(test)]
 mod tests {
+    use super::super::arm::RetireScope;
     use super::*;
 
     fn task() -> TaskEntry {
@@ -264,6 +267,73 @@ mod tests {
             Some(Some("wait"))
         );
         assert!(!rename(dir.path(), "wait", "later").expect("rename absent"));
+    }
+
+    /// A same-session `agents restart` is a continuation, so its retirement
+    /// takes only what no later registration brings back. Everything the
+    /// caller reports — the dropped count included — is derived from the rows
+    /// this returns.
+    #[test]
+    fn unrestorable_scope_keeps_the_declared_rows_of_the_same_session() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let kind = crate::ids::AgentKind::new_unchecked("claude");
+        let session = crate::ids::AgentSessionId::from("resumed");
+        let pinned = |session_id: &str, team: Option<&str>| TaskEntry {
+            wait: Some(crate::config::TaskTarget {
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                session: crate::ids::AgentSessionId::from(session_id),
+                handle: "@coder".to_owned(),
+            }),
+            team: team.map(|team| team.parse().expect("team instance id")),
+            ..task()
+        };
+        for (name, entry) in [
+            ("declared", pinned("resumed", Some("recon#lane"))),
+            ("self-armed", pinned("resumed", None)),
+            ("other-session", pinned("elsewhere", None)),
+            ("unpinned", task()),
+        ] {
+            insert(dir.path(), name, &entry).expect("insert");
+        }
+
+        let retired = retire_session(dir.path(), &kind, &session, RetireScope::UnrestorableOnly)
+            .expect("retire");
+
+        assert_eq!(
+            retired
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["self-armed"]
+        );
+        assert_eq!(
+            retired
+                .iter()
+                .filter(|(_, entry)| entry.team.is_none())
+                .count(),
+            1,
+            "the count the restart line reports"
+        );
+        assert_eq!(
+            load_from(dir.path())
+                .0
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["declared", "other-session", "unpinned"]
+        );
+
+        let retired =
+            retire_session(dir.path(), &kind, &session, RetireScope::Session).expect("retire");
+
+        assert_eq!(
+            retired
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["declared"],
+            "the session scope takes the declared row a fresh identity leaves behind"
+        );
     }
 
     #[test]

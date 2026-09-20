@@ -169,8 +169,32 @@ fn record_mapped_lifecycle_observation(
             };
         }
     };
-    if receipt.side_conversation.is_some() {
+    let side_conversation = receipt.side_conversation.is_some();
+    if side_conversation {
         debug!(agent = agent.spec().kind, "lifecycle: side conversation");
+    } else {
+        log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
+    }
+    let audit = store
+        .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
+        .inspect_err(|err| {
+            warn!(error = %err, "lifecycle: failed to read team member state");
+        })
+        .ok();
+    // Every durable end in this workspace retires its rows here, whichever
+    // producer stamped it: the store reaper, the exec wrapper, and rebirth
+    // append `Ended` without ever reaching a hook. It sits above the side
+    // conversation's return because the commit above can trigger a reaper
+    // pass either way, and that pass is a producer nothing else follows.
+    if let Some(audit) = &audit
+        && let Err(err) =
+            rimz::harness::schedule::arm::retire_ended_sessions(&workspace.project_root, || {
+                std::borrow::Cow::Borrowed(&audit.agents)
+            })
+    {
+        warn!(error = %err, "lifecycle: failed to retire ended session deliveries");
+    }
+    if side_conversation {
         return RecordedLifecycle {
             model_hint,
             observation,
@@ -181,36 +205,19 @@ fn record_mapped_lifecycle_observation(
             side_conversation: receipt.side_conversation,
         };
     }
-    log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
-    let audit = store
-        .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
-        .inspect_err(|err| {
-            warn!(error = %err, "lifecycle: failed to read team member state");
-        })
-        .ok();
     let pending = store
         .list_pending_messages()
         .inspect_err(|err| {
             warn!(error = %err, "lifecycle: failed to read team signal state");
         })
         .ok();
-    // Every durable end in this workspace retires its rows here, whichever
-    // producer stamped it: the store reaper, the exec wrapper, and rebirth
-    // append `Ended` without ever reaching a hook.
-    if let Some(audit) = &audit
-        && let Err(err) =
-            rimz::harness::schedule::arm::retire_ended_sessions(&workspace.project_root, || {
-                std::borrow::Cow::Borrowed(&audit.agents)
-            })
-    {
-        warn!(error = %err, "lifecycle: failed to retire ended session deliveries");
-    }
     for event in &receipt.events {
         if matches!(event.signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
             && let Err(err) = rimz::harness::schedule::arm::retire_session(
                 &workspace.project_root,
                 &event.kind,
                 &event.agent_id,
+                rimz::harness::schedule::arm::RetireScope::Session,
             )
         {
             warn!(error = %err, "lifecycle: failed to retire session deliveries");

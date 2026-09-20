@@ -194,34 +194,43 @@ pub fn arm_delivery(
 #[error("retiring session deliveries: {0}")]
 pub struct RetireFailure(String);
 
-/// The rows a retirement removed, split by whether anything arms them again.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RetiredRows {
-    /// Team-declared bindings, which `team::arm_member` restores at the role's
-    /// next registration.
-    pub declared: usize,
-    /// Self waits and `loop add --wait` rows, which nothing arms again.
-    pub dropped: usize,
+/// Which of a session's rows a retirement takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetireScope {
+    /// Every row: the session is over and its identity will not come back.
+    Session,
+    /// Only the rows no later registration re-arms. A same-session
+    /// `agents restart` is a continuation, so the declared bindings of the
+    /// role carry over rather than depending on an order nothing enforces.
+    UnrestorableOnly,
 }
 
+/// Retire the instance rows pinned to `(kind, session)` that `scope` selects,
+/// paused and disabled rows included, and clear each one's watcher, arming and
+/// strike overlays.
+///
+/// Returns how many of the removed rows nothing arms again: self waits and
+/// `loop add --wait` rows. Team-declared bindings, which `team::arm_member`
+/// restores at the role's next registration, stay out of that count.
+/// Overlay cleanup is best-effort and warns instead of failing, so the count is
+/// reported whatever the overlays do; `Err` means the durable map could not be
+/// rewritten and nothing was removed.
 pub fn retire_session(
     project_root: &Path,
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
-) -> Result<RetiredRows, RetireFailure> {
+    scope: RetireScope,
+) -> Result<usize, RetireFailure> {
     let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
-        .map_err(|err| RetireFailure(err.to_string()))?;
-    let retired = super::instances::retire_session(&paths.root, kind, session)
         .map_err(|err| RetireFailure(err.to_string()))?;
     let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
-    let mut rows = RetiredRows::default();
-    let mut failures = Vec::new();
+    let retired = super::instances::retire_session(&paths.root, kind, session, scope)
+        .map_err(|err| RetireFailure(err.to_string()))?;
+    let mut dropped = 0;
     for (name, entry) in &retired {
-        if entry.team.is_some() {
-            rows.declared += 1;
-        } else {
-            rows.dropped += 1;
+        if entry.team.is_none() {
+            dropped += 1;
         }
         let key = super::arming::TaskKey::for_task(
             name,
@@ -229,19 +238,16 @@ pub fn retire_session(
             project_root,
         );
         if let Err(err) = super::signal::stop_watcher(&runtime, name) {
-            failures.push(format!("{name}: {err}"));
+            tracing::warn!(task = name, error = %err, "retire: stopping the watcher");
         }
         if let Err(err) = super::arming::remove(&key) {
-            failures.push(format!("{name}: {err}"));
+            tracing::warn!(task = name, error = %err, "retire: clearing the arming overlay");
         }
         if let Err(err) = super::strikes::clear(&key) {
-            failures.push(format!("{name}: {err}"));
+            tracing::warn!(task = name, error = %err, "retire: clearing the strike overlay");
         }
     }
-    if !failures.is_empty() {
-        return Err(RetireFailure(failures.join("; ")));
-    }
-    Ok(rows)
+    Ok(dropped)
 }
 
 /// Retire every instance row in this workspace pinned to a durably ended
@@ -257,44 +263,42 @@ pub fn retire_session(
 pub fn retire_ended_sessions<'a>(
     project_root: &Path,
     agents: impl FnOnce() -> std::borrow::Cow<'a, [AgentState]>,
-) -> Result<RetiredRows, RetireFailure> {
+) -> Result<usize, RetireFailure> {
     let paths = crate::disk::paths::StatePaths::for_project_root(project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
     let pinned = super::instances::pinned_sessions(&paths.root);
     if pinned.is_empty() {
-        return Ok(RetiredRows::default());
+        return Ok(0);
     }
-    let mut rows = RetiredRows::default();
+    let mut dropped = 0;
     let mut failures = Vec::new();
     for (kind, session) in ended_pinned_sessions(&agents(), &pinned) {
-        match retire_session(project_root, kind, session) {
-            Ok(retired) => {
-                rows.declared += retired.declared;
-                rows.dropped += retired.dropped;
-            }
+        match retire_session(project_root, kind, session, RetireScope::Session) {
+            Ok(count) => dropped += count,
             Err(err) => failures.push(err.to_string()),
         }
     }
     if !failures.is_empty() {
         return Err(RetireFailure(failures.join("; ")));
     }
-    Ok(rows)
+    Ok(dropped)
 }
 
 /// The retirement predicate: which of the `pinned` sessions `agents` proves
-/// durably ended.
-pub(super) fn ended_pinned_sessions<'a>(
-    agents: &'a [AgentState],
-    pinned: &std::collections::BTreeSet<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
-) -> Vec<(&'a crate::ids::AgentKind, &'a crate::ids::AgentSessionId)> {
-    agents
+/// durably ended. Collecting the ended identities first keeps the scan over an
+/// audit list, which holds every session the room ever saw, allocation-free.
+fn ended_pinned_sessions<'a>(
+    agents: &[AgentState],
+    pinned: &'a std::collections::BTreeSet<(crate::ids::AgentKind, crate::ids::AgentSessionId)>,
+) -> Vec<&'a (crate::ids::AgentKind, crate::ids::AgentSessionId)> {
+    let ended = agents
         .iter()
-        .filter(|agent| {
-            agent.ended_at.is_some()
-                && !agent.is_provider_subagent()
-                && pinned.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-        })
+        .filter(|agent| agent.ended_at.is_some() && !agent.is_provider_subagent())
         .map(|agent| (&agent.kind, &agent.agent_id))
+        .collect::<std::collections::BTreeSet<_>>();
+    pinned
+        .iter()
+        .filter(|(kind, session)| ended.contains(&(kind, session)))
         .collect()
 }
 
@@ -504,4 +508,50 @@ pub fn duration_label(duration: Duration) -> String {
         }
     }
     format!("{seconds}s")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jiff::Timestamp;
+
+    /// The retirement predicate: a pinned session is retired on positive
+    /// evidence of its own durable end, and on nothing else.
+    #[test]
+    fn ended_pinned_sessions_selects_only_durably_ended_pinned_targets() {
+        let now = Timestamp::UNIX_EPOCH;
+        let session = crate::ids::AgentSessionId::from;
+        let kind = crate::ids::AgentKind::new_unchecked;
+        let agent = |agent_kind: &str, id: &str, ended: bool| {
+            let mut agent = crate::testkit::agent_state(agent_kind, id, now);
+            agent.ended_at = ended.then_some(now);
+            agent
+        };
+        let pinned = ["ended", "revived", "subagent", "other-kind"]
+            .map(|id| (kind("claude"), session(id)))
+            .into();
+        let mut subagent = agent("claude", "subagent", true);
+        subagent.parent_agent_id = Some(session("parent"));
+        subagent.launch_depth = None;
+        let agents = vec![
+            agent("claude", "ended", true),
+            // A later lifecycle event for the same session clears `ended_at`.
+            agent("claude", "revived", false),
+            subagent,
+            // The pin names `claude`; this end is another provider's.
+            agent("codex", "other-kind", true),
+            // Ended, but nothing is pinned to it.
+            agent("claude", "unpinned", true),
+        ];
+
+        let selected = ended_pinned_sessions(&agents, &pinned);
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|(kind, session)| (kind.as_str(), session.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("claude", "ended")]
+        );
+    }
 }
