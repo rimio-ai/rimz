@@ -25,16 +25,16 @@ use std::path::PathBuf;
 use crate::disk::atomic;
 use crate::store::event_log::EventLogErr;
 
-pub(crate) use assemble::{build_from, rebuild};
+pub(super) use assemble::{build_from, rebuild};
 pub use assemble::{build_with_cursor, read_fresh_latest};
 #[cfg(feature = "testkit")]
 pub(crate) use fold::testkit as fold_testkit;
 pub use fold::{ResumeOutcome, RollupCursor};
-pub(crate) use fold::{
+pub(super) use fold::{
     catch_up_rollup, prune_carryover, reseed_rollup_cache_for_rotation,
     stage_carryover_for_rotation,
 };
-pub(crate) use fold::{lifecycle_follow_seed, lifecycle_log_generation};
+pub(super) use fold::{lifecycle_follow_seed, lifecycle_log_generation};
 pub use panes::{
     HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
     HookPaneRecoveryPhase, HookPaneRecoverySelection,
@@ -43,9 +43,11 @@ pub(crate) use panes::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };
 pub use panes::{SidebarOwnView, stamped_agent_for_pane};
-pub use process::pane_agent_kind;
-pub(crate) use process::pane_worktree_path;
-pub(crate) use process::process_is_active;
+/// Pane binding calls this classifier directly; the re-export exists for the
+/// sidebar's pane-field fixtures.
+#[cfg(test)]
+pub(crate) use process::pane_agent_kind;
+pub(crate) use process::{pane_worktree_path, process_is_active};
 pub use row::{
     AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarRow,
     SidebarSubAgent,
