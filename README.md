@@ -166,7 +166,7 @@ rimz teams spot -w fix-expiry                         # coder and reviewer on a 
 
 ### Steer the fleet
 
-**Message agents like teammates.** Every agent answers to a [handle](./docs/guide/messaging.md), named by kind, profile, or team role: `@codex` reaches the one in your channel, `@codex#feat-a` reaches across the workspace. Every message becomes a durable record, so it lands: parked at the turn boundary by default, `--steer` to interrupt the live turn now, `--schedule` to deliver later. The same command serves you, your scripts, and the agents themselves, which use it to talk to each other.
+**Message agents like teammates.** Every agent answers to a [handle](./docs/guide/messaging.md), named by kind, profile, or team role: `@codex` reaches the one in your channel, `@codex#feat-a` reaches across the workspace. Every message becomes a durable record you can read back and steer: parked at the turn boundary by default, `--steer` to interrupt the live turn now, `--schedule` to deliver later. The same command serves you, your scripts, and the agents themselves, which use it to talk to each other.
 
 ```sh
 # Park at the next turn boundary — address by kind, profile, or team role

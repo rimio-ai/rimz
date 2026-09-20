@@ -21,7 +21,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 ## Harness Engineering
 
 - [Worktrees](./guide/worktrees.md): isolate a layout or team on its own Git branch so several run in parallel without clobbering each other.
-- [Messaging](./guide/messaging.md): steer and queue agents by handle, deliver at the turn boundary or on a schedule, and let agents talk to each other in channels.
+- [Messaging](./guide/messaging.md): reach agents by handle, park text for the turn boundary or steer the live turn, ask an agent a question and print its reply, and group the fleet into channels.
 - [Teams](./guide/teams.md): pair models by role, launch the whole set with one name, and reopen or resume it as a single unit.
 - [Scripting](./guide/scripting.md): supervised one-shot `-p` turns with exit codes, JSON and streaming output, and the background-run primitives that drop agents into scripts and CI.
 - [Loops](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, let agents set their own alarms, and keep the fleet moving with auto-continue.

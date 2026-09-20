@@ -32,7 +32,7 @@ The text comes from one of three sources:
 | --- | --- |
 | Inline argument | Trimmed. `\n` becomes a soft newline in the agent's composer and `\\` a literal backslash; every other backslash is kept, so `\d+` and `C:\tmp` arrive unchanged. |
 | `--file <PATH>` | Sent as written, with no escape processing; only the trailing newline is dropped. Conflicts with inline text and `--stdin`. An empty file is refused. |
-| `--stdin` | Read to EOF and sent verbatim. With inline text too, the inline text comes first and stdin follows inside `<stdin>` and `</stdin>` lines. Conflicts with `--file`. |
+| `--stdin` | Read to EOF, with the surrounding whitespace trimmed and no escape processing. With inline text too, the inline text comes first and stdin follows inside `<stdin>` and `</stdin>` lines. Conflicts with `--file`. |
 
 Piped stdin without `--stdin` is ignored, with a warning on stderr.
 
@@ -111,7 +111,7 @@ Each fan-out delivery starts with the typed selector, such as `@all, ` or `@code
 | --- | --- |
 | `--channel <NAME>` | Match only agents in that named channel. Same as an inline `#NAME`. Conflicts with `--worktree`. |
 | `--worktree <NAME>` | Match only agents in that worktree, by name or path. Conflicts with `--channel`. |
-| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt, in the addressed channel. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, and `--wait`. |
+| `--create` | When the address matches no agent, launch one from a kind (`@codex`) or profile (`@planner`) with the text as its first prompt. `--worktree <NAME>` launches in that worktree; an inline `#NAME` or `--channel <NAME>` registers a named channel and launches there, and is refused when a worktree already owns the name. A pet name or ordinal cannot create. Conflicts with `--schedule`, `--after`, `--when`, and `--wait`. |
 
 ## Delivery options
 
