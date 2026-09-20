@@ -229,7 +229,7 @@ pub fn rollup_snapshot(
 /// reader (the sidebar fetch worker owns one across its loop) pays O(new log
 /// bytes) per wakeup instead of a full `rollup.json` re-read; a fresh cursor
 /// folds cold, so a one-shot caller passes `&mut RollupCursor::new()`.
-pub fn read_published_snapshot(
+pub(super) fn read_published_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,
     runtime: &RuntimePaths,
