@@ -462,6 +462,8 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "idle_compact.rs",
         "orphan_sweep.rs",
         "run_timeout.rs",
+        "schedule/fire.rs",
+        "schedule/pending.rs",
     ]
     .map(|name| harness_root.join(name));
     for needle in [

@@ -144,12 +144,7 @@ fn detect_host(
 /// fallback rules, which changed at v257. It runs only where its answer decides
 /// the host, so a tick outside systemd spawns nothing.
 fn user_manager_reachable() -> std::result::Result<(), String> {
-    let args = ["--user", "show-environment"];
-    match command_output("systemctl", &args) {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(command_error("systemctl", &args, &output).to_string()),
-        Err(err) => Err(err.to_string()),
-    }
+    command_success("systemctl", &["--user", "show-environment"]).map_err(|err| err.to_string())
 }
 
 pub(super) fn uncovered_task_roots() -> usize {

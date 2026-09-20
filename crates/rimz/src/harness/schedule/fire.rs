@@ -17,6 +17,7 @@ use super::{
     arming::{self, ArmState, Arming},
     catalog::{LoadedTask, TaskCatalog},
     run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult},
+    signal::Signal,
 };
 use crate::RuntimePaths;
 use crate::disk::atomic::write_temp_then_rename_cache;
@@ -123,21 +124,20 @@ fn fire_tasks(
                         continue;
                     }
                 };
-                let signal = super::signal::Signal {
+                let signal = Signal {
                     name: signal_name,
                     payload: serde_json::Map::new(),
                     source: crate::store::event::SignalSource::Watch,
                     watch: Some(watch),
                 };
-                if let Ok(encoded) = serde_json::to_string(&signal)
-                    && spawn_loop_run(
-                        runtime,
-                        &tasks[&name],
-                        project_root,
-                        &name,
-                        Some(&encoded),
-                        host,
-                    ) == LaunchOutcome::Started
+                if spawn_loop_run(
+                    runtime,
+                    &tasks[&name],
+                    project_root,
+                    &name,
+                    Some(&signal),
+                    host,
+                ) == LaunchOutcome::Started
                 {
                     fired.push(name);
                 }
@@ -320,10 +320,14 @@ pub(super) fn spawn_loop_run(
     task: &LoadedTask,
     project_root: Option<&Path>,
     name: &str,
-    signal_json: Option<&str>,
+    signal: Option<&Signal>,
     host: LoopRunHost,
 ) -> LaunchOutcome {
-    let args = loop_run_args(project_root, name, signal_json);
+    let encoded = match encode_signal(signal) {
+        Ok(encoded) => encoded,
+        Err(reason) => return record_start_failed(task, name, signal, reason),
+    };
+    let args = loop_run_args(project_root, name, encoded.as_deref());
     let (program, args) = loop_run_command(host, &crate::proc::rimz_exe(), &args, name);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
@@ -349,6 +353,7 @@ pub(super) fn spawn_loop_run(
                 return record_start_failed(
                     task,
                     name,
+                    signal,
                     "runner exited before the scope hand-off and left no history row".to_owned(),
                 );
             }
@@ -361,18 +366,36 @@ pub(super) fn spawn_loop_run(
                 error = &err as &dyn std::error::Error,
                 "sidebar: failed to spawn loop task",
             );
-            return record_start_failed(task, name, err.to_string());
+            return record_start_failed(task, name, signal, err.to_string());
         }
     }
     LaunchOutcome::Started
 }
 
-fn record_start_failed(task: &LoadedTask, name: &str, reason: String) -> LaunchOutcome {
+fn record_start_failed(
+    task: &LoadedTask,
+    name: &str,
+    signal: Option<&Signal>,
+    reason: String,
+) -> LaunchOutcome {
     let mut record =
         LoopRunRecord::new(name, LoopRunResult::StartFailed, LoopRunMode::Scheduled, 0);
+    record.duration_ms = None;
     record.error = Some(reason);
+    record.signal = signal.map(|signal| run_log::SignalRecord {
+        name: signal.name.clone(),
+        payload: signal.payload.clone(),
+    });
     run_log::record_transition(task, &record);
     LaunchOutcome::NotStarted
+}
+
+/// Encode the signal the runner is handed. Each launch encodes its own, so a
+/// launch holds the `Signal` itself and a failed start can record it.
+fn encode_signal(signal: Option<&Signal>) -> Result<Option<String>, String> {
+    signal
+        .map(|signal| serde_json::to_string(signal).map_err(|err| err.to_string()))
+        .transpose()
 }
 
 fn loop_run_command(
@@ -461,16 +484,20 @@ pub(super) fn wait_loop_run(
     task: &LoadedTask,
     project_root: Option<&Path>,
     name: &str,
-    signal_json: &str,
+    signal: &Signal,
 ) -> LaunchOutcome {
+    let encoded = match encode_signal(Some(signal)) {
+        Ok(encoded) => encoded,
+        Err(reason) => return record_start_failed(task, name, Some(signal), reason),
+    };
     let mut command = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
-    command.args(loop_run_args(project_root, name, Some(signal_json)));
+    command.args(loop_run_args(project_root, name, encoded.as_deref()));
     match command.status() {
         Ok(status) if status.success() => {}
         Ok(status) => tracing::warn!(task = name, %status, "watched wait delivery failed"),
         Err(err) => {
             tracing::warn!(task = name, error = %err, "running watched wait delivery");
-            return record_start_failed(task, name, err.to_string());
+            return record_start_failed(task, name, Some(signal), err.to_string());
         }
     }
     LaunchOutcome::Started

@@ -239,7 +239,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | `skipped` after a passing check | Resets the count. |
 | `skipped` after a failing check, or a sibling signal | Neutral. |
 | `budget skipped`, `surplus skipped`, `overlapped`, `canceled`, `expired`, `target gone` | Neutral. |
-| `start failed` — the runner never started, so the occurrence is spent without a run | Neutral. Shown as a failure, but a host that cannot start a runner never auto-disables the task. |
+| `start failed` — the fire left no run behind, so the occurrence is spent without one: either the runner was never spawned, or it exited before it could record anything | Neutral. Shown as a failure, but a fire that ran nothing never auto-disables the task. |
 
 ### Timeouts
 
