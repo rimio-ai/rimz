@@ -37,7 +37,7 @@ use crate::workspace::{self, KnownWorkspace, record};
 
 /// Immutable executable generation shared by every long-lived process in a room.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StagedBuild {
+pub(crate) struct StagedBuild {
     pub path: PathBuf,
     pub build: String,
 }
@@ -60,7 +60,7 @@ pub enum StageBuildErr {
 }
 
 /// Copy the invoking build into the durable user-scoped build store.
-pub fn stage_current_build() -> Result<StagedBuild, StageBuildErr> {
+pub(crate) fn stage_current_build() -> Result<StagedBuild, StageBuildErr> {
     let source = current_reexec_target().ok_or(StageBuildErr::MissingSource)?;
     stage_build_under(&source, &crate::disk::paths::rimz_home())
 }
@@ -194,7 +194,7 @@ pub fn current_reexec_target() -> Option<PathBuf> {
 /// so the raw path no longer resolves on disk. The replacement now lives at the
 /// un-annotated path, so strip that marker and prefer whichever path is a real
 /// file. `None` means neither path exists, such as during a partial install.
-pub fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
+fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
     crate::proc::resolve_existing_or_replacement(&exe)
 }
 
