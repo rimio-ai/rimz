@@ -11,16 +11,29 @@ use std::time::{Duration, Instant};
 /// matching keeps a new pin covered without touching this list.
 const AMBIENT_SESSION_PREFIXES: [&str; 3] = ["RIMZ_", "ZELLIJ", "TMUX"];
 
+/// Exact ambient keys with no shared prefix. `INVOCATION_ID` is set by systemd
+/// in every process it starts as a unit, which is how a RimZ pane runs on a
+/// systemd host. The loop scheduler reads it as "we are under systemd" and
+/// fires tasks through `systemd-run --user --scope`, but the fixture points
+/// `XDG_RUNTIME_DIR` at a tempdir with no user bus socket, so the scope spawn
+/// dies with "Failed to connect to user scope bus" and the task never runs.
+/// CI never sets it, so the suite is green there and red in a pane. Scrubbing
+/// it puts both on the plain detached-spawn path; `detect_host`'s systemd
+/// branch keeps its own unit coverage in `cli::loop_timer`.
+const AMBIENT_SESSION_KEYS: [&str; 1] = ["INVOCATION_ID"];
+
 /// The ambient environment keys [`ScrubSessionEnvExt::scrub_session_env`]
 /// drops from a child.
 fn ambient_session_keys() -> impl Iterator<Item = String> {
-    std::env::vars_os().filter_map(|(key, _)| {
-        let key = key.into_string().ok()?;
-        AMBIENT_SESSION_PREFIXES
-            .iter()
-            .any(|prefix| key.starts_with(prefix))
-            .then_some(key)
-    })
+    std::env::vars_os()
+        .filter_map(|(key, _)| {
+            let key = key.into_string().ok()?;
+            AMBIENT_SESSION_PREFIXES
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+                .then_some(key)
+        })
+        .chain(AMBIENT_SESSION_KEYS.into_iter().map(str::to_owned))
 }
 
 /// Drop every ambient RimZ/mux session variable from a child's environment, so
