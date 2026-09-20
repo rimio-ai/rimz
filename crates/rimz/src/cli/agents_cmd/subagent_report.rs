@@ -134,6 +134,11 @@ fn report_fleet_with_kind(
     if parent.ended_at.is_some() {
         return Ok(ReportOutcome::ParentEnded);
     }
+    // A launcher with no members has nothing to report whatever the runs
+    // directory holds, and a parked run asks this on every strand poll.
+    if rimz::address::launched_fleet(&projection.agents, parent).is_empty() {
+        return Ok(ReportOutcome::NothingToReport);
+    }
 
     let runs = run::list(store.paths())?;
     let fleet = FleetRuns::of(&projection.agents, &runs, parent);
@@ -613,6 +618,13 @@ mod tests {
             ReportOutcome::NothingToReport
         );
         assert_eq!(store.list_messages().unwrap().len(), 1);
+
+        append_agent(&store, "loner", None);
+        assert_eq!(
+            report_fleet(&workspace, &store, &AgentSessionId::from("loner")).unwrap(),
+            ReportOutcome::NothingToReport,
+            "a launcher with no members reports without reading the runs"
+        );
     }
 
     fn append_peer(store: &Store, name: &str, launcher: Option<&str>) {
