@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::layout::{spans_width, text_width};
 use crate::sidebar_pane::render::theme::Component;
 
 fn pipeline_snapshot() -> SidebarSnapshot {
@@ -922,26 +923,112 @@ fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
 }
 
 #[test]
-fn render_pr_badge_yields_to_the_name_at_extreme_width() {
+fn render_pr_badge_drops_before_ci_as_the_name_shortens() {
     let theme = Theme::fixed(false);
     let mut snapshot =
         pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
     snapshot.worktree_groups[0].pr_number = Some(91);
     snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
 
-    let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
-    let text = header
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<String>();
+    let admitted: Vec<_> = (1..=54)
+        .map(|width| {
+            let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))[0].clone();
+            (text.contains('✓'), text.contains("#91"))
+        })
+        .collect();
+    for (index, &(ci, badge)) in admitted.iter().enumerate() {
+        assert!(!badge || ci, "badge without CI at width {}", index + 1);
+        if index > 0 {
+            let (previous_ci, previous_badge) = admitted[index - 1];
+            assert!(!previous_ci || ci, "CI lost at width {}", index + 1);
+            assert!(
+                !previous_badge || badge,
+                "badge lost at width {}",
+                index + 1
+            );
+        }
+    }
+    let ci_threshold = admitted.iter().position(|&(ci, _)| ci).unwrap() + 1;
+    let badge_threshold = admitted.iter().position(|&(_, badge)| badge).unwrap() + 1;
+    assert_eq!((ci_threshold, badge_threshold), (12, 16));
+    assert_eq!(badge_threshold - ci_threshold, text_width(" #91"));
+    for width in [11, 12, 13, 15, 16, 17] {
+        assert_eq!(
+            admitted[width - 1],
+            (width >= 12, width >= 16),
+            "width {width}"
+        );
+    }
+    let threshold = group_lines_at_width(&snapshot, &theme, 0, 16);
+    let band = group_lines_at_width(&snapshot, &theme, 0, 15);
+    assert_eq!(text_width(&threshold[0].spans[1].content), 1);
+    assert_eq!(text_width(&band[0].spans[1].content), 4);
+}
 
-    assert!(!text.contains("#91"), "badge drops first: {text:?}");
-    assert!(!text.contains('✓'), "CI drops with its badge: {text:?}");
-    assert!(
-        text.contains('…'),
-        "the clipped name keeps the label slot: {text:?}"
-    );
+#[test]
+fn render_pr_badge_link_and_header_fill_follow_admission() {
+    let theme = Theme::fixed(false);
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
+    snapshot.worktree_groups[0].pr_number = Some(91);
+    snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
+    let url = "https://github.com/org/repo/pull/91";
+    snapshot.worktree_groups[0].pr_url = Some(url.to_owned());
+    let open = format!("\x1b]8;;{url}\x1b\\");
+    for width in 11..=17 {
+        for selected in [0, usize::MAX] {
+            let lines = group_lines_at_width(&snapshot, &theme, selected, width);
+            let header = &lines[0];
+            let content = &header.spans[1..header.spans.len() - 1];
+            assert_eq!(
+                spans_width(content),
+                width - 2,
+                "width {width}, selected {selected}"
+            );
+            let text = line_texts(&lines)[0].clone();
+            assert!(
+                text.contains("⑃ main"),
+                "right cluster stays intact: {text:?}"
+            );
+        }
+        // The link range the renderer hands the painter is the decision point
+        // for where the link lands: it covers the admitted `#91` exactly and
+        // never the CI glyph beside it. Painting it is `paint_hyperlinks`' job,
+        // and at these widths a wrapped line above the header offsets its rows,
+        // so the bytes are asserted at a realistic width in
+        // `render_pr_badge_is_a_diff_safe_sanitized_hyperlink`.
+        let links = group_hyperlinks_at_width(&snapshot, &theme, 0, width);
+        let bytes = snapshot_to_bytes_with_alert_and_ui(
+            &snapshot,
+            None,
+            &UiState::default(),
+            width as u16,
+            14,
+        );
+        let raw = String::from_utf8_lossy(&bytes);
+        if width < 16 {
+            assert!(links.is_empty(), "no link at width {width}: {links:?}");
+            assert!(!raw.contains(&open), "no link at width {width}: {raw:?}");
+            continue;
+        }
+        let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))[0].clone();
+        let hash = text.find('#').expect("admitted badge");
+        let start = u16::try_from(text_width(&text[..hash])).unwrap();
+        assert_eq!(
+            links,
+            vec![(
+                0,
+                start..start + u16::try_from(text_width("#91")).unwrap(),
+                url.to_owned()
+            )],
+            "width {width}"
+        );
+        assert!(
+            text[..hash].ends_with("✓ "),
+            "the CI glyph stays outside the link: {text:?}"
+        );
+        assert!(raw.contains(&open), "admitted badge is linked: {raw:?}");
+    }
 }
 
 #[test]
@@ -950,18 +1037,25 @@ fn render_bare_branch_ci_yields_to_the_name_at_extreme_width() {
     let mut snapshot = pristine_worktree_with_pr_state(None);
     snapshot.worktree_groups[0].ci = Some(crate::store::snapshot::WorktreeCi::Passing);
 
-    let header = &group_lines_at_width(&snapshot, &theme, 0, 7)[0];
-    let text = header
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<String>();
+    for width in [11, 12, 13] {
+        let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))[0].clone();
+        assert_eq!(text.contains('✓'), width >= 12, "width {width}: {text:?}");
+        assert!(text.contains('…'), "the name keeps its slot: {text:?}");
+    }
+}
 
-    assert!(!text.contains('✓'), "branch CI drops first: {text:?}");
-    assert!(
-        text.contains('…'),
-        "the clipped name keeps the label slot: {text:?}"
-    );
+#[test]
+fn render_bare_pr_number_yields_to_the_name_at_extreme_width() {
+    let theme = Theme::fixed(false);
+    let mut snapshot =
+        pristine_worktree_with_pr_state(Some(crate::store::snapshot::WorktreePrState::Open));
+    snapshot.worktree_groups[0].pr_number = Some(91);
+
+    for width in [13, 14, 15] {
+        let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width))[0].clone();
+        assert_eq!(text.contains("#91"), width >= 14, "width {width}: {text:?}");
+        assert!(text.contains('…'), "the name keeps its slot: {text:?}");
+    }
 }
 
 #[test]
