@@ -78,7 +78,7 @@ pub use context::{
     TurnSettleOutcome,
 };
 use context::{ContextObservation, SessionContextRefresh, SubagentObservation};
-pub(crate) use credits::HttpErrKind;
+use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
 pub use definition::{
     AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, CompactInstruction,
