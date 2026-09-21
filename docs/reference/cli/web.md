@@ -23,7 +23,7 @@ Two preconditions apply across the command:
 
 | Precondition | Checked by | Refusal |
 | --- | --- | --- |
-| `[web] enabled = true` (the default) | `open`, `share` | ``Browser access is disabled: set `[web] enabled = true` in the RimZ config on the machine serving this room (`rimz config path`) to allow browser sharing.`` |
+| `[web] enabled = true` (the default) | `open`, `share`, `start`, `restart` | ``Browser access is disabled: set `[web] enabled = true` in the RimZ config on the machine serving this room (`rimz config path`) to allow browser sharing.`` |
 | ttyd 1.7.5 or newer on `PATH` (or at `RIMZ_TTYD_BIN`) | `open`, `share`, `start`, `restart`, and `token create` while the writable daemon is online | `ttyd 1.7.5 or newer is required for browser access; ...` when missing, `ttyd <version> is too old for browser access; ...` when older. Both name the install or upgrade command. |
 
 Every verb exits `0` on success and `1` with the error on stderr; an invalid command line exits `2`.
@@ -77,8 +77,8 @@ These verbs act on the daemons without naming a room. Each daemon keeps its reco
 
 | Verb | Writable daemon | Broadcast daemon | Prints |
 | --- | --- | --- | --- |
-| `start` | Starts it, or keeps a running daemon that matches the config and replaces one that does not. | Untouched. | `ttyd: online on <address> (pid <pid>)` |
-| `restart` | Always starts a fresh process. Run it after changing `[web]` or `[theme]`. | Restarted when the share list is non-empty, stopped when it is empty. | The `start` line, then `ttyd: was offline; started a fresh daemon` if it was down, then `share: online on <address> (pid <pid>)` if the broadcast daemon was restarted. |
+| `start` | Requires `[web] enabled = true`. Starts it, or keeps a running daemon that matches the config and replaces one that does not. | Untouched. | `ttyd: online on <address> (pid <pid>)` |
+| `restart` | Requires `[web] enabled = true`. Always starts a fresh process. Run it after changing `[web]` or `[theme]`. | Restarted when the share list is non-empty, stopped when it is empty. | The `start` line, then `ttyd: was offline; started a fresh daemon` if it was down, then `share: online on <address> (pid <pid>)` if the broadcast daemon was restarted. |
 | `stop` | Stops it. | Stops it. The share list is kept. | `stopped <n> ttyd daemons` (`daemon` when `n` is 1) |
 | `status` | Reports it. | Reports it with the share list. | Two lines, below. |
 
@@ -87,6 +87,8 @@ $ rimz web status
 ttyd: online on 127.0.0.1:8200 (pid 48121)
 share: offline (configured listener 127.0.0.1:8201), sharing: (none)
 ```
+
+Setting `[web] enabled = false` does not stop a running daemon; use `rimz web stop`. `status`, `stop`, and every `token` operation, including revocation, remain usable while disabled.
 
 An offline daemon reports the listener from `[web] interface`, `port`, and `share_port`. The `share:` line lists shared sessions, comma-separated, even while the broadcast daemon is stopped. `status --json` prints the [status payload](#status-payload).
 
@@ -126,7 +128,7 @@ The writable daemon has one credential for the whole machine, named `rimz`. RimZ
 | `token list` | Shows when the credential was created. | `rimz: <RFC 3339 timestamp>`, or nothing when there is no credential. |
 | `token revoke rimz`, `token revoke-all` | Stops the writable daemon and deletes the credential. Any name other than `rimz` fails with ``ttyd credential `<name>` does not exist (the single credential is `rimz`)``. | `revoked ttyd credential and stopped <0 or 1> daemon(s)` |
 
-None of these touch the broadcast daemon. After a revoke, the next `open` or `start` creates a fresh credential.
+None of these touch the broadcast daemon. After a revoke, the next `open` or `start` creates a fresh credential if `[web] enabled = true`.
 
 `token create --read-only` is refused with ``ttyd read-only access is per process, not per credential; use `rimz web share` for a read-only broadcast``.
 

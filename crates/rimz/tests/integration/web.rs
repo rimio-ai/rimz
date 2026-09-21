@@ -250,6 +250,34 @@ fn web_open_disabled_fails_before_room_side_effects() {
 }
 
 #[test]
+fn web_start_and_restart_disabled_fail_before_daemon_side_effects() {
+    for verb in ["start", "restart"] {
+        let env = Env::new();
+        write_machine_config(&env, "[web]\nenabled = false\n");
+        let log = env.project_root.join("ttyd-disabled.log");
+        let output = env
+            .rimz()
+            .env("RIMZ_TTYD_BIN", ttyd_shim())
+            .env("RIMZ_TEST_TTYD_LOG", &log)
+            .args(["web", verb])
+            .bounded_output()
+            .expect("run disabled web command");
+
+        assert!(!output.status.success(), "disabled web {verb} should fail");
+        assert!(
+            output.stdout.is_empty(),
+            "disabled web {verb} printed output"
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Browser access is disabled"));
+        assert!(!log.exists(), "disabled web {verb} should not invoke ttyd");
+        assert!(
+            !env.rimz_home().join("web").exists(),
+            "disabled web {verb} should not create daemon state"
+        );
+    }
+}
+
+#[test]
 fn auth_users_without_auth_header_refuses_start() {
     let env = Env::new();
     write_machine_config(&env, "[web]\nauth_users = [\"alice\"]\n");

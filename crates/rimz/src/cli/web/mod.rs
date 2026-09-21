@@ -352,7 +352,9 @@ fn status(args: WebStatusArgs) -> Result<()> {
 }
 
 fn start() -> Result<()> {
-    let outcome = rimz::web::ensure_daemon(&machine_config())?;
+    let config = machine_config();
+    ensure_web_enabled(&config)?;
+    let outcome = rimz::web::ensure_daemon(&config)?;
     crate::cli::render::web_warnings(&outcome.warnings);
     writeln!(
         std::io::stdout().lock(),
@@ -364,7 +366,9 @@ fn start() -> Result<()> {
 }
 
 fn restart() -> Result<()> {
-    let outcome = rimz::web::restart_daemon(&machine_config())?;
+    let config = machine_config();
+    ensure_web_enabled(&config)?;
+    let outcome = rimz::web::restart_daemon(&config)?;
     crate::cli::render::web_warnings(&outcome.warnings);
     writeln!(
         std::io::stdout().lock(),

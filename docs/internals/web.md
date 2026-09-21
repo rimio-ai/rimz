@@ -102,8 +102,8 @@ A live record is reused only when every desired value matches: the listener, the
 | `rimz web open` | Preflights ttyd before birthing the room, waits up to 5 seconds for the session to be addressable, then ensures the daemon. | Untouched. |
 | `rimz web open --no-start` | Requires a live record and the credential, and fails with `TtydOffline` otherwise. It skips the config-drift comparison; the ttyd version is still checked before the room is resolved. | Untouched. |
 | `rimz web url` | Reads the record and credential; changes nothing beyond stale-record cleanup. | Untouched. |
-| `rimz web start` | Ensures it. | Untouched. |
-| `rimz web restart` | Always starts a fresh process, stopping the live one first. | Restarts it when the allowlist is non-empty, otherwise stops it. |
+| `rimz web start` | Refuses when `[web] enabled = false`; otherwise ensures it. | Untouched. |
+| `rimz web restart` | Refuses when `[web] enabled = false`; otherwise starts a fresh process, stopping the live one first. | Untouched when disabled; otherwise restarts it when the allowlist is non-empty, or stops it. |
 | `rimz web stop` | Stops it. | Stops it; the allowlist stays. |
 | `rimz reload` | Restarts it only when it is online. | Restarts it only when online, or stops it when the allowlist is empty. |
 | `rimz web token create` | Restarts it when online. | Untouched. |
@@ -247,7 +247,7 @@ The sidebar only sends Kitty graphics to a tmux client it trusts to render them.
 
 | Key | Default | Effect |
 | --- | --- | --- |
-| `enabled` | `true` | Allows `rimz web open` and `share`, the ensure on `rimz start`, and the styled client. |
+| `enabled` | `true` | Allows `rimz web open`, `share`, `start`, and `restart`, the ensure on `rimz start`, and the styled client. Does not stop a running daemon: use `rimz web stop`. `status`, `stop`, and all `token` operations, including revocation, remain usable while disabled. |
 | `interface` | `127.0.0.1` | Bind address for both daemons; must parse as an IP address. |
 | `port` | `8200` | Writable listener. |
 | `share_port` | `8201` | Broadcast listener. |

@@ -425,7 +425,7 @@ font = "JetBrainsMono Nerd Font Mono"
 style_client = true
 ```
 
-`enabled` defaults to true and gates `rimz web open`, `rimz web share`, and `rimz remote connect --web`. A normal `rimz start` makes a best-effort start of the shared daemon that every Zellij and tmux room on the machine uses; a missing or pre-1.7.5 ttyd, or an occupied port, warns without blocking the room. With `enabled = false`, the web commands fail before any room changes and tell you to change the config on the machine serving the room. Install ttyd 1.7.5 or newer with `brew install ttyd` or an apt source carrying a current package.
+`enabled` defaults to true and gates `rimz web open`, `share`, `start`, `restart`, and `rimz remote connect --web`. While enabled, a normal `rimz start` makes a best-effort start of the shared daemon that every Zellij and tmux room on the machine uses; a missing or pre-1.7.5 ttyd, or an occupied port, warns without blocking the room. With `enabled = false`, those gated commands fail before any room or daemon changes and tell you to change the config on the machine serving the room. An already-running daemon stays up until `rimz web stop`; `status`, `stop`, and all `token` operations, including revocation, remain usable while disabled. Install ttyd 1.7.5 or newer with `brew install ttyd` or an apt source carrying a current package.
 
 `interface` is the bind address for both daemons. `port` (8200) is the shared daemon, and `share_port` (8201) is the read-only broadcast daemon, which takes no login at all. `base_url` is the URL prefix RimZ prints for `rimz web open` and `rimz web url`, and `share_base_url` the one it prints for `rimz web share`.
 
