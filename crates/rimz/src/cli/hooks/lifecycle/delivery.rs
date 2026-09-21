@@ -94,10 +94,18 @@ pub(super) fn record_user_input_for_lifecycle(
     {
         return;
     }
-    if !sections.iter().any(|section| {
-        section.origin == rimz::store::message::SectionOrigin::Human
-            && section.record.is_none_or(|record| record.is_user_input())
-    }) {
+    // Narrow only where the classifier had text to judge. A turn start with no
+    // prompt (an antigravity transcript read that found nothing, a plugin that
+    // omits the optional `prompt`) says nothing about who opened the turn, and
+    // the ledger's asymmetry decides the default: a missing record leaves the
+    // five-hour window shut, while a duplicate resolves to the same boundary
+    // in `spending::aggregate::burst_cutoff`.
+    if !sections.is_empty()
+        && !sections.iter().any(|section| {
+            section.origin == rimz::store::message::SectionOrigin::Human
+                && section.record.is_none_or(|record| record.is_user_input())
+        })
+    {
         return;
     }
     let record = rimz::agents::spending::user_input::UserInputRecord {
