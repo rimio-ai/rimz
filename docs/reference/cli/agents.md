@@ -421,7 +421,7 @@ rimz agents compact @coder               # compact context at the next turn boun
 
 #### `list`
 
-`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Bare `rimz agents` takes the same `SCOPE`, `-w`, `--all`, and `--json`. It needs a live room: enter one with `rimz start` or `rimz attach`.
+`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Bare `rimz agents` takes the same `SCOPE`, `--all`, and `--json`; `-w` there is a launch flag and needs a spec. It needs a live room: enter one with `rimz start` or `rimz attach`.
 
 ```console
 $ rimz agents
