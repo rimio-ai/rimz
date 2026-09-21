@@ -75,7 +75,10 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
     );
     let mut hook_commands: Vec<String> = tmux_window_options(&opts.config.tmux)
         .into_iter()
-        .map(|(key, value)| format!("set-window-option {key} '{}'", value))
+        .map(|(key, value)| match value {
+            Some(value) => format!("set-window-option {key} '{value}'"),
+            None => format!("set-window-option -u {key}"),
+        })
         .collect();
     hook_commands.push(split);
     // A plain default-shell tab has an empty `pane_start_command`: tmux births
@@ -263,21 +266,37 @@ fn sidebar_blanking_border_format() -> String {
     .concat()
 }
 
-pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
-    let mut opts = vec![
-        ("allow-passthrough", tmux_bool(config.allow_passthrough)),
-        ("aggressive-resize", tmux_bool(config.aggressive_resize)),
-    ];
-    if let Some(status) = config.pane_border_status {
-        opts.push(("pane-border-status", status.as_str().to_owned()));
-        if status != crate::config::TmuxPaneBorderStatus::Off {
-            opts.push(("pane-border-format", sidebar_blanking_border_format()));
-        }
-    }
-    if let Some(lines) = config.pane_border_lines {
-        opts.push(("pane-border-lines", lines.as_str().to_owned()));
-    }
-    opts
+/// Every owned window key; `None` restores inheritance from the global option.
+pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, Option<String>)> {
+    vec![
+        (
+            "allow-passthrough",
+            Some(tmux_bool(config.allow_passthrough)),
+        ),
+        (
+            "aggressive-resize",
+            Some(tmux_bool(config.aggressive_resize)),
+        ),
+        (
+            "pane-border-status",
+            config
+                .pane_border_status
+                .map(|status| status.as_str().to_owned()),
+        ),
+        (
+            "pane-border-format",
+            config
+                .pane_border_status
+                .filter(|status| *status != crate::config::TmuxPaneBorderStatus::Off)
+                .map(|_| sidebar_blanking_border_format()),
+        ),
+        (
+            "pane-border-lines",
+            config
+                .pane_border_lines
+                .map(|lines| lines.as_str().to_owned()),
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -414,6 +433,9 @@ mod tests {
                 format!(
                     "set-window-option allow-passthrough 'on' ; \
                      set-window-option aggressive-resize 'on' ; \
+                     set-window-option -u pane-border-status ; \
+                     set-window-option -u pane-border-format ; \
+                     set-window-option -u pane-border-lines ; \
                      split-window -h -b -d -c '#{{session_path}}' -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
                      if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'"
                 ),
@@ -509,8 +531,11 @@ mod tests {
         assert_eq!(
             tmux_window_options(&config),
             vec![
-                ("allow-passthrough", "on".to_owned()),
-                ("aggressive-resize", "on".to_owned()),
+                ("allow-passthrough", Some("on".to_owned())),
+                ("aggressive-resize", Some("on".to_owned())),
+                ("pane-border-status", None),
+                ("pane-border-format", None),
+                ("pane-border-lines", None),
             ],
         );
         let config = TmuxConfig {
@@ -521,11 +546,11 @@ mod tests {
         assert_eq!(
             tmux_window_options(&config),
             vec![
-                ("allow-passthrough", "on".to_owned()),
-                ("aggressive-resize", "on".to_owned()),
-                ("pane-border-status", "top".to_owned()),
-                ("pane-border-format", sidebar_blanking_border_format()),
-                ("pane-border-lines", "heavy".to_owned()),
+                ("allow-passthrough", Some("on".to_owned())),
+                ("aggressive-resize", Some("on".to_owned())),
+                ("pane-border-status", Some("top".to_owned())),
+                ("pane-border-format", Some(sidebar_blanking_border_format())),
+                ("pane-border-lines", Some("heavy".to_owned())),
             ],
         );
 
@@ -536,9 +561,11 @@ mod tests {
         assert_eq!(
             tmux_window_options(&config),
             vec![
-                ("allow-passthrough", "on".to_owned()),
-                ("aggressive-resize", "on".to_owned()),
-                ("pane-border-status", "off".to_owned()),
+                ("allow-passthrough", Some("on".to_owned())),
+                ("aggressive-resize", Some("on".to_owned())),
+                ("pane-border-status", Some("off".to_owned())),
+                ("pane-border-format", None),
+                ("pane-border-lines", None),
             ],
         );
 
