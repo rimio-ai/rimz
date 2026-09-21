@@ -155,6 +155,8 @@ Custom scheme files and color slots are in the [theming guide](../../guide/theme
 
 `rimz list-pets` lists every pet id you can give `theme.pets.pet`: the built-in pets first, then each pet installed under `~/.codex/pets/` (a directory holding `pet.json`), sorted by directory name. An installed pet's id is that directory name.
 
+A built-in id wins a collision: install a petdex pet named `rocky` and `theme.pets.pet = "rocky"` still selects the built-in, so reach the installed one by its directory path instead. RimZ reads the setting as a path when it contains `/` or `.`, or starts with `~`, and as a bare id otherwise.
+
 | Output | Shape |
 | --- | --- |
 | On a terminal | A preview grid sized to the terminal width, each pet's idle sprite over its id. Sprites draw as pixels when `theme.pets.glyphs` and the terminal allow kitty graphics, and as cell art otherwise. |
@@ -177,4 +179,4 @@ $ rimz list-pets --json
 ]
 ```
 
-The terminal preview fetches each built-in sprite sheet over HTTPS into `~/.rimz/cache/pets/` on first use and reads installed pets from disk. With `RIMZ_PETS_OFFLINE` set to any value it reads the cache only. A pet that cannot load leaves an empty slot, and the grid ends with `(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)`; the command still exits 0. Render tiers, custom sheets, and petdex installs are in the [pets guide](../../guide/pets.md).
+The terminal preview fetches each built-in sprite sheet over HTTPS into `~/.rimz/cache/pets/v1/assets/` on first use and reads installed pets from disk. With `RIMZ_PETS_OFFLINE` set to any value it reads the cache only. A pet that cannot load leaves an empty slot, and the grid ends with `(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)`; the command still exits 0. Render tiers, custom sheets, and petdex installs are in the [pets guide](../../guide/pets.md).

@@ -66,6 +66,8 @@ Inside a session, `rimz start --account` fails instead, because accounts apply o
 
 `rimz attach` with no `SESSION` opens the current directory's room, creating it if needed. Unlike `start`, it skips the first-run, hook, and trust prompts below, takes no `--account`, and does not start the browser daemon. `rimz attach <SESSION>` takes an exact session name, the `SESSION` column of [`rimz list`](#list-rooms). When RimZ has a workspace record for that session, it restores the room's sidebar and recovery state before attaching. A session RimZ has no record for is attached, or printed, as a plain multiplexer session.
 
+`rimz start` goes through the same health check on the way in, so either command is the way back into a room whose sidebar was closed or whose session came back wrong after a reboot.
+
 ### Prompts at room birth
 
 A `rimz start` that creates the session, run from a terminal, can ask up to four things before it attaches. A start that reattaches a running session asks none of them; `rimz attach` asks only the recovery question.
@@ -89,7 +91,7 @@ rimz: this room's previous session ended with agents still running (2026-07-02 1
 Recover 2 agents (claude, codex)? [Y/n]
 ```
 
-After a reboot the first line reads `rimz: machine rebooted since this room was last open (...)`. The recovered agents are reported on stderr as `rimz: resumed 2 agents: ...`, and any left behind as `rimz: not resumed: <label> (<reason>)`. `--no-resume` skips recovery and brings the room up empty; the durable records stay, so a later rebirth without the flag can still recover them. A healthy running room is never affected. The `[resume]` settings are in the [configuration guide](../../guide/configuration.md#resume).
+After a reboot the first line reads `rimz: machine rebooted since this room was last open (...)`. The recovered agents are reported on stderr as `rimz: resumed 2 agents: ...`, and any left behind as `rimz: not resumed: <label> (<reason>)`. `--no-resume` skips recovery and brings the room up empty, and so does answering `n`. Both are one-way: RimZ records the agents it did not recover as ended, so a later start without the flag has nothing left to seed from. Their transcripts and history stay on disk. A healthy running room is never affected. The `[resume]` settings are in the [configuration guide](../../guide/configuration.md#resume).
 
 ### Accounts
 
@@ -115,7 +117,7 @@ When `[web] enabled = true`, `rimz start` also starts the shared ttyd browser da
 rimz sessions
 ```
 
-`rimz sessions` opens a full-screen manager of every live RimZ room on the machine. Each room is a two-line card: the repository name and path, then live agent counts by kind (`claude ×2`), a `●` count of agents that need attention, and the session, token, and spend totals of the sidebar's headline window ([`spend_window`](../../guide/configuration.md#sidebar-rendering)). Rooms with a prompt in the last 24 hours come first, newest prompt first; the rest follow by most recent workspace activity. Detaching from a room you entered returns you to the manager.
+`rimz sessions` opens a full-screen manager of every live RimZ room on the machine. Each room is a two-line card: the repository name and path, then live agent counts by kind (`claude ×2`), a `●` count of agents that need attention, and the session, token, and spend totals of the sidebar's headline window ([`spend_window`](../../guide/configuration.md#sidebar-rendering)). Rooms with a prompt in the last 24 hours come first, newest prompt first; the rest follow by the time RimZ last wrote the workspace record, then by repository name and project path. A narrow terminal drops the card's right-hand metrics rather than wrapping them: the token and spend totals go first, then the session count. Detaching from a room you entered returns you to the manager.
 
 | Key (room list) | Action |
 | --- | --- |
@@ -192,7 +194,7 @@ A merge names every file it wrote, merged, or left untouched. An unparseable fil
 rimz doctor [--audit] [--json] [--output <PATH>] [--clear]
 ```
 
-`rimz doctor` reports the machine, the backend, and the room for the current directory in one pass. It changes nothing unless you pass `--clear`, and it exits 0 whatever it finds; read the closing line, or the JSON, to act on the result.
+`rimz doctor` reports the machine, the backend, and the room for the current directory in one pass. It starts, stops, and moves nothing, and it exits 0 whatever it finds; read the closing line, or the JSON, to act on the result. Collecting the agent and message sections opens the room's store, so a run in a project that never opened a room creates that room's state directory and its workspace record. `--clear` is the only flag that changes what a later report says.
 
 | Flag | Effect |
 | --- | --- |
@@ -201,6 +203,8 @@ rimz doctor [--audit] [--json] [--output <PATH>] [--clear]
 | `--output <PATH>` | Write the report to `PATH` atomically instead of stdout. Human output is written without color. |
 | `--clear` | Before reporting, dismiss this workspace's recorded diagnostics, last incident, message failures, and multiplexer log records up to now. |
 
+`--json` embeds the multiplexer log lines behind each finding verbatim, up to 8 KiB per issue, so it can carry file paths, command lines, and prompt text from your own sessions. Read the artifact before attaching it to a public issue.
+
 The human report opens with the RimZ version, OS user, and binary path, then prints these sections in order. A section marked conditional appears only when it has something to show.
 
 | Section | Reports |
@@ -208,7 +212,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `WORKSPACE` | Workspace id, project root and root class, worktree root and branch, session name, socket-path headroom. |
 | `MULTIPLEXER` | Backend and version against the floor, binary, server log scan and its scope, sockets, room ownership, session health, Zellij presence and plugins, ttyd. |
 | `TERMINAL` | Color depth. |
-| `HOME` | The RimZ home and whether `RIMZ_HOME` set it, a superseded `RIMZ_AGENTS_HOME`, and any legacy XDG roots still on disk with the [move steps](../../guide/configuration.md#moving-from-the-xdg-roots). |
+| `HOME` | The RimZ home and whether `RIMZ_HOME` set it, the definition root `RIMZ_AGENTS_HOME` points at when it is set, and any legacy XDG roots still on disk with the [move steps](../../guide/configuration.md#moving-from-the-xdg-roots). |
 | `MACHINE CONFIG` | Parse and validation errors in the machine config files and `~/.rimz` fragments, with paths and fixes. |
 | `SANDBOX` | Isolation mode, bubblewrap path and version, mount probe result. |
 | `HOOKS` | Agents reporting to RimZ, a row with the fix for each agent whose hooks need a command, agents not found on the machine. |

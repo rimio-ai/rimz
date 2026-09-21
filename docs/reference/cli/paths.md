@@ -48,7 +48,7 @@ builds                /home/me/.rimz/builds
 | `state dir`, `runtime dir` | The room's durable directory under `home/ws/` and its tmpfs directory under `runtime root/ws/`, both named by `workspace dir`. |
 | `room tmp`, `scratch` | The room's private tmp, and the invoking agent's scratch dir inside it: `agents/<handle>` for a named agent, the shared `scratchpad` otherwise. |
 | `scratch (agent view)` | That scratch dir as the invoking agent sees it: `/tmp/scratchpad` under sandbox isolation, the host path otherwise. |
-| `runtime root` | `$XDG_RUNTIME_DIR/rimz`, else `/tmp/rimz-<uid>/rimz`. `~/.rimz/run` links here once a room is born; RimZ itself never reads through the link. |
+| `runtime root` | `$XDG_RUNTIME_DIR/rimz`, else `/tmp/rimz-<uid>/rimz`. `~/.rimz/run` links here once a room is born; RimZ itself never reads through the link. The tmux server RimZ rooms run on has its socket here, at `<runtime root>/tmux/server`, which is the `-S` argument for reaching a room's server by hand. |
 | `handoffs` | Reserved for agent hand-off notes. |
 | `accounts` | Provider homes RimZ placed for named accounts, `accounts/<kind>/<name>/`: credentials and transcripts that nothing regenerates and no RimZ command removes. |
 | `logs`, `loops`, `web`, `builds` | Machine-wide directories: append-only logs, loop overlays, web daemon records, and reload staging. |

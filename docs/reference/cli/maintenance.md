@@ -180,6 +180,8 @@ rimz reload [--repair]
 
 It never starts a stopped session, creates or closes a pane, or touches an agent process. If the new build fails to start, each sidebar keeps running on its old build.
 
+A room whose sidebar pane was closed has nothing to reload, and the report says nothing about it: the room still counts as a live session, so the no-target line below does not appear either. [`rimz sidebar repair`](#repair-sidebars), or `rimz reload --repair`, is what mounts the pane again.
+
 The report prints a line per non-zero count:
 
 | Line | Meaning |
@@ -283,6 +285,8 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 | `--json` | off | Print the report as JSON instead. |
 
 The four current-workspace areas show `skipped — no rimz store here` when the directory has no RimZ store, and `worktrees` shows `skipped — not inside a git repo` outside a repository.
+
+The `worktrees` area is the one that reaches past RimZ's own files: removing a tree deletes that checkout and its files, and deletes the branch when Git or RimZ can prove the work landed. It never forces, so a dirty, occupied, or unproven tree is kept and reported.
 
 ### Automatic sweeps
 
