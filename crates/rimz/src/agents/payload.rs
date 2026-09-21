@@ -5,7 +5,33 @@
 
 use std::borrow::Cow;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// A prompt that has been through [`sanitize_user_prompt`]. The one constructor
+/// is what an adapter must go through before prompt text can reach the
+/// transcript, so no adapter can hand over raw provider bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SanitizedPrompt(String);
+
+impl SanitizedPrompt {
+    pub fn new(raw: Option<&str>) -> Option<Self> {
+        sanitize_user_prompt(raw).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SanitizedPrompt {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
 
 pub(super) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
@@ -201,6 +227,29 @@ pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitized_prompt_preserves_the_lifecycle_wire() {
+        use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
+
+        for raw in [None, Some("fix the build\nwith \"quotes\" and λ")] {
+            let mut observation = AgentLifecycleObservation::new(
+                None,
+                LifecycleSignal::TurnStarted { turn_id: None },
+            );
+            observation.prompt = SanitizedPrompt::new(raw);
+            let legacy = match raw {
+                Some(prompt) => format!(
+                    "{{\"signal\":{{\"signal\":\"turn_started\"}},\"prompt\":{}}}",
+                    serde_json::to_string(prompt).unwrap()
+                ),
+                None => "{\"signal\":{\"signal\":\"turn_started\"}}".to_owned(),
+            };
+            assert_eq!(serde_json::to_string(&observation).unwrap(), legacy);
+            let decoded: AgentLifecycleObservation = serde_json::from_str(&legacy).unwrap();
+            assert_eq!(decoded, observation);
+        }
+    }
 
     #[test]
     fn sanitize_user_prompt_accepts_real_text_and_rejects_control_payloads() {

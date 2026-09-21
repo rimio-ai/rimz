@@ -33,8 +33,8 @@ use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation,
-    LocallyPricedTurnCost, PriceBook, Result, SubagentIdentity, TokenSplit, locate_binary,
-    non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
+    LocallyPricedTurnCost, PriceBook, Result, SanitizedPrompt, SubagentIdentity, TokenSplit,
+    locate_binary, non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -429,7 +429,7 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
                 .with_worktree_from_payload(payload);
         let prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.task = prompt.clone();
-        observation.prompt = prompt;
+        observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
         let effort = parsed.model_param("effort").map(ToOwned::to_owned);
         observation.transcript_path = parsed.transcript_path;
         observation.launch.model = parsed

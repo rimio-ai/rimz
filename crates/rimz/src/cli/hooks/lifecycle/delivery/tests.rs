@@ -118,8 +118,9 @@ fn turn_started_records_only_unsupervised_user_inputs() {
         Some(dir.path()),
     );
     let mut mixed = turn_started();
-    mixed.observation.prompt =
-        Some("Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nhuman prompttyped directly".to_owned());
+    mixed.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
+        "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nhuman prompttyped directly",
+    ));
     record_user_input_for_lifecycle(
         &workspace,
         agent,

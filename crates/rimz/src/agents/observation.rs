@@ -295,7 +295,7 @@ pub struct AgentLifecycleObservation {
     /// `task`), so the sidebar can label an unnamed session by its prompt once
     /// the turn ends, until a real session name exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
+    pub prompt: Option<super::SanitizedPrompt>,
     /// Adapter-reported durable card label, such as a native session title or
     /// a subagent task description. The reducer carries the latest value.
     #[serde(default, skip_serializing_if = "Option::is_none")]

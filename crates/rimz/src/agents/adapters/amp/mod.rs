@@ -28,8 +28,8 @@ use super::managed_source::ManagedSource;
 use super::{
     AgentCurrentUsage, AgentErr, AgentLifecycleObservation, AgentTokenUsage, AskKind, FieldPatch,
     HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
-    LocalTokenPatch, RefreshTrigger, Result, SessionOrigin, TranscriptStat, non_empty_trimmed,
-    sanitize_user_prompt,
+    LocalTokenPatch, RefreshTrigger, Result, SanitizedPrompt, SessionOrigin, TranscriptStat,
+    non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -345,7 +345,7 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
                 .with_worktree_from_payload(payload);
         let prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.task = prompt.clone();
-        observation.prompt = prompt;
+        observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
         observation.launch.model = parsed.model;
         observation.launch.effort = parsed.effort;
         stamp_transcript_path(&mut observation, session_id, &spend::data_root());

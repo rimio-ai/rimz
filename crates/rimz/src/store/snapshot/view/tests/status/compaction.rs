@@ -69,7 +69,7 @@ fn compact_incident(with_side_fork: bool) -> SidebarSnapshot {
         "continuation",
         LifecycleSignal::TurnStarted { turn_id: None },
         |observation| {
-            observation.prompt = Some("continue".to_owned());
+            observation.prompt = crate::agents::SanitizedPrompt::new(Some("continue"));
             observation.usage.total_tokens = Some(123);
         },
     ));

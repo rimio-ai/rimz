@@ -29,7 +29,7 @@ use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, AgentTurnError, FieldPatch, HookOutput, HookRouting,
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
-    RefreshTrigger, Result, TranscriptStat, TurnErrorClass, non_empty_trimmed,
+    RefreshTrigger, Result, SanitizedPrompt, TranscriptStat, TurnErrorClass, non_empty_trimmed,
     sanitize_user_prompt,
 };
 #[cfg(test)]
@@ -345,7 +345,7 @@ fn kimi_observation(
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
     observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-    observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+    observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
     if event_name == "SessionStart"
         && let Some(session_id) = parsed.session_id.as_deref()
     {
@@ -673,7 +673,7 @@ impl KimiAdapter {
             .and_then(non_empty_trimmed)
             .or(matched.profile);
         observation.task = sanitize_user_prompt(matched.task.as_deref());
-        observation.prompt = observation.task.clone();
+        observation.prompt = SanitizedPrompt::new(observation.task.as_deref());
         observation.transcript_path = Some(matched.transcript_path.to_string_lossy().into_owned());
         Some(observation)
     }

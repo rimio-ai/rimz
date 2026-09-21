@@ -338,7 +338,7 @@ fn derive_lifecycle_events(
             observation.launch.role = child.role.clone();
             observation.launch.model = child.model.clone();
             observation.task = child.role.clone().or_else(|| child.prompt.clone());
-            observation.prompt = child.prompt.clone();
+            observation.prompt = crate::agents::SanitizedPrompt::new(child.prompt.as_deref());
             observation.usage.total_tokens = child.total_tokens;
             observation.pane_id = intent.observation.pane_id.clone();
             if child_state.is_some_and(|state| state.parent_agent_id.is_some()) {

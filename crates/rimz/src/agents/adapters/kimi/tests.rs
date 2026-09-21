@@ -447,7 +447,9 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             "trace the parser",
         ),
         prompt: Some(
-            "trace the parser",
+            SanitizedPrompt(
+                "trace the parser",
+            ),
         ),
         description: None,
         transcript_path: Some(

@@ -609,6 +609,58 @@ fn strings(values: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn turn_start_control_blocks_never_become_prompts() {
+    let root = tempfile::tempdir().unwrap();
+    let plugin_dir = root.path().join("fixturebot");
+    fs::create_dir(&plugin_dir).unwrap();
+    fs::write(plugin_dir.join("README.md"), "hook setup").unwrap();
+    fs::write(
+        plugin_dir.join("agent.toml"),
+        "protocol = 1\nkind = \"fixturebot\"\ndisplay-name = \"Fixture Bot\"\nprocess-names = [\"fixturebot\"]\nemits = [\"session_start\", \"turn_start\", \"turn_end\"]\nsetup-doc = \"README.md\"\n",
+    )
+    .unwrap();
+    let loaded = super::plugins::load_from_root(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    for adapter in BUILTINS.iter().copied().chain(loaded.definitions) {
+        let kind = adapter.spec().kind;
+        let conformance = adapter.conformance();
+        let sample = conformance
+            .classification
+            .iter()
+            .find(|sample| {
+                if !sample_produces_signal(adapter, sample, LifecycleSignalKind::TurnStarted) {
+                    return false;
+                }
+                // Antigravity reads its transcript, not the hook's prompt fields; its injected reader is covered in the adapter tests.
+                if kind == "antigravity" {
+                    return true;
+                }
+                let mut payload = sample.payload.clone();
+                payload["prompt"] = serde_json::json!("a real request");
+                payload["submitted_prompt"] = serde_json::json!("a real request");
+                adapter
+                    .decode_hook(sample.event_name, &payload)
+                    .unwrap()
+                    .lifecycle()
+                    .is_some_and(|observation| {
+                        observation.prompt.as_deref() == Some("a real request")
+                    })
+            })
+            .unwrap_or_else(|| panic!("{kind}: no turn-start fixture"));
+        for tag in super::CONTROL_TAG_PREFIXES {
+            let mut payload = sample.payload.clone();
+            let prompt = serde_json::json!(format!("{tag}synthetic control text"));
+            payload["prompt"] = prompt.clone();
+            payload["submitted_prompt"] = prompt;
+            let decoded = adapter.decode_hook(sample.event_name, &payload).unwrap();
+            let observation = decoded.lifecycle().unwrap();
+            assert_eq!(observation.signal.kind(), LifecycleSignalKind::TurnStarted);
+            assert!(observation.prompt.is_none(), "{kind}: {tag}");
+        }
+    }
+}
+
+#[test]
 fn classify_matches_corpus() {
     for adapter in BUILTINS {
         let kind = adapter.spec().kind;

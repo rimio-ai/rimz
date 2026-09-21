@@ -35,9 +35,9 @@ use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation, Result,
-    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity,
-    SubagentSpawnInput, TranscriptMessage, non_empty_trimmed, resolve_subagent_identity,
-    sanitize_user_prompt,
+    SanitizedPrompt, SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput,
+    SubagentIdentity, SubagentSpawnInput, TranscriptMessage, non_empty_trimmed,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -677,7 +677,7 @@ fn observation_with_prompt_reader(
         .flatten();
     let mut observation = AgentLifecycleObservation::new(Some(agent_id.as_str().into()), signal);
     observation.worktree_path = worktree_path.clone();
-    observation.prompt = prompt;
+    observation.prompt = SanitizedPrompt::new(prompt.as_deref());
     observation.transcript_path = transcript_path;
     observation.launch.model = common.model_name.filter(|model| !model.trim().is_empty());
     DecodedLifecycleFields {

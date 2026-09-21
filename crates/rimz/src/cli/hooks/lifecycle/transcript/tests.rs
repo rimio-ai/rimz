@@ -204,10 +204,9 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.observation.prompt = Some(
-        "Type: AGENT_MESSAGE\nFrom: @calm-fox (planner)\nContent:\nfirst\n\nType: AGENT_MESSAGE\nFrom: @reviewer\nContent:\nsecond"
-            .to_owned(),
-    );
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
+        "Type: AGENT_MESSAGE\nFrom: @calm-fox (planner)\nContent:\nfirst\n\nType: AGENT_MESSAGE\nFrom: @reviewer\nContent:\nsecond",
+    ));
 
     record_conversation(
         &workspace,
@@ -289,7 +288,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
 
     let mut hand_typed = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     hand_typed.waiting_cleared = true;
-    hand_typed.observation.prompt = Some("typed directly".to_owned());
+    hand_typed.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("typed directly"));
     record_conversation(
         &workspace,
         &store,
@@ -359,9 +358,9 @@ fn harness_notices_retain_delivery_attribution_in_transcripts() {
         )
         .with_sender(sender);
         let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-        started.observation.prompt = Some(format!(
+        started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(&format!(
             "Type: {header}\nFrom: @rimz\nContent:\nchild result"
-        ));
+        )));
 
         record_conversation(
             &workspace,
@@ -397,9 +396,9 @@ fn mixed_submit_records_stray_text_as_direct_input() {
         name: "lucid-atlas".to_owned(),
     });
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.observation.prompt = Some(
-        "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nchild resultdo you still".to_owned(),
-    );
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
+        "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nchild resultdo you still",
+    ));
 
     record_conversation(
         &workspace,
@@ -436,8 +435,9 @@ fn user_message_header_records_prompt_without_envelope() {
         rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.observation.prompt =
-        Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nfrom a human".to_owned());
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
+        "Type: USER_MESSAGE\nFrom: @user\nContent:\nfrom a human",
+    ));
 
     record_conversation(
         &workspace,
@@ -498,7 +498,7 @@ fn launched_child_brief_is_attributed_to_parent() {
     rimz::harness::run::create(store.paths(), &run).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.agent_id = Some(rimz::ids::AgentSessionId::from("child-session"));
-    started.observation.prompt = Some("  inspect the infra  ".to_owned());
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("  inspect the infra  "));
 
     record_conversation(
         &workspace,
@@ -513,7 +513,7 @@ fn launched_child_brief_is_attributed_to_parent() {
     .unwrap();
 
     let mut later = started;
-    later.observation.prompt = Some("follow-up from the human".to_owned());
+    later.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("follow-up from the human"));
     record_conversation(
         &workspace,
         &store,
@@ -568,8 +568,9 @@ fn agent_message_does_not_answer_open_ask() {
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.waiting_cleared = true;
-    started.observation.prompt =
-        Some("Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nnew context".to_owned());
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(
+        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nnew context",
+    ));
 
     record_conversation(
         &workspace,
@@ -600,7 +601,7 @@ fn prompt_without_waiting_transition_does_not_answer_stale_ask() {
     ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
     rimz::transcript::append(store.paths(), &ask).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.observation.prompt = Some("new task".to_owned());
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("new task"));
 
     record_conversation(
         &workspace,
@@ -633,7 +634,7 @@ fn idless_ask_does_not_capture_prompt() {
     rimz::transcript::append(store.paths(), &ask).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.waiting_cleared = true;
-    started.observation.prompt = Some("new task".to_owned());
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("new task"));
 
     record_conversation(
         &workspace,
@@ -672,7 +673,7 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
     rimz::transcript::append(store.paths(), &answer).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.waiting_cleared = true;
-    started.observation.prompt = Some("next task".to_owned());
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("next task"));
 
     record_conversation(
         &workspace,
@@ -737,7 +738,7 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
     )
     .with_sender(rimz::store::message::MessageSender::System);
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
-    started.observation.prompt = Some("first\n\n\n\nsecond".to_owned());
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("first\n\n\n\nsecond"));
 
     record_conversation(
         &workspace,

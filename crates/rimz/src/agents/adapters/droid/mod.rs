@@ -35,9 +35,9 @@ use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
     AgentLifecycleObservation, AgentTokenUsage, FieldPatch, HookOutput, HookRouting,
     LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
-    RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
-    TurnSettle, TurnSettleOutcome, optional_payload_string, read_transcript_lines,
-    sanitize_user_prompt,
+    RefreshTrigger, Result, SanitizedPrompt, SessionOrigin, TranscriptMessage, TranscriptPage,
+    TranscriptPosition, TurnSettle, TurnSettleOutcome, optional_payload_string,
+    read_transcript_lines, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -395,7 +395,7 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
         if event_name == "UserPromptSubmit" {
             let prompt = parse_user_prompt_submit(payload).prompt;
             observation.task = sanitize_user_prompt(prompt.as_deref());
-            observation.prompt = sanitize_user_prompt(prompt.as_deref());
+            observation.prompt = SanitizedPrompt::new(prompt.as_deref());
         }
         // The replacement session's transcript must not repoint the compacted row.
         observation.transcript_path = compacted_id

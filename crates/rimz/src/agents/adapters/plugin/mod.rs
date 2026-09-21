@@ -36,8 +36,8 @@ use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
 use super::{
     AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook, ContextObservation,
-    HookOutput, HookRouting, PriceBook, Result, RootIdentity, SubagentIdentity,
-    resolve_root_identity, resolve_subagent_identity,
+    HookOutput, HookRouting, PriceBook, Result, RootIdentity, SanitizedPrompt, SubagentIdentity,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use super::{PresetArgMatcher, PresetField};
@@ -240,8 +240,8 @@ impl crate::agents::capabilities::HookCapability for PluginAdapter {
             observation.worktree_path = envelope.cwd;
         }
         if event.prompt.is_some() {
-            observation.task = event.prompt.clone();
-            observation.prompt = event.prompt;
+            observation.task = sanitize_user_prompt(event.prompt.as_deref());
+            observation.prompt = SanitizedPrompt::new(event.prompt.as_deref());
         }
         decoded.attach_lifecycle(observation);
         Ok(decoded)
