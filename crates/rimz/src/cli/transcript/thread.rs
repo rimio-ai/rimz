@@ -213,7 +213,10 @@ pub(super) fn hide_harness_turns(
 
 /// The entries that opened each turn-output entry's turn: its resolved
 /// `reply_to` parents, or, when nothing was recorded (typed prompts), the
-/// latest opener for the same agent session, unless that opener was hidden.
+/// opener for the same agent session that arrived last without arriving after
+/// the output, unless that opener was hidden. Arrival, not the created time a
+/// line is stamped with, is what a turn can have seen: a message created
+/// mid-turn and delivered after it opened no turn of that output's.
 /// Other entries open no turn.
 pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
     let by_message_id = message_index(entries);
