@@ -113,8 +113,9 @@ pub(crate) fn wrap_rimz_block(block: RimzBlock, body: &str) -> String {
 }
 
 /// Remove every balanced registered block, joining what survives with a
-/// paragraph break. Malformed nesting leaves the original text untouched, so a
-/// prompt that merely quotes a tag is never rewritten.
+/// paragraph break. Malformed nesting returns the original text, trimmed and
+/// otherwise untouched, so a prompt that merely quotes a tag is never
+/// rewritten and every path out of here is trimmed.
 pub fn peel_rimz_blocks(text: &str) -> String {
     let tags = RimzBlock::ALL.map(|block| {
         let tag = block.tag();
@@ -142,7 +143,7 @@ pub fn peel_rimz_blocks(text: &str) -> String {
         cursor = start + len;
         if closing {
             if stack.pop() != Some(block) {
-                return text.to_owned();
+                return text.trim().to_owned();
             }
             if stack.is_empty() {
                 kept_start = cursor;
@@ -155,7 +156,7 @@ pub fn peel_rimz_blocks(text: &str) -> String {
         }
     }
     if !stack.is_empty() {
-        return text.to_owned();
+        return text.trim().to_owned();
     }
     pieces.push(text[kept_start..].trim());
     pieces
@@ -341,11 +342,15 @@ mod tests {
                 None
             );
             assert!(CONTROL_TAG_PREFIXES.contains(&format!("<{}>", block.tag()).as_str()));
+            // Both malformed exits hand the text back trimmed: an unbalanced
+            // open, and a close with no open. Untrimmed, the residue an
+            // envelope peel leaves behind would reach the transcript with the
+            // whitespace `sanitize_user_prompt` used to strip at the end.
             for malformed in [
                 format!("  brief <{}>body", block.tag()),
-                format!("brief </{}>", block.tag()),
+                format!("brief </{}>\n", block.tag()),
             ] {
-                assert_eq!(peel_rimz_blocks(&malformed), malformed);
+                assert_eq!(peel_rimz_blocks(&malformed), malformed.trim());
             }
         }
         let reminder = wrap_rimz_block(RimzBlock::SystemReminder, "reminder");
