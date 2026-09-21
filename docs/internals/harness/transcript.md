@@ -20,7 +20,7 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 
 | Kind | Records | Human rendering |
 | --- | --- | --- |
-| `Prompt` | A human prompt when no question is open, or a confirmed system prompt with `from: "rimz"` | `user: @receiver, text` for a human prompt; a system prompt is hidden with the output of the turn it opens |
+| `Prompt` | A human prompt when no question is open, or a system prompt or command with `from: "rimz"` | `user: @receiver, text` for a human prompt; a system prompt or command is hidden with the output of the turn it opens |
 | `Message` | An inter-agent delivery, or a launched child's launch brief, with structured `from` | `@sender: @receiver, text` |
 | `SubagentReport` | The status-only launched-child fleet digest, with `from: rimz` | Hidden with the output of the turn it opens |
 | `Wait` | A `Type: WAIT`, `Type: SIGNAL`, or `Type: STAGE` delivery, with `from: rimz` | Hidden with the output of the turn it opens |
@@ -29,11 +29,25 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | `Answer` | The effective answer, from the native prompt UI or the first human prompt submitted while a question is open | `you` to the agent, folded into its ask card |
 | `Error` | A hook-path provider error newly merged into `AgentContext.turn_error` | `@receiver: error text`, styled as an error |
 
-`rimz transcript --json` includes every hidden entry. [`TranscriptEntry::is_harness()`](../../../crates/rimz/src/transcript.rs) is the one predicate for harness entries (`SubagentReport`, `Wait`, and a `Prompt` whose `from` is `HARNESS_FROM`), shared by the human renderer and conversation counts.
+`rimz transcript --json` includes every hidden entry. [`TranscriptEntry::origin()`](../../../crates/rimz/src/transcript.rs) is the one read-side origin projection, shared by rendering, thread assembly, and attribution. It derives `EntryOrigin` from `(entry, from)` without adding a field to stored JSONL. The first matching row wins:
+
+| Kind | Stored `from` | Origin |
+| --- | --- | --- |
+| `SubagentReport`, `Wait` | Any | `Harness` |
+| `Assistant`, `Ask`, `Error` | Any | `Agent` |
+| Any remaining kind | `"rimz"` (`HARNESS_FROM`) | `Harness` |
+| `Message` | Absent | `Harness` |
+| `Prompt`, `Answer` | Absent | `Human` |
+| Any remaining kind | `"you"` (`HUMAN_FROM`) | `Human` |
+| Any remaining kind | Any other sender | `Agent` |
+
+`is_harness()` delegates to this projection. Conversation counts count only human-origin prompts as input from the user. Rendered `from` stays identity rather than origin; the fallback `user` is reserved for human-origin entries. Stage lines derive their origin separately from the flip's author: the operator is human, otherwise the author is an agent.
 
 ## Writing entries
 
-The receiver's turn-start hook writes the entries for a delivered prompt. It parses the [message header](./messaging.md#the-message-header) once per section and maps the `Type`:
+The receiver's turn-start hook first records and folds the lifecycle event into the snapshot, then reads this card's in-flight messages before confirming delivery, classifies the submitted sections once, records spend user input, and writes transcript entries. The snapshot fold therefore cannot see queue records: it uses the record-less classifier, so a headerless system prompt can still restart `user_turn_started_at`. Spend and transcript consume the same record-aware sections after confirmation; spend counts a human section only when its optional record also passes `is_user_input()` (excluding automated and `Resume`-gated records).
+
+[`store::message::classify_submitted_prompt`](../../../crates/rimz/src/store/message.rs) owns the write-side classification. It aligns confirmed records, parses the [message header](./messaging.md#the-message-header) once per section, and recovers unmatched headerless text from records RimZ has in flight to this card. That read uses `Store::list_messages`, not the queued-only pending list: candidates are `Sent` or `awaiting_late_ack()`. Classification changes no status; `TurnStarted` still confirms only prompts and `Compaction` only commands.
 
 | Header `Type` | Entry |
 | --- | --- |
@@ -41,16 +55,24 @@ The receiver's turn-start hook writes the entries for a delivered prompt. It par
 | `SUBAGENT_REPORT` | `SubagentReport`, with `from: rimz` |
 | `WAIT`, `SIGNAL`, `STAGE` | `Wait`, with `from: rimz` |
 | `USER_MESSAGE` | `Prompt`, header removed, no `from` |
-| none, confirmed system record | `Prompt` with `from: rimz` |
-| none, unconfirmed | `Prompt` (human direct input) |
+| none, matches a confirmed record or a record RimZ has in flight to this card | That record's origin: human → `Prompt` without `from`; agent → `Message` from its handle; subagent report → `SubagentReport`; notice → `Wait`; system → `Prompt` with `from: "rimz"` |
+| none, nothing accounts for it | Human `Prompt`, subject to the launch-run and open-ask cases below |
+
+A header's origin wins over a matched record's sender. An in-flight match requires a record that ships headerless (a system prompt or any command) with the same trimmed text. A system `/compact` is therefore harness-authored even before its compaction acknowledgement; an operator's command keeps that operator's human or agent origin. Human is the residue after these checks, not the fallback for an acknowledgement that returned no records.
 
 A batched delivery splits on each blank line that introduces another header of those six types, so every section becomes its own entry.
 
 Three cases change the mapping:
 
 - While the agent has an open question, the first direct human `Prompt` segment becomes that ask's id-stamped `Answer`. An attributed queue record never answers a question.
-- A launched child's initial headerless prompt becomes a `Message` from its parent when it exactly matches the durable subagent run prompt. Later headerless input stays a human `Prompt`.
+- A supervised run's matching launch prompt takes its origin from its durable run record, as described below.
 - Text around a confirmed headered batch becomes separate direct-input `Prompt` entries ([messaging.md § Confirmation and retry](./messaging.md#confirmation-and-retry)).
+
+For a record-less human section on a turn carrying a run id, the writer loads the run and compares the submitted text with `RunRecord.prompt` after `rimz::agents::peel_rimz_blocks` removes registered RimZ wrappers from both sides. `RunRecord::prompt_origin()` gives a subagent run `Parent` origin first, a non-subagent run with `loop_task` `Harness` origin, and any other run `Human` origin. A parent's resolved handle produces a `Message`; an unresolved parent produces a harness `Prompt` with `from: "rimz"`, never a user fallback. Loop-spawned runs likewise produce harness prompts, while plain runs remain human prompts. A retry carries the same `subagent` and `loop_task` fields, so it keeps its origin without loading `retry_of`. Unmatched later text follows ordinary section classification.
+
+RimZ's `SystemReminder` and `PreviousAttemptFailure` wrappers are composed through the registry in `agents::payload`. Adapters can populate lifecycle prompts only through `SanitizedPrompt`; its sanitizer rejects a prompt carrying a registered control block, rather than recording RimZ's wrapper as human text. Peeling for run matching does not bypass that adapter filter: if the adapter supplies no usable prompt, there is no submitted section to match.
+
+The guarantee concerns recorded message and run origins, not raw keystrokes: `rimz pane send` carries no message record by design, and its caller is the author. `message --create` still passes undeliverable text as an unrecorded launch prompt; preserving an agent sender on that path is deferred until it launches promptless and queues the text.
 
 The turn's final assistant message becomes an `Assistant` entry. A provider turn error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh). A statusline-only detection stays card enrichment, because the statusline path takes no lock and writes no transcript.
 
@@ -58,7 +80,7 @@ The turn's final assistant message becomes an `Assistant` entry. A provider turn
 
 Three optional field groups link entries. Each defaults empty, so older JSONL lines decode unchanged.
 
-`message_id` stamps a delivered entry with its queue record. Confirmation returns every record in the submitted batch; alignment restores each section from the durable record boundaries, and each section then matches a returned record by exact body text, in order. Hand-typed prompts and unmatched text carry no `message_id`.
+`message_id` stamps an entry with its matched queue record. Confirmation returns every confirmed record in the submitted batch; alignment restores each section from the durable record boundaries, and each section then matches a returned record by exact body text, in order. A headerless in-flight match also supplies `message_id` and `reply_to`, even while the record remains `Sent`. Hand-typed prompts and unmatched text carry no `message_id`.
 
 `enqueued_at` accompanies a matched `message_id`, copying the queue record's creation time however long delivery took. The log's `at` stays the record time, which for a message is delivery confirmation, so bucket placement and reader order are unchanged. The view derives `ChatLine.at` from `enqueued_at` when it is there and exposes the record time as `delivered_at`. `ChatLine.at` is the stamp: it drives the header, `--json`, header grouping, and the flip window. Order is arrival, `ChatLine::arrived_at` (`delivered_at` else `at`), which for every log entry is the log's own `at`; the sort, the live-cohort split, and the `--last` cut key on it, so a line that waited sits where it landed. Nothing is backfilled from the message store, so entries written before the field keep their delivery stamp. A scheduled message is stamped from its creation time, with no floor at the scheduled moment, and reads at its delivery; a requeue is a new record with its own.
 

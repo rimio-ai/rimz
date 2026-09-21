@@ -34,6 +34,7 @@ These are the promises the product is built on. A change to one is a product dec
 - **Hook stdout is the decision channel.** Logs go to stderr or RimZ state logs; hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class; core behaviour never depends on a backend-only feature.
 - **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives, and `message` routes human text through the same send path. Pane reads stay in rendering, explicit `pane capture` calls, and Codex turn-death confirmation.
+- **Transcript origin is explicit.** RimZ-introduced text never renders as the user merely because it lacks a header: one write-side classifier and one read-side projection preserve its recorded author ([contract and remaining launch gap](./docs/internals/harness/transcript.md#writing-entries)). `rimz pane send` is the boundary: it is the raw keystroke primitive, carries no record by design, and its caller is the author.
 - **Sidebar is read-only on the store.** Sidebar code reads via `rimz sidebar snapshot`; store-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
 - **Security surfaces stay visible.** Project trust, notification handlers, hook install diffs, and privacy settings are product behaviour.

@@ -22,6 +22,7 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 
 - Layering runs one way: `dispatch` calls `deliver` and `send`; `deliver` calls `send`; `send` calls the store and the mux. Nothing calls back up.
 - `message.rs` owns delivery assembly and parsing. The record schema and FIFO/claim/batch selection live in `store::message`, while I/O delivery belongs in the submodules.
+- `store::message::classify_submitted_prompt` owns submitted-prompt origin for transcript and spend consumers. Classification is read-only over confirmed records and the card's in-flight queue view, read before acknowledgement; it never finalizes a record. The ack contract is unchanged: `TurnStarted` confirms only prompts, `Compaction` only commands, so a system command can be classified as harness while still `Sent`.
 - Status transitions stay in `store/writer/queue.rs`, under the workspace lock, each with its audit event. The status enum carries vocabulary, not rules.
 - Message content never enters the event log. Terminal text lives in `messages/history.jsonl`, which is audit: the live queue commits ahead of it, and a failed history append or retention pass warns without undoing the transition.
 - `fire.rs` runs on the renderer's cache-refresh tick, so keep it as light as that path demands. It reads the wake stamp and spawns `message sweep`; store reads and writes stay in that helper.

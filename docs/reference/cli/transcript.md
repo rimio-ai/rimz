@@ -145,7 +145,7 @@ The human view leaves out RimZ's own deliveries, so a conversation shows the wor
 | --- | --- |
 | Fleet digest | The status-only `SUBAGENT_REPORT` from `@rimz` when an agent's launched subagents settle. |
 | Wait | A [`rimz wait`](./wait.md) or loop `--wait` delivery, a signal delivery, or a stage notice, from `@rimz`. |
-| `rimz` prompt | A prompt RimZ sent without a header, such as a nudge or a confirmed `rimz message --no-from` send. |
+| `rimz` prompt or command | A prompt or command RimZ sent without a header, such as a nudge, a `rimz message --no-from` send, or a system `/compact`. A loop-spawned run's launch prompt is also hidden. |
 
 Each hidden entry takes with it the agent's replies and error output in the turn it opened. Three things stay visible: an ask raised in that turn, the output of a turn that asked the user, and any message the agent sends. A turn opened by both a hidden entry and a visible message stays visible. No flag shows hidden entries in the human view.
 
@@ -172,7 +172,8 @@ Each entry carries these fields. A field shown as optional is absent when empty 
 
 | Field | Value |
 | --- | --- |
-| `from` | `user` for a prompt, `you` or `answered` for an answer, `@rimz` for a hidden delivery, otherwise the agent's handle. |
+| `from` | Sender identity: `user` for a human prompt, `you` or `answered` for an answer, `rimz` for a system prompt or command, `@rimz` for a harness notice, otherwise the agent's handle. |
+| `origin` | Always present: `human`, `agent`, or `harness`. Classifies authorship independently of the sender's display handle. |
 | `to` | Optional. The receiving agent's handle. Absent on agent output and flips. |
 | `at` | The creation time when known, otherwise the recorded time, RFC 3339 in UTC. |
 | `delivered_at` | Optional. The delivery record time when creation time is known, RFC 3339 in UTC. Included even for waits shorter than 60 seconds. |
@@ -184,7 +185,7 @@ Each entry carries these fields. A field shown as optional is absent when empty 
 | `answers` | Optional. An answer's picks: `question`, `chosen`, `note`. |
 | `stage` | Optional. A flip: `team`, `from`, `to`, `owner`, `by`. |
 
-Entries carry no kind field. A prompt RimZ sent reads `from: "user"` like a human prompt, so JSON cannot tell the two apart. `reply_to` records causality as delivered. The human view builds threads from it, but only from turn output and replies back to the sender, so two entries linked in JSON can print in separate exchanges.
+Entries carry no kind field. `origin` is additive; `from` keeps its string shape and sender vocabulary, but system prompts and commands no longer fall back to `user`. A system `/compact` carries `origin: "harness"`; a command requested by a human or agent keeps that caller's origin. Agent replies remain `origin: "agent"` even when the human view hides them with a harness opener. `reply_to` records causality as delivered. The human view builds threads from it, but only from turn output and replies back to the sender, so two entries linked in JSON can print in separate exchanges.
 
 ## See also
 
