@@ -200,16 +200,17 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
-/// One absolute session-scoped Zellij option.
+/// One absolute session-scoped Zellij option. Opaque outside the crate: callers
+/// resolve a list through [`zellij_session_options`] and hand it back whole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZellijSessionOption {
-    pub key: &'static str,
-    pub value: ZellijOptionValue,
+    key: &'static str,
+    value: ZellijOptionValue,
 }
 
 /// Values supported by RimZ's resolved session options.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ZellijOptionValue {
+enum ZellijOptionValue {
     Bool(bool),
     Int(u32),
     Word(&'static str),

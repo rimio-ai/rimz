@@ -107,7 +107,9 @@ fn sidebar_pane_kdl(
 /// keeps the classic representation so every agent remains observable with its
 /// own rect; older hosts ignore the unknown option.
 ///
-/// The tail carries every session-scoped option RimZ asserts: detached birth drops CLI flags, while layout options merge absolutely through the channel the detached server preserves.
+/// The tail carries every session-scoped option RimZ asserts: a detached birth
+/// drops CLI flags, while layout options merge absolutely through the one
+/// configuration channel the detached server preserves.
 pub(super) fn render_session_layout(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,

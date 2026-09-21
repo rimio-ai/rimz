@@ -31,7 +31,10 @@ impl From<&MachineConfig> for MultiplexerConfig {
     }
 }
 
-/// Zellij room options. Session options are asserted through the birth layout and live plugin reconfiguration; client options travel on attach. Optional fields are asserted only when set here, leaving `~/.config/zellij/config.kdl` authoritative at birth otherwise.
+/// Zellij room options. Session options are asserted through the birth layout
+/// and live plugin reconfiguration; client options travel on attach. Optional
+/// fields are asserted only when set here, leaving the user's
+/// `~/.config/zellij/config.kdl` authoritative at birth otherwise.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ZellijConfig {
@@ -65,12 +68,14 @@ pub struct ZellijConfig {
     /// keeps it off: a resurrected room comes back with every command pane
     /// `start_suspended` ("Waiting to run") and a dead mouse. RimZ owns rebirth,
     /// so a dead server leaves nothing to resurrect and the next start comes up
-    /// clean and running. Asserted through the birth layout and plugin reconfiguration; Zellij consumes this option at session start.
+    /// clean and running. Asserted through the birth layout and plugin
+    /// reconfiguration; Zellij consumes this option at session start.
     pub session_serialization: bool,
     /// Whether Zellij skips the per-second session metadata writer and command
     /// discovery loop. RimZ keeps it on because the loop rewrites
     /// `session-metadata.kdl` and forks `ps` even when session serialization is
-    /// disabled. Asserted through the birth layout and plugin reconfiguration; Zellij consumes this option at session start.
+    /// disabled. Asserted through the birth layout and plugin
+    /// reconfiguration; Zellij consumes this option at session start.
     pub disable_session_metadata: bool,
 }
 
