@@ -66,7 +66,7 @@ pub fn write(
 /// Attach provider rest certificates to raw-active root sessions before a
 /// caller makes an ownership or reaping decision. Missing sidecars leave the
 /// durable lifecycle status authoritative.
-pub(crate) fn attach_rest_certificates<'a>(
+pub fn attach_rest_certificates<'a>(
     runtime: &RuntimePaths,
     agents: impl IntoIterator<Item = &'a mut AgentState>,
 ) {
