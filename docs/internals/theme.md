@@ -199,7 +199,7 @@ Four checks in [`xtask/src/invariants.rs`](../../xtask/src/invariants.rs) guard 
 | retune a hue for every element that wears it | the slot's derivation in `RawPalette::derive_tones`, or, for one machine, the slot override in `theme.toml` |
 | color a new sidebar element | add a `Component` variant, map it in `Component::resolve`, and add it to `Component::ALL` for the golden test |
 | color a new CLI state | the typed mapping in `cli/render/status.rs` |
-| add a configurable glyph | add the role in the `glyph_roles!` table in `config/glyphs.rs`, then its row at the same position in `GLYPH_CATALOG` |
+| add a configurable glyph | add the role in the `glyph_roles!` table in `config/glyphs.rs`, then its row at the same position in `GLYPH_CATALOG`, then a commented row per set in `theme.template.toml` (a template test walks `GlyphRole::ALL` and `AnimationRole::ALL`, so the drift fails the build) |
 | change how a ramp sweeps | the stop arrays in `Palette::resolve_with_raw`; `ramp_tone` needs no edit |
 | brand a new provider | the agent definition's brand fields; `[theme.providers.<kind>]` stays the user's override |
 | add a shared human format | `theme/fmt.rs` |

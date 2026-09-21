@@ -137,7 +137,7 @@ set = "nerd_font"
 total = "◇"
 ```
 
-Glyphs are grouped by where they appear as you read the sidebar down the column. The commented template shows both shipped sets group by group, so overriding one is uncomment-and-edit.
+Glyphs are grouped by where they appear as you read the sidebar down the column. The commented template shows every glyph of both shipped sets, group by group, so overriding one is uncomment-and-edit; a test walks the role catalog against the template, so a glyph RimZ can draw is a glyph you can restyle.
 
 | group | what it covers |
 | --- | --- |
@@ -164,7 +164,7 @@ The `status` group sets head shapes only. Their color, effect, and speed live in
 
 ## Animations
 
-`[theme.animations]` themes the status heads the sidebar paints; [the glyph legend](../interface/sidebar.md#reading-the-glyphs) says what each head means. There are eleven roles: `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `sleeping`, `waiting`, and `failed`.
+`[theme.animations]` themes the status heads the sidebar paints; [the glyph legend](../interface/sidebar.md#reading-the-glyphs) says what each head means. There are eleven roles: `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `sleeping`, `waiting`, and `failed`, and the template carries a commented block for each.
 
 Each role takes four optional fields, and an omitted field keeps the built-in, so a one-line override leaves the rest alone.
 
