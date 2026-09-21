@@ -126,6 +126,8 @@ removed claude account `work`; its home ~/.rimz/accounts/claude/work and the pro
 
 A room born on the removed account keeps that selection, so its next `rimz start` fails with ``unknown claude account `work`; configured: default; run `rimz accounts add claude work` ``. Either add the account again, or run `rimz reset`, which clears the room's selection; `rimz reset --account <KIND>=<NAME>` picks another in the same step.
 
+If a live room still selects the account, removal proceeds and appends ``warning: room <session> is running on it; its <kind> dashboard stops refreshing until you add the account back or `rimz reset` that room``. With multiple rooms, the warning names each session and applies to all their provider dashboards.
+
 Removing an account that is not configured prints ``no <kind> account `<name>` is configured; nothing to remove`` and exits 0. `default` cannot be removed, and asking exits 1.
 
 Nothing else deletes an account home either. `rimz uninstall` keeps `accounts/` and `skills/` under the RimZ home whatever flags you pass, `--all` included ([Uninstall RimZ](./maintenance.md#uninstall-rimz)), so provider credentials outlive RimZ. Delete the home yourself when you want them gone.
