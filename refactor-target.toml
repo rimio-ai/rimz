@@ -165,7 +165,7 @@ surface-budget = 13
 [[module]]
 path = "crates/rimz/src/child_process.rs"
 # Loop dispatch shares isolated-program spawning with its cgroup handoff.
-surface-budget = 15
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -188,7 +188,7 @@ upward-dependencies = [
 # Doctor and start notices classify agents-home fragments and find a legacy root through config's fragment walk.
 # The Markdown definition loader, its rows and errors feed config load and `agents validate`;
 # per-name failures feed launch refusal through the effective-config failed-reference gate.
-surface-budget = 191
+surface-budget = 159
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -315,7 +315,7 @@ surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/pane"
-surface-budget = 43
+surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/proc"
@@ -396,7 +396,7 @@ path = "crates/rimz/src/transcript.rs"
 # Human rendering and statistics share harness classification and its sender sentinel.
 # The CLI locates a named channel's workspace from transcript evidence.
 # `agents wait` reads an interactive agent's final message from the transcript.
-surface-budget = 20
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/trust.rs"
@@ -473,7 +473,7 @@ surface-budget = 2
 [[module]]
 path = "crates/rimz/src/config/notifications.rs"
 allowed-dependencies = ["agents"]
-surface-budget = 22
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/config/resume.rs"
@@ -3485,3 +3485,133 @@ reason = "Returned by decode and decode_with_header_fallback, which held adapter
 kind = "item"
 key = "agents::session::DaemonSessionEvidence"
 reason = "Named by the public SessionCapability::daemon_session_evidence (capabilities.rs:365), so it cannot go below the trait (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "config::display::DisplayConfig"
+reason = "Pass 24a: representative of every section record the config façade re-exports. The façade line decides reach, so the declaration stays `pub` as a field type of MachineConfig; narrowing the declaration to pub(crate) moves no budget once the façade has narrowed, because pub(crate) still reaches the crate root. Do not re-propose the child declarations."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::PromptSource"
+reason = "Pass 24a: the `file` accessor cannot narrow — cli/agents_cmd/fork.rs:397 reads it, which atlas's tables miss for binary-crate readers (E0624)."
+
+[[verdict]]
+kind = "item"
+key = "config::glyphs::GlyphRole"
+reason = "Pass 24a: `name` and `namespace` cannot narrow — theme/glyphs.rs:357 reads them across the module boundary (E0624); `namespaced_name` has the same floor."
+
+[[verdict]]
+kind = "item"
+key = "config::notifications::NotificationsPrefs"
+reason = "Pass 24a: `command` cannot go private — config/tests.rs:1434 reads it (E0624). `effective_handlers` and `triggers_status` did narrow to crate reach."
+
+[[verdict]]
+kind = "item"
+key = "config::harness::compact_instruction"
+reason = "Pass 24a: refuted by the integration suite, which reads it from tests/integration/message.rs:3627,3654,4042,4074,4160,4380,4496."
+
+[[verdict]]
+kind = "item"
+key = "config::theme::ThemeConfig"
+reason = "Pass 24a: representative of the serde-predicate family — ThemeConfig::is_unset, LoopConfig::is_empty, DisplayConfig::is_unset, ThemeGlyphsConfig::is_unset, ThemeAnimationsConfig::is_unset, PetsConfig::is_default, GlyphOverrides::is_empty. Each is named only inside a skip_serializing_if string (config.rs:435,439, config/theme.rs:71,73,77,79, config/glyphs.rs:274,276), which SCIP cannot see, so atlas reports them vestigial and proposes private. They are live and need parent reach; grep the string before narrowing or deleting one."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::Tasks"
+reason = "Pass 24a: named by the integration crate through the config façade, so the re-export stays `pub use`."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::LoopConfig"
+reason = "Pass 24a: named by the integration crate through the config façade, so the re-export stays `pub use`."
+
+[[verdict]]
+kind = "item"
+key = "config::harness::CompactSeat"
+reason = "Pass 24a: named by the integration crate through the config façade, so the re-export stays `pub use`."
+
+[[verdict]]
+kind = "item"
+key = "config::theme::ThemeStyle"
+reason = "Pass 24a: named by the binary crate's test modules and fixtures through the config façade, so the re-export stays `pub use`."
+
+[[verdict]]
+kind = "item"
+key = "config::accounts::AccountBudgetConfigError"
+reason = "Pass 24a: named by the binary crate's test modules through the config façade, so the re-export stays `pub use`."
+
+[[verdict]]
+kind = "item"
+key = "config::DefinitionError"
+reason = "Pass 24a: named by the binary crate's test modules, so it stays `pub`."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::project_tasks_from_value"
+reason = "Pass 24a: cannot leave `effective`'s public surface — harness/schedule/config_edit.rs:58 reads it in production."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::ProjectTasksErr"
+reason = "Pass 24a: carried by the kept public EffectiveConfigErr::Tasks::source, as the effective::Result alias is by the public load and project_tasks signatures."
+
+[[verdict]]
+kind = "item"
+key = "pane::pane_is_host"
+reason = "Pass 24a: narrowed to pub(crate) and restored. Public rustdoc for store::snapshot::panes::own_view_is_daemon (panes.rs:352) and store::snapshot::view::reap::only_daemon_view (reap.rs:180) links to it, and cargo xtask doc is a gate; unblocked by a pass on store that rewrites those links as plain backticks."
+
+[[verdict]]
+kind = "item"
+key = "pane::ElevatedAgent"
+reason = "Pass 24a: floored by the `pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind}` at lib.rs:76, which this pass does not own; RuntimeOwner::new is also named by tests/integration/message.rs:916."
+
+[[verdict]]
+kind = "item"
+key = "pane::SIDEBAR_CHROME_TITLE"
+reason = "Pass 24a: representative of the pane constants the integration suite names — SIDEBAR_CHROME_TITLE (journey/deep.rs:1386), VIEW_NAME (backend/tmux/layout.rs:390), BRACKET_PASTE_OPEN and BRACKET_PASTE_CLOSE (backend/zellij/pane_io.rs:10)."
+
+[[verdict]]
+kind = "item"
+key = "pane::bandwidth::SocketEndpoint"
+reason = "Pass 24a: types the public SshConn::local and SshConn::peer fields (bandwidth.rs:18-19), so it is a signature floor."
+
+[[verdict]]
+kind = "item"
+key = "pane::keys::UnknownKey"
+reason = "Pass 24a: it is public NamedKey's FromStr::Err (keys.rs:85), so it is a signature floor."
+
+[[verdict]]
+kind = "item"
+key = "wakeup::WakeupErr"
+reason = "Pass 24a: narrowing produced `type wakeup::WakeupErr is private` at tests/integration/reload.rs:169 and sidebar_wakeup.rs:36 and at cli/agents_cmd/auto_redeem.rs:32, plus private_interfaces on wake_store_delta, reload_all and broadcast."
+
+[[verdict]]
+kind = "item"
+key = "wakeup::heartbeat::HeartbeatWriteErr"
+reason = "Pass 24a: narrowing produced `type heartbeat::HeartbeatWriteErr is private` at tests/integration/backend/tmux/sidebar.rs:647 and private_interfaces on write_heartbeat."
+
+[[verdict]]
+kind = "item"
+key = "wakeup::events::PaneFramePublicationKind"
+reason = "Pass 24a: types the public SidebarEvent::PaneFramePublished::publication field (events.rs:111), so narrowing trips private_interfaces, which lint denies (caveat 13)."
+
+[[verdict]]
+kind = "item"
+key = "wakeup::heartbeat::SidebarHeartbeat"
+reason = "Pass 24a: representative of the heartbeat surface the integration suite names — is_heartbeat_file and read_from (backend/tmux/sidebar.rs:235,157), write_heartbeat (:647 via support.rs:21), SidebarHeartbeat::new, reload_all and RELOAD_CONTROL_WORD (reload.rs:144,169,178), SIDEBAR_EVENT_VERSION (wakeup_pipe.rs:206)."
+
+[[verdict]]
+kind = "item"
+key = "agent_activity::AgentActivity"
+reason = "Pass 24a: nothing in this module can narrow. read_all and read_for_keys are named by tests/integration/hooks.rs:1314,1351,1565,2173, and AgentActivity is the type both return."
+
+[[verdict]]
+kind = "item"
+key = "child_process::agent_helper_argv"
+reason = "Pass 24a: named by tests/integration/oauth_usage.rs:17, message.rs:797 and hooks.rs:3367."
+
+[[verdict]]
+kind = "item"
+key = "transcript::TranscriptLogErr"
+reason = "Pass 24a: carried by the public transcript::Result alias (:42) and by the public append and read_all signatures (:269,:304), so it is a signature floor."
