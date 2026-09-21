@@ -62,6 +62,8 @@ Reflect is the last stage of every pipeline. Its owner runs Skill(reflect) in di
 
 A message carries a question, an answer, or a pointer to a changed file someone builds on; the substance stays in the file. `plan amended at plan-notes.md:40-58, re-read before step 3` is a whole message. Send one when what you have changes something for the reader: as many rounds as the work needs, none for courtesy.
 
+Every message wakes its reader for a full turn, so a reply is owed to a question and to nothing else. Thanks, an acknowledgement, "nothing open from me", and a correction that changes nothing the reader will do are courtesy: leave them unsent and rest. Confirm that a request landed by reading the file or the PR it changes, never by asking for a confirmation or promising to hold for one, and never resend a request the receipt shows delivered: the receiver may be acting on it as you look. Something you found while answering goes in the file it corrects. After `Done`, send a message only when a file or the PR still has to change.
+
 The leader sends every message with `--steer`. What it sends is user intent or a changed plan, and a parked message would land only after the receiver finished a full turn against the old truth.
 
 A request the user sends you directly is yours: do it in this turn, record what it changed in your stage file, and message the teammate whose work it changes.
