@@ -383,9 +383,12 @@ fn hash_covers_every_documented_surface_field() {
     // hash to distinct values; if a future refactor drops a field from
     // `ExecutableSurface`, two cases collide and this test fires. A field
     // added to the projection belongs here in the same commit, once per
-    // surface that carries it.
+    // surface that carries it. A field only collides when some other case
+    // is identical but for it, so the name of each surface is covered by a
+    // pair differing in nothing else.
     let cases = [
         "[[agents]]\nname = \"claude\"\nlaunch_command = \"claude code\"\n",
+        "[[agents]]\nname = \"codex\"\nlaunch_command = \"claude code\"\n",
         "[[agents]]\nname = \"claude\"\nenv = { PATH = \"/opt/llms/bin\" }\n",
         "[profiles.x]\nagent = \"claude\"\n",
         "[profiles.x]\nagent = \"codex\"\n",
@@ -404,6 +407,7 @@ fn hash_covers_every_documented_surface_field() {
         "[profiles.y]\nagent = \"claude\"\n",
         "[agents.teams.review]\nlayout = \"planner,coder\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
+        "[[agents.teams.audit.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"y\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nmode = \"ask\"\n",
