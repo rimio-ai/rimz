@@ -538,7 +538,9 @@ fn render_removal_outcomes(
 
 fn account_preview_lines(homes: &[(String, PathBuf)]) -> Vec<String> {
     if homes.is_empty() {
-        return vec!["Accounts: none declared".to_owned()];
+        // On disk, not declared: a named account whose home was deleted by hand
+        // is still in `config.toml` and still listed by `rimz accounts list`.
+        return vec!["Accounts: none on disk".to_owned()];
     }
     // The label carries the verdict: these rows sit under Storage rows that
     // read `remove`, so a bare `Accounts:` would read as a removal list.
@@ -635,7 +637,7 @@ mod tests {
 
     #[test]
     fn account_preview_names_kept_homes_and_removal_command() {
-        assert_eq!(account_preview_lines(&[]), ["Accounts: none declared"]);
+        assert_eq!(account_preview_lines(&[]), ["Accounts: none on disk"]);
         let homes = vec![
             (
                 "claude@work".to_owned(),

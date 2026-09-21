@@ -189,7 +189,10 @@ fn new_worktree(
 fn report_created(created: &rimz::worktree::CreatedWorktree) {
     let marker = &created.marker;
     println!("created {}", marker.name);
-    println!("  path   : {}", created_path_display(&marker.worktree_path));
+    println!(
+        "  path   : {}",
+        render::home_relative_path(&marker.worktree_path)
+    );
     println!("  branch : {}", marker.branch);
     if let Some(destination) = created.push_destination.as_ref() {
         let remote = &destination.remote;
@@ -218,11 +221,6 @@ fn report_created(created: &rimz::worktree::CreatedWorktree) {
     if created.linked > 0 {
         println!("  linked : {} dir(s) from .worktreelink", created.linked);
     }
-}
-
-/// The created tree's path as `list` prints it: `..` folded away and the home directory abbreviated, so the create report and the next `list` agree.
-fn created_path_display(path: &Path) -> String {
-    render::home_relative(&rimz::utils::path::normalize_path_lexical(path).to_string_lossy())
 }
 
 fn list_worktrees(workspace: &ResolvedWorkspace, json: bool) -> Result<()> {
@@ -698,8 +696,10 @@ mod tests {
 
     #[test]
     fn created_path_display_folds_parent_components() {
+        // `worktree.dir` defaults to `../{repo}-worktrees`, so the marker path
+        // the create report prints carries a `..` the printed row must not.
         assert_eq!(
-            created_path_display(Path::new(
+            render::home_relative_path(Path::new(
                 "/code/query-engine/../query-engine-worktrees/feat-a"
             )),
             render::home_relative("/code/query-engine-worktrees/feat-a")
