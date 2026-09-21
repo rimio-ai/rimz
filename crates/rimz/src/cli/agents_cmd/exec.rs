@@ -1207,23 +1207,10 @@ fn resolve_own_agent_end_trace(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit projection for agent exit end stamp")?;
     if let Some(pane_id) = own_pane.clone() {
-        for agent in &mut projection.agents {
-            if agent.ended_at.is_some()
-                || agent.is_provider_subagent()
-                || !matches!(
-                    agent.status,
-                    rimz::agents::AgentStatus::Running | rimz::agents::AgentStatus::Waiting
-                )
-            {
-                continue;
-            }
-            agent.context = rimz::store::agent_context::read_one(
-                store.runtime_paths(),
-                agent.kind.as_str(),
-                agent.agent_id.as_str(),
-            )
-            .map(|record| record.context);
-        }
+        rimz::store::agent_context::attach_rest_certificates(
+            store.runtime_paths(),
+            &mut projection.agents,
+        );
         let pane = rimz::pane::PaneRef::from_id(pane_id);
         let owner = rimz::store::snapshot::stamped_agent_for_pane(&pane, &projection.agents);
         if let Some(launch_id) = request.identity.launch_id.as_deref() {
