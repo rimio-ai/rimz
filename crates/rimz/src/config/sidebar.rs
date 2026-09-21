@@ -68,7 +68,7 @@ impl SidebarConfig {
         Some(key)
     }
 
-    pub fn afk_after_ms(&self) -> u64 {
+    pub(crate) fn afk_after_ms(&self) -> u64 {
         u64::from(self.afk_after_secs.get()) * 1_000
     }
 }

@@ -63,7 +63,7 @@ impl NotificationsPrefs {
             .filter(|command| !command.is_empty())
     }
 
-    pub fn effective_handlers(&self) -> Vec<NotifyHandler> {
+    pub(crate) fn effective_handlers(&self) -> Vec<NotifyHandler> {
         let mut handlers = self.handler.clone();
         if let Some(command) = self.command() {
             handlers.push(NotifyHandler {
@@ -79,7 +79,7 @@ impl NotificationsPrefs {
         self.command().is_some() || !self.handler.is_empty()
     }
 
-    pub fn triggers_status(&self, status: AgentStatus) -> bool {
+    pub(crate) fn triggers_status(&self, status: AgentStatus) -> bool {
         NotificationTrigger::from_status(status)
             .is_some_and(|trigger| self.triggers.contains(&trigger))
     }
@@ -232,7 +232,7 @@ pub enum NotificationKind {
 }
 
 impl NotificationKind {
-    pub const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Waiting => "waiting",
             Self::Failed => "failed",
@@ -257,7 +257,7 @@ pub enum NotificationTrigger {
 }
 
 impl NotificationTrigger {
-    pub const fn from_status(status: AgentStatus) -> Option<Self> {
+    const fn from_status(status: AgentStatus) -> Option<Self> {
         match status {
             AgentStatus::Waiting => Some(Self::Waiting),
             AgentStatus::Failed => Some(Self::Failed),
