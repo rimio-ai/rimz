@@ -349,7 +349,7 @@ Two fields load, enter the trust hash so a grant covers them, and are then read 
 
 ### RimZ cannot parse a config file
 
-The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, or `loop.toml` RimZ cannot parse, with the precise error. A broken file does not stop the room: `rimz start` warns on stderr and opens with built-in defaults for every setting in that file. Fix it, then restart so RimZ loads the values you meant.
+The `MACHINE CONFIG` section names parse and validation errors in `config.toml`, `theme.toml`, and `loop.toml`. A file that cannot parse does not stop the room: `rimz start` warns on stderr and opens with built-in defaults for every setting in that file. Invalid accounts, account budgets, or notification settings do stop start. Invalid palette sources only produce notices; other theme settings still apply. Fix the reported error, then restart so RimZ loads the values you meant.
 
 Markdown definitions fail differently. A broken profile, team, or subagent definition refuses only the launches that select it, while read-only views keep showing the definitions that loaded. `rimz start` summarizes broken definitions in a few lines grouped by cause; `rimz agents validate` lists each file and error. Nothing rewrites a definition for you.
 
@@ -359,7 +359,7 @@ Run `rimz start` to apply changes to an open room. Zellij's start-only settings,
 
 ### A theme or width change did nothing
 
-`theme.scheme` fails quietly. A bundled theme name that does not resolve, a path that is not there, or an inline `[colors]` block with a missing key or an unparseable color is dropped with no message, and the sidebar keeps `TokyoNight Night`. Set the scheme through the command instead, which validates and refuses:
+`rimz start` and `rimz doctor` report a bundled theme name that does not resolve, a missing scheme path, or an inline `[colors]` block with a missing required key or an unparseable color. Start still opens the room and names the palette the sidebar keeps; other theme settings still apply ([theme fallback](./theme.md#color-scheme)). Fix the named source, or set the scheme through the command, which validates and refuses:
 
 ```sh
 rimz config set theme "Catppuccin Mocha"

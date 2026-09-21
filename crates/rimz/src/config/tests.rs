@@ -198,6 +198,24 @@ fn broken_machine_files_reports_notifications_even_with_broken_theme() {
 }
 
 #[test]
+fn broken_machine_files_reports_theme_without_failing_strict_load() {
+    let dir = tempdir().expect("tempdir");
+    let path = write(&dir, "");
+    let theme_path = dir.path().join(THEME_FILE);
+    std::fs::write(&theme_path, "[theme]\nscheme = 'missing scheme'\n").unwrap();
+    let files = MachineConfigFiles::from_paths(path.clone(), dir.path().join("agents-home"));
+    let errors = broken_machine_files_in(&files);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        matches!(&errors[0], ConfigErr::Theme { path, message } if path == &theme_path && message.contains("unknown sidebar theme scheme `missing scheme`"))
+    );
+    assert_eq!(
+        load_no_fragments(&path).unwrap().theme.scheme.as_deref(),
+        Some("missing scheme")
+    );
+}
+
+#[test]
 fn lenient_load_falls_back_only_for_the_broken_file() {
     let dir = tempdir().unwrap();
     let path = write(&dir, "not = = toml");

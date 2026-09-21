@@ -93,6 +93,10 @@ fn definition_group(
 
 fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
     let path = render::home_relative(&err.path().display().to_string());
+    if let rimz::config::ConfigErr::Theme { message, .. } = err {
+        let detail = render::one_line(message);
+        return format!("{path}: {detail}");
+    }
     let detail = err
         .diagnosis()
         .map(rimz::config::ConfigFileDiagnosis::summary)
@@ -314,6 +318,19 @@ mod tests {
             "{notice}"
         );
         assert!(notice.contains("built-in defaults apply"), "{notice}");
+    }
+
+    #[test]
+    fn theme_notice_preserves_the_effective_palette_without_dropping_other_settings() {
+        let message = "unknown sidebar theme scheme `missing`; the sidebar keeps the inline `[colors]` palette until it is fixed";
+        let err = rimz::config::ConfigErr::Theme {
+            path: "/tmp/theme.toml".into(),
+            message: message.to_owned(),
+        };
+        assert_eq!(
+            broken_config_notice(&err),
+            format!("/tmp/theme.toml: {message}")
+        );
     }
 
     #[test]

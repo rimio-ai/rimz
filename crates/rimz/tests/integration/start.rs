@@ -200,6 +200,29 @@ fn start_names_a_broken_definition_and_still_opens_the_room() {
 }
 
 #[test]
+fn start_names_a_broken_theme_and_still_opens_the_room() {
+    let env = Env::new();
+    let path = env.rimz_home().join("theme.toml");
+    std::fs::write(&path, "[theme]\nscheme = 'missing scheme'\n").unwrap();
+    let output = start_with_accounts(&env, "", &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("theme.toml: unknown sidebar theme scheme `missing scheme`"),
+        "{stderr}"
+    );
+    assert!(
+        stderr
+            .contains("the sidebar keeps the default scheme `TokyoNight Night` until it is fixed"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("every setting in it is ignored"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn singular_agent_is_unknown_subcommand_with_agents_suggestion() {
     let env = Env::new();
 
