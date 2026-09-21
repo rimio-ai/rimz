@@ -22,6 +22,18 @@ use crate::workspace::{KnownWorkspace, known_workspaces_under};
 
 pub const HARNESS_FROM: &str = "rimz";
 
+/// The `from` handle a human-authored entry carries; a typed prompt carries none.
+pub const HUMAN_FROM: &str = "you";
+
+/// Who authored a transcript entry. The renderer, thread builder, and attribution read this projection; `from` stays identity rather than origin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryOrigin {
+    Human,
+    Agent,
+    Harness,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TranscriptLogErr {
     #[error(transparent)]
@@ -95,12 +107,22 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
+    pub fn origin(&self) -> EntryOrigin {
+        use TranscriptKind::*;
+        match (self.entry, self.from.as_deref()) {
+            (SubagentReport | Wait, _) => EntryOrigin::Harness,
+            (Assistant | Ask | Error, _) => EntryOrigin::Agent,
+            (_, Some(HARNESS_FROM)) => EntryOrigin::Harness,
+            (Message, None) => EntryOrigin::Harness,
+            (Prompt | Answer, None) => EntryOrigin::Human,
+            (_, Some(HUMAN_FROM)) => EntryOrigin::Human,
+            (_, Some(_)) => EntryOrigin::Agent,
+        }
+    }
+
     /// RimZ-authored automation: fleet digests, waits and signals, and headerless system prompts. Human rendering skips these and the `Assistant`/`Error` output of the turns they open; conversation counts skip these.
     pub fn is_harness(&self) -> bool {
-        matches!(
-            self.entry,
-            TranscriptKind::SubagentReport | TranscriptKind::Wait
-        ) || (self.entry == TranscriptKind::Prompt && self.from.as_deref() == Some(HARNESS_FROM))
+        matches!(self.origin(), EntryOrigin::Harness)
     }
 
     pub fn new(

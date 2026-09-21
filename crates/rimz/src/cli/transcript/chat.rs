@@ -13,7 +13,6 @@ pub(super) fn render_entry_for_log_entry(
         source: LineSource::Log {
             kind: entry.entry,
             agent: entry_key(entry),
-            harness: entry.is_harness(),
             opener_hidden: false,
         },
         chat: chat_entry_for_log_entry(entry, identities, include_channel),
@@ -37,6 +36,11 @@ pub(super) fn render_entry_for_flip(
         source: LineSource::Stage,
         chat: ChatLine {
             from,
+            origin: if flip.by == "user" {
+                EntryOrigin::Human
+            } else {
+                EntryOrigin::Agent
+            },
             to: None,
             at: Some(flip.at),
             delivered_at: None,
@@ -57,6 +61,17 @@ pub(super) fn render_entry_for_flip(
     }
 }
 
+/// The rendered author of a turn-opening entry. `"user"` is reserved for a human origin; anything RimZ or an agent introduced renders as its handle.
+fn chat_from(entry: &TranscriptEntry) -> String {
+    entry.from.clone().unwrap_or_else(|| {
+        match entry.origin() {
+            EntryOrigin::Human => "user",
+            EntryOrigin::Agent | EntryOrigin::Harness => rimz::transcript::HARNESS_FROM,
+        }
+        .to_owned()
+    })
+}
+
 pub(super) fn chat_entry_for_log_entry(
     entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
@@ -66,11 +81,10 @@ pub(super) fn chat_entry_for_log_entry(
     let message_id = entry.message_id.as_ref().map(ToString::to_string);
     let reply_to = entry.reply_to.iter().map(ToString::to_string).collect();
     let (from, to) = match entry.entry {
-        TranscriptKind::Prompt => ("user".to_owned(), Some(receiver)),
-        TranscriptKind::Message | TranscriptKind::SubagentReport | TranscriptKind::Wait => (
-            entry.from.clone().unwrap_or_else(|| "user".to_owned()),
-            Some(receiver),
-        ),
+        TranscriptKind::Prompt
+        | TranscriptKind::Message
+        | TranscriptKind::SubagentReport
+        | TranscriptKind::Wait => (chat_from(entry), Some(receiver)),
         TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => (receiver, None),
         TranscriptKind::Answer => (
             entry.from.clone().unwrap_or_else(|| "answered".to_owned()),
@@ -80,6 +94,7 @@ pub(super) fn chat_entry_for_log_entry(
     let error = entry.entry == TranscriptKind::Error;
     ChatLine {
         from,
+        origin: entry.origin(),
         to,
         at: Some(entry.enqueued_at.unwrap_or(entry.at)),
         delivered_at: entry.enqueued_at.map(|_| entry.at),

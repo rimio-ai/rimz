@@ -315,7 +315,7 @@ fn thread_edge(parent: &RenderEntry, child: &RenderEntry) -> bool {
         | TranscriptKind::Message
         | TranscriptKind::SubagentReport
         | TranscriptKind::Wait => {
-            parent.chat.from != "user"
+            parent.chat.origin != EntryOrigin::Human
                 && child
                     .chat
                     .to
