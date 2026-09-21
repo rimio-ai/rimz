@@ -124,7 +124,7 @@ pub(super) fn record_native_answer(
         answer,
     );
     entry.channel = channel;
-    entry.from = Some("you".to_owned());
+    entry.from = Some(rimz::transcript::HUMAN_FROM.to_owned());
     entry.answers = answers.to_vec();
     entry.id = ask_id;
     stamp_parent(&mut entry, state.as_ref());
@@ -244,6 +244,8 @@ pub(super) fn record_conversation(
                     .then(|| latest_open_native_ask(store, agent.spec().kind, agent_id.as_str()))
                     .flatten()
                     .and_then(|ask| ask.id);
+                // One read per turn, and none when no section needs it.
+                let mut run = None;
                 for section in sections {
                     use rimz::store::message::SectionOrigin;
                     use rimz::transcript::TranscriptKind;
@@ -267,8 +269,12 @@ pub(super) fn record_conversation(
                     entry.from = from;
                     if section.origin == SectionOrigin::Human
                         && section.record.is_none()
-                        && let Some(run) =
-                            run_id.and_then(|id| rimz::harness::run::load(store.paths(), id).ok())
+                        && let Some(run) = run
+                            .get_or_insert_with(|| {
+                                run_id
+                                    .and_then(|id| rimz::harness::run::load(store.paths(), id).ok())
+                            })
+                            .as_ref()
                         && peel_rimz_blocks(&run.prompt).trim()
                             == peel_rimz_blocks(&section.text).trim()
                     {
@@ -315,7 +321,7 @@ pub(super) fn record_conversation(
                         let fallback = entry.clone();
                         entry.entry = rimz::transcript::TranscriptKind::Answer;
                         entry.id = Some(ask_id);
-                        entry.from = Some("you".to_owned());
+                        entry.from = Some(rimz::transcript::HUMAN_FROM.to_owned());
                         entry.answers = vec![rimz::transcript::AskAnswer {
                             question: None,
                             chosen: vec![entry.text.clone()],
