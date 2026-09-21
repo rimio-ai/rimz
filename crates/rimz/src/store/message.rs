@@ -80,6 +80,27 @@ impl HarnessNotice {
 }
 
 impl MessageSender {
+    /// The origin supplied by this sender, independent of the message body.
+    pub fn section_origin(&self) -> SectionOrigin {
+        match self {
+            Self::Human => SectionOrigin::Human,
+            Self::Agent { .. } => SectionOrigin::Agent(self.render()),
+            Self::Subagent { .. }
+            | Self::Harness {
+                notice: HarnessNotice::SubagentReport,
+            } => SectionOrigin::Subagent(self.render()),
+            Self::Harness {
+                notice:
+                    HarnessNotice::Deadline
+                    | HarnessNotice::Wait
+                    | HarnessNotice::Signal
+                    | HarnessNotice::Stage
+                    | HarnessNotice::Other(_),
+            } => SectionOrigin::Notice(self.render()),
+            Self::System => SectionOrigin::Harness,
+        }
+    }
+
     /// Conversation traffic: human sends and attributed agent sends, not harness or system text.
     pub fn is_conversation(&self) -> bool {
         matches!(self, Self::Human | Self::Agent { .. })
@@ -456,6 +477,25 @@ pub struct MessageRecord {
 }
 
 impl MessageRecord {
+    fn ships_headerless(&self) -> bool {
+        match (&self.sender, self.body) {
+            (MessageSender::System, _) => true,
+            (_, MessageBody::Command) => true,
+            (
+                MessageSender::Human
+                | MessageSender::Agent { .. }
+                | MessageSender::Subagent { .. }
+                | MessageSender::Harness { .. },
+                MessageBody::Prompt,
+            ) => false,
+        }
+    }
+
+    /// Written to the pane and not yet finalized.
+    pub fn in_flight(&self) -> bool {
+        self.status == MessageStatus::Sent || self.awaiting_late_ack()
+    }
+
     /// A delivered prompt that is the human's own input. Agent senders carry
     /// identity, system senders cover nudges and deliberately unattributed text,
     /// background orchestration marks records automated, and resume gates stay
@@ -997,13 +1037,105 @@ pub(crate) fn prompt_is_harness_delivered(prompt: &str) -> bool {
     if prompt.trim().is_empty() {
         return false;
     }
-    split_batched_prompt(prompt)
+    classify_submitted_prompt(prompt, &[], &[])
         .into_iter()
-        .filter(|segment| !segment.trim().is_empty())
-        .all(|segment| {
-            parse_message_header(segment.trim_start())
-                .is_some_and(|(kind, _, _)| kind != HeaderKind::User)
-        })
+        .all(|section| section.origin != SectionOrigin::Human)
+}
+
+/// Who authored one section of a submitted prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SectionOrigin {
+    Human,
+    Agent(String),
+    Subagent(String),
+    Notice(String),
+    Harness,
+}
+
+/// A classified section and the queue record that supplied it, when known.
+pub struct PromptSection<'a> {
+    pub text: String,
+    pub origin: SectionOrigin,
+    pub record: Option<&'a MessageRecord>,
+}
+
+/// Classify submitted text against confirmed records and the pre-ack in-flight view.
+/// Human is the residue when neither a header nor a record accounts for the text.
+pub fn classify_submitted_prompt<'a>(
+    prompt: &str,
+    delivered: &[&'a MessageRecord],
+    in_flight: &[&'a MessageRecord],
+) -> Vec<PromptSection<'a>> {
+    let aligned = align_submitted_prompt(prompt, delivered);
+    let batch_aligned = aligned.is_some();
+    let segments = if let Some((leading, aligned, trailing)) = aligned {
+        leading
+            .into_iter()
+            .map(|text| (text, false))
+            .chain(aligned.into_iter().map(|text| (text, true)))
+            .chain(trailing.into_iter().map(|text| (text, false)))
+            .collect::<Vec<_>>()
+    } else {
+        split_batched_prompt(prompt)
+            .into_iter()
+            .map(|text| (text, false))
+            .collect()
+    };
+    let mut cursor = 0;
+    let mut sections = Vec::new();
+    for (segment, aligned_record) in segments {
+        let header = parse_message_header(segment.trim_start());
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let (text, origin) = match header {
+            Some((header, sender, body)) => {
+                let origin = match header {
+                    HeaderKind::Agent => SectionOrigin::Agent(sender),
+                    HeaderKind::Subagent => SectionOrigin::Subagent(sender),
+                    HeaderKind::Wait
+                    | HeaderKind::Signal
+                    | HeaderKind::Stage
+                    | HeaderKind::Deadline => SectionOrigin::Notice(sender),
+                    HeaderKind::User => SectionOrigin::Human,
+                };
+                (body.trim_end().to_owned(), Some(origin))
+            }
+            None => (segment.to_owned(), None),
+        };
+        let matched = if aligned_record {
+            delivered.get(cursor).map(|record| (0, *record))
+        } else if !batch_aligned {
+            delivered[cursor..]
+                .iter()
+                .copied()
+                .enumerate()
+                .find(|(_, record)| record.text == text)
+        } else {
+            None
+        };
+        let record = if let Some((offset, record)) = matched {
+            cursor += offset + 1;
+            Some(record)
+        } else if origin.is_none() {
+            in_flight
+                .iter()
+                .copied()
+                .find(|record| record.ships_headerless() && record.text.trim() == text)
+        } else {
+            None
+        };
+        let origin = origin
+            .or_else(|| record.map(|record| record.sender.section_origin()))
+            .unwrap_or(SectionOrigin::Human);
+        sections.push(PromptSection {
+            text,
+            origin,
+            record,
+        });
+    }
+    sections
 }
 
 /// Align one submitted pane paste with the records written as its batch.

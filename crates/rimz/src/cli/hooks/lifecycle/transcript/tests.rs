@@ -39,12 +39,45 @@ fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
     }
 }
 
+struct TestConversationInput<'a> {
+    assistant_message: Option<&'a str>,
+    questions: &'a [rimz::transcript::AskQuestion],
+    delivered: &'a [rimz::store::message::MessageRecord],
+    run_id: Option<&'a rimz::RunId>,
+}
+
+fn record_conversation(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &AgentDefinition,
+    recorded: &RecordedLifecycle,
+    input: TestConversationInput<'_>,
+) -> rimz::transcript::Result<()> {
+    let sections = rimz::store::message::classify_submitted_prompt(
+        recorded.observation.prompt.as_deref().unwrap_or_default(),
+        &input.delivered.iter().collect::<Vec<_>>(),
+        &[],
+    );
+    super::record_conversation(
+        workspace,
+        store,
+        agent,
+        recorded,
+        ConversationInput {
+            assistant_message: input.assistant_message,
+            questions: input.questions,
+            sections: &sections,
+            run_id: input.run_id,
+        },
+    )
+}
+
 fn conversation_input<'a>(
     assistant_message: Option<&'a str>,
     questions: &'a [rimz::transcript::AskQuestion],
     delivered: &'a [rimz::store::message::MessageRecord],
-) -> ConversationInput<'a> {
-    ConversationInput {
+) -> TestConversationInput<'a> {
+    TestConversationInput {
         assistant_message,
         questions,
         delivered,
@@ -505,7 +538,7 @@ fn launched_child_brief_is_attributed_to_parent() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        ConversationInput {
+        TestConversationInput {
             run_id: Some(&run.run_id),
             ..conversation_input(None, &[], &[])
         },
@@ -519,7 +552,7 @@ fn launched_child_brief_is_attributed_to_parent() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &later,
-        ConversationInput {
+        TestConversationInput {
             run_id: Some(&run.run_id),
             ..conversation_input(None, &[], &[])
         },
@@ -762,6 +795,132 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
             .turn_opened_by,
         vec![first.message_id, second.message_id]
     );
+}
+
+#[test]
+fn in_flight_turn_openers_keep_origin_causality_and_spend() {
+    use rimz::store::message::{
+        DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
+        classify_submitted_prompt,
+    };
+    use rimz::transcript::TranscriptKind;
+    let agent_sender = MessageSender::Agent {
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        name: None,
+        profile: None,
+        role: Some("coder".to_owned()),
+        channel: None,
+    };
+    for (sender, body, kind, from, user_inputs) in [
+        (
+            MessageSender::System,
+            MessageBody::Command,
+            TranscriptKind::Prompt,
+            Some("rimz"),
+            0,
+        ),
+        (
+            MessageSender::Human,
+            MessageBody::Command,
+            TranscriptKind::Prompt,
+            None,
+            1,
+        ),
+        (
+            agent_sender,
+            MessageBody::Command,
+            TranscriptKind::Message,
+            Some("@coder"),
+            0,
+        ),
+        (
+            MessageSender::System,
+            MessageBody::Prompt,
+            TranscriptKind::Prompt,
+            Some("rimz"),
+            0,
+        ),
+    ] {
+        let (dir, store) = store();
+        let workspace = workspace();
+        let agent = rimz::agents::definition_by_kind("claude").unwrap();
+        let state = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+        let mut message = MessageRecord::new(
+            workspace.workspace_id.clone(),
+            &state,
+            "/compact".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(sender)
+        .with_body(body);
+        message.status = MessageStatus::Sent;
+        store.queue_message(&message, "session").unwrap();
+        let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+        started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("/compact"));
+        let in_flight = in_flight_messages_for_lifecycle(&store, agent, &started);
+        assert_eq!(in_flight.len(), 1);
+        if body == MessageBody::Command {
+            assert!(
+                confirm_sent_message_for_lifecycle(&store, agent, &started, "session").is_empty()
+            );
+        }
+        let sections =
+            classify_submitted_prompt("/compact", &[], &in_flight.iter().collect::<Vec<_>>());
+        super::record_conversation(
+            &workspace,
+            &store,
+            agent,
+            &started,
+            ConversationInput {
+                assistant_message: None,
+                questions: &[],
+                sections: &sections,
+                run_id: None,
+            },
+        )
+        .unwrap();
+        record_user_input_for_lifecycle(
+            &workspace,
+            agent,
+            &started,
+            &sections,
+            false,
+            Some(dir.path()),
+        );
+        let entries = rimz::transcript::read_all(store.paths()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry, kind);
+        assert_eq!(entries[0].from.as_deref(), from);
+        assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+        assert_eq!(
+            store.list_messages().unwrap()[0].status,
+            MessageStatus::Sent
+        );
+        assert_eq!(
+            rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "sess-1")
+                .unwrap()
+                .context
+                .turn_opened_by,
+            vec![message.message_id]
+        );
+        assert_eq!(
+            rimz::agents::spending::user_input::load_in(dir.path()).len(),
+            user_inputs
+        );
+        let typed = classify_submitted_prompt("real typed prompt", &[], &[]);
+        record_user_input_for_lifecycle(
+            &workspace,
+            agent,
+            &started,
+            &typed,
+            false,
+            Some(dir.path()),
+        );
+        assert_eq!(
+            rimz::agents::spending::user_input::load_in(dir.path()).len(),
+            user_inputs + 1
+        );
+    }
 }
 
 #[test]

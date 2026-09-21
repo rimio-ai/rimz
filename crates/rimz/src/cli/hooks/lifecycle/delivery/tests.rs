@@ -1,5 +1,27 @@
 use super::*;
 
+fn record_user_input_for_lifecycle(
+    workspace: &ResolvedWorkspace,
+    agent: &AgentDefinition,
+    recorded: &RecordedLifecycle,
+    delivered: &[rimz::store::message::MessageRecord],
+    supervised: bool,
+    state_root: Option<&std::path::Path>,
+) {
+    let sections = rimz::store::message::classify_submitted_prompt(
+        recorded
+            .observation
+            .prompt
+            .as_deref()
+            .unwrap_or("human prompt"),
+        &delivered.iter().collect::<Vec<_>>(),
+        &[],
+    );
+    super::record_user_input_for_lifecycle(
+        workspace, agent, recorded, &sections, supervised, state_root,
+    );
+}
+
 fn workspace_id() -> rimz::ids::WorkspaceId {
     rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"))
 }
@@ -133,8 +155,32 @@ fn turn_started_records_only_unsupervised_user_inputs() {
         &workspace,
         agent,
         &turn_started(),
-        &[human],
+        std::slice::from_ref(&human),
         true,
+        Some(dir.path()),
+    );
+    for excluded in [
+        human.clone().with_automated(true),
+        rimz::store::message::MessageRecord {
+            gate: rimz::store::message::DeliveryGate::Resume,
+            ..human
+        },
+    ] {
+        record_user_input_for_lifecycle(
+            &workspace,
+            agent,
+            &turn_started(),
+            &[excluded],
+            false,
+            Some(dir.path()),
+        );
+    }
+    super::record_user_input_for_lifecycle(
+        &workspace,
+        agent,
+        &turn_started(),
+        &[],
+        false,
         Some(dir.path()),
     );
 

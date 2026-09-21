@@ -215,13 +215,19 @@ pub(super) fn handle_lifecycle_hook(
         {
             warn!(%run_id, %error, "lifecycle: failed to claim deadline context");
         }
+        let in_flight = in_flight_messages_for_lifecycle(store, agent, recorded);
         let delivered =
             confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
+        let sections = rimz::store::message::classify_submitted_prompt(
+            recorded.observation.prompt.as_deref().unwrap_or_default(),
+            &delivered.iter().collect::<Vec<_>>(),
+            &in_flight.iter().collect::<Vec<_>>(),
+        );
         record_user_input_for_lifecycle(
             workspace,
             agent,
             recorded,
-            &delivered,
+            &sections,
             env_run_id().is_some(),
             user_input_state_root(store),
         );
@@ -238,7 +244,7 @@ pub(super) fn handle_lifecycle_hook(
             ConversationInput {
                 assistant_message: assistant_message.as_deref(),
                 questions,
-                delivered: &delivered,
+                sections: &sections,
                 run_id: run_id.as_ref(),
             },
         ) {
