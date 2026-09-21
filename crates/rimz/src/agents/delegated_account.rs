@@ -16,7 +16,7 @@ use super::credits::AccountUsageReportable;
 use super::{AccountUsageIdentity, AccountUsageProbe, AgentAccount, ProviderAccountScope};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Adapter {
+pub(super) enum Adapter {
     Pi,
     OpenCode,
 }
@@ -30,7 +30,7 @@ impl Adapter {
     }
 }
 
-pub(crate) struct Config {
+pub(super) struct Config {
     pub(crate) adapter: Adapter,
     pub(crate) auth_path: Option<PathBuf>,
     pub(crate) used_provider: fn() -> Option<String>,
@@ -59,7 +59,7 @@ struct SelectedCredential {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
+enum Error {
     #[error("{adapter} OAuth credentials not found")]
     NoCredentials { adapter: &'static str },
     #[error("{adapter} auth file selected an API-key credential")]
@@ -111,7 +111,7 @@ impl AccountUsageReportable for Error {
     }
 }
 
-pub(crate) fn probe_account(config: &Config) -> AccountProbe {
+pub(super) fn probe_account(config: &Config) -> AccountProbe {
     let Some(path) = config.auth_path.as_deref() else {
         return AccountProbe::LoggedOut;
     };
@@ -152,7 +152,7 @@ pub(crate) fn probe_account(config: &Config) -> AccountProbe {
     })
 }
 
-pub(crate) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
+pub(super) fn probe_account_usage(config: &Config) -> AccountUsageProbe {
     let stamp = config.auth_path.as_deref().and_then(file_mtime_ms);
     let selected = select_usage_from_config(config);
     let selected = match selected {
