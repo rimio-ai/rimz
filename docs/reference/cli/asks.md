@@ -17,7 +17,7 @@ rimz asks --json          # the same rows as JSON
 | `--all` | Include asks from every channel. Outside a channel the list already covers every channel. |
 | `--json` | Print a JSON array of [ask rows](#ask-json), `[]` when nothing is open. |
 
-The table has the columns `ASK`, `AGENT`, `KIND`, `AGE`, and `QUESTION`, oldest ask first. `KIND` reads `permission`, `plan approval`, or `question`, and `QUESTION` is the first line of the first question. With no open asks the command prints nothing and exits `0`.
+The table has the columns `ASK`, `AGENT`, `KIND`, `AGE`, and `QUESTION`, oldest ask first. `KIND` reads `permission`, `plan approval`, or `question`, and `QUESTION` is the first line of the first question. With no open asks the command prints `no agent in #<channel> is asking anything — rimz asks --all shows every channel` and exits `0`; where the list already covers every channel — with `--all`, or outside a channel — the line is `no agent is asking anything`.
 
 A provider subagent (a child the agent spawned inside its own session) that raises a prompt appears as `child-name (via @root)`, because the prompt is drawn in the root agent's pane. In JSON, `agent.handle` is the root's address and `agent.name` is the child. A child whose root agent is no longer live is left out of the list. Target a child's ask by its `ask_id`.
 

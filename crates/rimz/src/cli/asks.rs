@@ -148,7 +148,11 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         return render::json_pretty(&views.iter().map(AskJsonView::from).collect::<Vec<_>>());
     }
     if views.is_empty() {
-        return Ok(());
+        return render::finish(writeln!(
+            render::out(),
+            "{}",
+            render::paint(render::palette::faint(), &empty_ask_digest(all, channel))
+        ));
     }
     let now = jiff::Timestamp::now();
     let mut table = render::Table::new(["ASK", "AGENT", "KIND", "AGE", "QUESTION"]);
@@ -163,6 +167,21 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         ]);
     }
     render::finish(table.render(&mut render::out()))
+}
+
+/// The line a human reads when nothing is blocked. A channel-scoped list hides
+/// asks the room may still hold, so it names the flag that widens it; with no
+/// current channel the list already covers every channel and `--all` adds
+/// nothing.
+fn empty_ask_digest(all: bool, channel: Option<&str>) -> String {
+    match channel.filter(|_| !all) {
+        Some(channel) => {
+            format!(
+                "no agent in #{channel} is asking anything — rimz asks --all shows every channel"
+            )
+        }
+        None => "no agent is asking anything".to_owned(),
+    }
 }
 
 fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
@@ -302,4 +321,22 @@ fn first_line(view: &OpenAskView) -> &str {
         .map(|question| question.question.lines().next().unwrap_or_default())
         .or(view.detail.open.detail.as_deref())
         .unwrap_or("waiting for input")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_ask_digest_names_all_only_where_it_widens() {
+        assert_eq!(
+            empty_ask_digest(false, Some("cli-docs")),
+            "no agent in #cli-docs is asking anything — rimz asks --all shows every channel"
+        );
+        assert_eq!(
+            empty_ask_digest(true, Some("cli-docs")),
+            "no agent is asking anything"
+        );
+        assert_eq!(empty_ask_digest(false, None), "no agent is asking anything");
+    }
 }
