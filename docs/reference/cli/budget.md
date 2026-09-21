@@ -33,7 +33,7 @@ Every form prints the report, after the change when there is one:
 
 | Field | Shows |
 | --- | --- |
-| `agent` | The agent's session id as an address (`@<session id>`). |
+| `agent` | The agent's [handle](./agents.md#addressing-agents), channel suffix included (`@coder#auth`). |
 | `spend` | Spend counted against the cap in its window, as `$N.NN`, or `-` when the agent's cost is unknown. |
 | `cap` | The cap in effect as `$N.NN`, or `none` when unset or cleared. |
 | `window` | `session` or `day`, or `-` when the agent never had a cap. A cleared cap keeps its last window. |

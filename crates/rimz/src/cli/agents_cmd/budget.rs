@@ -41,9 +41,10 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         .transpose()
         .context("parsing the agent's launch budget")?;
     let existing = read_ledger(store.runtime_paths(), &agent.kind, &agent.agent_id);
+    let peers = rimz::address::addressable_agents(&snapshot);
 
     if args.value.is_none() {
-        return render_budget(agent, existing.as_ref(), launched);
+        return render_budget(agent, &peers, existing.as_ref(), launched);
     }
 
     let mut ledger = existing
@@ -108,18 +109,19 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                 .context("queueing budget continue prompt")?;
         }
     }
-    render_budget(agent, Some(&ledger), launched)
+    render_budget(agent, &peers, Some(&ledger), launched)
 }
 
 fn render_budget(
     agent: &rimz::agents::AgentState,
+    peers: &[&rimz::agents::AgentState],
     ledger: Option<&BudgetLedger>,
     launched: Option<BudgetSpec>,
 ) -> Result<()> {
     let mut kv = crate::cli::render::KeyVals::new();
     kv.push(
         "agent",
-        crate::cli::render::cell(format!("@{}", agent.agent_id)),
+        crate::cli::render::cell(rimz::address::agent_handle(agent, peers, true)),
     );
     let spec = ledger.map(|ledger| ledger.spec).or(launched);
     let spend = total_cost_usd(agent).map(|total| {
