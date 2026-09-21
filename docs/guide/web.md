@@ -55,7 +55,7 @@ Editing `?room=` in the address bar is how you switch rooms. RimZ validates that
 
 Safari can load the direct local page but never attaches the terminal: WebKit omits Basic credentials from WebSocket upgrades. Open the URL in Chrome, or reach the room through [`rimz remote connect --web`](#open-a-remote-room) or a [reverse proxy](#behind-a-reverse-proxy), both of which supply the credential before the browser has to.
 
-`rimz web stop` stops every ttyd daemon RimZ started and touches nothing else: the rooms keep running, and the credential and the list of shared rooms both survive. To end browser access rather than pause it, revoke the credential as well and set `enabled = false` under `[web]`. With the default `enabled = true`, every `rimz start` also brings the shared daemon up best-effort; a missing ttyd, an occupied port, or a daemon error warns on stderr and leaves the room usable in the terminal.
+`rimz web stop` stops every ttyd daemon RimZ started and touches nothing else: the rooms keep running, and the credential and the list of shared rooms both survive. To end browser access rather than pause it, revoke the credential as well and set `enabled = false` under `[web]`. The key refuses `open`, `share`, `start`, and `restart`, but does not stop an already-running daemon: use `rimz web stop` for that. `status`, `stop`, and all `token` operations, including revocation, remain usable while disabled. With the default `enabled = true`, every `rimz start` also brings the shared daemon up best-effort; a missing ttyd, an occupied port, or a daemon error warns on stderr and leaves the room usable in the terminal.
 
 ## Session manager
 
@@ -106,7 +106,7 @@ rimz web unshare --all                            # revoke every room
 
 tmux viewers attach read-only and with `ignore-size`, so they can neither type nor pull the layout to their own window size. Zellij has neither mode: dropped input is the only barrier there, and a viewer resizing their window can change the shared room's geometry.
 
-`unshare` on one room while others stay shared stops and restarts the broadcast daemon, which disconnects every viewer; tabs on still-shared rooms reconnect on their own. Removing the last room, or `--all`, stops the daemon outright. The list itself survives `rimz web stop` and a reboot, so the next `share` or `rimz web restart` serves the same rooms again, and `rimz web status` prints it whether or not the daemon is up.
+`unshare` on one room while others stay shared stops and restarts the broadcast daemon, which disconnects every viewer; tabs on still-shared rooms reconnect on their own. Removing the last room, or `--all`, stops the daemon outright. The list itself survives `rimz web stop` and a reboot, so the next `share` or `rimz web restart` serves the same rooms again if `[web] enabled = true`, and `rimz web status` prints it whether or not the daemon is up.
 
 The viewer link is unauthenticated by design. Keep the listener on loopback for someone sitting beside you, and put HTTPS and whatever viewer check you want in a reverse proxy before it leaves the machine, with `share_base_url` set to the proxy's public prefix. The reverse-proxy settings below guard the shared daemon and never reach this listener. Sharing a room while `interface` is not loopback prints `rimz: warning: broadcast is unauthenticated; anyone reaching <interface>:<port> can watch`.
 
@@ -126,7 +126,7 @@ Appearance is fixed when the daemon starts, so after a `[theme]` or `[web]` styl
 rimz web restart
 ```
 
-`restart` starts the shared daemon when it was down, and restarts the broadcast daemon when rooms are shared. Reload any tab that stayed open: it keeps the page it already loaded.
+`restart` requires `[web] enabled = true`. It starts the shared daemon when it was down, and restarts the broadcast daemon when rooms are shared. Reload any tab that stayed open: it keeps the page it already loaded.
 
 ## Behind a reverse proxy
 
