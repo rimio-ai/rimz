@@ -1082,6 +1082,10 @@ pub fn classify_submitted_prompt<'a>(
             .collect()
     };
     let mut cursor = 0;
+    // The in-flight lookup consumes its match, as the `delivered` cursor does:
+    // two sections carrying the same text are two records, and binding both to
+    // the first would stamp one `message_id` on two entries.
+    let mut unmatched = in_flight.to_vec();
     let mut sections = Vec::new();
     for (segment, aligned_record) in segments {
         let header = parse_message_header(segment.trim_start());
@@ -1119,10 +1123,10 @@ pub fn classify_submitted_prompt<'a>(
             cursor += offset + 1;
             Some(record)
         } else if origin.is_none() {
-            in_flight
+            unmatched
                 .iter()
-                .copied()
-                .find(|record| record.ships_headerless() && record.text.trim() == text)
+                .position(|record| record.ships_headerless() && record.text.trim() == text)
+                .map(|index| unmatched.remove(index))
         } else {
             None
         };
