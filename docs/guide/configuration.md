@@ -632,7 +632,7 @@ surplus-after = "3d"
 
 Loop tasks live in `~/.rimz/loop.toml` under `[tasks.<name>]`. Shared project tasks take the same shape in `<repo>/.rimz/config.toml`, enter the trust hash, and need both `rimz trust grant` and a machine-local `rimz loop enable <name>` before they run unattended. The scheduling model (the shapes, the watchdogs, the self-waits) is the [loops guide](./loops.md); this section is the field shape, and [`rimz loop`](../reference/cli/loop.md) is the command that writes most of it for you.
 
-`default-timeout` bounds a scheduled run whose task omits `timeout`. It takes `s`, `m`, `h`, and `d` durations, defaults to `2h`, and `rimz config set loop.default-timeout 3h` writes it. A task's own `timeout` wins, and a manual `rimz loop fire` without one stays unbounded.
+`default-timeout` bounds a scheduled run whose task omits `timeout`. It takes a positive `s`, `m`, `h`, or `d` duration, defaults to `2h`, and `rimz config set loop.default-timeout 3h` writes it; `0s` is refused rather than accepted as a deadline no turn can meet. A task's own `timeout` wins, and a manual `rimz loop fire` without one stays unbounded.
 
 Every task you write here does one thing: `agent` runs one agent cell on a calendar, interval, cron, or one-shot schedule.
 

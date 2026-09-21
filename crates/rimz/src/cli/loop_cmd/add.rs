@@ -134,9 +134,7 @@ fn add_delivery(
         };
         DeliveryTrigger::Clock(clock)
     };
-    if let Some(timeout) = args.timeout.as_deref() {
-        parse_task_timeout(timeout).map_err(anyhow::Error::msg)?;
-    }
+    validate_task_timeout(args.timeout.as_deref())?;
     let prompt = match (&args.prompt, &args.prompt_file) {
         (Some(prompt), _) => DeliveryPrompt::Inline(prompt.clone()),
         (_, Some(path)) => DeliveryPrompt::File(path.clone()),
@@ -329,14 +327,23 @@ fn resolve_add_action(
     Ok(action)
 }
 
+/// A scheduled turn needs a deadline it can reach, so `--timeout 0s` is refused
+/// the way `--for`, `--in`, and `--until` are.
+fn validate_task_timeout(raw: Option<&str>) -> Result<()> {
+    let Some(raw) = raw else { return Ok(()) };
+    let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
+    if duration.is_zero() {
+        bail!("--timeout must be greater than zero");
+    }
+    Ok(())
+}
+
 fn build_task_entry(
     args: &AddArgs,
     action: AddTaskAction,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<(TaskEntry, Option<ResolvedSingleAgentLaunch>)> {
-    if let Some(timeout) = args.timeout.as_deref() {
-        parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
-    }
+    validate_task_timeout(args.timeout.as_deref())?;
     let budget = args
         .budget
         .as_deref()
