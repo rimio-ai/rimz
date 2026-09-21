@@ -42,7 +42,7 @@ pub use width::{
     CLIENT_SIZE_ENV, SidebarTarget, SidebarWidth, WidthAdjust, WidthPercent, WidthPermille,
     WidthStep, client_size_from_env, detect_terminal_size, split_along_longer_edge,
 };
-pub use zellij::{ZellijBackend, ZellijOptionValue, ZellijSessionOption};
+pub use zellij::ZellijBackend;
 
 use std::collections::BTreeMap;
 use std::io;
@@ -635,8 +635,9 @@ pub struct PresencePluginOptions {
     pub focus_key: Option<String>,
     /// The smart-zoom chord (`[sidebar] zoom_key`) bound by the plugin.
     pub zoom_key: Option<String>,
-    /// Session-scoped options the plugin re-asserts through `reconfigure`, where values are absolute.
-    pub session_options: Vec<ZellijSessionOption>,
+    /// Session-scoped options the plugin re-asserts through `reconfigure`,
+    /// where values are absolute rather than CLI-XORed with `config.kdl`.
+    pub session_options: Vec<zellij::ZellijSessionOption>,
 }
 
 impl PresencePluginOptions {

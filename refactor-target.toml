@@ -360,12 +360,15 @@ path = "crates/rimz/src/mux"
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
 # Tab naming shares pane-label policy and one intent-driven operation across launch and projection.
 # The cross-backend live-session snapshot moves here from room (pass 15c).
-surface-budget = 249
+# The resolved Zellij session option list is one public type plus its resolver,
+# consumed by the live backend tests that prove room options at the multiplexer.
+surface-budget = 251
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
 # Presence lifecycle stays behind upgrade_presence_plugin; public schema serves sidebar, doctor and integration fixtures.
-surface-budget = 50
+# ZellijSessionOption is opaque: its fields and value enum stay private to this module.
+surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/observability"

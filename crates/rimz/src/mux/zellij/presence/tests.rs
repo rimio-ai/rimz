@@ -500,10 +500,11 @@ fn presence_plugin_identity_renders_expressible_fields() {
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |opts| {
-                opts.session_options.push(crate::mux::ZellijSessionOption {
-                    key: "copy_clipboard",
-                    value: crate::mux::ZellijOptionValue::Word("primary"),
-                });
+                opts.session_options
+                    .push(crate::mux::zellij::ZellijSessionOption {
+                        key: "copy_clipboard",
+                        value: crate::mux::zellij::ZellijOptionValue::Word("primary"),
+                    });
             },
             expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
         },
