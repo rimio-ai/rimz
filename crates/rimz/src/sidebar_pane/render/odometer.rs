@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 /// configured base render grid; the roll clicks on every second phase, so the
 /// default 100ms grid yields a 200ms click — and a room where only money moves
 /// rides the serve loop's matching money grid rather than the fast one.
-pub(crate) const CLICK_PHASES: u64 = 2;
+pub(in crate::sidebar_pane) const CLICK_PHASES: u64 = 2;
 
 /// The fixed climb window: every jump completes within this many clicks
 /// (1.2s), the bounded-duration contract that keeps a $5 turn from crawling
@@ -61,7 +61,7 @@ fn eased_cents(from: u64, target: u64, clicks: u64) -> u64 {
 
 /// One animated scalar — where it is painted versus where the data points.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Roll {
+pub(in crate::sidebar_pane) struct Roll {
     /// The painted value in cents when the current roll began — the eased
     /// sweep's start.
     from_cents: u64,
@@ -103,7 +103,7 @@ impl Roll {
     /// correct even on a render path that never folded a roll, with the roll
     /// supplying only the transition. Pure: render reads it without mutating,
     /// so a frame recomputes at any phase.
-    pub(crate) fn display(&self, target: f64, phase: u64) -> f64 {
+    pub(in crate::sidebar_pane) fn display(&self, target: f64, phase: u64) -> f64 {
         let target_cents = to_cents(target);
         match self.start_phase {
             Some(start) if self.from_cents < target_cents => {
@@ -153,7 +153,7 @@ impl Roll {
 
     /// Within the brief brighten window just after the figure lands. A snap never
     /// flashes — only a genuine climb earns the "ka-chunk".
-    pub(crate) fn flashing(&self, phase: u64) -> bool {
+    pub(in crate::sidebar_pane) fn flashing(&self, phase: u64) -> bool {
         if self.from_cents >= self.target_cents {
             return false;
         }
@@ -175,8 +175,8 @@ impl Roll {
 /// climbs as a turn lands. The W/M store rows below read straight from the
 /// tally with no roll.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct TallyAnim {
-    pub(crate) today_usd: Roll,
+pub(in crate::sidebar_pane) struct TallyAnim {
+    pub(in crate::sidebar_pane) today_usd: Roll,
 }
 
 impl TallyAnim {
@@ -185,14 +185,14 @@ impl TallyAnim {
     /// each data refresh that carries a figure; a refresh without one leaves
     /// the roll untouched, so a transient missing snapshot never snaps the
     /// figure to zero.
-    pub(crate) fn observe(&mut self, today_usd: f64, phase: u64) {
+    pub(in crate::sidebar_pane) fn observe(&mut self, today_usd: f64, phase: u64) {
         self.today_usd.observe(today_usd, phase);
     }
 
     /// Whether the figure is still mid-roll — the serve loop ORs this into its
     /// animation gate so a finished-turn climb plays even when no agent is
     /// running, then lets the loop fall back to the slow data tick once settled.
-    pub(crate) fn any_rolling(&self, phase: u64) -> bool {
+    pub(in crate::sidebar_pane) fn any_rolling(&self, phase: u64) -> bool {
         self.today_usd.rolling(phase)
     }
 }
@@ -203,7 +203,7 @@ impl TallyAnim {
 /// id no fold has observed displays the target as-is, so a one-off draw or a
 /// test paints the corner correctly with no roll seeded.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct CostRolls {
+pub(in crate::sidebar_pane) struct CostRolls {
     rolls: HashMap<String, Roll>,
 }
 
@@ -211,7 +211,11 @@ impl CostRolls {
     /// Fold the snapshot's resolved per-row costs under each row id, then drop
     /// ids the snapshot no longer carries, so the map tracks the live rows and
     /// never grows across a long session.
-    pub(crate) fn observe(&mut self, costs: impl Iterator<Item = (String, f64)>, phase: u64) {
+    pub(in crate::sidebar_pane) fn observe(
+        &mut self,
+        costs: impl Iterator<Item = (String, f64)>,
+        phase: u64,
+    ) {
         let mut seen = HashSet::new();
         for (id, usd) in costs {
             self.rolls
@@ -225,20 +229,20 @@ impl CostRolls {
 
     /// The value to paint for `id` at `phase` — the eased sweep toward the
     /// authoritative `target`, or `target` itself for an unobserved id.
-    pub(crate) fn display(&self, id: &str, target: f64, phase: u64) -> f64 {
+    pub(in crate::sidebar_pane) fn display(&self, id: &str, target: f64, phase: u64) -> f64 {
         self.rolls
             .get(id)
             .map_or(target, |roll| roll.display(target, phase))
     }
 
     /// Whether `id`'s figure is inside its brief settle brighten.
-    pub(crate) fn flashing(&self, id: &str, phase: u64) -> bool {
+    pub(in crate::sidebar_pane) fn flashing(&self, id: &str, phase: u64) -> bool {
         self.rolls.get(id).is_some_and(|roll| roll.flashing(phase))
     }
 
     /// Whether any card figure is still mid-roll — ORed into the serve loop's
     /// animation gate beside the cockpit tally's.
-    pub(crate) fn any_rolling(&self, phase: u64) -> bool {
+    pub(in crate::sidebar_pane) fn any_rolling(&self, phase: u64) -> bool {
         self.rolls.values().any(|roll| roll.rolling(phase))
     }
 }

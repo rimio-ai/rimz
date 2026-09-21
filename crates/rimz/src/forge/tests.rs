@@ -52,26 +52,16 @@ fn parses_gitlab_urls() {
 fn compares_pr_url_identity_with_origin() {
     let target = parse("https://github.com/Org/Repo/pull/7").unwrap();
 
-    assert!(pr_url_matches_origin(
-        &target,
-        "git@github.com:org/repo.git"
-    ));
-    assert!(!pr_url_matches_origin(
-        &target,
-        "ssh://git@github.com/other/repo.git"
-    ));
-    assert!(!pr_url_matches_origin(
-        &target,
-        "git@gitlab.com:org/repo.git"
-    ));
-    assert!(pr_url_matches_origin(
-        &parse("7").unwrap(),
-        "git@gitlab.com:other/repo.git"
-    ));
-    assert!(pr_url_matches_origin(
-        &parse("https://GITHUB.com/Org/Team/Repo/pull/7").unwrap(),
-        "git@github.com:org/team/repo.git"
-    ));
+    let origin = RemoteRepo::parse("git@github.com:org/repo.git").unwrap();
+    assert!(origin.matches_target(&target));
+    let origin = RemoteRepo::parse("ssh://git@github.com/other/repo.git").unwrap();
+    assert!(!origin.matches_target(&target));
+    let origin = RemoteRepo::parse("git@gitlab.com:org/repo.git").unwrap();
+    assert!(!origin.matches_target(&target));
+    let origin = RemoteRepo::parse("git@gitlab.com:other/repo.git").unwrap();
+    assert!(origin.matches_target(&parse("7").unwrap()));
+    let origin = RemoteRepo::parse("git@github.com:org/team/repo.git").unwrap();
+    assert!(origin.matches_target(&parse("https://GITHUB.com/Org/Team/Repo/pull/7").unwrap()));
 }
 
 #[test]
@@ -82,7 +72,11 @@ fn maps_remote_hosts_to_forge() {
         "https://gitea.example.test/org/repo.git",
         "git@gitea.example.test:org/repo.git",
     ] {
-        assert_eq!(forge_for_remote(remote), Forge::GitHubStyle, "{remote}");
+        assert_eq!(
+            RemoteRepo::parse(remote).unwrap().forge(),
+            Forge::GitHubStyle,
+            "{remote}"
+        );
     }
     for remote in [
         "https://gitlab.com/org/repo.git",
@@ -90,7 +84,11 @@ fn maps_remote_hosts_to_forge() {
         "ssh://git@gitlab.example.test/org/repo.git",
         "ssh://git@gitlab.example.test:2222/org/repo.git",
     ] {
-        assert_eq!(forge_for_remote(remote), Forge::GitLab, "{remote}");
+        assert_eq!(
+            RemoteRepo::parse(remote).unwrap().forge(),
+            Forge::GitLab,
+            "{remote}"
+        );
     }
 }
 
@@ -100,7 +98,11 @@ fn maps_remote_hosts_to_forge_cli() {
         "https://github.com/org/repo.git",
         "git@github.com:org/repo.git",
     ] {
-        assert_eq!(forge_cli_for_remote(remote), Some(ForgeCli::Gh), "{remote}");
+        assert_eq!(
+            RemoteRepo::parse(remote).and_then(|repo| repo.forge_cli()),
+            Some(ForgeCli::Gh),
+            "{remote}"
+        );
     }
     for remote in [
         "https://gitea.example.test/org/repo.git",
@@ -108,7 +110,7 @@ fn maps_remote_hosts_to_forge_cli() {
         "https://codeberg.org/org/repo.git",
     ] {
         assert_eq!(
-            forge_cli_for_remote(remote),
+            RemoteRepo::parse(remote).and_then(|repo| repo.forge_cli()),
             Some(ForgeCli::Tea),
             "{remote}"
         );
@@ -120,7 +122,11 @@ fn maps_remote_hosts_to_forge_cli() {
         "https:///gitea.example.test/org/repo.git",
         "not-a-remote",
     ] {
-        assert_eq!(forge_cli_for_remote(remote), None, "{remote}");
+        assert_eq!(
+            RemoteRepo::parse(remote).and_then(|repo| repo.forge_cli()),
+            None,
+            "{remote}"
+        );
     }
 }
 
@@ -138,7 +144,11 @@ fn extracts_remote_repo_slug() {
             "owner/team/repo",
         ),
     ] {
-        assert_eq!(remote_repo_slug(remote), Some(slug.to_owned()), "{remote}");
+        assert_eq!(
+            RemoteRepo::parse(remote).unwrap().repo_slug(),
+            Some(slug),
+            "{remote}"
+        );
     }
 }
 
@@ -152,7 +162,11 @@ fn rejects_remote_repo_slug_without_owner_repo_path() {
         "https://host/repo.git",
         "https:///owner/repo.git",
     ] {
-        assert_eq!(remote_repo_slug(remote), None, "{remote}");
+        assert_eq!(
+            RemoteRepo::parse(remote).and_then(|repo| repo.repo_slug),
+            None,
+            "{remote}"
+        );
     }
 }
 
@@ -275,16 +289,22 @@ fn builds_sibling_repo_urls() {
         ("host/org/repo", "host/alice/fork"),
     ] {
         assert_eq!(
-            sibling_repo_url(origin, "alice/fork").as_deref(),
+            RemoteRepo::parse(origin)
+                .unwrap()
+                .sibling_url("alice/fork")
+                .as_deref(),
             Some(expected),
             "{origin}"
         );
     }
     assert_eq!(
-        sibling_repo_url("https://host/org/repo.git", " /alice/fork/ ").as_deref(),
+        RemoteRepo::parse("https://host/org/repo.git")
+            .unwrap()
+            .sibling_url(" /alice/fork/ ")
+            .as_deref(),
         Some("https://host/alice/fork.git")
     );
-    assert_eq!(sibling_repo_url("/tmp/origin.git", "alice/fork"), None);
+    assert!(RemoteRepo::parse("/tmp/origin.git").is_none());
 }
 
 #[test]

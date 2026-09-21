@@ -2,18 +2,17 @@
 //!
 //! The OS limit includes the trailing NUL byte. Public headroom values in this
 //! module therefore report bytes-used including that terminator, while
-//! [`path_len`] reports the path bytes themselves for callers that need to match
+//! `path_len` reports the path bytes themselves for callers that need to match
 //! backend diagnostics.
 
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
-pub const AF_UNIX_PATH_LIMIT: usize = 104;
+pub(crate) const AF_UNIX_PATH_LIMIT: usize = 104;
 #[cfg(not(target_os = "macos"))]
-pub const AF_UNIX_PATH_LIMIT: usize = 108;
+pub(crate) const AF_UNIX_PATH_LIMIT: usize = 108;
 
-pub const LONGEST_SOCKET_FILENAME: &str = "sidebar.123456789012.sock";
-pub const LONGEST_SOCKET_TAIL_LEN: usize = LONGEST_SOCKET_FILENAME.len() + 1;
+const LONGEST_SOCKET_FILENAME: &str = "sidebar.123456789012.sock";
 pub const XDG_REMEDY: &str = "export XDG_RUNTIME_DIR=/tmp/rimz-$(id -u)";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,11 +36,11 @@ impl SockBudget {
         self.used <= self.limit
     }
 
-    pub fn longest_path(&self) -> PathBuf {
+    fn longest_path(&self) -> PathBuf {
         self.sock_dir.join(LONGEST_SOCKET_FILENAME)
     }
 
-    pub fn validate(&self) -> Result<(), SocketPathTooLong> {
+    pub(crate) fn validate(&self) -> Result<(), SocketPathTooLong> {
         validate_socket_path(&self.longest_path())
     }
 }
@@ -57,7 +56,7 @@ pub struct SocketPathTooLong {
     pub limit: usize,
 }
 
-pub fn validate_socket_path(path: &Path) -> Result<(), SocketPathTooLong> {
+pub(crate) fn validate_socket_path(path: &Path) -> Result<(), SocketPathTooLong> {
     let used = path_len(path) + 1;
     if used > AF_UNIX_PATH_LIMIT {
         return Err(SocketPathTooLong {
@@ -92,14 +91,14 @@ impl Drop for SocketGuard {
 }
 
 #[cfg(unix)]
-pub fn path_len(path: &Path) -> usize {
+pub(crate) fn path_len(path: &Path) -> usize {
     use std::os::unix::ffi::OsStrExt as _;
 
     path.as_os_str().as_bytes().len()
 }
 
 #[cfg(not(unix))]
-pub fn path_len(path: &Path) -> usize {
+pub(crate) fn path_len(path: &Path) -> usize {
     path.to_string_lossy().len()
 }
 
@@ -117,7 +116,7 @@ mod tests {
 
     #[test]
     fn budget_accepts_limit_including_terminator_and_rejects_one_more() {
-        let max_sock_dir_len = AF_UNIX_PATH_LIMIT - LONGEST_SOCKET_TAIL_LEN - 1;
+        let max_sock_dir_len = AF_UNIX_PATH_LIMIT - LONGEST_SOCKET_FILENAME.len() - 2;
         let at_limit = SockBudget::for_sock_dir(&path_with_len(max_sock_dir_len));
         let overflow = SockBudget::for_sock_dir(&path_with_len(max_sock_dir_len + 1));
 

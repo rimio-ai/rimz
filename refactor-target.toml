@@ -160,7 +160,7 @@ surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/channel.rs"
-surface-budget = 13
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/child_process.rs"
@@ -192,7 +192,7 @@ surface-budget = 159
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
-surface-budget = 7
+surface-budget = 3
 
 [[module]]
 path = "crates/rimz/src/daemon_view.rs"
@@ -230,7 +230,7 @@ surface-budget = 157
 
 [[module]]
 path = "crates/rimz/src/forge"
-surface-budget = 48
+surface-budget = 39
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -263,7 +263,7 @@ surface-budget = 528
 [[module]]
 path = "crates/rimz/src/ids.rs"
 # `WorkspaceDirName` names workspace dirs beside the `WorkspaceId` they hold.
-surface-budget = 67
+surface-budget = 66
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -298,7 +298,7 @@ path = "crates/rimz/src/mux"
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
 # Tab naming shares pane-label policy and one intent-driven operation across launch and projection.
 # The cross-backend live-session snapshot moves here from room (pass 15c).
-surface-budget = 253
+surface-budget = 249
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -359,11 +359,11 @@ surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 233
+surface-budget = 231
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
-surface-budget = 118
+surface-budget = 78
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
@@ -371,7 +371,7 @@ surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/sock.rs"
-surface-budget = 17
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/store"
@@ -389,7 +389,7 @@ surface-budget = 312
 path = "crates/rimz/src/theme"
 upward-dependencies = ["agents"]
 # Wait prompts and CLI reports share the byte-size formatter.
-surface-budget = 31
+surface-budget = 30
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
@@ -409,7 +409,7 @@ surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/uninstall.rs"
-surface-budget = 11
+surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/update.rs"
@@ -678,11 +678,10 @@ allowed-dependencies = [
     "harness::team_prompt",
     "ids",
     "sandbox",
-    "workspace::record",
 ]
 # The exec wrapper and inspection share one read-only compiler and write boundary.
 # Apply refreshes the built-in consensus copy as best-effort enrichment.
-surface-budget = 8
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -2679,22 +2678,22 @@ reason = "The pets painter test asserts resend spacing through PixelPainter; pri
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::pixel::meter::MeterPixels"
-reason = "Field type of pub(crate) UiState::meter_pixels in the held render root; private_interfaces floors it at pub(crate) (pass 22a, open deferral)."
+reason = "Field type of UiState::meter_pixels; private_interfaces floors it at that field's reach, which pass 24c narrowed to the pane, so this follows it there (pass 22a; re-anchored pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::pets::PetView"
-reason = "Field type of pub(crate) UiState::pet in the held render root; private_interfaces floors it at pub(crate) (pass 22a, open deferral)."
+reason = "Field type of UiState::pet; private_interfaces floors it at that field's reach, which pass 24c narrowed to the pane, so this follows it there (pass 22a; re-anchored pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::pets::PetBody"
-reason = "Field type of pub(crate) PetView::body; floored with PetView (pass 22a)."
+reason = "Field type of PetView::body; floored with PetView, at pane reach since pass 24c (pass 22a; re-anchored pass 24c)."
 
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::pets::PetPixelView"
-reason = "Payload of pub(crate) PetBody::Pixel; floored with PetView (pass 22a)."
+reason = "Payload of PetBody::Pixel; floored with PetView, at pane reach since pass 24c (pass 22a; re-anchored pass 24c)."
 
 [[verdict]]
 kind = "item"
@@ -3615,3 +3614,373 @@ reason = "Pass 24a: named by tests/integration/oauth_usage.rs:17, message.rs:797
 kind = "item"
 key = "transcript::TranscriptLogErr"
 reason = "Pass 24a: carried by the public transcript::Result alias (:42) and by the public append and read_all signatures (:269,:304), so it is a signature floor."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::SidebarLiveness"
+reason = "Carried by the pub MuxBackend::reconcile_sidebars (mux/mod.rs:1025-1028) and driven from the separate integration crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::SidebarRecovery"
+reason = "Carried by the pub MuxBackend::reconcile_sidebars (mux/mod.rs:1025-1028) and driven from the separate integration crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::ViewSidebars"
+reason = "Signature floor on the mux-internal group_reconcile_panes (reconcile.rs:73); pub(super) is already its narrowest (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::ReconcilePlan"
+reason = "Signature floor on plan_reconcile (reconcile.rs:180-186); pub(super) is already its narrowest (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::reconcile::ReconcileFailure"
+reason = "Signature floor on execute_reconcile_plan (reconcile.rs:304); pub(super) is already its narrowest (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::width::SidebarTarget"
+reason = "Named by the separate integration crate (tests/integration/backend/tmux/support.rs:46,53,65) and by cli/agents_cmd/placement.rs:286-287, which see only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::width::WidthPermille"
+reason = "Named by the separate integration crate (tests/integration/backend/tmux/support.rs:46,53,65) and by cli/agents_cmd/placement.rs:286-287, which see only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::width::from_cols"
+reason = "WidthPermille::from_cols is constructed by the integration crate's tmux support and the CLI placement path, both outside the library (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::width::from_percent"
+reason = "WidthPermille::from_percent is constructed by the integration crate's tmux support and the CLI placement path, both outside the library (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::width::resolve"
+reason = "WidthPercent::resolve is called from cli/agents_cmd/placement.rs:286-287, a binary reader that sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::focus_key::RoomKeyBinding"
+reason = "Signature floor on the pub MuxBackend::register_room_key (mux/mod.rs:932) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::focus_key::FocusChord"
+reason = "Return floor on RoomKeyBinding::chord (focus_key.rs:55), which the room-key path reads at crate reach (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::focus_anchor::store"
+reason = "The held sidebar_pane/app/loop_state focus tests reach it; crate reach is the narrowest that keeps them compiling without editing a held module (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::focus_anchor::FOCUS_ANCHOR_FRESH"
+reason = "The held sidebar_pane/app/loop_state focus tests reach it; crate reach is the narrowest that keeps them compiling without editing a held module (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::binaries::BinaryScan"
+reason = "cli/doctor/runtime.rs:252-264 consumes the pub scan's result in the binary crate (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::binaries::ServerBinary"
+reason = "cli/doctor/runtime.rs:252-264 reads the scanned server binaries in the binary crate (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::companion_layout::GridSplit"
+reason = "Signature floor on the mux-internal plan_append (companion_layout.rs:68); pub(super) is already its narrowest (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::domain::ProcessDomain"
+reason = "tests/integration/proc.rs drives the process-domain predicates from the separate crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::domain::current"
+reason = "tests/integration/proc.rs drives the process-domain predicates from the separate crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::domain::same_mux_endpoint_as_process"
+reason = "tests/integration/proc.rs drives the process-domain predicates from the separate crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::domain::same_world_as_process"
+reason = "tests/integration/proc.rs drives the process-domain predicates from the separate crate, which sees only pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "build_id::warm"
+reason = "Called from main.rs:27; the binary is a separate crate, so crate reach is E0603 there. The library's own caller is sidebar_pane/app.rs:116 (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "tui::TuiLogWriter"
+reason = "Constructed in main.rs, the binary crate: crate reach is E0603 there, which also holds LOG_CAPTURE_CAP and CapturedLogOutput (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::raw"
+reason = "PaneId::raw is read by the separate integration crate (tests/integration/presence_wake.rs:897,947) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::creation_ordinal"
+reason = "PaneId::creation_ordinal is read by the separate integration crate (tests/integration/backend/zellij/pane_io.rs:263,351) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::parse"
+reason = "WorkspaceId::parse, MessageId::parse and WorkspaceDirName::parse are all called from the binary crate (cli/sidebar/tests.rs:232, cli/message/list.rs:816, cli/message/show.rs:704, cli/sessions/picker/tests.rs:386) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::ViewId"
+reason = "Named by the binary crate (cli/doctor/runtime/tests.rs:651) and a field type of the pub sidebar frame link (sidebar/frame.rs:77-78) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::new_unchecked"
+reason = "ViewId::new_unchecked is called from the binary crate (cli/budget.rs, cli/doctor/runtime/tests.rs:651) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::ViewKind"
+reason = "Named by the binary crate (cli/sidebar/fixture.rs:2050) and the separate integration crate (tests/integration/common/env.rs:40) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::WorkspaceDirName"
+reason = "Named by the binary crate (cli/sessions/picker/tests.rs:386, cli/transcript/tests.rs) and floored by the pub workspace path resolution (disk/paths.rs:74) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::LinkTier"
+reason = "Named by the binary crate (cli/sidebar/fixture.rs:3,1083, cli/doctor/runtime/tests.rs) and carried in the pub sidebar frame link (sidebar/frame.rs:77-78) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::default_login"
+reason = "LoginName::default_login is called from cli/accounts.rs:295 in the binary crate (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::FocusNonce"
+reason = "Field type of the pub nonce in mux::focus_anchor (focus_anchor.rs:43); private_interfaces floors it at pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::TeamInstanceId"
+reason = "Field type of the pub team field in config::loop_ (loop_.rs:73); private_interfaces floors it at pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidPaneId"
+reason = "FromStr::Err or public parser error on the pane id; the associated error type of a pub trait impl cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidAskId"
+reason = "FromStr::Err or public parser error on the ask id; the associated error type of a pub trait impl cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidLoginKey"
+reason = "FromStr::Err or public parser error on the login key; the associated error type of a pub trait impl cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidLoginName"
+reason = "FromStr::Err or public parser error on the login name; the associated error type of a pub trait impl cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidMessageId"
+reason = "FromStr::Err or public parser error on the message id; the associated error type of a pub trait impl cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidWorkspaceId"
+reason = "FromStr::Err or public parser error on the workspace id; the associated error type of a pub trait impl cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidUuidId"
+reason = "FromStr::Err or public parser error on the uuid-shaped ids; the associated error type of a pub trait impl cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::UnknownMux"
+reason = "FromStr::Err on the mux kind; the associated error type of a pub trait impl cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidTeamInstanceId"
+reason = "Public parser error on the team instance id (ids.rs:285-303); the error of a pub parser cannot narrow (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sock::SocketPathTooLong"
+reason = "Variant payload of the pub disk::paths error (disk/paths.rs:41); private_interfaces floors it at pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "utils::time::TimeInputErr"
+reason = "Error of the pub parse_duration_units (utils/time.rs:103) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "utils::time::Result"
+reason = "Return alias of the pub duration parsers (utils/time.rs:103) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "utils::tokens::estimate"
+reason = "The separate integration crate's output-size probe calls it (tests/integration/output_files.rs:70,83) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "update::Result"
+reason = "Return alias of the pub download and install entry points the CLI drives (update.rs:230) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "update::DownloadedRelease"
+reason = "Carried by the pub download entry point (update.rs:230) that cli/update.rs consumes (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "observability::init"
+reason = "Called from main.rs:30, the binary crate: crate reach is E0603 there (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "observability::sentry_tracing_layer"
+reason = "Reached from main.rs:51, the binary crate: crate reach is E0603 there (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "observability::Reporting"
+reason = "Named in main.rs and carried by the pub init result, both outside the library (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "forge::Forge"
+reason = "Field type of PrTarget::forge (forge.rs:46), which the pub PR target exposes (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "forge::pr_state::PrLink"
+reason = "Restored after private_interfaces: type PrLink is more private than RefreshedLanes::pr_states in the held sidebar/refresh/mod.rs:90 (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "forge::GhBulkPr"
+reason = "Constructed by the held sidebar/refresh/pr/tests.rs, so crate reach is the narrowest that keeps them compiling (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "channel::Result"
+reason = "Return alias of the pub channel reads cli/channel.rs and cli/complete.rs drive (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "channel::ChannelErr"
+reason = "Error of the pub channel reads cli/channel.rs and cli/complete.rs drive (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "channel::ChannelRecord"
+reason = "The record cli/channel.rs and cli/complete.rs read out of the channel file (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "channel::Channels"
+reason = "The record set cli/channel.rs and cli/complete.rs read and list (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "daemon_content::ResolvedPane"
+reason = "Return floor on resolve_content, which the elder's admitted daemon_view read calls at crate reach (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot"
+reason = "The separate integration crate reads the snapshot module at nineteen sites, so the store root's re-export stays pub (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch_plan::LaunchPlanErr"
+reason = "Error of the pub compile and apply entry points the binary's exec path drives (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch_plan::LaunchPlanWarning"
+reason = "Carried by the pub warnings field that the binary's exec and agents explain read (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::view::WORKTREE_ROW_CAP"
+reason = "cli/sidebar/fixture.rs:2075 reads the cap in the binary crate, refuting the dossier's private proposal (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::view::capped_visible_rows"
+reason = "cli/sidebar/fixture.rs:2073 calls it in the binary crate, refuting the dossier's private proposal (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::odometer::Roll"
+reason = "Field type of TallyAnim::today_usd (odometer.rs:179), so it follows that field to pane reach rather than going private (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::interaction::HitTarget"
+reason = "Field type of HitRegion::target (interaction.rs:31) and named across the pane's input path, so it lands at pane reach rather than private (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::ui_state::SpendRatchet"
+reason = "Field type of UiState::spend_ratchet, so it follows the field to pane reach rather than going private (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::ui_state::Browse"
+reason = "Field type of UiState::browse, so it follows the field to pane reach rather than going private (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::ui_state::OrderHold"
+reason = "Field type of UiState::order_hold, so it follows the field to pane reach rather than going private (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::ui_state::ManualScroll"
+reason = "Field type of UiState::manual_scroll, so it follows the field to pane reach rather than going private (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::ui_state::DashboardTab"
+reason = "Field type of UiState::dashboard_tab, so it follows the field to pane reach rather than going private (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::ui_state::GateNotice"
+reason = "Field type of UiState::gate_notice, so it follows the field to pane reach rather than going private (pass 24c)."
+
+[[verdict]]
+kind = "guard"
+key = "$0.root_class!=RootClass::Repo"
+reason = "Four sites turn one workspace-root fact into three different outcomes: channel.rs:145 returns an empty channel set, cli/gc.rs:324 reports WorktreeSweepStatus::Skipped, cli/worktree.rs:117 and cli/agents_cmd/resume.rs:183 bail with their own message (pass 24c)."

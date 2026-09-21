@@ -4,8 +4,6 @@ use jiff::Timestamp;
 
 use crate::agents::RateLimitWindow;
 use crate::sidebar_pane::render::layout::clip;
-#[cfg(test)]
-use crate::theme::fmt::reset_secs;
 pub(super) use crate::theme::fmt::{dollars_cap, dollars2, reset_countdown};
 
 /// Seconds since `at`, clamped at zero — the shared input for [`age_short`] and
@@ -49,7 +47,7 @@ pub(super) fn run_clock_label(secs: u64) -> String {
 /// "how long since this agent last did something". Ages under five minutes never
 /// reach here; [`activity_short`] withholds them so the card stays quiet until a
 /// real gap opens.
-pub(super) fn activity_label(seconds: i64) -> String {
+fn activity_label(seconds: i64) -> String {
     if seconds < 60 * 60 {
         format!("{}m", seconds / 60)
     } else if seconds < 60 * 60 * 24 {
@@ -284,19 +282,6 @@ mod tests {
 
     #[test]
     fn time_and_window_labels_keep_their_compact_boundaries() {
-        for (seconds, expected) in [
-            (4 * 3_600 + 20 * 60, "4h20m"),
-            (45 * 60, "0h45m"),
-            (86_400, "1d00h"),
-            (6 * 86_400 + 23 * 3_600, "6d23h"),
-            (30 * 86_400 + 10 * 3_600, "30d10h"),
-            (-10, "0h00m"),
-        ] {
-            assert_eq!(reset_secs(seconds), expected);
-        }
-        assert_eq!(reset_secs(45 * 60).chars().count(), 5);
-        assert_eq!(reset_secs(5 * 86_400).chars().count(), 5);
-
         for (seconds, expected) in [
             (0, "<1m"),
             (45, "<1m"),

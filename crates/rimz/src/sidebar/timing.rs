@@ -68,7 +68,7 @@ pub(super) const TAB_SUCCESS_STATUS_TTL: SignedDuration = SignedDuration::from_m
 /// Short enough that live pane/git drift (which fires no store delta) still
 /// surfaces inside one tick. While the presence stamp is fresh the producer
 /// uses [`EVENT_PANE_TTL`] instead.
-pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
+pub(super) const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 
 /// Pane-cache TTL while the presence push channel is alive (the presence stamp
 /// is fresh). Typed topology events force a fresh pane frame, trusting the
@@ -79,7 +79,7 @@ pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// drop ~10× versus [`SNAPSHOT_CACHE_TTL`]. Forced pane-frame freshness
 /// (`min_pane_cache_ms`) overrides it, while topology freshness floors stay
 /// reserved for explicit structural repair.
-pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
+pub(crate) const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
 /// How often the producer re-samples tmux client activity while an idle-capable
 /// client is attached, independent of the heavy pane cache TTL, so the AFK
@@ -229,7 +229,7 @@ pub(crate) const UNWATCHED_METRICS_FOLD_CLAMP: Duration = METRICS_BACKGROUND_SAM
 /// Minimum gap between out-of-band session context refreshes for one target.
 /// The producer checks every data tick, but budget windows move on the scale of
 /// minutes.
-pub const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Minimum gap between Codex daemon ghost-reap probes. A failed daemon control
 /// socket attempt can burn the full 2s deadline, so success and failure share

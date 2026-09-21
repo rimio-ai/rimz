@@ -107,7 +107,7 @@ pub enum StoreErr {
     },
 }
 
-pub type Result<T> = std::result::Result<T, StoreErr>;
+pub(crate) type Result<T> = std::result::Result<T, StoreErr>;
 
 impl Store {
     pub fn open(paths: StatePaths, runtime: RuntimePaths) -> Result<Self> {
@@ -191,7 +191,7 @@ impl Store {
     }
 
     /// Return a frame-aligned active-log offset for incremental wait polls.
-    pub fn wait_fold_base(&self) -> Result<u64> {
+    pub(crate) fn wait_fold_base(&self) -> Result<u64> {
         let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
         match std::fs::metadata(&self.inner.paths.events_log) {
             Ok(meta) => Ok(meta.len()),

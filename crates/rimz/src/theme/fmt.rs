@@ -40,7 +40,7 @@ pub fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
     reset_secs(deadline.duration_since(now).as_secs())
 }
 
-pub(crate) fn reset_secs(seconds: i64) -> String {
+fn reset_secs(seconds: i64) -> String {
     let seconds = seconds.max(0);
     if seconds >= 86_400 {
         format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600)
@@ -147,6 +147,18 @@ mod tests {
         assert_eq!(reset_secs(90_000), "1d01h");
         assert_eq!(reset_secs(18_000), "5h00m");
         assert_eq!(reset_secs(-1), "0h00m");
+        for (seconds, expected) in [
+            (4 * 3_600 + 20 * 60, "4h20m"),
+            (45 * 60, "0h45m"),
+            (86_400, "1d00h"),
+            (6 * 86_400 + 23 * 3_600, "6d23h"),
+            (30 * 86_400 + 10 * 3_600, "30d10h"),
+            (-10, "0h00m"),
+        ] {
+            assert_eq!(reset_secs(seconds), expected);
+        }
+        assert_eq!(reset_secs(45 * 60).chars().count(), 5);
+        assert_eq!(reset_secs(5 * 86_400).chars().count(), 5);
     }
 
     #[test]

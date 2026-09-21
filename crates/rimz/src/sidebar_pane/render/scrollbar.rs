@@ -24,7 +24,7 @@ const FADE_FRAMES: u64 = 10;
 /// The settle-window state behind the `auto` scrollbar mode: the offset the
 /// last draw resolved, and the phase the viewport last moved at.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ScrollbarFade {
+pub(in crate::sidebar_pane) struct ScrollbarFade {
     /// Viewport offset at the last draw; `None` before the first draw, so the
     /// first frame establishes a baseline rather than reading as a move.
     last_offset: Option<usize>,
@@ -36,7 +36,7 @@ impl ScrollbarFade {
     /// Fold in the offset a draw resolved: a change from the last draw stamps
     /// scroll activity at `phase`. Called at the draw write-back, beside
     /// `scroll_offset` itself.
-    pub(crate) fn observe(&mut self, offset: usize, phase: u64) {
+    pub(in crate::sidebar_pane) fn observe(&mut self, offset: usize, phase: u64) {
         if self.moved_from(offset) {
             self.last_activity = Some(phase);
         }
@@ -46,13 +46,13 @@ impl ScrollbarFade {
     /// Whether `offset` is a move against the last draw's baseline — the
     /// same-frame signal that paints the bar on the very frame the viewport
     /// moves, before `observe` has stamped it.
-    pub(crate) fn moved_from(&self, offset: usize) -> bool {
+    pub(in crate::sidebar_pane) fn moved_from(&self, offset: usize) -> bool {
         self.last_offset.is_some_and(|prev| prev != offset)
     }
 
     /// Whether the bar shows at `phase`: within the settle window after the
     /// last move. Pure — render reads it without mutating.
-    pub(crate) fn visible(&self, phase: u64) -> bool {
+    pub(in crate::sidebar_pane) fn visible(&self, phase: u64) -> bool {
         self.last_activity
             .is_some_and(|stamp| phase.saturating_sub(stamp) <= FADE_FRAMES)
     }
@@ -60,7 +60,7 @@ impl ScrollbarFade {
     /// Whether the fade still needs the fast animation tick — through the
     /// visible window plus one trailing clean frame, so the frame that hides
     /// the bar is actually painted rather than waiting on the slow data tick.
-    pub(crate) fn fading(&self, phase: u64) -> bool {
+    pub(in crate::sidebar_pane) fn fading(&self, phase: u64) -> bool {
         self.last_activity
             .is_some_and(|stamp| phase.saturating_sub(stamp) <= FADE_FRAMES + 1)
     }
