@@ -77,7 +77,7 @@ impl AccountsConfig {
         }
     }
 
-    pub fn usage_limit(&self, kind: &str) -> Option<f64> {
+    pub(crate) fn usage_limit(&self, kind: &str) -> Option<f64> {
         self.usage_limit_usd.get(kind).map(|limit| limit.as_usd())
     }
 
@@ -114,7 +114,7 @@ pub struct UsageLimitUsd {
 }
 
 impl UsageLimitUsd {
-    pub fn as_usd(&self) -> f64 {
+    fn as_usd(&self) -> f64 {
         self.cents as f64 / 100.0
     }
 
