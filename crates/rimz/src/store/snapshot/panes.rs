@@ -374,15 +374,24 @@ pub(super) fn is_daemon_owned(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -
     agent_owner_pid(agent).is_some_and(|pid| daemon_pids.contains(&pid))
 }
 
-pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> bool {
+/// Admission feeds rows, agent_panes, rimz agents, and message addressing. The loop zone puts real agent panes in the daemon view, so that view requires a stamped agent rather than blanket exclusion.
+pub(super) fn pane_admits_card(
+    pane: &PaneRef,
+    exclude: Option<&PaneId>,
+    bindings: &PaneBindingIndex<'_>,
+) -> bool {
     if exclude.is_some_and(|excluded| pane.pane_id == *excluded) {
         return false;
     }
     if pane.is_rimz_sidebar() {
         return false;
     }
-    if crate::pane::pane_is_host(pane) {
+    if crate::pane::pane_runs_daemon_host(pane) {
         return false;
+    }
+    if pane.view_name.as_deref() == Some(crate::pane::VIEW_NAME) {
+        return bindings.stamped_agent(pane).is_some()
+            || bindings.stamped_launched_child(pane).is_some();
     }
     true
 }
@@ -593,6 +602,16 @@ mod tests {
 
     #[test]
     fn card_admission_names_card_blockers() {
+        let root_pane = pane_cmd("terminal_5", "tab_1", "claude", Some("rimzd"));
+        let child_pane = pane_cmd("terminal_6", "tab_1", "claude", Some("rimzd"));
+        let mut root = agent("claude", "root", AgentStatus::Running, 1_000);
+        root.pane = Some(root_pane.clone());
+        let mut child = agent("claude", "child", AgentStatus::Running, 1_001);
+        child.pane = Some(child_pane.clone());
+        child.parent_agent_id = Some(root.agent_id.clone());
+        child.launch_depth = Some(1);
+        let agents = [root, child];
+        let bindings = PaneBindingIndex::new(&agents);
         let working = pane_cmd("terminal_1", "tab_0", "zsh", None);
         let unreadable = PaneRef {
             command: None,
@@ -619,9 +638,26 @@ mod tests {
                 false,
             ),
             ("identityless pane", unreadable, None, true),
+            (
+                "daemon view without stamp",
+                pane_cmd("terminal_7", "tab_1", "claude", Some("rimzd")),
+                None,
+                false,
+            ),
+            ("daemon view stamped root", root_pane.clone(), None, true),
+            ("daemon view stamped child", child_pane, None, true),
+            (
+                "stamped host remains excluded",
+                PaneRef {
+                    spawn_command: Some("claude remote-control".to_owned()),
+                    ..root_pane
+                },
+                None,
+                false,
+            ),
         ] {
             assert_eq!(
-                pane_admits_card(&pane, exclude.as_ref()),
+                pane_admits_card(&pane, exclude.as_ref(), &bindings),
                 expected,
                 "{label}"
             );

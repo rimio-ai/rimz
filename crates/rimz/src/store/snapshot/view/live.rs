@@ -210,7 +210,7 @@ impl SidebarSnapshot {
     /// pure: callers own pane discovery and pass the result in, so snapshot
     /// building stays independent of any backend command.
     pub fn with_live_panes(mut self, panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Self {
-        let panes = Self::card_admitted_live_panes(panes, exclude);
+        let panes = self.card_admitted_live_panes(panes, exclude);
         self.fold_admitted_live_panes(&panes, None, None, &BTreeMap::new(), &BTreeSet::new());
         self
     }
@@ -222,15 +222,20 @@ impl SidebarSnapshot {
         exclude: Option<&PaneId>,
         provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
     ) -> Self {
-        let panes = Self::card_admitted_live_panes(panes, exclude);
+        let panes = self.card_admitted_live_panes(panes, exclude);
         self.fold_admitted_live_panes(&panes, None, None, provider_capacities, &BTreeSet::new());
         self
     }
 
-    pub fn card_admitted_live_panes(panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Vec<PaneRef> {
+    pub fn card_admitted_live_panes(
+        &self,
+        panes: Vec<PaneRef>,
+        exclude: Option<&PaneId>,
+    ) -> Vec<PaneRef> {
+        let bindings = PaneBindingIndex::new(&self.agents);
         panes
             .into_iter()
-            .filter(|pane| pane_admits_card(pane, exclude))
+            .filter(|pane| pane_admits_card(pane, exclude, &bindings))
             .collect()
     }
 

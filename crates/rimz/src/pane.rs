@@ -72,11 +72,15 @@ pub(crate) fn command_is_claude_host(command: &str) -> bool {
     false
 }
 
-/// Whether `pane` belongs to the daemon dashboard.
-pub fn pane_is_host(pane: &PaneRef) -> bool {
+/// Whether this pane runs one of RimZ's managed daemon hosts.
+pub fn pane_runs_daemon_host(pane: &PaneRef) -> bool {
     pane.spawn_command.as_deref().is_some_and(command_is_host)
         || pane.command.as_deref().is_some_and(command_is_host)
-        || pane.view_name.as_deref() == Some(VIEW_NAME)
+}
+
+/// Whether `pane` belongs to the daemon dashboard: view-level classification, not card admission.
+pub fn pane_is_host(pane: &PaneRef) -> bool {
+    pane_runs_daemon_host(pane) || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
 /// Whether a pane's foreground command is RimZ's own sidebar — chrome to filter
@@ -356,6 +360,12 @@ mod tests {
 
     #[test]
     fn pane_ref_classifies_daemon_hosts_across_identity_fields() {
+        let agent_pane = PaneRef {
+            view_name: Some(VIEW_NAME.to_owned()),
+            ..pane("terminal_1", "tab_1", Some("claude"))
+        };
+        assert!(pane_is_host(&agent_pane));
+        assert!(!pane_runs_daemon_host(&agent_pane));
         assert!(pane_is_host(&pane(
             "terminal_1",
             "tab_1",

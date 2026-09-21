@@ -1022,7 +1022,7 @@ fn ensure_card_admission_predicate(root: &Path) -> Result<()> {
         bail!("with_live_panes must build worktree groups after card admission");
     };
     let body = &after[..groups_fold];
-    if !body.contains("pane_admits_card(pane, exclude)") {
+    if !body.contains("pane_admits_card(pane, exclude, &bindings)") {
         bail!("with_live_panes must filter rows through pane_admits_card");
     }
     let mut violations = Vec::new();

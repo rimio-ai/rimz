@@ -58,12 +58,15 @@ The markers are the taxonomy of `ManagedPaneMarker`:
 
 A content slot matches its own `--slot` value, so slot 0 and slot 1 never collide. The Claude marker parses tokens (`pane::command_is_claude_host`) where the others test substrings, which keeps `nvim remote-control.md` out of the managed set.
 
-Two broader predicates in [`pane.rs`](../../crates/rimz/src/pane.rs) classify panes outside this module, and they answer different questions:
+Three broader predicates in [`pane.rs`](../../crates/rimz/src/pane.rs) classify panes outside this module, and they answer different questions:
 
 | Predicate | True when | Used by |
 | --- | --- | --- |
 | `command_is_host(command)` | The command line contains `remote-control` or `app-server` (a substring test that ignores content supervisors and the loop panel) | Zellij's daemon-host pane classifier (`mux/zellij/raw_pane.rs`), which also checks the spawn command for hosts that re-exec; tab status, to drop hosts from a tab's work panes |
-| `pane_is_host(pane)` | The pane is in the `rimzd` view, or its spawn or foreground command passes `command_is_host` | The sidebar frame, to tell a daemon view from a working one; tmux reconcile, to mark a view occupied; store pane binding and view reaping, to skip infrastructure panes |
+| `pane_runs_daemon_host(pane)` | The pane's spawn or foreground command passes `command_is_host` | Card admission and the host reap in `store/snapshot`, to skip a daemon host wherever it sits |
+| `pane_is_host(pane)` | The pane runs a daemon host, or it is in the `rimzd` view | The sidebar frame, to tell a daemon view from a working one; tmux reconcile, to mark a view occupied; `only_daemon_view`, to tell a room that has nothing but the dashboard left |
+
+The split is what lets a loop-zone run be a card. Admission ([`store/snapshot/panes.rs`](../../crates/rimz/src/store/snapshot/panes.rs) `pane_admits_card`) reads the narrow predicate and adds one rule for this view: a `rimzd` pane admits a card only when an agent is durably stamped on it, so the dashboard's own infrastructure stays chrome while a run pane does not. Admission feeds rows, `rimz agents`, and `agent_panes`, which is where message delivery binds a receiver's pane, so a pane dropped there is also a pane no message can reach.
 
 ## The content supervisor
 
@@ -142,6 +145,8 @@ A rebuilt specification always gets one authoritative repair. With a stable stam
 
 A scheduled run lands in the runtime column. `split_into_loop_zone` ([`cli/supervised/pane.rs`](../../crates/rimz/src/cli/supervised/pane.rs)) asks `ensure_loop_panel` for the workspace's oldest live loop panel and splits the run pane against it with `SplitPlacement::Stacked`. Which fires land there, and the new-tab fallback, are in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
 
+The run pane is the one real agent pane inside this view, and it is a card like any other: the exec wrapper stamps the agent on it at launch, so admission keeps it, the sidebar renders it, `rimz agents` lists it, and a queued wake or a steer binds its pane. The panel, the content slots, and the hosts beside it carry no stamp and stay chrome.
+
 `ensure_loop_panel` repairs at fire time, outside the elder's tick:
 
 1. Look for the panel in a listing that prefers authoritative truth, bounded by `LOOP_PANEL_LOOKUP_TIMEOUT` (500 ms). A failed lookup returns `None`, and the run opens a new tab.
@@ -158,7 +163,7 @@ A scheduled run lands in the runtime column. `split_into_loop_zone` ([`cli/super
 | [`daemon_content.rs`](../../crates/rimz/src/daemon_content.rs) | Slot resolution, the supervisor loop, config watching, child termination |
 | [`cli/daemon.rs`](../../crates/rimz/src/cli/daemon.rs) | The hidden `rimz daemon content` entry point |
 | [`config/daemon.rs`](../../crates/rimz/src/config/daemon.rs) | `DaemonConfig` and `DaemonPane` |
-| [`pane.rs`](../../crates/rimz/src/pane.rs) | `VIEW_NAME`, the host markers, `command_is_host`, `command_is_claude_host`, `pane_is_host` |
+| [`pane.rs`](../../crates/rimz/src/pane.rs) | `VIEW_NAME`, the host markers, `command_is_host`, `command_is_claude_host`, `pane_runs_daemon_host`, `pane_is_host` |
 | [`remote_control.rs`](../../crates/rimz/src/remote_control.rs) | `ReadinessSnapshot`, `prepare_hosts`, `apply_runtime_toggle` |
 | [`room/mod.rs`](../../crates/rimz/src/room/mod.rs), [`room/birth.rs`](../../crates/rimz/src/room/birth.rs) | The start-time specification and birth-time repair |
 | [`sidebar_pane/app/cache_refresh.rs`](../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The elder tick that calls the tracker |

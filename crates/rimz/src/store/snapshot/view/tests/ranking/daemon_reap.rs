@@ -196,4 +196,45 @@ fn host_pane_roots_are_dropped_only_when_frame_is_present() {
     );
 }
 
+#[test]
+fn daemon_view_agent_survives_reap_and_live_pane_fold() {
+    let root = agent("claude", "loop-root", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%loop");
+    let host = agent("claude", "host-root", AgentStatus::Running, 1_001)
+        .worktree("/repo/daemon")
+        .in_pane("%host");
+    let mut loop_pane = pane("%loop", "claude", "/repo/main");
+    loop_pane.view_name = Some(crate::pane::VIEW_NAME.to_owned());
+    let mut host_pane = pane("%host", "claude", "/repo/daemon");
+    host_pane.view_name = Some(crate::pane::VIEW_NAME.to_owned());
+    host_pane.spawn_command = Some("claude remote-control --spawn worktree".to_owned());
+    let panes = vec![loop_pane.clone(), host_pane];
+    let mut snapshot = room(vec![root, host]);
+
+    snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
+        daemon_pids: &BTreeSet::new(),
+        loaded: None,
+        frame_panes: Some(&panes),
+        exclude_pane: None,
+    });
+
+    assert_eq!(rollup_ids(&snapshot), vec!["loop-root"]);
+    let snapshot = snapshot.with_live_panes(panes, None);
+    assert_eq!(snapshot.agent_panes.len(), 1);
+    assert!(
+        snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .any(|row| {
+                row.is_agent()
+                    && row
+                        .pane
+                        .as_ref()
+                        .is_some_and(|pane| pane.pane_id == loop_pane.pane_id)
+            })
+    );
+}
+
 // ── Ranking, caps, and bucket order ──────────────────────────────────────────

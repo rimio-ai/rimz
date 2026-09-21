@@ -541,7 +541,7 @@ fn enrich_core(
     // enrichment. Discovery belongs to the room producer; every renderer keeps
     // the strict live-pane binding and discards paneless observations.
     if let Some(frame) = frame {
-        let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
+        let panes = snapshot.card_admitted_live_panes(frame.to_pane_refs(), None);
         let (next_snapshot, diagnostics) = snapshot
             .with_local_sessions_and_diagnostics(&panes, opts.agent_projection.local_sessions);
         snapshot = next_snapshot;
@@ -665,7 +665,7 @@ fn enrich_core(
         snapshot.truth_degraded = truth_notice_for_frame(frame);
         let metrics = frame.pane_metrics().collect::<Vec<_>>();
         let panes = frame.to_pane_refs();
-        let admitted_panes = SidebarSnapshot::card_admitted_live_panes(panes.clone(), None);
+        let admitted_panes = snapshot.card_admitted_live_panes(panes.clone(), None);
         let lazy_pairings = compute_lazy_agent_pairings(&admitted_panes, &snapshot.agents);
         if producing {
             log_lazy_pairing_ambiguities(&snapshot, runtime, &lazy_pairings);
