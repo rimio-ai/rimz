@@ -116,7 +116,7 @@ RimZ keeps your work local. Prompts, transcripts, pane text, and credentials sta
 
 - **Provider usage.** To fill the cost and budget meters, RimZ reads each provider's usage endpoint with the OAuth login the agent already holds. Usage endpoints stay pinned to each provider's official host; a URL override is refused unless it targets that host or loopback.
 - **Pull-request status.** The sidebar's PR marker runs your own `gh` (GitHub) or `tea` (Gitea, Forgejo, Codeberg) against your forge, on your existing login. It reads no RimZ secrets and adds no config field, so it stays off the trust hash.
-- **Pets.** Enabling `[theme.pets]` fetches a sprite sheet over HTTPS from the host you name; a built-in pet reaches the public Codex pets CDN, and a local-path pet fetches nothing. `RIMZ_PETS_OFFLINE`, set to any value, makes the process tree cache-only. The request carries the asset URL and nothing else.
+- **Pets.** Enabling `[theme.pets]` fetches a sprite sheet over HTTPS from the host you name; a built-in pet reaches the public Codex pets CDN, and a local-path pet fetches nothing. `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only, and `0`, `false`, or an empty value leaves fetching on. The request carries the asset URL and nothing else.
 - **Release downloads.** `rimz update` asks GitHub for the latest tag, then fetches the archive and its `SHA256SUMS` and verifies the checksum before replacing the binary. It runs only when you run it; nothing checks for a release in the background.
 - **Off-box error reporting.** Off by default and opt-in. See [Off-box error reporting](#off-box-error-reporting).
 

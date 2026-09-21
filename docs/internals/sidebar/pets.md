@@ -115,7 +115,7 @@ Fetches follow one policy (`fetch_url`):
 
 A petdex install is a directory holding `pet.json` beside its sheet. RimZ reads only `spritesheetPath` from the manifest, relative to the directory or absolute, and reads that sheet like a local one.
 
-Setting `RIMZ_PETS_OFFLINE`, to any value, makes built-ins and URLs cache-only: a missing entry fails as offline, and a wrong-shaped one is removed and fails. Petdex installs and local sheets already read from disk and are unaffected.
+Setting `RIMZ_PETS_OFFLINE=1` makes built-ins and URLs cache-only (`0`, `false`, and an empty value read as off): a missing entry fails as offline, and a wrong-shaped one is removed and fails. Petdex installs and local sheets already read from disk and are unaffected.
 
 ## The load state machine
 

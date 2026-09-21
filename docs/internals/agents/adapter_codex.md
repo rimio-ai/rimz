@@ -269,7 +269,7 @@ Codex has two account sources, and both normalize through [`account.rs`](../../.
 | Source | Supplies | When |
 | --- | --- | --- |
 | App-server `account/rateLimits/read` | plan (`planType`), `primary` and `secondary` windows with `windowDurationMins`, credits | on the session refresh, and first on each account usage refresh |
-| Direct OAuth usage endpoint ([`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/codex/oauth_usage.rs)) | plan (`plan_type`), windows, credits, reset credits | after the realtime read, on `OAUTH_USAGE_TTL` (5 minutes), for a file-backed token, unless `RIMZ_OAUTH_USAGE_OFFLINE` is set |
+| Direct OAuth usage endpoint ([`oauth_usage.rs`](../../../crates/rimz/src/agents/adapters/codex/oauth_usage.rs)) | plan (`plan_type`), windows, credits, reset credits | after the realtime read, on `OAUTH_USAGE_TTL` (5 minutes), for a file-backed token, unless `RIMZ_OAUTH_USAGE_OFFLINE` is on |
 | Account probe | login state and metering | out of band, [providers.md](./providers.md#the-out-of-band-probe) |
 
 The producer's `rimz agents refresh-usage` helper runs for a metered Codex login whether or not a session is live: it claims the read in `credits.json`, publishes the realtime read, then runs the direct probe with the `tokens.account_id` it read. An account id change drops cached windows and refetches. A present realtime plan wins; an absent one keeps the cached OAuth plan for idle and keyring-backed display.
