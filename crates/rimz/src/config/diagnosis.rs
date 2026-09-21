@@ -87,11 +87,13 @@ impl ConfigFileDiagnosis {
         &self.path
     }
 
-    pub fn line(&self) -> Option<usize> {
+    #[cfg(test)]
+    pub(crate) fn line(&self) -> Option<usize> {
         self.line
     }
 
-    pub fn problem(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn problem(&self) -> &str {
         &self.problem
     }
 
