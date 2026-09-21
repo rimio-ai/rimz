@@ -368,7 +368,7 @@ These details in [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) are l
 - Every sidebar width is a whole percentage, because Zellij pins a fixed-size layout pane against resize. With known geometry the percentage approximates the resolved share; detached birth tabs and the template keep configured percentage policy until a live view exists, and live convergence applies the exact target.
 - Every tab is born with an explicit focused terminal. A `children` placeholder nested in a split is never filled and would leave focus on the sidebar alone.
 - The layout file outlives the create call. Zellij parses `--default-layout` asynchronously, so the temp file stays on disk until the panes materialize.
-- The layout ends with `session_serialization`, `disable_session_metadata`, and `stacked_pane_list false` ([room options](#room-options-and-the-cli-xor-problem)).
+- The layout ends with the complete resolved session option list, including `auto_layout false`, `stacked_resize true`, and `stacked_pane_list false` ([room options](#room-options-and-the-cli-xor-problem)).
 
 Birth branches on the session's liveness from `zellij list-sessions`:
 
@@ -382,15 +382,17 @@ A session can stay in Zellij's live roster while its per-session screen thread n
 
 ### Room options and the CLI XOR problem
 
-`<room-options>` combines RimZ's defaults with the optional `[zellij]` keys the user sets in RimZ config. Each maps onto a Zellij `options` flag ([reference → options catalog](../externals/mux-adapter/zellij-reference.md#options-catalog)). Flags newer than the floor are version-gated, so an older host keeps its default instead of aborting.
+[`zellij.rs::zellij_session_options`](../../crates/rimz/src/mux/zellij.rs) resolves one ordered, typed list: RimZ's fixed `auto_layout false`, `stacked_resize true`, and `stacked_pane_list false`, the four always-resolved `[zellij]` keys, and every configured optional key except client-only `mouse_mode`. The list uses three value types (boolean, integer, enum word), with channel-specific quoting. The three channels are:
 
-Mouse options need a second mechanism. Zellij XORs boolean CLI options against values already set in the user's `config.kdl`, so a CLI flag cannot set an absolute value for every user. Birth and attach still pass `--mouse-click-through true` and `--focus-follows-mouse false` as a hint for the birth window, and the presence plugin then applies RimZ's resolved values through `reconfigure(..., false)`, whose KDL path merges onto the live config absolutely and never writes the user's file. With the defaults on Zellij 0.44, a single click both focuses the sidebar pane and reaches the renderer, so a jump lands on the first click.
+- **Birth layout:** `layout.rs::render_session_layout` renders the complete session list in the KDL tail. Layout values merge absolutely; a detached birth discards CLI option flags. `create_session_with_sidebar` passes only `--default-cwd` and `--default-layout` after `options`.
+- **Live reconfiguration:** `PresencePluginOptions::from_config` projects the same list. `presence.rs::presence_plugin_identity` sends generic `opt_<key>=<value>` entries and includes them in the configuration hash, so a changed option re-converges the plugin. The plugin collects entries without knowing option names and renders them ahead of keybinds in one `reconfigure(..., false)` payload. Supplied values win absolutely without writing `config.kdl`; unknown KDL keys are ignored by older hosts, so neither KDL channel needs a version gate.
+- **Attaching client:** `zellij_client_options_args` carries only `--default-mode locked`, explicit `--mouse-mode false`, and configured `--support-kitty-keyboard-protocol <bool>`. On Zellij 0.45.1, `Setup::from_cli_args` applies attach flags through plain `merge`, then `start_client` applies them again through `merge_from_cli`. Each of the nine XOR booleans is XORed against itself, so either explicit value becomes `false` ([upstream mechanism](../externals/mux-adapter/zellij-reference.md#command-line-options)). RimZ never sends an XOR boolean as `true`.
 
-RimZ leaves `advanced_mouse_actions`, `mouse_hover_effects`, `mouse_mode`, and global `pane_frames` to `config.kdl` unless the user sets them in RimZ config.
+The whole session list reaches reconfiguration, including start-only keys; RimZ keeps no separate live-key table. Zellij consumes `session_serialization`, `disable_session_metadata`, `scroll_buffer_size`, `on_force_close`, `osc8_hyperlinks`, `show_startup_tips`, and `show_release_notes` at room birth, and `mouse_mode` and Kitty keyboard support at client start. An absent reconfigure key keeps its live value, so removing an optional `[zellij]` key restores `config.kdl` control only at the next birth. `mouse_mode` is read in the client's own process: RimZ's `true` cannot override a `config.kdl` `false`, while RimZ's explicit `false` disables it.
 
-**Serialization off by default.** `[zellij] session_serialization` defaults to `false`, and RimZ passes the configured value on every birth and attach. Resurrection does not help a room of agents: agents and scripts cannot restore their running state, so a resurrected room comes back as a wall of suspended command panes with a dead mouse. With serialization off, a crashed server's session vanishes, the next start births a clean running room, and RimZ owns rebirth ([resume on rebirth](./sidebar/sidebar.md#resume-on-rebirth)). The value is also written into the birth layout, because Zellij 0.44 drops `options` flags from `attach --create-background` before the detached server initializes. Attach first purges the room's resurrection cache, so a corrupt serialized layout cannot block a live session.
+**Serialization off by default.** `[zellij] session_serialization` defaults to `false`, and the birth layout supplies the configured value when Zellij consumes it. Resurrection does not help a room of agents: agents and scripts cannot restore their running state, so a resurrected room comes back as a wall of suspended command panes with a dead mouse. With serialization off, a crashed server's session vanishes, the next start births a clean running room, and RimZ owns rebirth ([resume on rebirth](./sidebar/sidebar.md#resume-on-rebirth)). Attach first purges the room's resurrection cache, so a corrupt serialized layout cannot block a live session.
 
-**Session metadata off by default.** `[zellij] disable_session_metadata` defaults to `true` and travels the same two routes. It stops Zellij's periodic `session-metadata.kdl` rewrite and its command-discovery `ps` loop, which at roughly 100 panes on 0.44.3 costs a visible share of Zellij server CPU. `Absent` and `Exited` sessions still converge through the same clean-rebirth gate, so the setting changes CPU cost, not room semantics.
+**Session metadata off by default.** `[zellij] disable_session_metadata` defaults to `true` and takes effect at birth through the same list. It stops Zellij's periodic `session-metadata.kdl` rewrite and its command-discovery `ps` loop, which at roughly 100 panes on 0.44.3 costs a visible share of Zellij server CPU. `Absent` and `Exited` sessions still converge through the same clean-rebirth gate, so the setting changes CPU cost, not room semantics.
 
 ### In-place repair
 
@@ -458,7 +460,7 @@ The plugin publishes Zellij facts, and the host derives every meaning.
 | Merged topology snapshots from Zellij's pane and tab manifests | Pane roles: which pane is a sidebar, which is an agent card |
 | Attached-client observations, including the settled sample after a tab switch | Focus-repair decisions and the `SidebarEvent` taxonomy |
 | Poke timing that Zellij's event model requires | Launch-chrome filtering and topology-writer authority |
-| Capabilities that need plugin-only APIs: runtime keybinds, mouse `reconfigure`, fullscreen toggles, hiding or closing itself | Durable cache publication |
+| Capabilities that need plugin-only APIs: runtime keybinds, session-option `reconfigure`, fullscreen toggles, hiding or closing itself | Durable cache publication |
 
 The split keeps product policy out of plugin releases: a change to what counts as chrome, when focus is stranded, or how an event maps ships in the `rimz` crate alone. Two rules follow. The plugin carries only facts that originate in Zellij's server state; a fact derivable from the OS goes through `pane_pid` on the host, which owns `/proc`. And a new wake shape is added only for a fact that an accepted snapshot diff cannot produce.
 
@@ -539,7 +541,7 @@ RimZ seeds Zellij's `permissions.kdl` cache for its embedded plugin, so the firs
 | --- | --- |
 | `ReadApplicationState` | The pane, tab, session, and client manifests. |
 | `RunCommands` | The `rimz sidebar wake`, `rimz sidebar focus`, and `rimz pane zoom` forks. |
-| `Reconfigure` | Runtime mouse options and the optional focus and zoom keybinds, applied without writing `config.kdl`. |
+| `Reconfigure` | The resolved session option list and optional focus and zoom keybinds, applied without writing `config.kdl`. |
 | `ChangeApplicationState` | The fullscreen toggle for the host-selected pane id. |
 
 The artifact path is canonicalized because Zellij keys the grant on the exact string. The security boundary is in [security.md](../guide/security.md#the-zellij-presence-plugin).
@@ -633,7 +635,7 @@ Session birth checks the property: it reads the birth pane's `pane_current_path`
 
 ### Room options
 
-`ensure_session` applies the per-machine `[tmux]` room options in one batched client call, and the `after-new-window` hook replays window options before docking the sidebar, so later windows match the birth window. Session and window options are scoped to the RimZ session; server-scoped options (clipboard, rich-key handling, focus events) are global to the RimZ server because tmux has no per-session equivalent.
+`ensure_session` applies the per-machine `[tmux]` room options on every open or reattach. `tmux.rs::apply_room_options` first lists stable window IDs with `list-windows -t <session> -F '#{window_id}'`, then asserts every window-scoped key on every ID in one batch alongside the session and server settings. `options.rs::tmux_window_options` returns all five owned keys as values or unsets: `allow-passthrough`, `aggressive-resize`, `pane-border-status`, `pane-border-format`, and `pane-border-lines`. Missing optional border settings emit `set-window-option -u`, restoring inheritance from the user's global tmux config; `pane-border-format` also unsets when status is explicitly `off`. The `after-new-window` hook renders the same list before docking the sidebar, so future windows match. Per-window values, rather than global window writes, preserve the inherited settings. Session and window options are scoped to the RimZ session; server-scoped options (clipboard, rich-key handling, focus events) are global to the RimZ server because tmux has no per-session equivalent.
 
 The batch also does what the option list alone cannot express:
 
