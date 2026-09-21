@@ -129,6 +129,80 @@ fn template_lists_optional_sidebar_theme_slots() {
     );
 }
 
+#[test]
+fn template_lists_every_animation_role() {
+    let sections = template_optional_sections(Kind::Theme.template());
+    let listed: Vec<&str> = sections
+        .iter()
+        .filter_map(|(header, _)| header.strip_prefix("theme.animations."))
+        .collect();
+    let expected: Vec<&str> = AnimationRole::ALL
+        .iter()
+        .map(|role| role.config_key())
+        .collect();
+
+    assert_eq!(
+        listed, expected,
+        "the theme template must show every animation role, in catalog order"
+    );
+}
+
+#[test]
+fn template_lists_every_glyph_role_in_both_sets() {
+    let sections = template_optional_sections(Kind::Theme.template());
+    for set in ["unicode", "nerd_font"] {
+        let prefix = format!("theme.glyphs.{set}.");
+        let mut namespaces = Vec::new();
+        for (header, keys) in &sections {
+            let Some(namespace) = header.strip_prefix(&prefix) else {
+                continue;
+            };
+            namespaces.push(namespace);
+            let expected: Vec<&str> = GlyphRole::ALL
+                .iter()
+                .filter(|role| role.namespace() == namespace)
+                .map(|role| role.name())
+                .collect();
+            assert_eq!(
+                keys.iter().map(String::as_str).collect::<Vec<_>>(),
+                expected,
+                "[theme.glyphs.{set}.{namespace}] must show every role of that group, in catalog order"
+            );
+        }
+        for role in GlyphRole::ALL {
+            assert!(
+                namespaces.contains(&role.namespace()),
+                "the theme template has no [theme.glyphs.{set}.{}] group",
+                role.namespace()
+            );
+        }
+    }
+}
+
+/// Every `[header]` a template declares, commented (`## [header]`) or not, with
+/// the optional keys shown as `## key = …` beneath it, all in file order.
+fn template_optional_sections(template: &str) -> Vec<(String, Vec<String>)> {
+    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+    for line in template.lines() {
+        let line = line.trim();
+        let uncommented = line.strip_prefix("## ").unwrap_or(line);
+        if let Some(header) = uncommented
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            sections.push((header.to_owned(), Vec::new()));
+            continue;
+        }
+        if let Some((key, _)) = uncommented.split_once(" = ")
+            && line.starts_with("## ")
+            && let Some((_, keys)) = sections.last_mut()
+        {
+            keys.push(key.to_owned());
+        }
+    }
+    sections
+}
+
 fn all_template_default_paths() -> BTreeSet<String> {
     let mut out = template_default_paths(Kind::Core.template());
     out.extend(

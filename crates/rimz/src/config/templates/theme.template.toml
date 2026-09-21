@@ -126,6 +126,9 @@
 ## [theme.animations.paused]
 ## frames = ["⏸︎"]
 ## color = "cool"
+## [theme.animations.sleeping]
+## frames = "☾"
+## color = "cool"
 ## [theme.animations.waiting]
 ## frames = "?"
 ## color = "warn"
@@ -144,6 +147,7 @@
 ## waiting = "?"
 ## attention = "!"
 ## paused = "⏸︎"
+## sleeping = "☾"
 ## done = "✓"
 ## idle = "○"
 ## working = "⢿"
@@ -151,6 +155,7 @@
 ## delegating = "⢄"
 ## resolving = "⠙"
 ## compacting = "▇"
+## tool_repeat = "⟲"
 
 [theme.glyphs.unicode.cockpit]
 ## workspace = "⌘"
@@ -202,9 +207,13 @@
 ## trunk_merge = "✓"
 ## pr_open = "⑃"
 ## pr_closed = "✕"
+## ci_passing = "✓"
+## ci_failing = "✕"
+## ci_pending = "◌"
 ## reconciling = "⟳"
 ## expand = "▸"
 ## dotted = "┄"
+## channel_hash = "#"
 
 [theme.glyphs.unicode.pipeline]
 ## passed = "●"
@@ -260,6 +269,7 @@
 ## waiting = ""
 ## attention = ""
 ## paused = ""
+## sleeping = "󰤄"
 ## done = ""
 ## idle = ""
 ## working = "⢿"
@@ -267,6 +277,7 @@
 ## delegating = "⢄"
 ## resolving = "⠙"
 ## compacting = "▇"
+## tool_repeat = "󰑓"
 
 [theme.glyphs.nerd_font.cockpit]
 ## workspace = ""
@@ -318,9 +329,13 @@
 ## trunk_merge = ""
 ## pr_open = ""
 ## pr_closed = ""
+## ci_passing = ""
+## ci_failing = ""
+## ci_pending = ""
 ## reconciling = ""
 ## expand = "▸"
 ## dotted = "┄"
+## channel_hash = ""
 
 [theme.glyphs.nerd_font.pipeline]
 ## passed = "●"
