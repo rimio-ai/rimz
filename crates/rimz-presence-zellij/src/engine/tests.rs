@@ -55,8 +55,7 @@ fn config() -> EngineConfig {
         plugin_config: Some("config-hash".to_owned()),
         focus_key: None,
         zoom_key: None,
-        focus_follows_mouse: None,
-        mouse_click_through: None,
+        session_options: Vec::new(),
     }
 }
 
@@ -64,8 +63,11 @@ fn reconfigure_config() -> EngineConfig {
     EngineConfig {
         focus_key: Some("Alt+p".to_owned()),
         zoom_key: Some("Alt+g".to_owned()),
-        focus_follows_mouse: Some(false),
-        mouse_click_through: Some(true),
+        session_options: vec![
+            ("pane_frames".to_owned(), "false".to_owned()),
+            ("scroll_buffer_size".to_owned(), "123456".to_owned()),
+            ("on_force_close".to_owned(), "quit".to_owned()),
+        ],
         ..config()
     }
 }
@@ -249,11 +251,17 @@ fn pregrant_unknown_patch_is_retained_until_the_manifest_arrives() {
 
     let effects = engine.on_permission_granted(20, &host);
     assert!(effects.contains(&Effect::HideSelf));
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::Reconfigure(_)))
-    );
+    let reconfigurations: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::Reconfigure(kdl) => Some(kdl),
+            _ => None,
+        })
+        .collect();
+    assert!(!reconfigurations.is_empty());
+    assert!(reconfigurations.iter().all(|kdl| kdl.starts_with(
+        "pane_frames false\nscroll_buffer_size 123456\non_force_close \"quit\"\nkeybinds {\n"
+    )));
     assert!(effects.contains(&Effect::ListClients));
     assert_eq!(reasons(&effects), vec!["panes-changed"]);
 

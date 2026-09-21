@@ -164,25 +164,22 @@ pub struct RuntimeReconfigure<'a> {
     pub plugin_id: Option<u32>,
     pub focus_key: Option<&'a str>,
     pub zoom_key: Option<&'a str>,
-    pub focus_follows_mouse: Option<bool>,
-    pub mouse_click_through: Option<bool>,
-}
-
-pub fn parse_configuration_bool(value: Option<&str>) -> Option<bool> {
-    match value {
-        Some("true") => Some(true),
-        Some("false") => Some(false),
-        _ => None,
-    }
+    pub session_options: &'a [(String, String)],
 }
 
 pub fn runtime_reconfigure_kdl(config: &RuntimeReconfigure<'_>) -> Option<String> {
     let mut kdl = String::new();
-    if let Some(value) = config.focus_follows_mouse {
-        push_bool_option_kdl(&mut kdl, "focus_follows_mouse", value);
-    }
-    if let Some(value) = config.mouse_click_through {
-        push_bool_option_kdl(&mut kdl, "mouse_click_through", value);
+    for (key, value) in config.session_options {
+        kdl.push_str(key);
+        kdl.push(' ');
+        if matches!(value.as_str(), "true" | "false")
+            || (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            kdl.push_str(value);
+        } else {
+            kdl.push_str(&kdl_string(value));
+        }
+        kdl.push('\n');
     }
     if let Some(plugin_id) = config.plugin_id
         && let Some(keybinds) = room_keybinds_kdl(
@@ -194,17 +191,6 @@ pub fn runtime_reconfigure_kdl(config: &RuntimeReconfigure<'_>) -> Option<String
         kdl.push_str(&keybinds);
     }
     (!kdl.is_empty()).then_some(kdl)
-}
-
-fn push_bool_option_kdl(kdl: &mut String, key: &str, value: bool) {
-    kdl.push_str(key);
-    kdl.push(' ');
-    kdl.push_str(bool_kdl(value));
-    kdl.push('\n');
-}
-
-fn bool_kdl(value: bool) -> &'static str {
-    if value { "true" } else { "false" }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]

@@ -502,8 +502,7 @@ pub struct EngineConfig {
     pub plugin_config: Option<String>,
     pub focus_key: Option<String>,
     pub zoom_key: Option<String>,
-    pub focus_follows_mouse: Option<bool>,
-    pub mouse_click_through: Option<bool>,
+    pub session_options: Vec<(String, String)>,
 }
 
 pub struct Engine {
@@ -1000,8 +999,7 @@ impl Engine {
             plugin_id: self.config.plugin_id,
             focus_key: self.config.focus_key.as_deref(),
             zoom_key: self.config.zoom_key.as_deref(),
-            focus_follows_mouse: self.config.focus_follows_mouse,
-            mouse_click_through: self.config.mouse_click_through,
+            session_options: &self.config.session_options,
         };
         if let Some(kdl) = wire::runtime_reconfigure_kdl(&config) {
             effects.push(Effect::Reconfigure(kdl));
