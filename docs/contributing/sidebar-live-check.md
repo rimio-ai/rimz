@@ -157,6 +157,24 @@ On the team's tab, run the sidebar's Look and take a fresh Capture. Count rows f
 
 The recorded row was `row0=8` on both backends. tmux focus moved from `%3` to `%8`, matching `Role: @reviewer#probe  tmux:%8`. On Zellij, `8=forge.reviewer@#probe` joined the focused set, matching `Role: @reviewer#probe  zellij:terminal_8`.
 
+## Inspect the data behind a card
+
+A frame shows what the renderer decided; `rimz sidebar snapshot --json` shows what it decided it from. Run it from the binary you built, not the installed one: the verb folds a fresh snapshot in the calling process, so your change is what produces it. `--no-produce` instead renders the producer's published cache, which a running release build wrote — useful for comparing old and new behaviour, and the wrong flag for checking your own code.
+
+One rendered card is a row in a worktree group, and its clocks and card fields live there:
+
+```sh
+target/debug/rimz sidebar snapshot --json > /tmp/snap.json
+jq '.worktree_groups[].rows[] | select(.handle == "coder")' /tmp/snap.json
+```
+
+`.agents[]` on the same snapshot is the rollup the fold reads, not what the card paints: it carries each session's own unfolded clock and no nested children, so a check that reads it will report the display fields missing. Row-level projections — the child-activity fold, display status, attention — exist only under `.worktree_groups[].rows[]`.
+
+Two rules for a check whose subject is time:
+
+- A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and launch no children, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent.
+- Put the wait in a background script (`sleep <secs>` followed by the capture commands, run detached) rather than a foreground sleep. An agent harness refuses a long foreground sleep, and any tool call you make during the window stamps the very activity clock you are trying to age.
+
 ## Traps
 
 - Look before capturing or clicking: an unwatched sidebar can hold a stale frame, because the renderer suppresses a dirty paint while the attached client is known to be looking elsewhere (`sidebar_pane/app/loop_state.rs` `dirty_paintable`). It is not a reliable negative control, so do not assert it: across runs an unwatched clock froze on tmux and on Zellij, and on one Zellij run it kept ticking.

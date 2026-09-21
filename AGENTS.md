@@ -88,6 +88,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - `examples/` is sample configuration for users to copy: not source code, not documentation. Do not read it while working unless the user asks, and do not treat it as authority on behaviour.
 - Contributor automation lives in `xtask/`. Each repository loop task owns a directory under [loops/](./loops/README.md), whose coordinator runs read-only at the project root and gives each editing attempt a fresh RimZ worktree. The command surface and gate stack live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Bulk command output (`--json` snapshots, transcript tails, gate logs) reaches an agent truncated, so printing it to stdout burns a turn and still loses the part that mattered. Redirect it to a file under `/tmp` in the same command, then narrow it with `jq` or a targeted read.
+- A scan command never passes `-r` to `rg`: it is `--replace`, so `rg -rn PATTERN` parses as `-r n` and rewrites every match to `n`. Single-quote any argument that starts with `=` or carries a glob character (`echo '==='`, `rg -g '*.rs'`), since the shell otherwise aborts the whole command before it runs. Both failures return plausible-looking output, so they cost a call each time.
 
 ## Testing
 
