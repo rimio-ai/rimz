@@ -11,7 +11,7 @@
 //! leftovers swept. An online shared web daemon restarts onto the new build.
 //! Every step is best-effort and run-once.
 
-use std::io::Write as _;
+use std::io::Write;
 
 use anyhow::Result;
 use clap::Args;
@@ -44,15 +44,19 @@ pub fn run(args: ReloadArgs, globals: &GlobalFlags) -> Result<()> {
             false
         }
     };
-    report(&outcome, web_restarted)?;
+    report(&mut render::out(), &outcome, args.repair, web_restarted)?;
     if args.repair {
         super::sidebar::repair(globals)?;
     }
     Ok(())
 }
 
-fn report(outcome: &ReloadOutcome, web_restarted: bool) -> Result<()> {
-    let mut out = render::out();
+fn report(
+    out: &mut impl Write,
+    outcome: &ReloadOutcome,
+    repair: bool,
+    web_restarted: bool,
+) -> Result<()> {
     // Each tally reads at a glance: the count carries the accent, the verb stays plain.
     let n = |count: usize, noun: &str| {
         render::paint(render::palette::accent(), &self::count(count, noun))
@@ -131,6 +135,15 @@ fn report(outcome: &ReloadOutcome, web_restarted: bool) -> Result<()> {
             n(outcome.dead_swept, "leftover process"),
         )?;
     }
+    // Reload only converges sidebars it can find; a room that lost its pane
+    // needs the repair verb, which `--repair` is already running.
+    if outcome.sidebar_missing > 0 && !repair {
+        writeln!(
+            out,
+            "{} with no sidebar; mount it again with `rimz reload --repair`.",
+            n(outcome.sidebar_missing, "room"),
+        )?;
+    }
     if web_restarted {
         writeln!(out, "Restarted the shared web daemon.")?;
     }
@@ -145,5 +158,47 @@ fn count(n: usize, noun: &str) -> String {
         format!("{n} {noun}es")
     } else {
         format!("{n} {noun}s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rendered(outcome: &ReloadOutcome, repair: bool) -> String {
+        let mut out = Vec::new();
+        report(&mut out, outcome, repair, false).expect("render the reload report");
+        String::from_utf8(out).expect("utf-8 report")
+    }
+
+    // The count carries the accent, so a styled report splits around it; each
+    // assertion stays on one side.
+    #[test]
+    fn a_room_that_lost_its_sidebar_is_pointed_at_repair() {
+        let outcome = ReloadOutcome {
+            sessions: 1,
+            sidebar_missing: 1,
+            ..ReloadOutcome::default()
+        };
+        let report = rendered(&outcome, false);
+        assert!(report.contains("1 room"), "{report}");
+        assert!(
+            report.contains("with no sidebar; mount it again with `rimz reload --repair`."),
+            "{report}"
+        );
+        // `--repair` runs that verb next, so naming it again would be noise.
+        assert!(!rendered(&outcome, true).contains("--repair"));
+    }
+
+    #[test]
+    fn a_converged_room_says_nothing_about_repair() {
+        let outcome = ReloadOutcome {
+            sessions: 1,
+            reexeced: 1,
+            ..ReloadOutcome::default()
+        };
+        let report = rendered(&outcome, false);
+        assert!(report.contains("Reloaded"), "{report}");
+        assert!(!report.contains("--repair"), "{report}");
     }
 }

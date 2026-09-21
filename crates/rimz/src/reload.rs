@@ -241,6 +241,8 @@ pub struct ReloadOutcome {
     /// Working sidebar panes that remain outside the verified full-height left
     /// dock after the bounded repair path.
     pub misdocked: usize,
+    /// Live sessions carrying no sidebar renderer at all.
+    pub sidebar_missing: usize,
 }
 
 impl ReloadOutcome {
@@ -264,6 +266,7 @@ impl ReloadOutcome {
             deferred,
             redocked,
             misdocked,
+            sidebar_missing,
         } = delta;
         self.sessions += sessions;
         self.presence_dead += presence_dead;
@@ -283,6 +286,7 @@ impl ReloadOutcome {
         self.deferred += deferred;
         self.redocked += redocked;
         self.misdocked += misdocked;
+        self.sidebar_missing += sidebar_missing;
     }
 }
 
@@ -463,6 +467,10 @@ fn upgrade_live(
     let current = current_build_claims(&post_wait, build);
     outcome.reexeced += awaiting.intersection(&current).count();
     outcome.unconverged += awaiting.difference(&current).count();
+    // A managed room always runs a sidebar, so a live session publishing no
+    // heartbeat has lost its pane: reload has nothing to converge there and the
+    // report owes the reader the verb that mounts it again.
+    outcome.sidebar_missing += usize::from(post_wait.is_empty());
     // 2. Converge the session's presence plugin onto the current wasm — reload
     //    is the explicit upgrade verb. Stale instances retire only after the
     //    replacement publishes topology from its new writer generation; a
@@ -1211,6 +1219,7 @@ mod tests {
             deferred: 15,
             redocked: 16,
             misdocked: 17,
+            sidebar_missing: 36,
         };
         base.merge(ReloadOutcome {
             sessions: 18,
@@ -1231,6 +1240,7 @@ mod tests {
             deferred: 32,
             redocked: 33,
             misdocked: 34,
+            sidebar_missing: 37,
         });
 
         assert_eq!(
@@ -1254,6 +1264,7 @@ mod tests {
                 deferred: 47,
                 redocked: 49,
                 misdocked: 51,
+                sidebar_missing: 73,
             }
         );
     }
