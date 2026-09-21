@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::disk::paths::{StatePaths, rimz_home, workspaces_dir_under};
 use crate::disk::{atomic, lock};
@@ -480,36 +479,6 @@ fn is_paste_tag(text: &str) -> bool {
     !id.is_empty() && !id.contains(['"', '\n'])
 }
 
-pub fn answer_text(decision: &Value) -> String {
-    if let Some(choice) = decision
-        .get("choice")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return choice.to_owned();
-    }
-    for key in ["updatedInput", "answer", "message"] {
-        if let Some(text) = decision.get(key).and_then(text_value) {
-            return text;
-        }
-    }
-    serde_json::to_string(decision).unwrap_or_else(|_| "null".to_owned())
-}
-
-fn text_value(value: &Value) -> Option<String> {
-    if let Some(text) = value
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(text.to_owned());
-    }
-    (!value.is_null())
-        .then(|| serde_json::to_string(value).ok())
-        .flatten()
-}
-
 fn transcript_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -970,27 +939,6 @@ mod tests {
         assert!(append_answer_if_missing(&paths, &answer).expect("first append"));
         assert!(!append_answer_if_missing(&paths, &answer).expect("duplicate append"));
         assert_eq!(read_all(&paths).expect("read").len(), 1);
-    }
-
-    #[test]
-    fn answer_text_prefers_choice_then_typed_fields_then_json() {
-        assert_eq!(
-            answer_text(&serde_json::json!({"choice": "allow"})),
-            "allow"
-        );
-        assert_eq!(
-            answer_text(&serde_json::json!({"updatedInput": "deploy now"})),
-            "deploy now"
-        );
-        assert_eq!(answer_text(&serde_json::json!({"answer": "yes"})), "yes");
-        assert_eq!(
-            answer_text(&serde_json::json!({"message": {"ok": true}})),
-            r#"{"ok":true}"#
-        );
-        assert_eq!(
-            answer_text(&serde_json::json!({"other": 1})),
-            r#"{"other":1}"#
-        );
     }
 
     #[test]
