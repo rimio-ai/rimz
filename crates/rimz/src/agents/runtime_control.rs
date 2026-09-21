@@ -24,7 +24,7 @@ pub enum RuntimeControlLiveness {
 
 impl RuntimeControlLiveness {
     /// Whether the host recorded evidence that it stopped serving.
-    pub const fn is_down(self) -> bool {
+    pub(crate) const fn is_down(self) -> bool {
         matches!(self, Self::Down)
     }
 }
@@ -74,7 +74,7 @@ impl RuntimeControlError {
     }
 }
 
-pub fn readiness(
+pub(crate) fn readiness(
     kind: &str,
     enabled: bool,
     login_env: &BTreeMap<String, String>,
@@ -96,7 +96,7 @@ pub fn host_liveness(
     })
 }
 
-pub fn ensure(kind: &str, enabled: bool, login_env: &BTreeMap<String, String>) {
+pub(crate) fn ensure(kind: &str, enabled: bool, login_env: &BTreeMap<String, String>) {
     if let Some(definition) = super::find_definition(kind) {
         definition.ensure_runtime_control(enabled, login_env);
     }
@@ -104,13 +104,13 @@ pub fn ensure(kind: &str, enabled: bool, login_env: &BTreeMap<String, String>) {
 
 /// Fill a host's launch preconditions without starting it, so a readiness gate
 /// judges the state the host will actually start with.
-pub fn prepare(kind: &str, enabled: bool, login_env: &BTreeMap<String, String>) {
+pub(crate) fn prepare(kind: &str, enabled: bool, login_env: &BTreeMap<String, String>) {
     if let Some(definition) = super::find_definition(kind) {
         definition.prepare_runtime_control(enabled, login_env);
     }
 }
 
-pub fn reconcile(
+pub(crate) fn reconcile(
     kind: &str,
     enabled: bool,
     login_env: &BTreeMap<String, String>,
@@ -120,11 +120,14 @@ pub fn reconcile(
     })
 }
 
-pub fn updater_advisory(kind: &str, login_env: &BTreeMap<String, String>) -> Option<String> {
+pub(crate) fn updater_advisory(kind: &str, login_env: &BTreeMap<String, String>) -> Option<String> {
     super::find_definition(kind)?.runtime_control_advisory(login_env)
 }
 
-pub fn wiring_input_path(kind: &str, login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+pub(crate) fn wiring_input_path(
+    kind: &str,
+    login_env: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
     super::find_definition(kind)?.runtime_control_wiring_input_path(login_env)
 }
 
