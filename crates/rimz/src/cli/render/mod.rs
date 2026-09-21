@@ -269,6 +269,14 @@ pub(crate) fn home_relative(path: &str) -> String {
     home_relative_to(home.as_ref().and_then(|home| home.to_str()), path)
 }
 
+/// Render a path a command holds as a [`Path`]: `..` folded away, then the home
+/// directory abbreviated. The worktree directory template is `../{repo}-worktrees`
+/// by default, so a configured tree reaches its printer unfolded and every
+/// surface that names one goes through here to agree with `rimz worktree list`.
+pub(crate) fn home_relative_path(path: &std::path::Path) -> String {
+    home_relative(&rimz::utils::path::normalize_path_lexical(path).to_string_lossy())
+}
+
 pub(crate) fn agent_activity_line(
     agent: &rimz::agents::AgentState,
     card: Option<&rimz::store::snapshot::AgentCard>,

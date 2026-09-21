@@ -359,6 +359,14 @@ fn uninstall_removes_managed_hooks() {
         stderr.contains(&format!("kept {}", accounts.display())),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("Accounts: kept; their credentials and history stay on disk"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("clear by hand: rm -rf {}", work_home.display())),
+        "{stderr}"
+    );
     assert!(work_home.join(".credentials.json").is_file());
     let unhooked = fs::read_to_string(&work_settings).expect("work settings kept");
     assert!(!unhooked.contains("rimz"), "{unhooked}");

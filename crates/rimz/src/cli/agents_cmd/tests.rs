@@ -1488,8 +1488,10 @@ mod pane_exec {
 
     #[test]
     fn exit_hint_names_the_kept_worktree_on_every_exit() {
-        let path = Path::new("/code/query-engine-worktrees/feat-a");
-        let display = crate::cli::render::home_relative(&path.to_string_lossy());
+        // The default `../{repo}-worktrees` template reaches the hint unfolded,
+        // so the input carries the `..` the printed line must not.
+        let path = Path::new("/code/query-engine/../query-engine-worktrees/feat-a");
+        let display = crate::cli::render::home_relative("/code/query-engine-worktrees/feat-a");
         for (startup_failure, resumable, code, action) in [
             (false, false, 0, "exited"),
             (false, true, 0, "exited"),

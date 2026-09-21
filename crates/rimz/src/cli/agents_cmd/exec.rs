@@ -504,7 +504,7 @@ pub(super) fn exit_hint(
         format!("rimz: agent `{kind}` exited ({status}); relaunch with `{relaunch}`\r\n")
     };
     if let Some(path) = worktree {
-        let path = crate::cli::render::home_relative(&path.to_string_lossy());
+        let path = crate::cli::render::home_relative_path(path);
         hint.push_str(&format!(
             "rimz: worktree {path} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"
         ));
