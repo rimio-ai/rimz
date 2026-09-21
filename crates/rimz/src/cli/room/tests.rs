@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{
-    ResumePromptMode, birth_socket_name, preflight_machine_accounts, resume_prompt_mode,
+    ResumePromptMode, birth_socket_name, blocks_room_start, resume_prompt_mode,
     write_project_trust_offer_to,
 };
 
@@ -19,7 +19,7 @@ fn zellij_birth_preflights_the_state_dir_name_only_when_the_room_is_dead() {
 }
 
 #[test]
-fn machine_account_preflight_propagates_only_account_config_errors() {
+fn machine_config_preflight_blocks_accounts_and_notifications() {
     let path = PathBuf::from("/tmp/config.toml");
     let account_error = rimz::config::ConfigErr::AccountBudget {
         path: path.clone(),
@@ -27,20 +27,40 @@ fn machine_account_preflight_propagates_only_account_config_errors() {
             kind: "cursor".to_owned(),
         },
     };
-    assert!(preflight_machine_accounts(Err(account_error)).is_err());
+    assert!(blocks_room_start(&account_error));
     let login_error = rimz::config::ConfigErr::Account {
         path: path.clone(),
         source: Box::new(rimz::agents::LoginConfigErr::ReservedName {
             kind: rimz::ids::AgentKind::new_unchecked("claude"),
         }),
     };
-    assert!(preflight_machine_accounts(Err(login_error)).is_err());
+    assert!(blocks_room_start(&login_error));
+    let notifications_error = rimz::config::MachineConfig::parse_text(
+        &path,
+        "[[notifications.handler]]\nname = \"bad\"\ncommand = \"\"\n",
+        std::path::Path::new("/tmp/missing-agents-home"),
+    )
+    .expect_err("invalid notifications");
+    assert!(matches!(
+        notifications_error,
+        rimz::config::ConfigErr::Notifications { .. }
+    ));
+    assert!(blocks_room_start(&notifications_error));
+
+    let parse_error = rimz::config::MachineConfig::parse_text(
+        &path,
+        "not = = toml",
+        std::path::Path::new("/tmp/missing-agents-home"),
+    )
+    .expect_err("broken TOML");
+    assert!(matches!(parse_error, rimz::config::ConfigErr::Parse { .. }));
+    assert!(!blocks_room_start(&parse_error));
 
     let unrelated = rimz::config::ConfigErr::Io {
         path,
         source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
     };
-    assert!(preflight_machine_accounts(Err(unrelated)).is_ok());
+    assert!(!blocks_room_start(&unrelated));
 }
 
 #[test]

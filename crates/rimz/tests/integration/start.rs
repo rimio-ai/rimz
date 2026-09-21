@@ -316,6 +316,43 @@ fn start_rejects_unsupported_account_budget_before_room_state() {
 }
 
 #[test]
+fn start_rejects_invalid_notifications_before_room_state() {
+    let env = Env::new();
+    let config = env.rimz_home().join("config.toml");
+    std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
+    std::fs::write(
+        &config,
+        "[[notifications.handler]]\nname = \"bad\"\ncommand = \"\"\n",
+    )
+    .expect("machine config");
+    let workspace_state = env.state_path_for(&env.project_root).root;
+
+    let output = env
+        .rimz()
+        .arg("start")
+        .bounded_output()
+        .expect("run rimz start");
+
+    assert!(!output.status.success(), "start accepted invalid handler");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(&config.display().to_string()), "{stderr}");
+    assert!(
+        stderr.contains(
+            "notification command in [notifications.handler #1 `bad`].command must not be empty"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("every setting in it is ignored and built-in defaults apply"),
+        "{stderr}"
+    );
+    assert!(
+        !workspace_state.exists(),
+        "notifications preflight must run before room state is created"
+    );
+}
+
+#[test]
 fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let birth = Env::new();
     let birth_bin = seed_actionable_agent(&birth);

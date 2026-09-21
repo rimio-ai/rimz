@@ -173,6 +173,31 @@ fn broken_machine_files_reports_only_the_unparseable_file() {
 }
 
 #[test]
+fn broken_machine_files_reports_notifications_even_with_broken_theme() {
+    let dir = tempdir().expect("tempdir");
+    let path = write(
+        &dir,
+        "[[notifications.handler]]\nname = \"bad\"\ncommand = \"\"\n",
+    );
+    let files = MachineConfigFiles::from_paths(path.clone(), dir.path().join("agents-home"));
+    for broken_theme in [false, true] {
+        if broken_theme {
+            std::fs::write(dir.path().join(THEME_FILE), "not = = toml")
+                .expect("write broken theme");
+        }
+        let errors = broken_machine_files_in(&files);
+        assert!(
+            errors.iter().any(|error| matches!(error,
+                ConfigErr::Notifications { path: error_path, source: NotificationsConfigErr::EmptyCommand { .. } }
+                if error_path == &path
+            )),
+            "notifications must remain visible: {errors:?}"
+        );
+        assert_eq!(errors.len(), if broken_theme { 2 } else { 1 });
+    }
+}
+
+#[test]
 fn lenient_load_falls_back_only_for_the_broken_file() {
     let dir = tempdir().unwrap();
     let path = write(&dir, "not = = toml");
