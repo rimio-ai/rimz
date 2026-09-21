@@ -25,7 +25,7 @@ The rest of the module follows from that rule: how a record decides it is ready,
 | [`message/compact.rs`](../../../crates/rimz/src/message/compact.rs) | Standalone compaction for the operator verb and idle compaction: repeat refusal and boundary delivery. |
 | [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs) | `--wait`: leg state machines, transcript anchoring, cycle detection, join settlement. |
 | [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The elder's side of the clock: read the wake stamp and spawn `message sweep`. |
-| [`store/message.rs`](../../../crates/rimz/src/store/message.rs) | The record schema and vocabulary, card matching, FIFO, claim, and batch selection, and prompt alignment for [confirmation](#confirmation-and-retry). |
+| [`store/message.rs`](../../../crates/rimz/src/store/message.rs) | The record schema and vocabulary, card matching, FIFO, claim, and batch selection, prompt alignment for [confirmation](#confirmation-and-retry), and the read-only submitted-prompt origin classifier. |
 | [`store/message/codec.rs`](../../../crates/rimz/src/store/message/codec.rs) | The JSONL codec for the live queue and terminal history. |
 | [`store/writer/queue.rs`](../../../crates/rimz/src/store/writer/queue.rs) | Every status transition, under the workspace lock, with its audit event where one is written. |
 | [`cli/message/`](../../../crates/rimz/src/cli/message) | Flag parsing, rendering, and the inbox verbs. No delivery logic. |
@@ -74,6 +74,32 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 `MessageSender::is_conversation()` splits senders by variant alone. `Human` and `Agent` are conversation traffic; `Harness`, `Subagent`, and `System` are system traffic, which covers nudges, compaction commands, and deliberately unattributed `--no-from` text. The split is a read-side filter for `message list` and other conversation surfaces, and `automated` plays no part in it.
 
 Two counters track two different failures. `attempts` counts claims and caps at `MAX_DELIVERY_ATTEMPTS` (5). `unconfirmed_sends` counts prompt writes that landed and were never acknowledged, and caps at `DEFAULT_MAX_DELIVERY_ATTEMPTS` (3, overridable through `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS`). A claim bumps only the first; a stale-`Sent` prompt requeue bumps only the second. Commands have no unconfirmed-send cap because they are never resent.
+
+### Turn-opening injection sites
+
+These are the producers of queued or launch-time text. Paths are relative to `crates/rimz/src`; sender and body names are `MessageSender` and `MessageBody` variants. A launch prompt is not a queued `Prompt` record.
+
+| Site | Module and composing symbol | Sender / body queued |
+| --- | --- | --- |
+| Human or agent message; `--no-from` | `cli/message/dispatch.rs::send_message`, caller text; `cli/send.rs::sender_for` resolves identity | `Human` or `Agent` / `Prompt`; `--no-from` uses `System` / `Prompt` |
+| Subagent fleet digest | `cli/agents_cmd/subagent_report.rs::compose_digest` | `Harness { notice: SubagentReport }` / `Prompt` |
+| Auto-continue | `cli/agents_cmd/auto_continue.rs::run_auto_continue`, configured resume text via `message/deliver.rs::nudge_now` | `System` / `Prompt` |
+| Supervised verification reprompt | `harness/prompt_compose.rs::verify_reprompt`, delivered by `cli/supervised/verify.rs::deliver_reprompt` | `System` / `Prompt` |
+| Fleet or account budget continuation | `cli/budget.rs::run`, configured resume text via `message/deliver.rs::queue_synthetic` | `System` / `Prompt` |
+| Agent budget continuation | `cli/agents_cmd/budget.rs::run_budget`, configured resume text via `message/deliver.rs::queue_synthetic` | `System` / `Prompt` |
+| Idle compaction | `cli/agents_cmd/idle_compact.rs::run_idle_compact`, `agents::compact_command`, `message/compact.rs::send_compact` | `System` / `Command` |
+| Stage-flip compaction | `harness/team_stage.rs::compact_flipper`, `agents::compact_command`, `message/compact.rs::send_compact` | `System` / `Command` |
+| Operator compaction | `cli/agents_cmd/compact.rs::compact_agent`, adapter compact command, `message/compact.rs::send_compact` | Operator's `Human` or `Agent` / `Command` |
+| Smart compact before delivery | `message/send.rs::compact_message_for_target`, `agents::compact_command` | `System` / `Command` |
+| Stage notice | `harness/team_stage.rs::stage_open_body`, queued by `open_stage` | `Harness { notice: Stage }` / `Prompt` |
+| Loop delivery or self-wait | `harness/schedule/runner.rs::resolve_effect_prompt`, `runner/prompt.rs::compose_wait`; dispatched by `cli/loop_cmd/run.rs::execute_prepared_delivery` | `Harness { notice: Wait }` / `Prompt` |
+| Signal or watch delivery | Same scheduler composition and dispatch; team bindings are armed by `harness/schedule/team.rs::arm_member` | `Harness { notice: Signal }` / `Prompt` |
+| Loop-spawned run | `harness/schedule/runner.rs::compile_spawn_request` and `resolve_effect_prompt` | No queue record; `RunRecord.loop_task` supplies harness origin |
+| Supervised launch or subagent brief | `cli/supervised/run.rs::supervised_prompt`; fallback reminder from `harness/launch_reminders.rs::subagent_reminder` | No queue record; run origin is human or the subagent's parent |
+| Supervised retry | `harness/prompt_compose.rs::retry_prompt` | No queue record; retains the run's origin |
+| `message --create` on a missing recipient | `cli/message/dispatch.rs::recipient_miss`, caller text passed as a launch prompt | No queue record; agent-sender preservation is deferred |
+
+Run-origin matching and the wrapper registry are described in [transcript.md § Writing entries](./transcript.md#writing-entries). Direct typing and `rimz pane send` have no message record: `pane send` is the raw keystroke primitive and its caller is the author. Ordinary root launch text is likewise not queued. Team system prompts use the system-text channel rather than the conversation; restart, fork, resume, and rebirth inject no turn-opening text. Provider control payloads are filtered through `SanitizedPrompt`, including for process plugins, before they can become lifecycle prompts.
 
 ## Status lifecycle
 
@@ -266,6 +292,8 @@ A `SUBAGENT_REPORT` digest is always claimed alone, as its own head. Nothing els
 The batch lands as one paste and one submit. Agent- and human-authored members keep their own [header](#the-message-header), system members stay verbatim, and a blank line separates sections. Claim, `Sent`, release, and pre-send failure each change the whole batch in one queue transaction.
 
 ### Confirmation and retry
+
+Origin classification is a separate, read-only decision in `store::message::classify_submitted_prompt`. Before confirmation removes records from the live queue, the hook reads `Store::list_messages` for this card's `Sent` or `awaiting_late_ack()` records, of either body. After confirmation, the classifier combines that view with the confirmed records. An unmatched headerless section can recover its sender and causal ids from a headerless in-flight record with the same trimmed text. That does not acknowledge the record: a system command remains `Sent` at turn start and waits for `Compaction`. The [transcript writer and spend consumer](./transcript.md#writing-entries) share the classified sections; neither widens the acknowledgement contract below.
 
 A `TurnStarted` hook aligns the submitted prompt against the candidate `Prompt` batches for its card through [`align_submitted_prompt`](../../../crates/rimz/src/store/message.rs). Record text supplies the boundaries between adjacent messages: agent-, human-, and harness-authored records match through their structured headers (`SIGNAL` included), and system records match verbatim. Inside a batch the text and the blank-line joins must match exactly; only the outer whitespace follows the hook payload's normalization.
 
