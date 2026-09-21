@@ -7,42 +7,41 @@ use tempfile::TempDir;
 
 use super::support::*;
 
-/// Zellij 0.44.3 suppresses terminal mouse reporting when an attach command
-/// explicitly passes `options --mouse-mode true`. RimZ keeps the enabled case
-/// implicit so clicks reach the tab bar and sidebar, while still applying the
-/// rest of the room options.
+/// Mouse mode is client-local: an explicit true cannot override config.kdl's
+/// false. Use the namespace's mouse-silent config as the positive baseline.
 #[test]
 fn attach_command_keeps_terminal_mouse_reporting_enabled() {
     require_zellij!();
 
-    let room = LiveZellijSession::new("mouse");
-    let xdg = room.path();
-    let name = room.name().to_owned();
-    let spec = ZellijBackend::with_runtime_dir(xdg)
-        .attach_command(&name, &rimz::config::MultiplexerConfig::default());
-    assert!(
-        !spec
-            .args
-            .windows(2)
-            .any(|pair| pair[0] == "--mouse-mode" && pair[1] == "true"),
-        "Zellij 0.44.3 disables mouse reporting for `--mouse-mode true`: {spec:?}",
-    );
-
-    let output = capture_pty_output_until(&spec, Duration::from_secs(10), mouse_reporting_enabled);
-    assert!(
-        mouse_reporting_enabled(&output),
-        "attach output did not enable terminal mouse reporting: {:?}",
-        String::from_utf8_lossy(&output),
-    );
-}
-
-fn mouse_reporting_enabled(output: &[u8]) -> bool {
-    output
-        .windows(b"\x1b[?1006h".len())
-        .any(|window| window == b"\x1b[?1006h")
-        && output
-            .windows(b"\x1b[?1000h".len())
-            .any(|window| window == b"\x1b[?1000h")
+    for enabled in [true, false] {
+        let room = LiveZellijSession::new("mouse");
+        room.create_plain_background(room.path(), "600");
+        let mut config = rimz::config::MultiplexerConfig::default();
+        config.zellij.mouse_mode = Some(enabled);
+        let spec = room.backend().attach_command(room.name(), &config);
+        let output = capture_pty_output_until(&spec, Duration::from_secs(5), |_| false);
+        assert!(
+            output
+                .windows(b"\x1b[?1049h".len())
+                .any(|bytes| bytes == b"\x1b[?1049h"),
+            "client never entered its terminal UI: {output:?}",
+        );
+        for sequence in [
+            b"\x1b[?1000h",
+            b"\x1b[?1002h",
+            b"\x1b[?1003h",
+            b"\x1b[?1006h",
+        ] {
+            assert_eq!(
+                output
+                    .windows(sequence.len())
+                    .any(|bytes| bytes == sequence),
+                enabled,
+                "mouse_mode={enabled}, sequence={sequence:?}, output={output:?}",
+            );
+        }
+        eprintln!("live Zellij attach mouse_mode={enabled} verified");
+    }
 }
 
 /// `open_sidebar` births the full Zellij room shape once: left sidebar, focused
