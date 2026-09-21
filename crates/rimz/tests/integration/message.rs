@@ -6146,3 +6146,33 @@ fn provisional_without_live_frame_parks_queue_and_steer() {
         "no-live-frame steer must not paste into the stale launch pane: {lines:?}"
     );
 }
+
+#[test]
+fn a_bare_word_send_names_the_missing_sigil() {
+    let env = Env::new();
+
+    let out = env
+        .rimz()
+        .args(["message", "codex", "hi"])
+        .output()
+        .expect("bare-word send");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("must start with `@`") && stderr.contains("try `@codex`"),
+        "a send whose sigil is missing gets the one-word fix: {stderr}"
+    );
+
+    // With nothing to deliver, the same word is a mistyped subcommand.
+    let out = env
+        .rimz()
+        .args(["message", "lst"])
+        .output()
+        .expect("mistyped subcommand");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown subcommand `lst`"),
+        "stderr: {stderr}"
+    );
+}

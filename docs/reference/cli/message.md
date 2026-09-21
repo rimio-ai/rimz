@@ -24,7 +24,7 @@ rimz message clear @claude-2#cli-docs
 
 A send takes one target and the text: `rimz message <TARGET> "<TEXT>"`. Flags may come before, between, or after them. Pass the text as one quoted argument; a text that starts with `-` goes after clap's `--` terminator.
 
-The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_01k…` suggests `rimz message show msg_01k…`, and any other word lists the subcommands. An address that matches no agent prints the error followed by the live agents, and exits 1.
+The target follows the [address grammar](./agents.md#addressing-agents), plus `@me` for the calling agent. A bare word that is not an address fails: `rimz message msg_01k…` suggests `rimz message show msg_01k…`, a word carrying text to deliver names the sigil (``agent target `codex` must start with `@` (try `@codex`)``), and a word with nothing to deliver lists the subcommands. An address that matches no agent prints the error followed by the live agents, and exits 1.
 
 The text comes from one of three sources:
 

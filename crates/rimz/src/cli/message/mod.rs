@@ -245,6 +245,13 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                 if target.starts_with("msg_") {
                     bail!("did you mean `rimz message show {target}`?");
                 }
+                // Clap has already matched every real subcommand, so the word is
+                // one of two mistakes. Text behind it makes the intent a send,
+                // and the fix is the one word `require_mention` names; a bare
+                // word with nothing to deliver is a mistyped subcommand.
+                if args.text.is_some() || args.send.stdin || args.send.file.is_some() {
+                    rimz::address::require_mention(&target)?;
+                }
                 bail!(
                     "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, requeue <id>, cancel <id>..., clear [target], or an @agent target"
                 );
