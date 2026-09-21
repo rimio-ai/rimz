@@ -107,11 +107,13 @@ Review docs/reference/cli/transcript.md against the transcript CLI code.
 
 Each header names the sender, then `→` and the receiver when there is one, then the local time as `HH:MM`. Human senders show as the `user` or `you` chip, and RimZ itself as `rimz`. A channel view drops the `#channel` suffix from handles. Consecutive entries from the same sender to the same receiver share one header when they fall within 5 minutes of each other, on the same day, in the same margin or thread. A rule labelled `Today` or with the date (`Sat, Jun 27 2026`) marks a change of day.
 
+A message's time is its creation time when known, otherwise its recorded time. When delivery trails creation by at least 60 seconds, the header reads `12:41 · delivered 12:45`. Delivery on a different local date includes that date, as in `23:58 · delivered Mon, Jun 29 2026 · 00:02`. Such a line gets its own header, and the next line cannot share it. Older entries without a recorded creation time keep their original timestamp.
+
 ### Threads
 
-Each conversation starts at the margin, and the receiver's turn output plus any replies back to the sender follow beneath it behind a `│` spine, in time order. Threads are one level deep. A hand-off to a third agent opens its own exchange at the margin, as does a reply whose parent is outside the view. A thread entry on a different day from its root shows the date in its header (`Mon, Jun 29 2026 · 00:02`).
+Each conversation starts at the margin, with replies behind a `│` spine one level deep. A reply back to the sender continues the exchange only while it is the latest conversation; once another conversation's message, prompt, or flip intervenes, it opens at the margin. A hand-off to a third agent also opens its own exchange, as does a reply whose parent is outside the view. Messages, prompts, and flips keep their timestamp order; turn output sits beneath the message that opened its turn, however late it ran. When one turn answers two opening messages, its output sits under the later opener without merging their threads. A thread entry on a different day from its first line shows the date in its header (`Mon, Jun 29 2026 · 00:02`).
 
-Output with no recorded parent, such as the reply to a prompt typed directly into the agent's pane, threads beneath that agent's most recent opening message. It stays at the margin when that opener is hidden (see [What the human view hides](#what-the-human-view-hides)). `--flat` turns threading off.
+Output with no recorded parent, such as the reply to a prompt typed directly into the agent's pane, threads beneath that agent's most recently arrived opening message at the time of the output. A message still waiting for delivery cannot open that turn. Output stays at the margin when that opener is hidden (see [What the human view hides](#what-the-human-view-hides)). `--flat` turns threading off and uses timestamp order (`at` in JSON).
 
 ### Bodies
 
@@ -131,7 +133,7 @@ A [`rimz teams flip`](./teams.md#flip-the-board-to-the-next-stage) prints inside
 ⇢ Plan → Implement  14:13
 ```
 
-The transition prints in the accent tone and the note faint, with further note lines hanging beneath. A flip continues its flipper's most recent line in the same channel when that line is within 5 minutes, adding its own `HH:MM`; otherwise it opens a block under its own header. A flip with no prior stage reads `⇢ Plan · opened`, and a flip to the current stage reads `⇢ Plan · re-opened`. Flips come from the [`team.stage` signal](./teams.md#the-teamstage-signal) in the active event log, so flips older than the last event-log rotation do not print.
+The transition prints in the accent tone and the note faint, with further note lines hanging beneath. A flip continues its flipper's most recent line in the same channel when that line is within 5 minutes and belongs to the latest conversation, adding its own `HH:MM`; otherwise it opens a block under its own header. A flip with no prior stage reads `⇢ Plan · opened`, and a flip to the current stage reads `⇢ Plan · re-opened`. Flips come from the [`team.stage` signal](./teams.md#the-teamstage-signal) in the active event log, so flips older than the last event-log rotation do not print.
 
 ## What the human view hides
 
@@ -147,7 +149,7 @@ Each hidden entry takes with it the agent's replies and error output in the turn
 
 ## Tail with `--last`
 
-`-n, --last <N>` keeps the last `N` entries in display order, after hidden entries are removed. One entry is one message, however many lines its body takes, and an answer folded into an ask card still counts as one. When the cut lands inside a thread, the tail widens back to the thread's root so the conversation keeps its opener. `--last` applies to `--json` the same way.
+`-n, --last <N>` keeps the last `N` entries in display order, after hidden entries are removed. One entry is one message, however many lines its body takes, and an answer folded into an ask card still counts as one. When the cut lands inside a thread, the tail widens back to the displayed thread's first line so the conversation keeps its opener. `--last` applies to `--json` the same way.
 
 ## Empty results
 
@@ -155,7 +157,7 @@ A scope with nothing to show exits 0 and prints a faint note on stderr. It reads
 
 ## JSON output
 
-`--json` prints one object with the selected entries in timestamp order, hidden entries included.
+`--json` prints one object with the selected entries in timestamp (`at`) order, hidden entries included.
 
 | Field | Present | Value |
 | --- | --- | --- |
@@ -170,7 +172,8 @@ Each entry carries these fields. A field shown as optional is absent when empty 
 | --- | --- |
 | `from` | `user` for a prompt, `you` or `answered` for an answer, `@rimz` for a hidden delivery, otherwise the agent's handle. |
 | `to` | Optional. The receiving agent's handle. Absent on agent output and flips. |
-| `at` | The timestamp, RFC 3339 in UTC. |
+| `at` | The creation time when known, otherwise the recorded time, RFC 3339 in UTC. |
+| `delivered_at` | Optional. The delivery record time when creation time is known, RFC 3339 in UTC. Included even for waits shorter than 60 seconds. |
 | `text` | The body. For a flip, the note. |
 | `message_id` | Optional. The id of the delivered message this entry records. |
 | `reply_to` | Optional. Ids of the messages that opened the turn this entry belongs to. |
