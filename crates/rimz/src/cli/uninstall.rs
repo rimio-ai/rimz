@@ -50,6 +50,7 @@ struct Preview<'a> {
     disk_usage: &'a RuntimeStorage,
     remove_state: bool,
     remove_config: bool,
+    account_homes: &'a [(String, PathBuf)],
     live_rooms: &'a [LiveRoom],
     hook_agents: &'a [String],
     skill_links: &'a [SkillLinkPlan],
@@ -83,6 +84,14 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
             "read provider accounts: {err}; only the providers' own homes were cleaned"
         ));
     }
+    let account_homes = logins
+        .iter()
+        .filter(|(key, _, _)| !key.name.is_default())
+        .filter_map(|(key, adapter, env)| {
+            let home = adapter.config_home(env)?;
+            home.exists().then(|| (hook_label(key), home))
+        })
+        .collect::<Vec<_>>();
     let hook_agents = logins
         .iter()
         .filter(|(_, adapter, env)| adapter.managed_hook_artifacts_present(env))
@@ -117,6 +126,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
         disk_usage: &disk_usage,
         remove_state,
         remove_config,
+        account_homes: &account_homes,
         live_rooms: &live_rooms,
         hook_agents: &hook_agents,
         skill_links: &skill_links,
@@ -257,6 +267,9 @@ fn render_preview(preview: Preview<'_>) -> Result<()> {
             root.path.display(),
             present
         )?;
+    }
+    for line in account_preview_lines(preview.account_homes) {
+        writeln!(stderr, "{line}")?;
     }
     if preview.live_rooms.is_empty() {
         writeln!(stderr, "Rooms: none running")?;
@@ -523,6 +536,26 @@ fn render_removal_outcomes(
     Ok(())
 }
 
+fn account_preview_lines(homes: &[(String, PathBuf)]) -> Vec<String> {
+    if homes.is_empty() {
+        return vec!["Accounts: none declared".to_owned()];
+    }
+    let mut lines = vec!["Accounts:".to_owned()];
+    for (label, home) in homes {
+        lines.push(format!(
+            "  {label}  {}",
+            super::render::home_relative(&home.to_string_lossy())
+        ));
+    }
+    let paths = homes
+        .iter()
+        .map(|(_, home)| shell_quote_path(home))
+        .collect::<Vec<_>>()
+        .join(" ");
+    lines.push(format!("  clear by hand: rm -rf {paths}"));
+    lines
+}
+
 fn home_kept_children(remove_state: bool, remove_config: bool) -> Vec<&'static str> {
     let mut keep = vec![
         "profiles",
@@ -597,6 +630,30 @@ fn shell_quote_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_preview_names_kept_homes_and_removal_command() {
+        assert_eq!(account_preview_lines(&[]), ["Accounts: none declared"]);
+        let homes = vec![
+            (
+                "claude@work".to_owned(),
+                PathBuf::from("/accounts/claude/work"),
+            ),
+            (
+                "codex@personal".to_owned(),
+                PathBuf::from("/accounts/codex/personal home"),
+            ),
+        ];
+        assert_eq!(
+            account_preview_lines(&homes),
+            [
+                "Accounts:",
+                "  claude@work  /accounts/claude/work",
+                "  codex@personal  /accounts/codex/personal home",
+                "  clear by hand: rm -rf /accounts/claude/work '/accounts/codex/personal home'",
+            ]
+        );
+    }
 
     #[test]
     fn home_cleanup_preserves_flagged_categories_and_user_files() {
