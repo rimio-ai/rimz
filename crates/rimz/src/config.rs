@@ -922,7 +922,7 @@ fn stamped_path_modified_within(path: &StampedPath, now: Duration, quiet: Durati
 }
 
 /// Resolve an optional IANA name to a zone, falling back to the system zone.
-pub fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
+pub(crate) fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
     name.map(str::trim)
         .filter(|name| !name.is_empty())
         .and_then(|name| jiff::tz::TimeZone::get(name).ok())
