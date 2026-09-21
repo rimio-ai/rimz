@@ -531,7 +531,12 @@ fn launched_child_brief_is_attributed_to_parent() {
     rimz::harness::run::create(store.paths(), &run).unwrap();
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.agent_id = Some(rimz::ids::AgentSessionId::from("child-session"));
-    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some("  inspect the infra  "));
+    let submitted = format!(
+        "{}\n\n{}",
+        run.prompt,
+        rimz::harness::launch_reminders::subagent_reminder()
+    );
+    started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(&submitted));
 
     record_conversation(
         &workspace,
@@ -563,6 +568,7 @@ fn launched_child_brief_is_attributed_to_parent() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Message);
     assert_eq!(entries[0].from.as_deref(), Some("@planner"));
+    assert_eq!(entries[0].text, "inspect the infra");
     assert_eq!(
         entries[0].parent_agent_id.as_deref(),
         Some("parent-launch-session")
@@ -577,6 +583,104 @@ fn launched_child_brief_is_attributed_to_parent() {
         entries[1].parent_agent_id.as_deref(),
         Some("parent-launch-session")
     );
+
+    let original_run_id = run.run_id.clone();
+    run.run_id = rimz::RunId::new();
+    run.retry_of = Some(original_run_id);
+    run.loop_task = Some("review".to_owned());
+    run.prompt =
+        "inspect the infra\n\n<previous-attempt-failure>\ntry again\n</previous-attempt-failure>"
+            .to_owned();
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    later.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(&format!(
+        "{}\n\n{}",
+        run.prompt,
+        rimz::harness::launch_reminders::subagent_reminder()
+    )));
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &later,
+        TestConversationInput {
+            run_id: Some(&run.run_id),
+            ..conversation_input(None, &[], &[])
+        },
+    )
+    .unwrap();
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[2].entry, rimz::transcript::TranscriptKind::Message);
+    assert_eq!(entries[2].from.as_deref(), Some("@planner"));
+    assert_eq!(entries[2].text, "inspect the infra");
+}
+
+#[test]
+fn run_briefs_keep_loop_human_and_unresolved_parent_origins() {
+    for (subagent, loop_task, expected_from) in [
+        (false, Some("review"), Some("rimz")),
+        (false, None, None),
+        (true, None, Some("rimz")),
+    ] {
+        let (_dir, store) = store();
+        let workspace = workspace();
+        let mut run = rimz::store::run::RunRecord::new(
+            workspace.workspace_id.clone(),
+            rimz::ids::AgentKind::new_unchecked("claude"),
+            rimz::agents::PermissionMode::Auto,
+            "inspect the infra".to_owned(),
+            workspace.worktree_root.clone(),
+        );
+        run.subagent = subagent;
+        run.loop_task = loop_task.map(ToOwned::to_owned);
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+        started.observation.prompt = rimz::agents::SanitizedPrompt::new(Some(&run.prompt));
+        record_conversation(
+            &workspace,
+            &store,
+            rimz::agents::definition_by_kind("claude").unwrap(),
+            &started,
+            TestConversationInput {
+                run_id: Some(&run.run_id),
+                ..conversation_input(None, &[], &[])
+            },
+        )
+        .unwrap();
+        let entries = rimz::transcript::read_all(store.paths()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Prompt);
+        assert_eq!(entries[0].from.as_deref(), expected_from);
+        assert_eq!(entries[0].text, run.prompt);
+        if expected_from.is_some() {
+            let mut ask = rimz::transcript::TranscriptEntry::new(
+                jiff::Timestamp::now(),
+                run.kind.clone(),
+                rimz::ids::AgentSessionId::from("sess-1"),
+                rimz::transcript::TranscriptKind::Ask,
+                String::new(),
+            );
+            ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
+            rimz::transcript::append(store.paths(), &ask).unwrap();
+            started.waiting_cleared = true;
+            record_conversation(
+                &workspace,
+                &store,
+                rimz::agents::definition_by_kind("claude").unwrap(),
+                &started,
+                TestConversationInput {
+                    run_id: Some(&run.run_id),
+                    ..conversation_input(None, &[], &[])
+                },
+            )
+            .unwrap();
+            let entries = rimz::transcript::read_all(store.paths()).unwrap();
+            assert_eq!(entries.len(), 3);
+            assert_eq!(entries[2].entry, rimz::transcript::TranscriptKind::Prompt);
+            assert_eq!(entries[2].from.as_deref(), expected_from);
+            assert!(has_open_native_ask(&store, "claude", "sess-1"));
+        }
+    }
 }
 
 #[test]
