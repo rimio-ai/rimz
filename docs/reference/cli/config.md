@@ -155,7 +155,7 @@ Custom scheme files and color slots are in the [theming guide](../../guide/theme
 
 `rimz list-pets` lists every pet id you can give `theme.pets.pet`: the built-in pets first, then each pet installed under `~/.codex/pets/` (a directory holding `pet.json`), sorted by directory name. An installed pet's id is that directory name.
 
-A built-in id wins a collision: install a petdex pet named `rocky` and `theme.pets.pet = "rocky"` still selects the built-in, so reach the installed one by its directory path instead. RimZ reads the setting as a path when it contains `/` or `.`, or starts with `~`, and as a bare id otherwise.
+A built-in id wins a collision: install a petdex pet named `rocky` and `theme.pets.pet = "rocky"` still selects the built-in, so reach the installed one by its directory path instead. RimZ resolves the setting in order: a built-in id, then an `http://` or `https://` selector as a remote sprite sheet, then a selector containing `/` or `.` or starting with `~` as a local path, and anything else as an installed pet's directory name.
 
 | Output | Shape |
 | --- | --- |

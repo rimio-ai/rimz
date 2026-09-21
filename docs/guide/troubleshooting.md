@@ -4,7 +4,7 @@ Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess abo
 
 ## Start with `rimz doctor`
 
-`rimz doctor` probes the machine, the room, and RimZ's own state, then prints a verdict per row: the multiplexer and whether its version clears the floor, per-machine config parsing, sandbox support, per-agent hook status, provider accounts, scheduled loop tasks, project trust, terminal color depth, workspace and store health, the live agents, messages that failed to land, and recent incidents. It only reads: nothing in the room starts, stops, or moves, so run it as often as you like.
+`rimz doctor` probes the machine, the room, and RimZ's own state, then prints a verdict per row: the multiplexer and whether its version clears the floor, per-machine config parsing, sandbox support, per-agent hook status, provider accounts, scheduled loop tasks, project trust, terminal color depth, workspace and store health, the live agents, messages that failed to land, and recent incidents. Nothing in the room starts, stops, or moves, so run it as often as you like.
 
 ```sh
 rimz doctor

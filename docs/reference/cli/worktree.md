@@ -45,7 +45,7 @@ created feat-a
 
 `new` runs `git worktree add -b <branch> <path> <base>`, writes the ownership marker, and seeds the tree from the repository's `.worktreeinclude` and `.worktreelink` files ([seed the tree](../../guide/worktrees.md#seed-the-tree)). It launches nothing into the tree. Any open messages still queued on the channel of that name are archived.
 
-A seeded file that `.gitignore` does not already cover leaves every tree created from then on permanently dirty, which is enough for `sweep` to keep it with `uncommitted changes` and for `remove` to refuse it. Seed paths the repository ignores, or add them to `.gitignore` first. Linked directories need no entry of their own: `new` writes each one into the tree's `.git/info/exclude`.
+Seed only paths Git already ignores. A seed Git neither tracks nor ignores lands as an untracked change in every tree it reaches, which is enough for `sweep` to keep that tree with `uncommitted changes` and for `remove` to refuse it. Linked directories need no `.gitignore` entry: `new` adds each one to the exclude file `git rev-parse --git-path info/exclude` names, which for a linked worktree is usually the main checkout's `.git/info/exclude`.
 
 `--base` picks the commit the branch starts from. Without it, `new` uses the `[agents.worktree] base` setting, which defaults to `head`.
 
@@ -197,7 +197,7 @@ sweep — would remove 1 · 18 MB · 2 kept
 | `uncommitted changes` | The tree is dirty. |
 | `not merged yet` | The work is pending or unknown. |
 
-Quitting the agent that worked in a tree reclaims nothing: its pane drops back to a shell and the tree, its branch, and its files stay. `sweep` and `remove` are the only commands that take one away.
+Quitting the agent that worked in a tree reclaims nothing: its pane drops back to a shell, and the tree, its branch, and its files stay. A tree goes away through `sweep`, through `remove`, or through the daily `gc` below, which runs this same sweep.
 
 A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` under its row. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster cannot be read, `sweep` removes nothing and exits 1.
 

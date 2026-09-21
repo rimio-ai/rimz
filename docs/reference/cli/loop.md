@@ -306,7 +306,7 @@ Footers count tasks blocked by trust and project tasks not yet enabled, with the
 
 | Section | Contents |
 | --- | --- |
-| `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, their total cost, an average over the ten most recent runs that recorded a cost, and the five latest attempts. |
+| `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, the total and average cost across every escalated run the log still holds that recorded one, and the five latest attempts. |
 | `RECENT RUNS` | The latest runs, identical consecutive runs collapsed into one row. `-n, --runs <N>` sets how many, default `10`. |
 | `LAST RUN` | The newest run in full; an older last failure becomes a pointer to `loop logs`. |
 
