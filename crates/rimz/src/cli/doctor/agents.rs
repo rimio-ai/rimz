@@ -1,7 +1,7 @@
 use rimz::agents::AgentStatus;
 use rimz::trust::{self};
 
-use super::super::open_store;
+use super::super::open_existing_store;
 use super::model::{
     AccountRow, Accounts, AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus, PluginProbeRow,
     PluginRow, Probe, Trust,
@@ -11,8 +11,9 @@ use super::model::{
 /// default scope is live runtime state; audit widens to durable history and
 /// emits every observed row.
 pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) -> AgentRollup {
-    let store = match open_store(ws) {
-        Ok(store) => store,
+    let store = match open_existing_store(ws) {
+        Ok(Some(store)) => store,
+        Ok(None) => return AgentRollup::None,
         Err(err) => {
             return AgentRollup::Unavailable {
                 error: err.to_string(),

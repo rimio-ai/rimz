@@ -73,6 +73,93 @@ fn doctor_json(output: &Output) -> Value {
 }
 
 #[test]
+fn doctor_does_not_create_state_for_an_unopened_project() {
+    let env = Env::new();
+    let state = env.state_path_for(&env.project_root);
+    assert!(!state.root.exists());
+
+    for args in [vec!["doctor"], vec!["doctor", "--json", "--audit"]] {
+        let home_before = tree_listing(&env.rimz_home());
+        let runtime_before = tree_listing(&env.runtime_root);
+        let output = env.rimz().args(&args).output().expect("spawn doctor");
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(tree_listing(&env.rimz_home()), home_before);
+        assert_eq!(tree_listing(&env.runtime_root), runtime_before);
+        assert!(!state.root.exists());
+
+        if args.contains(&"--json") {
+            let report = doctor_json(&output);
+            assert_eq!(report["agents"]["state"], "none");
+            assert_eq!(
+                report["messages"]["ready"],
+                json!({
+                    "open": {"queued": 0, "claimed": 0, "sent": 0},
+                    "stuck": [],
+                    "recent_failures": []
+                })
+            );
+        } else {
+            let report = String::from_utf8(output.stdout).expect("human report");
+            assert!(report.contains("AGENTS\n  none observed"), "{report}");
+            assert!(report.contains("MESSAGES\n  no open messages"), "{report}");
+        }
+    }
+}
+
+fn tree_listing(root: &Path) -> Vec<(PathBuf, Option<u64>)> {
+    let mut listing = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&path).expect("tree metadata");
+        listing.push((
+            path.strip_prefix(root)
+                .expect("relative path")
+                .to_path_buf(),
+            metadata.is_file().then_some(metadata.len()),
+        ));
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path).expect("list directory") {
+                pending.push(entry.expect("directory entry").path());
+            }
+        }
+    }
+    listing.sort();
+    listing
+}
+
+#[test]
+fn doctor_preserves_existing_workspace_record() {
+    let env = Env::new();
+    inject_lifecycle(
+        &env,
+        "claude",
+        "read-only-agent",
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        Some("main"),
+    );
+    env.record(&env.project_root);
+    let record = env.state_path_for(&env.project_root).workspace_record;
+    let before = std::fs::read(&record).expect("workspace record before doctor");
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+    assert_eq!(
+        std::fs::read(record).expect("workspace record after doctor"),
+        before
+    );
+    assert_eq!(report["agents"]["state"], "observed");
+    assert_eq!(report["agents"]["counts"]["failed"], 1);
+    assert_eq!(report["agents"]["rows"][0]["agent_id"], "read-only-agent");
+}
+
+#[test]
 fn doctor_json_reports_legacy_roots_and_a_superseded_agents_home() {
     let env = Env::new();
     let legacy = env.state_root().join("rimz");

@@ -8,7 +8,7 @@ use rimz::store::message::{MessageRecord, MessageStatus};
 
 use crate::cli::address;
 
-use super::super::open_store;
+use super::super::open_existing_store;
 use super::model::{MessageProblemRow, Messages, OpenCounts, Probe};
 
 const RECENT_FAILURE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
@@ -20,8 +20,15 @@ pub(super) fn collect_messages(
     ws: &rimz::ResolvedWorkspace,
     cleared_at: Option<Timestamp>,
 ) -> Probe<Messages> {
-    let store = match open_store(ws) {
-        Ok(store) => store,
+    let store = match open_existing_store(ws) {
+        Ok(Some(store)) => store,
+        Ok(None) => {
+            return Probe::Ready(Messages {
+                open: OpenCounts::default(),
+                stuck: Vec::new(),
+                recent_failures: Vec::new(),
+            });
+        }
         Err(err) => {
             return Probe::Unavailable {
                 error: err.to_string(),
