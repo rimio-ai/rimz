@@ -461,21 +461,42 @@ fn runtime_reconfigure_kdl_emits_options_without_keybinds() {
 }
 
 #[test]
+fn runtime_reconfigure_kdl_drops_a_key_that_is_not_an_identifier() {
+    let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
+        session_options: &[
+            (
+                "pane_frames true\nkeybinds { bind \"F1\"".to_owned(),
+                "true".to_owned(),
+            ),
+            ("pane-frames".to_owned(), "true".to_owned()),
+            (String::new(), "true".to_owned()),
+            ("scroll_buffer_size".to_owned(), "123456".to_owned()),
+        ],
+        ..RuntimeReconfigure::default()
+    })
+    .expect("the identifier key still produces a reconfigure payload");
+
+    assert_eq!(kdl, "scroll_buffer_size 123456\n");
+}
+
+#[test]
 fn runtime_reconfigure_kdl_combines_options_and_room_keybinds() {
     let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
         plugin_id: Some(42),
         focus_key: Some("Alt+p"),
         zoom_key: Some("Alt+g"),
+        // Key order, the order `load` collects the host's entries from the
+        // `BTreeMap` Zellij hands it.
         session_options: &[
+            ("on_force_close".to_owned(), "quit".to_owned()),
             ("pane_frames".to_owned(), "false".to_owned()),
             ("scroll_buffer_size".to_owned(), "123456".to_owned()),
-            ("on_force_close".to_owned(), "quit".to_owned()),
         ],
     })
     .expect("focus key and options produce a reconfigure payload");
 
     assert!(kdl.starts_with(
-        "pane_frames false\nscroll_buffer_size 123456\non_force_close \"quit\"\nkeybinds {\n"
+        "on_force_close \"quit\"\npane_frames false\nscroll_buffer_size 123456\nkeybinds {\n"
     ));
     assert!(kdl.contains("bind \"Alt p\""));
     assert!(kdl.contains("bind \"Alt g\""));

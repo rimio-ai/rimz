@@ -235,7 +235,13 @@ impl ZellijOptionValue {
     }
 }
 
-/// Resolve the deterministic option list shared by birth layouts and live reconfiguration.
+/// Resolve the option list shared by birth layouts and live reconfiguration.
+///
+/// The order is fixed, and is the order the birth layout tail and the plugin
+/// identity hash carry. The reconfigure payload does not keep it: the plugin
+/// reads its load configuration from a `BTreeMap`, so the keys reach Zellij in
+/// key order there. Nothing depends on it, since the keys are distinct and the
+/// merge is per key.
 pub fn zellij_session_options(config: &ZellijConfig) -> Vec<ZellijSessionOption> {
     use ZellijOptionValue::{Bool, Int, Word};
 
