@@ -364,7 +364,7 @@ pane_border_status = "top"    # an optional override; unset, your ~/.tmux.conf w
 
 The two backends differ in what an unset key means.
 
-`[zellij]` passes four keys on every birth and attach, whatever you set them to. Their defaults are what make the room work, and changing one sends your value instead.
+`[zellij]` asserts four keys in every room, whatever you set them to. Their defaults are what make the room work, and changing one asserts your value instead.
 
 | Key | Default | Why RimZ sets it |
 | --- | --- | --- |
@@ -373,11 +373,11 @@ The two backends differ in what an unset key means.
 | `session_serialization` | `false` | RimZ owns rebirth; a resurrected Zellij room comes back with dead panes. |
 | `disable_session_metadata` | `true` | Stops Zellij's per-second metadata and `ps` loop. |
 
-Every other key, `pane_frames` and `copy_clipboard` among them, is passed only when you set it and otherwise falls through to your `~/.config/zellij/config.kdl`. Six behaviours are not keys at all: the room starts in locked mode, a directionless new pane splits the focused pane rather than the largest one, swap layouts are off, resizing stacks panes rather than shrinking them, every view carries RimZ's own layout with its one-row compact bar in place of Zellij's built-in tab and status bars, and the sidebar pane is always borderless so its hit-testing stays stable whatever `pane_frames` says.
+Every other key, `pane_frames` and `copy_clipboard` among them, is asserted only when you set it and otherwise falls through to your `~/.config/zellij/config.kdl` at room birth. Six behaviours are not keys at all: the room starts in locked mode, a directionless new pane splits the focused pane rather than the largest one, swap layouts are off, resizing stacks panes rather than shrinking them, every view carries RimZ's own layout with its one-row compact bar in place of Zellij's built-in tab and status bars, and the sidebar pane is always borderless so its hit-testing stays stable whatever `pane_frames` says.
 
-A boolean you set here is a request, not a guarantee. Zellij XORs a boolean command-line option against the same key in your `config.kdl`, so `pane_frames = true` on top of a `config.kdl` that already says `pane_frames true` turns frames off. Set a Zellij boolean in one file, not both; RimZ works around the XOR for the two mouse keys its sidebar depends on.
+A session value here overrides `config.kdl` absolutely. Most changes apply on the next `rimz start` or reattach; start-only settings and removal of optional keys wait for a new room. Client settings apply per attach, but `mouse_mode = true` cannot override `mouse_mode false` in `config.kdl`. See [change what the room asserts](./multiplexer.md#change-what-the-room-asserts) for the start-only keys and how to apply changes.
 
-`[tmux]` carries a RimZ default for every key and applies all of them on every birth, so an unset key means RimZ's value rather than yours. The two pane-border keys are the exception, falling through to your `~/.tmux.conf` or tmux's defaults when unset. Setting `pane_border_status` also hands RimZ `pane-border-format`, which blanks the sidebar's border row and overrides any format in `~/.tmux.conf`; leave it unset and your tmux config wins, which may put a title on the sidebar. The table spans session, window, and server scope, clipboard and rich-key handling included, because tmux has no per-session form for those.
+`[tmux]` carries a RimZ default for every key except the two pane-border keys, so other unset keys mean RimZ's value rather than yours. Changed window settings reach every open window on the next open or reattach, and future windows match. Removing a pane-border key restores inheritance from `~/.tmux.conf` or tmux's defaults on that next apply. Setting `pane_border_status` to `"top"` or `"bottom"` also hands RimZ `pane-border-format`, which blanks the sidebar's border row and overrides any format in `~/.tmux.conf`; leave it unset or set it to `"off"` and your format is inherited. The table spans session, window, and server scope, clipboard and rich-key handling included, because tmux has no per-session form for those.
 
 Three tmux behaviours are not keys either: window titles (`set-titles` with the `set-titles-string` that carries a pane's title to the tab), and the server `terminal-features` entries for synchronized output and for hyperlinks. Two more are governed by `extended_keys` rather than standing alone: the `extkeys` terminal feature, which RimZ unsets when you turn the key off, and the three root key bindings for Shift+Enter, Alt+Enter, and RimZ's own `User240` signal, which it stops writing.
 

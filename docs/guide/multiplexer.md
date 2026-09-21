@@ -53,11 +53,13 @@ history_limit = 200000
 pane_border_status = "top"      # unset, your ~/.tmux.conf decides
 ```
 
-The backends differ in what an unset key means. `[tmux]` carries a RimZ value for every key but the two pane-border ones, so leaving a key out means RimZ's default rather than yours. `[zellij]` passes only the keys you set, plus the four it always passes: `mouse_click_through` and `focus_follows_mouse` behind single-click jumps, `session_serialization`, and `disable_session_metadata`. Every key with its default is in [configuration → multiplexer room options](./configuration.md#multiplexer-room-options).
+The backends differ in what an unset key means. `[tmux]` carries a RimZ value for every key but the two pane-border ones, so leaving a key out means RimZ's default rather than yours. `[zellij]` asserts the optional keys you set alongside four always-resolved keys: `mouse_click_through` and `focus_follows_mouse` behind single-click jumps, `session_serialization`, and `disable_session_metadata`. Session settings apply at room birth and through live reconfiguration; client settings apply when you attach. Every key with its default is in [configuration → multiplexer room options](./configuration.md#multiplexer-room-options).
 
-A changed value reaches the room the next time RimZ opens or reattaches its session. tmux's window-scoped settings are the exception: the pane borders, passthrough, and per-client resize reach only windows opened after the change. When an edit looks ignored, restart the room.
+A changed `[tmux]` value reaches every open window the next time RimZ opens or reattaches the session, and windows opened later get the same settings. Removing a pane-border key restores inheritance from `~/.tmux.conf` on that next open or reattach, including RimZ's border format when you remove `pane_border_status`.
 
-A Zellij boolean is a request rather than a setting. Zellij XORs a boolean command-line option against the same key in your `config.kdl`, so `pane_frames = true` here while `config.kdl` already says `pane_frames true` turns frames off. Set a Zellij boolean in one file, not both.
+A `[zellij]` session value overrides `config.kdl` absolutely. Most changes reach an open room on the next `rimz start` or reattach. `session_serialization`, `disable_session_metadata`, `scroll_buffer_size`, `on_force_close`, `osc8_hyperlinks`, `show_startup_tips`, and `show_release_notes` take effect at the next room birth. `mouse_mode` and `support_kitty_keyboard_protocol` apply per attaching client.
+
+Removing an optional `[zellij]` key returns control to `config.kdl` at the next room birth, not in the open room. One client setting has a limit: `mouse_mode = true` cannot override `mouse_mode false` in `config.kdl`. Remove that line or change it to `true` in `config.kdl` before attaching; `mouse_mode = false` in RimZ always disables mouse reporting for that client.
 
 ## Everything in the room is an ordinary pane operation
 

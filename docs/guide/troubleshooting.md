@@ -355,9 +355,7 @@ Markdown definitions fail differently. A broken profile, team, or subagent defin
 
 ### A `[zellij]` or `[tmux]` setting did nothing
 
-Three causes, all covered in [change what the room asserts](./multiplexer.md#change-what-the-room-asserts). Zellij treats a boolean RimZ passes on the command line as a toggle against your `config.kdl`, so setting the same key `true` in both files turns it off: set it in one file. A tmux window-scoped value, meaning the pane borders, passthrough, and per-client resize, reaches only windows opened after the change. And deleting a `[tmux]` key leaves the last value RimZ asserted in place rather than restoring your `~/.tmux.conf` value.
-
-A room restart applies the first two. The third needs the key set back to the value you want.
+Run `rimz start` to apply changes to an open room. Zellij's start-only settings, and removal of an optional `[zellij]` key, need a new room. If `[zellij] mouse_mode = true` still leaves the mouse disabled, remove or change `mouse_mode false` in `config.kdl` before attaching. See [change what the room asserts](./multiplexer.md#change-what-the-room-asserts) for the start-only list and when each backend applies changes.
 
 ### A theme or width change did nothing
 

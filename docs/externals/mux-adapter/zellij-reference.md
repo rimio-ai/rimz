@@ -364,6 +364,8 @@ An initial command after `--` runs in the first pane only when `attach` creates 
 
 The output has no pid. Each enriched pane costs two sequential round trips to the PTY thread, so a JSON listing of a large session takes time in proportion to its terminal pane count.
 
+Observed on 0.45.1: `list-panes --json` content geometry does not reflect `pane_frames`, so pane frames are observable only in an attached client's rendered output.
+
 **Blocking panes.** `--blocking` waits for the command to exit and its pane to close; `--block-until-exit` waits for any exit; `--block-until-exit-success` and `--block-until-exit-failure` return on that status or when the pane closes. `new-pane` and `zellij run` take all four, and `new-tab` takes the three `--block-until-exit` forms. The exit code reaches the caller, so `zellij action new-pane --block-until-exit-success -- cargo test && next-step` chains.
 
 ### `run`, `edit`, `plugin`
@@ -474,9 +476,9 @@ Options from the command line merge into the configuration at two points, with d
 | --- | --- | --- |
 | Top-level `zellij options --<flag>` | `Options::merge` | A set flag replaces the configuration value |
 | Layout options | `Options::merge` | Between the configuration file and the top-level flags in precedence |
-| `zellij attach ... options --<flag>` | `Options::merge_from_cli` | Most options: a set flag replaces the value. Nine booleans are toggles instead (below) |
+| `zellij attach ... options --<flag>` | `Options::merge`, then `Options::merge_from_cli` | Most options: a set flag replaces the value. Any explicit value of nine booleans becomes `false` (below) |
 
-Under `merge_from_cli`, these nine booleans are XORed when both the resolved configuration and the flag set them: `simplified_ui`, `mouse_mode`, `pane_frames`, `auto_layout`, `mirror_session`, `session_serialization`, `serialize_pane_viewport`, `focus_follows_mouse`, `mouse_click_through`. A flag value of `false` therefore leaves a configured value unchanged, and `true` inverts it; only when the configuration omits the key does the flag value apply directly. Every other option, booleans such as `disable_session_metadata` and `stacked_pane_list` included, takes the flag value.
+[`Options::merge_from_cli`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/input/options.rs#L674-L745) XORs these nine booleans when both operands are present: `simplified_ui`, `mouse_mode`, `pane_frames`, `auto_layout`, `mirror_session`, `session_serialization`, `serialize_pane_viewport`, `focus_follows_mouse`, `mouse_click_through`. On the attach path, [`Setup::from_cli_args`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/setup.rs#L302-L329) has already applied the flags through plain `merge` before [`start_client`](https://github.com/zellij-org/zellij/blob/v0.45.1/src/commands.rs#L748-L753) applies them again through `merge_from_cli`. Each explicit flag is therefore XORed against itself: either `true` or `false` becomes `false`, regardless of `config.kdl`. Omitting the flag preserves the configured value. Every other option, including `support_kitty_keyboard_protocol`, `disable_session_metadata`, and `stacked_pane_list`, takes the flag value. The XOR arm in [`setup.rs::merge_attach_command_options`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/setup.rs#L674-L695) is unreachable from the real CLI: top-level `Options` and `Sessions::Attach` are mutually exclusive commands, so attach always takes the direct-adoption arm there.
 
 A detached birth drops the `attach` options entirely. `zellij attach --create-background <s> options ...` builds the new server's `CliAssets` in `start_server_detached` (`zellij-client/src/lib.rs`) from `CliArgs::options()`, which reads only a top-level `zellij options` command. Options a session fixes when its first client initializes must travel in the birth layout instead.
 
