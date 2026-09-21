@@ -560,7 +560,7 @@ fn check_project_config_removed_tables(path: &Path, text: &str) -> Result<()> {
     if doc.contains_key("layout") {
         return Err(TrustErr::RemovedProjectTable {
             path: path.to_path_buf(),
-            detail: "`[layout]` and `[[layout.initial_panes]]` are per-machine room layout config; move them to `$RIMZ_HOME/config.toml`"
+            detail: "`[layout]` (with `[[layout.initial_panes]]`) was removed — set `placement` under `[agents]` and declare teams in <agents_home>/teams/<name>.md"
                 .to_owned(),
         });
     }
