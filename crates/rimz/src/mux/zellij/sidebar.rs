@@ -96,7 +96,6 @@ impl ZellijBackend {
             opts.session_name.clone(),
             "options".to_owned(),
         ];
-        option_args.extend(self.zellij_options_args_probed(&opts.config.zellij));
         option_args.extend([
             "--default-cwd".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),

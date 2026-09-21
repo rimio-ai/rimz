@@ -201,9 +201,27 @@ fn session_layout_uses_configured_birth_fixed_options() {
     let mut opts = sidebar_opts("rimz-options", None, None);
     opts.config.zellij.session_serialization = true;
     opts.config.zellij.disable_session_metadata = false;
+    opts.config.zellij.on_force_close = Some(crate::config::ZellijForceClose::Quit);
+    opts.config.zellij.scroll_buffer_size = Some(123_456);
+    opts.config.zellij.pane_frames = Some(true);
 
     let layout = render_session_layout(&opts, None, &[]).expect("render layout");
 
+    assert!(
+        layout.ends_with(concat!(
+            "auto_layout false\n",
+            "stacked_resize true\n",
+            "stacked_pane_list false\n",
+            "mouse_click_through true\n",
+            "focus_follows_mouse false\n",
+            "session_serialization true\n",
+            "disable_session_metadata false\n",
+            "pane_frames true\n",
+            "on_force_close \"quit\"\n",
+            "scroll_buffer_size 123456\n",
+        )),
+        "{layout}"
+    );
     assert!(layout.contains("session_serialization true"), "{layout}");
     assert!(
         layout.contains("disable_session_metadata false"),

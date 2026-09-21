@@ -164,18 +164,6 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
         configuration.push_str(",rimz_bin=");
         configuration.push_str(&bin);
     }
-    configuration.push_str(",focus_follows_mouse=");
-    configuration.push_str(if opts.focus_follows_mouse {
-        "true"
-    } else {
-        "false"
-    });
-    configuration.push_str(",mouse_click_through=");
-    configuration.push_str(if opts.mouse_click_through {
-        "true"
-    } else {
-        "false"
-    });
     // Room chords the plugin binds at load. Grammar validation and user-facing
     // warnings happen at room birth for both backends; here we only guard the
     // plugin-config separators.
@@ -200,6 +188,13 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
             configuration.push_str(",zoom_key=");
             configuration.push_str(zoom_key);
         }
+    }
+    // Resolved values are bools, digits, or bare enum words: no ',' or '=' by construction.
+    for option in &opts.session_options {
+        configuration.push_str(",opt_");
+        configuration.push_str(option.key);
+        configuration.push('=');
+        configuration.push_str(&option.value.plugin_configuration());
     }
     // Pipe-launched identities are background plugins. Changing this marker
     // forces one global re-convergence, repairing identities previously

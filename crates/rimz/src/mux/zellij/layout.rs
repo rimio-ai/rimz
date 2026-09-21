@@ -107,10 +107,7 @@ fn sidebar_pane_kdl(
 /// keeps the classic representation so every agent remains observable with its
 /// own rect; older hosts ignore the unknown option.
 ///
-/// Zellij 0.44 drops `attach --create-background … options` flags while
-/// starting the detached server, and fixes serialization and metadata behavior
-/// at first-client initialization. The layout therefore carries those options
-/// through the only configuration channel the detached server preserves.
+/// The tail carries every session-scoped option RimZ asserts: detached birth drops CLI flags, while layout options merge absolutely through the channel the detached server preserves.
 pub(super) fn render_session_layout(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
@@ -178,6 +175,10 @@ pub(super) fn render_session_layout(
     let work_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
     let new_tab_pane = render_plain_terminal_pane()?;
     let new_tab_body = render_sidebar_work_area(&sidebar, &new_tab_pane, 8);
+    let session_options = super::zellij_session_options(&opts.config.zellij)
+        .into_iter()
+        .map(|option| format!("{} {}\n", option.key, option.value.kdl()))
+        .collect::<String>();
     Ok(format!(
         r#"layout {{
     new_tab_template {{
@@ -189,12 +190,7 @@ pub(super) fn render_session_layout(
         {COMPACT_BAR_KDL}
     }}
 }}
-session_serialization {session_serialization}
-disable_session_metadata {disable_session_metadata}
-stacked_pane_list false
-"#,
-        session_serialization = opts.config.zellij.session_serialization,
-        disable_session_metadata = opts.config.zellij.disable_session_metadata,
+{session_options}"#,
     ))
 }
 

@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use rimz::config::MultiplexerConfig;
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, ZellijBackend, zellij};
 use tempfile::TempDir;
@@ -436,8 +437,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         rimz_bin: rimz_shim,
         focus_key: None,
         zoom_key: None,
-        focus_follows_mouse: false,
-        mouse_click_through: true,
+        session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
     };
     backend
         .ensure_presence_plugin(&opts)
@@ -571,8 +571,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
         rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
         focus_key: None,
         zoom_key: None,
-        focus_follows_mouse: false,
-        mouse_click_through: true,
+        session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
     };
     backend
         .ensure_presence_plugin(&opts)
@@ -865,8 +864,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
             rimz_bin: room_bin,
             focus_key: Some("Alt+p".to_owned()),
             zoom_key: Some("Alt+g".to_owned()),
-            focus_follows_mouse: false,
-            mouse_click_through: true,
+            session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
         })
         .expect("converge presence plugin");
     wait_for_reload_baseline(&poke_log, pokes_before_reload, &birth_work);
@@ -936,7 +934,7 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
     let stamp_path = rimz::sidebar::cache::presence_stamp_path(&runtime);
     let plugin_url = format!("file:{}", wasm.display());
     let configuration = format!(
-        "workspace_id=ws_0123456789abcdef01234567,session_name={name},rimz_bin={},focus_follows_mouse=false,mouse_click_through=true",
+        "workspace_id=ws_0123456789abcdef01234567,session_name={name},rimz_bin={},opt_auto_layout=false,opt_stacked_resize=true,opt_stacked_pane_list=false,opt_mouse_click_through=true,opt_focus_follows_mouse=false,opt_session_serialization=false,opt_disable_session_metadata=true",
         real_rimz.display(),
     );
 
@@ -1036,8 +1034,7 @@ fn room_key_presses_from_different_cwd_reach_the_plugin() {
             rimz_bin: rimz_shim,
             focus_key: Some("Alt+p".to_owned()),
             zoom_key: Some("Alt+g".to_owned()),
-            focus_follows_mouse: false,
-            mouse_click_through: true,
+            session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
         })
         .expect("pipe load against a live session");
 

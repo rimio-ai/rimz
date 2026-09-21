@@ -1845,70 +1845,100 @@ fn version_serves_the_memoized_probe() {
 }
 
 #[test]
-fn zellij_options_respect_defaults_overrides_and_version_gates() {
+fn zellij_session_options_respect_defaults_overrides_and_order() {
     use crate::config::{ZellijClipboard, ZellijForceClose};
+    use ZellijOptionValue::{Bool, Int, Word};
 
-    let expected_defaults = expected_option_map(
-        "--auto-layout=false --default-mode=locked --disable-session-metadata=true --focus-follows-mouse=false --mouse-click-through=true --session-serialization=false --stacked-resize=true",
-    );
+    let pairs = |config: &ZellijConfig| {
+        zellij_session_options(config)
+            .into_iter()
+            .map(|option| (option.key, option.value))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
-        option_map(&zellij_options_args(
-            &ZellijConfig::default(),
-            Some((0, 44, 3))
-        )),
-        expected_defaults
+        pairs(&ZellijConfig::default()),
+        vec![
+            ("auto_layout", Bool(false)),
+            ("stacked_resize", Bool(true)),
+            ("stacked_pane_list", Bool(false)),
+            ("mouse_click_through", Bool(true)),
+            ("focus_follows_mouse", Bool(false)),
+            ("session_serialization", Bool(false)),
+            ("disable_session_metadata", Bool(true)),
+        ]
     );
-    let mut unknown_defaults = expected_defaults.clone();
-    unknown_defaults.remove("--mouse-click-through");
-    assert_eq!(
-        option_map(&zellij_options_args(&ZellijConfig::default(), None)),
-        unknown_defaults
-    );
-
-    let mouse = ZellijConfig {
+    let configured = ZellijConfig {
+        mouse_mode: Some(true),
+        mouse_click_through: false,
+        focus_follows_mouse: true,
+        session_serialization: true,
+        disable_session_metadata: false,
         advanced_mouse_actions: Some(true),
         mouse_hover_effects: Some(false),
-        ..ZellijConfig::default()
-    };
-    for (name, version, gated) in [
-        ("unknown", None, false),
-        ("0.43.9", Some((0, 43, 9)), false),
-        ("0.44.1", Some((0, 44, 1)), false),
-        ("0.44.2", Some((0, 44, 2)), true),
-        ("0.44.3", Some((0, 44, 3)), true),
-    ] {
-        let args = zellij_options_args(&mouse, version);
-        let map = option_map(&args);
-        assert_eq!(map.get("--advanced-mouse-actions"), Some(&"true"), "{name}");
-        assert_eq!(
-            map.get("--mouse-click-through"),
-            gated.then_some(&"true"),
-            "{name}"
-        );
-        assert_eq!(
-            map.get("--mouse-hover-effects"),
-            gated.then_some(&"false"),
-            "{name}"
-        );
-    }
-
-    let configured = ZellijConfig {
-        mouse_mode: Some(false),
         pane_frames: Some(true),
         on_force_close: Some(ZellijForceClose::Quit),
         scroll_buffer_size: Some(200_000),
         show_startup_tips: Some(true),
-        show_release_notes: Some(true),
+        show_release_notes: Some(false),
         copy_clipboard: Some(ZellijClipboard::Primary),
         copy_on_select: Some(false),
-        support_kitty_keyboard_protocol: Some(false),
+        support_kitty_keyboard_protocol: Some(true),
         osc8_hyperlinks: Some(false),
-        ..ZellijConfig::default()
     };
     assert_eq!(
-        option_map(&zellij_options_args(&configured, Some((0, 44, 3)))),
-        expected_option_map(
-            "--auto-layout=false --copy-clipboard=primary --copy-on-select=false --default-mode=locked --disable-session-metadata=true --focus-follows-mouse=false --mouse-click-through=true --mouse-mode=false --on-force-close=quit --osc8-hyperlinks=false --pane-frames=true --scroll-buffer-size=200000 --session-serialization=false --show-release-notes=true --show-startup-tips=true --stacked-resize=true --support-kitty-keyboard-protocol=false"
-        )
+        pairs(&configured),
+        vec![
+            ("auto_layout", Bool(false)),
+            ("stacked_resize", Bool(true)),
+            ("stacked_pane_list", Bool(false)),
+            ("mouse_click_through", Bool(false)),
+            ("focus_follows_mouse", Bool(true)),
+            ("session_serialization", Bool(true)),
+            ("disable_session_metadata", Bool(false)),
+            ("advanced_mouse_actions", Bool(true)),
+            ("mouse_hover_effects", Bool(false)),
+            ("pane_frames", Bool(true)),
+            ("on_force_close", Word("quit")),
+            ("scroll_buffer_size", Int(200_000)),
+            ("show_startup_tips", Bool(true)),
+            ("show_release_notes", Bool(false)),
+            ("copy_clipboard", Word("primary")),
+            ("copy_on_select", Bool(false)),
+            ("support_kitty_keyboard_protocol", Bool(true)),
+            ("osc8_hyperlinks", Bool(false)),
+        ]
     );
+}
+
+#[test]
+fn zellij_client_options_never_enable_xor_booleans() {
+    for mouse_mode in [None, Some(true), Some(false)] {
+        for kitty in [None, Some(true), Some(false)] {
+            let config = ZellijConfig {
+                mouse_mode,
+                support_kitty_keyboard_protocol: kitty,
+                pane_frames: Some(true),
+                focus_follows_mouse: true,
+                session_serialization: true,
+                ..ZellijConfig::default()
+            };
+            let args = zellij_client_options_args(&config);
+            let mut expected = expected_option_map("--default-mode=locked");
+            if mouse_mode == Some(false) {
+                expected.insert("--mouse-mode", "false");
+            }
+            if let Some(value) = kitty {
+                expected.insert(
+                    "--support-kitty-keyboard-protocol",
+                    if value { "true" } else { "false" },
+                );
+            }
+            assert_eq!(option_map(&args), expected);
+            for pair in args.chunks_exact(2) {
+                if pair[1] == "true" {
+                    assert_eq!(pair[0], "--support-kitty-keyboard-protocol");
+                }
+            }
+        }
+    }
 }

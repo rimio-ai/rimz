@@ -200,94 +200,158 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
-/// `options` flags that forward a single click through the sidebar pane to the
-/// renderer. Below the required Zellij version the flag is unknown, so omit it
-/// and degrade to a click that only focuses the sidebar.
-fn mouse_click_through_args(enabled: bool, parsed: Option<(u32, u32, u32)>) -> Vec<String> {
-    if enabled {
-        versioned_bool_arg("--mouse-click-through", true, parsed)
-    } else {
-        Vec::new()
+/// One absolute session-scoped Zellij option.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZellijSessionOption {
+    pub key: &'static str,
+    pub value: ZellijOptionValue,
+}
+
+/// Values supported by RimZ's resolved session options.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZellijOptionValue {
+    Bool(bool),
+    Int(u32),
+    Word(&'static str),
+}
+
+impl ZellijOptionValue {
+    fn kdl(self) -> String {
+        match self {
+            // Every word is a bare ASCII enum spelling (`quit`, `primary`), so
+            // Rust's own string quoting is already the KDL spelling.
+            Self::Word(value) => format!("{value:?}"),
+            _ => self.plugin_configuration(),
+        }
+    }
+
+    fn plugin_configuration(self) -> String {
+        match self {
+            Self::Bool(value) => value.to_string(),
+            Self::Int(value) => value.to_string(),
+            Self::Word(value) => value.to_owned(),
+        }
     }
 }
 
-fn versioned_bool_arg(flag: &str, value: bool, parsed: Option<(u32, u32, u32)>) -> Vec<String> {
-    if parsed.is_some_and(|v| v >= MIN_ZELLIJ_VERSION) {
-        vec![flag.to_owned(), bool_value(value)]
-    } else {
-        Vec::new()
-    }
-}
+/// Resolve the deterministic option list shared by birth layouts and live reconfiguration.
+pub fn zellij_session_options(config: &ZellijConfig) -> Vec<ZellijSessionOption> {
+    use ZellijOptionValue::{Bool, Int, Word};
 
-fn bool_value(value: bool) -> String {
-    if value { "true" } else { "false" }.to_owned()
-}
-
-/// Zellij `options` flags RimZ owns for its rooms.
-fn zellij_options_args(
-    config: &ZellijConfig,
-    parsed_version: Option<(u32, u32, u32)>,
-) -> Vec<String> {
-    let mut args = vec![
-        "--default-mode".to_owned(),
-        "locked".to_owned(),
-        "--focus-follows-mouse".to_owned(),
-        bool_value(config.focus_follows_mouse),
-        "--session-serialization".to_owned(),
-        bool_value(config.session_serialization),
-        "--disable-session-metadata".to_owned(),
-        bool_value(config.disable_session_metadata),
-        "--auto-layout".to_owned(),
-        bool_value(false),
+    // mouse_mode is read in each client's process, so no session channel can set it.
+    let mut options = vec![
+        ZellijSessionOption {
+            key: "auto_layout",
+            value: Bool(false),
+        },
+        ZellijSessionOption {
+            key: "stacked_resize",
+            value: Bool(true),
+        },
+        ZellijSessionOption {
+            key: "stacked_pane_list",
+            value: Bool(false),
+        },
+        ZellijSessionOption {
+            key: "mouse_click_through",
+            value: Bool(config.mouse_click_through),
+        },
+        ZellijSessionOption {
+            key: "focus_follows_mouse",
+            value: Bool(config.focus_follows_mouse),
+        },
+        ZellijSessionOption {
+            key: "session_serialization",
+            value: Bool(config.session_serialization),
+        },
+        ZellijSessionOption {
+            key: "disable_session_metadata",
+            value: Bool(config.disable_session_metadata),
+        },
     ];
-    args.extend(["--stacked-resize".to_owned(), bool_value(true)]);
-    args.extend(mouse_click_through_args(
-        config.mouse_click_through,
-        parsed_version,
-    ));
-    if let Some(value) = config.pane_frames {
-        args.extend(["--pane-frames".to_owned(), bool_value(value)]);
-    }
-    if let Some(value) = config.mouse_mode {
-        args.extend(["--mouse-mode".to_owned(), bool_value(value)]);
-    }
     if let Some(value) = config.advanced_mouse_actions {
-        args.extend(["--advanced-mouse-actions".to_owned(), bool_value(value)]);
+        options.push(ZellijSessionOption {
+            key: "advanced_mouse_actions",
+            value: Bool(value),
+        });
     }
     if let Some(value) = config.mouse_hover_effects {
-        // Older versions reject this narrower hover-only option as unknown.
-        args.extend(versioned_bool_arg(
-            "--mouse-hover-effects",
-            value,
-            parsed_version,
-        ));
+        options.push(ZellijSessionOption {
+            key: "mouse_hover_effects",
+            value: Bool(value),
+        });
+    }
+    if let Some(value) = config.pane_frames {
+        options.push(ZellijSessionOption {
+            key: "pane_frames",
+            value: Bool(value),
+        });
     }
     if let Some(value) = config.on_force_close {
-        args.extend(["--on-force-close".to_owned(), value.as_str().to_owned()]);
+        options.push(ZellijSessionOption {
+            key: "on_force_close",
+            value: Word(value.as_str()),
+        });
     }
     if let Some(value) = config.scroll_buffer_size {
-        args.extend(["--scroll-buffer-size".to_owned(), value.to_string()]);
+        options.push(ZellijSessionOption {
+            key: "scroll_buffer_size",
+            value: Int(value),
+        });
     }
     if let Some(value) = config.show_startup_tips {
-        args.extend(["--show-startup-tips".to_owned(), bool_value(value)]);
+        options.push(ZellijSessionOption {
+            key: "show_startup_tips",
+            value: Bool(value),
+        });
     }
     if let Some(value) = config.show_release_notes {
-        args.extend(["--show-release-notes".to_owned(), bool_value(value)]);
+        options.push(ZellijSessionOption {
+            key: "show_release_notes",
+            value: Bool(value),
+        });
     }
     if let Some(value) = config.copy_clipboard {
-        args.extend(["--copy-clipboard".to_owned(), value.as_str().to_owned()]);
+        options.push(ZellijSessionOption {
+            key: "copy_clipboard",
+            value: Word(value.as_str()),
+        });
     }
     if let Some(value) = config.copy_on_select {
-        args.extend(["--copy-on-select".to_owned(), bool_value(value)]);
+        options.push(ZellijSessionOption {
+            key: "copy_on_select",
+            value: Bool(value),
+        });
+    }
+    if let Some(value) = config.support_kitty_keyboard_protocol {
+        options.push(ZellijSessionOption {
+            key: "support_kitty_keyboard_protocol",
+            value: Bool(value),
+        });
+    }
+    if let Some(value) = config.osc8_hyperlinks {
+        options.push(ZellijSessionOption {
+            key: "osc8_hyperlinks",
+            value: Bool(value),
+        });
+    }
+    options
+}
+
+/// Options consumed by the attaching client, not the session.
+fn zellij_client_options_args(config: &ZellijConfig) -> Vec<String> {
+    let mut args = vec!["--default-mode".to_owned(), "locked".to_owned()];
+    // Zellij 0.45.1 merges twice: plain merge in Setup::from_cli_args, then
+    // Options::merge_from_cli in start_client. Any explicit XOR boolean
+    // collapses to false, so false is expressible by flag and true is not.
+    if config.mouse_mode == Some(false) {
+        args.extend(["--mouse-mode".to_owned(), "false".to_owned()]);
     }
     if let Some(value) = config.support_kitty_keyboard_protocol {
         args.extend([
             "--support-kitty-keyboard-protocol".to_owned(),
-            bool_value(value),
+            value.to_string(),
         ]);
-    }
-    if let Some(value) = config.osc8_hyperlinks {
-        args.extend(["--osc8-hyperlinks".to_owned(), bool_value(value)]);
     }
     args
 }
@@ -395,12 +459,6 @@ impl ZellijBackend {
                 .env("TMPDIR", dir);
         }
         spec
-    }
-
-    /// Probe the installed Zellij and resolve the session `options` flags for it.
-    pub(super) fn zellij_options_args_probed(&self, config: &ZellijConfig) -> Vec<String> {
-        let parsed = self.version().ok().as_deref().and_then(parse_version);
-        zellij_options_args(config, parsed)
     }
 
     /// `zellij --session <name> action <verb> …`.

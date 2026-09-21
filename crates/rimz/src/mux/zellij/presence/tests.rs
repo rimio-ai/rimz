@@ -476,6 +476,7 @@ fn presence_force_sweep_listing_failure_keeps_retire_best_effort() {
 
 #[test]
 fn presence_plugin_identity_renders_expressible_fields() {
+    const DEFAULT_OPTIONS: &str = ",opt_auto_layout=false,opt_stacked_resize=true,opt_stacked_pane_list=false,opt_mouse_click_through=true,opt_focus_follows_mouse=false,opt_session_serialization=false,opt_disable_session_metadata=true";
     type PresenceOpts = crate::mux::PresencePluginOptions;
     type MutatePresence = fn(&mut PresenceOpts);
     struct Case {
@@ -483,65 +484,77 @@ fn presence_plugin_identity_renders_expressible_fields() {
         rimz_bin: &'static str,
         mutate: MutatePresence,
         expected: &'static str,
+        extra_options: &'static str,
     }
 
     let cases = [
         Case {
+            extra_options: "",
             session: "rimz-test",
             rimz_bin: "/home/user/.rimz/ws/repo-0123/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.rimz/ws/repo-0123/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.rimz/ws/repo-0123/rimz",
         },
         Case {
+            extra_options: ",opt_copy_clipboard=primary",
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |opts| {
-                opts.focus_follows_mouse = true;
-                opts.mouse_click_through = false;
+                opts.session_options.push(crate::mux::ZellijSessionOption {
+                    key: "copy_clipboard",
+                    value: crate::mux::ZellijOptionValue::Word("primary"),
+                });
             },
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=true,mouse_click_through=false",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
         },
         Case {
+            extra_options: "",
             session: "rimz-test",
             rimz_bin: "/tmp/a,b/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test",
         },
         Case {
+            extra_options: "",
             session: "rimz-test",
             rimz_bin: "/tmp/a=b/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test",
         },
         Case {
+            extra_options: "",
             session: "rimz,test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz",
         },
         Case {
+            extra_options: "",
             session: "rimz=test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |_| {},
-            expected: "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz",
         },
         Case {
+            extra_options: "",
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |opts| opts.focus_key = Some("Alt+p".to_owned()),
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,focus_key=Alt+p",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_key=Alt+p",
         },
         Case {
+            extra_options: "",
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |opts| opts.zoom_key = Some("Alt+g".to_owned()),
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true,zoom_key=Alt+g",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,zoom_key=Alt+g",
         },
         Case {
+            extra_options: "",
             session: "rimz-test",
             rimz_bin: "/home/user/.cargo/bin/rimz",
             mutate: |opts| opts.focus_key = Some("Alt=p".to_owned()),
-            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_follows_mouse=false,mouse_click_through=true",
+            expected: "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
         },
     ];
 
@@ -549,8 +562,9 @@ fn presence_plugin_identity_renders_expressible_fields() {
         let mut opts = presence_opts(case.session, case.rimz_bin);
         (case.mutate)(&mut opts);
         let without_config = format!(
-            "{},launch_scope=background,plugin_build={}",
+            "{}{DEFAULT_OPTIONS}{},launch_scope=background,plugin_build={}",
             case.expected,
+            case.extra_options,
             presence_plugin_build()
         );
         let expected = format!(

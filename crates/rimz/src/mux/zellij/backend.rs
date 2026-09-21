@@ -877,7 +877,7 @@ impl MuxBackend for ZellijBackend {
                 name.to_owned(),
                 "options".to_owned(),
             ])
-            .args(self.zellij_options_args_probed(&config.zellij))
+            .args(super::zellij_client_options_args(&config.zellij))
     }
 
     fn attach_existing_command(&self, name: &str) -> CommandSpec {
