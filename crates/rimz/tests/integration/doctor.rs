@@ -77,11 +77,24 @@ fn doctor_does_not_create_state_for_an_unopened_project() {
     let env = Env::new();
     let state = env.state_path_for(&env.project_root);
     assert!(!state.root.exists());
+    // Probing tmux is what used to create the socket directory, and a host
+    // without tmux on PATH never reaches that read path, so the backend is
+    // stubbed rather than left to whatever the machine happens to have.
+    let tmux = path_with_only(&[stub_mux_version(&env, "mux-bin", "tmux", "-V", "tmux 3.5")]);
 
-    for args in [vec!["doctor"], vec!["doctor", "--json", "--audit"]] {
+    for (args, path) in [
+        (vec!["doctor"], None),
+        (vec!["doctor", "--json", "--audit"], None),
+        (vec!["doctor", "--mux", "tmux"], Some(&tmux)),
+    ] {
         let home_before = tree_listing(&env.rimz_home());
         let runtime_before = tree_listing(&env.runtime_root);
-        let output = env.rimz().args(&args).output().expect("spawn doctor");
+        let mut command = env.rimz();
+        command.args(&args);
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
+        let output = command.output().expect("spawn doctor");
         assert!(output.status.success(), "{output:?}");
         assert_eq!(tree_listing(&env.rimz_home()), home_before);
         assert_eq!(tree_listing(&env.runtime_root), runtime_before);
@@ -106,7 +119,9 @@ fn doctor_does_not_create_state_for_an_unopened_project() {
     }
 }
 
-fn tree_listing(root: &Path) -> Vec<(PathBuf, Option<u64>)> {
+/// Every entry's size and modification time, so a same-size rewrite and a
+/// directory that gained and lost an entry both show up as a difference.
+fn tree_listing(root: &Path) -> Vec<(PathBuf, Option<u64>, std::time::SystemTime)> {
     let mut listing = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
@@ -116,6 +131,7 @@ fn tree_listing(root: &Path) -> Vec<(PathBuf, Option<u64>)> {
                 .expect("relative path")
                 .to_path_buf(),
             metadata.is_file().then_some(metadata.len()),
+            metadata.modified().expect("entry mtime"),
         ));
         if metadata.is_dir() {
             for entry in std::fs::read_dir(path).expect("list directory") {
