@@ -38,6 +38,10 @@ impl From<&MachineConfig> for MultiplexerConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ZellijConfig {
+    /// Whether the room's clients report mouse events. The one key RimZ cannot
+    /// assert absolutely: Zellij resolves it inside each client process from
+    /// that client's own config and flags, so `false` travels as an attach flag
+    /// and `true` cannot override a `mouse_mode false` in `config.kdl`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mouse_mode: Option<bool>,
     pub mouse_click_through: bool,

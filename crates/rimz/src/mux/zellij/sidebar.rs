@@ -90,18 +90,16 @@ impl ZellijBackend {
         // new-tab template and fixed sidebar/compact-bar tree shape.
         let body = render_session_layout(opts, daemon, &opts.resume_tabs)?;
         let layout = TempLayoutFile::new(body)?;
-        let mut option_args = vec![
+        let option_args = vec![
             "attach".to_owned(),
             "--create-background".to_owned(),
             opts.session_name.clone(),
             "options".to_owned(),
-        ];
-        option_args.extend([
             "--default-cwd".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),
             "--default-layout".to_owned(),
             layout.path().to_string_lossy().into_owned(),
-        ]);
+        ];
         let mut spec = self.cmd().args(option_args);
         // The identity pin rides the spawning client's environment: the
         // per-session server is forked from this command, and every pane is
