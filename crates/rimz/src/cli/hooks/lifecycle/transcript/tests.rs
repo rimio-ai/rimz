@@ -162,6 +162,7 @@ fn claude_human_paste_keeps_typed_and_pasted_text_in_one_prompt() {
         "look at this\n\npanic at foo.rs:1\n\nwhat now?"
     );
     assert!(!entries[0].text.contains("pasted_content"));
+    assert_eq!(entries[0].enqueued_at, None);
 }
 
 #[test]
@@ -186,13 +187,16 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
     let parent = rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
-    let first = rimz::store::message::MessageRecord::new(
+    let mut first = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "first".to_owned(),
         rimz::store::message::DeliveryGate::Done,
     )
     .with_in_reply_to(vec![parent.clone()]);
+    first.enqueued_at = jiff::Timestamp::now()
+        .checked_sub(jiff::SignedDuration::from_secs(120))
+        .unwrap();
     let second = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
@@ -217,8 +221,11 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     let entries = rimz::transcript::read_all(store.paths()).unwrap();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].message_id.as_ref(), Some(&first.message_id));
+    assert_eq!(entries[0].enqueued_at, Some(first.enqueued_at));
+    assert!(entries[0].at > entries[0].enqueued_at.unwrap());
     assert_eq!(entries[0].reply_to, vec![parent]);
     assert_eq!(entries[1].message_id.as_ref(), Some(&second.message_id));
+    assert_eq!(entries[1].enqueued_at, Some(second.enqueued_at));
     assert_eq!(
         rimz::store::agent_context::read_one(store.runtime_paths(), "claude", "sess-1")
             .unwrap()
@@ -315,6 +322,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         }]
     );
     assert_eq!(answer.message_id, None);
+    assert_eq!(answer.enqueued_at, None);
 }
 
 #[test]
@@ -412,6 +420,7 @@ fn mixed_submit_records_stray_text_as_direct_input() {
     assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Prompt);
     assert_eq!(entries[1].text, "do you still");
     assert_eq!(entries[1].message_id, None);
+    assert_eq!(entries[1].enqueued_at, None);
 }
 
 #[test]
