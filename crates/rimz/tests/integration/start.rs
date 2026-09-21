@@ -316,6 +316,53 @@ fn start_rejects_unsupported_account_budget_before_room_state() {
 }
 
 #[test]
+fn start_rejects_old_or_unrecognised_tmux_before_room_state() {
+    let (maj, min, patch) = rimz::mux::tmux::MIN_TMUX_VERSION;
+    for (version, message) in [
+        (
+            "tmux 3.4",
+            format!(
+                "tmux 3.4 is below RimZ's floor; upgrade tmux to >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
+            ),
+        ),
+        (
+            "tmux next-3.6",
+            format!(
+                "`tmux -V` output \"tmux next-3.6\" was not recognised; RimZ needs a release build >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
+            ),
+        ),
+    ] {
+        let env = Env::new();
+        let bin_dir = env.home_root.join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("bin dir");
+        let tmux = bin_dir.join("tmux");
+        std::fs::write(
+            &tmux,
+            format!("#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = '-V' ]; then\n    printf '%s\\n' '{version}'\n  fi\ndone\n"),
+        )
+        .expect("tmux shim");
+        std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod tmux shim");
+        let workspace_state = env.state_path_for(&env.project_root).root;
+
+        let output = env
+            .rimz()
+            .args(["start", "--mux", "tmux"])
+            .env("PATH", &bin_dir)
+            .bounded_output()
+            .expect("run rimz start");
+
+        assert!(!output.status.success(), "start accepted {version}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(&message), "{stderr}");
+        assert!(
+            !workspace_state.exists(),
+            "tmux version preflight must run before room state is created"
+        );
+    }
+}
+
+#[test]
 fn start_rejects_invalid_notifications_before_room_state() {
     let env = Env::new();
     let config = env.rimz_home().join("config.toml");

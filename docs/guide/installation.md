@@ -32,7 +32,7 @@ A RimZ room is one Zellij or tmux session: your agents running in panes, RimZ's 
 - Zellij 0.44.2 or newer, or
 - tmux 3.5 or newer, with 3.6 or newer preferred. On 3.5.x, the soft-newline key support RimZ turns on corrupts multiline text pasted into an agent; 3.6 fixes the paste.
 
-One is enough and both are first-class. `rimz start` refuses to open a room on a Zellij below the minimum and names the upgrade. An old tmux is not blocked at start, so check it yourself: `rimz doctor` reports the backend it selected and whether the version clears the minimum, which it labels the floor.
+One is enough and both are first-class. `rimz start` refuses to open a room on either backend below its minimum and names the upgrade. Unrecognised tmux versions, including development builds such as `next-3.6` or `master`, are refused too: install a release build at or above the minimum, or use `--mux zellij`. `rimz doctor` reports the backend it selected and whether the version clears the minimum, which it labels the floor.
 
 Packaged builds lag. Debian 12 ships tmux 3.3a and Debian 13 ships 3.5a, and most distributions do not package Zellij at all. On macOS, Homebrew's builds of both are current:
 
