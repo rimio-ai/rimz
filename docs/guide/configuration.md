@@ -716,7 +716,7 @@ A trusted repo profile, team, or task overlays your machine config and wins a na
 
 ## Moving from the XDG roots
 
-Earlier releases split RimZ across four XDG directories. RimZ reads only `~/.rimz/` now and does not move the old roots for you. `rimz doctor` lists the config, state, and data roots when they are still present, and `rimz start` and `rimz attach` refuse to open a room on a machine that has them but no `~/.rimz/config.toml`, naming this section. Setting `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, or `XDG_CACHE_HOME` no longer moves any RimZ file; `RIMZ_HOME` does.
+Earlier releases split RimZ across four XDG directories. RimZ reads only `~/.rimz/` now and does not move the old roots for you. `rimz doctor` lists all four old roots when present: config, state, data, and cache. Its fix says to move the contents of the first three into the home and delete the obsolete cache. `rimz start` and `rimz attach` refuse to open a room on a machine that has a config, state, or data root but no `~/.rimz/config.toml`, naming this section; a leftover cache alone blocks neither command. Setting `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, or `XDG_CACHE_HOME` no longer moves any RimZ file; `RIMZ_HOME` does.
 
 | Old location | New location |
 | --- | --- |

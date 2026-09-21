@@ -99,6 +99,8 @@ The workspace id is `ws_` plus the first 24 hex characters of the SHA-256 of the
 
 The directory is named by a `WorkspaceDirName`, `<basename>-<hex>`, never by the id: the root's sanitized basename plus a hex prefix of the id, four digits unless a prefix is already taken by another workspace, then two more at a time. `StatePaths::for_project_root` finds an existing directory or mints the name and creates nothing; lookup scans `ws/` for names whose hex prefixes the id, and a candidate's `workspace.json` decides, so a record naming another id is skipped and several unrecorded candidates are an error. A site holding only an id (`StatePaths::for_workspace`) resolves the same way but falls back to `ws-<24hex>` when nothing exists, which only a pre-birth id-only caller can reach. The runtime directory uses the same name (`RuntimePaths::for_state`), so both trees agree.
 
+`Store::open` creates the state and runtime trees for commands that write, while reading commands take the non-creating handle from `Store::open_existing` (`store/mod.rs`), which returns `None` when no store exists.
+
 This page owns the log, the caches derived from it, and the workspace record. The other files have their own homes:
 
 | Files | Owner |

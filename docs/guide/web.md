@@ -18,7 +18,7 @@ brew install ttyd     # macOS or Linuxbrew
 ttyd --version        # RimZ needs 1.7.5 or newer
 ```
 
-`brew upgrade ttyd` fixes an older Homebrew build. On Debian or Ubuntu, read `apt-cache policy ttyd` first and install from apt only when the candidate is 1.7.5 or newer; otherwise take a binary from the [ttyd releases](https://github.com/tsl0922/ttyd/releases). In a tmux room, `rimz doctor` prints the resolved binary and version on a `ttyd web` row.
+`brew upgrade ttyd` fixes an older Homebrew build. On Debian or Ubuntu, read `apt-cache policy ttyd` first and install from apt only when the candidate is 1.7.5 or newer; otherwise take a binary from the [ttyd releases](https://github.com/tsl0922/ttyd/releases). While `[web] enabled` is true, `rimz doctor` prints a `ttyd web` row for both Zellij and tmux, with the resolved binary and version or the fix for a missing or older binary.
 
 The commands that start or use the daemon (`rimz web open`, `share`, `start`, `restart`) refuse a missing or older binary and name the install or upgrade. `rimz start` only warns, because browser access at start is best-effort: the terminal room opens either way.
 

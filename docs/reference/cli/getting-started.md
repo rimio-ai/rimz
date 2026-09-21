@@ -192,19 +192,20 @@ A merge names every file it wrote, merged, or left untouched. An unparseable fil
 ## Diagnose with doctor
 
 ```sh
-rimz doctor [--audit] [--json] [--output <PATH>] [--clear]
+rimz doctor [--audit] [--json] [--no-log-text] [--output <PATH>] [--clear]
 ```
 
-`rimz doctor` reports the machine, the backend, and the room for the current directory in one pass. It starts, stops, or reconfigures nothing, and it exits 0 whatever it finds; read the closing line, or the JSON, to act on the result. It is not inert on disk, though: collecting the agent and message sections opens the room's store, so a run in a project that has never opened a room creates that room's state directory and workspace record.
+`rimz doctor` reports the machine, the backend, and the room for the current directory in one pass. It starts, stops, or reconfigures nothing, and it exits 0 whatever it finds; read the closing line, or the JSON, to act on the result. Without `--clear` or `--output`, it writes nothing to disk, including with `--audit` or `--json`. `--clear` writes a history watermark; `--output` writes the named report file.
 
 | Flag | Effect |
 | --- | --- |
 | `--audit` | List every observed agent session in `AGENTS`, not only live problem rows. |
 | `--json` | Print the report as one `rimz.doctor.v1` JSON document. |
+| `--no-log-text` | Omit multiplexer log record text from summaries, samples, and excerpts in either output format; retain severity, timestamps, counts, Zellij module targets, and RimZ-authored diagnoses. |
 | `--output <PATH>` | Write the report to `PATH` atomically instead of stdout. Human output is written without color. |
 | `--clear` | Before reporting, dismiss this workspace's recorded diagnostics, last incident, message failures, and multiplexer log records up to now. |
 
-`--json` embeds the multiplexer log lines behind each finding verbatim, up to 8 KiB per log record, so it can carry file paths, command lines, and prompt text from your own sessions. Read the artifact before attaching it to a public issue.
+Plain `--json` carries multiplexer log text verbatim, up to 8 KiB per log record; add `--no-log-text` to omit it without changing other report sections.
 
 The human report opens with the RimZ version, OS user, and binary path, then prints these sections in order. A section marked conditional appears only when it has something to show.
 
