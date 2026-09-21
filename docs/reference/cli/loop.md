@@ -199,6 +199,8 @@ A `--wait` delivery arrives from `@rimz` and parks until the target's current tu
 
 When the guard fires, the prompt gains ``--- check `<cmd>` exited <code> ---`` and the check's output. A check that does not fire the action records `skipped`.
 
+A scheduled check-only task opens its root's room before it runs the check, so a check that reads room state finds one. A check guarding an `--agent` or `--wait` action runs with no room open; the action opens it if the guard fires.
+
 `--verify <CMD>` runs after an `--agent` turn and re-prompts the same session with the failure until the command passes or `--max-attempts` turns are spent, then records `verify failed`. `--wait` and check-only tasks refuse it, because they have no supervised session to re-prompt. The retry loop is the one [supervised runs](./agents.md#supervised-runs--p) use.
 
 ## Budgets, gates, and strikes
@@ -207,7 +209,7 @@ Gates run before the check, so a closed gate spends nothing and opens no room. A
 
 ### Budgets
 
-`--budget <AMOUNT>` caps each spawned run; a run that overruns it records `budget exceeded`. `--budget-per-day <AMOUNT>` sums the task's run costs in the configured local day and skips a fire when the remaining amount cannot fund the next run's `--budget`.
+`--budget <AMOUNT>` caps each spawned run; a run that overruns it records `budget exceeded`. `--budget-per-day <AMOUNT>` sums the task's run costs in the configured local day and skips a fire when the remaining amount cannot fund the next run's `--budget`. It requires `--budget` for that reason: the gate reserves one run at the per-run cap before it lets a fire through.
 
 A fire records `budget skipped` from any of three sources:
 
@@ -304,7 +306,7 @@ Footers count tasks blocked by trust and project tasks not yet enabled, with the
 
 | Section | Contents |
 | --- | --- |
-| `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, their total and average cost, and the five latest attempts. |
+| `AGENT RUNS` | Check-gated `--agent` and `--wait` tasks only: how many fires escalated to the action, their total cost, an average over the ten most recent runs that recorded a cost, and the five latest attempts. |
 | `RECENT RUNS` | The latest runs, identical consecutive runs collapsed into one row. `-n, --runs <N>` sets how many, default `10`. |
 | `LAST RUN` | The newest run in full; an older last failure becomes a pointer to `loop logs`. |
 

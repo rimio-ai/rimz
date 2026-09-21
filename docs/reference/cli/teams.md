@@ -348,8 +348,8 @@ The first flip creates `<worktree>/blackboard.md` when absent. Each flip, under 
 Other board text is left as it is; the leader writes the rest of the board.
 
 ```text
-- 2026-09-12 14:02 @planner: opened Explore — board opened; sweep aimed at rate-limit handling
-- 2026-09-12 14:20 @planner: Plan -> Implement — plan ready in plan-notes.md; three advisories carried in
+- 2026-09-12 14:02:11 @planner: opened Explore — board opened; sweep aimed at rate-limit handling
+- 2026-09-12 14:20:36 @planner: Plan -> Implement — plan ready in plan-notes.md; three advisories carried in
 ```
 
 To undo a mistaken flip, flip back to the intended stage; both entries stay in the ledger. A flip to the current stage repeats the ledger line, signal, and delivery. The board and ledger mechanics are in [team memory and stages](../../internals/harness/teams.md).

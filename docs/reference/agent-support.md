@@ -89,6 +89,7 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 ### Copilot
 
 - The wrapped statusline supplies the resolved model, effort, context tokens, and cumulative session tokens. The live dollar figure comes from the session's AI credits at $0.01 per credit, or is an estimate at that model when credits are absent; when the statusline is missing or replaced, RimZ falls back to OpenTelemetry metadata.
+- That fallback needs a local telemetry file. An OTLP exporter configured in the environment sends the telemetry elsewhere, so RimZ warns `Copilot direct-launch enrichment is unavailable because an OTLP exporter is configured; set COPILOT_OTEL_FILE_EXPORTER_PATH to retain a file source` and the card keeps lifecycle alone. Point `COPILOT_OTEL_FILE_EXPORTER_PATH` at a file to keep both.
 - History adds per-model tokens and credit-metered dollars (local estimates where credits are absent) to `rimz stats` and the provider dashboard. These are not an account billing ledger.
 - Questions raise Waiting and clear as soon as the tool that asked completes.
 - Children appear with their model when they start, show their tool activity, and report their exact token total when they finish. A child's permission prompt arrives on the parent session, so the parent card waits. An approved shell command clears it when the child's command finishes; a denied or non-shell request clears at the parent's next hook.
@@ -128,6 +129,7 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 ### Grok
 
 - RimZ installs passive global hooks only; every permission decision stays in Grok's TUI.
+- A running Grok session reads its hook registry as a snapshot taken at start, so `rimz hooks install` leaves that session calling whatever was registered before. Press `r` in Grok's Hooks tab, or start a new session, to pick up the installed hooks.
 - Permission, plan, diff-review, and question prompts reach `rimz asks` through Grok's `Notification` hook. When a Grok version logs only an unmatched permission request, the card waits with `rimz asks` empty and the pane as the answer surface.
 - Errored and cancelled turns end through Grok's `StopFailure` and `StopCancelled` hooks, and child agents resolve from their own session hooks.
 - Launch reminders reach Grok through `--rules`.
@@ -230,7 +232,7 @@ Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, c
 
 ### Auto-compaction window
 
-The `auto-compact` field on a profile or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction).
+The `auto-compact` field on a profile or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction). Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).
 
 | Agent | Auto-compaction window | How the agent receives it |
 | --- | :--: | --- |

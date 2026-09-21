@@ -81,7 +81,7 @@ Any change lifts the scope's park for this room's agents. When the cap had parke
 
 ## What a cap blocks
 
-An interactive agent that crosses any cap is parked: RimZ interrupts its turn, and the card reads `paused`. A supervised run whose agent is parked by any cap ends with status `budget_exceeded` and exit `125`. A human message sent after the park waives that agent's next turn once. The full resume rules are in the [budgets guide](../../guide/budget.md#what-resumes-a-parked-agent).
+An interactive agent that crosses any cap is parked: RimZ interrupts its turn, and its card shows `⏸` with the cap that stopped it, such as `fleet budget: $50.21 of $50.00/day`. A supervised run whose agent is parked by any cap ends with status `budget_exceeded` and exit `125`. A human message sent after the park waives that agent's next turn once. The full resume rules are in the [budgets guide](../../guide/budget.md#what-resumes-a-parked-agent).
 
 While a room or account cap has no headroom, automation does not launch:
 

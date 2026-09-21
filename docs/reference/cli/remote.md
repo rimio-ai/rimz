@@ -70,7 +70,9 @@ The host's `rimz` compares its version with yours before it enters the room:
 
 ### Port forwarding
 
-A supervised terminal connection forwards a remote dev server to the same port on your machine when the server starts listening after you attach. The listener must belong to your remote user, use port 1024 or above, and bind a loopback or wildcard address. The local end binds only `127.0.0.1`, and a local port already in use is skipped. Discovery reads the host's `/proc`, so it works on Linux hosts only. `--no-reconnect` and `--web` connections never forward. The guide walks through it in [Ports forward themselves](../../guide/remote.md#ports-forward-themselves); limits and timing are in [remote internals](../../internals/remote.md#port-auto-forwarding).
+A supervised terminal connection forwards a remote dev server to the same port on your machine when the server starts listening after you attach. The listener must belong to your remote user, use port 1024 or above, and bind a loopback or wildcard address. The local end binds only `127.0.0.1`, and a local port already in use is skipped. Discovery reads the host's `/proc`, so it works on Linux hosts only. `--no-reconnect` and `--web` connections never forward.
+
+Two ceilings bound a busy host: discovery keeps the 32 lowest qualifying ports, and at most 16 forwards stay open at once. A port skipped because the local end was busy is retried when the remote listener stops and starts again, not when you reconnect, so free the local port before you restart the remote server. The guide walks through it in [Ports forward themselves](../../guide/remote.md#ports-forward-themselves); limits and timing are in [remote internals](../../internals/remote.md#port-auto-forwarding).
 
 ### Exit codes
 
