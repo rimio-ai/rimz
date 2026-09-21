@@ -197,10 +197,11 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
         if freshest <= row.last_activity {
             continue;
         }
-        let own = row.last_activity;
-        row.last_activity = freshest;
-        if let Some(agent) = row.as_agent_mut() {
-            agent.own_last_activity = Some(own);
+        let own = std::mem::replace(&mut row.last_activity, freshest);
+        // The same card the guard above matched — the mutable borrow only
+        // starts here because reading the child clocks held the shared one.
+        if let Some(card) = row.as_agent_mut() {
+            card.own_last_activity = Some(own);
         }
     }
 }
