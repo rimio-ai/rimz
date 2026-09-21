@@ -175,6 +175,10 @@ fn turn_started_records_only_unsupervised_user_inputs() {
             Some(dir.path()),
         );
     }
+    // A turn start whose prompt the adapter could not read classifies into no
+    // sections at all, and still opens the spend window: antigravity with an
+    // unreadable transcript and a plugin that omits the optional prompt both
+    // reach here on a genuine human turn.
     super::record_user_input_for_lifecycle(
         &workspace,
         agent,
@@ -185,7 +189,7 @@ fn turn_started_records_only_unsupervised_user_inputs() {
     );
 
     let records = rimz::agents::spending::user_input::load_in(dir.path());
-    assert_eq!(records.len(), 3);
+    assert_eq!(records.len(), 4);
     assert!(
         records
             .iter()
