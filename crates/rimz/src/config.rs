@@ -269,7 +269,10 @@ pub enum ConfigErr {
     },
     #[error("{0}")]
     Definition(definitions::DefinitionErr),
-    #[error("{path}: {message}")]
+    /// Displays without the file, which both reporters prefix themselves from
+    /// [`Self::path`]: `rimz doctor` renders `{path} is invalid: {error}` and
+    /// the start notice `{path}: {detail}`.
+    #[error("{message}")]
     Theme { path: PathBuf, message: String },
     #[error("cannot access {path}: {source}")]
     Io {
