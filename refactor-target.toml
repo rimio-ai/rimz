@@ -3384,7 +3384,7 @@ reason = "ProviderCapacity::from_windows is built by harness/auto_continue/tests
 [[verdict]]
 kind = "item"
 key = "agents::account::binding"
-reason = "ManagedLaunchState::binding is read by the binary (cli/supervised/run.rs:703,909) and by the integration crate (tests/integration/loop_schedule.rs, run.rs); E0624 refuted pub(crate) (pass 24b)."
+reason = "Two methods share this key. ManagedLaunchState::binding (account.rs:114) is read by the binary (cli/supervised/run.rs:703,909) and the integration crate, so E0624 refuted pub(crate) and it stays pub; AccountUsageIdentity::binding (account.rs:147) narrowed to pub(super) and needs no verdict (pass 24b)."
 
 [[verdict]]
 kind = "item"
