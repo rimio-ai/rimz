@@ -98,13 +98,13 @@ Per-machine TOML loads leniently: a missing file uses defaults, an unknown key w
 You never have to write these files from scratch. RimZ ships a commented template for each one, and generating them is safe to repeat.
 
 ```sh
-rimz                       # first start writes the three files when none exists yet, then opens the room
+rimz                       # first start writes whichever of the three files is missing, then opens the room
 rimz setup                 # detect this machine and write or refresh config
-rimz config init           # write config.toml, theme.toml, and loop.toml
+rimz config init           # write all three, refusing if any exists unless you pass --force
 rimz config init --print   # print the commented templates without writing anything
 ```
 
-Most people run `rimz` inside a project once, or `rimz setup` once, then edit the few lines they care about. A first start on an interactive terminal writes the per-machine config, offers hook install, runs the live glyph probe, and asks whether to enable a pet; a non-interactive first start writes the same defaults without prompting. That write is all or nothing: if even one of the three files is already on disk, first start writes none of them, and `rimz setup` is what fills the gaps.
+Most people run `rimz` inside a project once, or `rimz setup` once, then edit the few lines they care about. A first start on an interactive terminal writes the per-machine config, offers hook install, runs the live glyph probe, and asks whether to enable a pet; a non-interactive first start writes the same defaults without prompting. It writes each file independently: delete `config.toml` and keep your `theme.toml`, and the next start writes the one that is missing and leaves the one you kept exactly as it is.
 
 **Rerunning setup keeps your values.** On a machine that already has config, `rimz setup` asks `Keep your current config?`, and saying yes merges. `rimz setup --yes` merges without asking, and a non-interactive `rimz setup` without `--yes` changes nothing at all.
 
