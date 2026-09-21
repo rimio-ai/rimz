@@ -383,11 +383,16 @@ fn hash_covers_every_documented_surface_field() {
     // hash to distinct values; if a future refactor drops a field from
     // `ExecutableSurface`, two cases collide and this test fires. A field
     // added to the projection belongs here in the same commit, once per
-    // surface that carries it. A field only collides when some other case
-    // is identical but for it, so every documented field is carried by such
-    // a pair: the bare cases below are the anchors an optional field pairs
-    // against, and a field with no optional slot is paired by varying it.
+    // surface that carries it. A field only collides when some other case is
+    // identical but for it, so each surface opens with a bare case its
+    // optional fields pair against: the empty config, `[[agents]]` with only
+    // a name, `[profiles.x]`, `[tasks.x]`, a team with roles and no `layout`.
+    // A required field is paired by varying it instead. Every field the
+    // projection serializes was checked field by field against this list, by
+    // dropping it and confirming the collision, so a new field needs its
+    // pair, not just its case.
     let cases = [
+        "",
         "[[agents]]\nname = \"claude\"\n",
         "[[agents]]\nname = \"claude\"\nlaunch_command = \"claude code\"\n",
         "[[agents]]\nname = \"codex\"\nlaunch_command = \"claude code\"\n",
@@ -408,6 +413,7 @@ fn hash_covers_every_documented_surface_field() {
         "[profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
         "[profiles.y]\nagent = \"claude\"\n",
         "[agents.teams.review]\nlayout = \"planner,coder\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
+        "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[[agents.teams.audit.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
@@ -421,6 +427,7 @@ fn hash_covers_every_documented_surface_field() {
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
         "[agents.teams.review]\nconsensus-file = \"prompts/consensus.md\"\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[agents.teams.review]\nappend-system-prompt-files = [\"prompts/pipeline.md\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
+        "[tasks.x]\n",
         "[tasks.x]\nagent = \"codex\"\n",
         "[tasks.y]\nagent = \"codex\"\n",
         "[tasks.x]\nprompt = \"repair CI\"\n",
