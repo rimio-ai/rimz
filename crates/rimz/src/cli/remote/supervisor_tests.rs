@@ -3,6 +3,25 @@ use std::time::{Duration, Instant};
 use super::*;
 
 #[test]
+fn parked_port_forward_notice_reaches_terminal_with_retry() {
+    let (title, body) = parked_port_forward_notice(3000);
+    assert_eq!(title, "RimZ: port forward skipped");
+    assert_eq!(
+        body,
+        "Local port 3000 is already in use. Free it, then stop and restart the server on the host to retry forwarding."
+    );
+    let bytes = local_link_terminal_notification_bytes(
+        &title,
+        &body,
+        &rimz::config::NotificationsPrefs::default(),
+        true,
+    );
+    let notification = String::from_utf8(bytes).unwrap();
+    assert!(notification.contains("\x1b]"), "{notification:?}");
+    assert!(notification.contains("3000"), "{notification:?}");
+}
+
+#[test]
 fn disconnected_link_event_channel_keeps_poll_cadence() {
     let (tx, rx) = std::sync::mpsc::channel::<LinkEvent>();
     drop(tx);

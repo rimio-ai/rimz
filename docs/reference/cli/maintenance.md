@@ -342,7 +342,7 @@ What each sweep removes on disk is in [store internals](../../internals/store.md
 rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 ```
 
-`uninstall` removes RimZ from the machine. It prints a preview of every root, room, hook, skill-link root, timer, and binary it will touch, asks `[y/N]`, and then reports each removal. Preview and report go to stderr.
+`uninstall` removes RimZ from the machine. It prints a preview of every root, room, hook, skill-link root, timer, and binary it will touch, plus the account homes it keeps, asks `[y/N]`, and then reports each removal. Preview and report go to stderr.
 
 | What | Default | Flag to change it |
 | --- | --- | --- |
@@ -351,7 +351,7 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 | Running rooms, on both backends | Torn down | |
 | The external [loop timer](./loop.md) | Removed | |
 | The runtime tree and `~/.rimz/cache/`, including the provider caches under `cache/providers/` | Removed | |
-| [Provider account](./accounts.md) homes under `~/.rimz/accounts/` | Kept: their credentials and history belong to the provider | |
+| [Provider account](./accounts.md) homes under `~/.rimz/accounts/` | Kept: their credentials and history belong to the provider; the preview names each existing declared home and the `rm -rf` command to clear it by hand | |
 | Durable stores and spend history (`ws/`, `logs/`, `loops/`, `web/`, `builds/` under `~/.rimz`) | Kept | `--state` removes them |
 | Per-machine config, themes, trust grants, plugins, and remote aliases (`config.toml`, `theme.toml`, `loop.toml`, `remote.toml`, `trust/`, `agents.d/` under `~/.rimz`) | Kept | `--config` removes them |
 | Agent library (`agents/`, `subagents/`, `teams/`, `traits/`, `skills/`, `profiles/`, and `accounts/`) and `handoffs/` | Always kept | |

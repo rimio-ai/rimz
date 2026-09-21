@@ -1458,22 +1458,44 @@ fn emit_local_link_notification(
     let prefs = rimz::config::MachineConfig::load_lenient()
         .notifications
         .clone();
-    let bytes = local_link_terminal_notification_bytes(
-        title,
-        body,
-        &prefs,
-        std::io::stderr().is_terminal(),
-    );
-    if !bytes.is_empty() {
-        let mut stderr = std::io::stderr().lock();
-        let _ = stderr.write_all(&bytes);
-        let _ = stderr.flush();
-    }
+    emit_local_terminal_notification(title, body, &prefs);
     let Some(notification) = local_link_command_notification(kind, title, body, delivery, &prefs)
     else {
         return;
     };
     rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
+}
+
+fn emit_local_terminal_notification(
+    title: &str,
+    body: &str,
+    prefs: &rimz::config::NotificationsPrefs,
+) {
+    let bytes =
+        local_link_terminal_notification_bytes(title, body, prefs, std::io::stderr().is_terminal());
+    if !bytes.is_empty() {
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr.write_all(&bytes);
+        let _ = stderr.flush();
+    }
+}
+
+/// The attached room owns the screen, so skipped forwards use terminal notifications.
+fn parked_port_forward_notice(port: u16) -> (String, String) {
+    (
+        "RimZ: port forward skipped".to_owned(),
+        format!(
+            "Local port {port} is already in use. Free it, then stop and restart the server on the host to retry forwarding."
+        ),
+    )
+}
+
+fn emit_parked_port_forward_notice(port: u16) {
+    let (title, body) = parked_port_forward_notice(port);
+    let prefs = rimz::config::MachineConfig::load_lenient()
+        .notifications
+        .clone();
+    emit_local_terminal_notification(&title, &body, &prefs);
 }
 
 fn local_link_terminal_notification_bytes(
@@ -1922,6 +1944,7 @@ fn apply_port_actions(
                     Err(error) => {
                         mark_port_open_failed(sync, port);
                         tracing::info!(port, %error, "remote port auto-forward parked; local port unavailable");
+                        emit_parked_port_forward_notice(port);
                         continue;
                     }
                 };

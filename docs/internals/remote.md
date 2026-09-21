@@ -377,7 +377,7 @@ Locally, `PortSync` diffs the reports:
 - A port missing from three consecutive reports is closed.
 - An open that fails, because the local port is taken or `ssh -O forward` refuses, is parked until that listener disappears from a report and later returns.
 
-Before asking the master to forward, `apply_port_actions` binds `127.0.0.1:<port>` itself and releases it, which turns a busy local port into a park instead of a stream of refusals. The forward is `ssh -O forward -L 127.0.0.1:<port>:localhost:<port>` on the live master with a two-second timeout, and `ssh -O cancel` with the same argument closes it, so the local side never listens on a public address.
+Before asking the master to forward, `apply_port_actions` binds `127.0.0.1:<port>` itself and releases it, which turns a busy local port into a park instead of a stream of refusals. A bind-failure park is reported to the attached user through the local terminal notification channel, respecting notification preferences without running link-event handlers. The notice names the port and tells the user to free it, then stop and restart the server on the host to retry. The forward is `ssh -O forward -L 127.0.0.1:<port>:localhost:<port>` on the live master with a two-second timeout, and `ssh -O cancel` with the same argument closes it, so the local side never listens on a public address.
 
 The baseline and active set live for the whole `rimz remote connect`, across probe-stream and transport replacements. A replacement master reopens the active set before reports resume, and the master's exit tears every forward down at detach. Restarting `rimz remote connect` takes a new baseline.
 
