@@ -35,6 +35,9 @@ pub struct DoctorArgs {
     /// Emit machine-readable JSON instead of the human report.
     #[arg(long)]
     json: bool,
+    /// Omit multiplexer log record text from the report (summaries, samples, and excerpts).
+    #[arg(long)]
+    no_log_text: bool,
     /// Write the report to a file (atomically) instead of stdout.
     #[arg(long, value_name = "PATH")]
     output: Option<PathBuf>,
@@ -52,11 +55,16 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
             .context("resolving workspace state to clear doctor history")?;
         watermark::stamp(&paths, jiff::Timestamp::now())?;
     }
-    let report = collect_report(globals, args.audit);
+    let log_text = if args.no_log_text {
+        mux_log::LogText::Omit
+    } else {
+        mux_log::LogText::Include
+    };
+    let report = collect_report(globals, args.audit, log_text);
     emit(&report, args.json, args.output.as_deref())
 }
 
-fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
+fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText) -> DoctorReport {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
     let ws = workspace.as_ref().ok();
     let history_cleared_at = ws
@@ -73,7 +81,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
                 error: err.to_string(),
             },
         },
-        mux: runtime::collect_mux(globals.mux, ws, history_cleared_at),
+        mux: runtime::collect_mux(globals.mux, ws, history_cleared_at, log_text),
         terminal: runtime::collect_terminal(),
         home: collect_home(),
         machine_config: collect_machine_config(),

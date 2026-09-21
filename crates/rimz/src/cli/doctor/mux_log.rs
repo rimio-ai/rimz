@@ -18,6 +18,31 @@ const WINDOW_BYTES: u64 = 256 * 1024;
 /// rendered line, so the budget buys real findings rather than repetition.
 const ISSUE_CAP: usize = 24;
 
+/// Whether the report may carry text copied out of a multiplexer log record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LogText {
+    Include,
+    Omit,
+}
+
+/// Where a summary's words came from, so `--no-log-text` has one decision point.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LogSummary {
+    /// RimZ's own sentence about a record it recognized; carries nothing from the log.
+    Authored(String),
+    /// A summary whose words came from the record, and its log-free alternative.
+    FromLog { text: String, without_text: String },
+}
+
+impl LogSummary {
+    fn resolve(self, mode: LogText) -> String {
+        match (self, mode) {
+            (Self::Authored(text), _) | (Self::FromLog { text, .. }, LogText::Include) => text,
+            (Self::FromLog { without_text, .. }, LogText::Omit) => without_text,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LogSeverity {
     Warn,
@@ -67,7 +92,7 @@ struct LogDiagnosis {
     key: String,
     state: LogState,
     impact: LogImpact,
-    summary: String,
+    summary: LogSummary,
     sample: Option<String>,
 }
 
@@ -108,7 +133,7 @@ struct LogScan {
     issues: Vec<LogIssue>,
 }
 
-pub(super) fn collect(mux: MuxName, since: Option<Timestamp>) -> model::MuxLog {
+pub(super) fn collect(mux: MuxName, since: Option<Timestamp>, log_text: LogText) -> model::MuxLog {
     let window = LogWindow {
         bytes: WINDOW_BYTES,
         issue_cap: ISSUE_CAP,
@@ -126,6 +151,7 @@ pub(super) fn collect(mux: MuxName, since: Option<Timestamp>) -> model::MuxLog {
                     window,
                     parse_zellij_log_line,
                     diagnose_zellij_log_record,
+                    log_text,
                 ),
                 Ok(false) => model::MuxLog::Missing {
                     path: path.display().to_string(),
@@ -142,6 +168,7 @@ pub(super) fn collect(mux: MuxName, since: Option<Timestamp>) -> model::MuxLog {
                 window,
                 parse_tmux_log_line,
                 diagnose_tmux_log_record,
+                log_text,
             ),
             None => model::MuxLog::Disabled {
                 hint: "server logging off (start tmux with `-v` to enable)".to_owned(),
@@ -160,8 +187,9 @@ fn scan(
         &LogicalRecord,
         Option<&LogicalRecord>,
     ) -> Option<LogDiagnosis>,
+    log_text: LogText,
 ) -> model::MuxLog {
-    match scan_tail(&path, window, parse_line, diagnose) {
+    match scan_tail(&path, window, parse_line, diagnose, log_text) {
         Ok(scan) => model::MuxLog::Ready {
             path: path.display().to_string(),
             scope,
@@ -172,6 +200,7 @@ fn scan(
             since: window.since,
             problem_records: scan.problem_records,
             omitted_issue_groups: scan.omitted_issue_groups,
+            log_text_omitted: log_text == LogText::Omit,
             issues: scan
                 .issues
                 .into_iter()
@@ -218,6 +247,7 @@ fn scan_tail(
         &LogicalRecord,
         Option<&LogicalRecord>,
     ) -> Option<LogDiagnosis>,
+    log_text: LogText,
 ) -> io::Result<LogScan> {
     let LogWindow {
         bytes: window_bytes,
@@ -314,10 +344,12 @@ fn scan_tail(
             if record.start.at.is_some() {
                 issue.last_occurrence = record.start.at;
             }
-            issue.evidence_truncated |= record.truncated;
-            let sample = diagnosis.sample.unwrap_or_else(|| record.text.clone());
-            if issue.samples.len() < SAMPLE_CAP && !issue.samples.contains(&sample) {
-                issue.samples.push(sample);
+            if log_text == LogText::Include {
+                issue.evidence_truncated |= record.truncated;
+                let sample = diagnosis.sample.unwrap_or_else(|| record.text.clone());
+                if issue.samples.len() < SAMPLE_CAP && !issue.samples.contains(&sample) {
+                    issue.samples.push(sample);
+                }
             }
             continue;
         }
@@ -330,12 +362,16 @@ fn scan_tail(
                 severity,
                 state: diagnosis.state,
                 impact: diagnosis.impact,
-                summary: diagnosis.summary,
+                summary: diagnosis.summary.resolve(log_text),
                 occurrences: 1,
                 first_occurrence: record.start.at,
                 last_occurrence: record.start.at,
-                samples: vec![diagnosis.sample.unwrap_or_else(|| record.text.clone())],
-                evidence_truncated: record.truncated,
+                samples: if log_text == LogText::Include {
+                    vec![diagnosis.sample.unwrap_or_else(|| record.text.clone())]
+                } else {
+                    Vec::new()
+                },
+                evidence_truncated: log_text == LogText::Include && record.truncated,
             },
         ));
     }
@@ -560,8 +596,9 @@ fn diagnose_zellij_log_record(
             key: "plugin_pane_query_timeout".to_owned(),
             state: LogState::Investigate,
             impact: LogImpact::Warn,
-            summary: "plugin pane queries timed out — pane discovery lags behind the room"
-                .to_owned(),
+            summary: LogSummary::Authored(
+                "plugin pane queries timed out — pane discovery lags behind the room".to_owned(),
+            ),
             sample: None,
         });
     }
@@ -575,8 +612,8 @@ fn diagnose_zellij_log_record(
             key: "client_protocol_mismatch".to_owned(),
             state: LogState::Investigate,
             impact: LogImpact::Warn,
-            summary: "a client sent messages zellij could not read — usually a client/server version mismatch"
-                .to_owned(),
+            summary: LogSummary::Authored("a client sent messages zellij could not read — usually a client/server version mismatch"
+                .to_owned()),
             sample: None,
         });
     }
@@ -588,9 +625,12 @@ fn diagnose_zellij_log_record(
             key: normalized_issue_key(&format!("missing_pane_cwd:{cwd}")),
             state: LogState::Investigate,
             impact: LogImpact::Warn,
-            summary: format!(
-                "a pane's configured directory is missing ({cwd}) — zellij started it in the inherited directory"
-            ),
+            summary: LogSummary::FromLog {
+                text: format!(
+                    "a pane's configured directory is missing ({cwd}) — zellij started it in the inherited directory"
+                ),
+                without_text: "a pane's configured directory is missing — zellij started it in the inherited directory".to_owned(),
+            },
             sample: None,
         });
     }
@@ -610,7 +650,17 @@ fn diagnose_zellij_log_record(
         key: normalized_issue_key(&format!("{target}:{summary}")),
         state: LogState::Investigate,
         impact,
-        summary,
+        summary: LogSummary::FromLog {
+            text: summary,
+            without_text: if target.is_empty() {
+                format!("an unclassified {} record", severity_label(severity))
+            } else {
+                format!(
+                    "an unclassified {} record from {target}",
+                    severity_label(severity)
+                )
+            },
+        },
         sample: None,
     })
 }
@@ -627,7 +677,7 @@ fn expected_zellij_lifecycle(
         key: key.to_owned(),
         state: LogState::Expected,
         impact: LogImpact::Info,
-        summary: summary.to_owned(),
+        summary: LogSummary::Authored(summary.to_owned()),
         sample,
     };
 
@@ -641,11 +691,17 @@ fn expected_zellij_lifecycle(
         ));
     }
     if let Some(action) = action_ack_timeout(subject) {
-        return Some(expected(
-            &format!("action_ack_timeout:{action}"),
-            &format!("zellij acknowledged {action} late (the action still ran)"),
-            None,
-        ));
+        return Some(LogDiagnosis {
+            key: format!("action_ack_timeout:{action}"),
+            state: LogState::Expected,
+            impact: LogImpact::Info,
+            summary: LogSummary::FromLog {
+                text: format!("zellij acknowledged {action} late (the action still ran)"),
+                without_text: "zellij acknowledged an action late (the action still ran)"
+                    .to_owned(),
+            },
+            sample: None,
+        });
     }
     // Zellij truncates the target column, so the untruncated source path is the
     // reliable way to place a record in the server's pty reader.
@@ -784,7 +840,10 @@ fn diagnose_tmux_log_record(
         } else {
             LogImpact::Warn
         },
-        summary: record.start.message.clone(),
+        summary: LogSummary::FromLog {
+            text: record.start.message.clone(),
+            without_text: format!("an unclassified {} record", severity_label(severity)),
+        },
         sample: None,
     })
 }
@@ -839,7 +898,7 @@ mod tests {
             key: normalized_issue_key(&record.start.message),
             state: LogState::Investigate,
             impact: LogImpact::Warn,
-            summary: record.start.message.clone(),
+            summary: LogSummary::Authored(record.start.message.clone()),
             sample: None,
         })
     }
@@ -854,7 +913,7 @@ mod tests {
         )
         .unwrap();
 
-        let scan = scan_tail(&path, window(1024, 10), parse, diagnose).unwrap();
+        let scan = scan_tail(&path, window(1024, 10), parse, diagnose, LogText::Include).unwrap();
         assert_eq!(scan.logical_records, 3);
         assert_eq!(scan.problem_records, 2);
         assert_eq!(scan.issues[0].samples[0], "WARN first\nCaused by: detail\n");
@@ -870,7 +929,7 @@ mod tests {
         )
         .unwrap();
 
-        let scan = scan_tail(&path, window(1024, 1), parse, diagnose).unwrap();
+        let scan = scan_tail(&path, window(1024, 1), parse, diagnose, LogText::Include).unwrap();
         assert_eq!(scan.problem_records, 4);
         assert_eq!(scan.omitted_issue_groups, 1);
         assert_eq!(scan.issues.len(), 1);
@@ -891,6 +950,7 @@ mod tests {
             },
             parse,
             diagnose,
+            LogText::Include,
         )
         .unwrap();
 
@@ -915,7 +975,7 @@ mod tests {
         let path = dir.path().join("mux.log");
         std::fs::write(&path, "WARN too old\ndetail\nINFO boundary\nERROR recent\n").unwrap();
 
-        let scan = scan_tail(&path, window(27, 10), parse, diagnose).unwrap();
+        let scan = scan_tail(&path, window(27, 10), parse, diagnose, LogText::Include).unwrap();
         assert_eq!(scan.problem_records, 1);
         assert_eq!(scan.issues[0].summary, "recent");
     }
@@ -927,7 +987,14 @@ mod tests {
         let recent = "ERROR recent\n";
         std::fs::write(&path, format!("WARN old\n{recent}")).unwrap();
 
-        let scan = scan_tail(&path, window(recent.len() as u64, 10), parse, diagnose).unwrap();
+        let scan = scan_tail(
+            &path,
+            window(recent.len() as u64, 10),
+            parse,
+            diagnose,
+            LogText::Include,
+        )
+        .unwrap();
 
         assert_eq!(scan.problem_records, 1);
         assert_eq!(scan.issues[0].summary, "recent");
@@ -939,7 +1006,14 @@ mod tests {
         let path = dir.path().join("mux.log");
         std::fs::write(&path, format!("ERROR {}\n", "é".repeat(RECORD_TEXT_LIMIT))).unwrap();
 
-        let scan = scan_tail(&path, window(32 * 1024, 10), parse, diagnose).unwrap();
+        let scan = scan_tail(
+            &path,
+            window(32 * 1024, 10),
+            parse,
+            diagnose,
+            LogText::Include,
+        )
+        .unwrap();
         assert!(scan.issues[0].evidence_truncated);
         assert!(scan.issues[0].samples[0].is_char_boundary(scan.issues[0].samples[0].len()));
     }
@@ -988,7 +1062,7 @@ mod tests {
         let write = diagnose_zellij_log_record(None, &write, None).unwrap();
 
         assert_eq!(
-            mouse.summary,
+            mouse.summary.resolve(LogText::Include),
             "failed to set the cursor shape: I/O error (os error 5)"
         );
         assert_eq!(mouse.state, LogState::Investigate);
@@ -1043,9 +1117,13 @@ mod tests {
         assert_eq!(investigate.state, LogState::Investigate);
         assert_eq!(investigate.impact, LogImpact::Warn);
         assert!(
-            investigate.summary.contains("version mismatch"),
+            investigate
+                .summary
+                .clone()
+                .resolve(LogText::Include)
+                .contains("version mismatch"),
             "an unpaired unknown message names what it usually means: {}",
-            investigate.summary
+            investigate.summary.resolve(LogText::Include)
         );
 
         let RecordLine::Start(start) = parse_zellij_log_line(
@@ -1106,9 +1184,12 @@ mod tests {
         assert_eq!(cwd.state, LogState::Investigate);
         assert_eq!(cwd.impact, LogImpact::Warn);
         assert!(
-            cwd.summary.contains("/tmp/rimz-presence-probe"),
-            "the directory to fix is the whole point of the line: {}",
             cwd.summary
+                .clone()
+                .resolve(LogText::Include)
+                .contains("/tmp/rimz-presence-probe"),
+            "the directory to fix is the whole point of the line: {}",
+            cwd.summary.resolve(LogText::Include)
         );
 
         // Two stale directories are two fixes, so they stay two issues.
@@ -1164,6 +1245,7 @@ mod tests {
             },
             parse_zellij_log_line,
             diagnose_zellij_log_record,
+            LogText::Include,
         )
         .unwrap();
 
@@ -1176,6 +1258,56 @@ mod tests {
         assert_eq!(scan.issues[1].state, LogState::Expected);
         assert_eq!(scan.issues[2].state, LogState::Investigate);
         assert_eq!(scan.issues[3].severity, LogSeverity::Panic);
+    }
+
+    #[test]
+    fn omitted_log_text_preserves_diagnoses_and_grouping() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zellij.log");
+        std::fs::write(&path, concat!(
+            "ERROR Failed to set CWD for new pane. '/private/cwd-marker' does not exist or is not a folder\n",
+            "ERROR Action PrivateAction did not complete within 1s timeout\n",
+            "ERROR Action PrivateAction did not complete within 2s timeout\n",
+            "ERROR |zellij_server::panes| 2026-07-17 12:23:34.169 [main] source.rs:1: generic-marker\n",
+            "ERROR Received unknown message from client.\n",
+        )).unwrap();
+        let scan = |mode| {
+            scan_tail(
+                &path,
+                window(64 * 1024, 10),
+                parse_zellij_log_line,
+                diagnose_zellij_log_record,
+                mode,
+            )
+            .unwrap()
+        };
+        let included = scan(LogText::Include);
+        let omitted = scan(LogText::Omit);
+        assert_eq!(included.problem_records, omitted.problem_records);
+        assert_eq!(included.logical_records, omitted.logical_records);
+        assert_eq!(
+            included.records_before_cutoff,
+            omitted.records_before_cutoff
+        );
+        assert_eq!(included.issues.len(), omitted.issues.len());
+        assert_eq!(included.issues[1].occurrences, 2);
+        assert_eq!(included.issues[3].summary, omitted.issues[3].summary);
+        assert!(included.issues[0].summary.contains("/private/cwd-marker"));
+        assert!(included.issues[1].summary.contains("PrivateAction"));
+        assert_eq!(
+            omitted.issues[2].summary,
+            "an unclassified error record from zellij_server::panes"
+        );
+        for (included, omitted) in included.issues.iter().zip(&omitted.issues) {
+            assert_eq!(included.occurrences, omitted.occurrences);
+            assert_eq!(included.first_occurrence, omitted.first_occurrence);
+            assert_eq!(included.last_occurrence, omitted.last_occurrence);
+            assert!(omitted.samples.is_empty());
+            assert!(!omitted.evidence_truncated);
+            for marker in ["/private/cwd-marker", "PrivateAction", "generic-marker"] {
+                assert!(!omitted.summary.contains(marker));
+            }
+        }
     }
 
     #[test]
