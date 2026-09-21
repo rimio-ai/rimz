@@ -1143,3 +1143,35 @@ fn answer_codex_questions_sends_verified_option_choreography() {
     assert_eq!(sent.matches("send-keys -t %7 Down").count(), 3, "{sent}");
     assert_eq!(sent.matches("send-keys -t %7 Enter").count(), 2, "{sent}");
 }
+
+#[test]
+fn asks_says_so_when_no_agent_is_blocked() {
+    let env = Env::new();
+
+    let output = env
+        .rimz()
+        .arg("asks")
+        .bounded_output()
+        .expect("run asks with nothing open");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let listed = String::from_utf8(output.stdout).expect("asks empty state");
+    assert!(
+        listed.contains("no agent is asking anything"),
+        "an empty list must say so: {listed}"
+    );
+
+    let output = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("run asks --json with nothing open");
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("asks empty json"),
+        "[]\n",
+        "--json stays machine-readable"
+    );
+}
