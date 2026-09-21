@@ -72,17 +72,6 @@ impl SupervisedChild {
         Self { child, _wake: wake }
     }
 
-    pub fn id(&self) -> u32 {
-        #[cfg(unix)]
-        {
-            self.pid
-        }
-        #[cfg(not(unix))]
-        {
-            self.child.id()
-        }
-    }
-
     /// Check whether the child has exited without blocking.
     pub fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
         #[cfg(unix)]
