@@ -61,6 +61,8 @@ A `[zellij]` session value overrides `config.kdl` absolutely. Most changes reach
 
 Removing an optional `[zellij]` key returns control to `config.kdl` at the next room birth, not in the open room. One client setting has a limit: `mouse_mode = true` cannot override `mouse_mode false` in `config.kdl`. Remove that line or change it to `true` in `config.kdl` before attaching; `mouse_mode = false` in RimZ always disables mouse reporting for that client.
 
+`pane_frames = true` is a setting you may not see straight away. Zellij draws no frame around a pane that is the only framed pane in its tab, and the sidebar and the bottom bar do not count, so a tab holding one work pane looks the same either way. Split the work pane and both halves get their frames.
+
 ## Everything in the room is an ordinary pane operation
 
 What RimZ does inside the room reduces to multiplexer commands you could run yourself, which is worth knowing before you hand it a room full of agents.
