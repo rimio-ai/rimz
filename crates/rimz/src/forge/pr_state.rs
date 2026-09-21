@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
 #[derive(Debug, Default, Clone, Serialize)]
-pub struct PrStateCache {
+pub(crate) struct PrStateCache {
     /// PR link by absolute worktree path.
     #[serde(default)]
     pub states: BTreeMap<String, PrLink>,

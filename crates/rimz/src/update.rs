@@ -16,9 +16,9 @@ use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use url::Url;
 
-pub const LINUX_X86_64_ARCHIVE: &str = "rimz-x86_64-unknown-linux-gnu.tar.gz";
-pub const DARWIN_AARCH64_ARCHIVE: &str = "rimz-aarch64-apple-darwin.tar.gz";
-pub const DARWIN_X86_64_ARCHIVE: &str = "rimz-x86_64-apple-darwin.tar.gz";
+pub(crate) const LINUX_X86_64_ARCHIVE: &str = "rimz-x86_64-unknown-linux-gnu.tar.gz";
+pub(crate) const DARWIN_AARCH64_ARCHIVE: &str = "rimz-aarch64-apple-darwin.tar.gz";
+pub(crate) const DARWIN_X86_64_ARCHIVE: &str = "rimz-x86_64-apple-darwin.tar.gz";
 
 const RELEASES_URL: &str = "https://github.com/rimio-ai/rimz/releases";
 const LATEST_URL: &str = "https://github.com/rimio-ai/rimz/releases/latest";

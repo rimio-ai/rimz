@@ -7,7 +7,7 @@ use ratatui::text::Line;
 use crate::sidebar_pane::view::BodyFilter;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum HitTarget {
+pub(in crate::sidebar_pane) enum HitTarget {
     Row(usize),
     ProviderTab(String),
     BodyFilter(BodyFilter),
@@ -25,14 +25,18 @@ pub(crate) enum HitTarget {
 
 /// Half-open display-cell region.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct HitRegion {
-    pub(crate) rows: Range<usize>,
-    pub(crate) columns: Range<u16>,
-    pub(crate) target: HitTarget,
+pub(in crate::sidebar_pane) struct HitRegion {
+    pub(in crate::sidebar_pane) rows: Range<usize>,
+    pub(in crate::sidebar_pane) columns: Range<u16>,
+    pub(in crate::sidebar_pane) target: HitTarget,
 }
 
 impl HitRegion {
-    pub(crate) fn line(line: usize, columns: Range<u16>, target: HitTarget) -> Self {
+    pub(in crate::sidebar_pane) fn line(
+        line: usize,
+        columns: Range<u16>,
+        target: HitTarget,
+    ) -> Self {
         Self {
             rows: line..line.saturating_add(1),
             columns,
@@ -41,27 +45,30 @@ impl HitRegion {
     }
 
     #[cfg(test)]
-    pub(crate) fn whole_line(line: usize, target: HitTarget) -> Self {
+    pub(in crate::sidebar_pane) fn whole_line(line: usize, target: HitTarget) -> Self {
         Self::line(line, 0..u16::MAX, target)
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FrameInteractions {
+pub(in crate::sidebar_pane) struct FrameInteractions {
     row_by_line: Vec<Option<usize>>,
     regions: Vec<HitRegion>,
 }
 
 impl FrameInteractions {
     #[cfg(test)]
-    pub(crate) fn from_parts(row_by_line: Vec<Option<usize>>, regions: Vec<HitRegion>) -> Self {
+    pub(in crate::sidebar_pane) fn from_parts(
+        row_by_line: Vec<Option<usize>>,
+        regions: Vec<HitRegion>,
+    ) -> Self {
         Self {
             row_by_line,
             regions,
         }
     }
 
-    pub(crate) fn target_at(&self, column: u16, row: u16) -> Option<HitTarget> {
+    pub(in crate::sidebar_pane) fn target_at(&self, column: u16, row: u16) -> Option<HitTarget> {
         let row = usize::from(row);
         self.regions
             .iter()
@@ -77,7 +84,9 @@ impl FrameInteractions {
             .min_by_key(target_precedence)
     }
 
-    pub(crate) fn hyperlinks(&self) -> impl Iterator<Item = (&Range<usize>, &Range<u16>, &str)> {
+    pub(in crate::sidebar_pane) fn hyperlinks(
+        &self,
+    ) -> impl Iterator<Item = (&Range<usize>, &Range<u16>, &str)> {
         self.regions
             .iter()
             .filter_map(|region| match &region.target {
@@ -86,35 +95,38 @@ impl FrameInteractions {
             })
     }
 
-    pub(crate) fn visible_row_span(&self) -> Option<(usize, usize)> {
+    pub(in crate::sidebar_pane) fn visible_row_span(&self) -> Option<(usize, usize)> {
         let mut rows = self.row_by_line.iter().flatten().copied();
         let first = rows.next()?;
         Some((first, rows.fold(first, |_, row| row)))
     }
 
-    pub(crate) fn row_map(&self) -> &[Option<usize>] {
+    pub(super) fn row_map(&self) -> &[Option<usize>] {
         &self.row_by_line
     }
 
     #[cfg(test)]
-    pub(crate) fn row_at_line(&self, line: usize) -> Option<usize> {
+    pub(in crate::sidebar_pane) fn row_at_line(&self, line: usize) -> Option<usize> {
         self.row_by_line.get(line).copied().flatten()
     }
 
     #[cfg(test)]
-    pub(crate) fn line_for_row(&self, ordinal: usize) -> Option<usize> {
+    pub(in crate::sidebar_pane) fn line_for_row(&self, ordinal: usize) -> Option<usize> {
         self.row_by_line
             .iter()
             .position(|row| *row == Some(ordinal))
     }
 
     #[cfg(test)]
-    pub(crate) fn line_count(&self) -> usize {
+    pub(in crate::sidebar_pane) fn line_count(&self) -> usize {
         self.row_by_line.len()
     }
 
     #[cfg(test)]
-    pub(crate) fn line_for_target(&self, target: &HitTarget) -> Option<(u16, u16)> {
+    pub(in crate::sidebar_pane) fn line_for_target(
+        &self,
+        target: &HitTarget,
+    ) -> Option<(u16, u16)> {
         self.regions.iter().find_map(|region| {
             (&region.target == target).then(|| {
                 (
@@ -126,7 +138,7 @@ impl FrameInteractions {
     }
 
     #[cfg(test)]
-    pub(crate) fn regions(&self) -> &[HitRegion] {
+    pub(in crate::sidebar_pane) fn regions(&self) -> &[HitRegion] {
         &self.regions
     }
 
@@ -186,13 +198,13 @@ fn target_precedence(target: &HitTarget) -> u8 {
 
 /// Lines and their geometry, transformed together during three-zone compose.
 #[derive(Default)]
-pub(crate) struct RenderedBlock {
-    pub(crate) lines: Vec<Line<'static>>,
-    pub(crate) interactions: FrameInteractions,
+pub(super) struct RenderedBlock {
+    pub(super) lines: Vec<Line<'static>>,
+    pub(super) interactions: FrameInteractions,
 }
 
 impl RenderedBlock {
-    pub(crate) fn from_parts(
+    pub(super) fn from_parts(
         lines: Vec<Line<'static>>,
         row_by_line: Vec<Option<usize>>,
         regions: Vec<HitRegion>,
@@ -213,21 +225,21 @@ impl RenderedBlock {
         block
     }
 
-    pub(crate) fn push(&mut self, line: Line<'static>, ordinal: Option<usize>) {
+    fn push(&mut self, line: Line<'static>, ordinal: Option<usize>) {
         self.lines.push(line);
         self.interactions.row_by_line.push(ordinal);
         self.assert_shape();
     }
 
-    pub(crate) fn push_row(&mut self, line: Line<'static>, ordinal: usize) {
+    fn push_row(&mut self, line: Line<'static>, ordinal: usize) {
         self.push(line, Some(ordinal));
     }
 
-    pub(crate) fn push_inert(&mut self, line: Line<'static>) {
+    pub(super) fn push_inert(&mut self, line: Line<'static>) {
         self.push(line, None);
     }
 
-    pub(crate) fn push_with_regions(
+    pub(super) fn push_with_regions(
         &mut self,
         line: Line<'static>,
         ordinal: Option<usize>,
@@ -243,34 +255,34 @@ impl RenderedBlock {
         self.assert_shape();
     }
 
-    pub(crate) fn push_target(&mut self, line: Line<'static>, target: HitTarget) {
+    pub(super) fn push_target(&mut self, line: Line<'static>, target: HitTarget) {
         self.push_with_regions(line, None, [(0..u16::MAX, target)]);
     }
 
-    pub(crate) fn extend_inert(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
+    pub(super) fn extend_inert(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
         for line in lines {
             self.push_inert(line);
         }
     }
 
-    pub(crate) fn map_lines(&mut self, mut map: impl FnMut(Line<'static>) -> Line<'static>) {
+    pub(super) fn map_lines(&mut self, mut map: impl FnMut(Line<'static>) -> Line<'static>) {
         for line in &mut self.lines {
             *line = map(std::mem::take(line));
         }
         self.assert_shape();
     }
 
-    pub(crate) fn translate_columns(&mut self, columns: u16) {
+    pub(super) fn translate_columns(&mut self, columns: u16) {
         self.interactions.translate(0, columns);
     }
 
-    pub(crate) fn append(&mut self, other: Self) {
+    pub(super) fn append(&mut self, other: Self) {
         self.interactions.append(other.interactions);
         self.lines.extend(other.lines);
         self.assert_shape();
     }
 
-    pub(crate) fn window(mut self, start: usize, len: usize) -> Self {
+    pub(super) fn window(mut self, start: usize, len: usize) -> Self {
         let end = start.saturating_add(len).min(self.lines.len());
         self.lines.truncate(end);
         self.lines.drain(..start.min(end));

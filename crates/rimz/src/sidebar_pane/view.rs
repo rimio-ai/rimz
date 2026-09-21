@@ -14,7 +14,7 @@ pub const WORKTREE_ROW_CAP: usize = 6;
 
 /// One projected group, indexed into its roster's flat row slice.
 #[derive(Clone, Debug)]
-pub(crate) struct VisibleGroup<'a> {
+pub(super) struct VisibleGroup<'a> {
     source: &'a SidebarWorktreeGroup,
     range: Range<usize>,
     expanded: bool,
@@ -23,43 +23,43 @@ pub(crate) struct VisibleGroup<'a> {
 }
 
 impl<'a> VisibleGroup<'a> {
-    pub(crate) fn source(&self) -> &'a SidebarWorktreeGroup {
+    pub(super) fn source(&self) -> &'a SidebarWorktreeGroup {
         self.source
     }
 
-    pub(crate) fn range(&self) -> Range<usize> {
+    pub(super) fn range(&self) -> Range<usize> {
         self.range.clone()
     }
 
-    pub(crate) fn rows<'r>(&self, roster: &'r VisibleRoster<'a>) -> &'r [&'a SidebarRow] {
+    pub(super) fn rows<'r>(&self, roster: &'r VisibleRoster<'a>) -> &'r [&'a SidebarRow] {
         &roster.rows[self.range.clone()]
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.range.is_empty()
     }
 
-    pub(crate) fn expanded(&self) -> bool {
+    pub(super) fn expanded(&self) -> bool {
         self.expanded
     }
 
-    pub(crate) fn natural_hidden_count(&self) -> usize {
+    pub(super) fn natural_hidden_count(&self) -> usize {
         self.natural_hidden_count
     }
 
-    pub(crate) fn hidden_count(&self) -> usize {
+    pub(super) fn hidden_count(&self) -> usize {
         self.hidden_count
     }
 }
 
 /// One body projection shared by render, browse, selection, and order holds.
-pub(crate) struct VisibleRoster<'a> {
+pub(super) struct VisibleRoster<'a> {
     rows: Vec<&'a SidebarRow>,
     groups: Vec<VisibleGroup<'a>>,
 }
 
 impl<'a> VisibleRoster<'a> {
-    pub(crate) fn new(
+    pub(super) fn new(
         snapshot: &'a SidebarSnapshot,
         filter: Option<BodyFilter>,
         expanded_groups: &BTreeSet<String>,
@@ -98,7 +98,7 @@ impl<'a> VisibleRoster<'a> {
         Self { rows, groups }
     }
 
-    pub(crate) fn baseline(snapshot: &'a SidebarSnapshot) -> Self {
+    pub(super) fn baseline(snapshot: &'a SidebarSnapshot) -> Self {
         Self::new(snapshot, None, &BTreeSet::new(), None)
     }
 
@@ -133,23 +133,23 @@ impl<'a> VisibleRoster<'a> {
         }
     }
 
-    pub(crate) fn rows(&self) -> &[&'a SidebarRow] {
+    pub(super) fn rows(&self) -> &[&'a SidebarRow] {
         &self.rows
     }
 
-    pub(crate) fn row(&self, ordinal: usize) -> Option<&'a SidebarRow> {
+    pub(super) fn row(&self, ordinal: usize) -> Option<&'a SidebarRow> {
         self.rows.get(ordinal).copied()
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.rows.len()
     }
 
-    pub(crate) fn groups(&self) -> &[VisibleGroup<'a>] {
+    pub(super) fn groups(&self) -> &[VisibleGroup<'a>] {
         &self.groups
     }
 
-    pub(crate) fn ordinal_of_pane(&self, pane_id: &PaneId) -> Option<usize> {
+    pub(super) fn ordinal_of_pane(&self, pane_id: &PaneId) -> Option<usize> {
         self.rows.iter().position(|row| {
             row.pane
                 .as_ref()
@@ -157,23 +157,23 @@ impl<'a> VisibleRoster<'a> {
         })
     }
 
-    pub(crate) fn ordinal_of_id(&self, id: &str) -> Option<usize> {
+    pub(super) fn ordinal_of_id(&self, id: &str) -> Option<usize> {
         self.rows.iter().position(|row| row.id == id)
     }
 
-    pub(crate) fn pane_at_ordinal(&self, ordinal: usize) -> Option<PaneId> {
+    pub(super) fn pane_at_ordinal(&self, ordinal: usize) -> Option<PaneId> {
         self.row(ordinal)
             .and_then(|row| row.pane.as_ref())
             .map(|pane| pane.pane_id.clone())
     }
 
-    pub(crate) fn group_containing(&self, ordinal: usize) -> Option<&VisibleGroup<'a>> {
+    pub(super) fn group_containing(&self, ordinal: usize) -> Option<&VisibleGroup<'a>> {
         self.groups
             .iter()
             .find(|group| group.range.contains(&ordinal))
     }
 
-    pub(crate) fn neighboring_group_head(&self, ordinal: usize, step: isize) -> Option<usize> {
+    pub(super) fn neighboring_group_head(&self, ordinal: usize, step: isize) -> Option<usize> {
         let visible = self
             .groups
             .iter()

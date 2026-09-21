@@ -805,16 +805,12 @@ pub enum InvalidLoginKey {
 }
 
 impl LoginKey {
-    pub fn new(kind: AgentKind, name: LoginName) -> Self {
+    pub(crate) fn new(kind: AgentKind, name: LoginName) -> Self {
         Self { kind, name }
     }
 
     pub fn default_for(kind: AgentKind) -> Self {
         Self::new(kind, LoginName::default_login())
-    }
-
-    pub fn is_default(&self) -> bool {
-        self.name.is_default()
     }
 }
 
@@ -1062,7 +1058,10 @@ impl std::fmt::Display for FocusNonce {
 /// Compose a routing channel for read-side fallback. A launch-stamped lane
 /// wins; otherwise the worktree directory basename is the fallback for agents
 /// not launched by this RimZ binary.
-pub fn compose_channel(explicit: Option<&str>, dir_basename: Option<&str>) -> Option<String> {
+pub(crate) fn compose_channel(
+    explicit: Option<&str>,
+    dir_basename: Option<&str>,
+) -> Option<String> {
     if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
         return Some(channel.to_owned());
     }

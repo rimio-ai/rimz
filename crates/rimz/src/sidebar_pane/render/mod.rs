@@ -30,7 +30,7 @@ pub(in crate::sidebar_pane) use self::animation::{AnimationCadence, animation_ca
 use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::{hairline_rule, help_lines};
 #[cfg(test)]
-pub(crate) use self::compose::compose_lines;
+pub(in crate::sidebar_pane) use self::compose::compose_lines;
 use self::compose::compose_lines_with_meter;
 #[cfg(test)]
 use self::compose::lead_unread;
@@ -38,16 +38,18 @@ use self::compose::lead_unread;
 use self::compose::{
     auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, scroll_thumb,
 };
-pub(crate) use self::interaction::{FrameInteractions, HitRegion, HitTarget, RenderedBlock};
+use self::interaction::RenderedBlock;
+pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion, HitTarget};
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
+pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
 pub use self::ui_state::{Alert, UiState};
-pub(crate) use self::ui_state::{
+pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
-    cockpit_spend_target,
 };
-pub(crate) use crate::sidebar_pane::view::BodyFilter;
-pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
-pub(crate) use scrollbar::ScrollbarFade;
+pub(in crate::sidebar_pane) use crate::sidebar_pane::view::BodyFilter;
+pub(in crate::sidebar_pane) use odometer::CLICK_PHASES;
+pub(in crate::sidebar_pane) use odometer::{CostRolls, TallyAnim};
+pub(in crate::sidebar_pane) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
 use std::num::NonZeroU16;

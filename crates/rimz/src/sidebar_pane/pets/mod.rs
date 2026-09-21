@@ -34,20 +34,20 @@ use crate::sidebar_pane::pixel::{PixelRenderCaps, RgbaImage};
 use asset::PetSource;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PetView {
+pub(super) struct PetView {
     pub(crate) body: Option<PetBody>,
     pub(crate) caption: Option<String>,
     pub(crate) frame_interval: Option<std::time::Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PetBody {
+pub(super) enum PetBody {
     Cell(PetCellGrid),
     Pixel(PetPixelView),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PetPixelView {
+pub(super) struct PetPixelView {
     pub(crate) pet_id: String,
     pub(crate) sprite_index: usize,
     pub(crate) image_id: u32,

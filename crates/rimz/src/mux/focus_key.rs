@@ -22,7 +22,7 @@ enum Modifier {
 impl FocusChord {
     /// Parse a `Mod+key` (or `Mod-key`) chord. Unsupported shapes return
     /// `None` so room birth can warn and skip the binding.
-    pub(crate) fn parse(raw: &str) -> Option<Self> {
+    fn parse(raw: &str) -> Option<Self> {
         let raw = raw.trim();
         let (modifier, key) = raw.split_once(['+', '-'])?;
         let modifier = match modifier.trim().to_ascii_lowercase().as_str() {
@@ -59,7 +59,7 @@ pub struct RoomKeyBinding {
 
 impl RoomKeyBinding {
     /// Resolve a command and configured chord against the absolute RimZ binary.
-    pub fn resolve(chord: &str, rimz_bin: &Path, args: &[&str]) -> Option<Self> {
+    pub(crate) fn resolve(chord: &str, rimz_bin: &Path, args: &[&str]) -> Option<Self> {
         Some(Self {
             chord: FocusChord::parse(chord)?,
             program: rimz_bin.to_path_buf(),

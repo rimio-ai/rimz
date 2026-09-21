@@ -81,13 +81,6 @@ impl LaunchPlan {
             | AgentProcessStage::LoginShellReentry { process, .. } => process,
         }
     }
-
-    pub fn argv(&self) -> &[String] {
-        match &self.stage {
-            AgentProcessStage::Ready(process) => &process.argv,
-            AgentProcessStage::LoginShellReentry { argv, .. } => argv,
-        }
-    }
 }
 
 pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr> {

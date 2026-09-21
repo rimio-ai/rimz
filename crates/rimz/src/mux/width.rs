@@ -126,7 +126,7 @@ impl WidthPermille {
     }
 
     /// Spell this share as a whole percentage for Zellij layout KDL.
-    pub fn to_percent_rounded(self) -> u16 {
+    fn to_percent_rounded(self) -> u16 {
         ((self.0 + 5) / 10).clamp(1, 100)
     }
 }
@@ -180,7 +180,7 @@ impl SidebarTarget {
     }
 
     /// Spell the resolved share as a whole percentage for Zellij layout KDL.
-    pub fn percent(self) -> u16 {
+    pub(super) fn percent(self) -> u16 {
         self.share.to_percent_rounded()
     }
 }
@@ -224,7 +224,7 @@ impl SidebarWidth {
     }
 
     /// The configured column cap.
-    pub fn cap_cols(self) -> u64 {
+    fn cap_cols(self) -> u64 {
         u64::from(self.max_cols.get())
     }
 }
@@ -265,7 +265,7 @@ pub(crate) fn width_step_regressed(before: u64, after: u64, target: u64) -> bool
 }
 
 /// The nominal target increment for one Zellij resize keypress.
-pub(crate) fn zellij_resize_step_cols(view_cols: u64) -> u64 {
+pub(super) fn zellij_resize_step_cols(view_cols: u64) -> u64 {
     (view_cols / 20).max(1)
 }
 

@@ -304,7 +304,7 @@ pub fn set_command_scope(facts: ScopeFacts<'_>) {
 }
 
 /// The Sentry reporting layer layer: `warn!`/`error!` become Sentry events and an `info!`
-/// on [`BREADCRUMB_TARGET`] becomes a breadcrumb attached to the next event, so
+/// on `BREADCRUMB_TARGET` becomes a breadcrumb attached to the next event, so
 /// a warning arrives with the trail that led to it. The `INFO` level filter
 /// keeps the global max-level hint at `INFO` — `debug!`/`trace!` are still never
 /// constructed — so the breadcrumb trail stays a cold-path concern (the

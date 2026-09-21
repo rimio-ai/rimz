@@ -23,21 +23,21 @@ pub struct RemovalOutcome {
 }
 
 impl RemovalOutcome {
-    pub fn removed(path: impl Into<PathBuf>) -> Self {
+    fn removed(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
             result: Ok(Removed::Removed),
         }
     }
 
-    pub fn already_absent(path: impl Into<PathBuf>) -> Self {
+    fn already_absent(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
             result: Ok(Removed::AlreadyAbsent),
         }
     }
 
-    pub fn failed(path: impl Into<PathBuf>, err: io::Error) -> Self {
+    fn failed(path: impl Into<PathBuf>, err: io::Error) -> Self {
         Self {
             path: path.into(),
             result: Err(err),
@@ -45,7 +45,7 @@ impl RemovalOutcome {
     }
 }
 
-pub fn remove_root(path: &Path) -> RemovalOutcome {
+fn remove_root(path: &Path) -> RemovalOutcome {
     match fs::remove_dir_all(path) {
         Ok(()) => RemovalOutcome::removed(path),
         Err(err) if err.kind() == io::ErrorKind::NotFound => RemovalOutcome::already_absent(path),
@@ -92,7 +92,7 @@ pub fn remove_runtime_root() -> Vec<RemovalOutcome> {
     )
 }
 
-pub fn remove_runtime_root_at(
+fn remove_runtime_root_at(
     runtime_root: &Path,
     cleanup_fallback_parent: bool,
 ) -> Vec<RemovalOutcome> {

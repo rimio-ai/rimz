@@ -11,7 +11,7 @@ use crate::ids::MuxName;
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 
-pub fn desktop_notification_bytes(
+pub(crate) fn desktop_notification_bytes(
     mux: MuxName,
     desktop: DesktopNotificationMode,
     title: &str,
@@ -20,7 +20,7 @@ pub fn desktop_notification_bytes(
     desktop_payload(Some(mux), desktop, title, body).unwrap_or_default()
 }
 
-pub fn sound_notification_bytes(sound: NotificationSoundMode) -> Vec<u8> {
+pub(crate) fn sound_notification_bytes(sound: NotificationSoundMode) -> Vec<u8> {
     match sound {
         NotificationSoundMode::Bell => vec![BEL],
         NotificationSoundMode::Off => Vec::new(),

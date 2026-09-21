@@ -76,7 +76,7 @@ struct Entry {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MeterPixels {
+pub(in crate::sidebar_pane) struct MeterPixels {
     pub(in crate::sidebar_pane) id_base: u32,
     table: BTreeMap<MeterRaster, Entry>,
     clock: u64,

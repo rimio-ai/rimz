@@ -59,12 +59,12 @@ pub struct ChannelRecord {
 pub struct Channels(pub BTreeMap<String, ChannelRecord>);
 
 impl Channels {
-    pub fn into_records(self) -> Vec<ChannelRecord> {
+    fn into_records(self) -> Vec<ChannelRecord> {
         self.0.into_values().collect()
     }
 }
 
-pub fn validate_name(name: &str) -> Result<()> {
+fn validate_name(name: &str) -> Result<()> {
     if valid_name(name) {
         Ok(())
     } else {
@@ -81,7 +81,7 @@ pub fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-pub fn read(path: &Path) -> Result<Channels> {
+fn read(path: &Path) -> Result<Channels> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| ChannelErr::Json {
             path: path.to_path_buf(),

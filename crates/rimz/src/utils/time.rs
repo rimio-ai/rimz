@@ -48,17 +48,17 @@ impl DurationUnit {
 
 /// A validated local wall-clock hour and minute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ClockTime {
+pub(crate) struct ClockTime {
     hour: u8,
     minute: u8,
 }
 
 impl ClockTime {
-    pub const fn hour(self) -> u8 {
+    pub(crate) const fn hour(self) -> u8 {
         self.hour
     }
 
-    pub const fn minute(self) -> u8 {
+    pub(crate) const fn minute(self) -> u8 {
         self.minute
     }
 }

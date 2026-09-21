@@ -17,27 +17,27 @@ use serde::Deserialize;
 use crate::child_process::{SupervisedChild, register_signal_wake, wait_wake};
 use crate::config::{DaemonConfig, DaemonPane, MachineConfig};
 
-pub const STATS_TOKEN: &str = "stats";
+const STATS_TOKEN: &str = "stats";
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedPane {
+pub(crate) struct ResolvedPane {
     pub argv: Vec<String>,
     pub cwd: PathBuf,
 }
 
-pub fn stats_argv(rimz_bin: &Path) -> Vec<String> {
+fn stats_argv(rimz_bin: &Path) -> Vec<String> {
     vec![
         rimz_bin.to_string_lossy().into_owned(),
-        "stats".to_owned(),
+        STATS_TOKEN.to_owned(),
         "--refresh".to_owned(),
         "--hold".to_owned(),
     ]
 }
 
-pub fn resolve_content(
+pub(crate) fn resolve_content(
     daemon: &DaemonConfig,
     rimz_bin: &Path,
     worktree_root: &Path,
@@ -54,7 +54,7 @@ pub fn resolve_content(
     }
 }
 
-pub fn resolve_slot(
+fn resolve_slot(
     daemon: &DaemonConfig,
     slot: usize,
     rimz_bin: &Path,
@@ -66,11 +66,7 @@ pub fn resolve_slot(
         .unwrap_or_else(|| stats_pane(rimz_bin, worktree_root))
 }
 
-pub fn resolve_pane(
-    pane: &DaemonPane,
-    rimz_bin: &Path,
-    worktree_root: &Path,
-) -> Option<ResolvedPane> {
+fn resolve_pane(pane: &DaemonPane, rimz_bin: &Path, worktree_root: &Path) -> Option<ResolvedPane> {
     let cwd = match &pane.cwd {
         Some(cwd) if cwd.is_absolute() => cwd.clone(),
         Some(cwd) => worktree_root.join(cwd),

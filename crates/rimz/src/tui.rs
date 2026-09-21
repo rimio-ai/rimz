@@ -331,7 +331,7 @@ impl TerminalModeGuard {
     /// handoff. The replacement process re-enables the same modes, while
     /// restoring here opens a mouse-reporting gap that outer terminals can
     /// observe and turn wheel input into arrow keys.
-    pub fn preserve_for_reexec(self) {
+    pub(crate) fn preserve_for_reexec(self) {
         // The process exits immediately after this handoff, so keeping the
         // panic hook installed and skipping the terminal restore are both
         // intentional.

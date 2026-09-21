@@ -58,7 +58,7 @@ use super::{
 /// vector that is rendered, so they stay 1:1 with what the user sees through
 /// every clip and every scroll position.
 #[cfg(test)]
-pub(crate) fn compose_lines(
+pub(in crate::sidebar_pane) fn compose_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
@@ -69,7 +69,7 @@ pub(crate) fn compose_lines(
     compose_lines_with_meter(snapshot, alert, ui, theme, width, height, None)
 }
 
-pub(crate) fn compose_lines_with_meter(
+pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
@@ -462,14 +462,14 @@ fn bottom_corner_chrome(
 }
 
 /// One draw's lines, typed interactions, and resolved zone positions.
-pub(crate) struct ComposedFrame {
-    pub(crate) lines: Vec<Line<'static>>,
-    pub(crate) interactions: FrameInteractions,
-    pub(crate) scroll_offset: usize,
-    pub(crate) top_height: usize,
-    pub(crate) bottom_height: usize,
+pub(in crate::sidebar_pane) struct ComposedFrame {
+    pub(in crate::sidebar_pane) lines: Vec<Line<'static>>,
+    pub(in crate::sidebar_pane) interactions: FrameInteractions,
+    pub(in crate::sidebar_pane) scroll_offset: usize,
+    pub(in crate::sidebar_pane) top_height: usize,
+    pub(in crate::sidebar_pane) bottom_height: usize,
     /// Rows occupied by composed content before viewport padding.
-    pub(crate) content_height: usize,
+    pub(in crate::sidebar_pane) content_height: usize,
 }
 
 fn resolve_scroll_offset(

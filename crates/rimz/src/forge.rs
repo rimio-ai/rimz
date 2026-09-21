@@ -22,7 +22,7 @@ pub enum Forge {
     GitLab,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ForgeCli {
+pub(crate) enum ForgeCli {
     Gh,
     Tea,
 }
@@ -49,7 +49,7 @@ pub struct PrTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrHead {
+pub(crate) struct PrHead {
     pub branch: String,
     pub owner: Option<String>,
     pub repo_full_name: Option<String>,
@@ -57,7 +57,7 @@ pub struct PrHead {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrCandidate {
+pub(crate) struct PrCandidate {
     pub number: u64,
     pub state: WorktreePrState,
     pub created_at: Option<jiff::Timestamp>,
@@ -80,11 +80,11 @@ pub(crate) struct GhBulkResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TeaPrDetail {
-    pub state: Option<WorktreePrState>,
-    pub created_at: Option<jiff::Timestamp>,
-    pub merged_sha: Option<String>,
-    pub head_sha: Option<String>,
+pub(crate) struct TeaPrDetail {
+    pub(crate) state: Option<WorktreePrState>,
+    pub(crate) created_at: Option<jiff::Timestamp>,
+    pub(crate) merged_sha: Option<String>,
+    pub(crate) head_sha: Option<String>,
 }
 
 pub fn parse(raw: &str) -> Result<PrTarget, String> {
@@ -201,7 +201,7 @@ impl RemoteRepo {
         })
     }
 
-    pub(crate) fn host(&self) -> &str {
+    fn host(&self) -> &str {
         &self.host
     }
 
@@ -229,7 +229,7 @@ impl RemoteRepo {
 
     pub(crate) fn repo_key(&self, cli: ForgeCli) -> String {
         let repo = self.repo_slug.as_deref().unwrap_or(&self.raw);
-        format!("{}:{}:{repo}", cli.key(), self.host())
+        format!("{}:{}:{repo}", cli.program(), self.host())
     }
 
     pub(crate) fn pr_web_url(&self, number: u64) -> Option<String> {
@@ -285,24 +285,8 @@ fn remote_authority_host(authority: &str) -> Option<String> {
     (!matches!(host, "" | "." | "..") && !host.chars().any(char::is_whitespace))
         .then(|| host.to_ascii_lowercase())
 }
-pub fn forge_for_remote(remote_url: &str) -> Forge {
-    RemoteRepo::parse(remote_url).map_or(Forge::GitHubStyle, |remote| remote.forge())
-}
-pub fn forge_cli_for_remote(remote_url: &str) -> Option<ForgeCli> {
-    RemoteRepo::parse(remote_url).and_then(|remote| remote.forge_cli())
-}
-/// Extract the `owner/repo` slug from a git remote URL.
-pub fn remote_repo_slug(remote_url: &str) -> Option<String> {
-    RemoteRepo::parse(remote_url).and_then(|remote| remote.repo_slug)
-}
 
-/// Return whether URL-derived PR identity names the origin repository.
-pub fn pr_url_matches_origin(target: &PrTarget, origin_url: &str) -> bool {
-    target.host.is_none()
-        || RemoteRepo::parse(origin_url).is_some_and(|remote| remote.matches_target(target))
-}
-
-pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
+fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
     #[derive(Deserialize)]
     struct Pull {
         #[serde(rename = "headRefName")]
@@ -348,7 +332,7 @@ pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
 
 /// Parse the Gitea pull request from `tea api repos/<slug>/pulls/<N>`.
 /// The branch-only presentation from `tea pr <N> --output json` is rejected.
-pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
+fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
     #[derive(Deserialize)]
     struct Pull {
         head: Branch,
@@ -389,11 +373,6 @@ pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
     })
 }
 
-/// Build a sibling repository URL while preserving the origin's transport.
-pub fn sibling_repo_url(origin_url: &str, repo_full_name: &str) -> Option<String> {
-    RemoteRepo::parse(origin_url)?.sibling_url(repo_full_name)
-}
-
 fn required_json_text(raw: &str, label: &str) -> Result<String, String> {
     nonempty(raw).ok_or_else(|| format!("{label} is empty"))
 }
@@ -404,7 +383,7 @@ fn nonempty(raw: impl AsRef<str>) -> Option<String> {
 }
 
 impl Forge {
-    pub fn pr_refspec(self, number: u64) -> String {
+    pub(crate) fn pr_refspec(self, number: u64) -> String {
         match self {
             Self::GitHubStyle => format!("refs/pull/{number}/head"),
             Self::GitLab => format!("refs/merge-requests/{number}/head"),
@@ -418,10 +397,6 @@ impl ForgeCli {
             Self::Gh => "gh",
             Self::Tea => "tea",
         }
-    }
-
-    pub(crate) fn key(self) -> &'static str {
-        self.program()
     }
 
     pub(crate) fn pr_head_args(
@@ -656,7 +631,10 @@ fn ci_from_gh_rollup_state(raw: &str) -> Option<WorktreeCi> {
     }
 }
 
-pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<PrCandidate>, String> {
+pub(crate) fn parse_tea_pr_list_json(
+    raw: &str,
+    branch: &str,
+) -> Result<Option<PrCandidate>, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let pulls = value
         .as_array()
@@ -669,7 +647,7 @@ pub fn parse_tea_pr_list_json(raw: &str, branch: &str) -> Result<Option<PrCandid
         .fold(None, |current, next| Some(prefer_candidate(current, next))))
 }
 
-pub fn parse_tea_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>, String> {
+pub(crate) fn parse_tea_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate>, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let pulls = value
         .as_array()
@@ -688,7 +666,7 @@ pub fn parse_tea_pr_list_links(raw: &str) -> Result<BTreeMap<String, PrCandidate
 }
 
 /// Parse the Gitea payload from `tea api repos/<slug>/pulls/<number>`.
-pub fn parse_tea_pr_detail_json(raw: &str) -> Result<TeaPrDetail, String> {
+pub(crate) fn parse_tea_pr_detail_json(raw: &str) -> Result<TeaPrDetail, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let text = |value: Option<&Value>| {
         value
@@ -710,7 +688,7 @@ pub fn parse_tea_pr_detail_json(raw: &str) -> Result<TeaPrDetail, String> {
 }
 
 /// Build bounded `tea pr list` argv for open-set and transition probes.
-pub fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a str> {
+pub(crate) fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a str> {
     let mut args = vec!["pr", "list", "--state", state];
     args.extend([
         "--output",
@@ -727,12 +705,12 @@ pub fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a st
 }
 
 /// Build the Gitea combined commit-status endpoint used for CI enrichment.
-pub fn tea_commit_status_endpoint(repo_slug: &str, branch: &str) -> String {
+pub(crate) fn tea_commit_status_endpoint(repo_slug: &str, branch: &str) -> String {
     format!("repos/{repo_slug}/commits/{branch}/status")
 }
 
 /// Parse Gitea's combined commit status into the sidebar CI vocabulary.
-pub fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreeCi>, String> {
+pub(crate) fn parse_tea_combined_status(raw: &str) -> Result<Option<WorktreeCi>, String> {
     let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
     let object = value
         .as_object()

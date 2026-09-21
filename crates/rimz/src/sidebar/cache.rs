@@ -102,8 +102,8 @@ pub(super) fn published_frame_unwatched(runtime: &RuntimePaths, session: &str) -
 
 /// The presence liveness stamp refreshed by the Zellij presence plugin through
 /// `rimz sidebar wake` and by the tmux control-mode watch. Its freshness gates
-/// the producer's pane TTL: fresh → event mode ([`EVENT_PANE_TTL`]), stale or absent → poll mode
-/// ([`SNAPSHOT_CACHE_TTL`]). Cache-class JSON in the workspace runtime root;
+/// the producer's pane TTL: fresh → event mode (`EVENT_PANE_TTL`), stale or absent → poll mode
+/// (`SNAPSHOT_CACHE_TTL`). Cache-class JSON in the workspace runtime root;
 /// the explicit millisecond field (over a bare mtime stamp) lets `rimz doctor`
 /// render a stamp age from the same value the producer's verdict reads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
