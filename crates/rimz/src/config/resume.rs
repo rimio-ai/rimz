@@ -98,7 +98,7 @@ impl Default for ResumeConfig {
 }
 
 impl ResumeConfig {
-    pub fn auto_redeem_min_gain(&self) -> Duration {
+    pub(crate) fn auto_redeem_min_gain(&self) -> Duration {
         parse_auto_redeem_min_gain(&self.auto_redeem_min_gain)
             .unwrap_or_else(|_| default_auto_redeem_min_gain())
     }

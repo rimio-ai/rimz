@@ -332,14 +332,14 @@ impl Team {
         }
     }
 
-    pub fn owner_of(&self, stage: &str) -> Option<&str> {
+    pub(crate) fn owner_of(&self, stage: &str) -> Option<&str> {
         self.roles
             .iter()
             .find(|role| role.owns.iter().any(|owned| owned == stage))
             .map(|role| role.role.as_str())
     }
 
-    pub fn owned_stages(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn owned_stages(&self) -> impl Iterator<Item = &str> {
         self.roles
             .iter()
             .flat_map(|role| role.owns.iter().map(String::as_str))

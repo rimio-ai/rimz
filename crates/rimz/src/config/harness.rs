@@ -28,7 +28,7 @@ pub struct DayCap {
 }
 
 impl DayCap {
-    pub fn as_usd(self) -> f64 {
+    pub(crate) fn as_usd(self) -> f64 {
         self.cents as f64 / 100.0
     }
 

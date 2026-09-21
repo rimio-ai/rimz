@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub struct SkillName(String);
 
 impl SkillName {
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }

@@ -45,7 +45,7 @@ impl Serialize for WorktreeBase {
 }
 
 impl WorktreeBase {
-    pub fn as_refspec(&self) -> &str {
+    pub(crate) fn as_refspec(&self) -> &str {
         match self {
             Self::Head => "HEAD",
             Self::Fresh => "origin/HEAD",

@@ -218,7 +218,7 @@ impl WatchSpec {
     }
 
     /// The first line of the delivered wait message.
-    pub fn headline(&self) -> String {
+    pub(crate) fn headline(&self) -> String {
         match self {
             Self::Command(command) => format!(
                 "waited on `{}`",
