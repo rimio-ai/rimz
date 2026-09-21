@@ -176,7 +176,7 @@ pub fn refresh(out: Option<&Path>) -> Result<RefreshReport> {
 
 /// `true` when runtime network fetches are disabled.
 pub(super) fn offline() -> bool {
-    env::var_os("RIMZ_PRICING_OFFLINE").is_some()
+    crate::utils::env::flag_enabled("RIMZ_PRICING_OFFLINE")
 }
 
 /// Fetch and project LiteLLM for the runtime cache, returning `None` on any

@@ -179,4 +179,4 @@ $ rimz list-pets --json
 ]
 ```
 
-The terminal preview fetches each built-in sprite sheet over HTTPS into `~/.rimz/cache/pets/v1/assets/` on first use and reads installed pets from disk. With `RIMZ_PETS_OFFLINE` set to any value it reads the cache only. A pet that cannot load leaves an empty slot, and the grid ends with `(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)`; the command still exits 0. Render tiers, custom sheets, and petdex installs are in the [pets guide](../../guide/pets.md).
+The terminal preview fetches each built-in sprite sheet over HTTPS into `~/.rimz/cache/pets/v1/assets/` on first use and reads installed pets from disk. With `RIMZ_PETS_OFFLINE=1` it reads the cache only. A pet that cannot load leaves an empty slot, and the grid ends with `(some pets unavailable - check network, or RIMZ_PETS_OFFLINE serves cache only)`; the command still exits 0. Render tiers, custom sheets, and petdex installs are in the [pets guide](../../guide/pets.md).

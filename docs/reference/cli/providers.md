@@ -84,7 +84,7 @@ A plain run reuses the same caches the sidebar keeps, and refreshes only what is
 | Windows, paid usage, reset credits | Read from the provider's usage API for each logged-in account whose last read is older than 5 minutes, or 1 hour after a read that failed on missing or rejected credentials. Providers without a usage API show the windows their agents last reported. | Read now for every logged-in account of the selected kinds. |
 | Spend | The last published `provider-spending.json`. | Same. |
 
-Setting `RIMZ_OAUTH_USAGE_OFFLINE` skips the usage API reads, with or without `--refresh`.
+Setting `RIMZ_OAUTH_USAGE_OFFLINE=1` skips the usage API reads, with or without `--refresh`. Any value but `0`, `false`, or empty turns it on, so `RIMZ_OAUTH_USAGE_OFFLINE=0` leaves the reads running.
 
 Rooms, the sidebar, and concurrent `rimz providers` runs share one probe and one usage read per account at a time, so `--refresh` in a loop does not multiply provider requests.
 

@@ -50,7 +50,7 @@ A breakdown entry under 1% of its section, and any entry past the row cap, folds
 
 A one-shot run outside a room can therefore print figures from the last time anything refreshed the cache. Run `rimz stats --refresh`, or open a room, to bring them up to date.
 
-Every run except `--assists` creates RimZ's shared state directories when they are missing. Beyond that, only the transcript walk writes files or uses the network. The walk writes the spending cache, its walk cursor, and the price-table cache beside it, unless another process is already writing them. It fetches the price tables from LiteLLM and models.dev when the cached table is more than a week old, or sooner when your history holds models it has no price for. Set `RIMZ_PRICING_OFFLINE` to any value to skip every fetch; prices then come from the cached table and the table built into the binary. The walk and pricing are described in [spending internals](../../internals/agents/spending.md).
+Every run except `--assists` creates RimZ's shared state directories when they are missing. Beyond that, only the transcript walk writes files or uses the network. The walk writes the spending cache, its walk cursor, and the price-table cache beside it, unless another process is already writing them. It fetches the price tables from LiteLLM and models.dev when the cached table is more than a week old, or sooner when your history holds models it has no price for. Set `RIMZ_PRICING_OFFLINE=1` to skip every fetch (`0`, `false`, and an empty value leave fetching on); prices then come from the cached table and the table built into the binary. The walk and pricing are described in [spending internals](../../internals/agents/spending.md).
 
 ## The held dashboard
 

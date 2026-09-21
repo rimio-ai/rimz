@@ -417,8 +417,8 @@ surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/utils.rs"
-# `tokens` joins `path` and `time` as a cross-domain helper.
-surface-budget = 3
+# `tokens` and `env` join `path` and `time` as cross-domain helpers.
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/web"
@@ -553,6 +553,7 @@ allowed-dependencies = [
     "disk::paths",
     "sidebar",
     "sidebar_pane",
+    "utils::env",
 ]
 surface-budget = 26
 

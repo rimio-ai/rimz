@@ -353,7 +353,7 @@ fn retrying<T>(
 }
 
 fn offline() -> bool {
-    env::var_os("RIMZ_PETS_OFFLINE").is_some()
+    crate::utils::env::flag_enabled("RIMZ_PETS_OFFLINE")
 }
 
 fn asset_path(file: &str) -> PathBuf {

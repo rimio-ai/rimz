@@ -216,7 +216,7 @@ The claim is what makes the helper safe across rooms. Under the shared credits l
 | `OAUTH_USAGE_SETTLED_TTL` | 1 hour | a login whose last read settled as an auth failure (missing or rejected credentials) and whose credential stamp is unchanged |
 | `ACCOUNT_USAGE_CLAIM_TTL` | 90 seconds | the lease on each helper segment |
 
-A changed published scope, credential stamp, or account key reopens the claim at once. `RIMZ_OAUTH_USAGE_OFFLINE` disables account-usage fetches for the process tree.
+A changed published scope, credential stamp, or account key reopens the claim at once. `RIMZ_OAUTH_USAGE_OFFLINE=1` disables account-usage fetches for the process tree; `0`, `false`, and an empty value read as off.
 
 The helper runs two segments. First it folds a realtime account reading when the adapter has one (Codex's app-server) and publishes it to the rate-limit cache, then renews the claim. Then it runs the direct query and publishes again. A missing, replaced, or lock-contended claim cannot renew, and the direct segment does not start; completion re-checks the nonce so a superseded writer is rejected. Both segments publish an `AccountUsageSnapshot`: windows go through `fuse_window`, and plan, paid usage, and reset credits go through one cache conversion. Direct-query windows are authoritative and merge after the realtime fold, so a fresh credential read replaces a stale realtime process. A detached writer waits on the bounded rate-cache lock and publishes before returning; the producer's per-frame path falls back to a non-blocking read under contention.
 

@@ -17,7 +17,7 @@ use crate::agents::context::AgentRateLimits;
 /// `true` when direct provider account-usage fetches are disabled for this
 /// process (tests, CI, air-gapped runs).
 pub(crate) fn oauth_usage_offline() -> bool {
-    std::env::var_os("RIMZ_OAUTH_USAGE_OFFLINE").is_some()
+    crate::utils::env::flag_enabled("RIMZ_OAUTH_USAGE_OFFLINE")
 }
 
 /// Why an OAuth usage HTTP probe failed, carried structured (so a status code is

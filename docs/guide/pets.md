@@ -115,7 +115,7 @@ Two things outside `[theme.pets]` override the tier. `[theme.display] pixel = "o
 
 A built-in pet is fetched once over HTTPS from the public Codex pets CDN, and a URL pet from the host you named. Both land under `~/.rimz/cache/pets/`, so a pet is fetched once per machine and every room after that reads it off disk. Petdex installs and local sheets are read from disk and make no request at all.
 
-Set `RIMZ_PETS_OFFLINE` to any value, `0` included, and RimZ serves the cache only: a pet already cached still draws, and one that is not fails as unavailable instead of reaching the network.
+Set `RIMZ_PETS_OFFLINE=1` and RimZ serves the cache only: a pet already cached still draws, and one that is not fails as unavailable instead of reaching the network. The variable reads its value, so `RIMZ_PETS_OFFLINE=0`, `false`, or an empty value leaves fetching on.
 
 The request carries the asset URL and nothing else. Prompts, transcripts, pane text, workspace paths, and provider credentials never travel on this path. A sheet is image data, and RimZ decodes it rather than running anything from it; a `pet.json` manifest holds a path to that image and no commands. The pet's place in the wider threat model is one bullet in [security](./security.md#what-leaves-your-machine), and the cache layout, the timeouts, and the retry policy are in the [pets internals](../internals/sidebar/pets.md#assets).
 
