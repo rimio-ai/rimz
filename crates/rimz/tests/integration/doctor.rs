@@ -160,7 +160,7 @@ fn doctor_preserves_existing_workspace_record() {
 }
 
 #[test]
-fn doctor_json_reports_legacy_roots_and_a_superseded_agents_home() {
+fn doctor_json_reports_legacy_roots_and_an_agents_home_override() {
     let env = Env::new();
     let legacy = env.state_root().join("rimz");
     std::fs::create_dir_all(&legacy).expect("seed legacy root");
@@ -507,6 +507,34 @@ fn doctor_classifies_an_unparseable_project_config() {
             path.display()
         )
     );
+}
+
+#[test]
+fn doctor_ttyd_follows_web_enabled_on_both_backends() {
+    for (mux, version_arg, version) in [
+        ("zellij", "--version", "zellij 0.44.3"),
+        ("tmux", "-V", "tmux 3.5"),
+    ] {
+        let env = Env::new();
+        let stub_dir = stub_mux_version(&env, "mux-bin", mux, version_arg, version);
+        let path = path_with_only(&[stub_dir]);
+
+        for enabled in [true, false] {
+            if !enabled {
+                write_machine_config(&env, "[web]\nenabled = false\n");
+            }
+            let report = doctor_json(
+                &env.rimz()
+                    .args(["doctor", "--json", "--mux", mux])
+                    .env("PATH", &path)
+                    .output()
+                    .expect("spawn doctor"),
+            );
+            let ready = &report["mux"]["ready"];
+            assert_eq!(ready["name"], mux, "{report}");
+            assert_eq!(ready.get("ttyd").is_some(), enabled, "{report}");
+        }
+    }
 }
 
 #[test]
