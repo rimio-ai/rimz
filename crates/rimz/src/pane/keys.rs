@@ -46,7 +46,7 @@ pub enum NamedKey {
 pub struct UnknownKey(pub String);
 
 impl NamedKey {
-    pub fn tmux_name(self) -> &'static str {
+    pub(crate) fn tmux_name(self) -> &'static str {
         match self {
             Self::Enter => "Enter",
             Self::Escape => "Escape",

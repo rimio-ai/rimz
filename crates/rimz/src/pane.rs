@@ -54,7 +54,7 @@ pub(crate) const COMMAND_MARKER: &str = "remote-control";
 pub(crate) const APP_SERVER_MARKER: &str = "app-server";
 
 /// Whether a command line is one of RimZ's managed daemon hosts.
-pub fn command_is_host(command: &str) -> bool {
+pub(crate) fn command_is_host(command: &str) -> bool {
     command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
 }
 
