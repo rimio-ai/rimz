@@ -2,9 +2,9 @@
 
 Copy-ready configuration and integration samples. The multiplexer configs are the full versions of the baselines walked through in [Zellij and tmux baselines](../docs/guide/multiplexer.md).
 
-## tmux — `tmux/`
+## tmux
 
-Four self-contained modules, so you adopt what you want by adding `source-file` lines to your own `~/.tmux.conf` — your config stays yours, and `git pull` updates the modules in place:
+Four self-contained modules under [`tmux/`](./tmux/), so you adopt what you want by adding `source-file` lines to your own `~/.tmux.conf`. Your config stays yours, and `git pull` updates the modules in place:
 
 | Module | Carries |
 | --- | --- |
@@ -22,18 +22,18 @@ tmux source-file ~/.tmux.conf
 
 `agents.conf` needs tmux 3.5 or newer, the same floor RimZ requires. On a machine with an older distro tmux, upgrade first ([installation](../docs/guide/installation.md#install-zellij-or-tmux)).
 
-## Zellij — `zellij/`
+## Zellij
 
-[`config.kdl`](./zellij/config.kdl) is a complete starting point: locked-mode-first behavior, the `tokyo-night` theme, and locked-mode Alt chords mirroring the tmux module. Zellij reads one config file, so start fresh with a copy, or lift blocks into an existing config — unlisted keys keep Zellij's defaults either way:
+[`zellij/config.kdl`](./zellij/config.kdl) is a complete starting point: locked-mode-first behavior, the `tokyo-night` theme, and locked-mode Alt chords mirroring the tmux module. Zellij reads one config file, so start fresh with a copy, or lift blocks into an existing config; unlisted keys keep Zellij's defaults either way:
 
 ```sh
 cp examples/zellij/config.kdl ~/.config/zellij/config.kdl
 zellij setup --check
 ```
 
-## Agent teams — `teams/`
+## Agent teams
 
-Three RimZ drop-in team fragments, one per shape of work: [`forge`](./teams/forge/) plans, builds, and reviews a change worth designing first; [`mill`](./teams/mill/) puts an architect in the lead for a refactor that has to remove surface; [`spot`](./teams/spot/) drops the design stage entirely for a small fix. Each directory is a `team.toml` declaring the roles, layout, pipeline stages, git-excluded scratch files, and a `ci.failed` → `coder` signal binding, plus one Markdown prompt per role. Their `blackboard.md` carries the Stage line and append-only Progress history; forge's first `rimz teams flip <stage> "<progress note>"` opens the board and records each later hand-off. The [teams README](./teams/README.md) walks all three: pipelines, hand-offs, install, and customization.
+Three drop-in team bundles under [`teams/`](./teams/), one per shape of work: [`forge`](./teams/forge/) plans, builds, and reviews a change worth designing first; [`mill`](./teams/mill/) puts an architect in the lead for a refactor that has to remove surface; [`spot`](./teams/spot/) drops the design stage entirely for a small fix. Each directory holds the team definition as one Markdown file (`forge/forge.md`), whose frontmatter declares the leader, the layout, the roles, the pipeline stages each role owns, and forge's `ci.failed` binding to the coder, plus an `agents/` directory with one Markdown prompt per role. Their `blackboard.md` carries the Stage line and append-only Progress history; forge's first `rimz teams flip <stage> "<progress note>"` opens the board and records each later hand-off. The [teams README](./teams/README.md) walks all three: pipelines, hand-offs, install, and customization.
 
 Install a release-matched bundle from GitHub:
 
@@ -45,20 +45,20 @@ rimz teams install spot
 From a repository checkout, copying remains the local-edit alternative:
 
 ```sh
-mkdir -p ~/.agents/{teams,agents}
-cp -n examples/teams/forge/forge.md ~/.agents/teams/
-cp -n examples/teams/forge/agents/*.md ~/.agents/agents/
+mkdir -p ~/.rimz/{teams,agents}
+cp -n examples/teams/forge/forge.md ~/.rimz/teams/
+cp -n examples/teams/forge/agents/*.md ~/.rimz/agents/
 rimz agents validate
 ```
 
 `rimz teams install forge --force` replaces existing target definitions; the plain install refuses them. Each bundle includes team-prefixed agent definitions and shared `claude.md` and `codex.md` base prompts.
 
-Launch with `rimz teams forge -w feat-x`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to its role handle — `@planner`, `@architect`, `@coder`, `@reviewer`. The signal binding is armed when the coder registers, scoped to its worktree, and retired with that session. Failed CI delivers a `Type: SIGNAL` message directly to the coder, not whoever pushed. Without an explicit branch/path match, launching this binding on the root checkout is refused; use `-w` or launch from a linked worktree. `rimz teams show forge#feat-x` separates declared bindings from live subscriptions.
+Launch with `rimz teams forge -w feat-x`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to its role handle (`@planner`, `@architect`, `@coder`, `@reviewer`). The signal binding is armed when the coder registers, scoped to its worktree, and retired with that session. Failed CI delivers a `Type: SIGNAL` message directly to the coder, not whoever pushed. Without an explicit branch/path match, launching this binding on the root checkout is refused; use `-w` or launch from a linked worktree. `rimz teams show forge#feat-x` separates declared bindings from live subscriptions.
 
 The `claude` and `codex` CLIs must be on `PATH`, for all three teams. Agent Markdown frontmatter pins models (`fable`, `opus`, the current GPT) and tools; adjust them there to taste. The prompts also name helper skills that are not shipped here, `pr` among them, and state the outcome alongside each, so a role without one falls back to plain `git` or `gh`.
 
 The team definition's Markdown body carries its pipeline; see the [bundle guide](./teams/README.md) for customization.
 
-## Third-party agent plugin — `agent-plugin/`
+## Third-party agent plugin
 
-[`agent-plugin`](./agent-plugin/) is a complete ScriptBot process plugin: a manifest, scripted agent, canonical event shim behavior, priced spend probe, account probe, and fixture transcript. Its [README](./agent-plugin/README.md) installs the bundle and launches the demo; the public contract is [agent-plugins.md](../docs/reference/agent-plugins.md).
+[`agent-plugin/`](./agent-plugin/) is a complete ScriptBot process plugin: a manifest, scripted agent, canonical event shim behavior, priced spend probe, account probe, and fixture transcript. Its [README](./agent-plugin/README.md) installs the bundle and launches the demo; the public contract is [agent-plugins.md](../docs/reference/agent-plugins.md).
