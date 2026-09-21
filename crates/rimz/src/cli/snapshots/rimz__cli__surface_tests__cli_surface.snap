@@ -799,6 +799,7 @@ rimz doctor
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
+    --no-log-text  [action=set-true takes=0..=0]
     --output <PATH>  [action=set takes=1..=1]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]

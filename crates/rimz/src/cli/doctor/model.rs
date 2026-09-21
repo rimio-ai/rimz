@@ -262,6 +262,7 @@ pub(super) enum MuxLog {
         since: Option<Timestamp>,
         problem_records: usize,
         omitted_issue_groups: usize,
+        log_text_omitted: bool,
         issues: Vec<MuxLogIssue>,
     },
     Missing {

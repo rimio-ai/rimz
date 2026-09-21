@@ -571,7 +571,10 @@ fn doctor_reports_zellij_server_log_excerpt() {
     std::fs::create_dir_all(log_path.parent().expect("log parent")).expect("mkdir log dir");
     std::fs::write(
         &log_path,
-        "INFO boot\nWARN first warning\nINFO WARN mid-line ignored\nERROR failed\nPanic occured: boom\n",
+        concat!(
+            "INFO boot\nWARN first warning\nINFO WARN mid-line ignored\nERROR failed\nPanic occured: boom\n",
+            "ERROR a non-fatal error occured\nCaused by:\n    0: reading /private/doctor-path-marker\n    1: doctor-cause-marker\n",
+        ),
     )
     .expect("write zellij log");
 
@@ -588,11 +591,12 @@ fn doctor_reports_zellij_server_log_excerpt() {
     assert_eq!(log["path"], log_path.display().to_string());
     assert_eq!(log["scope"]["kind"], "host_user");
     assert_eq!(log["scope"]["uid"], uid);
-    assert_eq!(log["logical_records"], 5);
-    assert_eq!(log["problem_records"], 3);
+    assert_eq!(log["logical_records"], 6);
+    assert_eq!(log["problem_records"], 4);
+    assert_eq!(log["log_text_omitted"], false);
     assert_eq!(log["omitted_issue_groups"], 0);
     let issues = log["issues"].as_array().expect("issues");
-    assert_eq!(issues.len(), 3, "{issues:?}");
+    assert_eq!(issues.len(), 4, "{issues:?}");
     assert_eq!(issues[0]["source_severity"], "warn");
     assert_eq!(issues[0]["state"], "investigate");
     assert_eq!(issues[0]["impact"], "warn");
@@ -602,6 +606,46 @@ fn doctor_reports_zellij_server_log_excerpt() {
     assert_eq!(issues[2]["source_severity"], "panic");
     assert_eq!(issues[2]["impact"], "alarm");
     assert_eq!(issues[2]["samples"][0], "Panic occured: boom");
+    assert_eq!(
+        issues[3]["summary"],
+        "reading /private/doctor-path-marker: doctor-cause-marker"
+    );
+    assert!(
+        issues[3]["samples"][0]
+            .as_str()
+            .unwrap()
+            .contains("Caused by:\n")
+    );
+
+    let stripped = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json", "--no-log-text"])
+            .env("PATH", path_with_only(std::slice::from_ref(&stub_dir)))
+            .env("TMPDIR", &tmp)
+            .output()
+            .expect("spawn stripped doctor"),
+    );
+    let serialized = serde_json::to_string(&stripped).expect("serialize report");
+    for marker in [
+        "first warning",
+        "ERROR failed",
+        "Panic occured: boom",
+        "/private/doctor-path-marker",
+        "doctor-cause-marker",
+        "Caused by:",
+    ] {
+        assert!(!serialized.contains(marker), "leaked {marker}");
+    }
+    let stripped_log = &stripped["mux"]["ready"]["log"];
+    assert_eq!(stripped_log["log_text_omitted"], true);
+    assert_eq!(stripped_log["problem_records"], log["problem_records"]);
+    let stripped_issues = stripped_log["issues"].as_array().expect("stripped issues");
+    assert_eq!(stripped_issues.len(), issues.len());
+    for (included, omitted) in issues.iter().zip(stripped_issues) {
+        assert_eq!(included["occurrences"], omitted["occurrences"]);
+        assert!(omitted["samples"].as_array().unwrap().is_empty());
+        assert_eq!(omitted["evidence_truncated"], false);
+    }
 
     std::fs::write(&log_path, "INFO boot\nINFO WARN still ignored\n").expect("rewrite zellij log");
     let clean = doctor_json(

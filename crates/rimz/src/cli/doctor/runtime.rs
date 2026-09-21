@@ -119,6 +119,7 @@ pub(super) fn collect_mux(
     mux_hint: Option<MuxName>,
     ws: Option<&rimz::ResolvedWorkspace>,
     history_cleared_at: Option<jiff::Timestamp>,
+    log_text: super::mux_log::LogText,
 ) -> model::Probe<model::Mux> {
     let mux = match rimz::mux::auto_detect_backend(mux_hint) {
         Ok(mux) => mux,
@@ -141,7 +142,7 @@ pub(super) fn collect_mux(
         MuxName::Tmux => model::Capabilities::Tmux(collect_tmux_capabilities()),
     };
     let binaries = collect_mux_binaries(mux);
-    let log = super::mux_log::collect(mux, history_cleared_at);
+    let log = super::mux_log::collect(mux, history_cleared_at, log_text);
     let mut report = model::Mux {
         name: mux,
         version,

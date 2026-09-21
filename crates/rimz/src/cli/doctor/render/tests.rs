@@ -534,6 +534,7 @@ fn mux_log_spends_lines_on_issues_and_counts_the_lifecycle_noise() {
             since: Some(Timestamp::now() - std::time::Duration::from_secs(300)),
             problem_records: 1_190,
             omitted_issue_groups: 0,
+            log_text_omitted: false,
             issues: vec![
                 log_issue(
                     "a client left the session",
@@ -588,6 +589,34 @@ fn mux_log_spends_lines_on_issues_and_counts_the_lifecycle_noise() {
 }
 
 #[test]
+fn mux_log_names_omitted_text_only_when_requested() {
+    for log_text_omitted in [false, true] {
+        let mux = Mux {
+            log: MuxLog::Ready {
+                path: "/tmp/zellij.log".to_owned(),
+                scope: LogScope::Server,
+                size_bytes: 0,
+                scanned_bytes: 0,
+                logical_records: 0,
+                records_before_cutoff: 0,
+                since: None,
+                problem_records: 0,
+                omitted_issue_groups: 0,
+                log_text_omitted,
+                issues: Vec::new(),
+            },
+            ..mux_fixture()
+        };
+        let out = strip(|w| render_mux(w, &Probe::Ready(mux), &mut Tally::default()));
+        assert_eq!(
+            out.contains("--no-log-text: no log record text in this report"),
+            log_text_omitted,
+            "{out}"
+        );
+    }
+}
+
+#[test]
 fn mux_log_carries_raw_evidence_for_an_alarm() {
     let mux = Mux {
         log: MuxLog::Ready {
@@ -600,6 +629,7 @@ fn mux_log_carries_raw_evidence_for_an_alarm() {
             since: None,
             problem_records: 1,
             omitted_issue_groups: 0,
+            log_text_omitted: false,
             issues: vec![log_issue(
                 "Panic occurred",
                 DoctorState::Investigate,

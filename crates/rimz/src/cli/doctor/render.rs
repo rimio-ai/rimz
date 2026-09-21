@@ -593,6 +593,7 @@ fn push_mux_log(kv: &mut KeyVals, tally: &mut Tally, log: &MuxLog) {
         scanned_bytes,
         records_before_cutoff,
         since,
+        log_text_omitted,
         ..
     } = log
     else {
@@ -627,13 +628,16 @@ fn push_mux_log(kv: &mut KeyVals, tally: &mut Tally, log: &MuxLog) {
         }
         LogScope::Server => "written by this room's tmux server".to_owned(),
     };
-    kv.push_lines(
-        "log",
-        vec![
-            vec![cell(home_relative(path)).fg(palette::body())],
-            vec![cell(format!("read {reach} · {scope}")).fg(palette::faint())],
-        ],
-    );
+    let mut lines = vec![
+        vec![cell(home_relative(path)).fg(palette::body())],
+        vec![cell(format!("read {reach} · {scope}")).fg(palette::faint())],
+    ];
+    if *log_text_omitted {
+        lines.push(vec![
+            cell("--no-log-text: no log record text in this report").fg(palette::faint()),
+        ]);
+    }
+    kv.push_lines("log", lines);
 }
 
 fn session_health_cell(tally: &mut Tally, health: &Probe<SessionHealth>) -> Cell {
