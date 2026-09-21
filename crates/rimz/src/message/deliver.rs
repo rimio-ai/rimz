@@ -135,6 +135,19 @@ pub enum DeliveryVerdict {
     Ready,
 }
 
+/// The blocker sentence for a `NoPane` verdict, without the receiver; the sweep records it as `last_error` and the CLI appends the target.
+pub fn no_pane_blocker(pinned_pane_id: Option<&PaneId>) -> String {
+    match pinned_pane_id {
+        Some(pane_id) => format!("stuck: pinned pane {pane_id} is not live"),
+        None => "stuck: no live pane".to_owned(),
+    }
+}
+
+enum DeliveryReport {
+    Sent,
+    Stopped(Option<DeliveryVerdict>),
+}
+
 /// Build verbatim System text against an agent card; every synthetic record carries the agent's channel and submits.
 fn synthetic_record(
     workspace_id: crate::ids::WorkspaceId,
@@ -210,7 +223,10 @@ pub fn deliver_one(
     if let Ok(runtime) = RuntimePaths::for_project_root(&workspace.project_root) {
         snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime));
     }
-    attempt_delivery(workspace, store, message_id, policy, &pending, &snapshot)
+    Ok(matches!(
+        attempt_delivery(workspace, store, message_id, policy, &pending, &snapshot)?,
+        DeliveryReport::Sent
+    ))
 }
 
 fn attempt_delivery(
@@ -220,7 +236,7 @@ fn attempt_delivery(
     policy: DeliveryPolicy,
     pending: &[MessageRecord],
     snapshot: &SidebarSnapshot,
-) -> Result<bool> {
+) -> Result<DeliveryReport> {
     if let Some(message) = pending
         .iter()
         .find(|message| &message.message_id == message_id)
@@ -229,17 +245,19 @@ fn attempt_delivery(
             Ok(false) => {}
             Ok(true) => {
                 register_message_wake(workspace, store)?;
-                return Ok(false);
+                return Ok(DeliveryReport::Stopped(None));
             }
             Err(error) => {
                 tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
-                return Ok(false);
+                return Ok(DeliveryReport::Stopped(None));
             }
         }
     }
     let now = Timestamp::now();
-    let Some(candidate) = delivery_candidate(pending, snapshot, message_id, policy, now) else {
-        return Ok(false);
+    let candidate = match delivery_candidate(pending, snapshot, message_id, policy, now) {
+        Candidacy::Ready(candidate) => candidate,
+        Candidacy::Refused(verdict) => return Ok(DeliveryReport::Stopped(Some(verdict))),
+        Candidacy::Gone => return Ok(DeliveryReport::Stopped(None)),
     };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_BEFORE_CLAIM");
@@ -252,7 +270,7 @@ fn attempt_delivery(
             .map(|message| vec![message]),
     };
     let Some(claimed) = claimed else {
-        return Ok(false);
+        return Ok(DeliveryReport::Stopped(None));
     };
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_AFTER_CLAIM");
@@ -260,7 +278,7 @@ fn attempt_delivery(
         Ok(false) => {}
         Ok(true) => {
             register_message_wake(workspace, store)?;
-            return Ok(false);
+            return Ok(DeliveryReport::Stopped(None));
         }
         Err(error) => {
             tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
@@ -270,7 +288,7 @@ fn attempt_delivery(
                 &workspace.session_name,
             )?;
             register_message_wake(workspace, store)?;
-            return Ok(false);
+            return Ok(DeliveryReport::Stopped(None));
         }
     }
     // Hook delivery handles one claimed batch; the caller's settle owns any pre-delivery spacing, so this pacer's first tick stays a no-op.
@@ -297,7 +315,11 @@ fn attempt_delivery(
         &mut live_send,
     )?;
     register_message_wake(workspace, store)?;
-    Ok(matches!(outcome, AttemptOutcome::Sent { .. }))
+    Ok(if matches!(outcome, AttemptOutcome::Sent { .. }) {
+        DeliveryReport::Sent
+    } else {
+        DeliveryReport::Stopped(None)
+    })
 }
 
 fn cancel_joined_subagent_report(
@@ -474,7 +496,7 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
             continue;
         };
         if heads_seen.insert(head.message_id.to_string()) {
-            let delivered = attempt_delivery(
+            let report = attempt_delivery(
                 workspace,
                 store,
                 &head.message_id,
@@ -482,8 +504,18 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
                 &pending,
                 snapshot.expect("queued delivery requires a resolution snapshot"),
             )?;
-            if !delivered {
-                store.defer_message_wake(&head.message_id, now + delivery_window)?;
+            if let DeliveryReport::Stopped(verdict) = report {
+                let blocker = match verdict {
+                    Some(DeliveryVerdict::NoPane { pinned_pane_id }) => {
+                        Some(no_pane_blocker(pinned_pane_id.as_ref()))
+                    }
+                    _ => None,
+                };
+                store.defer_message_wake(
+                    &head.message_id,
+                    now + delivery_window,
+                    blocker.as_deref(),
+                )?;
             }
         }
     }
@@ -940,39 +972,49 @@ pub(super) fn evaluate_after_condition(
     }
 }
 
+enum Candidacy<'a> {
+    Ready(Box<DeliveryCandidate<'a>>),
+    Refused(DeliveryVerdict),
+    Gone,
+}
+
 fn delivery_candidate<'a>(
     pending: &[MessageRecord],
     snapshot: &'a SidebarSnapshot,
     message_id: &MessageId,
     policy: DeliveryPolicy,
     now: Timestamp,
-) -> Option<DeliveryCandidate<'a>> {
-    let message = pending
+) -> Candidacy<'a> {
+    let Some(message) = pending
         .iter()
         .find(|message| message.message_id == *message_id)
-        .cloned()?;
+        .cloned()
+    else {
+        return Candidacy::Gone;
+    };
     let evaluation = evaluate_delivery(&message, pending, snapshot, now);
     let check = &evaluation.check;
     if matches!(policy, DeliveryPolicy::Boundary)
         && (!message.is_deliverable(now) || !check.fifo.head || !check.gate_ready())
     {
-        return None;
+        return Candidacy::Refused(check.verdict());
     }
     if check.ask.waiting && !matches!(policy, DeliveryPolicy::Steer { force: true }) {
-        return None;
+        return Candidacy::Refused(check.verdict());
     }
-    let agent = evaluation.agent?;
+    let (Some(agent), Some(binding)) = (evaluation.agent, evaluation.binding) else {
+        return Candidacy::Refused(check.verdict());
+    };
     let status = agent.effective_status();
-    let binding = evaluation.binding?;
     let target = binding.pane;
     let bound = binding.exact_agent;
-    Some(DeliveryCandidate {
+    Candidacy::Ready(Box::new(DeliveryCandidate {
         message,
         status,
         snapshot,
         target,
         bound,
-    })
+    }))
 }
 
 pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) -> Result<()> {
@@ -1249,29 +1291,31 @@ mod tests {
             DeliveryVerdict::Ready
         );
         assert!(
-            delivery_candidate(
-                &pending,
-                &live,
-                &candidate.message_id,
-                DeliveryPolicy::Boundary,
-                now,
-            )
-            .is_none(),
+            matches!(
+                delivery_candidate(
+                    &pending,
+                    &live,
+                    &candidate.message_id,
+                    DeliveryPolicy::Boundary,
+                    now,
+                ),
+                Candidacy::Refused(DeliveryVerdict::Ready)
+            ),
             "dynamic truth explains readiness but cannot cross claim boundary"
         );
 
         candidate.after[0].met_at = Some(now);
         let pending = vec![candidate.clone()];
-        assert!(
+        assert!(matches!(
             delivery_candidate(
                 &pending,
                 &live,
                 &candidate.message_id,
                 DeliveryPolicy::Boundary,
                 now,
-            )
-            .is_some()
-        );
+            ),
+            Candidacy::Ready(_)
+        ));
     }
 
     #[test]
