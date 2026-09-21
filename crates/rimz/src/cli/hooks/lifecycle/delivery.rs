@@ -5,6 +5,38 @@ use super::*;
 #[cfg(test)]
 mod tests;
 
+pub(super) fn in_flight_messages_for_lifecycle(
+    store: &Store,
+    agent: &AgentDefinition,
+    recorded: &RecordedLifecycle,
+) -> Vec<rimz::store::message::MessageRecord> {
+    if !matches!(
+        recorded.observation.signal,
+        LifecycleSignal::TurnStarted { .. }
+    ) {
+        return Vec::new();
+    }
+    let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
+        return Vec::new();
+    };
+    let kind = agent.spec().kind_id();
+    let card = rimz::agents::AgentCardRef::new(
+        &kind,
+        agent_id,
+        recorded.observation.agent_name.as_deref(),
+    );
+    match store.list_messages() {
+        Ok(messages) => messages
+            .into_iter()
+            .filter(|record| record.in_flight() && record.same_card(card))
+            .collect(),
+        Err(err) => {
+            warn!(error = %err, "lifecycle: failed to read in-flight messages");
+            Vec::new()
+        }
+    }
+}
+
 pub(super) fn confirm_sent_message_for_lifecycle(
     store: &Store,
     agent: &AgentDefinition,
@@ -51,7 +83,7 @@ pub(super) fn record_user_input_for_lifecycle(
     workspace: &ResolvedWorkspace,
     agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
-    delivered: &[rimz::store::message::MessageRecord],
+    sections: &[rimz::store::message::PromptSection<'_>],
     supervised: bool,
     state_root: Option<&std::path::Path>,
 ) {
@@ -62,19 +94,11 @@ pub(super) fn record_user_input_for_lifecycle(
     {
         return;
     }
-    if !delivered.is_empty() && !delivered.iter().any(|record| record.is_user_input()) {
-        let delivered_refs = delivered.iter().collect::<Vec<_>>();
-        let mixed_submit = recorded
-            .observation
-            .prompt
-            .as_deref()
-            .and_then(|prompt| {
-                rimz::store::message::align_submitted_prompt(prompt, &delivered_refs)
-            })
-            .is_some_and(|(leading, _, trailing)| leading.is_some() || trailing.is_some());
-        if !mixed_submit {
-            return;
-        }
+    if !sections.iter().any(|section| {
+        section.origin == rimz::store::message::SectionOrigin::Human
+            && section.record.is_none_or(|record| record.is_user_input())
+    }) {
+        return;
     }
     let record = rimz::agents::spending::user_input::UserInputRecord {
         at: jiff::Timestamp::now(),

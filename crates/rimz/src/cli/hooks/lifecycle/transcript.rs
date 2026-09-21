@@ -174,7 +174,7 @@ pub(super) fn latest_native_ask_id(
 pub(super) struct ConversationInput<'a> {
     pub(super) assistant_message: Option<&'a str>,
     pub(super) questions: &'a [rimz::transcript::AskQuestion],
-    pub(super) delivered: &'a [rimz::store::message::MessageRecord],
+    pub(super) sections: &'a [rimz::store::message::PromptSection<'a>],
     pub(super) run_id: Option<&'a rimz::RunId>,
 }
 
@@ -188,7 +188,7 @@ pub(super) fn record_conversation(
     let ConversationInput {
         assistant_message,
         questions,
-        delivered,
+        sections,
         run_id,
     } = input;
     let observation = &recorded.observation;
@@ -236,132 +236,60 @@ pub(super) fn record_conversation(
         LifecycleSignal::TurnStarted { .. } => {
             let mut entries = Vec::new();
             let mut matched_ids = Vec::new();
-            let mut delivered_cursor = 0;
-            if let Some(prompt) = observation
-                .prompt
-                .as_deref()
-                .map(str::trim)
-                .filter(|prompt| !prompt.is_empty())
-            {
+            if !sections.is_empty() {
                 let mut open_ask_id = recorded
                     .waiting_cleared
                     .then(|| latest_open_native_ask(store, agent.spec().kind, agent_id.as_str()))
                     .flatten()
                     .and_then(|ask| ask.id);
-                let delivered_refs = delivered.iter().collect::<Vec<_>>();
-                let aligned = rimz::store::message::align_submitted_prompt(prompt, &delivered_refs);
-                let batch_aligned = aligned.is_some();
-                let segments = if let Some((leading, aligned, trailing)) = aligned {
-                    let mut segments = Vec::with_capacity(aligned.len() + 2);
-                    if let Some(leading) = leading {
-                        segments.push((leading, false));
-                    }
-                    segments.extend(aligned.into_iter().map(|segment| (segment, true)));
-                    if let Some(trailing) = trailing {
-                        segments.push((trailing, false));
-                    }
-                    segments
-                } else {
-                    rimz::store::message::split_batched_prompt(prompt)
-                        .into_iter()
-                        .map(|segment| (segment, false))
-                        .collect()
-                };
-                for (segment, aligned_record) in segments {
-                    let segment = segment.trim();
-                    if segment.is_empty() {
-                        continue;
-                    }
-                    let (mut entry, delivered_text) =
-                        match rimz::store::message::parse_message_header(segment) {
-                            Some((
-                                header @ (rimz::store::message::HeaderKind::Agent
-                                | rimz::store::message::HeaderKind::Subagent
-                                | rimz::store::message::HeaderKind::Wait
-                                | rimz::store::message::HeaderKind::Signal
-                                | rimz::store::message::HeaderKind::Stage
-                                | rimz::store::message::HeaderKind::Deadline),
-                                sender,
-                                body,
-                            )) => {
-                                let delivered_text = body.clone();
-                                let kind = match header {
-                                    rimz::store::message::HeaderKind::Agent => {
-                                        rimz::transcript::TranscriptKind::Message
-                                    }
-                                    rimz::store::message::HeaderKind::Subagent => {
-                                        rimz::transcript::TranscriptKind::SubagentReport
-                                    }
-                                    rimz::store::message::HeaderKind::Wait
-                                    | rimz::store::message::HeaderKind::Signal
-                                    | rimz::store::message::HeaderKind::Stage
-                                    | rimz::store::message::HeaderKind::Deadline => {
-                                        rimz::transcript::TranscriptKind::Wait
-                                    }
-                                    rimz::store::message::HeaderKind::User => {
-                                        unreachable!("user header matched separately")
-                                    }
-                                };
-                                let mut entry = entry_base(kind, body);
-                                entry.from = Some(sender);
-                                (entry, delivered_text)
-                            }
-                            Some((rimz::store::message::HeaderKind::User, _, body)) => {
-                                let delivered_text = body.clone();
-                                (
-                                    entry_base(rimz::transcript::TranscriptKind::Prompt, body),
-                                    delivered_text,
-                                )
-                            }
-                            None => {
-                                let launch_brief = state
-                                    .filter(|state| state.is_launched_child())
-                                    .and_then(|state| {
-                                        let run = rimz::harness::run::load(store.paths(), run_id?)
-                                            .ok()?;
-                                        (run.subagent && run.prompt.trim() == segment)
-                                            .then_some(())?;
-                                        launched_parent_handle(
-                                            snapshot.as_ref()?,
-                                            state,
-                                            channel.as_deref(),
-                                        )
-                                    });
-                                let mut entry = entry_base(
-                                    if launch_brief.is_some() {
-                                        rimz::transcript::TranscriptKind::Message
-                                    } else {
-                                        rimz::transcript::TranscriptKind::Prompt
-                                    },
-                                    segment.to_owned(),
-                                );
-                                entry.from = launch_brief;
-                                (entry, segment.to_owned())
-                            }
-                        };
-                    let matched = if aligned_record {
-                        delivered.get(delivered_cursor).map(|message| (0, message))
-                    } else if !batch_aligned {
-                        delivered[delivered_cursor..]
-                            .iter()
-                            .enumerate()
-                            .find(|(_, message)| message.text == delivered_text)
-                    } else {
-                        None
+                for section in sections {
+                    use rimz::store::message::SectionOrigin;
+                    use rimz::transcript::TranscriptKind;
+                    let (kind, from) = match &section.origin {
+                        SectionOrigin::Human => (TranscriptKind::Prompt, None),
+                        SectionOrigin::Agent(handle) => {
+                            (TranscriptKind::Message, Some(handle.clone()))
+                        }
+                        SectionOrigin::Subagent(handle) => {
+                            (TranscriptKind::SubagentReport, Some(handle.clone()))
+                        }
+                        SectionOrigin::Notice(handle) => {
+                            (TranscriptKind::Wait, Some(handle.clone()))
+                        }
+                        SectionOrigin::Harness => (
+                            TranscriptKind::Prompt,
+                            Some(rimz::transcript::HARNESS_FROM.to_owned()),
+                        ),
                     };
-                    if let Some((offset, message)) = matched {
+                    let mut entry = entry_base(kind, section.text.clone());
+                    entry.from = from;
+                    if section.origin == SectionOrigin::Human && section.record.is_none() {
+                        let launch_brief = state
+                            .filter(|state| state.is_launched_child())
+                            .and_then(|state| {
+                                let run = rimz::harness::run::load(store.paths(), run_id?).ok()?;
+                                (run.subagent && run.prompt.trim() == section.text).then_some(())?;
+                                launched_parent_handle(
+                                    snapshot.as_ref()?,
+                                    state,
+                                    channel.as_deref(),
+                                )
+                            });
+                        if let Some(handle) = launch_brief {
+                            entry.entry = TranscriptKind::Message;
+                            entry.from = Some(handle);
+                        }
+                    }
+                    if let Some(message) = section.record {
                         entry.message_id = Some(message.message_id.clone());
                         entry.enqueued_at = Some(message.enqueued_at);
                         entry.reply_to = message.in_reply_to.clone();
-                        if matches!(&message.sender, rimz::store::message::MessageSender::System) {
-                            entry.from = Some(rimz::transcript::HARNESS_FROM.to_owned());
-                        }
                         matched_ids.push(message.message_id.clone());
-                        delivered_cursor += offset + 1;
                     }
                     // Only direct input answers an open ask; attributed queue
                     // records arrived through RimZ's separate delivery path.
-                    let fallback_prompt = if entry.message_id.is_none()
+                    let fallback_prompt = if section.origin == SectionOrigin::Human
+                        && entry.message_id.is_none()
                         && entry.entry == rimz::transcript::TranscriptKind::Prompt
                         && let Some(ask_id) = open_ask_id.take()
                     {

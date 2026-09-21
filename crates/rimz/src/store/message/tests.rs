@@ -7,6 +7,93 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn submitted_sections_cover_every_sender_and_body() {
+    let mut cases = vec![
+        (MessageSender::Human, SectionOrigin::Human),
+        (
+            agent_sender("coder", None),
+            SectionOrigin::Agent("@coder".to_owned()),
+        ),
+        (MessageSender::System, SectionOrigin::Harness),
+        (
+            MessageSender::Subagent {
+                kind: AgentKind::new_unchecked("claude"),
+                name: "child".to_owned(),
+            },
+            SectionOrigin::Subagent("@child".to_owned()),
+        ),
+    ];
+    for notice in [
+        HarnessNotice::SubagentReport,
+        HarnessNotice::Wait,
+        HarnessNotice::Signal,
+        HarnessNotice::Stage,
+        HarnessNotice::Other("future".to_owned()),
+    ] {
+        let origin = if notice == HarnessNotice::SubagentReport {
+            SectionOrigin::Subagent("@rimz".to_owned())
+        } else {
+            SectionOrigin::Notice("@rimz".to_owned())
+        };
+        cases.push((MessageSender::Harness { notice }, origin));
+    }
+    for (sender, origin) in cases {
+        for body in [MessageBody::Prompt, MessageBody::Command] {
+            let mut record = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+                .with_sender(sender.clone())
+                .with_body(body);
+            record.text = " /compact ".to_owned();
+            record.status = MessageStatus::Sent;
+            assert_eq!(record.sender.section_origin(), origin);
+            let headerless = sender == MessageSender::System || body == MessageBody::Command;
+            assert_eq!(record.ships_headerless(), headerless);
+            assert!(record.in_flight());
+            let sections = classify_submitted_prompt("/compact", &[], &[&record]);
+            assert_eq!(sections.len(), 1);
+            assert_eq!(
+                sections[0].origin,
+                if headerless {
+                    origin.clone()
+                } else {
+                    SectionOrigin::Human
+                }
+            );
+            assert_eq!(
+                sections[0].record.map(|record| &record.message_id),
+                headerless.then_some(&record.message_id)
+            );
+        }
+    }
+}
+
+#[test]
+fn submitted_sections_preserve_headers_and_composer_residue() {
+    let mut record = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+        .with_sender(agent_sender("stored", None));
+    record.text = "queued".to_owned();
+    let sections = classify_submitted_prompt(
+        "before\nType: AGENT_MESSAGE\nFrom: @wire\nContent:\nqueuedafter",
+        &[&record],
+        &[],
+    );
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| section.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["before", "queued", "after"]
+    );
+    assert_eq!(sections[0].origin, SectionOrigin::Human);
+    assert_eq!(sections[1].origin, SectionOrigin::Agent("@wire".to_owned()));
+    assert!(sections[1].record.is_some());
+    assert_eq!(sections[2].origin, SectionOrigin::Human);
+    assert_eq!(
+        classify_submitted_prompt("typed", &[], &[])[0].origin,
+        SectionOrigin::Human
+    );
+}
+
+#[test]
 fn conversation_senders_exclude_system_traffic() {
     assert!(MessageSender::Human.is_conversation());
     assert!(
