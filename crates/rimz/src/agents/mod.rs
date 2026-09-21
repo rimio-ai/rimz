@@ -137,7 +137,7 @@ pub use tools::{
 use transcript::TranscriptRole;
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition};
 use transcript_fs::read_transcript_lines;
-pub(crate) use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
+use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
 
 pub mod plugins;
 
