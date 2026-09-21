@@ -243,10 +243,7 @@ fn inspect(
     kv.render(&mut out)?;
 
     if matches!(scope, DailyBudgetScope::Fleet) && !config.accounts.budget.is_empty() {
-        writeln!(out)?;
-        let mut table =
-            crate::cli::render::Table::new(["ACCOUNT", "CAP", "SOURCE", "SPEND", "PARKED"]);
-        let logins = LoginCatalog::from_config(&config.accounts)
+        let logins: Vec<_> = LoginCatalog::from_config(&config.accounts)
             .map(|catalog| catalog.all().map(|login| login.key()).collect::<Vec<_>>())
             .unwrap_or_else(|_| {
                 config
@@ -255,37 +252,44 @@ fn inspect(
                     .keys()
                     .map(|kind| LoginKey::default_for(AgentKind::new_unchecked(kind)))
                     .collect()
-            });
-        for key in logins
+            })
             .into_iter()
             .filter(|key| config.accounts.budget(key.kind.as_str()).is_some())
             .filter(|key| {
                 rimz::config::AccountsConfig::validate_budget_kind(key.kind.as_str()).is_ok()
             })
-        {
-            let scope = DailyBudgetScope::Account(key);
-            let account = scope.read_ledger(runtime, Some(state));
-            table.row([
-                crate::cli::render::cell(
-                    scope
-                        .account_login()
-                        .expect("account table contains account scopes")
-                        .to_string(),
-                ),
-                crate::cli::render::cell(cap_label(scope.effective_cap_usd(&account, config))),
-                crate::cli::render::cell(scope.cap_source(&account, config).to_string()),
-                crate::cli::render::cell(format!(
-                    "${:.2}",
-                    scope.day_spend_usd(runtime, config, now, provider.as_ref())
-                )),
-                crate::cli::render::cell(if account.parked.is_some() {
-                    "yes"
-                } else {
-                    "no"
-                }),
-            ]);
+            .collect();
+        // Every configured key can be ineligible, and a header with no rows
+        // reads as a broken command; the warnings below still name each one.
+        if !logins.is_empty() {
+            writeln!(out)?;
+            let mut table =
+                crate::cli::render::Table::new(["ACCOUNT", "CAP", "SOURCE", "SPEND", "PARKED"]);
+            for key in logins {
+                let scope = DailyBudgetScope::Account(key);
+                let account = scope.read_ledger(runtime, Some(state));
+                table.row([
+                    crate::cli::render::cell(
+                        scope
+                            .account_login()
+                            .expect("account table contains account scopes")
+                            .to_string(),
+                    ),
+                    crate::cli::render::cell(cap_label(scope.effective_cap_usd(&account, config))),
+                    crate::cli::render::cell(scope.cap_source(&account, config).to_string()),
+                    crate::cli::render::cell(format!(
+                        "${:.2}",
+                        scope.day_spend_usd(runtime, config, now, provider.as_ref())
+                    )),
+                    crate::cli::render::cell(if account.parked.is_some() {
+                        "yes"
+                    } else {
+                        "no"
+                    }),
+                ]);
+            }
+            table.render(&mut out)?;
         }
-        table.render(&mut out)?;
         let mut stderr = crate::cli::render::err();
         for kind in config.accounts.budget.keys() {
             if let Err(detail) = rimz::config::AccountsConfig::validate_budget_kind(kind) {
