@@ -705,6 +705,14 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
             "invalid value \"forever\" for `loop.default-timeout`",
         ));
 
+    env.rimz()
+        .args(["config", "set", "loop.default-timeout", "0s"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "invalid value \"0s\" for `loop.default-timeout`: must be greater than zero",
+        ));
+
     let config_path = machine_config_path(&env).display().to_string();
     env.rimz()
         .args(["config", "set", "remote_control.claude", "flase"])

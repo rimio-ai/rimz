@@ -47,7 +47,11 @@ where
 {
     let raw = Option::<String>::deserialize(deserializer)?;
     if let Some(value) = raw.as_deref() {
-        parse_duration_units(value, DEFAULT_TIMEOUT_UNITS).map_err(D::Error::custom)?;
+        let duration =
+            parse_duration_units(value, DEFAULT_TIMEOUT_UNITS).map_err(D::Error::custom)?;
+        if duration.is_zero() {
+            return Err(D::Error::custom("must be greater than zero"));
+        }
     }
     Ok(raw)
 }
@@ -655,6 +659,21 @@ mod tests {
         let err = toml::from_str::<LoopConfig>("default-timeout = \"forever\"\n")
             .expect_err("invalid default timeout");
         assert!(err.to_string().contains("duration"), "{err}");
+    }
+
+    #[test]
+    fn default_timeout_rejects_a_zero_duration() {
+        for text in [
+            "default-timeout = \"0s\"\n",
+            "default-timeout = \"0m\"\n",
+            "default-timeout = \"0d\"\n",
+        ] {
+            let err = toml::from_str::<LoopConfig>(text).expect_err("zero default timeout");
+            assert!(
+                err.to_string().contains("must be greater than zero"),
+                "{err}"
+            );
+        }
     }
 
     #[test]

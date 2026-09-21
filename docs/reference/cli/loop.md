@@ -251,7 +251,7 @@ After `--max-strikes` consecutive strikes (default `3`), the task disables itsel
 | Scheduled `--agent` turn and its verify commands | The task's `--timeout`, else `loop.default-timeout` (default `2h`, set with `rimz config set loop.default-timeout 3h`). |
 | `--agent` turn under `loop fire` | The task's `--timeout`, else unbounded. |
 
-`--timeout` takes `s`, `m`, `h`, or `d`.
+`--timeout` takes `s`, `m`, `h`, or `d`, and must be greater than zero. `loop.default-timeout` is refused the same way.
 
 ## Enable, disable, and pause
 
