@@ -359,7 +359,7 @@ impl LoginCatalog {
     }
 
     /// The declared names of a kind, `default` first.
-    pub fn names(&self, kind: &AgentKind) -> Vec<LoginName> {
+    fn names(&self, kind: &AgentKind) -> Vec<LoginName> {
         self.logins
             .values()
             .filter(|login| login.kind() == kind)
