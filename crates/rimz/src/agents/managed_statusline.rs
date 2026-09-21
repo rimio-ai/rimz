@@ -6,23 +6,23 @@ use serde_json::{Map, Value};
 
 use super::StatusLineChange;
 
-pub(crate) const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
-pub(crate) const RIMZ_WRAPPED_KEY: &str = "_rimz_wrapped";
+const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
+const RIMZ_WRAPPED_KEY: &str = "_rimz_wrapped";
 
 #[derive(Clone, Copy)]
-pub(crate) enum RenderingOptions {
+pub(super) enum RenderingOptions {
     All,
     Only(&'static [&'static str]),
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum WrapPolicy {
+pub(super) enum WrapPolicy {
     Any,
     CommandMode,
     ObjectOnly,
 }
 
-pub(crate) struct ManagedStatusLineSpec {
+pub(super) struct ManagedStatusLineSpec {
     pub key_path: &'static [&'static str],
     pub command: &'static str,
     pub command_marker: &'static str,
@@ -31,11 +31,11 @@ pub(crate) struct ManagedStatusLineSpec {
     pub required_for_install: bool,
 }
 
-pub(crate) fn is_managed(root: &Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
+pub(super) fn is_managed(root: &Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
     matches!(value_at(root, spec.key_path), Some(Value::Object(object)) if object_is_managed(object))
 }
 
-pub(crate) fn install_satisfied(root: &Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
+pub(super) fn install_satisfied(root: &Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
     if !spec.required_for_install {
         return true;
     }
@@ -57,7 +57,7 @@ pub(crate) fn install_satisfied(root: &Map<String, Value>, spec: &ManagedStatusL
     }
 }
 
-pub(crate) fn upsert(root: &mut Map<String, Value>, spec: &ManagedStatusLineSpec) {
+pub(super) fn upsert(root: &mut Map<String, Value>, spec: &ManagedStatusLineSpec) {
     let Some(parent) = parent_mut(root, spec.key_path, true) else {
         return;
     };
@@ -95,7 +95,7 @@ pub(crate) fn upsert(root: &mut Map<String, Value>, spec: &ManagedStatusLineSpec
     parent.insert(key.to_owned(), Value::Object(entry));
 }
 
-pub(crate) fn strip(root: &mut Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
+pub(super) fn strip(root: &mut Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
     if !is_managed(root, spec) {
         return false;
     }
@@ -118,7 +118,7 @@ pub(crate) fn strip(root: &mut Map<String, Value>, spec: &ManagedStatusLineSpec)
     true
 }
 
-pub(crate) fn classify(
+pub(super) fn classify(
     root: &Map<String, Value>,
     spec: &ManagedStatusLineSpec,
 ) -> Option<StatusLineChange> {
@@ -147,7 +147,7 @@ pub(crate) fn classify(
     }
 }
 
-pub(crate) fn wrapped_command(
+pub(super) fn wrapped_command(
     root: &Map<String, Value>,
     spec: &ManagedStatusLineSpec,
 ) -> Option<String> {
