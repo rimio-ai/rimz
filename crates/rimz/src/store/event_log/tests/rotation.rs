@@ -73,6 +73,25 @@ fn rotate_syncs_the_log_before_renaming() {
 }
 
 #[test]
+fn prune_archive_io_failure_preserves_display_and_source() {
+    let dir = tempdir().unwrap();
+    let archive_dir = dir.path().join("events.log.archive");
+    let trap = archive_dir.join(format!("events.{}.jsonl", uuid::Uuid::now_v7().simple()));
+    std::fs::create_dir_all(&trap).unwrap();
+
+    let error = prune_archive(&archive_dir, Duration::ZERO).unwrap_err();
+    let message = error.to_string();
+    assert!(message.starts_with("cannot access "), "{message}");
+    assert!(message.contains(trap.to_str().unwrap()), "{message}");
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .is_some()
+    );
+}
+
+#[test]
 fn prune_archive_removes_only_stale_files() {
     let dir = tempdir().unwrap();
     let archive_dir = dir.path().join("events.log.archive");

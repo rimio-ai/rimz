@@ -415,6 +415,23 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_usage_alias_drops_usage_without_losing_percentage() {
+        let context = context(json!({
+            "context_window": {
+                "used_percentage": 25,
+                "current_usage": {
+                    "cache_creation_input_tokens": 10,
+                    "cache_write_tokens": 20
+                }
+            }
+        }));
+
+        let tokens = context.tokens.unwrap();
+        assert_eq!(tokens.used_percentage, Some(25));
+        assert!(tokens.current_usage.is_none());
+    }
+
+    #[test]
     fn malformed_siblings_degrade_field_locally_without_synthesizing_usage() {
         let context = context(json!({
             "model": {
