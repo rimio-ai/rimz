@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use rimz::config::MultiplexerConfig;
 use rimz::ids::WorkspaceId;
 use rimz::mux::{MuxBackend, SplitPaneOptions, SplitTarget, ZellijBackend, zellij};
 use tempfile::TempDir;
@@ -80,8 +81,7 @@ fn sidebar_self_closes_when_its_tab_empties() {
             rimz_bin: rimz,
             focus_key: None,
             zoom_key: None,
-            focus_follows_mouse: false,
-            mouse_click_through: true,
+            session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
         })
         .expect("load presence plugin for self-close topology");
 

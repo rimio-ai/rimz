@@ -81,7 +81,8 @@ pub(crate) fn presence_opts(session_name: &str, rimz_bin: &str) -> PresencePlugi
         rimz_bin: PathBuf::from(rimz_bin),
         focus_key: None,
         zoom_key: None,
-        focus_follows_mouse: false,
-        mouse_click_through: true,
+        session_options: super::super::zellij_session_options(
+            &crate::config::ZellijConfig::default(),
+        ),
     }
 }
