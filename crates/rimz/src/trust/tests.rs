@@ -381,7 +381,9 @@ fn agent_env_blocks_untrusted_and_stale_workspaces() {
 fn hash_covers_every_documented_surface_field() {
     // One config per documented executable-surface field. Any two must
     // hash to distinct values; if a future refactor drops a field from
-    // `ExecutableSurface`, two cases collide and this test fires.
+    // `ExecutableSurface`, two cases collide and this test fires. A field
+    // added to the projection belongs here in the same commit, once per
+    // surface that carries it.
     let cases = [
         "[[agents]]\nname = \"claude\"\nlaunch_command = \"claude code\"\n",
         "[[agents]]\nname = \"claude\"\nenv = { PATH = \"/opt/llms/bin\" }\n",
@@ -394,6 +396,8 @@ fn hash_covers_every_documented_surface_field() {
         "[profiles.x]\nagent = \"claude\"\nmode = \"ask\"\n",
         "[profiles.x]\nagent = \"claude\"\nmodel = \"opus\"\n",
         "[profiles.x]\nagent = \"claude\"\neffort = \"low\"\n",
+        "[profiles.x]\nagent = \"claude\"\nauto-compact = \"200k\"\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nauto-compact = \"200k\"\n",
         "[profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
         "[profiles.x]\nagent = \"claude\"\nappend-system-prompt-files = [\"prompts/a.md\"]\n",
         "[profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
@@ -405,6 +409,7 @@ fn hash_covers_every_documented_surface_field() {
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nmode = \"ask\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nmodel = \"opus\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\neffort = \"low\"\n",
+        "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nauto-compact = \"200k\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nappend-system-prompt-files = [\"prompts/a.md\"]\n",
         "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
