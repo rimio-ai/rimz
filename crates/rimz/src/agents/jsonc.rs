@@ -2,7 +2,7 @@
 
 use serde::de::DeserializeOwned;
 
-pub(crate) fn from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, serde_json::Error> {
+pub(super) fn from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, serde_json::Error> {
     serde_json::from_slice(&normalize(bytes))
 }
 
