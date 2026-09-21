@@ -4,7 +4,7 @@ Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess abo
 
 ## Start with `rimz doctor`
 
-`rimz doctor` probes the machine, the room, and RimZ's own state, then prints a verdict per row: the multiplexer and whether its version clears the floor, per-machine config parsing, sandbox support, per-agent hook status, provider accounts, scheduled loop tasks, project trust, terminal color depth, workspace and store health, the live agents, messages that failed to land, and recent incidents. Nothing in the room starts, stops, or moves, so run it as often as you like.
+`rimz doctor` probes the machine, the room, and RimZ's own state, then prints a verdict per row: the multiplexer and whether its version clears the floor, per-machine config parsing, sandbox support, per-agent hook status, provider accounts, scheduled loop tasks, project trust, terminal color depth, workspace and store health, the live agents, messages that failed to land, and recent incidents. A normal run writes nothing to disk and starts, stops, or moves nothing in the room, so run it as often as you like. Only `--clear` writes a history watermark and `--output` writes the report to the named file.
 
 ```sh
 rimz doctor
@@ -227,7 +227,7 @@ rimz config set theme.style modern        # truecolor plus Nerd Font icons
 rimz config set theme.pets.enabled true   # an animated companion on the dashboard
 ```
 
-`modern` needs a Nerd Font installed in the terminal. Pets render as crisp pixels only in Ghostty, kitty, and a browser tab served by RimZ, and inside tmux that also needs tmux 3.6 or newer with `allow-passthrough on`. In a tmux room every attached client has to qualify, so one plain terminal attaching drops the room to cell art within ten seconds. Zellij rooms are always cell art, whatever the host terminal supports and whatever `rimz doctor`'s `zellij kitty graphics` row says: that row probes the terminal, and no render path consults it.
+`modern` needs a Nerd Font installed in the terminal. Pets render as crisp pixels only in Ghostty, kitty, and a browser tab served by RimZ, and inside tmux that also needs tmux 3.6 or newer with `allow-passthrough on`. In a tmux room every attached client has to qualify, so one plain terminal attaching drops the room to cell art within ten seconds. Zellij rooms are always cell art. When the probe finds host-terminal support, `rimz doctor`'s `zellij kitty graphics` row says so, but also explains that Zellij rooms still draw cell art because Zellij rejects the placement the pixel tier uses.
 
 The full appearance model is [theming](./theme.md), and the per-terminal pet notes are in the [pets guide](./pets.md#crisp-pixels-and-cell-art).
 
@@ -285,6 +285,8 @@ The report ends in a delivery check that names the first unmet condition and the
 ## Browser and remote access
 
 ### ttyd is missing, too old, or a browser room will not start
+
+First check `rimz doctor`'s `ttyd web` row. It appears for both Zellij and tmux while `[web] enabled` is true, and reports the resolved binary and version or the fix for a missing or older binary.
 
 Browser access for both Zellij and tmux needs ttyd 1.7.5 or newer on the serving machine. Run `ttyd --version`; with Homebrew use `brew install ttyd` or `brew upgrade ttyd`, and on Debian or Ubuntu install from a current apt repository or the ttyd release page when `apt` offers an older build. Explicit web commands refuse an older version, while a normal room start prints the same fix and keeps the terminal room running.
 
@@ -449,10 +451,10 @@ rimz uninstall            # hooks, rooms, runtime state, binaries; keeps stores 
 Capture the state RimZ sees and attach it to the report:
 
 ```sh
-rimz doctor --json --output rimz-doctor.json    # full environment report as JSON
+rimz doctor --json --no-log-text --output rimz-doctor.json
 ```
 
-`rimz doctor --json` is the artifact to attach: it carries the backend, versions, per-agent hook status, trust state, and the room health that most reports need, and it carries no prompts and no transcripts. One thing to skim before you attach it to a public issue: the multiplexer log lines doctor flagged are kept verbatim, so read those rows if your log could hold a path or a hostname you would rather not publish.
+The report carries the backend, versions, per-agent hook status, trust state, and the room health that most reports need. `--no-log-text` omits multiplexer log record text from summaries, samples, and excerpts in both JSON and human reports. Only severity, timestamps, counts, and Zellij module targets survive from the records, alongside RimZ's own diagnostic wording; other report sections are unchanged. A maintainer may ask for the unstripped report if those details are not enough to diagnose the problem.
 
 ## See also
 
