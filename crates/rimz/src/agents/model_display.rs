@@ -10,7 +10,7 @@ pub fn display_model(id: &str) -> String {
 /// protocol bookkeeping, not part of the model name. This is presentation
 /// only: callers must resolve configuration separately before treating the
 /// selector as a canonical pricing identity.
-pub fn display_factory_custom_selector(id: &str) -> Option<String> {
+pub(crate) fn display_factory_custom_selector(id: &str) -> Option<String> {
     let selector = id.trim().strip_prefix("custom:")?;
     let (display_slug, index) = selector.rsplit_once('-')?;
     if display_slug.is_empty()

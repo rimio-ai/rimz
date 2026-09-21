@@ -36,7 +36,7 @@ pub enum BackgroundShellReport {
 impl BackgroundShellReport {
     /// Fold this report onto `shells`. A shell already listed keeps its first
     /// `started_at`, so a later report never resets its elapsed time.
-    pub fn apply(&self, shells: &mut Vec<BackgroundShell>) {
+    pub(crate) fn apply(&self, shells: &mut Vec<BackgroundShell>) {
         match self {
             Self::Started { shell } => {
                 if !shells.iter().any(|known| known.id == shell.id) {
