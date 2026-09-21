@@ -806,7 +806,8 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     if let Some(reminder) = report.prompt.reminder {
         writeln!(
             output,
-            "── <system_reminder> via {} ──\n{reminder}",
+            "── <{}> via {} ──\n{reminder}",
+            rimz::agents::RimzBlock::SystemReminder.tag(),
             report
                 .prompt
                 .reminder_channel

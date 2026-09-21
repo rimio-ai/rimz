@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::agents::payload::{RimzBlock, wrap_rimz_block};
 use crate::agents::{PresetArgMatcher, PresetField};
 use crate::config::PromptSource;
 use crate::disk::paths::RuntimePaths;
@@ -298,7 +299,8 @@ pub fn retry_prompt(base: &str, failure_tail: Option<&str>) -> String {
             )
         },
     );
-    format!("{base}\n\n<previous-attempt-failure>\n{failure}\n</previous-attempt-failure>")
+    let failure = wrap_rimz_block(RimzBlock::PreviousAttemptFailure, &failure);
+    format!("{base}\n\n{failure}")
 }
 
 pub fn verify_reprompt(cmd: &str, code_label: &str, output: &str) -> String {

@@ -111,9 +111,9 @@ pub use observation::{
     SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
-pub use payload::SanitizedPrompt;
 use payload::{CONTROL_TAG_PREFIXES, optional_payload_string, stop_payload_errored};
 pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};
+pub use payload::{RimzBlock, SanitizedPrompt, peel_rimz_blocks};
 pub use pricing::{PriceBook, TokenSplit};
 pub use registry::{
     all_definitions, compact_command, definition_by_kind, find_definition, known_kinds,

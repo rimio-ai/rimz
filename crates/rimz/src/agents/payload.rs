@@ -77,11 +77,87 @@ pub(super) fn stop_payload_errored(payload: &Value) -> bool {
 pub(super) const CONTROL_TAG_PREFIXES: &[&str] = &[
     "<task-notification>",
     "<system-reminder>",
+    "<system_reminder>",
+    "<previous-attempt-failure>",
     "<command-message>",
     "<command-name>",
     "<local-command-stdout>",
     "<skill name=",
 ];
+
+/// Blocks RimZ composes around a prompt, with one registry for writing and peeling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RimzBlock {
+    SystemReminder,
+    PreviousAttemptFailure,
+}
+
+impl RimzBlock {
+    const ALL: [Self; 2] = [Self::SystemReminder, Self::PreviousAttemptFailure];
+
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::SystemReminder => "system_reminder",
+            Self::PreviousAttemptFailure => "previous-attempt-failure",
+        }
+    }
+}
+
+pub fn wrap_rimz_block(block: RimzBlock, body: &str) -> String {
+    let tag = block.tag();
+    format!("<{tag}>\n{body}\n</{tag}>")
+}
+
+/// Remove balanced registered blocks, trimming their joins to paragraph breaks. Malformed nesting leaves the original text untouched.
+pub fn peel_rimz_blocks(text: &str) -> String {
+    let tags = RimzBlock::ALL.map(|block| {
+        let tag = block.tag();
+        (format!("<{tag}>"), format!("</{tag}>"))
+    });
+    let mut stack = Vec::new();
+    let mut pieces = Vec::new();
+    let mut kept_start = 0;
+    let mut cursor = 0;
+    while let Some((offset, block, closing, len)) = tags
+        .iter()
+        .enumerate()
+        .flat_map(|(block, (open, close))| {
+            [(false, open), (true, close)]
+                .into_iter()
+                .filter_map(move |(closing, tag)| {
+                    text[cursor..]
+                        .find(tag)
+                        .map(|offset| (offset, block, closing, tag.len()))
+                })
+        })
+        .min_by_key(|token| token.0)
+    {
+        let start = cursor + offset;
+        cursor = start + len;
+        if closing {
+            if stack.pop() != Some(block) {
+                return text.to_owned();
+            }
+            if stack.is_empty() {
+                kept_start = cursor;
+            }
+        } else {
+            if stack.is_empty() {
+                pieces.push(text[kept_start..start].trim());
+            }
+            stack.push(block);
+        }
+    }
+    if !stack.is_empty() {
+        return text.to_owned();
+    }
+    pieces.push(text[kept_start..].trim());
+    pieces
+        .into_iter()
+        .filter(|piece| !piece.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
 
 const TASK_NOTIFICATION_OPEN: &str = "<task-notification>";
 const TASK_NOTIFICATION_CLOSE: &str = "</task-notification>";
@@ -227,6 +303,45 @@ pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subagent_fallback_reminder_is_not_user_text() {
+        let brief = "review this change";
+        let submitted = format!(
+            "{brief}\n\n{}",
+            crate::harness::launch_reminders::subagent_reminder()
+        );
+        // The launch-brief consumer's unpeeled comparison misses this fallback.
+        assert_ne!(brief.trim(), submitted);
+        assert_eq!(sanitize_user_prompt(Some(&submitted)), None);
+        assert_eq!(peel_rimz_blocks(&submitted), brief);
+    }
+
+    #[test]
+    fn rimz_blocks_round_trip_and_reject_synthetic_prompts() {
+        for block in RimzBlock::ALL {
+            let wrapped = wrap_rimz_block(block, "harness words");
+            assert_eq!(peel_rimz_blocks(&wrapped), "");
+            for text in [format!("brief\n\n{wrapped}"), format!("{wrapped}\n\nbrief")] {
+                assert_eq!(peel_rimz_blocks(&text), "brief");
+                assert_eq!(sanitize_user_prompt(Some(&text)), None);
+            }
+            assert!(CONTROL_TAG_PREFIXES.contains(&format!("<{}>", block.tag()).as_str()));
+            for malformed in [
+                format!("  brief <{}>body", block.tag()),
+                format!("brief </{}>", block.tag()),
+            ] {
+                assert_eq!(peel_rimz_blocks(&malformed), malformed);
+            }
+        }
+        let reminder = wrap_rimz_block(RimzBlock::SystemReminder, "reminder");
+        let failure = wrap_rimz_block(RimzBlock::PreviousAttemptFailure, &reminder);
+        assert_eq!(
+            peel_rimz_blocks(&format!("before\n\n{failure}\n\n{reminder}\n\nafter")),
+            "before\n\nafter"
+        );
+        assert_eq!(peel_rimz_blocks("plain\n  text"), "plain\n  text");
+    }
 
     #[test]
     fn sanitized_prompt_preserves_the_lifecycle_wire() {

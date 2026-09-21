@@ -6,6 +6,7 @@ use super::launch::ExecRequest;
 use super::launch_context::{self, escape_reminder_text};
 use super::launch_env::LaunchEnv;
 use super::subagent_policy::{self, SubagentCatalog};
+use crate::agents::payload::{RimzBlock, wrap_rimz_block};
 use crate::agents::{LaunchParams, model_display::display_model};
 
 pub use super::launch_context::TeamReminder;
@@ -66,7 +67,7 @@ const SUBAGENT_REMINDER_BODY: &str = concat!(
 const STATUS_LINE_CAP: usize = 40;
 
 pub(super) fn wrap(body: &str) -> String {
-    format!("<system_reminder>\n{body}\n</system_reminder>")
+    wrap_rimz_block(RimzBlock::SystemReminder, body)
 }
 
 /// Child policy for adapters that require a user-prompt fallback.

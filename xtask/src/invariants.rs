@@ -66,6 +66,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_presence_plugin_vendored(root)?;
     ensure_store_durability(root, &files)?;
     ensure_participant_identity(root, &files)?;
+    ensure_rimz_block_registry(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_managed_tmux_endpoint(root, &files)?;
     ensure_rolling_release_is_single_writer(root)?;
@@ -659,6 +660,69 @@ fn ensure_participant_identity(root: &Path, files: &[PathBuf]) -> Result<()> {
         },
         "participant surfaces resolve identity through the session pin — use resolve_participant",
     )
+}
+
+fn ensure_rimz_block_registry(root: &Path, files: &[PathBuf]) -> Result<()> {
+    use syn::visit::Visit;
+
+    #[derive(Default)]
+    struct Tags(Vec<String>);
+    impl<'ast> Visit<'ast> for Tags {
+        fn visit_expr_lit(&mut self, literal: &'ast syn::ExprLit) {
+            if let syn::Lit::Str(tag) = &literal.lit {
+                self.0.push(tag.value());
+            }
+        }
+    }
+
+    let registry = root.join("crates/rimz/src/agents/payload.rs");
+    let source = fs::read_to_string(&registry)?;
+    let parsed = syn::parse_file(&source)?;
+    let mut tags = Tags::default();
+    for item in &parsed.items {
+        if let syn::Item::Impl(item) = item
+            && let syn::Type::Path(ty) = item.self_ty.as_ref()
+            && ty.path.is_ident("RimzBlock")
+        {
+            for member in &item.items {
+                if let syn::ImplItem::Fn(method) = member
+                    && method.sig.ident == "tag"
+                {
+                    tags.visit_block(&method.block);
+                }
+            }
+        }
+    }
+    if tags.0.is_empty() {
+        bail!("RimzBlock::tag must declare the wrapper tag literals");
+    }
+    let mut violations = Vec::new();
+    for path in files {
+        if path == &registry
+            || is_test_source_path(root, path)
+            || path.extension().and_then(OsStr::to_str) != Some("rs")
+            || !(path.starts_with(root.join("crates/rimz/src"))
+                || path.starts_with(root.join("xtask/src")))
+        {
+            continue;
+        }
+        let source = fs::read_to_string(path)?;
+        for (idx, line) in source.lines().enumerate() {
+            if line.trim() == "#[cfg(test)]" {
+                break;
+            }
+            if tags.0.iter().any(|tag| line.contains(tag)) {
+                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            }
+        }
+    }
+    if !violations.is_empty() {
+        bail!(
+            "RimZ wrapper tags live in agents/payload.rs — compose through wrap_rimz_block\n{}",
+            violations.join("\n")
+        );
+    }
+    Ok(())
 }
 
 fn ensure_no_match(
