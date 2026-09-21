@@ -538,3 +538,63 @@ fn ensure_dirs_rejects_symlinked_runtime_root() {
         other => panic!("expected RuntimeDirSymlink, got {other:?}"),
     }
 }
+
+/// The fix sentence is the only advice a reader gets for a legacy root, so it
+/// has to match what the root actually holds: config, state, and data carry
+/// files RimZ still wants, and the old cache carries nothing worth moving.
+#[test]
+fn legacy_roots_fix_moves_config_roots_and_deletes_the_old_cache() {
+    let home = Path::new("/home/u/.rimz");
+    let cache = cache_home().join("rimz");
+    let config = config_home().join("rimz");
+
+    let config_only = legacy_roots_fix(std::slice::from_ref(&config), home);
+    assert!(
+        config_only.contains("move their contents into /home/u/.rimz"),
+        "{config_only}"
+    );
+    assert!(config_only.contains("or set RIMZ_HOME"), "{config_only}");
+    assert!(!config_only.contains("delete"), "{config_only}");
+
+    let mixed = legacy_roots_fix(&[config.clone(), cache.clone()], home);
+    assert!(
+        mixed.contains(&format!("move the contents of {}", config.display())),
+        "{mixed}"
+    );
+    assert!(
+        mixed.contains(&format!("delete the obsolete cache at {}", cache.display())),
+        "{mixed}"
+    );
+
+    let cache_only = legacy_roots_fix(std::slice::from_ref(&cache), home);
+    assert!(
+        cache_only.contains(&format!("delete the obsolete cache at {}", cache.display())),
+        "{cache_only}"
+    );
+    assert!(!cache_only.contains("move"), "{cache_only}");
+    // Relocating the home does not make a stale cache read again, so offering
+    // RIMZ_HOME as an alternative would be advice that does not work.
+    assert!(!cache_only.contains("RIMZ_HOME"), "{cache_only}");
+
+    for sentence in [&config_only, &mixed, &cache_only] {
+        assert!(
+            sentence.contains("moving-from-the-xdg-roots"),
+            "every form keeps the migration link: {sentence}"
+        );
+    }
+}
+
+/// Doctor reports what is on disk; the room guard asks the narrower question of
+/// whether this host's config could be lost, and a cache holds no config.
+#[test]
+fn legacy_config_roots_excludes_the_cache_doctor_reports() {
+    let dir = tempfile::tempdir().unwrap();
+    let seeded = dir.path().join("rimz");
+    fs::create_dir_all(&seeded).unwrap();
+
+    assert_eq!(
+        existing_legacy_roots([dir.path().to_path_buf()]),
+        vec![seeded]
+    );
+    assert!(existing_legacy_roots([dir.path().join("absent")]).is_empty());
+}

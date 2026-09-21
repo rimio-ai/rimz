@@ -158,7 +158,7 @@ fn refuse_legacy_only_home() -> Result<()> {
     if rimz::config::MachineConfig::config_path().exists() {
         return Ok(());
     }
-    let legacy = rimz::disk::paths::legacy_roots();
+    let legacy = rimz::disk::paths::legacy_config_roots();
     if legacy.is_empty() {
         return Ok(());
     }
