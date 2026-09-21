@@ -173,7 +173,7 @@ fn broken_machine_files_reports_only_the_unparseable_file() {
 }
 
 #[test]
-fn broken_machine_files_reports_notifications_even_with_broken_theme() {
+fn broken_machine_files_reports_switched_on_notifications_even_with_broken_theme() {
     let dir = tempdir().expect("tempdir");
     let path = write(
         &dir,
@@ -195,6 +195,22 @@ fn broken_machine_files_reports_notifications_even_with_broken_theme() {
         );
         assert_eq!(errors.len(), if broken_theme { 2 } else { 1 });
     }
+
+    // A table the user switched off is inert, so it is not a precondition and
+    // must not reach the start gate; the broken theme written above still does.
+    std::fs::write(
+        &path,
+        "[notifications]\nenabled = false\n\n[[notifications.handler]]\nname = \"bad\"\ncommand = \"\"\n",
+    )
+    .expect("write disabled notifications");
+    let errors = broken_machine_files_in(&files);
+    assert!(
+        !errors
+            .iter()
+            .any(|error| matches!(error, ConfigErr::Notifications { .. })),
+        "a disabled table must not be reported: {errors:?}"
+    );
+    assert_eq!(errors.len(), 1);
 }
 
 #[test]

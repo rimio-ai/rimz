@@ -423,6 +423,26 @@ fn start_rejects_invalid_notifications_before_room_state() {
 }
 
 #[test]
+fn start_opens_the_room_when_the_invalid_notifications_table_is_switched_off() {
+    let env = Env::new();
+    write_machine_config(
+        &env,
+        "[notifications]\nenabled = false\n\n[[notifications.handler]]\nname = \"bad\"\ncommand = \"\"\n",
+    );
+
+    let output = start_with_accounts(&env, "", &[]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    // The lenient loader still warns and falls back, as it does at runtime; what
+    // a switched-off table must not do is refuse the room.
+    assert!(
+        !stderr.contains("error: invalid per-machine notifications config"),
+        "a switched-off table is a precondition of nothing: {stderr}"
+    );
+}
+
+#[test]
 fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let birth = Env::new();
     let birth_bin = seed_actionable_agent(&birth);
