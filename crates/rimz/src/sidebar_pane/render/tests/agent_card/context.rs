@@ -1112,3 +1112,69 @@ fn codex_app_server_context_links_to_rich_card() {
     assert!(!token_line.contains('↗'));
     assert!(!token_line.contains('$'));
 }
+
+#[test]
+fn render_agent_card_age_pin_holds_the_parent_own_clock_while_children_work() {
+    // The pin is a cache-age clock, so it reads the parent's own quiet time: a
+    // parent blocked on its children's reports makes no model call while their
+    // activity keeps the row clock — and the stall check — fresh.
+    let screen_with_parent_quiet_for = |secs: u64| {
+        let mut parent = agent(
+            "parent",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("delegate"),
+        );
+        parent.context = Some(claude_context(fixed_now()));
+        parent.last_activity = fixed_now() - Duration::from_secs(secs);
+        parent.last_seen = parent.last_activity;
+        let mut child = agent(
+            "child-0",
+            "claude",
+            AgentStatus::Running,
+            None,
+            None,
+            Some("task-0"),
+        );
+        child.parent_agent_id = Some("parent".into());
+        child.registered_at = Some(fixed_now() - Duration::from_secs(120));
+        child.last_activity = fixed_now() - Duration::from_secs(5);
+        child.last_seen = child.last_activity;
+
+        let snapshot = snapshot_with(vec![parent, child]);
+        let row = &snapshot.worktree_groups[0].rows[0];
+        assert_eq!(
+            row.last_activity,
+            fixed_now() - Duration::from_secs(5),
+            "the child's activity still holds the row clock"
+        );
+        assert_eq!(
+            row.own_last_activity(),
+            fixed_now() - Duration::from_secs(secs),
+            "the parent's own clock survives the fold"
+        );
+        let rendered = snapshot_to_screen(&snapshot, 56, 24);
+        // The pin rides the context line; the child entry below carries its own
+        // elapsed clock in the same glyph vocabulary.
+        let context_line = rendered
+            .lines()
+            .find(|line| line.contains('▤'))
+            .unwrap_or_else(|| panic!("the card draws its context line:\n{rendered}"))
+            .to_owned();
+        (context_line, rendered)
+    };
+
+    let (context_line, rendered) = screen_with_parent_quiet_for(12 * 60);
+    assert!(
+        context_line.contains("◔ 12m"),
+        "a parent quiet for twelve minutes wears its own age pin:\n{rendered}"
+    );
+
+    let (context_line, rendered) = screen_with_parent_quiet_for(120);
+    assert!(
+        !context_line.contains('◔'),
+        "under five minutes the card stays quiet, children or not:\n{rendered}"
+    );
+}

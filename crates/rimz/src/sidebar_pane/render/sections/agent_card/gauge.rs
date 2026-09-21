@@ -332,7 +332,10 @@ pub(super) fn gauge_segments(
 /// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
 /// through warn, caution, and alarm toward the hour, when resuming would likely
 /// re-read the whole context uncached. A finished row heats on the same ramp —
-/// its context is exactly what a follow-up prompt would pay to re-read.
+/// its context is exactly what a follow-up prompt would pay to re-read. The age
+/// is the agent's own quiet time ([`SidebarRow::own_last_activity`]), not the
+/// child-folded row clock: a parent waiting on its subagents' reports is making
+/// no model call, so its cache keeps cooling while they work.
 pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Line<'static> {
     let theme = row_ctx.theme;
     let bands = row_ctx.bands;
@@ -340,9 +343,10 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     let width = content_width(row_ctx.width);
     // The age clock is the line's one right pin — resource stats are
     // process-row vocabulary and never ride an agent card.
-    let age = activity_short(row.last_activity, now)
+    let own_last_activity = row.own_last_activity();
+    let age = activity_short(own_last_activity, now)
         .map(|label| {
-            let secs = age_secs(row.last_activity, now);
+            let secs = age_secs(own_last_activity, now);
             vec![Span::styled(
                 format!("{} {label}", elapsed_glyph(theme, secs)),
                 activity_age_style(theme, secs),

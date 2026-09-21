@@ -349,5 +349,40 @@ fn child_activity_does_not_reclock_parent_attention_or_dead_turns() {
         assert_eq!(row.status(), Some(expected_status), "{label}");
         assert_eq!(row.last_activity, ago(120), "{label}");
         assert_eq!(row.turn_error_label(), expected_error, "{label}");
+        assert_eq!(
+            row.as_agent().and_then(|card| card.own_last_activity),
+            None,
+            "a row the fold skips records no own clock: {label}"
+        );
+        assert_eq!(row.own_last_activity(), ago(120), "{label}");
     }
+}
+
+#[test]
+fn waiting_on_children_keeps_the_parent_cache_clock_on_its_own_session() {
+    // A parent blocked on its children's reports makes no model call for the
+    // whole wait, so its prompt cache ages even while their clocks tick. The
+    // row clock stays folded for the stall check; the card's cache-age pin
+    // reads the parent's own clock through the accessor.
+    let parent = agent("claude", "sess-root", AgentStatus::Running, 100).active_ago(720);
+    let child = child_state("sess-root", "child-1", AgentStatus::Running, 10);
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+
+    let parent_row = row(&snapshot, "sess-root");
+    assert_eq!(
+        parent_row.status(),
+        Some(AgentStatus::Running),
+        "delegated work is still work: not a stall"
+    );
+    assert_eq!(parent_row.last_activity, ago(10), "the row clock is folded");
+    assert_eq!(
+        parent_row.own_last_activity(),
+        ago(720),
+        "the cache clock is the parent's own quiet time"
+    );
+    assert_eq!(
+        rollup_agent(&snapshot, "sess-root").last_activity,
+        ago(720),
+        "the fold is still display-only"
+    );
 }

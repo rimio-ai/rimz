@@ -117,6 +117,19 @@ impl SidebarRow {
         self.as_agent().map(|agent| agent.status)
     }
 
+    /// Quiet-since for this agent's own provider session, the clock a prompt
+    /// cache ages on. `last_activity` after the child fold answers "when did
+    /// this agent or its delegated work last move", which every stall, sink,
+    /// ranking, and unread reader wants; a parent waiting on subagent reports
+    /// is silent to its provider the whole time its children tick, and this is
+    /// the clock that shows it. Process rows have no delegated work, so they
+    /// fall through to the row clock.
+    pub fn own_last_activity(&self) -> Timestamp {
+        self.as_agent()
+            .and_then(|agent| agent.own_last_activity)
+            .unwrap_or(self.last_activity)
+    }
+
     /// Status that determines row-level attention. A provider child has no pane
     /// of its own, so its actionable state lifts the parent card without
     /// changing the parent's displayed lifecycle status.
@@ -364,6 +377,14 @@ pub struct AgentCard {
     /// session's first cost; row ordering keys on pane creation, not this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
+    /// How long this agent's *own* provider session has been quiet: the row
+    /// clock as it stood before `fold_child_activity_onto_parents` raised it to
+    /// a child's, set only on a row that fold actually raised. A delegating
+    /// parent blocked on its children makes no model call for the whole wait,
+    /// so this is the clock its prompt cache ages on. Read it through
+    /// [`SidebarRow::own_last_activity`], never directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_last_activity: Option<Timestamp>,
     /// Current children and prior-turn finished children, nested under the parent.
     /// `sub_agent_count` also includes reaped running ghosts retained by the store.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -412,6 +433,7 @@ impl Default for AgentCard {
             context_severity: None,
             estimated_active_secs: None,
             registered_at: None,
+            own_last_activity: None,
             sub_agents: Vec::new(),
             compacting: false,
             compaction_count: 0,

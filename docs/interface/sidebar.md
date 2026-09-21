@@ -256,7 +256,7 @@ On a narrow sidebar the identity line drops the reasoning token first, then the 
 
 On the stats line, a column that is zero or unreported is left out. A provider that reports only session totals, as stock Droid does, shows `◇ total ↘ input ↗ output ◌ cache-read` on this line instead, and its meter stays empty. The cache hit is cached input divided by all input, and it is absent until the session has input counters.
 
-The meter draws windows up to 256k tokens linearly and larger ones on a log curve that reaches full strength at 1M, so a large window keeps detail in its working range. The percent is always the raw share in use. The age clock heats toward red as the hour approaches, because a prompt after an hour of quiet usually re-reads the whole context uncached. A parent whose subagents are running shows the most recent activity among itself and them, unless it is itself waiting or failed. Bands, curve, and tones are set under [`[theme.display]`](../guide/theme.md#display).
+The meter draws windows up to 256k tokens linearly and larger ones on a log curve that reaches full strength at 1M, so a large window keeps detail in its working range. The percent is always the raw share in use. The age clock heats toward red as the hour approaches, because a prompt after an hour of quiet usually re-reads the whole context uncached. It measures the agent's own quiet time, so a parent waiting on its subagents keeps heating while they work — its own session is making no call, and its cache ages the whole wait. The children's own times ride their entries under the card. Bands, curve, and tones are set under [`[theme.display]`](../guide/theme.md#display).
 
 ### Card shapes
 
