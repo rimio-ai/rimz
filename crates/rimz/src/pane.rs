@@ -119,16 +119,6 @@ pub enum RuntimeOwnerKind {
     Script,
 }
 
-impl RuntimeOwnerKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Agent => "agent",
-            Self::Daemon => "daemon",
-            Self::Script => "script",
-        }
-    }
-}
-
 /// Process identity for read-time runtime projection.
 ///
 /// Durable records remain on disk after the owner exits. Runtime views include
