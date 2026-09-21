@@ -34,16 +34,15 @@ mod trace;
 pub mod usage;
 
 pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts};
-pub(crate) use credits::merge_provider_realtime_usage;
 pub(super) use daemon_reap::read_codex_daemon_reap;
 pub use live_spend::apply_live_day_spend;
-pub(crate) use rate_limits::merge_account_rate_limits;
 pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context,
     refresh_session_transcript_context_from_watch,
 };
 pub use usage::{
-    complete_realtime_account_usage, refresh_claimed_account_usage, refresh_provider_usage,
+    complete_realtime_account_usage, publish_account_usage_snapshot, refresh_claimed_account_usage,
+    refresh_provider_usage,
 };
 
 use self::accounts::produce_accounts;

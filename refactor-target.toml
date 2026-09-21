@@ -281,7 +281,7 @@ surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/harness"
-upward-dependencies = ["sidebar::refresh"]
+# `harness` never reaches `sidebar`: a harness helper that refreshes provider usage returns it, and its CLI entry publishes through `sidebar::refresh`, which alone owns account-cache fusion and publication.
 # Watch verdicts, output paths and retention cross the library/CLI seam.
 # Launch-row selection is shared by ancestry and CLI parent consumers.
 # Team inspection shares scratch discovery and board-stage records with launch reminders.
@@ -317,7 +317,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Room GC reaps only its instance rows; unattended GC elects and stamps machine sweeps.
 # GC scope is shared by the helper, durable assists, and stats projection.
 # Cache keepalive shares its request, helper recheck, prompt and producer entry across the CLI/sidebar seam.
-surface-budget = 570
+# `Redeemed` hands the refreshed usage to the CLI entry that publishes it through `sidebar::refresh`.
+surface-budget = 571
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::RuntimePaths;
-use crate::agents::{
-    AccountUsageIdentity, AccountUsageSnapshot, ProviderAccountScope, ProviderLogin, RoomLoginSet,
-};
+use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, ProviderLogin, RoomLoginSet};
 use crate::ids::{LoginKey, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -24,9 +22,9 @@ use super::credits::{
     complete_provider_account_usage, merge_provider_realtime_usage,
     renew_provider_account_usage_claim,
 };
-use super::rate_limits::drop_login_rate_limits;
+use super::rate_limits::{drop_login_rate_limits, merge_account_rate_limits};
+use super::trace;
 use super::trace::{TraceEvent, duration_ms};
-use super::{merge_account_rate_limits, trace};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountUsageRefreshRequest {
@@ -157,7 +155,8 @@ fn refresh_claimed_account_usage_with(
     let mut cache_publication_ms = 0;
     if let Some(usage) = realtime {
         let publication_started = Instant::now();
-        wrote |= publish_account_usage_snapshot(runtime, key, usage);
+        wrote |=
+            publish_account_usage_snapshot(runtime, key, AccountUsageIdentity::default(), usage);
         cache_publication_ms += duration_ms(publication_started.elapsed());
     }
     if !renew_provider_account_usage_claim(runtime, key, claim_id) {
@@ -272,7 +271,8 @@ fn complete_realtime_account_usage_with(
         || realtime.rate_limits.is_none();
     let mut wrote = false;
     if publish {
-        wrote |= publish_account_usage_snapshot(runtime, key, realtime);
+        wrote |=
+            publish_account_usage_snapshot(runtime, key, AccountUsageIdentity::default(), realtime);
     }
     if run_direct {
         wrote |= complete_direct(runtime, key);
@@ -328,9 +328,12 @@ fn complete_direct_account_usage(
 
 /// Publish one normalized realtime snapshot. Credits and optional windows keep
 /// their owning locks and no provider call runs while either lock is held.
-fn publish_account_usage_snapshot(
+/// This is the one entry through which any caller publishes a normalized
+/// account-usage snapshot, harness-originated redemptions included.
+pub fn publish_account_usage_snapshot(
     runtime: &RuntimePaths,
     key: &LoginKey,
+    identity: AccountUsageIdentity,
     mut snapshot: AccountUsageSnapshot,
 ) -> bool {
     let windows = snapshot.rate_limits.take();
@@ -338,10 +341,9 @@ fn publish_account_usage_snapshot(
         || snapshot.extra_credits.is_some()
         || snapshot.reset_credits.is_some();
     if has_credits {
-        merge_provider_realtime_usage(runtime, key, ProviderAccountScope::KindWide, snapshot);
+        merge_provider_realtime_usage(runtime, key, identity.scope.clone(), snapshot);
     }
-    let has_windows =
-        publish_account_usage_windows(runtime, key, AccountUsageIdentity::default(), windows);
+    let has_windows = publish_account_usage_windows(runtime, key, identity, windows);
     has_credits || has_windows
 }
 
