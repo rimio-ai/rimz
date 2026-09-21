@@ -73,11 +73,19 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
     let split = format!(
         "split-window -h -b -d -c '#{{session_path}}' -l '#{{{SIDEBAR_WIDTH_OPTION}}}' '{serve}'"
     );
+    // The hook body is one tmux command string rather than argv, so an argument
+    // carrying a space or a `#{…}` reference is quoted on the way in.
     let mut hook_commands: Vec<String> = tmux_window_options(&opts.config.tmux)
         .into_iter()
-        .map(|(key, value)| match value {
-            Some(value) => format!("set-window-option {key} '{value}'"),
-            None => format!("set-window-option -u {key}"),
+        .map(|(key, value)| {
+            window_option_argv(key, value.as_deref(), None)
+                .into_iter()
+                .map(|arg| match arg.contains([' ', '#']) {
+                    true => format!("'{arg}'"),
+                    false => arg,
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
         })
         .collect();
     hook_commands.push(split);
@@ -267,6 +275,28 @@ fn sidebar_blanking_border_format() -> String {
 }
 
 /// Every owned window key; `None` restores inheritance from the global option.
+/// One `set-window-option` argv for an owned window key: the value, or `-u` to
+/// hand the key back to the user's `~/.tmux.conf`. A `target` is spelled only by
+/// a caller addressing a window by id; the `after-new-window` hook runs inside
+/// the window it configures. Apply and hook render through this one function so
+/// a key needing a different flag cannot be fixed in one and missed in the other.
+pub(super) fn window_option_argv(
+    key: &str,
+    value: Option<&str>,
+    target: Option<&str>,
+) -> Vec<String> {
+    let mut argv = vec!["set-window-option".to_owned()];
+    if value.is_none() {
+        argv.push("-u".to_owned());
+    }
+    if let Some(target) = target {
+        argv.extend(["-t".to_owned(), target.to_owned()]);
+    }
+    argv.push(key.to_owned());
+    argv.extend(value.map(str::to_owned));
+    argv
+}
+
 pub(super) fn tmux_window_options(config: &TmuxConfig) -> Vec<(&'static str, Option<String>)> {
     vec![
         (
@@ -431,8 +461,8 @@ mod tests {
                 "room".to_owned(),
                 "after-new-window".to_owned(),
                 format!(
-                    "set-window-option allow-passthrough 'on' ; \
-                     set-window-option aggressive-resize 'on' ; \
+                    "set-window-option allow-passthrough on ; \
+                     set-window-option aggressive-resize on ; \
                      set-window-option -u pane-border-status ; \
                      set-window-option -u pane-border-format ; \
                      set-window-option -u pane-border-lines ; \
@@ -456,11 +486,11 @@ mod tests {
                 "room".to_owned(),
                 "after-new-window".to_owned(),
                 format!(
-                    "set-window-option allow-passthrough 'on' ; \
-                     set-window-option aggressive-resize 'on' ; \
-                     set-window-option pane-border-status 'top' ; \
+                    "set-window-option allow-passthrough on ; \
+                     set-window-option aggressive-resize on ; \
+                     set-window-option pane-border-status top ; \
                      set-window-option pane-border-format '{}' ; \
-                     set-window-option pane-border-lines 'heavy' ; \
+                     set-window-option pane-border-lines heavy ; \
                      split-window -h -b -d -c '#{{session_path}}' -l '#{{@rimz_sidebar_cols}}' '{serve}' ; \
                      if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'",
                     sidebar_blanking_border_format()
