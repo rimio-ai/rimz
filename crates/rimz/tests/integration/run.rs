@@ -2905,6 +2905,30 @@ fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
         run_agents_json_command(&env, &workspace.session_name, &["agents", "list", "#auth"]);
     assert_agent_ids(&subcommand, &["sess-auth"]);
 
+    // From inside a channel the bare command lists that lane alone, and `--all`
+    // widens it to the whole room.
+    let scoped =
+        run_agents_json_command_in(&env, &workspace.session_name, &["agents"], Some("auth"));
+    assert_agent_ids(&scoped, &["sess-auth"]);
+    let widened = run_agents_json_command_in(
+        &env,
+        &workspace.session_name,
+        &["agents", "--all"],
+        Some("auth"),
+    );
+    let mut widened_ids = widened["agents"]
+        .as_array()
+        .expect("agent array")
+        .iter()
+        .map(|agent| agent["id"].as_str().expect("id"))
+        .collect::<Vec<_>>();
+    widened_ids.sort_unstable();
+    assert_eq!(
+        widened_ids,
+        ["sess-auth", "sess-ops"],
+        "`--all` must widen past the current channel: {widened:#}"
+    );
+
     let out = env
         .rimz()
         .args(["agents", "@coder"])
@@ -2984,6 +3008,17 @@ fn publish_pane_frame(env: &Env, session_name: &str, panes: Vec<rimz::pane::Pane
 }
 
 fn run_agents_json_command(env: &Env, session_name: &str, args: &[&str]) -> serde_json::Value {
+    run_agents_json_command_in(env, session_name, args, None)
+}
+
+/// The same call, optionally from inside a channel — the pin that scopes a bare
+/// listing, which `Env` scrubs unless a test sets it.
+fn run_agents_json_command_in(
+    env: &Env,
+    session_name: &str,
+    args: &[&str],
+    channel: Option<&str>,
+) -> serde_json::Value {
     let trace_log = env.project_root.join(format!("{}.log", args.join("-")));
     let mut command = env.rimz();
     command
@@ -2996,6 +3031,9 @@ fn run_agents_json_command(env: &Env, session_name: &str, args: &[&str]) -> serd
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{session_name} [Created 1s ago]\n"),
         );
+    if let Some(channel) = channel {
+        command.env(rimz::workspace::ENV_CHANNEL, channel);
+    }
     let out = command.output().expect("agents json command");
     assert!(
         out.status.success(),
