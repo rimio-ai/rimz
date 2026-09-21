@@ -530,16 +530,38 @@ pub(crate) fn selected_lines(view: &RenderedChat) -> Vec<ChatLine> {
     thread::selected_chat_lines(view)
 }
 
-pub(crate) fn render_lines_since_to(
+fn arrival_indices_since(view: &RenderedChat, seen: usize) -> Vec<usize> {
+    let mut indices = (0..view.entries.len()).collect::<Vec<_>>();
+    indices.sort_by(|&left, &right| {
+        compare_optional_timestamps(
+            view.entries[left].chat.arrived_at(),
+            view.entries[right].chat.arrived_at(),
+        )
+        .then_with(|| left.cmp(&right))
+    });
+    indices.into_iter().skip(seen).collect()
+}
+
+pub(crate) fn arrival_lines_since(view: &RenderedChat, seen: usize) -> Vec<ChatLine> {
+    arrival_indices_since(view, seen)
+        .into_iter()
+        .map(|index| view.entries[index].chat.clone())
+        .collect()
+}
+
+pub(crate) fn render_arrivals_since_to(
     out: &mut impl Write,
     view: &RenderedChat,
-    source_index: usize,
+    seen: usize,
     tz: &TimeZone,
     prose: Prose,
 ) -> Result<()> {
+    let arrivals = arrival_indices_since(view, seen)
+        .into_iter()
+        .collect::<HashSet<_>>();
     let entries = entries_for_view(view)
         .into_iter()
-        .filter(|entry| entry.source_index >= source_index)
+        .filter(|entry| arrivals.contains(&entry.source_index))
         .collect::<Vec<_>>();
     chat::render_display_chat_to(
         out,

@@ -731,6 +731,55 @@ fn flat_and_last_apply_to_display_order() {
 }
 
 #[test]
+fn follow_selects_parked_message_by_arrival_not_created_order() {
+    let mut parked = entry("2026-06-28T12:41:00Z", "parked message");
+    parked.chat.delivered_at = Some(ts("2026-06-28T12:45:00Z"));
+    let view = RenderedChat {
+        channel: None,
+        focus: None,
+        entries: vec![
+            entry("2026-06-28T12:40:00Z", "already printed prompt"),
+            parked,
+            assistant_entry("2026-06-28T12:42:00Z", "already printed output"),
+            entry("2026-06-28T12:42:00Z", "already printed tied prompt"),
+        ],
+        archive_prefix: 0,
+        archived_hidden: 0,
+        newest_archived_at: None,
+        empty_message: None,
+        last: None,
+        flat: false,
+    };
+
+    assert_eq!(
+        arrival_lines_since(&view, 0)
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "already printed prompt",
+            "already printed output",
+            "already printed tied prompt",
+            "parked message",
+        ]
+    );
+    let arrivals = arrival_lines_since(&view, 3);
+    assert_eq!(arrivals, vec![view.entries[1].chat.clone()]);
+    let json = serde_json::to_value(&arrivals).expect("serialize arrivals");
+    assert_eq!(json[0]["at"], "2026-06-28T12:41:00Z");
+    assert_eq!(json[0]["delivered_at"], "2026-06-28T12:45:00Z");
+
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_arrivals_since_to(&mut out, &view, 3, &TimeZone::UTC, Prose::Raw)
+        .expect("render arrival");
+    let rendered = String::from_utf8(out.into_inner()).expect("utf8");
+    assert!(rendered.contains("parked message"), "{rendered}");
+    assert!(rendered.contains("12:41 · delivered 12:45"), "{rendered}");
+    assert!(!rendered.contains("already printed"), "{rendered}");
+    assert!(arrival_lines_since(&view, view.entries.len()).is_empty());
+}
+
+#[test]
 fn subagent_reports_and_waits_are_json_only_and_do_not_consume_the_human_last_slot() {
     let project = tempfile::TempDir::new().expect("project tempdir");
     let (workspace, paths) = temp_workspace(&project);
