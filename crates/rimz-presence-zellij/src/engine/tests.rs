@@ -63,10 +63,12 @@ fn reconfigure_config() -> EngineConfig {
     EngineConfig {
         focus_key: Some("Alt+p".to_owned()),
         zoom_key: Some("Alt+g".to_owned()),
+        // Zellij hands `load` a `BTreeMap`, so the shell collects the host's
+        // `opt_` entries in key order, not in the host's resolved order.
         session_options: vec![
+            ("on_force_close".to_owned(), "quit".to_owned()),
             ("pane_frames".to_owned(), "false".to_owned()),
             ("scroll_buffer_size".to_owned(), "123456".to_owned()),
-            ("on_force_close".to_owned(), "quit".to_owned()),
         ],
         ..config()
     }
@@ -260,7 +262,7 @@ fn pregrant_unknown_patch_is_retained_until_the_manifest_arrives() {
         .collect();
     assert!(!reconfigurations.is_empty());
     assert!(reconfigurations.iter().all(|kdl| kdl.starts_with(
-        "pane_frames false\nscroll_buffer_size 123456\non_force_close \"quit\"\nkeybinds {\n"
+        "on_force_close \"quit\"\npane_frames false\nscroll_buffer_size 123456\nkeybinds {\n"
     )));
     assert!(effects.contains(&Effect::ListClients));
     assert_eq!(reasons(&effects), vec!["panes-changed"]);

@@ -170,6 +170,18 @@ pub struct RuntimeReconfigure<'a> {
 pub fn runtime_reconfigure_kdl(config: &RuntimeReconfigure<'_>) -> Option<String> {
     let mut kdl = String::new();
     for (key, value) in config.session_options {
+        // The key becomes a KDL node name. Only a plain identifier is emitted:
+        // the host resolves the key set, but the load configuration this list
+        // comes from is reachable by anything that can pipe to the session, and
+        // a key carrying KDL text would otherwise inject whole nodes into a
+        // payload the plugin applies with its own grants.
+        if key.is_empty()
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            continue;
+        }
         kdl.push_str(key);
         kdl.push(' ');
         if matches!(value.as_str(), "true" | "false")
