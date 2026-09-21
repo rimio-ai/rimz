@@ -11,6 +11,51 @@ use crate::sidebar::test_support::{provider_panel, snapshot_with_panels};
 
 use super::*;
 
+#[test]
+fn published_usage_preserves_identity_and_only_writes_present_credits() {
+    for with_credits in [true, false] {
+        let (_dir, runtime) = account_usage_runtime();
+        let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"));
+        let identity = crate::agents::AccountUsageIdentity {
+            scope: crate::agents::ProviderAccountScope::sub_provider("alibaba", "international"),
+            account_key: Some("opaque-fingerprint".to_owned()),
+            credentials_stamp: None,
+        };
+        publish_account_usage_snapshot(
+            &runtime,
+            &key,
+            identity.clone(),
+            AccountUsageSnapshot {
+                rate_limits: Some(AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        used_percentage: Some(25),
+                        duration_mins: Some(10_080),
+                        ..Default::default()
+                    }],
+                }),
+                reset_credits: with_credits.then_some(crate::agents::ResetCredits {
+                    count: 1,
+                    soonest_expiry: None,
+                    expiries: Vec::new(),
+                }),
+                ..Default::default()
+            },
+        );
+
+        let cache =
+            crate::agents::account::read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        let entry = cache.entries.get(&key).unwrap();
+        assert_eq!(entry.scope, identity.scope);
+        assert_eq!(entry.account_key, identity.account_key);
+        let cache = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
+        if with_credits {
+            assert_eq!(cache.logins.get(&key).unwrap().scope, identity.scope);
+        } else {
+            assert!(!cache.logins.contains_key(&key));
+        }
+    }
+}
+
 fn complete_realtime() -> AccountUsageSnapshot {
     AccountUsageSnapshot {
         plan: Some("pro".to_owned()),
@@ -139,6 +184,7 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
             publish_account_usage_snapshot(
                 runtime,
                 kind,
+                AccountUsageIdentity::default(),
                 AccountUsageSnapshot {
                     rate_limits: Some(usage_windows(34)),
                     ..Default::default()
@@ -231,7 +277,7 @@ fn authoritative_direct_completion_survives_live_session_exit() {
             ..Default::default()
         },
     );
-    super::super::merge_account_rate_limits(
+    super::super::rate_limits::merge_account_rate_limits(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
         identity.clone(),
@@ -347,7 +393,7 @@ fn owned_usage_runtime(owner: &str) -> (tempfile::TempDir, RuntimePaths) {
             ..Default::default()
         },
     );
-    super::super::merge_account_rate_limits(
+    super::super::rate_limits::merge_account_rate_limits(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
         usage_identity(Some(owner)),

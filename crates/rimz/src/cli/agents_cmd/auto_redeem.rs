@@ -21,14 +21,23 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
         &config.resume,
     );
     match result {
-        Ok(Some(report)) => {
+        Ok(Some(redeemed)) => {
+            let published = redeemed.usage.is_some();
+            if let Some((identity, snapshot)) = redeemed.usage {
+                rimz::sidebar::refresh::publish_account_usage_snapshot(
+                    &runtime,
+                    &request.login,
+                    identity,
+                    snapshot,
+                );
+            }
             append_report(
                 request.login.kind.as_str(),
                 request.request_id,
-                &report,
+                &redeemed.report,
                 None,
             );
-            if report.reset {
+            if published {
                 let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
             }
         }

@@ -18,7 +18,7 @@ use crate::RuntimePaths;
 use crate::agents::account::{
     ProviderCapacity, RedemptionCode, ResetCreditResult, prepare_reset_credit_redemption,
 };
-use crate::agents::{AccountUsageSnapshot, RateLimitWindow, ResetCredits};
+use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, RateLimitWindow, ResetCredits};
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
@@ -122,7 +122,12 @@ pub struct RedeemReport {
     pub outcome: Option<RedemptionCode>,
     pub windows_reset: bool,
     pub window_resets: Vec<AssistWindowReset>,
-    pub reset: bool,
+}
+
+/// A redemption result; the caller publishes `usage` before appending the report.
+pub struct Redeemed {
+    pub report: RedeemReport,
+    pub usage: Option<(AccountUsageIdentity, AccountUsageSnapshot)>,
 }
 
 /// Decide whether current provider-neutral capacity and reset credits warrant
@@ -517,7 +522,7 @@ pub fn execute_auto_redeem(
     requested_reason: RedeemReason,
     request_id: uuid::Uuid,
     config: &ResumeConfig,
-) -> Result<Option<RedeemReport>, AutoRedeemErr> {
+) -> Result<Option<Redeemed>, AutoRedeemErr> {
     if key.kind.as_str() != CODEX_KIND {
         return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
     }
@@ -582,7 +587,6 @@ pub fn execute_auto_redeem(
         outcome: None,
         windows_reset: false,
         window_resets: Vec::new(),
-        reset: false,
     };
 
     let mut stamp = RedeemStamp {
@@ -597,7 +601,6 @@ pub fn execute_auto_redeem(
         })?;
     report.outcome = Some(action.outcome);
     report.windows_reset = action.windows_reset > 0;
-    report.reset = action.outcome == RedemptionCode::Reset;
     stamp.outcome = Some(action.outcome.as_str().to_owned());
     write_stamp(&stamp_path, &stamp).map_err(|err| attempted_error(&report, err))?;
 
@@ -610,7 +613,10 @@ pub fn execute_auto_redeem(
         "auto-redeem: reset-credit outcome",
     );
     if action.outcome != RedemptionCode::Reset {
-        return Ok(Some(report));
+        return Ok(Some(Redeemed {
+            report,
+            usage: None,
+        }));
     }
 
     let Some((usage_identity, refreshed)) = action.refreshed else {
@@ -634,8 +640,10 @@ pub fn execute_auto_redeem(
                 .collect()
         })
         .unwrap_or_default();
-    publish_usage(runtime, key, usage_identity, refreshed);
-    Ok(Some(report))
+    Ok(Some(Redeemed {
+        report,
+        usage: Some((usage_identity, refreshed)),
+    }))
 }
 
 fn consume_reserved_reset_credit(
@@ -660,24 +668,6 @@ fn attempted_error(report: &RedeemReport, error: AutoRedeemErr) -> AutoRedeemErr
     AutoRedeemErr::Attempted {
         report: Box::new(report.clone()),
         error: error.to_string(),
-    }
-}
-
-fn publish_usage(
-    runtime: &RuntimePaths,
-    key: &LoginKey,
-    identity: crate::agents::AccountUsageIdentity,
-    snapshot: AccountUsageSnapshot,
-) {
-    let scope = identity.scope.clone();
-    if let Some(windows) = snapshot.rate_limits.clone() {
-        crate::sidebar::refresh::merge_account_rate_limits(runtime, key, identity, windows);
-    }
-    if snapshot.plan.is_some()
-        || snapshot.extra_credits.is_some()
-        || snapshot.reset_credits.is_some()
-    {
-        crate::sidebar::refresh::merge_provider_realtime_usage(runtime, key, scope, snapshot);
     }
 }
 

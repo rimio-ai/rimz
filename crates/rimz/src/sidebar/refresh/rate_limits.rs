@@ -87,7 +87,7 @@ impl WindowIndex {
 /// section so an accepted OAuth observation is published before its five-minute
 /// attempt throttle advances. Used by the detached `rimz agents refresh-usage`
 /// helper, never on the per-tick path.
-pub(crate) fn merge_account_rate_limits(
+pub(super) fn merge_account_rate_limits(
     runtime: &RuntimePaths,
     key: &LoginKey,
     identity: AccountUsageIdentity,

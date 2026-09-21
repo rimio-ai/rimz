@@ -567,82 +567,30 @@ fn stamp_round_trips_atomically() {
 }
 
 #[test]
-fn published_usage_preserves_identity_and_only_writes_present_credits() {
-    for with_credits in [true, false] {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime =
-            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let key = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND));
-        let identity = crate::agents::AccountUsageIdentity {
-            scope: crate::agents::ProviderAccountScope::sub_provider("alibaba", "international"),
-            account_key: Some("opaque-fingerprint".to_owned()),
-            credentials_stamp: None,
-        };
-        publish_usage(
-            &runtime,
-            &key,
-            identity.clone(),
-            AccountUsageSnapshot {
-                rate_limits: Some(AgentRateLimits {
-                    windows: vec![RateLimitWindow {
-                        used_percentage: Some(25),
-                        duration_mins: Some(10_080),
-                        ..Default::default()
-                    }],
-                }),
-                reset_credits: with_credits.then(|| credits(ts(1_700_000_000), None)),
-                ..Default::default()
-            },
-        );
-
-        let cache =
-            crate::agents::account::read_rate_limits_cache(&runtime.shared_rate_limits_path());
-        let entry = cache.entries.get(&key).unwrap();
-        assert_eq!(entry.scope, identity.scope);
-        assert_eq!(entry.account_key, identity.account_key);
-        let cache: serde_json::Value = match std::fs::read(runtime.shared_credits_path()) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Value::Null,
-            Err(error) => panic!("cannot read credits cache: {error}"),
-        };
-        let entry = &cache["logins"][key.to_string()];
-        if with_credits {
-            assert_eq!(
-                entry["scope"],
-                serde_json::json!({
-                    "kind": "sub_provider",
-                    "provider": "alibaba",
-                    "variant": "international"
-                })
-            );
-        } else {
-            assert!(entry.is_null());
-        }
-    }
-}
-
-#[test]
 fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     let now = ts(1_700_000_000);
     let dir = tempfile::tempdir().unwrap();
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    crate::sidebar::refresh::merge_account_rate_limits(
-        &runtime,
-        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
-        Default::default(),
-        AgentRateLimits {
-            windows: vec![RateLimitWindow {
-                used_percentage: Some(100),
-                resets_at: Some(now + Duration::from_secs(3 * 86_400)),
-                duration_mins: Some(10_080),
-                observed_at: Some(now),
-                ..Default::default()
-            }],
+    let mut cache = crate::agents::account::RateLimitsCache::default();
+    cache.entries.insert(
+        LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
+        crate::agents::account::RateLimitCacheEntry {
+            limits: AgentRateLimits {
+                windows: vec![RateLimitWindow {
+                    used_percentage: Some(100),
+                    resets_at: Some(now + Duration::from_secs(3 * 86_400)),
+                    duration_mins: Some(10_080),
+                    observed_at: Some(now),
+                    source: crate::agents::context::WindowSource::Authoritative,
+                    ..Default::default()
+                }],
+            },
+            ..Default::default()
         },
     );
+    write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &cache).unwrap();
     let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
     panel.reset_credits = Some(credits(now, Some(Duration::from_secs(10 * 86_400))));
     let config = ResumeConfig {
@@ -741,7 +689,6 @@ fn attempted_errors_retain_the_redeem_decision_report() {
         outcome: None,
         windows_reset: false,
         window_resets: Vec::new(),
-        reset: false,
     };
 
     let error = attempted_error(&report, AutoRedeemErr::Codex("offline".to_owned()));
@@ -768,7 +715,6 @@ fn failed_reservation_never_consumes_a_credit() {
         outcome: None,
         windows_reset: false,
         window_resets: Vec::new(),
-        reset: false,
     };
     let consumed = std::cell::Cell::new(false);
 
