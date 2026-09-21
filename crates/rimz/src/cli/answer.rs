@@ -469,7 +469,7 @@ fn record_answer_if_missing(
     entry.name = agent.name.clone();
     entry.profile = agent.profile.clone();
     entry.role = agent.role.clone();
-    entry.from = Some("you".to_owned());
+    entry.from = Some(rimz::transcript::HUMAN_FROM.to_owned());
     entry.answers = answers;
     rimz::transcript::append_answer_if_missing(store.paths(), &entry)?;
     Ok(())
