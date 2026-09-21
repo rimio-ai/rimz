@@ -100,18 +100,17 @@ pub fn prune_archive(archive_dir: &Path, older_than: Duration) -> Result<PruneOu
             return Ok(PruneOutcome::default());
         }
         Err(source) => {
-            return Err(atomic::AtomicErr::Io {
+            return Err(EventLogErr::Io {
                 path: archive_dir.to_path_buf(),
                 source,
-            }
-            .into());
+            });
         }
     };
 
     let now = SystemTime::now();
     let mut report = PruneOutcome::default();
     for entry in entries {
-        let entry = entry.map_err(|source| atomic::AtomicErr::Io {
+        let entry = entry.map_err(|source| EventLogErr::Io {
             path: archive_dir.to_path_buf(),
             source,
         })?;
@@ -119,16 +118,14 @@ pub fn prune_archive(archive_dir: &Path, older_than: Duration) -> Result<PruneOu
         if !is_archive_name(&path) {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path).map_err(|source| atomic::AtomicErr::Io {
+        let metadata = fs::symlink_metadata(&path).map_err(|source| EventLogErr::Io {
             path: path.clone(),
             source,
         })?;
-        let modified = metadata
-            .modified()
-            .map_err(|source| atomic::AtomicErr::Io {
-                path: path.clone(),
-                source,
-            })?;
+        let modified = metadata.modified().map_err(|source| EventLogErr::Io {
+            path: path.clone(),
+            source,
+        })?;
         let Ok(age) = now.duration_since(modified) else {
             continue;
         };
@@ -136,7 +133,7 @@ pub fn prune_archive(archive_dir: &Path, older_than: Duration) -> Result<PruneOu
             continue;
         }
         let bytes = metadata.len();
-        fs::remove_file(&path).map_err(|source| atomic::AtomicErr::Io {
+        fs::remove_file(&path).map_err(|source| EventLogErr::Io {
             path: path.clone(),
             source,
         })?;
