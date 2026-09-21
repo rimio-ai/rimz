@@ -35,7 +35,7 @@ Named channels and worktrees share one namespace in a repository room ([channel 
 ```console
 $ rimz worktree new feat-a
 created feat-a
-  path   : /home/you/code/query-engine/../query-engine-worktrees/feat-a
+  path   : ~/code/query-engine-worktrees/feat-a
   branch : feat-a
   base branch: main
   base   : bece28e8adc3d54ed07a03764b25452117cdce6d
@@ -197,7 +197,7 @@ sweep — would remove 1 · 18 MB · 2 kept
 | `uncommitted changes` | The tree is dirty. |
 | `not merged yet` | The work is pending or unknown. |
 
-Quitting the agent that worked in a tree reclaims nothing: its pane drops back to a shell, and the tree, its branch, and its files stay. A tree goes away through `sweep`, through `remove`, or through the daily `gc` below, which runs this same sweep.
+Quitting the agent that worked in a tree reclaims nothing: its pane says the worktree was kept and names `rimz worktree sweep`, then drops back to a shell, and the tree, its branch, and its files stay. A tree goes away through `sweep`, through `remove`, or through the daily `gc` below, which runs this same sweep.
 
 A tree that fails to remove prints `  failed: PATH — ERROR`, and a failed message archive prints `    message archive failed: ERROR` under its row. The sweep continues past both and then exits 1 with `worktree sweep completed with N problem(s)`. If the agent roster cannot be read, `sweep` removes nothing and exits 1.
 

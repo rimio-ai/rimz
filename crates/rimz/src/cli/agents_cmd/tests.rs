@@ -1438,7 +1438,14 @@ mod pane_exec {
         assert_eq!(relaunch_command(&bare_exec_args()), "rimz agents codex");
 
         let status = exit_status(0);
-        let message = exit_hint("codex", &status, false, "rimz agents codex-plan", false);
+        let message = exit_hint(
+            "codex",
+            &status,
+            false,
+            "rimz agents codex-plan",
+            false,
+            None,
+        );
         assert_eq!(
             message,
             format!(
@@ -1450,7 +1457,14 @@ mod pane_exec {
     #[test]
     fn exit_hint_teaches_resume_for_a_redeemable_session() {
         let status = exit_status(0);
-        let message = exit_hint("codex", &status, false, "rimz agents forge.coder", true);
+        let message = exit_hint(
+            "codex",
+            &status,
+            false,
+            "rimz agents forge.coder",
+            true,
+            None,
+        );
         assert_eq!(
             message,
             format!(
@@ -1460,9 +1474,48 @@ mod pane_exec {
 
         // A startup failure never advertises resume: there is no conversation.
         let failed = exit_status(1);
-        let message = exit_hint("codex", &failed, true, "rimz agents forge.coder", true);
+        let message = exit_hint(
+            "codex",
+            &failed,
+            true,
+            "rimz agents forge.coder",
+            true,
+            None,
+        );
         assert!(message.contains("failed to start"), "{message}");
         assert!(!message.contains("--resume"), "{message}");
+    }
+
+    #[test]
+    fn exit_hint_names_the_kept_worktree_on_every_exit() {
+        let path = Path::new("/code/query-engine-worktrees/feat-a");
+        let display = crate::cli::render::home_relative(&path.to_string_lossy());
+        for (startup_failure, resumable, code, action) in [
+            (false, false, 0, "exited"),
+            (false, true, 0, "exited"),
+            (true, true, 1, "failed to start"),
+        ] {
+            let status = exit_status(code);
+            let relaunch = "rimz agents codex-plan";
+            let command = if resumable && !startup_failure {
+                "resume with `rimz agents codex-plan --resume`"
+            } else {
+                "relaunch with `rimz agents codex-plan`"
+            };
+            assert_eq!(
+                exit_hint(
+                    "codex",
+                    &status,
+                    startup_failure,
+                    relaunch,
+                    resumable,
+                    Some(path)
+                ),
+                format!(
+                    "rimz: agent `codex` {action} ({status}); {command}\r\nrimz: worktree {display} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"
+                )
+            );
+        }
     }
 
     #[test]
