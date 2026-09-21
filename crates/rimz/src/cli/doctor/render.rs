@@ -536,7 +536,11 @@ fn push_capabilities(kv: &mut KeyVals, tally: &mut Tally, capabilities: &Capabil
                 floor_cell(tally, caps.meets_min_version, caps.min_version),
             );
             let graphics = match caps.kitty_graphics {
-                ZellijKittyGraphics::Supported => verdict(tally, Health::Ok, "supported"),
+                ZellijKittyGraphics::Supported => verdict(
+                    tally,
+                    Health::Info,
+                    "supported by the host terminal; Zellij rooms still draw cell art (Zellij rejects the placement the pixel tier uses)",
+                ),
                 ZellijKittyGraphics::Unsupported => {
                     verdict(tally, Health::Info, "unsupported by host terminal")
                 }

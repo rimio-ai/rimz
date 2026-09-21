@@ -146,7 +146,10 @@ fn mux_fixture() -> Mux {
 #[test]
 fn zellij_graphics_capability_names_each_probe_outcome() {
     let cases = [
-        (ZellijKittyGraphics::Supported, "supported"),
+        (
+            ZellijKittyGraphics::Supported,
+            "supported by the host terminal; Zellij rooms still draw cell art (Zellij rejects the placement the pixel tier uses)",
+        ),
         (
             ZellijKittyGraphics::Unsupported,
             "unsupported by host terminal",
@@ -180,7 +183,23 @@ fn zellij_graphics_capability_names_each_probe_outcome() {
 
         assert!(out.contains("zellij kitty graphics"), "{out}");
         assert!(out.contains(expected), "{out}");
+        let graphics = out
+            .lines()
+            .find(|line| line.contains("zellij kitty graphics"))
+            .expect("graphics row");
+        assert!(!graphics.contains(parts(Health::Ok).0), "{graphics}");
     }
+}
+
+#[test]
+fn agents_home_override_names_precedence_and_resolved_path() {
+    let mut home = report_fixture().home;
+    home.agents_home_override = Some("/resolved/agents-home".to_owned());
+    let out = strip(|w| render_home(w, &home, &mut Tally::default()));
+
+    assert!(out.contains("RIMZ_AGENTS_HOME"), "{out}");
+    assert!(out.contains("overrides RIMZ_HOME"), "{out}");
+    assert!(out.contains("/resolved/agents-home"), "{out}");
 }
 
 #[test]

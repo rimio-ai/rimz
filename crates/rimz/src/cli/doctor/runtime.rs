@@ -158,7 +158,8 @@ pub(super) fn collect_mux(
         duplicate_sessions: None,
         presence: None,
         topology_writer: None,
-        ttyd: (mux == MuxName::Tmux).then(collect_ttyd),
+        // Disabled web commands refuse to run, so missing ttyd is not a finding.
+        ttyd: crate::cli::machine_config().web.enabled.then(collect_ttyd),
     };
     if mux == MuxName::Tmux {
         report.socket = Some(tmux_mod::managed_server_socket_path().display().to_string());
