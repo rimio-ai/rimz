@@ -210,7 +210,7 @@ Closing the sidebar pane costs you nothing durable: every agent keeps working, a
 rimz sidebar repair    # remount a missing, duplicate, wedged, or mis-docked sidebar
 ```
 
-`rimz reload` will not do it: reload upgrades sidebars that are still alive and never opens a pane. It does say so, naming the room and the verb (``1 room with no sidebar; mount it again with `rimz reload --repair`.``), and `rimz reload --repair` runs both operations in order.
+`rimz reload` will not do it: reload upgrades sidebars that are still alive and never opens a pane. It does say so, counting the rooms and naming the verb (``1 room with no sidebar reporting in; mount or replace it with `rimz reload --repair`.``), and `rimz reload --repair` runs both operations in order.
 
 ### The "Sidebar degraded" banner
 
