@@ -130,7 +130,7 @@ const DELIVERY_STAMP_SECS: i64 = 60;
 const TIME_FORMAT: &str = "%H:%M";
 const DATED_TIME_FORMAT: &str = "%a, %b %-d %Y · %H:%M";
 
-pub(super) fn delivery_stamp(chat: &ChatLine) -> Option<jiff::Timestamp> {
+fn delivery_stamp(chat: &ChatLine) -> Option<jiff::Timestamp> {
     let at = chat.at?;
     chat.delivered_at
         .filter(|delivered| delivered.duration_since(at).as_secs() >= DELIVERY_STAMP_SECS)
