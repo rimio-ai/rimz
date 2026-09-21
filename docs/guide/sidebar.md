@@ -1,18 +1,12 @@
 # Sidebar
 
-> The sidebar is the narrow column pinned beside your panes, and it answers one question: **which pane needs you, right now.** This page teaches you to read it: the zones, the cards, the states behind them, and the ranking that puts the right card on top. Every glyph, meter, and frame drawn exactly is the [interface reference](../interface/sidebar.md).
-
 <p align="center">
   <img src="../rimz-sidebar.png" alt="The sidebar: cockpit on top, triaged agent cards by worktree, provider dashboard at the bottom" width="420">
 </p>
 
-## What it is
-
 Running coding agents today means one conversation per terminal: prompt, watch it run, answer when it stops. Two agents fit in two tabs. Ten do not. Every rotation through the tabs costs a context switch for your head as much as for the terminal: re-read scrollback to tell *thinking* from *waiting on me*, reload what this agent was doing, then find your way back to your own work. Nothing announces a finished turn or a blocking question, so you learn about them whenever you next visit the tab, and until you do, an agent stopped on a permission prompt looks exactly like an agent reasoning.
 
 The sidebar replaces the rotation with a column. One narrow pane beside the agents holds one live card per agent: its state, what it is working on, how full its context window is, what it has cost. A card changes as the agent starts a turn, calls a tool, asks a question, or finishes. One line counts the fleet by state, so a row of zeros means nothing needs you and you can stay where you are. When an agent does need you, its card rises to the top of its group and marks itself unread; press `n` and you are in that agent's pane. Checking becomes a glance, a switch starts with the card's context already read, and finished work waits marked instead of hoping to be noticed.
-
-The tab bar carries the same glance when the sidebar is off-screen. RimZ appends the tab's most urgent live-agent glyph to its existing name: `#feat !` for a failure, `#feat ?` for an ask, `#feat ⏸` for a provider pause, `#feat ⢿` while work is running, and `#feat ✓` for a clean finish in the last five minutes. Idle tabs keep their bare names, and every mark except `✓` stays until the underlying state changes. A tab RimZ named after its agents goes back to the shell's name when they all exit; a tab you named yourself keeps its name. These suffixes always use the compact Unicode shapes, even when the column runs a configured [glyph set](./theme.md#glyphs).
 
 You never work *in* the sidebar. It has no reply box and no approve button. It routes you to the pane, and you answer in the agent's own UI, where the full prompt and its safe defaults live.
 
@@ -176,6 +170,8 @@ The cockpit compresses the fleet into one line, and the column below arrives alr
 You do not read where to go; you go. Press `n` (or `␣`) to jump to the next thing that needs you, oldest first, and RimZ focuses that agent's pane; `N` walks back. You read and answer there, in the agent's own UI, where the full context is. From any pane in the room, `Alt+p` focuses the sidebar, and pressing it again returns you to a work pane in that tab, so the whole loop runs without touching the mouse. The full key table is in the [interface reference](../interface/sidebar.md#keys-and-mouse).
 
 A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `done`, and stays unread until you focus its pane, dwell a couple of seconds in its tab, or press `m`; `M` marks every card read. The mark survives the agent recovering and moving on, so a result you never looked at is still flagged an hour later. It changes emphasis, never position: the card keeps its place in the ranking while the wash, the blink, and the jump key get you to it. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread across the sleep; the mark and any configured success notification arrive when the wait cycle finishes at done.
+
+The tab bar carries the same glance when the sidebar is off-screen. RimZ appends the tab's most urgent live-agent glyph to its existing name: `#feat !` for a failure, `#feat ?` for an ask, `#feat ⏸` for a provider pause, `#feat ⢿` while work is running, and `#feat ✓` for a clean finish in the last five minutes. Idle tabs keep their bare names, and every mark except `✓` stays until the underlying state changes. A tab RimZ named after its agents goes back to the shell's name when they all exit; a tab you named yourself keeps its name. These suffixes always use the compact Unicode shapes, even when the column runs a configured [glyph set](./theme.md#glyphs).
 
 That loop is the product. When you are off-screen, desktop, bell, and command notifications carry the same cues, and handlers or loops you wire can clear routine prompts before they reach you ([notifications](./notifications.md), [loops and schedules](./loops.md)).
 
