@@ -100,6 +100,7 @@ After a reboot the first line reads `rimz: machine rebooted since this room was 
 | Case | Fix it names |
 | --- | --- |
 | `--account` differs from the room's recorded accounts | `rimz reset --account <KIND=NAME>` |
+| Any `--account`, when you run `start` from inside the room's own multiplexer session | `rimz reset --account <KIND=NAME>` |
 | The project sets `[accounts]` but is untrusted or its trust is stale | Review with `rimz trust`, then `rimz trust grant` |
 | The account is not declared | `rimz accounts add <kind> <name>` |
 | The account's home is missing or lacks RimZ hooks | `rimz accounts add <kind> <name>` |
@@ -117,7 +118,7 @@ When `[web] enabled = true`, `rimz start` also starts the shared ttyd browser da
 rimz sessions
 ```
 
-`rimz sessions` opens a full-screen manager of every live RimZ room on the machine. Each room is a two-line card: the repository name and path, then live agent counts by kind (`claude ×2`), a `●` count of agents that need attention, and the session, token, and spend totals of the sidebar's headline window ([`spend_window`](../../guide/configuration.md#sidebar-rendering)). Rooms with a prompt in the last 24 hours come first, newest prompt first; the rest follow by the time RimZ last wrote the workspace record, then by repository name and project path. A narrow terminal drops the card's right-hand metrics rather than wrapping them: the token and spend totals go first, then the session count. Detaching from a room you entered returns you to the manager.
+`rimz sessions` opens a full-screen manager of every live RimZ room on the machine. Each room is a two-line card: the repository name and path, then live agent counts by kind (`claude ×2`), a `●` count of agents that need attention, and the session, token, and spend totals of the sidebar's headline window ([`spend_window`](../../guide/configuration.md#sidebar-rendering)). Rooms with a prompt in the last 24 hours come first, newest prompt first; the rest follow by the time RimZ last wrote the workspace record, then by repository name and project path. A narrow terminal drops the card's right-hand metrics rather than wrapping them: the token total goes first, then the session count. The dollar figure always stays. Detaching from a room you entered returns you to the manager.
 
 | Key (room list) | Action |
 | --- | --- |
@@ -194,7 +195,7 @@ A merge names every file it wrote, merged, or left untouched. An unparseable fil
 rimz doctor [--audit] [--json] [--output <PATH>] [--clear]
 ```
 
-`rimz doctor` reports the machine, the backend, and the room for the current directory in one pass. It starts, stops, and moves nothing, and it exits 0 whatever it finds; read the closing line, or the JSON, to act on the result. Collecting the agent and message sections opens the room's store, so a run in a project that never opened a room creates that room's state directory and its workspace record. `--clear` is the only flag that changes what a later report says.
+`rimz doctor` reports the machine, the backend, and the room for the current directory in one pass. It starts, stops, or reconfigures nothing, and it exits 0 whatever it finds; read the closing line, or the JSON, to act on the result. It is not inert on disk, though: collecting the agent and message sections opens the room's store, so a run in a project that has never opened a room creates that room's state directory and workspace record.
 
 | Flag | Effect |
 | --- | --- |
@@ -203,7 +204,7 @@ rimz doctor [--audit] [--json] [--output <PATH>] [--clear]
 | `--output <PATH>` | Write the report to `PATH` atomically instead of stdout. Human output is written without color. |
 | `--clear` | Before reporting, dismiss this workspace's recorded diagnostics, last incident, message failures, and multiplexer log records up to now. |
 
-`--json` embeds the multiplexer log lines behind each finding verbatim, up to 8 KiB per issue, so it can carry file paths, command lines, and prompt text from your own sessions. Read the artifact before attaching it to a public issue.
+`--json` embeds the multiplexer log lines behind each finding verbatim, up to 8 KiB per log record, so it can carry file paths, command lines, and prompt text from your own sessions. Read the artifact before attaching it to a public issue.
 
 The human report opens with the RimZ version, OS user, and binary path, then prints these sections in order. A section marked conditional appears only when it has something to show.
 

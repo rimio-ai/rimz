@@ -238,6 +238,8 @@ A supervised run refuses at entry, before it writes a run record or opens a pane
 - the room or provider-account daily cap has no headroom (exit `125`; see the [Budget CLI](./budget.md#what-a-cap-blocks));
 - a fresh Qwen run's exact Alibaba account has an exhausted quota window (exit `125`); missing or mismatched readings allow the launch.
 
+None of these writes a run record, so `agents wait` and the JSON have nothing to read afterwards. The two cap refusals exit `125` as listed; the hook and Codex-trust refusals exit `2`, and a flag combination the command rejects exits `1`, the same code a run that started and failed uses.
+
 Run records, the completion wakeup, streaming, and pane cleanup are described in [scripting.md](../../internals/harness/scripting.md).
 
 ## Resume agents

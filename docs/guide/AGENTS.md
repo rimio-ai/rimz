@@ -1,6 +1,6 @@
 # Guide writing contract
 
-Local contract for `docs/guide/`, the user guides. Extends the root [AGENTS.md](../../AGENTS.md). It governs new guides and every edit to an existing one.
+Local contract for `docs/guide/`, the user guides. Extends [docs/AGENTS.md](../AGENTS.md), which carries the rules every documentation page follows: the reader of each tree, grounding a `console` block, and the mechanics. This file governs new guides and every edit to an existing one.
 
 ## The reader
 
@@ -26,12 +26,58 @@ A guide reads front to back as the daily path. Field tables, provider matrices, 
 
 ## One home per fact
 
-Each topic has one owning guide; every other page links there with a half-line of orientation instead of restating. When a section accumulates detail another page owns, move the detail and retarget every inbound link. Guides teach the stable, dogfooded surface: mechanics live in `docs/internals/`, flag catalogs in `docs/reference/`, and early or still-shifting surfaces (agent plugins today) stay in the reference until they harden.
+Guides teach the stable, dogfooded surface, and the table below says which guide owns what. Mechanics live in `docs/internals/`, flag catalogs in `docs/reference/`, and early or still-shifting surfaces (agent plugins today) stay in the reference until they harden.
+
+## Who owns what
+
+Each page owns the topics in its row. A fact from another row gets a link, never a second copy.
+
+| Owner | Owns |
+| --- | --- |
+| `installation.md` | Getting RimZ and a multiplexer onto the machine, the version floors, and choosing a truecolor terminal and a Nerd Font. |
+| `setup.md` | One run of `rimz setup`, question by question. |
+| `sidebar.md` | The attention model: the trust story, the zone map, the agent lifecycle, the jump loop, and the ranking. |
+| `docs/interface/sidebar.md` | Every exact drawing: glyph meanings, worktree markers, receipts, budget bars, narrow-pane fallbacks, and the key and mouse tables. |
+| `insight.md` | What every token and dollar figure means, how each is calculated, and the scopes and windows. |
+| `configuration.md` | Every config key and its default, the `~/.rimz` layout, and rebirth resume. |
+| `theme.md` | Every `[theme]` key table. |
+| `loops.md` | `loop.toml` and the four hands-off reflexes: auto-continue, auto-redeem, idle compaction, smart compaction. |
+| `multiplexer.md` | Configuring Zellij and tmux, and what a room asserts on the session. |
+| `troubleshooting.md` | The symptom-to-fix mapping and nothing else. |
+| `security.md` | The threat model and nothing else. |
+| `docs/reference/` | Flag catalogs, field tables, exact output shapes, and per-agent matrices. |
+
+Two rows need a note. `theme.md` holds key tables only because `docs/reference/` has no theming page; create one and the slot table, the display keys, and the glyph roles move there, leaving the guide the workflow. A `troubleshooting.md` entry states the cause in a sentence or two, names the command, and links the guide that owns the model, so the model itself never migrates into the catalogue.
+
+## One term per concept
+
+The left column is the word to use. A synonym for one of these is a bug, and a term never shifts meaning between pages.
+
+| Term | Means |
+| --- | --- |
+| account | A provider login. |
+| park | An agent or run held rather than progressing: a crossed cap, a provider rate limit, spend limit, or overload, or a wake that never arrived. The sidebar's `⏸` covers the limit cases only. A message parks when it is held for the recipient's next turn boundary, the opposite of `--steer`. Sleeping is a separate state: an agent resting with a wait armed. |
+| reporting hooks | What `rimz hooks install` writes into an agent's own config. |
+| the run | What `rimz agents -p` or a scheduled task starts. |
+| channel, worktree | The two ways the fleet groups. Never "lane". |
+| landed | Work a base branch already contains. |
+| the floor | A minimum multiplexer version. |
+| truecolor | One word, matching the `COLORTERM` value. |
+| cell art | The sextant render tier. |
+| handle | `@name`. |
+| profile, kind base | The two definition shapes: `agents/<kind>.md` is a kind base, every other file under `agents/` is a profile. |
+| permission mode | What an agent may do without asking. Never "posture", which the reference reserves for launch posture. |
+| cohort | One live copy of a team. |
+| the per-machine config | The `~/.rimz` TOML set. |
+| project config | `<repo>/.rimz/config.toml`. |
+
+A state directory is written `~/.rimz/ws/<workspace-dir>/...`.
 
 ## Mechanics
 
+On top of the [documentation mechanics](../AGENTS.md#mechanics):
+
+- Every page opens with unheaded paragraphs under the H1, never a blockquote summary.
+- A bullet list answering "which one" or "who does it" may lead each bullet with a bolded full sentence (`**A new turn does.**`). A bold label and a colon (`**Performance:** improved`) stays banned.
 - Guide filenames are lowercase topic words. Never name a guide `agents.md`: it collides with the `AGENTS.md` contract files on case-insensitive filesystems and with the reference and internals files of that name.
-- `sh` blocks are copy-runnable; `console` blocks carry output as the command actually printed it, captured, never invented.
-- A guide that leaves the reader with an obvious next step ends in a `## See also` list, each link carrying the reason to follow it. Most do; a terminal page like `installation.md` or `security.md` reasonably stops instead.
-- A moved or reworded heading breaks inbound anchors silently. After changing one, grep for the old anchor across the repo and run `cargo xtask docs-links`, which validates file targets and `#anchors` together.
-- A new guide is not done until [docs/README.md](../README.md) and the root documentation map list it; an unlinked page is invisible.
+- A guide that leaves the reader with an obvious next step ends in a `## See also` list, each link carrying the reason to follow it after a colon. Most do; a terminal page like `installation.md` or `security.md` reasonably stops instead.

@@ -204,7 +204,7 @@ rimz agents claude "Run the migration audit." -p --bg
 # Block on that run later and tail the answer
 rimz agents wait swift-otter --stream
 
-# Race several runs; the first to finish wins and prints its name
+# Race several runs; the first to finish wins and prints its result
 rimz agents wait otter fox --any
 ```
 
