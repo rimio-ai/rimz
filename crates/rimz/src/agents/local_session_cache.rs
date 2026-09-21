@@ -63,7 +63,7 @@ impl ProviderPathStamp {
         self.state == ProviderPathState::Directory
     }
 
-    pub(super) fn is_stable(&self) -> bool {
+    fn is_stable(&self) -> bool {
         self.state != ProviderPathState::Unavailable
     }
 
