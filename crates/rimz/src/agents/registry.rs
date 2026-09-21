@@ -41,7 +41,7 @@ static QWEN: AgentDefinition = AgentDefinition::new(&QwenAdapter);
 static GROK: AgentDefinition = AgentDefinition::new(&GrokAdapter);
 
 /// Every built-in definition, in stable display order.
-pub(crate) static BUILTINS: &[&AgentDefinition] = &[
+pub(super) static BUILTINS: &[&AgentDefinition] = &[
     &CLAUDE,
     &CODEX,
     &AMP,
@@ -100,7 +100,7 @@ pub fn known_kinds() -> impl Iterator<Item = &'static str> {
 
 /// Agent kind for an interactive command, after shell syntax and process
 /// wrappers are normalized by `crate::proc::command`.
-pub fn command_agent_kind(command: &str) -> Option<&'static str> {
+pub(crate) fn command_agent_kind(command: &str) -> Option<&'static str> {
     command_agent_kind_with_comm(command, None)
 }
 
@@ -194,7 +194,7 @@ fn adapter_for_comm(comm: &str) -> Option<&'static AgentDefinition> {
 
 /// Adapter-owned enrichment environment for a new room. Backends receive one
 /// opaque map and remain independent of provider protocols.
-pub fn room_env(runtime: &crate::disk::paths::RuntimePaths) -> BTreeMap<String, String> {
+pub(crate) fn room_env(runtime: &crate::disk::paths::RuntimePaths) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     for adapter in all_definitions() {
         env.extend(adapter.room_env(runtime));
@@ -204,7 +204,7 @@ pub fn room_env(runtime: &crate::disk::paths::RuntimePaths) -> BTreeMap<String, 
 
 /// Dispatch a command line to the one adapter that recognizes its native
 /// resume syntax. Multiple matches abstain rather than guessing identity.
-pub fn resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSessionId> {
+pub(crate) fn resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSessionId> {
     let mut matches =
         all_definitions().filter_map(|adapter| adapter.resumed_session_id_from_cmdline(cmdline));
     let session = matches.next()?;
@@ -214,7 +214,7 @@ pub fn resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSessionId> 
 /// Find a resumed session in the pane root's shallow single-child process
 /// chain. Branching process trees abstain so sibling agents cannot donate an
 /// unrelated session identity.
-pub fn resumed_session_id_for_root(root_pid: u32) -> Option<AgentSessionId> {
+pub(crate) fn resumed_session_id_for_root(root_pid: u32) -> Option<AgentSessionId> {
     resumed_session_id_for_root_with(root_pid, &crate::proc::cmdline, &crate::proc::children)
 }
 
