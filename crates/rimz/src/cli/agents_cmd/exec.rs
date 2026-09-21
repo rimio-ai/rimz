@@ -494,14 +494,22 @@ pub(super) fn exit_hint(
     startup_failure: bool,
     relaunch: &str,
     resumable: bool,
+    worktree: Option<&Path>,
 ) -> String {
-    if startup_failure {
+    let mut hint = if startup_failure {
         format!("rimz: agent `{kind}` failed to start ({status}); relaunch with `{relaunch}`\r\n")
     } else if resumable {
         format!("rimz: agent `{kind}` exited ({status}); resume with `{relaunch} --resume`\r\n")
     } else {
         format!("rimz: agent `{kind}` exited ({status}); relaunch with `{relaunch}`\r\n")
+    };
+    if let Some(path) = worktree {
+        let path = crate::cli::render::home_relative(&path.to_string_lossy());
+        hint.push_str(&format!(
+            "rimz: worktree {path} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"
+        ));
     }
+    hint
 }
 
 #[cfg(unix)]
@@ -520,6 +528,7 @@ fn drop_to_shell_after_agent_exit(
         startup_failure,
         &relaunch_command(request),
         resumable,
+        request.worktree_path.as_deref(),
     );
     let _ = write!(std::io::stderr().lock(), "{hint}");
     let shell = rimz::proc::user_shell_program();

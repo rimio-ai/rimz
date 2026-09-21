@@ -76,7 +76,7 @@ Both files take one entry per line and ignore blank lines and `#` comments. Beca
 ```console
 $ rimz worktree new feat-a
 created feat-a
-  path   : /home/you/code/query-engine/../query-engine-worktrees/feat-a
+  path   : ~/code/query-engine-worktrees/feat-a
   branch : feat-a
   base branch: main
   base   : c175274596fd0148c7ad1b8376d4f69f55160b9a
@@ -116,7 +116,7 @@ What happens when the last agent in a tree exits depends on how it exits, and th
 
 - **The pane closes, or you kill it.** RimZ checks the tree. A clean one whose work has landed goes, branch and all, and says so on stderr: `rimz: removed clean worktree <path>`. A dirty or unproven one raises a `Choose (keep/remove/shell) [keep]:` prompt if you are there to answer it, and is kept if you are not.
 - **An unattended run finishes.** Same check, same outcomes. This is the path a [scripted `-p` run](./scripting.md) or a [scheduled loop turn](./loops.md) takes, and it is why a fleet that works while you sleep does not leave trees behind.
-- **You quit the agent normally.** Nothing is reclaimed. The pane drops to a shell inside the tree so you can commit, push, or look around, and the tree waits for a sweep.
+- **You quit the agent normally.** Nothing is reclaimed. The pane prints ``rimz: worktree <path> kept; `rimz worktree sweep` reclaims it once its work lands``, then drops to a shell inside the tree so you can commit, push, or look around.
 
 `rimz worktree list` is the status read. Two of its columns decide everything: a tree that is clean under `DIRTY` and `yes` under `MERGED` is one RimZ can reclaim, and anything else is the reason it cannot.
 
