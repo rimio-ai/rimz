@@ -16,7 +16,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::transcript::{TranscriptEntry, TranscriptKind};
+use crate::transcript::{EntryOrigin, TranscriptEntry, TranscriptKind};
 
 use super::{AgentState, pricing, spending};
 
@@ -656,7 +656,7 @@ fn conversation_counts(
             .or_insert_with(ConversationCounts::default);
         match entry.entry {
             TranscriptKind::Prompt => {
-                if !entry.is_harness() {
+                if entry.origin() == EntryOrigin::Human {
                     counts.messages.from_user = counts.messages.from_user.saturating_add(1);
                 }
             }

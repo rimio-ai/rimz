@@ -13,7 +13,7 @@ use super::{GlobalFlags, current_channel};
 use crate::cli::render;
 use crate::cli::render::prose::Prose;
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::transcript::{AskOption, TranscriptEntry, TranscriptKind};
+use rimz::transcript::{AskOption, EntryOrigin, TranscriptEntry, TranscriptKind};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -66,6 +66,7 @@ pub(crate) struct ChatView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ChatLine {
     pub from: String,
+    pub origin: EntryOrigin,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,7 +125,6 @@ enum LineSource {
     Log {
         kind: TranscriptKind,
         agent: AgentKey,
-        harness: bool,
         /// The turn's latest-opener fallback pointed at a hidden harness
         /// opener, so no older visible opener may stand in for it.
         opener_hidden: bool,
@@ -148,10 +148,7 @@ impl RenderEntry {
     }
 
     fn is_harness(&self) -> bool {
-        match &self.source {
-            LineSource::Log { harness, .. } => *harness,
-            LineSource::Stage => false,
-        }
+        matches!(self.chat.origin, EntryOrigin::Harness)
     }
 
     fn is_stage(&self) -> bool {

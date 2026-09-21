@@ -1,6 +1,68 @@
 use super::*;
 
 #[test]
+fn entry_origin_and_rendered_author_cover_kind_and_sender_vocabulary() {
+    use EntryOrigin::{Agent, Harness, Human};
+    use TranscriptKind::*;
+    use rimz::transcript::{HARNESS_FROM, HUMAN_FROM};
+
+    let senders = [
+        None,
+        Some(HUMAN_FROM),
+        Some(HARNESS_FROM),
+        Some("@rimz"),
+        Some("@coder"),
+    ];
+    let cases = [
+        (Prompt, [Human, Human, Harness, Agent, Agent]),
+        (Message, [Harness, Human, Harness, Agent, Agent]),
+        (SubagentReport, [Harness; 5]),
+        (Wait, [Harness; 5]),
+        (Assistant, [Agent; 5]),
+        (Ask, [Agent; 5]),
+        (Answer, [Human, Human, Harness, Agent, Agent]),
+        (Error, [Agent; 5]),
+    ];
+    let mut log = Vec::new();
+    for (kind, origins) in cases {
+        for (from, expected) in senders.into_iter().zip(origins) {
+            let entry = log_entry("claude", "receiver", kind, from, "text");
+            assert_eq!(entry.origin(), expected, "{kind:?} {from:?}");
+            assert_eq!(entry.is_harness(), expected == Harness);
+            log.push(entry);
+        }
+    }
+    let identities = build_identities(&log);
+    for entry in &log {
+        let chat = chat_entry_for_log_entry(entry, &identities, false);
+        assert_eq!(chat.origin, entry.origin());
+        if chat.from == "user" {
+            assert_eq!(entry.origin(), Human, "{entry:?}");
+        }
+    }
+}
+
+#[test]
+fn writer_produced_shapes_preserve_harness_classification() {
+    use TranscriptKind::*;
+    for (kind, from, harness) in [
+        (Prompt, None, false),
+        (Prompt, Some("rimz"), true),
+        (Message, Some("@coder"), false),
+        (SubagentReport, Some("@rimz"), true),
+        (Wait, Some("@rimz"), true),
+        (Assistant, None, false),
+        (Ask, None, false),
+        (Answer, Some("you"), false),
+        (Answer, Some("@coder"), false),
+        (Error, None, false),
+    ] {
+        let entry = log_entry("claude", "receiver", kind, from, "text");
+        assert_eq!(entry.is_harness(), harness, "{kind:?} {from:?}");
+    }
+}
+
+#[test]
 fn transcript_target_channel_precedence_and_errors() {
     assert_eq!(
         scope::reconcile_transcript_channel("@codex#a", Some("a"), Some("b"), None)
@@ -60,11 +122,15 @@ fn render_entry(
         source: LineSource::Log {
             kind,
             agent: agent_key(),
-            harness: false,
             opener_hidden: false,
         },
         chat: ChatLine {
             from: from.to_owned(),
+            origin: if matches!(from, "user" | "you" | "answered") {
+                EntryOrigin::Human
+            } else {
+                EntryOrigin::Agent
+            },
             to: to.map(ToOwned::to_owned),
             at: Some(ts(at)),
             delivered_at: None,
@@ -842,7 +908,12 @@ fn subagent_reports_and_waits_are_json_only_and_do_not_consume_the_human_last_sl
     assert_eq!(lines[2].from, "@rimz");
     assert_eq!(lines[2].text, "hidden wait");
     assert_eq!(lines[3].text, "hidden system prompt");
+    assert_eq!(lines[3].from, "rimz");
     let serialized = serde_json::to_value(&lines).unwrap();
+    assert_eq!(serialized[0]["origin"], "human");
+    for index in 1..4 {
+        assert_eq!(serialized[index]["origin"], "harness");
+    }
     assert_eq!(serialized[1]["text"], "hidden report");
     assert_eq!(serialized[2]["text"], "hidden wait");
     assert_eq!(serialized[3]["text"], "hidden system prompt");
@@ -983,7 +1054,7 @@ fn temp_workspace(project: &tempfile::TempDir) -> (rimz::ResolvedWorkspace, rimz
 
 #[test]
 fn harness_turn_output_hides_with_its_opener() {
-    use TranscriptKind::{Ask, Assistant, Prompt, SubagentReport, Wait};
+    use TranscriptKind::{Ask, Assistant, Message, Prompt, SubagentReport, Wait};
     let project = tempfile::TempDir::new().expect("project tempdir");
     let (workspace, paths) = temp_workspace(&project);
     let msg = |index: u64| rimz::ids::MessageId::parse(&message_id(index)).expect("message id");
@@ -1011,6 +1082,10 @@ fn harness_turn_output_hides_with_its_opener() {
     push(Wait, Some("@rimz"), "unrecorded", Some(6), &[]);
     push(Ask, None, "unlinked ask", None, &[]);
     push(Assistant, None, "unlinked asked reply", None, &[]);
+    push(Message, None, "senderless message", Some(7), &[]);
+    push(Assistant, None, "senderless reply", None, &[7]);
+    push(Prompt, Some("rimz"), "/compact", Some(8), &[]);
+    push(Assistant, None, "compact reply", None, &[8]);
     for entry in &logged {
         rimz::transcript::append(&paths, entry).expect("append");
     }
@@ -1059,6 +1134,10 @@ fn harness_turn_output_hides_with_its_opener() {
             "report",
             "superseded ask",
             "blocking ask",
+            "senderless message",
+            "senderless reply",
+            "/compact",
+            "compact reply",
         ] {
             assert!(!rendered.contains(hidden), "{rendered}");
         }
