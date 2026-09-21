@@ -98,7 +98,7 @@ fn edit_message_updates_queued_record_and_appends_event() {
     q.defer_message_wake(
         &message.message_id,
         Timestamp::now() + Duration::from_secs(30),
-        None,
+        BlockerUpdate::Keep,
     )
     .unwrap();
 

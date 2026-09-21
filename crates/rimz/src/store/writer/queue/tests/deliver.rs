@@ -4,26 +4,31 @@ fn user_message(text: &str) -> String {
     format!("Type: USER_MESSAGE\nFrom: @user\nContent:\n{text}")
 }
 
+const BLOCKER: &str = "stuck: no live pane";
+
+fn is_blocker(recorded: &str) -> bool {
+    recorded == BLOCKER
+}
+
 #[test]
 fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     let q = Queue::new();
     let queued = q.queue(1);
     let until = Timestamp::now() + Duration::from_secs(30);
 
-    let blocker = "stuck: no live pane";
     let events_before = std::fs::read(&q.inner.paths.events_log).unwrap();
-    q.defer_message_wake(&queued.message_id, until, Some(blocker))
+    q.defer_message_wake(&queued.message_id, until, BlockerUpdate::Set(BLOCKER))
         .unwrap();
 
     assert_eq!(
         q.list_pending_messages().unwrap()[0].retry_after,
         Some(until)
     );
-    assert_eq!(q.live()[0].last_error.as_deref(), Some(blocker));
-    q.defer_message_wake(&queued.message_id, until, None)
+    assert_eq!(q.live()[0].last_error.as_deref(), Some(BLOCKER));
+    q.defer_message_wake(&queued.message_id, until, BlockerUpdate::Keep)
         .unwrap();
     let deferred = &q.live()[0];
-    assert_eq!(deferred.last_error.as_deref(), Some(blocker));
+    assert_eq!(deferred.last_error.as_deref(), Some(BLOCKER));
     assert_eq!(deferred.status, MessageStatus::Queued);
     assert_eq!(deferred.attempts, 0);
     assert_eq!(deferred.pane_id, queued.pane_id);
@@ -31,6 +36,18 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
         std::fs::read(&q.inner.paths.events_log).unwrap(),
         events_before
     );
+
+    // The recorded blocker does not outlive its cause: the next defer on any other verdict drops it.
+    q.defer_message_wake(
+        &queued.message_id,
+        until,
+        BlockerUpdate::ClearOwn(is_blocker),
+    )
+    .unwrap();
+    let cleared = &q.live()[0];
+    assert_eq!(cleared.last_error, None);
+    assert_eq!(cleared.retry_after, Some(until));
+    assert_eq!(cleared.status, MessageStatus::Queued);
 
     let claimed = q
         .claim_message_for_delivery(&queued.message_id, Timestamp::now())
@@ -45,7 +62,7 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     q.defer_message_wake(
         &sent.message_id,
         until + Duration::from_secs(30),
-        Some(blocker),
+        BlockerUpdate::Set(BLOCKER),
     )
     .unwrap();
 
@@ -54,7 +71,31 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     assert_eq!(messages[0].retry_after, None);
     assert_eq!(messages[0].last_error, None);
 
-    q.defer_message_wake(&message_id(999), until, None).unwrap();
+    q.defer_message_wake(&message_id(999), until, BlockerUpdate::Keep)
+        .unwrap();
+}
+
+#[test]
+fn defer_message_wake_keeps_a_diagnostic_it_did_not_write() {
+    let q = Queue::new();
+    let queued = q.queue(1);
+    let claimed = q
+        .claim_message_for_delivery(&queued.message_id, Timestamp::now())
+        .unwrap()
+        .expect("claimed");
+    q.record_message_delivery_failure(&claimed.message_id, "write failed", "session")
+        .unwrap();
+    assert_eq!(q.live()[0].status, MessageStatus::Queued);
+    assert_eq!(q.live()[0].last_error.as_deref(), Some("write failed"));
+
+    q.defer_message_wake(
+        &queued.message_id,
+        Timestamp::now() + Duration::from_secs(30),
+        BlockerUpdate::ClearOwn(is_blocker),
+    )
+    .unwrap();
+
+    assert_eq!(q.live()[0].last_error.as_deref(), Some("write failed"));
 }
 
 #[test]

@@ -16,6 +16,7 @@ use crate::store::message::{
     MessageStatus, WhenCondition, older_ready_blocker, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
+use crate::store::writer::BlockerUpdate;
 use crate::workspace::ResolvedWorkspace;
 use crate::{RuntimePaths, Store};
 
@@ -135,12 +136,22 @@ pub enum DeliveryVerdict {
     Ready,
 }
 
+const NO_LIVE_PANE: &str = "stuck: no live pane";
+const PINNED_PANE_PREFIX: &str = "stuck: pinned pane ";
+const PINNED_PANE_SUFFIX: &str = " is not live";
+
 /// The blocker sentence for a `NoPane` verdict, without the receiver; the sweep records it as `last_error` and the CLI appends the target.
 pub fn no_pane_blocker(pinned_pane_id: Option<&PaneId>) -> String {
     match pinned_pane_id {
-        Some(pane_id) => format!("stuck: pinned pane {pane_id} is not live"),
-        None => "stuck: no live pane".to_owned(),
+        Some(pane_id) => format!("{PINNED_PANE_PREFIX}{pane_id}{PINNED_PANE_SUFFIX}"),
+        None => NO_LIVE_PANE.to_owned(),
     }
+}
+
+/// Whether a recorded `last_error` is one this sweep wrote, so a defer on any other verdict clears it and leaves a real send failure alone.
+fn is_no_pane_blocker(blocker: &str) -> bool {
+    blocker == NO_LIVE_PANE
+        || (blocker.starts_with(PINNED_PANE_PREFIX) && blocker.ends_with(PINNED_PANE_SUFFIX))
 }
 
 enum DeliveryReport {
@@ -505,17 +516,17 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
                 snapshot.expect("queued delivery requires a resolution snapshot"),
             )?;
             if let DeliveryReport::Stopped(verdict) = report {
-                let blocker = match verdict {
+                let recorded = match verdict {
                     Some(DeliveryVerdict::NoPane { pinned_pane_id }) => {
                         Some(no_pane_blocker(pinned_pane_id.as_ref()))
                     }
                     _ => None,
                 };
-                store.defer_message_wake(
-                    &head.message_id,
-                    now + delivery_window,
-                    blocker.as_deref(),
-                )?;
+                let blocker = match recorded.as_deref() {
+                    Some(sentence) => BlockerUpdate::Set(sentence),
+                    None => BlockerUpdate::ClearOwn(is_no_pane_blocker),
+                };
+                store.defer_message_wake(&head.message_id, now + delivery_window, blocker)?;
             }
         }
     }

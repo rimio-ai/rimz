@@ -37,6 +37,15 @@ pub struct ReconcileReport {
     pub timed_out: usize,
 }
 
+/// What a deferred delivery does to the message's recorded blocker. The store applies the
+/// instruction without reading the sentence: the caller owns what its own blocker says, so
+/// `ClearOwn` only drops a value its recognizer claims and leaves another writer's diagnostic.
+pub enum BlockerUpdate<'a> {
+    Set(&'a str),
+    ClearOwn(fn(&str) -> bool),
+    Keep,
+}
+
 pub enum DeliveryAck<'a> {
     /// A turn started. `None` means the adapter reported no usable prompt text.
     TurnStarted {
@@ -677,7 +686,7 @@ impl Store {
         &self,
         message_id: &MessageId,
         until: Timestamp,
-        blocker: Option<&str>,
+        blocker: BlockerUpdate<'_>,
     ) -> Result<()> {
         self.commit_queue(|queue| {
             let mut message = match queue.get(message_id) {
@@ -685,8 +694,14 @@ impl Store {
                 Some(_) | None => return Ok(()),
             };
             message.retry_after = Some(until);
-            if let Some(blocker) = blocker {
-                message.last_error = Some(blocker.to_owned());
+            match blocker {
+                BlockerUpdate::Set(blocker) => message.last_error = Some(blocker.to_owned()),
+                BlockerUpdate::ClearOwn(recognizes) => {
+                    if message.last_error.as_deref().is_some_and(recognizes) {
+                        message.last_error = None;
+                    }
+                }
+                BlockerUpdate::Keep => {}
             }
             queue.upsert(message);
             Ok(())

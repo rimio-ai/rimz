@@ -652,6 +652,80 @@ fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
 }
 
 #[test]
+fn sweep_clears_a_recorded_no_pane_blocker_once_the_pane_returns() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-pane-returns", "feature-pane-returns", pane_env);
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let wake = MessageRecord::new(
+        env.workspace_id.clone(),
+        &snapshot.agents[0],
+        "wait finished".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::Wait,
+    });
+    env.store().queue_message(&wake, "rimz-test").unwrap();
+    // The Stop hook opens the Done gate, so the missing pane is the first blocker the check reaches.
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-pane-returns",
+            "worktree_branch": "feature-pane-returns",
+        }),
+        pane_env,
+    );
+    let no_panes = env.write_pane_fixture(&[]);
+    run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", &no_panes)
+            .args(["message", "sweep"]),
+        "sweep an unbindable wake",
+    );
+    assert_eq!(
+        message_by_id(&env, &wake.message_id).last_error.as_deref(),
+        Some("stuck: no live pane")
+    );
+
+    // The pane comes back while the agent is mid-turn: the blocker is now the closed gate.
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-pane-returns",
+            "prompt": "working again",
+            "worktree_branch": "feature-pane-returns",
+        }),
+        pane_env,
+    );
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["message", "sweep"]),
+        "sweep a gated wake",
+    );
+
+    let queued = message_by_id(&env, &wake.message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.last_error, None);
+    let shown = run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &panes).args([
+            "message",
+            "show",
+            wake.message_id.as_str(),
+        ]),
+        "show a gated wake",
+    );
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(!shown.contains("stuck:"), "{shown}");
+    assert!(shown.contains("waiting:"), "{shown}");
+}
+
+#[test]
 fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let env = Env::new();
     env.install_agent_hooks("claude");

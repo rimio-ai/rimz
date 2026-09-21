@@ -451,6 +451,8 @@ The sweep backs off because the elder ticks often. When it cannot deliver a read
 
 A `NoPane` back-off also records the blocker in `last_error`, in the same queue commit and in the words `rimz message show` prints. Every other verdict moves `retry_after` alone: they name a receiver that is present and busy, which the record's own state already shows, while an unbindable receiver otherwise leaves a queue that can defer forever with nothing written down. The record stays `Queued` with its pane pin and its `attempts` untouched, and the next claim clears the error.
 
+The sentence does not outlive the blocker. A defer on any other verdict clears a `last_error` that a `NoPane` back-off wrote, so a pane that returns while the receiver is busy leaves the gate as the only thing `rimz message show` reports. It clears its own sentence and nothing else: a real send failure recorded by a requeue stays, which is why the recognizer sits beside the formatter in `message::deliver` and the store applies it without reading the words.
+
 A ready `Queued` head arms the stamp even without `not_before`, contributing its `updated_at`. That backstop recovers a message to an idle agent that missed the live send.
 
 An unmet `when` condition sets `retry_after` to the exact projected trip time, so a 58-minute dwell wakes once at 58 minutes. When the watched session ends, every record still waiting on it is archived with the condition in `last_error`; the lifecycle hook does this in realtime and orphan GC is the backstop. A met stamp survives session end and receiver delay, which is how a busy receiver still gets the message at its next boundary.
