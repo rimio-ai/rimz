@@ -271,8 +271,10 @@ pub(crate) fn home_relative(path: &str) -> String {
 
 /// Render a path a command holds as a [`Path`]: `..` folded away, then the home
 /// directory abbreviated. The worktree directory template is `../{repo}-worktrees`
-/// by default, so a configured tree reaches its printer unfolded and every
-/// surface that names one goes through here to agree with `rimz worktree list`.
+/// by default, so a configured tree reaches its printer unfolded: the two
+/// surfaces that print one from the template, the create report and the agent
+/// exit hint, come through here to agree with `rimz worktree list`. The sweep
+/// and cleanup rows print git-resolved paths and do not.
 pub(crate) fn home_relative_path(path: &std::path::Path) -> String {
     home_relative(&rimz::utils::path::normalize_path_lexical(path).to_string_lossy())
 }
