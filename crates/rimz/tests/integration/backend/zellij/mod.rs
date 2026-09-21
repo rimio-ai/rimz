@@ -24,6 +24,7 @@ mod containment;
 mod daemon;
 mod large_paste;
 mod launch;
+mod options;
 mod pane_io;
 mod presence;
 mod reap;
