@@ -587,11 +587,11 @@ fn even_a_bodyless_seat_needs_its_runtime_base() {
     let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
     assert!(!loaded.agent_profiles.0.contains_key("worker"));
     assert!(loaded.teams.0.is_empty());
+    let base = root.path().join("agents/pi.md");
     assert!(loaded.errors.iter().any(|error| {
         error.path.ends_with("agents/worker.md")
-            && error
-                .message
-                .contains("kind base `agents/pi.md` is missing")
+            && error.message.contains("kind base is missing")
+            && error.message.contains(&base.display().to_string())
     }));
 }
 
@@ -986,17 +986,19 @@ fn prompt_taking_kinds_require_their_base_body_or_not() {
         "model: fable\ntools: [Bash]",
         "",
     );
-    error(
-        root.path(),
-        "runs on claude, whose kind base `agents/claude.md` is missing",
+    let missing = format!(
+        "runs on claude, whose kind base is missing — create {} with a nonempty body, \
+         the system prompt every claude definition starts from",
+        root.path().join("agents/claude.md").display()
     );
+    error(root.path(), &missing);
     definition(
         root.path(),
         "agents/fable.md",
         "model: fable\ntools: [Bash]",
         "Craft.",
     );
-    error(root.path(), "kind base `agents/claude.md` is missing");
+    error(root.path(), &missing);
 }
 
 #[test]

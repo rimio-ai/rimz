@@ -43,6 +43,18 @@ pub struct DefinitionErr {
     pub message: String,
 }
 
+/// The tail of every refusal for a definition whose kind base is absent.
+/// Nothing in the tree ships one, so naming the file is not enough: the
+/// message has to say what a kind base is, where to write it, and that an
+/// empty body is refused in turn.
+fn missing_kind_base(home: &Path, kind: &str) -> String {
+    format!(
+        "whose kind base is missing — create {} with a nonempty body, the system prompt every \
+         {kind} definition starts from",
+        home.join("agents").join(format!("{kind}.md")).display()
+    )
+}
+
 impl DefinitionErr {
     fn new(path: &Path, message: impl AsRef<str>) -> Self {
         Self {
@@ -160,7 +172,13 @@ pub fn load(
                     let fm: BaseFrontmatter = frontmatter::parse(&path, yaml)?;
                     let description = frontmatter::description(&path, fm.description.as_deref())?;
                     if body.trim().is_empty() {
-                        return Err(DefinitionErr::new(&path, "kind base has no prompt body"));
+                        return Err(DefinitionErr::new(
+                            &path,
+                            format!(
+                                "kind base has no prompt body — write the system prompt every \
+                                 {stem} definition starts from below the frontmatter"
+                            ),
+                        ));
                     }
                     let mut profile = agent::empty_profile(&stem);
                     profile.description = Some(description);

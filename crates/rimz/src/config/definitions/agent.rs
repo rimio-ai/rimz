@@ -343,7 +343,10 @@ impl Resolver<'_> {
         {
             return Err(DefinitionErr::new(
                 path,
-                format!("runs on {kind}, whose kind base `agents/{kind}.md` is missing"),
+                format!(
+                    "runs on {kind}, {}",
+                    super::missing_kind_base(self.home, kind)
+                ),
             ));
         }
         Ok(Resolved {
