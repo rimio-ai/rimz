@@ -68,6 +68,13 @@ pub(super) fn flat_entries(entries: &[RenderEntry], archive_prefix: usize) -> Ve
         .collect()
 }
 
+/// Lays the view out in threads without moving the conversation in time.
+/// Prompts, messages and flips keep their order: one continues the thread of
+/// the entry it answers only while that thread is still the latest
+/// conversation, and opens a new thread at the margin once anything else has
+/// intervened. Turn output and answers move instead, under the entry that
+/// opened them ([`turn_openers`]) however late they ran, and leave the latest
+/// conversation as they found it.
 pub(super) fn assemble_threads(
     entries: &[RenderEntry],
     archive_prefix: usize,
@@ -79,68 +86,64 @@ pub(super) fn assemble_threads(
 
     let by_message_id = message_index(entries);
     let openers = turn_openers(entries);
-    let mut components = Components::new(entries.len());
-    let mut attached = HashMap::<usize, usize>::new();
+    let mut heads = Vec::<usize>::with_capacity(entries.len());
+    let mut lanes = Vec::<DisplayLane>::with_capacity(entries.len());
+    let mut current = None;
     let mut latest_by_sender = HashMap::<&str, usize>::new();
     for (index, entry) in entries.iter().enumerate() {
         let sender = base_handle(&entry.chat.from);
-        if entry.is_stage() {
-            // A flip hangs under its flipper's latest line while the grouping
-            // window holds; otherwise it stands as its own block.
-            if let Some(&latest) = latest_by_sender.get(sender)
-                && within_window(entries[latest].chat.at, entry.chat.at)
-            {
-                attached.insert(index, latest);
-                components.union(index, latest);
-            }
-            continue;
+        let ordered = !is_turn_output(entry) && entry.kind() != Some(TranscriptKind::Answer);
+        let target = if entry.is_stage() {
+            latest_by_sender
+                .get(sender)
+                .copied()
+                .filter(|&latest| within_window(entries[latest].chat.at, entry.chat.at))
+        } else if is_turn_output(entry) {
+            openers[index]
+                .iter()
+                .copied()
+                .filter(|&opener| opener < index)
+                .max()
+        } else {
+            entry
+                .chat
+                .reply_to
+                .iter()
+                .filter_map(|parent| by_message_id.get(parent.as_str()).copied())
+                .filter(|&parent| parent < index && thread_edge(&entries[parent], entry))
+                .max()
+        };
+        let target = target.filter(|&target| !ordered || Some(heads[target]) == current);
+        let head = target.map_or(index, |target| heads[target]);
+        let lane = match target {
+            Some(target) if entry.is_stage() => lanes[target].clone(),
+            Some(_) => DisplayLane::Thread {
+                component: head,
+                root_at: entries[head].chat.at,
+            },
+            None => DisplayLane::Margin,
+        };
+        heads.push(head);
+        lanes.push(lane);
+        if ordered {
+            current = Some(head);
         }
-        latest_by_sender.insert(sender, index);
-        if is_turn_output(entry) {
-            for &opener in &openers[index] {
-                components.union(index, opener);
-            }
-            continue;
-        }
-        for parent in &entry.chat.reply_to {
-            if let Some(parent_index) = by_message_id.get(parent.as_str()).copied()
-                && thread_edge(&entries[parent_index], entry)
-            {
-                components.union(index, parent_index);
-            }
+        if !entry.is_stage() {
+            latest_by_sender.insert(sender, index);
         }
     }
 
     let mut members = BTreeMap::<usize, Vec<usize>>::new();
-    for index in 0..entries.len() {
-        members
-            .entry(components.root(index))
-            .or_default()
-            .push(index);
+    for (index, head) in heads.into_iter().enumerate() {
+        members.entry(head).or_default().push(index);
     }
-    let mut blocks = members.into_values().collect::<Vec<_>>();
-    blocks.sort_by_key(|members| members[0]);
 
     let mut display = Vec::with_capacity(entries.len());
-    let mut lanes = HashMap::<usize, DisplayLane>::new();
-    for members in blocks {
-        let block = members[0];
-        let root_at = entries[block].chat.at;
-        let threaded = members.len() > 1;
-        for (position, source_index) in members.into_iter().enumerate() {
-            let lane = match attached.get(&source_index) {
-                // The target has a lower index in this block, so it was emitted first.
-                Some(target) => lanes[target].clone(),
-                None if threaded && position > 0 => DisplayLane::Thread {
-                    component: block,
-                    root_at,
-                },
-                None => DisplayLane::Margin,
-            };
-            lanes.insert(source_index, lane.clone());
+    for (block, members) in members {
+        for source_index in members {
             display.push(DisplayEntry {
                 entry: entries[source_index].clone(),
-                lane,
+                lane: lanes[source_index].clone(),
                 block,
                 archived: source_index < archive_prefix,
                 source_index,
@@ -333,38 +336,5 @@ fn thread_edge(parent: &RenderEntry, child: &RenderEntry) -> bool {
                     .as_deref()
                     .is_some_and(|to| base_handle(to) == base_handle(&parent.chat.from))
         }
-    }
-}
-
-struct Components {
-    parent: Vec<usize>,
-}
-
-impl Components {
-    fn new(len: usize) -> Self {
-        Self {
-            parent: (0..len).collect(),
-        }
-    }
-
-    fn root(&mut self, index: usize) -> usize {
-        let parent = self.parent[index];
-        if parent == index {
-            return index;
-        }
-        let root = self.root(parent);
-        self.parent[index] = root;
-        root
-    }
-
-    fn union(&mut self, left: usize, right: usize) {
-        let left = self.root(left);
-        let right = self.root(right);
-        if left == right {
-            return;
-        }
-        let root = left.min(right);
-        self.parent[left] = root;
-        self.parent[right] = root;
     }
 }

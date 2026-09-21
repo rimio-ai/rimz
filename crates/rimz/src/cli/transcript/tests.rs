@@ -331,7 +331,7 @@ fn reply_back_matches_base_handles_across_channels() {
 }
 
 #[test]
-fn thread_assembly_unions_multi_parent_turns_and_orphans_stay_flat() {
+fn multi_parent_turn_joins_later_opener_and_orphans_stay_flat() {
     let entries = vec![
         linked(entry("2026-06-28T04:00:00Z", "first"), Some(1), &[]),
         linked(entry("2026-06-28T04:01:00Z", "second"), Some(2), &[]),
@@ -351,10 +351,268 @@ fn thread_assembly_unions_multi_parent_turns_and_orphans_stay_flat() {
 
     assert_eq!(display[0].entry.chat.text, "first");
     assert!(display[0].lane.is_margin());
-    assert!(!display[1].lane.is_margin());
+    assert_eq!(display[1].entry.chat.text, "second");
+    assert!(display[1].lane.is_margin());
     assert!(!display[2].lane.is_margin());
+    assert_eq!(display[2].block, display[1].block);
+    assert_ne!(display[0].block, display[1].block);
     assert_eq!(display[3].entry.chat.text, "missing parent");
     assert!(display[3].lane.is_margin());
+}
+
+#[test]
+fn parked_exchange_keeps_messages_and_flips_in_time_order() {
+    use TranscriptKind::{Assistant, Message};
+
+    // The closing exchanges in transcript-stamps-evidence/chan.json, with
+    // h52h's queue creation time restored instead of its delivery stamp.
+    let mut entries = [
+        (
+            Message,
+            "@coder",
+            Some("@reviewer"),
+            "2026-09-21T04:39:46.742325043Z",
+            "gqg6",
+            Some(1),
+            vec![],
+        ),
+        (
+            Message,
+            "@reviewer",
+            Some("@coder"),
+            "2026-09-21T04:41:13Z",
+            "h52h",
+            Some(2),
+            vec![1],
+        ),
+        (
+            Assistant,
+            "@reviewer",
+            None,
+            "2026-09-21T04:41:14.591220272Z",
+            "reviewer 12:41",
+            None,
+            vec![1],
+        ),
+        (
+            Message,
+            "@coder",
+            Some("@reviewer"),
+            "2026-09-21T04:45:11.171345901Z",
+            "i23",
+            Some(3),
+            vec![],
+        ),
+        (
+            Assistant,
+            "@coder",
+            None,
+            "2026-09-21T04:45:49.002601555Z",
+            "coder 12:45",
+            None,
+            vec![2],
+        ),
+        (
+            Assistant,
+            "@reviewer",
+            None,
+            "2026-09-21T04:45:49.772529339Z",
+            "reviewer 12:45",
+            None,
+            vec![3],
+        ),
+        (
+            Message,
+            "@coder",
+            Some("@reviewer"),
+            "2026-09-21T04:45:50.295043556Z",
+            "i647",
+            Some(4),
+            vec![2],
+        ),
+        (
+            Message,
+            "@reviewer",
+            Some("@coder"),
+            "2026-09-21T04:46:25.357667315Z",
+            "ib5r",
+            Some(5),
+            vec![4],
+        ),
+        (
+            Assistant,
+            "@reviewer",
+            None,
+            "2026-09-21T04:46:27.644051096Z",
+            "reviewer 12:46",
+            None,
+            vec![4],
+        ),
+        (
+            Assistant,
+            "@coder",
+            None,
+            "2026-09-21T04:46:39.809624633Z",
+            "coder 12:46",
+            None,
+            vec![5],
+        ),
+    ]
+    .into_iter()
+    .map(|(kind, from, to, at, text, id, parents)| {
+        linked(render_entry(kind, from, to, at, text), id, &parents)
+    })
+    .collect::<Vec<_>>();
+    entries[1].chat.delivered_at = Some(ts("2026-09-21T04:45:26.396469321Z"));
+    entries.push(flip_entry(
+        "2026-09-21T04:39:52.64626633Z",
+        "coder",
+        Some("Implement"),
+        "Reflect",
+        Some("reflect"),
+    ));
+    entries.push(flip_entry(
+        "2026-09-21T04:45:14.791312157Z",
+        "coder",
+        Some("Reflect"),
+        "Done",
+        Some("done"),
+    ));
+    entries.sort_by_key(|entry| entry.chat.at);
+
+    let display = assemble_threads(&entries, 0, false);
+    assert_eq!(
+        display
+            .iter()
+            .map(|line| (
+                line.entry.chat.text.as_str(),
+                line.block,
+                line.lane.is_margin()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("gqg6", 0, true),
+            ("reflect", 0, true),
+            ("h52h", 0, false),
+            ("reviewer 12:41", 0, false),
+            ("coder 12:45", 0, false),
+            ("i23", 4, true),
+            ("done", 4, true),
+            ("reviewer 12:45", 4, false),
+            ("i647", 8, true),
+            ("ib5r", 8, false),
+            ("reviewer 12:46", 8, false),
+            ("coder 12:46", 8, false),
+        ]
+    );
+    let ordered_times = display
+        .iter()
+        .filter(|line| {
+            line.entry.is_stage()
+                || matches!(
+                    line.entry.kind(),
+                    Some(
+                        TranscriptKind::Prompt
+                            | Message
+                            | TranscriptKind::SubagentReport
+                            | TranscriptKind::Wait
+                    )
+                )
+        })
+        .map(|line| line.entry.chat.at.expect("timestamp"))
+        .collect::<Vec<_>>();
+    assert!(ordered_times.windows(2).all(|pair| pair[0] <= pair[1]));
+
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_display_chat_to(
+        &mut out,
+        None,
+        &display,
+        &TimeZone::get("Asia/Singapore").expect("timezone"),
+        Date::new(2026, 9, 21).expect("date"),
+        Prose::Raw,
+    )
+    .expect("render");
+    let rendered = String::from_utf8(out.into_inner()).expect("utf8");
+    assert!(rendered.contains("12:41 · delivered 12:45"), "{rendered}");
+    let mut preceding = 0;
+    for text in [
+        "gqg6",
+        "h52h",
+        "reviewer 12:41",
+        "coder 12:45",
+        "i23",
+        "reviewer 12:45",
+        "i647",
+        "ib5r",
+        "reviewer 12:46",
+        "coder 12:46",
+    ] {
+        let position = rendered.find(text).expect("rendered entry");
+        assert!(position >= preceding, "{rendered}");
+        preceding = position;
+    }
+}
+
+#[test]
+fn answers_do_not_split_threads_and_forward_parents_stay_unattached() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "first"), Some(1), &[]),
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@coder",
+                Some("@reviewer"),
+                "2026-06-28T04:01:00Z",
+                "second",
+            ),
+            Some(2),
+            &[],
+        ),
+        linked(
+            answer_entry("2026-06-28T04:02:00Z", "answer first"),
+            None,
+            &[1],
+        ),
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@reviewer",
+                Some("@coder"),
+                "2026-06-28T04:03:00Z",
+                "reply second",
+            ),
+            Some(3),
+            &[2],
+        ),
+        linked(
+            assistant_entry("2026-06-28T04:04:00Z", "future output"),
+            None,
+            &[4],
+        ),
+        linked(
+            answer_entry("2026-06-28T04:05:00Z", "future answer"),
+            None,
+            &[4],
+        ),
+        linked(entry("2026-06-28T04:06:00Z", "future prompt"), Some(4), &[]),
+    ];
+    let display = assemble_threads(&entries, 0, false);
+    assert_eq!(
+        display
+            .iter()
+            .map(|line| (line.entry.chat.text.as_str(), line.block))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 0),
+            ("answer first", 0),
+            ("second", 1),
+            ("reply second", 1),
+            ("future output", 4),
+            ("future answer", 5),
+            ("future prompt", 6),
+        ]
+    );
 }
 
 #[test]
