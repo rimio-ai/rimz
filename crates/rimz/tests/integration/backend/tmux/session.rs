@@ -414,6 +414,125 @@ fn ensure_session_applies_room_contract() {
     );
 }
 
+#[test]
+fn ensure_session_reapplies_options_to_every_open_window() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let session = "rimz-window-options";
+    let mut opts = session_opts(
+        session,
+        WorkspaceId::from_project_root(cwd.path()),
+        cwd.path(),
+        cwd.path(),
+        None,
+    );
+    server.backend.ensure_session(&opts).expect("birth");
+    let first = server.display(session, "#{window_id}");
+    let second = server.stdout(&[
+        "new-window",
+        "-P",
+        "-F",
+        "#{window_id}",
+        "-t",
+        session,
+        "sh",
+    ]);
+    assert_ne!(first, second);
+    server.tmux(&["select-window", "-t", &first]);
+    assert_eq!(server.display(session, "#{window_id}"), first);
+
+    opts.config.tmux = toml::from_str("pane_border_status = 'top'\nallow_passthrough = false")
+        .expect("room options");
+    server.backend.ensure_session(&opts).expect("reapply");
+    for window in [&first, &second] {
+        for (key, expected) in [("pane-border-status", "top"), ("allow-passthrough", "off")] {
+            assert_eq!(
+                server.stdout(&["show-options", "-wv", "-t", window, key]),
+                expected,
+                "{key} on window {window}",
+            );
+        }
+    }
+    eprintln!(
+        "live tmux: both open windows report pane-border-status top and allow-passthrough off"
+    );
+}
+
+#[test]
+fn ensure_session_unsets_border_options_to_restore_inheritance() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let session = "rimz-border-inheritance";
+    server.ensure_with_shell(session);
+    server.tmux(&["set-window-option", "-g", "pane-border-status", "bottom"]);
+    let first = server.display(session, "#{window_id}");
+    let second = server.stdout(&[
+        "new-window",
+        "-P",
+        "-F",
+        "#{window_id}",
+        "-t",
+        session,
+        "sh",
+    ]);
+    assert_ne!(first, second);
+    server.tmux(&["select-window", "-t", &first]);
+    let mut opts = session_opts(
+        session,
+        WorkspaceId::from_project_root(cwd.path()),
+        cwd.path(),
+        cwd.path(),
+        None,
+    );
+    opts.config.tmux = toml::from_str("pane_border_status = 'top'\npane_border_lines = 'double'")
+        .expect("border options");
+    server.backend.ensure_session(&opts).expect("set borders");
+    for window in [&first, &second] {
+        for (key, expected) in [
+            ("pane-border-status", "top"),
+            ("pane-border-lines", "double"),
+        ] {
+            assert_eq!(
+                server.stdout(&["show-options", "-wv", "-t", window, key]),
+                expected,
+                "{key} on window {window} before removal",
+            );
+        }
+        assert!(
+            !server
+                .stdout(&["show-options", "-wv", "-t", window, "pane-border-format"])
+                .is_empty()
+        );
+    }
+
+    opts.config.tmux.pane_border_status = None;
+    opts.config.tmux.pane_border_lines = None;
+    server.backend.ensure_session(&opts).expect("unset borders");
+    for window in [&first, &second] {
+        for key in [
+            "pane-border-status",
+            "pane-border-format",
+            "pane-border-lines",
+        ] {
+            assert_eq!(
+                server.stdout(&["show-options", "-wv", "-t", window, key]),
+                "",
+                "{key} on window {window} must no longer have a local value",
+            );
+        }
+        assert_eq!(
+            server.stdout(&["show-options", "-wvA", "-t", window, "pane-border-status"]),
+            "bottom",
+            "window {window} must inherit the global border status",
+        );
+    }
+    eprintln!(
+        "live tmux: both windows have no local border options and inherit pane-border-status bottom"
+    );
+}
+
 /// `focus_pane` lands cross-window: tmux's `select-pane` activates within its
 /// window only, so the backend batches `select-window` (a pane id resolves as
 /// a window target to the window holding it) before `select-pane`. The
