@@ -79,7 +79,7 @@ impl CanonicalHookEvent {
 }
 
 impl HookOutput {
-    pub fn new(classified: ClassifiedHook) -> Self {
+    pub(super) fn new(classified: ClassifiedHook) -> Self {
         let meaning = match (classified.class, classified.ask_kind) {
             (AgentHookClass::AwaitingUser, Some(kind)) => CanonicalHookMeaning::Ask(kind),
             (AgentHookClass::Lifecycle, None) => CanonicalHookMeaning::Lifecycle,
@@ -250,46 +250,46 @@ impl HookOutput {
             .or_else(|| self.routing.worktree_path())
     }
 
-    pub(crate) fn set_routing(&mut self, routing: HookRouting) {
+    pub(super) fn set_routing(&mut self, routing: HookRouting) {
         self.routing = routing;
     }
 
-    pub(crate) fn set_ask(&mut self, questions: Vec<AskQuestion>, detail: Option<String>) {
+    pub(super) fn set_ask(&mut self, questions: Vec<AskQuestion>, detail: Option<String>) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Ask { .. }),
             Some(CanonicalHookFact::Ask { questions, detail }),
         );
     }
 
-    pub(crate) fn set_native_answers(&mut self, answers: Option<Vec<AskAnswer>>) {
+    pub(super) fn set_native_answers(&mut self, answers: Option<Vec<AskAnswer>>) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::NativeAnswers(_)),
             answers.map(CanonicalHookFact::NativeAnswers),
         );
     }
 
-    pub(crate) fn set_assistant_message(&mut self, message: Option<String>) {
+    pub(super) fn set_assistant_message(&mut self, message: Option<String>) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::AssistantOutput(_)),
             message.map(CanonicalHookFact::AssistantOutput),
         );
     }
 
-    pub(crate) fn set_final_message(&mut self, message: Option<String>) {
+    pub(super) fn set_final_message(&mut self, message: Option<String>) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::FinalOutput(_)),
             message.map(CanonicalHookFact::FinalOutput),
         );
     }
 
-    pub(crate) fn set_turn_error(&mut self, error: Option<AgentTurnError>) {
+    pub(super) fn set_turn_error(&mut self, error: Option<AgentTurnError>) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Error(_)),
             error.map(CanonicalHookFact::Error),
         );
     }
 
-    pub(crate) fn set_observed_context(&mut self, context: Option<ContextObservation>) {
+    pub(super) fn set_observed_context(&mut self, context: Option<ContextObservation>) {
         let context = context.filter(|observation| {
             self.routing
                 .context_agent_id()
@@ -301,11 +301,11 @@ impl HookOutput {
         );
     }
 
-    pub(crate) fn set_reply(&mut self, reply: HookReply) {
+    pub(super) fn set_reply(&mut self, reply: HookReply) {
         self.reply = reply;
     }
 
-    pub(crate) fn attach_lifecycle(&mut self, observation: AgentLifecycleObservation) {
+    pub(super) fn attach_lifecycle(&mut self, observation: AgentLifecycleObservation) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Lifecycle(_)),
             Some(CanonicalHookFact::Lifecycle(Box::new(observation))),
@@ -322,7 +322,7 @@ impl HookOutput {
         }
     }
 
-    pub(crate) fn set_policy(&mut self, progress: bool, session_ended: bool) {
+    pub(super) fn set_policy(&mut self, progress: bool, session_ended: bool) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Progress),
             progress.then_some(CanonicalHookFact::Progress),
@@ -362,14 +362,14 @@ enum EventRouting {
 }
 
 impl HookRouting {
-    pub fn session(agent_id: Option<AgentSessionId>) -> Self {
+    pub(super) fn session(agent_id: Option<AgentSessionId>) -> Self {
         Self {
             root_agent_id: agent_id,
             ..Self::default()
         }
     }
 
-    pub fn split(
+    pub(super) fn split(
         event_agent_id: Option<AgentSessionId>,
         context_agent_id: Option<AgentSessionId>,
     ) -> Self {
@@ -385,12 +385,12 @@ impl HookRouting {
         }
     }
 
-    pub fn with_worktree(mut self, worktree_path: Option<String>) -> Self {
+    pub(super) fn with_worktree(mut self, worktree_path: Option<String>) -> Self {
         self.worktree_path = worktree_path;
         self
     }
 
-    pub fn with_server_url(mut self, server_url: Option<String>) -> Self {
+    pub(super) fn with_server_url(mut self, server_url: Option<String>) -> Self {
         self.server_url = server_url;
         self
     }
@@ -417,7 +417,7 @@ impl HookRouting {
 
 /// One installed managed hook and its classification policy.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct HookEventSpec {
+pub(super) struct HookEventSpec {
     pub(crate) event: &'static str,
     pub(crate) matcher: Option<&'static str>,
     pub(crate) lifecycle_fallback: bool,
@@ -433,7 +433,7 @@ pub(crate) struct HookEventSpec {
 }
 
 impl HookEventSpec {
-    pub(crate) const fn lifecycle(event: &'static str, _test_payload: &'static str) -> Self {
+    pub(super) const fn lifecycle(event: &'static str, _test_payload: &'static str) -> Self {
         Self {
             event,
             matcher: None,
@@ -450,7 +450,7 @@ impl HookEventSpec {
         }
     }
 
-    pub(crate) const fn blocking(
+    pub(super) const fn blocking(
         event: &'static str,
         _test_payload: &'static str,
         _test_ask: AskKind,
@@ -471,12 +471,12 @@ impl HookEventSpec {
         }
     }
 
-    pub(crate) const fn with_matcher(mut self, matcher: &'static str) -> Self {
+    pub(super) const fn with_matcher(mut self, matcher: &'static str) -> Self {
         self.matcher = Some(matcher);
         self
     }
 
-    pub(crate) const fn synchronous(mut self) -> Self {
+    pub(super) const fn synchronous(mut self) -> Self {
         self.synchronous = true;
         self
     }
@@ -491,17 +491,17 @@ impl HookEventSpec {
         self
     }
 
-    pub(crate) const fn with_lifecycle_fallback(mut self) -> Self {
+    pub(super) const fn with_lifecycle_fallback(mut self) -> Self {
         self.lifecycle_fallback = true;
         self
     }
 
-    pub(crate) const fn progress(mut self) -> Self {
+    pub(super) const fn progress(mut self) -> Self {
         self.progress = true;
         self
     }
 
-    pub(crate) const fn session_ended(mut self) -> Self {
+    pub(super) const fn session_ended(mut self) -> Self {
         self.session_ended = true;
         self
     }
@@ -518,12 +518,12 @@ impl HookEventSpec {
     }
 }
 
-pub(crate) fn catalog_contains(hooks: &[HookEventSpec], event_name: &str) -> bool {
+pub(super) fn catalog_contains(hooks: &[HookEventSpec], event_name: &str) -> bool {
     hooks.iter().any(|hook| hook.event == event_name)
 }
 
 #[cfg(test)]
-pub(crate) const fn catalog_event_name_array<const N: usize>(
+pub(super) const fn catalog_event_name_array<const N: usize>(
     hooks: &[HookEventSpec; N],
 ) -> [&'static str; N] {
     let mut names = [""; N];
@@ -536,14 +536,14 @@ pub(crate) const fn catalog_event_name_array<const N: usize>(
 }
 
 #[cfg(test)]
-pub(crate) fn catalog_classification_corpus(
+pub(super) fn catalog_classification_corpus(
     hooks: &[HookEventSpec],
 ) -> Vec<super::ClassificationSample> {
     hooks.iter().map(classification_sample).collect()
 }
 
 #[cfg(test)]
-pub(crate) fn classification_sample(hook: &HookEventSpec) -> super::ClassificationSample {
+pub(super) fn classification_sample(hook: &HookEventSpec) -> super::ClassificationSample {
     super::ClassificationSample::new(
         hook.event,
         serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
@@ -552,7 +552,7 @@ pub(crate) fn classification_sample(hook: &HookEventSpec) -> super::Classificati
     )
 }
 
-pub(crate) fn decode_catalog_hook<'a>(
+pub(super) fn decode_catalog_hook<'a>(
     hooks: impl IntoIterator<Item = &'a HookEventSpec>,
     event_name: &str,
     ask_kind: Option<AskKind>,
@@ -583,7 +583,7 @@ fn classify_catalog_entry(
 /// `source` field on `SessionStart` events, shared by both adapters.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum SessionSource {
+pub(super) enum SessionSource {
     #[default]
     Startup,
     Resume,
@@ -609,7 +609,7 @@ impl SessionSource {
 /// `trigger` field on `PreCompact` and `PostCompact` events.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum CompactTrigger {
+pub(super) enum CompactTrigger {
     Manual,
     Auto,
     #[default]
@@ -618,7 +618,7 @@ pub enum CompactTrigger {
 }
 
 impl CompactTrigger {
-    pub const fn auto_flag(&self) -> Option<bool> {
+    pub(super) const fn auto_flag(&self) -> Option<bool> {
         match self {
             Self::Manual => Some(false),
             Self::Auto => Some(true),
@@ -631,7 +631,7 @@ impl CompactTrigger {
 /// via `#[serde(flatten)]` in each adapter's per-event common struct.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct HookEventCommon {
+pub(super) struct HookEventCommon {
     pub session_id: Option<String>,
 }
 
