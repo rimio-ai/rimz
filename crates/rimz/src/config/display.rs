@@ -52,7 +52,7 @@ impl ProviderTabsMode {
     /// one, `never` not at all. A tabbed dashboard is bounded by its single
     /// active block, so it shows every provider - `max_provider_blocks` only
     /// trims the stacked layout.
-    pub fn tabs(self, count: usize) -> bool {
+    pub(crate) fn tabs(self, count: usize) -> bool {
         match self {
             ProviderTabsMode::Auto => count >= 3,
             ProviderTabsMode::Always => count > 1,

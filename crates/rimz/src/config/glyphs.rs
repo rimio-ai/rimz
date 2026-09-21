@@ -192,7 +192,7 @@ impl GlyphRole {
 pub struct GlyphOverrides(BTreeMap<GlyphRole, String>);
 
 impl GlyphOverrides {
-    pub fn glyph(&self, role: GlyphRole) -> Option<&str> {
+    fn glyph(&self, role: GlyphRole) -> Option<&str> {
         self.0.get(&role).map(String::as_str)
     }
 
@@ -282,7 +282,7 @@ impl ThemeGlyphsConfig {
         *self == Self::default()
     }
 
-    pub fn glyph(&self, set: &str, role: GlyphRole) -> Option<&str> {
+    pub(crate) fn glyph(&self, set: &str, role: GlyphRole) -> Option<&str> {
         match set {
             "unicode" => self.unicode.glyph(role),
             "nerd_font" => self.nerd_font.glyph(role),

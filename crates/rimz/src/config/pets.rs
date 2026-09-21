@@ -10,12 +10,12 @@ impl CellAspect {
     /// reproducing the historical full-footprint render exactly.
     pub const NEUTRAL: Self = Self(260);
 
-    pub fn from_ratio(ratio: f32) -> Option<Self> {
+    pub(crate) fn from_ratio(ratio: f32) -> Option<Self> {
         (ratio.is_finite() && (1.0..=4.0).contains(&ratio))
             .then(|| Self((ratio * 120.0).round() as u16))
     }
 
-    pub fn ratio(self) -> f32 {
+    pub(crate) fn ratio(self) -> f32 {
         f32::from(self.0) / 120.0
     }
 }
