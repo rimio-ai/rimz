@@ -61,7 +61,8 @@ pub(super) fn render_entry_for_flip(
     }
 }
 
-/// The rendered author of a turn-opening entry. `"user"` is reserved for a human origin; anything RimZ or an agent introduced renders as its handle.
+/// The rendered author of a turn-opening entry. `"user"` is reserved for a
+/// human origin; anything RimZ or an agent introduced renders as its handle.
 fn chat_from(entry: &TranscriptEntry) -> String {
     entry.from.clone().unwrap_or_else(|| {
         match entry.origin() {

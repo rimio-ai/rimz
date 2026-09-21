@@ -708,7 +708,13 @@ fn ensure_rimz_block_registry(root: &Path, files: &[PathBuf]) -> Result<()> {
         }
         let source = fs::read_to_string(path)?;
         for (idx, line) in source.lines().enumerate() {
-            if line.trim() == "#[cfg(test)]" {
+            // A fixture asserting the composed wire text is a guard, not a risk.
+            // Exact-line match on the inline module's own opening line, as
+            // `ensure_inline_tests_stay_small` does: the house shape keeps it
+            // last, so its span runs to EOF. Breaking on `#[cfg(test)]` instead
+            // would stop at the `mod tests;` declaration that sits near the top
+            // of every file whose tests live in a sibling `tests.rs`.
+            if line == "mod tests {" {
                 break;
             }
             if tags.0.iter().any(|tag| line.contains(tag)) {
