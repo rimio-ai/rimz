@@ -159,7 +159,7 @@ The recorded row was `row0=8` on both backends. tmux focus moved from `%3` to `%
 
 ## Inspect the data behind a card
 
-A frame shows what the renderer decided; `rimz sidebar snapshot --json` shows what it decided it from. Run it from the binary you built, not the installed one: the verb folds a fresh snapshot in the calling process, so your change is what produces it. `--no-produce` instead renders the producer's published cache, which a running release build wrote — useful for comparing old and new behaviour, and the wrong flag for checking your own code.
+A frame shows what the renderer decided; `rimz sidebar snapshot --json` shows what it decided it from. Run it from the binary you built, not the installed one: both the default and `--no-produce` fold the rows in the calling process, so the snapshot is always your code's output, and the only way to see another build's behaviour is to run that build. What the flag trades is the pane truth underneath: the default forks `list-panes` and git for a current roster, while `--no-produce` reuses the pane frame and agent projection the producer already published and forks neither, which makes it the cheap read in a room you would rather not disturb.
 
 One rendered card is a row in a worktree group, and its clocks and card fields live there:
 
