@@ -442,37 +442,41 @@ fn zoom_pane_argv_uses_zellij_mux_and_optional_session() {
 }
 
 #[test]
-fn parses_boolean_load_configuration() {
-    assert_eq!(parse_configuration_bool(Some("true")), Some(true));
-    assert_eq!(parse_configuration_bool(Some("false")), Some(false));
-    assert_eq!(parse_configuration_bool(Some("TRUE")), None);
-    assert_eq!(parse_configuration_bool(None), None);
-}
-
-#[test]
-fn runtime_reconfigure_kdl_emits_mouse_options_without_focus_key() {
+fn runtime_reconfigure_kdl_emits_options_without_keybinds() {
     let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
-        focus_follows_mouse: Some(false),
-        mouse_click_through: Some(true),
+        session_options: &[
+            ("pane_frames".to_owned(), "true".to_owned()),
+            ("empty".to_owned(), String::new()),
+            ("escaped".to_owned(), "a\"b\n".to_owned()),
+            ("non_ascii_digits".to_owned(), "１２".to_owned()),
+        ],
         ..RuntimeReconfigure::default()
     })
-    .expect("mouse options produce a reconfigure payload");
+    .expect("options produce a reconfigure payload");
 
-    assert_eq!(kdl, "focus_follows_mouse false\nmouse_click_through true\n");
+    assert_eq!(
+        kdl,
+        "pane_frames true\nempty \"\"\nescaped \"a\\\"b\\n\"\nnon_ascii_digits \"１２\"\n"
+    );
 }
 
 #[test]
-fn runtime_reconfigure_kdl_combines_mouse_options_and_room_keybinds() {
+fn runtime_reconfigure_kdl_combines_options_and_room_keybinds() {
     let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
         plugin_id: Some(42),
         focus_key: Some("Alt+p"),
         zoom_key: Some("Alt+g"),
-        focus_follows_mouse: Some(false),
-        mouse_click_through: Some(true),
+        session_options: &[
+            ("pane_frames".to_owned(), "false".to_owned()),
+            ("scroll_buffer_size".to_owned(), "123456".to_owned()),
+            ("on_force_close".to_owned(), "quit".to_owned()),
+        ],
     })
-    .expect("focus key and mouse options produce a reconfigure payload");
+    .expect("focus key and options produce a reconfigure payload");
 
-    assert!(kdl.starts_with("focus_follows_mouse false\nmouse_click_through true\nkeybinds {\n"));
+    assert!(kdl.starts_with(
+        "pane_frames false\nscroll_buffer_size 123456\non_force_close \"quit\"\nkeybinds {\n"
+    ));
     assert!(kdl.contains("bind \"Alt p\""));
     assert!(kdl.contains("bind \"Alt g\""));
     assert!(kdl.contains("name \"rimz:focus_sidebar\""));
@@ -480,6 +484,19 @@ fn runtime_reconfigure_kdl_combines_mouse_options_and_room_keybinds() {
     assert_eq!(kdl.matches("MessagePluginId 42").count(), 4);
     assert!(!kdl.contains("MessagePlugin \""));
     assert!(!kdl.contains("plugin_url"));
+}
+
+#[test]
+fn runtime_reconfigure_kdl_emits_keybinds_without_options() {
+    let kdl = runtime_reconfigure_kdl(&RuntimeReconfigure {
+        plugin_id: Some(42),
+        focus_key: Some("Alt+p"),
+        ..RuntimeReconfigure::default()
+    })
+    .expect("keybinds produce a reconfigure payload");
+
+    assert!(kdl.starts_with("keybinds {\n"));
+    assert!(kdl.contains("bind \"Alt p\""));
 }
 
 #[test]

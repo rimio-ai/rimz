@@ -85,12 +85,13 @@ mod shell {
                 plugin_config: configuration.get("plugin_config").cloned(),
                 focus_key: configuration.get("focus_key").cloned(),
                 zoom_key: configuration.get("zoom_key").cloned(),
-                focus_follows_mouse: wire::parse_configuration_bool(
-                    configuration.get("focus_follows_mouse").map(String::as_str),
-                ),
-                mouse_click_through: wire::parse_configuration_bool(
-                    configuration.get("mouse_click_through").map(String::as_str),
-                ),
+                session_options: configuration
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        key.strip_prefix("opt_")
+                            .map(|key| (key.to_owned(), value.clone()))
+                    })
+                    .collect(),
             };
             let mut engine = Engine::new(now, config);
             let host = ShellHost {
