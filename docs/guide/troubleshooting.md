@@ -343,7 +343,7 @@ rimz trust grant     # pin the current executable surface as trusted
 
 Editing any command-running field re-hashes the config, so `rimz trust status` and `rimz doctor` report `stale` on the next read (there is no background sweep) and those fields disable themselves until you re-grant. Review the diff, then run `rimz trust grant` again. The full model, including exactly which fields count, is in [project trust](./security.md#project-trust).
 
-Two fields load, enter the trust hash so a grant covers them, and are then read by nothing: `launch_command` on an `[[agents]]` entry, and a `[[hooks]]` table. Declaring either has no effect today. One table is refused outright: a `[layout]` table fails the load with an error telling you to move it to `$RIMZ_HOME/config.toml`. Ignore that fix and delete the table, because per-machine config has no `[layout]` either ([project config](./configuration.md#project-config)).
+Two fields load, enter the trust hash so a grant covers them, and are then read by nothing: `launch_command` on an `[[agents]]` entry, and a `[[hooks]]` table. Declaring either has no effect today. One table is refused outright: a `[layout]` table fails the load with an error naming what replaced it, `placement` under `[agents]` for where a launch lands and a team definition for a whole room shape. Delete the table; per-machine config has no `[layout]` either ([project config](./configuration.md#project-config)).
 
 ### RimZ cannot parse a config file
 

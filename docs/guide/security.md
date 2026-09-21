@@ -36,7 +36,7 @@ Edits outside RimZ's own project-task commands, a direct file edit by an agent i
 
 `rimz trust revoke` drops the grant. The project config is inert again at the next read; panes already running keep what they launched with until they stop.
 
-Room layout stays out of a repository's reach. A project config carrying a `[layout]` table is refused outright, with the fix to move it to your per-machine config.
+Room layout stays out of a repository's reach. A project config carrying a `[layout]` table is refused outright, and the error names what replaced the table: `placement` under `[agents]`, and a team definition for a whole room shape. The table goes rather than moves, because per-machine config has no `[layout]` either.
 
 The hash covers every field that can cause a process to run:
 
