@@ -17,13 +17,13 @@ const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
 const RIMZ_SYNC_KEY: &str = "_rimz_sync";
 
 #[derive(Clone, Copy)]
-pub(crate) enum SyncEncoding {
+pub(super) enum SyncEncoding {
     EntryMarker,
     HandlerAsync,
     None,
 }
 
-pub(crate) struct ManagedJsonHookSpec {
+pub(super) struct ManagedJsonHookSpec {
     pub agent: &'static str,
     pub catalog: &'static [HookEventSpec],
     pub command: &'static str,
@@ -34,7 +34,7 @@ pub(crate) struct ManagedJsonHookSpec {
 }
 
 impl ManagedJsonHookSpec {
-    pub fn install_into(&self, path: &Path) -> Result<HookInstallReport> {
+    pub(super) fn install_into(&self, path: &Path) -> Result<HookInstallReport> {
         let existed = path.exists();
         let (root, installed_events) = self.candidate(path)?;
         self.write_json(path, &root)?;
@@ -48,7 +48,7 @@ impl ManagedJsonHookSpec {
         })
     }
 
-    pub fn preview_at(&self, path: &Path) -> Result<HookInstallPreview> {
+    pub(super) fn preview_at(&self, path: &Path) -> Result<HookInstallPreview> {
         let existed = path.exists();
         let original = read_optional_file(self.agent, path)?;
         let existing = self.read_json(path)?;
@@ -75,7 +75,7 @@ impl ManagedJsonHookSpec {
         })
     }
 
-    pub fn uninstall_from(&self, path: &Path) -> Result<HookUninstallReport> {
+    pub(super) fn uninstall_from(&self, path: &Path) -> Result<HookUninstallReport> {
         let existed = path.exists();
         if !existed {
             return Ok(HookUninstallReport {
@@ -103,7 +103,7 @@ impl ManagedJsonHookSpec {
         })
     }
 
-    pub fn installed_at(&self, path: &Path) -> bool {
+    pub(super) fn installed_at(&self, path: &Path) -> bool {
         let Ok(root) = self.read_json(path) else {
             return false;
         };
@@ -127,7 +127,7 @@ impl ManagedJsonHookSpec {
             .all(|spec| managed_statusline::install_satisfied(&root, spec))
     }
 
-    pub fn managed_artifacts_at(&self, path: &Path) -> bool {
+    pub(super) fn managed_artifacts_at(&self, path: &Path) -> bool {
         let Ok(root) = self.read_json(path) else {
             return false;
         };
@@ -150,15 +150,19 @@ impl ManagedJsonHookSpec {
                 .any(|spec| managed_statusline::is_managed(&root, spec))
     }
 
-    pub fn read_json(&self, path: &Path) -> Result<Map<String, Value>> {
+    pub(super) fn read_json(&self, path: &Path) -> Result<Map<String, Value>> {
         settings_json::read_json_object(self.agent, path)
     }
 
-    pub fn render_json(&self, root: &Map<String, Value>) -> Result<String> {
+    fn render_json(&self, root: &Map<String, Value>) -> Result<String> {
         settings_json::render_json(self.agent, root)
     }
 
-    pub fn wrapped_status_line_command_at(&self, path: &Path, index: usize) -> Option<String> {
+    pub(super) fn wrapped_status_line_command_at(
+        &self,
+        path: &Path,
+        index: usize,
+    ) -> Option<String> {
         let spec = *self.status_lines.get(index)?;
         let root = self.read_json(path).ok()?;
         managed_statusline::wrapped_command(&root, spec)
