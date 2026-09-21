@@ -660,10 +660,9 @@ pub(super) fn render_verdict(
         deliver::DeliveryVerdict::AskWaiting => {
             format!("waiting: {target} is waiting on input in its pane")
         }
-        deliver::DeliveryVerdict::NoPane { pinned_pane_id } => match pinned_pane_id {
-            Some(pane_id) => format!("stuck: pinned pane {pane_id} is not live for {target}"),
-            None => format!("stuck: no live pane for {target}"),
-        },
+        deliver::DeliveryVerdict::NoPane { pinned_pane_id } => {
+            format!("{} for {target}", deliver::no_pane_blocker(pinned_pane_id.as_ref()))
+        }
         deliver::DeliveryVerdict::Ready => "ready: delivery conditions pass".to_owned(),
     }
 }

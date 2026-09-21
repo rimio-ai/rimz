@@ -673,13 +673,21 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn defer_message_wake(&self, message_id: &MessageId, until: Timestamp) -> Result<()> {
+    pub fn defer_message_wake(
+        &self,
+        message_id: &MessageId,
+        until: Timestamp,
+        blocker: Option<&str>,
+    ) -> Result<()> {
         self.commit_queue(|queue| {
             let mut message = match queue.get(message_id) {
                 Some(message) if message.status == MessageStatus::Queued => message,
                 Some(_) | None => return Ok(()),
             };
             message.retry_after = Some(until);
+            if let Some(blocker) = blocker {
+                message.last_error = Some(blocker.to_owned());
+            }
             queue.upsert(message);
             Ok(())
         })

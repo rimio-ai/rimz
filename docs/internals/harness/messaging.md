@@ -68,7 +68,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `attempts`, `last_attempt_at` | Claim bookkeeping; the cap ends in `Abandoned` |
 | `last_sent_at` | Last pane write; survives a prompt requeue so a late acknowledgement can still settle it |
 | `unconfirmed_sends` | Prompt writes that reached a pane and were never confirmed; the cap ends in `TimedOut` |
-| `last_error` | The most recent delivery or reconciliation failure |
+| `last_error` | The most recent delivery or reconciliation failure, or the blocker a `NoPane` back-off recorded |
 | `enqueued_at`, `updated_at`, `delivered_at` | Timestamps |
 
 `MessageSender::is_conversation()` splits senders by variant alone. `Human` and `Agent` are conversation traffic; `Harness`, `Subagent`, and `System` are system traffic, which covers nudges, compaction commands, and deliberately unattributed `--no-from` text. The split is a read-side filter for `message list` and other conversation surfaces, and `automated` plays no part in it.
@@ -192,6 +192,8 @@ An address that matches nothing, after the durable fallback, writes a terminal `
 | 10 | A live pane can receive a paste | `NoPane` | A pane appearing; affinity is cleared so any bound pane will do |
 
 All ten pass and the verdict is `Ready`.
+
+A pane is bindable when it reaches `agent_panes`, which the snapshot builds from the panes card admission keeps ([sidebar.md § Presence model](../sidebar/sidebar.md#presence-model)). A pane the fold drops is a receiver no message can reach, however healthy the agent's record looks, so `NoPane` is the one verdict that can outlive every other gate.
 
 The compaction window at check 6 closes every gate, `Resume` included. A receiver with a `compacting_since` marker less than 90 seconds old takes nothing. The window expires so a lost compaction-end signal costs a delay instead of a wedged queue. Stale-`Sent` reconciliation uses the full compaction bracket instead ([model.md § The compaction bracket](../agents/model.md#the-compaction-bracket)).
 
@@ -447,6 +449,8 @@ Condition evaluation inside a sweep is one transaction. It evaluates every unmet
 
 The sweep backs off because the elder ticks often. When it cannot deliver a ready head (gate closed, ask waiting, compacting, no pane), it sets `retry_after` one delivery window ahead, so the elder retries at most once per window. `retry_after` is only a wake hint: it does not affect `is_ready`, FIFO position, claim leases, or hook-driven delivery.
 
+A `NoPane` back-off also records the blocker in `last_error`, in the same queue commit and in the words `rimz message show` prints. Every other verdict moves `retry_after` alone: they name a receiver that is present and busy, which the record's own state already shows, while an unbindable receiver otherwise leaves a queue that can defer forever with nothing written down. The record stays `Queued` with its pane pin and its `attempts` untouched, and the next claim clears the error.
+
 A ready `Queued` head arms the stamp even without `not_before`, contributing its `updated_at`. That backstop recovers a message to an idle agent that missed the live send.
 
 An unmet `when` condition sets `retry_after` to the exact projected trip time, so a 58-minute dwell wakes once at 58 minutes. When the watched session ends, every record still waiting on it is archived with the condition in `last_error`; the lifecycle hook does this in realtime and orphan GC is the backstop. A met stamp survives session end and receiver delay, which is how a busy receiver still gets the message at its next boundary.
@@ -469,7 +473,7 @@ History and retention are audit, so a failure in either warns and leaves the que
 
 The store reads through `list()` (live), `list_history()` (terminal, with text), and `list_pending()` (`Queued` only).
 
-The event log carries these methods: `message.queued`, `message.edited`, `message.after_met`, `message.when_met`, `message.sent`, `message.delivered`, `message.timed_out`, `message.errored`, `message.canceled`, `message.abandoned`, and `message.archived`. The parser reads the retired `message.removed` as a cancellation. Not every transition writes one: a claim, a retryable pre-send failure returning a claim to `Queued`, a `Sent` record held during compaction, and a sweep that only moves `retry_after` rewrite the queue silently. An explicit claim release (`release_message_claims`) does write `message.queued`.
+The event log carries these methods: `message.queued`, `message.edited`, `message.after_met`, `message.when_met`, `message.sent`, `message.delivered`, `message.timed_out`, `message.errored`, `message.canceled`, `message.abandoned`, and `message.archived`. The parser reads the retired `message.removed` as a cancellation. Not every transition writes one: a claim, a retryable pre-send failure returning a claim to `Queued`, a `Sent` record held during compaction, and a sweep that only moves `retry_after` and its blocker rewrite the queue silently. An explicit claim release (`release_message_claims`) does write `message.queued`.
 
 The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `channel`, `gate`, `status`, `body`, `pane_id`, the `forced` flag, sender attribution, `text_len`, both counters, timestamps, the compaction baseline, and an optional `reason`. The reason is set on errors, abandons, cancels, archives, releases and requeues, timeouts, edits (the changed fields), condition stamps, and mixed-submit deliveries. **Message text never enters the event log**, which is why `message list` merges three sources: live records, history records with text, and terminal rows known only from events.
 

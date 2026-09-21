@@ -10,11 +10,26 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     let queued = q.queue(1);
     let until = Timestamp::now() + Duration::from_secs(30);
 
-    q.defer_message_wake(&queued.message_id, until).unwrap();
+    let blocker = "stuck: no live pane";
+    let events_before = std::fs::read(&q.inner.paths.events_log).unwrap();
+    q.defer_message_wake(&queued.message_id, until, Some(blocker))
+        .unwrap();
 
     assert_eq!(
         q.list_pending_messages().unwrap()[0].retry_after,
         Some(until)
+    );
+    assert_eq!(q.live()[0].last_error.as_deref(), Some(blocker));
+    q.defer_message_wake(&queued.message_id, until, None)
+        .unwrap();
+    let deferred = &q.live()[0];
+    assert_eq!(deferred.last_error.as_deref(), Some(blocker));
+    assert_eq!(deferred.status, MessageStatus::Queued);
+    assert_eq!(deferred.attempts, 0);
+    assert_eq!(deferred.pane_id, queued.pane_id);
+    assert_eq!(
+        std::fs::read(&q.inner.paths.events_log).unwrap(),
+        events_before
     );
 
     let claimed = q
@@ -22,18 +37,24 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
         .unwrap()
         .expect("claimed");
     assert_eq!(claimed.retry_after, None);
+    assert_eq!(claimed.last_error, None);
     let sent = q
         .record_sent_message(&claimed, "session")
         .unwrap()
         .expect("sent");
-    q.defer_message_wake(&sent.message_id, until + Duration::from_secs(30))
-        .unwrap();
+    q.defer_message_wake(
+        &sent.message_id,
+        until + Duration::from_secs(30),
+        Some(blocker),
+    )
+    .unwrap();
 
     let messages = q.live();
     assert_eq!(messages[0].status, MessageStatus::Sent);
     assert_eq!(messages[0].retry_after, None);
+    assert_eq!(messages[0].last_error, None);
 
-    q.defer_message_wake(&message_id(999), until).unwrap();
+    q.defer_message_wake(&message_id(999), until, None).unwrap();
 }
 
 #[test]
