@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// A prompt that has been through [`sanitize_user_prompt`]. The one constructor
+/// A prompt that has been through `sanitize_user_prompt`. The one constructor
 /// is what an adapter must go through before prompt text can reach the
 /// transcript, so no adapter can hand over raw provider bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
