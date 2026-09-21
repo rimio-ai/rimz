@@ -201,7 +201,7 @@ impl HookOutput {
         })
     }
 
-    pub fn observed_context(&self) -> Option<&ContextObservation> {
+    pub(super) fn observed_context(&self) -> Option<&ContextObservation> {
         self.event.facts.iter().find_map(|fact| match fact {
             CanonicalHookFact::Context(context) => Some(&**context),
             _ => None,

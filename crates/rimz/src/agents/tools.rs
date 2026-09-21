@@ -10,7 +10,7 @@ pub(crate) struct ToolSet {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ToolErr {
+pub(crate) enum ToolErr {
     #[error("invalid tool entry `{entry}`: expected a tool name")]
     Invalid { entry: String },
     #[error("tools are required for this agent kind")]
@@ -85,7 +85,7 @@ impl ToolSet {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DefinitionDefaults {
+pub(crate) struct DefinitionDefaults {
     pub mode: Option<PermissionMode>,
     pub effort: Option<&'static str>,
 }

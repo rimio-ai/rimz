@@ -129,7 +129,8 @@ pub use state::{
     single_line_description,
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_description};
-pub use tools::{DefinitionDefaults, ToolErr, definition_model_kind};
+use tools::ToolErr;
+pub use tools::definition_model_kind;
 pub(crate) use tools::{
     ToolSet, definition_defaults, expand_model_alias, render_tool_args, tools_required,
 };

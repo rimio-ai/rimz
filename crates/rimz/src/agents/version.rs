@@ -36,7 +36,7 @@ impl std::fmt::Display for CliVersion {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum VersionParseErr {
+pub(super) enum VersionParseErr {
     #[error("missing version token")]
     Empty,
     #[error("expected two or three numeric dot-separated version segments")]
