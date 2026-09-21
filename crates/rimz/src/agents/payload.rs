@@ -107,7 +107,7 @@ impl RimzBlock {
     }
 }
 
-pub fn wrap_rimz_block(block: RimzBlock, body: &str) -> String {
+pub(crate) fn wrap_rimz_block(block: RimzBlock, body: &str) -> String {
     let tag = block.tag();
     format!("<{tag}>\n{body}\n</{tag}>")
 }

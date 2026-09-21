@@ -81,7 +81,7 @@ impl HarnessNotice {
 
 impl MessageSender {
     /// The origin supplied by this sender, independent of the message body.
-    pub fn section_origin(&self) -> SectionOrigin {
+    fn section_origin(&self) -> SectionOrigin {
         match self {
             Self::Human => SectionOrigin::Human,
             Self::Agent { .. } => SectionOrigin::Agent(self.render()),

@@ -99,7 +99,8 @@ upward-dependencies = ["address"]
 # ContextCapability::prompt_cache_ttl supplies provider cache facts to idle-compaction policy.
 # The seat active-time sum and its session map are shared by store, sidebar and CLI.
 # Native post-tool context attachment crosses the adapter/CLI hook seam.
-surface-budget = 887
+# A sanitized-prompt newtype and the RimZ prompt-block registry are the adapters' and the CLI's only way to hand over prompt text.
+surface-budget = 897
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -426,7 +427,8 @@ path = "crates/rimz/src/store"
 # A deferred delivery instructs the queue what to do with the recorded blocker, whose words stay with the sweep.
 # The lifetime-class GC reports per-room, per-class removals to the CLI and the auto-GC assist.
 # Provider panels carry the auto-redeem forecast the header marker renders.
-surface-budget = 317
+# Submitted-prompt origin classification and a run's prompt origin are read by the lifecycle hooks in the binary crate.
+surface-budget = 323
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -440,7 +442,8 @@ path = "crates/rimz/src/transcript.rs"
 # Human rendering and statistics share harness classification and its sender sentinel.
 # The CLI locates a named channel's workspace from transcript evidence.
 # `agents wait` reads an interactive agent's final message from the transcript.
-surface-budget = 19
+# Entry origin is projected once here and read by rendering, thread assembly and attribution.
+surface-budget = 22
 
 [[module]]
 path = "crates/rimz/src/trust.rs"

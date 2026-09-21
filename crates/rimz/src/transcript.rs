@@ -25,7 +25,9 @@ pub const HARNESS_FROM: &str = "rimz";
 /// The `from` handle a human-authored entry carries; a typed prompt carries none.
 pub const HUMAN_FROM: &str = "you";
 
-/// Who authored a transcript entry. The renderer, thread builder, and attribution read this projection; `from` stays identity rather than origin.
+/// Who authored a transcript entry. The renderer, the thread builder, and
+/// attribution all read this projection instead of deciding for themselves, so
+/// `from` stays identity and origin has one home.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryOrigin {
@@ -107,6 +109,10 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
+    /// The read side's one origin decision, total over `(entry, from)`. A
+    /// handle is an agent, `HARNESS_FROM` is RimZ, and the human is what is
+    /// left once neither the kind nor the handle accounts for the entry — so
+    /// text RimZ introduced cannot become the user's by carrying no sender.
     pub fn origin(&self) -> EntryOrigin {
         use TranscriptKind::*;
         match (self.entry, self.from.as_deref()) {
