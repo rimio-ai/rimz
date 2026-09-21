@@ -12,6 +12,8 @@ Those three cover what most people change. The rest of this page goes a level do
 
 All of it lives in one per-machine file, `~/.rimz/theme.toml`. `rimz config set` writes that file in place and keeps your comments; `rimz config init --print` prints the commented template, which carries every key on this page with its shipped default ([configuration](./configuration.md#the-files-in-your-home-directory)). A running sidebar picks up an edit on its next refresh, a second or two later, with no restart and no reload; the sidebar's own width is the one exception, under [Display](#display). A file that will not parse falls back to built-in defaults: `rimz start` prints one line naming the file and the line that broke it, but a sidebar that is already running just snaps to the defaults without a word. When the column changes in a way you did not ask for, `rimz doctor` names the file and the line.
 
+If the file parses but a palette source is invalid, start and doctor report that source separately; other settings still apply. A running sidebar still falls back without a notice.
+
 A theme changes what RimZ paints, never what an agent can do. Every element carries its state by shape first, so color reinforces the meaning rather than carrying it, and any palette stays readable, including no color at all. This page is the settings; [interface/sidebar.md](../interface/sidebar.md) is what each tone and glyph means on screen, and [the glyph legend](../interface/sidebar.md#reading-the-glyphs) is the meaning table.
 
 ## Color scheme
@@ -26,13 +28,13 @@ scheme = "Catppuccin Mocha"
 
 The bundled catalog is the Alacritty export of [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/alacritty), so a name resolves to the same palette in every terminal and every multiplexer. `rimz list-themes` prints all of them with color chips ([reference](../reference/cli/config.md#list-themes)); a name with spaces needs TOML quotes.
 
-Set it through the command rather than by hand when you can. `rimz config set theme "Catppuccin Mocha"` is shorthand for `theme.scheme`, and it refuses a name or path it cannot resolve. A hand edit naming a scheme that does not exist is ignored without a message, and the sidebar keeps the default.
+Set it through the command rather than by hand when you can. `rimz config set theme "Catppuccin Mocha"` is shorthand for `theme.scheme`, and it refuses a name or path it cannot resolve. If a hand edit names a scheme that does not exist, `rimz start` reports it without refusing the room, and `rimz doctor` lists the error. The start notice names the palette the sidebar keeps: valid inline colors if present, otherwise the default. Other theme settings still apply.
 
 Every human `rimz` command resolves the same scheme, slot overrides, provider overrides, and color depth as the sidebar. Machine-readable output stays plain: JSON, hook decisions, pane captures, scripting values, and streams carry no theme styling. Browser rooms use the active scheme while `[web] style_client` is true, which is the default ([configuration](./configuration.md#web-access)).
 
 ### Paste a palette inline
 
-To use a palette RimZ does not bundle without saving it as a file, drop an Alacritty `[colors.*]` block at the root of `theme.toml`. An inline palette wins over `scheme`.
+To use a palette RimZ does not bundle without saving it as a file, drop an Alacritty `[colors.*]` block at the root of `theme.toml`. A valid inline palette wins over `scheme`, but start and doctor still report an invalid configured scheme.
 
 ```toml
 [colors.primary]
@@ -48,7 +50,7 @@ magenta = "#bb9af7"
 cyan = "#7dcfff"
 ```
 
-Those are the required keys: `colors.primary.background` and `foreground`, plus the six `colors.normal` hues. Two more are optional. `colors.bright.blue` is the selection accent, falling back to `normal.blue`; `colors.selection.background` is the selected-card band. A block with a key missing or a color RimZ cannot parse is ignored without a message and the scheme applies instead, so look at the sidebar after pasting one.
+Those are the required keys: `colors.primary.background` and `foreground`, plus the six `colors.normal` hues. Two more are optional. `colors.bright.blue` is the selection accent, falling back to `normal.blue`; `colors.selection.background` is the selected-card band. A block with a required key missing or a color RimZ cannot parse is reported by `rimz start` and `rimz doctor`. The sidebar uses the configured scheme if it resolves, otherwise the default; the start notice names which. If both sources are invalid, both are reported. Fix the named key in `theme.toml`; other theme settings still apply.
 
 ## Style preset
 

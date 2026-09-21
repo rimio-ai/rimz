@@ -95,6 +95,24 @@ pub(crate) fn validate_explicit_scheme(name_or_path: &str) -> Result<(), String>
     load_explicit_scheme(name_or_path).map(|_| ())
 }
 
+pub(super) fn validate_theme(theme: &ThemeConfig) -> Vec<String> {
+    let colors = theme.colors.as_ref().map(parse_colors);
+    let scheme = theme.scheme.as_deref().map(load_explicit_scheme);
+    let effective = if colors.as_ref().is_some_and(Result::is_ok) {
+        "inline `[colors]` palette".to_owned()
+    } else if let (Some(name), Some(Ok(_))) = (theme.scheme.as_deref(), &scheme) {
+        format!("scheme `{name}`")
+    } else {
+        format!("default scheme `{DEFAULT_SCHEME}`")
+    };
+    colors
+        .and_then(Result::err)
+        .into_iter()
+        .chain(scheme.and_then(Result::err))
+        .map(|message| format!("{message}; the sidebar keeps the {effective} until it is fixed"))
+        .collect()
+}
+
 pub(crate) fn explicit_scheme(name_or_path: &str) -> Option<ParsedScheme> {
     load_explicit_scheme(name_or_path)
         .ok()
@@ -311,6 +329,60 @@ foreground = '#d0d0d0'
             parse_scheme(MISSING_GREEN).expect_err("missing green"),
             "colors.normal.green is missing"
         );
+    }
+
+    #[test]
+    fn theme_validation_reports_each_invalid_source_and_effective_palette() {
+        let default =
+            format!("; the sidebar keeps the default scheme `{DEFAULT_SCHEME}` until it is fixed");
+        for name in ["missing scheme", "/missing-rimz-theme/palette.toml"] {
+            let theme = ThemeConfig {
+                scheme: Some(name.to_owned()),
+                ..ThemeConfig::default()
+            };
+            assert_eq!(
+                validate_theme(&theme),
+                vec![format!(
+                    "{}{default}",
+                    validate_explicit_scheme(name).unwrap_err()
+                )]
+            );
+        }
+        let missing = parse_inline_palette(MISSING_GREEN).unwrap();
+        let mut bad_hex = default_inline_palette();
+        bad_hex.primary.as_mut().unwrap().background = Some("not-a-color".to_owned());
+        for colors in [missing, bad_hex] {
+            let detail = parse_colors(&colors).unwrap_err();
+            let mut theme = ThemeConfig {
+                colors: Some(colors),
+                ..ThemeConfig::default()
+            };
+            assert_eq!(validate_theme(&theme), vec![format!("{detail}{default}")]);
+            theme.scheme = Some("Catppuccin Mocha".to_owned());
+            assert_eq!(
+                validate_theme(&theme),
+                vec![format!(
+                    "{detail}; the sidebar keeps the scheme `Catppuccin Mocha` until it is fixed"
+                )]
+            );
+            theme.scheme = Some("missing scheme".to_owned());
+            let errors = validate_theme(&theme);
+            assert_eq!(errors.len(), 2);
+            assert!(errors.iter().all(|error| error.ends_with(&default)));
+        }
+        let theme = ThemeConfig {
+            colors: Some(default_inline_palette()),
+            scheme: Some("missing scheme".to_owned()),
+            ..ThemeConfig::default()
+        };
+        assert_eq!(
+            validate_theme(&theme),
+            vec![format!(
+                "{}; the sidebar keeps the inline `[colors]` palette until it is fixed",
+                validate_explicit_scheme("missing scheme").unwrap_err()
+            )]
+        );
+        assert!(validate_theme(&ThemeConfig::default()).is_empty());
     }
 
     #[test]

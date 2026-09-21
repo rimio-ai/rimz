@@ -791,6 +791,7 @@ fn blocks_room_start(err: &ConfigErr) -> bool {
         | ConfigErr::Notifications { .. } => true,
         ConfigErr::Definition { .. }
         | ConfigErr::Worktree { .. }
+        | ConfigErr::Theme { .. }
         | ConfigErr::Io { .. }
         | ConfigErr::Parse { .. }
         | ConfigErr::Agents { .. }

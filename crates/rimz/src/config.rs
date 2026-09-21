@@ -269,6 +269,8 @@ pub enum ConfigErr {
     },
     #[error("{0}")]
     Definition(definitions::DefinitionErr),
+    #[error("{path}: {message}")]
+    Theme { path: PathBuf, message: String },
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
@@ -326,6 +328,7 @@ impl ConfigErr {
             Self::Definition(error) => &error.path,
             Self::Io { path, .. }
             | Self::Parse { path, .. }
+            | Self::Theme { path, .. }
             | Self::Agents { path, .. }
             | Self::Notifications { path, .. }
             | Self::Worktree { path, .. }
@@ -343,6 +346,7 @@ impl ConfigErr {
         match self {
             Self::Parse { diagnosis, .. } => diagnosis.raw_message().to_owned(),
             Self::Definition(error) => error.message.clone(),
+            Self::Theme { message, .. } => message.clone(),
             Self::Agents { source, .. } => source.to_string(),
             Self::Notifications { source, .. } => source.to_string(),
             Self::Worktree { source, .. } => source.to_string(),
@@ -861,18 +865,30 @@ impl MachineConfig {
 }
 
 /// Diagnose parse, I/O, and semantic failures across the per-machine config files and Markdown definitions.
-/// The core check covers TOML, removed keys, accounts, account budgets, and notifications. Runtime loading remains lenient; this feeds the start gate, start notices, and `rimz doctor`.
+/// The core check covers TOML, removed keys, accounts, account budgets, and notifications; the theme check validates every configured palette source. Runtime loading remains lenient; this feeds the start gate, start notices, and `rimz doctor`.
 pub fn broken_machine_files() -> Vec<ConfigErr> {
     broken_machine_files_in(&MachineConfigFiles::machine())
 }
 
 fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
-    let checks = [
-        load_optional(files.core_path(), parse_core_text_strict).map(|_| ()),
-        load_optional(&files.path(MachineConfigFileKind::Theme), parse_theme_text).map(|_| ()),
-        load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text).map(|_| ()),
-    ];
-    let mut errors: Vec<_> = checks.into_iter().filter_map(Result::err).collect();
+    let mut errors: Vec<_> = load_optional(files.core_path(), parse_core_text_strict)
+        .err()
+        .into_iter()
+        .collect();
+    let theme_path = files.path(MachineConfigFileKind::Theme);
+    match load_optional(&theme_path, parse_theme_text) {
+        Ok(Some(theme)) => {
+            errors.extend(scheme::validate_theme(&theme).into_iter().map(|message| {
+                ConfigErr::Theme {
+                    path: theme_path.clone(),
+                    message,
+                }
+            }))
+        }
+        Ok(None) => {}
+        Err(error) => errors.push(error),
+    }
+    errors.extend(load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text).err());
     let config = MachineConfig::load_lenient_from(
         files.core_path(),
         files.agents_home(),

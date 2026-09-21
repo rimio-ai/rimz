@@ -68,7 +68,7 @@ Every derived tone goes through [`oklab.rs`](../../crates/rimz/src/theme/oklab.r
 3. the bundled default, `TokyoNight Night` (`DEFAULT_SCHEME`);
 4. `RawPalette::DEFAULT`, the same colors compiled into the binary, used when the embedded catalog cannot be read.
 
-A malformed inline table or an unresolvable scheme name falls through to the next source instead of failing, so resolution always returns a palette. Load-time validation reports those errors to the user separately.
+A malformed inline table or an unresolvable scheme name falls through to the next source instead of failing, so resolution always returns a palette. The config health path (`broken_machine_files_in`) validates every configured source through `config::scheme::validate_theme`, independently of precedence, and returns one `ConfigErr::Theme` per invalid source. Each message names the palette actually in effect. Start prints these as non-blocking notices and doctor includes them in config health; strict `MachineConfig::load()` and rendering remain unchanged.
 
 ### 2. Derive the thirteen slots
 
