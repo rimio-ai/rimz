@@ -279,13 +279,17 @@ fn message_index(entries: &[RenderEntry]) -> HashMap<&str, usize> {
     by_message_id
 }
 
+/// Keeps the last `last` display entries, widening the cut back to the first
+/// line of the block it lands in so a shown thread keeps the entry that opened
+/// it. A flip attached to that opener is itself at the margin, so the walk
+/// tests the block's head rather than the lane.
 pub(super) fn keep_last_blocks(entries: &mut Vec<DisplayEntry>, last: Option<usize>) {
     let Some(last) = last else {
         return;
     };
     let len = entries.len();
     let mut drop = len.saturating_sub(last);
-    while drop > 0 && drop < len && !entries[drop].lane.is_margin() {
+    while drop > 0 && drop < len && entries[drop].source_index != entries[drop].block {
         drop -= 1;
     }
     if drop > 0 {
