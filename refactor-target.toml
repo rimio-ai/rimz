@@ -289,7 +289,8 @@ upward-dependencies = [
 ]
 # The turn-completion wait view is shared by reply waits and `agents wait`.
 # Its wake-in-flight predicate is shared with the supervised run's owed-wake read.
-surface-budget = 71
+# The no-pane blocker sentence is one formatter for the durable record and `message show`.
+surface-budget = 72
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -315,7 +316,9 @@ surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/pane"
-surface-budget = 42
+# Daemon-host classification splits in two: card admission and the view reap read
+# the command-marker arm, view-level classifiers keep the broad predicate.
+surface-budget = 43
 
 [[module]]
 path = "crates/rimz/src/proc"
