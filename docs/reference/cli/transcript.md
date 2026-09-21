@@ -9,7 +9,7 @@ rimz transcript @codex#cli-docs -n 4     # one agent, last 4 entries
 rimz transcript run_0123456789abcdef0123456789abcdef   # a supervised run's agent
 rimz transcript @all                     # every channel in the workspace
 rimz transcript --all                    # include prior sessions
-rimz transcript --flat                   # timestamp order, no threads
+rimz transcript --flat                   # arrival order, no threads
 rimz transcript --json > /tmp/chat.json
 ```
 
@@ -68,7 +68,7 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 | `-w, --worktree <channel>` | Channel used to resolve the target. |
 | `-n, --last <N>` | Keep the last `N` entries; see [Tail with `--last`](#tail-with---last). |
 | `--all` | Include prior sessions; see [Prior sessions](#prior-sessions). |
-| `--flat` | Print entries in timestamp order instead of grouping replies into threads. |
+| `--flat` | Print entries in arrival order instead of grouping replies into threads. |
 | `--json` | Emit JSON; see [JSON output](#json-output). |
 
 `--color`, `--root`, and the backend flags are [global flags](../cli.md#global-flags).

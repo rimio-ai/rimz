@@ -39,7 +39,7 @@ pub struct TranscriptArgs {
     /// Emit JSON.
     #[arg(long)]
     json: bool,
-    /// Render pure timestamp order instead of grouping replies into threads.
+    /// Render pure arrival order instead of grouping replies into threads.
     #[arg(long)]
     flat: bool,
 }
