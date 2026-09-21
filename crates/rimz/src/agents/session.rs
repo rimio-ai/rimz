@@ -14,7 +14,7 @@ pub struct DaemonSessionEvidence {
     pub loaded_session_ids: Option<BTreeSet<String>>,
 }
 
-pub fn daemon_session_evidence(
+pub(crate) fn daemon_session_evidence(
     kind: &str,
     login_env: &std::collections::BTreeMap<String, String>,
 ) -> DaemonSessionEvidence {
@@ -28,13 +28,13 @@ pub fn turn_death_needs_pane_confirmation(kind: &str, error: &AgentTurnError) ->
         .is_some_and(|definition| definition.turn_death_needs_pane_confirmation(error))
 }
 
-pub fn refine_turn_death_from_frame(kind: &str, error: &mut AgentTurnError, frame: &str) {
+pub(crate) fn refine_turn_death_from_frame(kind: &str, error: &mut AgentTurnError, frame: &str) {
     if let Some(definition) = super::find_definition(kind) {
         definition.refine_turn_death_from_frame(error, frame);
     }
 }
 
-pub fn infer_turn_death_from_spent_window(
+pub(crate) fn infer_turn_death_from_spent_window(
     kind: &str,
     error: &mut AgentTurnError,
     capacity: Option<&ProviderCapacity>,
