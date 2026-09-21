@@ -105,7 +105,10 @@
 ## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux
 
 [zellij]
-# Critical room invariants RimZ always applies:
+# The room invariants you can see and set. RimZ also fixes room behaviours that
+# have no key here (locked default mode, swap layouts off, stacked resize, its
+# own layout with the compact bar); docs/guide/configuration.md, "Multiplexer
+# room options", lists them for both backends.
 mouse_click_through = true            # single click on a card jumps to the agent (Zellij >= 0.44.2)
 focus_follows_mouse = false           # off so a single click passes through to the renderer
 session_serialization = false         # RimZ owns rebirth instead of Zellij resurrection
@@ -127,7 +130,9 @@ disable_session_metadata = true       # stop Zellij's per-second metadata/ps loo
 ## osc8_hyperlinks = true
 
 [tmux]
-# RimZ applies these to its tmux session on every birth.
+# RimZ applies these to its tmux session on every birth. It also sets window
+# titles, three server terminal-features, and three root key bindings, none of
+# which is a key here; the same guide section lists them.
 mouse = true
 focus_events = true
 history_limit = 100000
