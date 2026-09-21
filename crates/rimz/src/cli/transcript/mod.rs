@@ -90,7 +90,7 @@ pub(crate) struct ChatLine {
 
 impl ChatLine {
     /// When RimZ learned of this line: delivery for a message that waited, else its own time.
-    pub(crate) fn arrived_at(&self) -> Option<jiff::Timestamp> {
+    fn arrived_at(&self) -> Option<jiff::Timestamp> {
         self.delivered_at.or(self.at)
     }
 }
@@ -455,7 +455,9 @@ fn chat_view_with_mode(
                 })
             }),
     );
-    entries.sort_by(|left, right| compare_optional_timestamps(left.chat.at, right.chat.at));
+    entries.sort_by(|left, right| {
+        compare_optional_timestamps(left.chat.arrived_at(), right.chat.arrived_at())
+    });
     if mode.hidden == Hidden::Skip {
         entries = thread::hide_harness_turns(entries, &asked_ids);
     }
@@ -476,23 +478,17 @@ fn chat_view_with_mode(
     }
 
     let boundary = live_boundary(&scope, &live_agents);
-    let split = match boundary {
-        Some(boundary) => {
-            entries.partition_point(|entry| entry.chat.at.is_some_and(|at| at < boundary))
-        }
-        None => entries.len(),
-    };
+    let split = archive_prefix(&entries, boundary);
     let show_archive = all || split == entries.len();
     let mut archived_hidden = 0;
     let mut newest_archived_at = None;
     let (shown, archive_prefix) = if show_archive {
-        let archive_prefix = archive_prefix(&entries, boundary);
-        (entries, archive_prefix)
+        (entries, split)
     } else {
         archived_hidden = split;
         newest_archived_at = split
             .checked_sub(1)
-            .and_then(|index| entries[index].chat.at);
+            .and_then(|index| entries[index].chat.arrived_at());
         let current = entries.split_off(split);
         (current, 0)
     };
@@ -530,38 +526,16 @@ pub(crate) fn selected_lines(view: &RenderedChat) -> Vec<ChatLine> {
     thread::selected_chat_lines(view)
 }
 
-fn arrival_indices_since(view: &RenderedChat, seen: usize) -> Vec<usize> {
-    let mut indices = (0..view.entries.len()).collect::<Vec<_>>();
-    indices.sort_by(|&left, &right| {
-        compare_optional_timestamps(
-            view.entries[left].chat.arrived_at(),
-            view.entries[right].chat.arrived_at(),
-        )
-        .then_with(|| left.cmp(&right))
-    });
-    indices.into_iter().skip(seen).collect()
-}
-
-pub(crate) fn arrival_lines_since(view: &RenderedChat, seen: usize) -> Vec<ChatLine> {
-    arrival_indices_since(view, seen)
-        .into_iter()
-        .map(|index| view.entries[index].chat.clone())
-        .collect()
-}
-
-pub(crate) fn render_arrivals_since_to(
+pub(crate) fn render_lines_since_to(
     out: &mut impl Write,
     view: &RenderedChat,
-    seen: usize,
+    source_index: usize,
     tz: &TimeZone,
     prose: Prose,
 ) -> Result<()> {
-    let arrivals = arrival_indices_since(view, seen)
-        .into_iter()
-        .collect::<HashSet<_>>();
     let entries = entries_for_view(view)
         .into_iter()
-        .filter(|entry| arrivals.contains(&entry.source_index))
+        .filter(|entry| entry.source_index >= source_index)
         .collect::<Vec<_>>();
     chat::render_display_chat_to(
         out,
@@ -573,11 +547,14 @@ pub(crate) fn render_arrivals_since_to(
     )
 }
 
+/// How many leading entries belong to earlier sessions: those that arrived
+/// before the live boundary. A message created before the boundary and
+/// delivered after it arrived in this session, so it stays in the live view.
 fn archive_prefix(entries: &[RenderEntry], boundary: Option<jiff::Timestamp>) -> usize {
     match boundary {
         Some(boundary) => entries
             .iter()
-            .take_while(|entry| entry.chat.at.is_some_and(|at| at < boundary))
+            .take_while(|entry| entry.chat.arrived_at().is_some_and(|at| at < boundary))
             .count(),
         None => entries.len(),
     }

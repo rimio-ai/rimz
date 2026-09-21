@@ -123,21 +123,22 @@ fn follow_agent_logs(
         if view.entries.len() <= seen {
             continue;
         }
+        let new_entries = view.entries[seen..].to_vec();
+        seen = view.entries.len();
         if json {
-            for entry in crate::cli::transcript::arrival_lines_since(&view, seen) {
-                render::finish(write_json_line(&entry))?;
+            for entry in new_entries {
+                render::finish(write_json_line(&entry.chat))?;
             }
         } else {
             let mut out = render::out();
-            finish_transcript_render(crate::cli::transcript::render_arrivals_since_to(
+            finish_transcript_render(crate::cli::transcript::render_lines_since_to(
                 &mut out,
                 &view,
-                seen,
+                seen - new_entries.len(),
                 &tz,
                 Prose::for_stdout(),
             ))?;
         }
-        seen = view.entries.len();
     }
 }
 

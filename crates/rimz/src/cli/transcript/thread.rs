@@ -213,14 +213,13 @@ pub(super) fn hide_harness_turns(
 
 /// The entries that opened each turn-output entry's turn: its resolved
 /// `reply_to` parents, or, when nothing was recorded (typed prompts), the
-/// opener for the same agent session that arrived last without arriving after
-/// the output, unless that opener was hidden. Arrival, not the created time a
-/// line is stamped with, is what a turn can have seen: a message created
-/// mid-turn and delivered after it opened no turn of that output's.
-/// Other entries open no turn.
+/// latest opener for the same agent session, unless that opener was hidden.
+/// The view is in arrival order, so that opener is the last one delivered
+/// before the output: what the turn could have seen. Other entries open no
+/// turn.
 pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
     let by_message_id = message_index(entries);
-    let mut agent_openers = HashMap::<&AgentKey, Vec<usize>>::new();
+    let mut latest_opener = HashMap::<&AgentKey, usize>::new();
     let mut openers = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         let LineSource::Log {
@@ -238,7 +237,7 @@ pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
             | TranscriptKind::Message
             | TranscriptKind::SubagentReport
             | TranscriptKind::Wait => {
-                agent_openers.entry(agent).or_default().push(index);
+                latest_opener.insert(agent, index);
                 Vec::new()
             }
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
@@ -249,27 +248,7 @@ pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
                 if entry.chat.reply_to.is_empty() =>
             {
-                agent_openers
-                    .get(agent)
-                    .into_iter()
-                    .flatten()
-                    .copied()
-                    .filter(|&candidate| {
-                        entries[candidate]
-                            .chat
-                            .arrived_at()
-                            .zip(entry.chat.at)
-                            .is_none_or(|(arrival, output)| arrival <= output)
-                    })
-                    .max_by(|&left, &right| {
-                        scope::compare_optional_timestamps(
-                            entries[left].chat.arrived_at(),
-                            entries[right].chat.arrived_at(),
-                        )
-                        .then_with(|| left.cmp(&right))
-                    })
-                    .into_iter()
-                    .collect()
+                latest_opener.get(agent).copied().into_iter().collect()
             }
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => entry
                 .chat

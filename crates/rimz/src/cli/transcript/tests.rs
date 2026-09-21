@@ -478,7 +478,7 @@ fn parked_exchange_keeps_messages_and_flips_in_time_order() {
         "Done",
         Some("done"),
     ));
-    entries.sort_by_key(|entry| entry.chat.at);
+    entries.sort_by_key(|entry| entry.chat.arrived_at());
 
     let display = assemble_threads(&entries, 0, false);
     assert_eq!(
@@ -493,16 +493,16 @@ fn parked_exchange_keeps_messages_and_flips_in_time_order() {
         [
             ("gqg6", 0, true),
             ("reflect", 0, true),
-            ("h52h", 0, false),
             ("reviewer 12:41", 0, false),
-            ("coder 12:45", 0, false),
-            ("i23", 4, true),
-            ("done", 4, true),
-            ("reviewer 12:45", 4, false),
-            ("i647", 8, true),
-            ("ib5r", 8, false),
-            ("reviewer 12:46", 8, false),
-            ("coder 12:46", 8, false),
+            ("i23", 3, true),
+            ("done", 3, true),
+            ("reviewer 12:45", 3, false),
+            ("h52h", 5, true),
+            ("coder 12:45", 5, false),
+            ("i647", 5, false),
+            ("ib5r", 5, false),
+            ("reviewer 12:46", 5, false),
+            ("coder 12:46", 5, false),
         ]
     );
     let ordered_times = display
@@ -519,7 +519,7 @@ fn parked_exchange_keeps_messages_and_flips_in_time_order() {
                     )
                 )
         })
-        .map(|line| line.entry.chat.at.expect("timestamp"))
+        .map(|line| line.entry.chat.arrived_at().expect("timestamp"))
         .collect::<Vec<_>>();
     assert!(ordered_times.windows(2).all(|pair| pair[0] <= pair[1]));
 
@@ -538,11 +538,11 @@ fn parked_exchange_keeps_messages_and_flips_in_time_order() {
     let mut preceding = 0;
     for text in [
         "gqg6",
-        "h52h",
         "reviewer 12:41",
-        "coder 12:45",
         "i23",
         "reviewer 12:45",
+        "h52h",
+        "coder 12:45",
         "i647",
         "ib5r",
         "reviewer 12:46",
@@ -728,55 +728,6 @@ fn flat_and_last_apply_to_display_order() {
         vec!["root a", "root b", "reply a", "reply b"],
         "JSON selection returns the display tail in chronological order"
     );
-}
-
-#[test]
-fn follow_selects_parked_message_by_arrival_not_created_order() {
-    let mut parked = entry("2026-06-28T12:41:00Z", "parked message");
-    parked.chat.delivered_at = Some(ts("2026-06-28T12:45:00Z"));
-    let view = RenderedChat {
-        channel: None,
-        focus: None,
-        entries: vec![
-            entry("2026-06-28T12:40:00Z", "already printed prompt"),
-            parked,
-            assistant_entry("2026-06-28T12:42:00Z", "already printed output"),
-            entry("2026-06-28T12:42:00Z", "already printed tied prompt"),
-        ],
-        archive_prefix: 0,
-        archived_hidden: 0,
-        newest_archived_at: None,
-        empty_message: None,
-        last: None,
-        flat: false,
-    };
-
-    assert_eq!(
-        arrival_lines_since(&view, 0)
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>(),
-        vec![
-            "already printed prompt",
-            "already printed output",
-            "already printed tied prompt",
-            "parked message",
-        ]
-    );
-    let arrivals = arrival_lines_since(&view, 3);
-    assert_eq!(arrivals, vec![view.entries[1].chat.clone()]);
-    let json = serde_json::to_value(&arrivals).expect("serialize arrivals");
-    assert_eq!(json[0]["at"], "2026-06-28T12:41:00Z");
-    assert_eq!(json[0]["delivered_at"], "2026-06-28T12:45:00Z");
-
-    let mut out = anstream::StripStream::new(Vec::new());
-    render_arrivals_since_to(&mut out, &view, 3, &TimeZone::UTC, Prose::Raw)
-        .expect("render arrival");
-    let rendered = String::from_utf8(out.into_inner()).expect("utf8");
-    assert!(rendered.contains("parked message"), "{rendered}");
-    assert!(rendered.contains("12:41 · delivered 12:45"), "{rendered}");
-    assert!(!rendered.contains("already printed"), "{rendered}");
-    assert!(arrival_lines_since(&view, view.entries.len()).is_empty());
 }
 
 #[test]
@@ -1171,6 +1122,50 @@ fn flip_attaches_to_flippers_latest_line_within_window() {
     assert!(!display[2].lane.is_margin());
     assert_ne!(display[3].block, display[1].block);
     assert!(display[3].lane.is_margin());
+}
+
+#[test]
+fn flip_opens_at_the_margin_when_its_thread_is_not_current() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "brief"), Some(1), &[]),
+        linked(assistant_entry("2026-06-28T04:01:00Z", "done"), None, &[1]),
+        // Another agent's exchange takes over the conversation in between.
+        linked(
+            render_entry(
+                TranscriptKind::Message,
+                "@reviewer",
+                Some("@planner"),
+                "2026-06-28T04:02:00Z",
+                "other lane",
+            ),
+            Some(2),
+            &[],
+        ),
+        flip_entry(
+            "2026-06-28T04:03:00Z",
+            "claude",
+            Some("Explore"),
+            "Plan",
+            Some("plan ready"),
+        ),
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert_eq!(
+        display
+            .iter()
+            .map(|line| (line.entry.chat.text.as_str(), line.lane.is_margin()))
+            .collect::<Vec<_>>(),
+        [
+            ("brief", true),
+            ("done", false),
+            ("other lane", true),
+            ("plan ready", true),
+        ]
+    );
+    assert_ne!(display[3].block, display[1].block);
+    assert_ne!(display[3].block, display[2].block);
 }
 
 #[test]
@@ -1612,10 +1607,11 @@ fn parked_message_does_not_steal_an_earlier_turns_output() {
         "parked",
     );
     parked.chat.delivered_at = Some(ts("2026-06-28T04:05:00Z"));
+    // Arrival order: the parked message reaches the agent after the turn ran.
     let entries = vec![
         entry("2026-06-28T04:00:00Z", "prompt"),
-        parked,
         assistant_entry("2026-06-28T04:02:00Z", "output"),
+        parked,
     ];
     let display = assemble_threads(&entries, 0, false);
     assert_eq!(display[0].entry.chat.text, "prompt");
@@ -1646,6 +1642,131 @@ fn message_json_uses_created_time_and_preserves_delivery() {
     assert_eq!(json["at"], "2026-06-28T16:45:00Z");
     assert!(json.get("delivered_at").is_none());
     assert!(json.get("enqueued_at").is_none());
+}
+
+#[test]
+fn scheduled_message_reads_where_it_was_delivered() {
+    use TranscriptKind::{Assistant, Message, Prompt};
+    let project = tempfile::TempDir::new().expect("project tempdir");
+    let (workspace, paths) = temp_workspace(&project);
+    let msg = |index: u64| rimz::ids::MessageId::parse(&message_id(index)).expect("message id");
+    let push = |kind,
+                from: Option<&str>,
+                text,
+                at: &str,
+                enqueued: Option<&str>,
+                id: Option<u64>,
+                parents: &[u64]| {
+        let mut entry = log_entry("claude", "receiver", kind, from, text);
+        entry.at = ts(at);
+        entry.enqueued_at = enqueued.map(ts);
+        entry.message_id = id.map(msg);
+        entry.reply_to = parents.iter().copied().map(msg).collect();
+        rimz::transcript::append(&paths, &entry).expect("append");
+    };
+    // Monday's exchange, then a message sent Monday morning with `--schedule 1d`
+    // and the turn it opens when it lands on Tuesday.
+    push(
+        Prompt,
+        None,
+        "monday prompt",
+        "2026-06-01T12:00:00Z",
+        None,
+        Some(1),
+        &[],
+    );
+    push(
+        Assistant,
+        None,
+        "monday output",
+        "2026-06-01T12:01:00Z",
+        None,
+        None,
+        &[1],
+    );
+    push(
+        Message,
+        Some("@planner"),
+        "scheduled note",
+        "2026-06-02T09:00:00Z",
+        Some("2026-06-01T09:00:00Z"),
+        Some(2),
+        &[],
+    );
+    push(
+        Assistant,
+        None,
+        "tuesday output",
+        "2026-06-02T09:05:00Z",
+        None,
+        None,
+        &[2],
+    );
+    let view = |last| {
+        chat_view_with_mode(
+            &workspace,
+            &paths,
+            Some("@all"),
+            None,
+            last,
+            false,
+            ViewMode {
+                hidden: Hidden::for_json(false),
+                flat: false,
+            },
+        )
+        .expect("view")
+    };
+    let texts = |view: &RenderedChat| {
+        selected_lines(view)
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+    };
+
+    let whole = view(None);
+    assert_eq!(
+        texts(&whole),
+        [
+            "monday prompt",
+            "monday output",
+            "scheduled note",
+            "tuesday output"
+        ]
+    );
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_lines_to(&mut out, &whole, &TimeZone::UTC, Prose::Raw).expect("render");
+    let rendered = String::from_utf8(out.into_inner()).expect("utf8");
+    assert!(
+        rendered.contains("09:00 · delivered Tue, Jun 2 2026 · 09:00"),
+        "{rendered}"
+    );
+    // The turn the message opened is inside the tail; a created-time order put
+    // both a day earlier and cut them from it.
+    assert_eq!(texts(&view(Some(2))), ["scheduled note", "tuesday output"]);
+}
+
+#[test]
+fn a_message_parked_across_a_resume_stays_out_of_the_archive() {
+    let mut parked = render_entry(
+        TranscriptKind::Message,
+        "@reviewer",
+        Some("@claude"),
+        "2026-06-28T04:00:00Z",
+        "parked",
+    );
+    parked.chat.delivered_at = Some(ts("2026-06-28T04:10:00Z"));
+    let entries = vec![
+        entry("2026-06-28T03:50:00Z", "earlier session"),
+        parked,
+        assistant_entry("2026-06-28T04:11:00Z", "reply"),
+    ];
+
+    // The live agent registered at 04:05, after the message was created and
+    // before it was delivered.
+    let boundary = Some(ts("2026-06-28T04:05:00Z"));
+    assert_eq!(archive_prefix(&entries, boundary), 1);
+    assert_eq!(archive_prefix(&entries, None), entries.len());
 }
 
 #[test]
