@@ -4,7 +4,7 @@ use super::definition::{DefinitionSpec, DefinitionTools};
 use super::{PermissionMode, all_definitions, spec_by_kind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ToolSet {
+pub(crate) struct ToolSet {
     bases: Vec<String>,
     agent_types: Vec<String>,
 }
@@ -22,7 +22,7 @@ pub enum ToolErr {
 }
 
 impl ToolSet {
-    pub fn parse(entries: &[String]) -> Result<Self, ToolErr> {
+    pub(crate) fn parse(entries: &[String]) -> Result<Self, ToolErr> {
         let mut tools = Self {
             bases: Vec::new(),
             agent_types: Vec::new(),
@@ -71,17 +71,8 @@ impl ToolSet {
         Ok(tools)
     }
 
-    pub fn has(&self, base: &str) -> bool {
+    pub(crate) fn has(&self, base: &str) -> bool {
         self.bases.iter().any(|name| name == base)
-    }
-
-    pub fn without(&self, base: &str) -> Self {
-        let mut tools = self.clone();
-        tools.bases.retain(|name| name != base);
-        if base == "Agent" {
-            tools.agent_types.clear();
-        }
-        tools
     }
 
     pub fn bases(&self) -> &[String] {
@@ -128,7 +119,7 @@ pub fn definition_model_kind(model: &str) -> Option<&'static str> {
         .map(|definition| definition.spec().kind)
 }
 
-pub fn expand_model_alias(kind: &str, model: &str) -> String {
+pub(crate) fn expand_model_alias(kind: &str, model: &str) -> String {
     definitions(kind)
         .models
         .iter()
@@ -137,7 +128,7 @@ pub fn expand_model_alias(kind: &str, model: &str) -> String {
         .to_owned()
 }
 
-pub fn definition_defaults(kind: &str, requested_model: Option<&str>) -> DefinitionDefaults {
+pub(crate) fn definition_defaults(kind: &str, requested_model: Option<&str>) -> DefinitionDefaults {
     let spec = definitions(kind);
     let effort = requested_model
         .and_then(|model| {
@@ -160,11 +151,14 @@ pub fn definition_defaults(kind: &str, requested_model: Option<&str>) -> Definit
     }
 }
 
-pub fn tools_required(kind: &str) -> bool {
+pub(crate) fn tools_required(kind: &str) -> bool {
     matches!(definitions(kind).tools, DefinitionTools::Required(_))
 }
 
-pub fn render_tool_args(kind: &str, tools: Option<&ToolSet>) -> Result<Vec<String>, ToolErr> {
+pub(crate) fn render_tool_args(
+    kind: &str,
+    tools: Option<&ToolSet>,
+) -> Result<Vec<String>, ToolErr> {
     match (definitions(kind).tools, tools) {
         (DefinitionTools::Required(render), tools) => render(tools.ok_or(ToolErr::Missing)?),
         (DefinitionTools::Unsupported, Some(_)) => Err(ToolErr::Unsupported {
@@ -250,8 +244,7 @@ mod tests {
         let parsed = tools(&[" Bash ", "Agent(Explore, Plan)", "Bash", "Agent(Plan)"]);
         assert_eq!(parsed.bases(), ["Bash", "Agent"]);
         assert_eq!(parsed.agent_types(), ["Explore", "Plan"]);
-        assert!(!parsed.without("Agent").has("Agent"));
-        assert!(parsed.without("Agent").agent_types().is_empty());
+        assert!(parsed.has("Agent"));
         for entry in [
             "",
             " ",
