@@ -227,7 +227,6 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
         .select(kind, name)
         .ok()
         .and_then(|login| login.home().map(|home| home.display().to_string()));
-    let live = live_rooms_selecting(kind, name);
     let removed = ConfigEditor::machine().remove_named_account(kind, name)?;
     let mut out = render::out();
     if !removed {
@@ -236,6 +235,9 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
             "no {kind} account `{name}` is configured; nothing to remove"
         ));
     }
+    // After the removal: the probe costs a session listing on both backends,
+    // and a room's selection lives in its own record rather than this config.
+    let live = live_rooms_selecting(kind, name);
     render::finish(writeln!(
         out,
         "{}",

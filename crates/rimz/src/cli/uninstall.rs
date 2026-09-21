@@ -540,7 +540,9 @@ fn account_preview_lines(homes: &[(String, PathBuf)]) -> Vec<String> {
     if homes.is_empty() {
         return vec!["Accounts: none declared".to_owned()];
     }
-    let mut lines = vec!["Accounts:".to_owned()];
+    // The label carries the verdict: these rows sit under Storage rows that
+    // read `remove`, so a bare `Accounts:` would read as a removal list.
+    let mut lines = vec!["Accounts: kept; their credentials and history stay on disk".to_owned()];
     for (label, home) in homes {
         lines.push(format!(
             "  {label}  {}",
@@ -647,7 +649,7 @@ mod tests {
         assert_eq!(
             account_preview_lines(&homes),
             [
-                "Accounts:",
+                "Accounts: kept; their credentials and history stay on disk",
                 "  claude@work  /accounts/claude/work",
                 "  codex@personal  /accounts/codex/personal home",
                 "  clear by hand: rm -rf /accounts/claude/work '/accounts/codex/personal home'",

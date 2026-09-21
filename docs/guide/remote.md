@@ -89,7 +89,7 @@ Attach normally, then start `python3 -m http.server 3000`, `pnpm serve`, or anot
 
 RimZ forwards a listener when it starts after you attach, belongs to your remote user, uses port 1024 or above, and binds a loopback or wildcard address. The local side binds `127.0.0.1` only, so the forwarded service stays on your machine. Discovery keeps the thirty-two lowest qualifying ports, and at most sixteen forwards stay open at once.
 
-A forward closes shortly after its server stops, reopens with the room after a link recovery, and every forward closes when you detach. A port already busy on your local machine is skipped, with a terminal notification naming the port and the retry: free it, then stop and restart the server on the host, because the listener disappearing and coming back is what triggers the retry.
+A forward closes shortly after its server stops, reopens with the room after a link recovery, and every forward closes when you detach. A port already busy on your local machine is skipped, and a terminal notification names the port, on the same settings the link notifications obey: free it, then stop and restart the server on the host, because the listener disappearing and coming back is what triggers the retry.
 
 `rimz remote connect dev --no-auto-forward` turns forwarding off for one connection, and `rimz remote add dev dev-box:~/code/query-engine --no-auto-forward` saves the switch. Forwarding needs the supervised link, so `--no-reconnect` and `--web` connections never forward, and listener discovery reads the host's `/proc`, so Linux hosts only. Other hosts keep the normal remote connection without automatic forwards.
 
