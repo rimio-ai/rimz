@@ -205,7 +205,23 @@ pub struct RunRecord {
     pub parked_at: Option<Timestamp>,
 }
 
+/// Who authored a run's first prompt: its launching agent, RimZ's loop, or a person.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunPromptOrigin {
+    Parent,
+    Harness,
+    Human,
+}
+
 impl RunRecord {
+    pub fn prompt_origin(&self) -> RunPromptOrigin {
+        match (self.subagent, self.loop_task.as_ref()) {
+            (true, _) => RunPromptOrigin::Parent,
+            (false, Some(_)) => RunPromptOrigin::Harness,
+            (false, None) => RunPromptOrigin::Human,
+        }
+    }
+
     pub fn new(
         workspace_id: WorkspaceId,
         kind: AgentKind,

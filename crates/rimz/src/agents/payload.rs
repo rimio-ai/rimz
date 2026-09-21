@@ -71,7 +71,9 @@ pub(super) fn stop_payload_errored(payload: &Value) -> bool {
 /// background task, a system reminder, a slash-command echo, or an expanded
 /// skill block. Their text is not user-authored, so it must never become an
 /// agent's description line (the `<task-notification>…` or `<skill name=…`
-/// leak). Presence of any of these rejects the whole string. The renderer
+/// leak). RimZ's own registered blocks are peeled before this scan and are
+/// listed here only as the backstop for one that could not be peeled; any
+/// prefix still present rejects the whole string. The renderer
 /// backstop in `sidebar_pane::render::sections::agent_card::description` shares
 /// this list so producer and presentation guards cannot drift.
 pub(super) const CONTROL_TAG_PREFIXES: &[&str] = &[
@@ -280,24 +282,24 @@ fn unwrap_paste_envelopes(text: &str) -> Cow<'_, str> {
     )
 }
 
-/// Sanitize a raw prompt/task string before it can label a sidebar row. Peels a
-/// `<user_query>` envelope and every balanced `<pasted_content id=…>` envelope,
-/// trims, then returns `None` for an empty string or for any text carrying a
-/// harness control tag (a synthetic, non-user-authored turn). KISS: a single
-/// substring scan, no partial parsing — a control tag anywhere means the whole
-/// string is rejected, so a raw `<task-notification>…` or `<skill name=…>` can
-/// never reach the description.
+/// Sanitize a raw prompt/task string before it can label a sidebar row or open
+/// a transcript turn. Peels a `<user_query>` envelope, every balanced
+/// `<pasted_content id=…>` envelope, and every balanced RimZ block, keeping the
+/// text a person or an agent actually authored. Returns `None` for an empty
+/// result or for text still carrying a harness control tag — a synthetic,
+/// non-user-authored turn, or a RimZ block too malformed to peel — so a raw
+/// `<task-notification>…` or `<skill name=…>` can never reach the description.
 pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
     let trimmed = raw.map(str::trim).filter(|value| !value.is_empty())?;
     let unwrapped = unwrap_paste_envelopes(unwrap_user_query(trimmed));
-    let cleaned = unwrapped.trim();
+    let cleaned = peel_rimz_blocks(&unwrapped);
     if cleaned.is_empty() {
         return None;
     }
     if CONTROL_TAG_PREFIXES.iter().any(|tag| cleaned.contains(tag)) {
         return None;
     }
-    Some(cleaned.to_owned())
+    Some(cleaned)
 }
 
 #[cfg(test)]
@@ -305,7 +307,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subagent_fallback_reminder_is_not_user_text() {
+    fn subagent_fallback_reminder_preserves_the_brief() {
         let brief = "review this change";
         let submitted = format!(
             "{brief}\n\n{}",
@@ -313,19 +315,27 @@ mod tests {
         );
         // The launch-brief consumer's unpeeled comparison misses this fallback.
         assert_ne!(brief.trim(), submitted);
-        assert_eq!(sanitize_user_prompt(Some(&submitted)), None);
+        assert_eq!(
+            sanitize_user_prompt(Some(&submitted)),
+            Some(brief.to_owned())
+        );
         assert_eq!(peel_rimz_blocks(&submitted), brief);
     }
 
     #[test]
-    fn rimz_blocks_round_trip_and_reject_synthetic_prompts() {
+    fn rimz_blocks_round_trip_and_preserve_authored_text() {
         for block in RimzBlock::ALL {
             let wrapped = wrap_rimz_block(block, "harness words");
             assert_eq!(peel_rimz_blocks(&wrapped), "");
+            assert_eq!(sanitize_user_prompt(Some(&wrapped)), None);
             for text in [format!("brief\n\n{wrapped}"), format!("{wrapped}\n\nbrief")] {
                 assert_eq!(peel_rimz_blocks(&text), "brief");
-                assert_eq!(sanitize_user_prompt(Some(&text)), None);
+                assert_eq!(sanitize_user_prompt(Some(&text)), Some("brief".to_owned()));
             }
+            assert_eq!(
+                sanitize_user_prompt(Some(&format!("brief <{}>body", block.tag()))),
+                None
+            );
             assert!(CONTROL_TAG_PREFIXES.contains(&format!("<{}>", block.tag()).as_str()));
             for malformed in [
                 format!("  brief <{}>body", block.tag()),
