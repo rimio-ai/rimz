@@ -92,7 +92,7 @@ query-engine
   store refactor
 ```
 
-`@planner` sits first because it stopped to ask you something. `CTX` is how full each agent's context window is and `AGE` how long since it last moved; the indented line under a row is what that agent is working on. `rimz agents list --all` widens past the current channel to every lane in the room, and a scope like `rimz agents '#auth-refresh'` reads one.
+`@planner` sits first because it stopped to ask you something. `CTX` is how full each agent's context window is and `AGE` how long since it last moved; the indented line under a row is what that agent is working on. `rimz agents --all` widens past the current channel to every lane in the room, and a scope like `rimz agents '#auth-refresh'` reads one.
 
 **Ask why one agent is where it is.** When a card raises a question you cannot answer from one line, `rimz agents show` prints the full report for a single agent, so you see what you asked it, what it is spending, and where its pane lives without switching to it:
 

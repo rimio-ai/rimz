@@ -77,6 +77,31 @@ fn profiles_parse_as_agent_profile_listings_without_legacy_aliases() {
 }
 
 #[test]
+fn bare_agents_widens_to_every_lane_with_all() {
+    let args = parse_agents(&["rimz", "--all"]);
+    assert!(args.command.is_none());
+    assert!(args.launch.spec.is_none());
+    assert!(args.all, "bare `rimz agents --all` must widen the listing");
+
+    let args = parse_agents(&["rimz", "list", "--all"]);
+    assert!(matches!(
+        args.command,
+        Some(AgentsSubcmd::List { all: true, .. })
+    ));
+
+    // A scope and a worktree each already name one lane, so `--all` conflicts.
+    for narrowing in [
+        vec!["rimz", "--all", "#auth"],
+        vec!["rimz", "--all", "-w", "auth"],
+    ] {
+        assert!(
+            AgentsHarness::try_parse_from(&narrowing).is_err(),
+            "`{narrowing:?}` must refuse --all beside a lane"
+        );
+    }
+}
+
+#[test]
 fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
