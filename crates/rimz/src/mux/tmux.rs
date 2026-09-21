@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use options::{
     tmux_extended_key_bindings, tmux_server_options, tmux_session_options,
-    tmux_terminal_features_commands, tmux_window_options,
+    tmux_terminal_features_commands, tmux_window_options, window_option_argv,
 };
 use parse::parse_terminal_features;
 
@@ -355,10 +355,6 @@ impl TmuxBackend {
             .cmd()
             .args(["show-options", "-s", "terminal-features"])
             .run()?;
-        let windows = self
-            .cmd()
-            .args(["list-windows", "-t", session, "-F", "#{window_id}"])
-            .run()?;
         let mut commands: Vec<Vec<String>> = Vec::new();
         for (key, value) in tmux_server_options(config) {
             commands.push(vec![
@@ -383,22 +379,44 @@ impl TmuxBackend {
                 value,
             ]);
         }
+        commands.extend(tmux_extended_key_bindings(config));
+        self.batch(&commands)?;
+        self.apply_window_options(session, config)
+    }
+
+    /// Assert every owned window key on every window of the session, each window
+    /// in its own batch.
+    ///
+    /// tmux scopes a window option to the target's *current* window, so the keys
+    /// have to be written per window id. It also aborts a batch at the first
+    /// failing command, and a window can close between the listing and the
+    /// writes, so one batch over every window would let a vanished window fail
+    /// the room open. A per-window batch costs that window its own keys instead;
+    /// the same keys go to every window, so a genuinely bad write fails them all
+    /// and still surfaces.
+    fn apply_window_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
+        let windows = self
+            .cmd()
+            .args(["list-windows", "-t", session, "-F", "#{window_id}"])
+            .run()?;
+        let windows = String::from_utf8_lossy(&windows.stdout);
         let window_options = tmux_window_options(config);
-        for window_id in String::from_utf8_lossy(&windows.stdout).lines() {
-            for (key, value) in &window_options {
-                let mut command = vec!["set-window-option".to_owned()];
-                if value.is_none() {
-                    command.push("-u".to_owned());
-                }
-                command.extend(["-t".to_owned(), window_id.to_owned(), (*key).to_owned()]);
-                if let Some(value) = value {
-                    command.push(value.clone());
-                }
-                commands.push(command);
+        let mut last_failure = None;
+        let mut applied = 0usize;
+        for window_id in windows.lines() {
+            let commands: Vec<Vec<String>> = window_options
+                .iter()
+                .map(|(key, value)| window_option_argv(key, value.as_deref(), Some(window_id)))
+                .collect();
+            match self.batch(&commands) {
+                Ok(()) => applied += 1,
+                Err(err) => last_failure = Some(err),
             }
         }
-        commands.extend(tmux_extended_key_bindings(config));
-        self.batch(&commands)
+        match last_failure {
+            Some(err) if applied == 0 => Err(err),
+            _ => Ok(()),
+        }
     }
 }
 
