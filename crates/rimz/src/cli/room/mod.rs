@@ -11,6 +11,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
+use rimz::config::ConfigErr;
 use rimz::ids::{MuxName, RoomLogins, WorkspaceId};
 use rimz::room::session::{
     MissingSessionReport, ensure_single_backend_room, pick_mux_for_session,
@@ -445,7 +446,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         entry,
         RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
     ) {
-        preflight_machine_accounts(rimz::config::MachineConfig::load())?;
+        preflight_machine_config(rimz::config::broken_machine_files())?;
     }
 
     let mux = match &entry {
@@ -783,15 +784,26 @@ fn birth_managed_room(
     Ok(())
 }
 
-fn preflight_machine_accounts(
-    config: rimz::config::Result<rimz::config::MachineConfig>,
-) -> Result<()> {
-    match config {
-        Err(
-            error @ (rimz::config::ConfigErr::AccountBudget { .. }
-            | rimz::config::ConfigErr::Account { .. }),
-        ) => Err(error.into()),
-        Ok(_) | Err(_) => Ok(()),
+fn blocks_room_start(err: &ConfigErr) -> bool {
+    match err {
+        ConfigErr::AccountBudget { .. }
+        | ConfigErr::Account { .. }
+        | ConfigErr::Notifications { .. } => true,
+        ConfigErr::Definition { .. }
+        | ConfigErr::Worktree { .. }
+        | ConfigErr::Io { .. }
+        | ConfigErr::Parse { .. }
+        | ConfigErr::Agents { .. }
+        | ConfigErr::Loop { .. }
+        | ConfigErr::RemovedTable { .. }
+        | ConfigErr::RemovedKey { .. } => false,
+    }
+}
+
+fn preflight_machine_config(errors: Vec<ConfigErr>) -> Result<()> {
+    match errors.into_iter().find(blocks_room_start) {
+        Some(error) => Err(error.into()),
+        None => Ok(()),
     }
 }
 

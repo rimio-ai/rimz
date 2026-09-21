@@ -13,6 +13,7 @@
 //! points use [`MachineConfig::load_lenient`], which degrades a broken machine
 //! file to built-in defaults. A broken Markdown definition drops only that definition from read-only views and blocks launches with its source error.
 //! Strict [`MachineConfig::load`] backs config inspection and reports precise errors.
+//! Room start also checks [`broken_machine_files`] and refuses invalid accounts, account budgets, and notifications before creating room state.
 
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
@@ -859,9 +860,8 @@ impl MachineConfig {
     }
 }
 
-/// Diagnose parse, I/O, and semantic failures across the per-machine config
-/// files and Markdown definitions. Runtime loading remains lenient; this feeds
-/// the start notice and `rimz doctor`.
+/// Diagnose parse, I/O, and semantic failures across the per-machine config files and Markdown definitions.
+/// The core check covers TOML, removed keys, accounts, account budgets, and notifications. Runtime loading remains lenient; this feeds the start gate, start notices, and `rimz doctor`.
 pub fn broken_machine_files() -> Vec<ConfigErr> {
     broken_machine_files_in(&MachineConfigFiles::machine())
 }
@@ -1074,9 +1074,11 @@ fn parse_core_text_collecting(path: &Path, text: &str) -> Result<Parsed<CoreConf
     parse_toml_collecting(path, text)
 }
 
+/// Validate core TOML, removed keys, accounts, account budgets, and notifications.
 fn parse_core_text_strict(path: &Path, text: &str) -> Result<CoreConfig> {
     let core = parse_core_text(path, text)?;
     validate_account_budgets(&core.accounts, path)?;
+    validate_notifications_config(&core.notifications, path)?;
     Ok(core)
 }
 

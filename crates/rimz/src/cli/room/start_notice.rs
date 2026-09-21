@@ -144,6 +144,7 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
         errors
             .iter()
             .filter(|error| !matches!(error, rimz::config::ConfigErr::Definition(_)))
+            .filter(|error| !super::blocks_room_start(error))
             .map(broken_config_notice),
     );
     let machine = rimz::config::MachineConfig::load_lenient();

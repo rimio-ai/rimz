@@ -45,7 +45,7 @@ Nobody reads its output. stdin, stdout, and stderr go to `/dev/null` and RimZ ne
 
 It runs on the machine the notification came from. Agent notifications and the 60-second nudges fire from the room's sidebar, so handlers for a room on a server run on that server, with that server's credentials. `link_lost` and `link_restored` fire from `rimz remote connect` on the machine you typed it into, and `loop_disabled` from `rimz loop` wherever the task runs.
 
-A fourth trap is in the file rather than the spawn, and it costs more than the handler carrying it. An unknown `{{name}}`, an invalid glob, or an empty command makes the whole `[notifications]` table invalid, and the sidebar falls back to the built-in defaults, which have no handlers at all. Check a new template against the table below before you rely on it.
+A fourth trap is in the file rather than the spawn, and it costs more than the handler carrying it. An unknown `{{name}}`, an invalid glob, or an empty command makes the whole `[notifications]` table invalid. `rimz start` refuses with the validation error, and `rimz doctor` reports it. In a room already running, the sidebar still falls back to the built-in defaults, which have no handlers at all. Fix the table before relying on it, and check a new template against the table below.
 
 ### Narrow it with when
 
