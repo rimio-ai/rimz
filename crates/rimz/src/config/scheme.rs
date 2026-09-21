@@ -385,6 +385,69 @@ foreground = '#d0d0d0'
         assert!(validate_theme(&ThemeConfig::default()).is_empty());
     }
 
+    /// [`validate_theme`] names the palette in effect by repeating the
+    /// precedence in `theme::palette::raw_palette_for_theme`, which is private
+    /// and has no other caller. Pin the two together, one case per branch, so a
+    /// change to the fallback cannot leave the user-facing sentence lying.
+    #[test]
+    fn the_named_effective_palette_is_the_one_the_renderer_resolves() {
+        let depth = crate::config::ColorDepth::Truecolor;
+        let valid = default_inline_palette();
+        let mut broken = default_inline_palette();
+        broken.primary.as_mut().expect("primary").background = Some("not-a-color".to_owned());
+        let mocha = "Catppuccin Mocha".to_owned();
+
+        for (configured, named, effective) in [
+            (
+                ThemeConfig {
+                    colors: Some(valid.clone()),
+                    scheme: Some("missing scheme".to_owned()),
+                    ..ThemeConfig::default()
+                },
+                "inline `[colors]` palette".to_owned(),
+                ThemeConfig {
+                    colors: Some(valid),
+                    ..ThemeConfig::default()
+                },
+            ),
+            (
+                ThemeConfig {
+                    colors: Some(broken.clone()),
+                    scheme: Some(mocha.clone()),
+                    ..ThemeConfig::default()
+                },
+                format!("scheme `{mocha}`"),
+                ThemeConfig {
+                    scheme: Some(mocha),
+                    ..ThemeConfig::default()
+                },
+            ),
+            (
+                ThemeConfig {
+                    colors: Some(broken),
+                    scheme: Some("missing scheme".to_owned()),
+                    ..ThemeConfig::default()
+                },
+                format!("default scheme `{DEFAULT_SCHEME}`"),
+                ThemeConfig::default(),
+            ),
+        ] {
+            let clause = format!("; the sidebar keeps the {named} until it is fixed");
+            let errors = validate_theme(&configured);
+
+            assert!(!errors.is_empty(), "{named}");
+            assert!(
+                errors.iter().all(|error| error.ends_with(&clause)),
+                "{errors:?}"
+            );
+            assert_eq!(
+                crate::theme::Palette::resolve(&configured, depth),
+                crate::theme::Palette::resolve(&effective, depth),
+                "{named}"
+            );
+        }
+    }
+
     #[test]
     fn inline_colors_win_and_bad_scheme_falls_back() {
         let inline = InlinePalette {
