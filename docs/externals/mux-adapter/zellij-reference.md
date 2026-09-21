@@ -364,7 +364,7 @@ An initial command after `--` runs in the first pane only when `attach` creates 
 
 The output has no pid. Each enriched pane costs two sequential round trips to the PTY thread, so a JSON listing of a large session takes time in proportion to its terminal pane count.
 
-Observed on 0.45.1: `list-panes --json` content geometry does not reflect `pane_frames`, so pane frames are observable only in an attached client's rendered output.
+Observed on 0.45.1: `list-panes --json` content geometry does not reflect `pane_frames`, so pane frames are observable only in an attached client's rendered output. A pane's inner size does not reflect them either, and a tab holding one framed pane renders no frame at all whatever `pane_frames` says, because `borderless=true` siblings are not framed and so do not lift that count. Measuring `pane_frames` therefore needs two framed panes in the tab and a sized client.
 
 **Blocking panes.** `--blocking` waits for the command to exit and its pane to close; `--block-until-exit` waits for any exit; `--block-until-exit-success` and `--block-until-exit-failure` return on that status or when the pane closes. `new-pane` and `zellij run` take all four, and `new-tab` takes the three `--block-until-exit` forms. The exit code reaches the caller, so `zellij action new-pane --block-until-exit-success -- cargo test && next-step` chains.
 
