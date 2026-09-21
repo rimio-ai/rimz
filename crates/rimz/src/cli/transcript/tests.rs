@@ -523,6 +523,27 @@ fn parked_exchange_keeps_messages_and_flips_in_time_order() {
         .collect::<Vec<_>>();
     assert!(ordered_times.windows(2).all(|pair| pair[0] <= pair[1]));
 
+    // A cut landing on an attached flip widens back to the message that opened
+    // the thread, not to the flip, which is itself at the margin.
+    let mut tail = display.clone();
+    keep_last_blocks(&mut tail, Some(8));
+    assert_eq!(
+        tail.iter()
+            .map(|line| line.entry.chat.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "i23",
+            "done",
+            "reviewer 12:45",
+            "h52h",
+            "coder 12:45",
+            "i647",
+            "ib5r",
+            "reviewer 12:46",
+            "coder 12:46",
+        ]
+    );
+
     let mut out = anstream::StripStream::new(Vec::new());
     render_display_chat_to(
         &mut out,
