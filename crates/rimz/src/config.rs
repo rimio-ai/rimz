@@ -705,18 +705,6 @@ impl MachineConfig {
         resolve_time_zone(self.timezone.as_deref())
     }
 
-    /// Definition failures that block launches, including each source path.
-    pub fn definition_failure(&self) -> Option<String> {
-        (!self.notices.definition_errors.is_empty()).then(|| {
-            self.notices
-                .definition_errors
-                .iter()
-                .map(|notice| format!("{}: {}", notice.path.display(), notice.message))
-                .collect::<Vec<_>>()
-                .join("\n\n")
-        })
-    }
-
     /// Failures for one unloaded definition name, including each source path.
     pub fn definition_failure_for(&self, name: &str) -> Option<String> {
         let paths = self.notices.failed_definitions.get(name)?;
@@ -1173,13 +1161,6 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
         });
     }
     Ok(())
-}
-
-/// Whether a path belongs to one of the Markdown definition trees.
-pub fn is_definition_source(agents_home: &Path, path: &Path) -> bool {
-    ["agents", "subagents", "teams", "traits"]
-        .iter()
-        .any(|dir| path.starts_with(agents_home.join(dir)))
 }
 
 fn validate_agents_config(agents: &AgentsConfig, path: &Path) -> Result<()> {

@@ -1613,7 +1613,6 @@ fn definition_failures_keep_good_siblings_and_match_doctor_and_launch_preconditi
     assert_eq!(config.definition_failure_for("bad"), Some(detail.clone()));
     assert_eq!(config.definition_failure_for("good"), None);
     assert_eq!(config.definition_failure_for("never-defined"), None);
-    assert_eq!(config.definition_failure(), Some(detail.clone()));
     let broken = broken_machine_files_in(&MachineConfigFiles::from_paths(path, dir.path()));
     assert_eq!(broken.len(), 1);
     assert_eq!(broken[0].to_string(), detail);
