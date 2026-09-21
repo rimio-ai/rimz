@@ -461,7 +461,7 @@ enum AgentsSubcmd {
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_refs)
         )]
         references: Vec<String>,
-        /// Return when the first target finishes; print its result.
+        /// Return when the first target finishes; print its result block (`--json` for its name alone).
         #[arg(long, conflicts_with = "stream")]
         any: bool,
         /// Stop waiting after this duration.
