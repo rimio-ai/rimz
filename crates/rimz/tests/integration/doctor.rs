@@ -187,6 +187,57 @@ fn doctor_json_reports_legacy_roots_and_an_agents_home_override() {
 }
 
 #[test]
+fn doctor_reports_a_legacy_cache_for_deletion_without_blocking_start() {
+    let env = Env::new();
+    let cache = env.cache_root().join("rimz");
+    std::fs::create_dir_all(&cache).expect("seed legacy cache");
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+    assert_eq!(report["home"]["legacy_roots"], json!([cache]));
+    let fix = report["home"]["fix"].as_str().expect("cache fix");
+    assert!(fix.contains("delete the obsolete cache"), "{fix}");
+    assert!(fix.contains("moving-from-the-xdg-roots"), "{fix}");
+    assert!(!fix.contains("move"), "{fix}");
+    assert!(!fix.contains("or set RIMZ_HOME"), "{fix}");
+
+    // A missing project stops after the legacy guard, without birthing a room.
+    let missing_project = env.home_root.join("missing-project");
+    assert!(!env.rimz_home().join("config.toml").exists());
+    let output = env
+        .rimz()
+        .args(["start", "--no-attach"])
+        .arg(&missing_project)
+        .output()
+        .expect("start with cache only");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("resolving workspace at"), "{stderr}");
+    assert!(
+        stderr.contains(&missing_project.display().to_string()),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("legacy RimZ roots exist"), "{stderr}");
+
+    let config = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config).expect("seed legacy config");
+    let output = env
+        .rimz()
+        .args(["start", "--no-attach"])
+        .arg(&missing_project)
+        .output()
+        .expect("start with legacy config");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("legacy RimZ roots exist"), "{stderr}");
+    assert!(stderr.contains(&config.display().to_string()), "{stderr}");
+    assert!(!env.rimz_home().join("config.toml").exists());
+}
+
+#[test]
 fn doctor_json_folds_one_row_per_agent() {
     let env = Env::new();
     inject_lifecycle(

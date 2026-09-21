@@ -1047,20 +1047,50 @@ fn runtime_fallback_home() -> PathBuf {
 
 /// Pre-`~/.rimz` RimZ roots still present on this host.
 pub fn legacy_roots() -> Vec<PathBuf> {
-    [config_home(), state_home(), data_home()]
+    existing_legacy_roots([config_home(), state_home(), data_home(), cache_home()])
+}
+
+/// Pre-home roots that may hold configuration; a stale cache cannot block room entry.
+pub fn legacy_config_roots() -> Vec<PathBuf> {
+    existing_legacy_roots([config_home(), state_home(), data_home()])
+}
+
+fn existing_legacy_roots(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    roots
         .into_iter()
         .map(|root| root.join("rimz"))
         .filter(|root| root.exists())
         .collect()
 }
 
-/// How to move `legacy` roots into `home`; RimZ reads only the home.
+/// How to migrate `legacy` roots and delete obsolete caches; RimZ reads only the home.
 pub fn legacy_roots_fix(legacy: &[PathBuf], home: &Path) -> String {
     let roots = legacy
         .iter()
         .map(|root| root.display().to_string())
         .collect::<Vec<_>>()
         .join(", ");
+    let cache = cache_home().join("rimz");
+    if legacy.contains(&cache) {
+        let to_move = legacy
+            .iter()
+            .filter(|root| **root != cache)
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if to_move.is_empty() {
+            return format!(
+                "RimZ now keeps everything under {home} and no longer reads {roots}; delete the obsolete cache at {cache} (see docs/guide/configuration.md#moving-from-the-xdg-roots)",
+                home = home.display(),
+                cache = cache.display()
+            );
+        }
+        return format!(
+            "RimZ now keeps everything under {home} and no longer reads {roots}; move the contents of {to_move} into {home}, and delete the obsolete cache at {cache} (see docs/guide/configuration.md#moving-from-the-xdg-roots), or set RIMZ_HOME",
+            home = home.display(),
+            cache = cache.display()
+        );
+    }
     format!(
         "RimZ now keeps everything under {home} and no longer reads {roots}; move their contents into {home} (see docs/guide/configuration.md#moving-from-the-xdg-roots), or set RIMZ_HOME",
         home = home.display()
