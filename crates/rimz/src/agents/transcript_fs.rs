@@ -17,7 +17,7 @@ use std::fs;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn home_dir() -> PathBuf {
+pub(super) fn home_dir() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/"))
@@ -33,7 +33,7 @@ pub(crate) fn expand_tilde(raw: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
-pub(crate) fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
+pub(super) fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
@@ -41,7 +41,7 @@ pub(crate) fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// Deserialize an optional object while treating non-object JSON values as absent.
-pub(crate) fn deserialize_optional_object_lossy<'de, D, T>(
+pub(super) fn deserialize_optional_object_lossy<'de, D, T>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error>
 where
@@ -109,7 +109,7 @@ where
 }
 
 /// Deserialize an optional unsigned integer from a JSON number or numeric string.
-pub(crate) fn deserialize_optional_u64_lossy<'de, D>(
+pub(super) fn deserialize_optional_u64_lossy<'de, D>(
     deserializer: D,
 ) -> Result<Option<u64>, D::Error>
 where
@@ -124,7 +124,7 @@ where
 }
 
 /// Deserialize an optional finite float from a JSON number or numeric string.
-pub(crate) fn deserialize_optional_f64_lossy<'de, D>(
+pub(super) fn deserialize_optional_f64_lossy<'de, D>(
     deserializer: D,
 ) -> Result<Option<f64>, D::Error>
 where
@@ -141,7 +141,7 @@ where
 }
 
 /// Deserialize a non-empty optional string while treating other JSON values as absent.
-pub(crate) fn deserialize_optional_string_lossy<'de, D>(
+pub(super) fn deserialize_optional_string_lossy<'de, D>(
     deserializer: D,
 ) -> Result<Option<String>, D::Error>
 where
@@ -162,11 +162,11 @@ where
 /// record boundary. A newest record larger than the normal budget expands the
 /// read far enough to return that record whole; a valid final record needs no
 /// newline, while a torn final fragment stays out of the result.
-pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
+pub(super) fn read_transcript_tail(path: &Path) -> Option<String> {
     read_transcript_tail_with_status(path).map(|tail| tail.text)
 }
 
-pub(crate) struct TranscriptTail {
+pub(super) struct TranscriptTail {
     pub(crate) text: String,
     pub(crate) torn_suffix: bool,
 }
@@ -193,7 +193,7 @@ fn complete_jsonl_prefix(bytes: &[u8]) -> (usize, bool) {
 /// The bounded transcript tail plus whether an incomplete final record was
 /// excluded. Cursor uses the extra bit to prove its transcript is resting at
 /// a terminal row; other adapters retain the string-only wrapper above.
-pub(crate) fn read_transcript_tail_with_status(path: &Path) -> Option<TranscriptTail> {
+pub(super) fn read_transcript_tail_with_status(path: &Path) -> Option<TranscriptTail> {
     use std::io::{Read, Seek, SeekFrom};
 
     const TAIL_BYTES: u64 = 64 * 1024;
@@ -267,7 +267,7 @@ pub(crate) fn read_transcript_tail_with_status(path: &Path) -> Option<Transcript
 /// unconsumed for the next pass (the event log's torn-line discipline), while a
 /// final line still missing only its newline is counted without waiting.
 /// `None` on any IO error or when nothing consumable lies past `offset`.
-pub fn read_transcript_lines(path: &Path, offset: u64) -> Option<(Vec<u8>, u64)> {
+pub(super) fn read_transcript_lines(path: &Path, offset: u64) -> Option<(Vec<u8>, u64)> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = fs::File::open(path).ok()?;
     file.seek(SeekFrom::Start(offset)).ok()?;

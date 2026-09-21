@@ -37,7 +37,7 @@ use crate::ids::{AgentKind, LoginKey};
 /// Informational account and CLI-version probes are best-effort enrichment.
 /// Bound every subprocess so one installed but wedged CLI cannot hold the
 /// shared account cache producer indefinitely.
-pub(crate) const INFORMATIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(super) const INFORMATIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(test)]
 mod tests;
@@ -63,7 +63,7 @@ impl std::fmt::Debug for ProviderAccountBinding {
 }
 
 impl ProviderAccountBinding {
-    pub(crate) fn new(scope: ProviderAccountScope, account_key: String) -> Option<Self> {
+    pub(super) fn new(scope: ProviderAccountScope, account_key: String) -> Option<Self> {
         (!account_key.trim().is_empty()).then_some(Self { scope, account_key })
     }
 
@@ -83,7 +83,7 @@ impl ProviderAccountBinding {
             .filter(|binding: &Self| !binding.account_key.trim().is_empty())
     }
 
-    pub(crate) fn display_label(&self, kind: &str) -> String {
+    fn display_label(&self, kind: &str) -> String {
         let kind = match kind {
             "qwen" => "Qwen",
             other => other,
@@ -118,7 +118,11 @@ impl ManagedLaunchState {
         }
     }
 
-    pub fn capacity(&self, runtime: &RuntimePaths, key: &LoginKey) -> Option<ProviderCapacity> {
+    pub(crate) fn capacity(
+        &self,
+        runtime: &RuntimePaths,
+        key: &LoginKey,
+    ) -> Option<ProviderCapacity> {
         match self {
             Self::Unsupported => ProviderCapacity::read(runtime, key),
             Self::Bound(binding) => ProviderCapacity::read_bound(runtime, key, binding),
@@ -126,7 +130,7 @@ impl ManagedLaunchState {
         }
     }
 
-    pub fn exact_account_applies(&self) -> bool {
+    pub(crate) fn exact_account_applies(&self) -> bool {
         matches!(self, Self::Unresolved | Self::Bound(_))
     }
 }
@@ -140,7 +144,7 @@ pub struct AccountUsageIdentity {
 }
 
 impl AccountUsageIdentity {
-    pub(crate) fn binding(&self) -> Option<ProviderAccountBinding> {
+    pub(super) fn binding(&self) -> Option<ProviderAccountBinding> {
         ProviderAccountBinding::new(self.scope.clone(), self.account_key.clone()?)
     }
 }
@@ -274,7 +278,7 @@ impl ProviderCapacity {
     }
 
     /// Earliest future reset among currently exhausted authoritative windows.
-    pub(crate) fn spent_window(&self, now: Timestamp) -> Option<RateLimitWindow> {
+    fn spent_window(&self, now: Timestamp) -> Option<RateLimitWindow> {
         self.windows
             .iter()
             .filter(|window| {
@@ -446,7 +450,7 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
 }
 
 /// Best-effort credential-file mtime for provider usage ranking.
-pub(crate) fn file_mtime_ms(path: &Path) -> Option<u64> {
+pub(super) fn file_mtime_ms(path: &Path) -> Option<u64> {
     std::fs::metadata(path)
         .ok()?
         .modified()

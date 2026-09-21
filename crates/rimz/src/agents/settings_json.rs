@@ -8,7 +8,7 @@ use crate::disk::atomic;
 
 use super::{AgentErr, Result};
 
-pub(crate) fn read_json_object(agent: &'static str, path: &Path) -> Result<Map<String, Value>> {
+pub(super) fn read_json_object(agent: &'static str, path: &Path) -> Result<Map<String, Value>> {
     match std::fs::read_to_string(path) {
         Ok(text) if text.trim().is_empty() => Ok(Map::new()),
         Ok(text) => {
@@ -39,7 +39,7 @@ pub(crate) fn read_json_object(agent: &'static str, path: &Path) -> Result<Map<S
     }
 }
 
-pub(crate) fn render_json(agent: &'static str, root: &Map<String, Value>) -> Result<String> {
+pub(super) fn render_json(agent: &'static str, root: &Map<String, Value>) -> Result<String> {
     let text = serde_json::to_string_pretty(&Value::Object(root.clone())).map_err(|source| {
         AgentErr::InstallSerialize {
             agent,
@@ -49,7 +49,7 @@ pub(crate) fn render_json(agent: &'static str, root: &Map<String, Value>) -> Res
     Ok(format!("{text}\n"))
 }
 
-pub(crate) fn write_json(
+pub(super) fn write_json(
     agent: &'static str,
     path: &Path,
     root: &Map<String, Value>,
@@ -58,7 +58,7 @@ pub(crate) fn write_json(
     Ok(())
 }
 
-pub(crate) fn read_optional_bytes(agent: &'static str, path: &Path) -> Result<Option<Vec<u8>>> {
+pub(super) fn read_optional_bytes(agent: &'static str, path: &Path) -> Result<Option<Vec<u8>>> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -70,7 +70,7 @@ pub(crate) fn read_optional_bytes(agent: &'static str, path: &Path) -> Result<Op
     }
 }
 
-pub(crate) fn json_type_name(value: &Value) -> &'static str {
+pub(super) fn json_type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "bool",
@@ -81,20 +81,20 @@ pub(crate) fn json_type_name(value: &Value) -> &'static str {
     }
 }
 
-pub(crate) struct PendingWrite<'a> {
+pub(super) struct PendingWrite<'a> {
     path: &'a Path,
     candidate: Option<&'a [u8]>,
 }
 
 impl<'a> PendingWrite<'a> {
-    pub(crate) fn required(path: &'a Path, candidate: &'a str) -> Self {
+    pub(super) fn required(path: &'a Path, candidate: &'a str) -> Self {
         Self {
             path,
             candidate: Some(candidate.as_bytes()),
         }
     }
 
-    pub(crate) fn optional(path: &'a Path, candidate: Option<&'a str>) -> Self {
+    pub(super) fn optional(path: &'a Path, candidate: Option<&'a str>) -> Self {
         Self {
             path,
             candidate: candidate.map(str::as_bytes),
@@ -102,7 +102,7 @@ impl<'a> PendingWrite<'a> {
     }
 }
 
-pub(crate) fn commit_pair(
+pub(super) fn commit_pair(
     agent: &'static str,
     first: PendingWrite<'_>,
     second: PendingWrite<'_>,

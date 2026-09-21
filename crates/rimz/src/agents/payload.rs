@@ -7,7 +7,7 @@ use std::borrow::Cow;
 
 use serde_json::Value;
 
-pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
+pub(super) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| payload.get(*key).and_then(Value::as_str))
         .filter(|value| !value.is_empty())
@@ -25,7 +25,7 @@ pub(crate) fn non_empty_trimmed(value: &str) -> Option<String> {
 /// lifecycle [`step`](super::lifecycle::step) table, so this helper reports only
 /// the raw `errored` bit the adapter folds into
 /// [`LifecycleSignal::TurnEnded`](super::LifecycleSignal::TurnEnded).
-pub(crate) fn stop_payload_errored(payload: &Value) -> bool {
+pub(super) fn stop_payload_errored(payload: &Value) -> bool {
     payload
         .get("is_error")
         .and_then(Value::as_bool)
@@ -48,7 +48,7 @@ pub(crate) fn stop_payload_errored(payload: &Value) -> bool {
 /// leak). Presence of any of these rejects the whole string. The renderer
 /// backstop in `sidebar_pane::render::sections::agent_card::description` shares
 /// this list so producer and presentation guards cannot drift.
-pub(crate) const CONTROL_TAG_PREFIXES: &[&str] = &[
+pub(super) const CONTROL_TAG_PREFIXES: &[&str] = &[
     "<task-notification>",
     "<system-reminder>",
     "<command-message>",

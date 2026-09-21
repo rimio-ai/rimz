@@ -169,14 +169,13 @@ fn validate_schema(contract: &PassContract) -> Result<()> {
             "diff contract path",
         )?;
     }
-    match contract.kind {
-        PassKind::Module if contract.max_production_sloc_delta >= 0 => bail!(
-            "pass contract max-production-sloc-delta must be negative for a module pass; a seam pass declares kind = \"seam\" and takes a flat ceiling"
-        ),
-        PassKind::Seam if contract.dependency.is_empty() && contract.rehome.is_empty() => bail!(
+    if contract.kind == PassKind::Seam
+        && contract.dependency.is_empty()
+        && contract.rehome.is_empty()
+    {
+        bail!(
             "pass contract kind = \"seam\" needs a [[dependency]] or [[rehome]] row to prove the seam"
-        ),
-        _ => {}
+        );
     }
     for expectation in &contract.esc {
         let path = super::validate_scope(
@@ -312,17 +311,13 @@ mod tests {
     }
 
     #[test]
-    fn module_contract_rejects_nonnegative_sloc_ceiling() {
+    fn module_contract_takes_a_nonnegative_sloc_ceiling() {
         let (root, syntax) = syntax();
         let mut contract = contract();
-        contract.max_production_sloc_delta = 0;
-        let error = validate(root.path(), &syntax, &syntax, contract)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("must be negative for a module pass"),
-            "{error}"
-        );
+        contract.max_production_sloc_delta = 3;
+        let loaded = validate(root.path(), &syntax, &syntax, contract).unwrap();
+        assert_eq!(loaded.kind, PassKind::Module);
+        assert_eq!(loaded.max_production_sloc_delta, 3);
     }
 
     #[test]

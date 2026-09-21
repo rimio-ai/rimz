@@ -78,7 +78,7 @@ pub use context::{
     TurnSettleOutcome,
 };
 use context::{ContextObservation, SessionContextRefresh, SubagentObservation};
-pub(crate) use credits::HttpErrKind;
+use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
 pub use definition::{
     AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, CompactInstruction,
@@ -91,9 +91,7 @@ use definition::{
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
 pub use hook_types::{HookOutput, HookReply, HookRouting};
-pub(crate) use identity::{
-    RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
-};
+use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};
 pub(crate) use lifecycle::step;
 pub use lifecycle::{
     AskKind, CONDITION_CHECKPOINT, DELIVERY_CHECKPOINT, LIFECYCLE_EVENT_VERSION, LifecycleEvent,
@@ -101,7 +99,7 @@ pub use lifecycle::{
     Transition, TransitionKind, TurnPhase,
 };
 pub use locate::locate_binary;
-pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
+use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use login::{
     BirthLoginErr, LoginCatalog, LoginConfigErr, LoginErr, LoginMismatch, ProviderLogin,
     RoomLoginErr, RoomLoginSet, ambient_env, default_named_home, room_login, room_logins,
@@ -113,15 +111,14 @@ pub use observation::{
     SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
-pub(crate) use payload::{
-    CONTROL_TAG_PREFIXES, non_empty_trimmed, optional_payload_string, sanitize_user_prompt,
-    stop_payload_errored,
-};
+use payload::{CONTROL_TAG_PREFIXES, optional_payload_string, stop_payload_errored};
+pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};
 pub use pricing::{PriceBook, TokenSplit};
 pub use registry::{
     all_definitions, compact_command, definition_by_kind, find_definition, known_kinds,
-    resumed_session_id_for_root, resumed_session_id_from_cmdline, spec_by_kind,
+    spec_by_kind,
 };
+pub(crate) use registry::{resumed_session_id_for_root, resumed_session_id_from_cmdline};
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentState, AgentStatus, BudgetPark, BudgetScope,
@@ -132,14 +129,15 @@ pub use state::{
     single_line_description,
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_description};
-pub use tools::{
-    DefinitionDefaults, ToolErr, ToolSet, definition_defaults, definition_model_kind,
-    expand_model_alias, render_tool_args, tools_required,
+use tools::ToolErr;
+pub use tools::definition_model_kind;
+pub(crate) use tools::{
+    ToolSet, definition_defaults, expand_model_alias, render_tool_args, tools_required,
 };
 use transcript::TranscriptRole;
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition};
 use transcript_fs::read_transcript_lines;
-pub(crate) use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
+use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
 
 pub mod plugins;
 

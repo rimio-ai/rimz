@@ -13,14 +13,14 @@ use std::str::FromStr;
 /// A simple three-part CLI version. Agent CLIs do not need semver metadata for
 /// RimZ's gates; ordered numeric major/minor/patch is the contract.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct CliVersion {
+pub(super) struct CliVersion {
     pub major: u64,
     pub minor: u64,
     pub patch: u64,
 }
 
 impl CliVersion {
-    pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
+    pub(super) const fn new(major: u64, minor: u64, patch: u64) -> Self {
         Self {
             major,
             minor,
@@ -36,7 +36,7 @@ impl std::fmt::Display for CliVersion {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum VersionParseErr {
+pub(super) enum VersionParseErr {
     #[error("missing version token")]
     Empty,
     #[error("expected two or three numeric dot-separated version segments")]
@@ -77,14 +77,14 @@ impl FromStr for CliVersion {
 
 /// Run `<binary> --version` with captured stdio. Any failure is an absent
 /// version, not account truth or a launch precondition on its own.
-pub(crate) fn probe_cli_version(binary: impl AsRef<OsStr>) -> Option<String> {
+pub(super) fn probe_cli_version(binary: impl AsRef<OsStr>) -> Option<String> {
     probe_cli_version_with(binary, conventional_cli_version)
 }
 
 /// Run `<binary> --version` and pass its two output streams to the adapter's
 /// parser. Keeping the streams separate lets branded CLIs recognize their own
 /// banner without scanning unrelated release or upgrade prose.
-pub(crate) fn probe_cli_version_with(
+pub(super) fn probe_cli_version_with(
     binary: impl AsRef<OsStr>,
     parse: impl FnOnce(&str, &str) -> Option<String>,
 ) -> Option<String> {
@@ -107,7 +107,7 @@ pub(crate) fn probe_cli_version_with(
 /// Pick the version from a `--version` probe's two streams. Scan both for the
 /// first parseable version token so older Pi releases that used stderr remain
 /// compatible with current releases that use stdout.
-pub(crate) fn conventional_cli_version(stdout: &str, stderr: &str) -> Option<String> {
+pub(super) fn conventional_cli_version(stdout: &str, stderr: &str) -> Option<String> {
     stdout
         .split_whitespace()
         .chain(stderr.split_whitespace())

@@ -201,15 +201,15 @@ impl AgentUsageSummary {
 
     /// Gauge numerator: the input-side call split when known, else the latest
     /// cumulative token reading.
-    pub fn context_used_tokens(&self) -> Option<u64> {
+    fn context_used_tokens(&self) -> Option<u64> {
         self.input_context_tokens().or(self.total_tokens)
     }
 
-    pub fn resolved_context_window(&self, default_window: Option<u64>) -> Option<u64> {
+    fn resolved_context_window(&self, default_window: Option<u64>) -> Option<u64> {
         self.context_window.or(default_window)
     }
 
-    pub fn resolved_context_pct(&self, default_window: Option<u64>) -> Option<u8> {
+    fn resolved_context_pct(&self, default_window: Option<u64>) -> Option<u8> {
         self.context_pct.or_else(|| {
             let used = self.context_used_tokens()?;
             let window = self.resolved_context_window(default_window)?;
@@ -220,7 +220,7 @@ impl AgentUsageSummary {
     /// Carry sparse enrichment forward. An explicit incoming percentage wins;
     /// otherwise derive from the merged numerator/window before retaining the
     /// prior percentage.
-    pub fn merge(&self, prior: Option<&Self>, default_window: Option<u64>) -> Self {
+    pub(crate) fn merge(&self, prior: Option<&Self>, default_window: Option<u64>) -> Self {
         let prior = prior.cloned().unwrap_or_default();
         let mut merged = Self {
             context_pct: None,

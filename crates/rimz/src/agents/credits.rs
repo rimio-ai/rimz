@@ -16,14 +16,14 @@ use crate::agents::context::AgentRateLimits;
 
 /// `true` when direct provider account-usage fetches are disabled for this
 /// process (tests, CI, air-gapped runs).
-pub fn oauth_usage_offline() -> bool {
+pub(crate) fn oauth_usage_offline() -> bool {
     std::env::var_os("RIMZ_OAUTH_USAGE_OFFLINE").is_some()
 }
 
 /// Why an OAuth usage HTTP probe failed, carried structured (so a status code is
 /// a Sentry facet) without the request URL's path or query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HttpErrKind {
+pub(super) enum HttpErrKind {
     /// A response with this non-200 status code.
     Status(u16),
     /// The request never completed (DNS, connect, TLS, or timeout).
@@ -43,7 +43,7 @@ impl std::fmt::Display for HttpErrKind {
 }
 
 impl HttpErrKind {
-    pub(crate) fn is_auth_rejected(&self) -> bool {
+    pub(super) fn is_auth_rejected(&self) -> bool {
         matches!(self, Self::Status(401 | 403))
     }
 
@@ -55,7 +55,7 @@ impl HttpErrKind {
 /// The host authority of `url` — scheme stripped, path/query/fragment and any
 /// `userinfo@` removed — the only part of a request URL safe to attach to an
 /// off-box error. Std-only; never pulls in a URL parser.
-pub(crate) fn url_host(url: &str) -> &str {
+pub(super) fn url_host(url: &str) -> &str {
     let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
     let authority = after_scheme
         .split(['/', '?', '#'])
@@ -71,7 +71,7 @@ pub(crate) fn url_host(url: &str) -> &str {
 /// probes against local stubs, and a loopback listener already implies local
 /// execution; every other origin is refused before a secret-bearing request is
 /// built.
-pub(crate) fn trusted_usage_url(url: &str, official_host: &str) -> bool {
+pub(super) fn trusted_usage_url(url: &str, official_host: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
     };
@@ -88,8 +88,8 @@ pub(crate) fn trusted_usage_url(url: &str, official_host: &str) -> bool {
     }
 }
 
-pub(crate) const OAUTH_HTTP_TIMEOUT_SECS: u64 = 5;
-pub(crate) const OAUTH_HTTP_MAX_BYTES: u64 = 512 * 1024;
+pub(super) const OAUTH_HTTP_TIMEOUT_SECS: u64 = 5;
+pub(super) const OAUTH_HTTP_MAX_BYTES: u64 = 512 * 1024;
 const OAUTH_HTTP_ATTEMPTS: u32 = 3;
 const OAUTH_HTTP_RETRY_BACKOFF_MS: u64 = 300;
 const OAUTH_HTTP_RETRY_BACKOFF: Duration = Duration::from_millis(OAUTH_HTTP_RETRY_BACKOFF_MS);
@@ -106,7 +106,7 @@ pub(crate) const OAUTH_HTTP_MAX_DURATION: Duration = Duration::from_millis(
 /// Bounded GET for provider OAuth usage endpoints: 5s timeout per attempt, 512
 /// KiB body cap, host-only breadcrumb. Returns the body, or the error kind plus
 /// host authority for the caller's provider error enum.
-pub(crate) fn oauth_http_get(
+pub(super) fn oauth_http_get(
     url: &str,
     headers: &[(&str, String)],
     breadcrumb: &str,
@@ -117,7 +117,7 @@ pub(crate) fn oauth_http_get(
 /// Bounded JSON POST for fixed provider account-usage endpoints. Secret-bearing
 /// requests refuse redirects and expose only the destination host and status
 /// class to callers.
-pub(crate) fn oauth_http_post_json<T: Serialize>(
+pub(super) fn oauth_http_post_json<T: Serialize>(
     url: &str,
     headers: &[(&str, String)],
     body: &T,
@@ -259,7 +259,7 @@ pub struct ResetCredits {
 }
 
 impl ResetCredits {
-    pub(crate) fn normalized(count: u32, mut expiries: Vec<Timestamp>) -> Self {
+    pub(super) fn normalized(count: u32, mut expiries: Vec<Timestamp>) -> Self {
         expiries.sort_unstable();
         Self {
             count,
@@ -282,7 +282,7 @@ impl ExtraCredits {
         }
     }
 
-    pub fn with_limit_if_missing(self, fallback_limit_usd: Option<f64>) -> Self {
+    pub(crate) fn with_limit_if_missing(self, fallback_limit_usd: Option<f64>) -> Self {
         match self {
             Self::Known {
                 used_usd,
@@ -297,12 +297,12 @@ impl ExtraCredits {
         }
     }
 
-    pub fn is_disabled(&self) -> bool {
+    pub(crate) fn is_disabled(&self) -> bool {
         matches!(self, Self::Disabled)
     }
 
     /// Whether this extra paid budget is known to be exhausted.
-    pub fn is_exhausted(&self) -> bool {
+    fn is_exhausted(&self) -> bool {
         match self {
             Self::Disabled => true,
             Self::Known {
@@ -320,12 +320,12 @@ impl ExtraCredits {
 
     /// Whether extra paid usage may be available. Unknown values count as usable
     /// because no source has proven the budget is exhausted.
-    pub fn is_usable(&self) -> bool {
+    pub(crate) fn is_usable(&self) -> bool {
         !self.is_disabled() && !self.is_exhausted()
     }
 
     /// Remaining percentage for a draining bar, when enough data is known.
-    pub fn remaining_percentage(&self) -> Option<u8> {
+    pub(crate) fn remaining_percentage(&self) -> Option<u8> {
         match self {
             Self::Disabled => Some(0),
             Self::Known {
@@ -345,7 +345,7 @@ impl ExtraCredits {
     }
 
     /// Remaining dollars, direct or derived from `limit - used`, when known.
-    pub fn remaining_usd_left(&self) -> Option<f64> {
+    pub(crate) fn remaining_usd_left(&self) -> Option<f64> {
         match self {
             Self::Disabled => Some(0.0),
             Self::Known {
@@ -360,21 +360,21 @@ impl ExtraCredits {
         }
     }
 
-    pub fn used_usd(&self) -> Option<f64> {
+    pub(crate) fn used_usd(&self) -> Option<f64> {
         match self {
             Self::Known { used_usd, .. } => *used_usd,
             Self::Disabled => None,
         }
     }
 
-    pub fn remaining_usd(&self) -> Option<f64> {
+    pub(crate) fn remaining_usd(&self) -> Option<f64> {
         match self {
             Self::Known { remaining_usd, .. } => *remaining_usd,
             Self::Disabled => Some(0.0),
         }
     }
 
-    pub fn limit_usd(&self) -> Option<f64> {
+    pub(crate) fn limit_usd(&self) -> Option<f64> {
         match self {
             Self::Known { limit_usd, .. } => *limit_usd,
             Self::Disabled => Some(0.0),
@@ -417,7 +417,7 @@ pub enum AccountUsageProbe {
 /// adapter. The "report" set (HTTP/IO/parse faults) maps to `Failed`; the silent
 /// set (absent/api-key/expired credentials and locally refused configuration)
 /// maps to `NoCredentials`.
-pub(crate) trait AccountUsageReportable {
+pub(super) trait AccountUsageReportable {
     fn should_report(&self) -> bool;
 }
 
@@ -427,7 +427,7 @@ pub(crate) trait AccountUsageReportable {
 /// delegation to its account-usage fetcher. Every provider reports the static
 /// `oauth_usage` operation so Sentry groups them together; the provider tag and
 /// error's host authority keep the source visible.
-pub(crate) fn map_account_usage_probe<E>(
+pub(super) fn map_account_usage_probe<E>(
     result: std::result::Result<AccountUsageSnapshot, E>,
     identity: AccountUsageIdentity,
     provider: &'static str,

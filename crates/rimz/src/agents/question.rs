@@ -6,14 +6,14 @@ use serde_json::Value;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreviewPolicy {
+pub(super) enum PreviewPolicy {
     None,
     AnyValue,
     NonEmptyString,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NormalizedQuestion {
+pub(super) struct NormalizedQuestion {
     pub native_id: Option<String>,
     pub question: AskQuestion,
 }
@@ -43,14 +43,14 @@ struct OptionWire {
     preview: Option<Value>,
 }
 
-pub(crate) fn decode(
+pub(super) fn decode(
     input: &Value,
     preview_policy: PreviewPolicy,
 ) -> Option<Vec<NormalizedQuestion>> {
     decode_inner(input, preview_policy, false)
 }
 
-pub(crate) fn decode_with_header_fallback(
+pub(super) fn decode_with_header_fallback(
     input: &Value,
     preview_policy: PreviewPolicy,
 ) -> Option<Vec<NormalizedQuestion>> {
@@ -71,7 +71,7 @@ fn decode_inner(
     (!questions.is_empty()).then_some(questions)
 }
 
-pub(crate) fn questions_with_header_fallback(
+pub(super) fn questions_with_header_fallback(
     input: &Value,
     preview_policy: PreviewPolicy,
 ) -> Option<Vec<AskQuestion>> {
@@ -83,7 +83,7 @@ pub(crate) fn questions_with_header_fallback(
     })
 }
 
-pub(crate) fn questions(input: &Value, preview_policy: PreviewPolicy) -> Option<Vec<AskQuestion>> {
+pub(super) fn questions(input: &Value, preview_policy: PreviewPolicy) -> Option<Vec<AskQuestion>> {
     decode(input, preview_policy).map(|questions| {
         questions
             .into_iter()
@@ -92,7 +92,7 @@ pub(crate) fn questions(input: &Value, preview_policy: PreviewPolicy) -> Option<
     })
 }
 
-pub(crate) fn plan_question(plan: &str, options: Vec<AskOption>) -> Option<Vec<AskQuestion>> {
+pub(super) fn plan_question(plan: &str, options: Vec<AskOption>) -> Option<Vec<AskQuestion>> {
     let plan = non_empty(Some(plan))?;
     Some(vec![AskQuestion {
         question: format!("Requesting plan approval:\n\n{plan}"),
@@ -102,7 +102,7 @@ pub(crate) fn plan_question(plan: &str, options: Vec<AskOption>) -> Option<Vec<A
     }])
 }
 
-pub(crate) fn permission_detail(payload: &Value) -> Option<String> {
+pub(super) fn permission_detail(payload: &Value) -> Option<String> {
     let tool = non_empty(payload.get("tool_name").and_then(Value::as_str))?;
     let summary = payload
         .get("tool_input")

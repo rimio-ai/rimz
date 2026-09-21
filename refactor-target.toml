@@ -87,7 +87,7 @@ upward-dependencies = ["address"]
 # One compaction composer picks the brief for the agent's seat.
 # Host-mode skill links: plan/apply, plan accessors and reports are shared by launch_plan, exec, explain and uninstall.
 # The Markdown definition loader reads model catalog, defaults and tool rendering.
-surface-budget = 1002
+surface-budget = 865
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -3305,3 +3305,183 @@ reason = "MaterializeErr::from is the `?` conversion from SandboxErr; inlining i
 kind = "item"
 key = "harness::launch_context::TeamLaunchContext"
 reason = "Atlas proposes private, but launch_reminders.rs:73-81 names it and team_launch_context/reminder carry it in their signatures; rustc refuses (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::CoreCapability"
+reason = "Public AgentDefinition::new and Deref expose dyn AgentIntegration (definition.rs:480-492,544-551) and the binary's hook tests implement the traits (cli/hooks/tests.rs:90-110,1498-1525); a trait method has no visibility of its own, so all 54 capability candidates are floored by the public trait objects (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::HookCapability"
+reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability"
+reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::SessionCapability"
+reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::TranscriptCapability"
+reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::ContextCapability"
+reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::AccountCapability"
+reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::SpendingCapability"
+reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::RuntimeControlCapability"
+reason = "Public trait-object floor; see agents::capabilities::CoreCapability (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::AgentIntegration"
+reason = "The bundle every adapter implements and AgentDefinition holds as a trait object; public by construction (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::hook_types::context_agent_id"
+reason = "The binary crate calls it on the publicly re-exported HookOutput (cli/hooks/lifecycle/mod.rs:148,537,542, context.rs:59,441), so pub is its floor; worktree_path has the same floor (cli/hooks/lifecycle/transcript.rs:25,109). The adapter tests under agents/adapters are descendants and floor nothing (pass 24b, corrected in review)."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::AccountProbe"
+reason = "Named by public capability methods on AgentDefinition; the reset-credit and capacity contract types (AccountUsageIdentity, ProviderCapacity, RedemptionCode, ResetCreditResult, ResetCreditOffer, ResetCreditAction, PreparedRedemption) are floored the same way (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::RateLimitsCache"
+reason = "The integration crate constructs and reads the cache schema (tests/integration/loop_schedule.rs:14,2839-2872, run.rs:10,321-342); RateLimitCacheEntry and PendingRefill travel with it, and the harness account-cache writer lift is the deferral that would change their reach (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::scope"
+reason = "Read by the integration crate and by the held Qwen adapter's selection tests; private strands both (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::from_windows"
+reason = "ProviderCapacity::from_windows is built by harness/auto_continue/tests.rs, harness/auto_redeem/tests.rs and store/snapshot/testkit.rs; pub(crate) is the widest narrowing that strands no test in a held module (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::binding"
+reason = "Two methods share this key. ManagedLaunchState::binding (account.rs:114) is read by the binary (cli/supervised/run.rs:703,909) and the integration crate, so E0624 refuted pub(crate) and it stays pub; AccountUsageIdentity::binding (account.rs:147) narrowed to pub(super) and needs no verdict (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::observation::SessionOrigin"
+reason = "A public field and signature type of AgentLifecycleObservation (observation.rs:252-320) and imported by the integration crate; AgentUsageSummary and LaunchedBy are floored the same way (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::observation::SpawnedSubagent"
+reason = "The binary's hook tests name it (cli/hooks/tests.rs:148,151,248) and this pass may not edit the binary crate (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::login::LoginErr"
+reason = "The error of public ProviderLogin::named, LoginCatalog::select, room and room_login (login.rs:110,270-305); LoginMismatch, RoomLoginErr, session_login_env, birth_selection, between, room and default_named_home are floored by the same public signatures (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::login::named"
+reason = "ProviderLogin::named is called by the binary's provider tests (cli/providers/tests.rs:188); pub(crate) is refuted because the binary crate sees only pub (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::AccountUsageProbe"
+reason = "Returned by the public AccountCapability::probe_account_usage (capabilities.rs:646-655); AccountUsageSnapshot is the root-re-exported result beside it (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::known"
+reason = "ExtraCredits::known is called by the binary's sidebar fixture (cli/sidebar/fixture.rs:1397), which is production binary code this pass may not edit (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::managed_source::managed_artifacts_present"
+reason = "The ManagedSource inherent methods (install, preview, uninstall, resolved_path, upgrade_available_at, wrapped_status_line_command, wrapped_subagent_status_line_command) are the seam held adapters call; their pass-through shape is the ManagedIntegration impl, pinned by 417721973 and e566d6b44 (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::transcript::TranscriptPosition"
+reason = "Root-re-exported and imported directly by held adapters; TranscriptMessage, TranscriptRole, TranscriptPage and TranscriptPosition::new/get share that floor, and new is pinned as a pass-through by 417721973 (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::emblems::EmblemTint"
+reason = "Emblem's public field tints: Vec<EmblemTint> (emblems.rs:21-26) floors it; narrowing trips private_interfaces regardless of the root re-export (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::emblems::emblem_for"
+reason = "Read by the binary's sidebar fixture (cli/sidebar/fixture.rs:2217) (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::runtime_control::RuntimeControlIssue"
+reason = "Carried by public RuntimeControlReadiness (runtime_control.rs:7-12) and RuntimeControlError is the public reconcile error (:113-120); their new constructors took pub(crate) because remote_control/tests.rs builds them (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::petname::valid_agent_name"
+reason = "The binary crate calls it at cli/paths.rs:66 and cli/hooks/lifecycle/identity.rs:57, so pub is its floor; the store and harness sites inside the library would be served by pub(crate) (pass 24b, added in review)."
+
+[[verdict]]
+kind = "item"
+key = "agents::turns::TurnOutcome"
+reason = "TurnRecord::outcome is public (turns.rs:27-41) and the binary's history command reads it (cli/agents_cmd/history.rs:71-143) (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::skill_links::SkillLinkErr"
+reason = "Return types of the public plan/apply (skill_links.rs:162-206), with SkillLinkOutcome beside it; SkillLinkPlan::is_empty is called by the integration crate (tests/integration/sandbox.rs:1228,1269,1306) (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::tools::definition_model_kind"
+reason = "Called by the separate integration crate (tests/integration/common/mod.rs:59), which sees only pub (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::payload::sanitize_user_prompt"
+reason = "Named by store/message/tests.rs:66, a held module this pass may not edit; pub(crate) via the root alias is the widest narrowing that strands no test (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::petname::RESERVED_AGENT_WORDS"
+reason = "Read by the binary's agent-command tests (cli/agents_cmd/tests.rs:362) (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::local_session_cache::CatalogRefresh"
+reason = "Return type of more-visible items read by held adapters (adapters/antigravity/session.rs, adapters/claude/local_sessions.rs, adapters/cursor/session.rs); private is refused by private_interfaces, so pub(super) is the floor. ValueRefresh is the same (atlas caveat 13) (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::question::NormalizedQuestion"
+reason = "Returned by decode and decode_with_header_fallback, which held adapters call (adapters/claude/ask.rs:179, adapters/codex/ask.rs:58); private is refused by private_interfaces (atlas caveat 13) (pass 24b)."
+
+[[verdict]]
+kind = "item"
+key = "agents::session::DaemonSessionEvidence"
+reason = "Named by the public SessionCapability::daemon_session_evidence (capabilities.rs:365), so it cannot go below the trait (pass 24b)."

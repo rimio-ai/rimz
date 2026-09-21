@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use super::definition::{AgentSpec, BinIdentity};
 use super::{AgentErr, Result, version};
 
-pub(crate) fn probe_descriptor_version(
+pub(super) fn probe_descriptor_version(
     definition: &AgentSpec,
     parse: &dyn Fn(&str, &str) -> Option<String>,
 ) -> Option<String> {
@@ -99,7 +99,7 @@ fn binary_in_install_dirs(definition: &AgentSpec, home: &Path) -> Option<PathBuf
 /// value wins (so tests and tooling can point at a tempdir); otherwise the path
 /// is `$HOME` joined with `rel`. Returns an `Install` error naming the agent
 /// when `$HOME` is unset.
-pub(crate) fn agent_config_path(
+pub(super) fn agent_config_path(
     agent: &'static str,
     override_env: &str,
     rel: &Path,
@@ -120,7 +120,7 @@ pub(crate) fn agent_config_path(
 /// Read an agent config file's current contents for install preview and
 /// uninstall. A missing file reads as `None`; any other IO error propagates
 /// with agent + path context so the user sees which adapter failed and where.
-pub(crate) fn read_optional_file(agent: &'static str, path: &Path) -> Result<Option<String>> {
+pub(super) fn read_optional_file(agent: &'static str, path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
