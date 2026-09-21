@@ -974,7 +974,7 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         let Some(raw) = value.as_str() else {
             invalid_value!("harness.turn_budget must be a plain dollar amount string");
         };
-        raw.parse::<super::TurnCap>()
+        raw.parse::<super::harness::TurnCap>()
             .map_err(|err| ConfigEditErr::InvalidValue(err.to_string()))?;
     }
     if is_harness_smart_compact_edit(path) {

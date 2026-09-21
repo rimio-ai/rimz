@@ -78,7 +78,7 @@ pub enum ProjectTasksErr {
     #[error("task `{task}` needs a trigger; set `every`, `cron`, or `signal` for project tasks")]
     MustRepeat { task: String },
     #[error(transparent)]
-    Budget(#[from] crate::config::TaskBudgetError),
+    Budget(#[from] super::loop_::TaskBudgetError),
     #[error(transparent)]
     Schedule(#[from] ScheduleErr),
 }

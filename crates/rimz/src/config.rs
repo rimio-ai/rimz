@@ -53,70 +53,75 @@ mod theme;
 mod web;
 mod worktree;
 
-pub use accounts::{AccountBudgetConfigError, AccountsConfig, NamedAccount, UsageLimitUsd};
-pub(crate) use agents::retired_agents_key;
+#[cfg(test)]
+pub(crate) use accounts::UsageLimitUsd;
+pub use accounts::{AccountBudgetConfigError, AccountsConfig, NamedAccount};
+use agents::{AgentsConfig, SubagentProfilesConfig};
 pub use agents::{
-    AgentsConfig, CommandsConfig, DONE_STAGE, FlipCompact, Isolation, LaunchPlacement, Profile,
-    ProfilesConfig, PromptSource, RoleBinding, SubagentProfilesConfig, SubagentsConfig, Team,
-    TeamSignalBinding, TeamsConfig,
+    CommandsConfig, DONE_STAGE, Isolation, LaunchPlacement, Profile, ProfilesConfig, PromptSource,
+    RoleBinding, SubagentsConfig, Team, TeamSignalBinding, TeamsConfig,
 };
+pub(crate) use agents::{FlipCompact, retired_agents_key};
 use animation::validate_glyph_cells;
-pub use animation::{
-    AnimationColor, AnimationEffect, AnimationFrames, AnimationRole, AnimationSpec, AnimationSpeed,
+pub(crate) use animation::{
+    AnimationColor, AnimationEffect, AnimationRole, AnimationSpec, AnimationSpeed,
     ThemeAnimationsConfig, UnreadEffect,
 };
 pub use attention::AttentionConfig;
-pub(crate) use color::xterm_rgb;
-pub use color::{
-    ColorDepth, PaletteRole, Semantic, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex,
-};
-pub use daemon::{DaemonConfig, DaemonPane};
+pub use color::{ColorDepth, ThemeColor, ThemeMode};
+pub(crate) use color::{PaletteRole, Semantic, nearest_xterm_index, parse_hex, xterm_rgb};
+pub(crate) use daemon::{DaemonConfig, DaemonPane};
 pub use diagnosis::ConfigFileDiagnosis;
-pub use display::{
-    BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
-    DisplayConfig, HighlightStepsConfig, PixelMode, ProviderTabsMode, ScrollbarMode,
+pub(crate) use display::{
+    BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, DisplayConfig,
+    HighlightStepsConfig, ScrollbarMode,
 };
-pub use edit::{
-    ConfigEditErr, ConfigEditor, FileMergeOutcome, MergeAction, MergeReport, SkippedKey,
-};
-pub use gc::{GcConfig, parse_older_than};
-pub use glyphs::{GlyphOverrides, GlyphRole, ThemeGlyphsConfig};
+pub use display::{ContextMeterConfig, PixelMode, ProviderTabsMode};
+pub use edit::{ConfigEditor, MergeAction, MergeReport};
+pub(crate) use gc::GcConfig;
+pub use gc::parse_older_than;
+pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
-pub use harness::{
-    CompactSeat, DayCap, DayCapParseError, HarnessConfig, IdleCompactMode, TurnCap,
-    TurnCapParseError,
+pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode};
+use loop_::TaskBudgetError;
+pub(crate) use loop_::WaitMeta;
+pub use loop_::{CheckOn, FileMark, LoopConfig, TaskEntry, TaskTarget, Tasks, WatchSpec};
+pub use mux::MultiplexerConfig;
+use mux::MuxConfig;
+pub(crate) use mux::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus, ZellijConfig};
+#[cfg(test)]
+pub(crate) use mux::{TmuxPaneBorderLines, ZellijClipboard, ZellijForceClose};
+use notifications::NotificationsConfigErr;
+pub(crate) use notifications::{
+    DesktopNotificationMode, NotificationSoundMode, NotifyConditionAgent, RenderMode, TemplateVars,
+    render_template,
 };
-pub use loop_::{
-    CheckOn, FileMark, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WaitMeta,
-    WatchSpec,
-};
-pub use mux::{
-    MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
-    TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,
-};
-pub use notifications::{
-    DesktopNotificationMode, NotificationKind, NotificationSoundMode, NotificationTrigger,
-    NotificationsConfigErr, NotificationsPrefs, NotifyCondition, NotifyConditionAgent,
-    NotifyHandler, RenderMode, TemplateVars, render_template,
-};
-pub use pets::{CellAspect, PetsConfig, PetsGlyphMode};
-pub use remote_control::RemoteControlConfig;
+pub use notifications::{NotificationKind, NotificationsPrefs};
+#[cfg(test)]
+pub(crate) use notifications::{NotificationTrigger, NotifyCondition, NotifyHandler};
+pub(crate) use pets::PetsGlyphMode;
+pub use pets::{CellAspect, PetsConfig};
+pub(crate) use remote_control::RemoteControlConfig;
+pub(crate) use resume::DEFAULT_AUTO_CONTINUE_BACKOFF_SECS;
+pub use resume::ResumeConfig;
 use resume::parse_auto_redeem_min_gain;
-pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 #[cfg(test)]
 pub(crate) use scheme::parse_scheme_text;
-pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parse_colors};
-pub use scheme::{SchemeSwatch, resolve_inline_palette, scheme_swatches};
-pub use sentry::SentryConfig;
-pub use sidebar::{SidebarConfig, SidebarKeys};
-pub(crate) use skills::deserialize_optional_skill_list;
-pub use skills::{SkillListErr, SkillName, validate_skill_list};
-pub use theme::{
-    InlineAnsiColors, InlineCursorColors, InlinePalette, InlinePrimaryColors,
-    InlineSelectionColors, ThemeConfig, ThemeProviderStyle, ThemeStyle,
+pub(crate) use scheme::{
+    DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parse_colors, resolve_inline_palette,
 };
-pub use web::WebPrefs;
-pub use worktree::{WorktreeBase, WorktreeBaseParseError, WorktreeConfig};
+pub use scheme::{SchemeSwatch, scheme_swatches};
+use sentry::SentryConfig;
+pub use sidebar::SidebarConfig;
+pub(crate) use sidebar::SidebarKeys;
+pub use skills::SkillName;
+pub(crate) use skills::{SkillListErr, deserialize_optional_skill_list, validate_skill_list};
+pub(crate) use theme::InlinePalette;
+#[cfg(test)]
+pub(crate) use theme::{InlineAnsiColors, InlinePrimaryColors};
+pub use theme::{ThemeConfig, ThemeProviderStyle, ThemeStyle};
+use web::WebPrefs;
+pub use worktree::{WorktreeBase, WorktreeConfig};
 
 /// Default render base grid: 100ms, or 10Hz.
 const DEFAULT_REFRESH_MS: u16 = 100;

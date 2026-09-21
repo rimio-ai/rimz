@@ -36,11 +36,13 @@ pub struct Semantic {
 }
 
 impl Semantic {
-    /// The derived `TokyoNight Night` tones, baked in as the infallible default
-    /// so sidebar resolution never fails even when the bundled catalog is
-    /// unreadable. `default_const_matches_bundled_default` keeps these in
-    /// lockstep with the catalog; the CLI palette (`cli::render`) styles its
-    /// output from these same tones.
+    /// The derived `TokyoNight Night` tones, written out by hand so
+    /// `default_const_matches_bundled_default` can prove the derivation still
+    /// reproduces the bundled catalog's default scheme. Production resolves the
+    /// same tones from that embedded catalog instead
+    /// ([`crate::theme`]'s fallback to `explicit_scheme(DEFAULT_SCHEME)`), so
+    /// this mirror is a test fixture.
+    #[cfg(test)]
     pub const DEFAULT: Self = Self {
         good: (0x9e, 0xce, 0x6a),
         warn: (0xe0, 0xaf, 0x68),
