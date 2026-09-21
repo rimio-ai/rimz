@@ -214,15 +214,19 @@ impl ConfigEditor {
         Ok(true)
     }
 
+    /// Write the shipped template for each file. Without `force` a file that
+    /// already exists is left alone, so a bootstrap fills the gaps a user left
+    /// rather than skipping the whole set. Reports whether anything was written.
     pub fn write_defaults(&self, force: bool) -> Result<bool> {
-        let files = self.files.ordered();
-        if !force && files.iter().any(|file| file.path().exists()) {
-            return Ok(false);
-        }
-        for file in files {
+        let mut wrote = false;
+        for file in self.files.ordered() {
+            if !force && file.path().exists() {
+                continue;
+            }
             write(file.path(), file.template().as_bytes())?;
+            wrote = true;
         }
-        Ok(true)
+        Ok(wrote)
     }
 
     pub fn merge_defaults(&self) -> Result<MergeReport> {

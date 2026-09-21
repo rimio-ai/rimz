@@ -21,7 +21,7 @@ fn explicit_file_registry_preserves_path_and_template_order() {
 }
 
 #[test]
-fn config_editor_non_force_defaults_write_nothing_when_one_file_exists() {
+fn config_editor_non_force_defaults_fill_the_gaps_beside_an_existing_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let files = MachineConfigFiles::from_paths(
         dir.path().join("config.toml"),
@@ -29,12 +29,27 @@ fn config_editor_non_force_defaults_write_nothing_when_one_file_exists() {
     );
     let editor = ConfigEditor::new(files);
     let existing = editor.files().ordered()[2].path().to_path_buf();
-    std::fs::write(&existing, "# existing agents config\n[agents]\n").expect("write agents config");
+    let kept = "# existing loop config\n[tasks]\n";
+    std::fs::write(&existing, kept).expect("write loop config");
 
-    assert!(!editor.write_defaults(false).expect("write defaults"));
+    assert!(editor.write_defaults(false).expect("write defaults"));
     for file in editor.files().ordered() {
-        assert_eq!(file.path().exists(), file.path() == existing);
+        assert!(
+            file.path().exists(),
+            "{} was not written",
+            file.path().display()
+        );
     }
+    assert_eq!(
+        std::fs::read_to_string(&existing).expect("read kept file"),
+        kept,
+        "an existing file must survive the bootstrap untouched"
+    );
+
+    assert!(
+        !editor.write_defaults(false).expect("write defaults again"),
+        "a complete set writes nothing"
+    );
 }
 
 #[test]
