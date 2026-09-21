@@ -216,6 +216,13 @@ pub(super) fn normalize_model(model: String) -> String {
     }
 }
 
+/// Deserialize an optional object, treating any inner failure as absence.
+///
+/// Deliberately not `transcript_fs::deserialize_optional_object_lossy`: that
+/// visitor propagates an inner error, while this swallows it. Cursor's
+/// statusline is the more tolerant rule because `CurrentUsage` carries aliases
+/// for two of its fields, so a payload spelling both a field and its alias
+/// would otherwise fail the whole parse and drop the statusline context.
 fn deserialize_optional_object_lossy<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
