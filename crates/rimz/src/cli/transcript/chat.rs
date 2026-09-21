@@ -39,6 +39,7 @@ pub(super) fn render_entry_for_flip(
             from,
             to: None,
             at: Some(flip.at),
+            delivered_at: None,
             text: flip.note.clone().unwrap_or_default(),
             message_id: None,
             reply_to: Vec::new(),
@@ -64,69 +65,39 @@ pub(super) fn chat_entry_for_log_entry(
     let receiver = handle_for(entry, identities, include_channel);
     let message_id = entry.message_id.as_ref().map(ToString::to_string);
     let reply_to = entry.reply_to.iter().map(ToString::to_string).collect();
-    match entry.entry {
-        TranscriptKind::Prompt => ChatLine {
-            from: "user".to_owned(),
-            to: Some(receiver),
-            at: Some(entry.at),
-            text: entry.text.clone(),
-            message_id,
-            reply_to,
-            error: false,
-            questions: entry.questions.clone(),
-            answers: entry.answers.clone(),
-            stage: None,
+    let (from, to) = match entry.entry {
+        TranscriptKind::Prompt => ("user".to_owned(), Some(receiver)),
+        TranscriptKind::Message | TranscriptKind::SubagentReport | TranscriptKind::Wait => (
+            entry.from.clone().unwrap_or_else(|| "user".to_owned()),
+            Some(receiver),
+        ),
+        TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => (receiver, None),
+        TranscriptKind::Answer => (
+            entry.from.clone().unwrap_or_else(|| "answered".to_owned()),
+            Some(receiver),
+        ),
+    };
+    let error = entry.entry == TranscriptKind::Error;
+    ChatLine {
+        from,
+        to,
+        at: Some(entry.enqueued_at.unwrap_or(entry.at)),
+        delivered_at: entry.enqueued_at.map(|_| entry.at),
+        text: entry.text.clone(),
+        message_id,
+        reply_to,
+        error,
+        questions: if error {
+            Vec::new()
+        } else {
+            entry.questions.clone()
         },
-        TranscriptKind::Message | TranscriptKind::SubagentReport | TranscriptKind::Wait => {
-            ChatLine {
-                from: entry.from.clone().unwrap_or_else(|| "user".to_owned()),
-                to: Some(receiver),
-                at: Some(entry.at),
-                text: entry.text.clone(),
-                message_id,
-                reply_to,
-                error: false,
-                questions: entry.questions.clone(),
-                answers: entry.answers.clone(),
-                stage: None,
-            }
-        }
-        TranscriptKind::Assistant | TranscriptKind::Ask => ChatLine {
-            from: receiver,
-            to: None,
-            at: Some(entry.at),
-            text: entry.text.clone(),
-            message_id,
-            reply_to,
-            error: false,
-            questions: entry.questions.clone(),
-            answers: entry.answers.clone(),
-            stage: None,
+        answers: if error {
+            Vec::new()
+        } else {
+            entry.answers.clone()
         },
-        TranscriptKind::Error => ChatLine {
-            from: receiver,
-            to: None,
-            at: Some(entry.at),
-            text: entry.text.clone(),
-            message_id,
-            reply_to,
-            error: true,
-            questions: Vec::new(),
-            answers: Vec::new(),
-            stage: None,
-        },
-        TranscriptKind::Answer => ChatLine {
-            from: entry.from.clone().unwrap_or_else(|| "answered".to_owned()),
-            to: Some(receiver),
-            at: Some(entry.at),
-            text: entry.text.clone(),
-            message_id,
-            reply_to,
-            error: false,
-            questions: entry.questions.clone(),
-            answers: entry.answers.clone(),
-            stage: None,
-        },
+        stage: None,
     }
 }
 
@@ -155,6 +126,15 @@ pub(super) fn render_handle(base: &str, channel: Option<&str>, include_channel: 
 }
 
 pub(super) const GROUP_WINDOW_SECS: i64 = 5 * 60;
+const DELIVERY_STAMP_SECS: i64 = 60;
+const TIME_FORMAT: &str = "%H:%M";
+const DATED_TIME_FORMAT: &str = "%a, %b %-d %Y · %H:%M";
+
+pub(super) fn delivery_stamp(chat: &ChatLine) -> Option<jiff::Timestamp> {
+    let at = chat.at?;
+    chat.delivered_at
+        .filter(|delivered| delivered.duration_since(at).as_secs() >= DELIVERY_STAMP_SECS)
+}
 
 #[derive(Default)]
 pub(super) struct BrandColors {
@@ -282,15 +262,17 @@ pub(super) fn render_display_chat_to(
             last_group = None;
         }
         let is_ask = entry.kind() == Some(TranscriptKind::Ask);
-        let continuation = last_group.as_ref().is_some_and(|group| {
-            if is_ask {
-                group.matches_without_window(display, grouped, entry_date)
-            } else if entry.is_stage() {
-                group.matches_sender(display, grouped, entry_date)
-            } else {
-                group.matches(display, grouped, entry_date)
-            }
-        });
+        let shows_delivery = delivery_stamp(&entry.chat).is_some();
+        let continuation = !shows_delivery
+            && last_group.as_ref().is_some_and(|group| {
+                if is_ask {
+                    group.matches_without_window(display, grouped, entry_date)
+                } else if entry.is_stage() {
+                    group.matches_sender(display, grouped, entry_date)
+                } else {
+                    group.matches(display, grouped, entry_date)
+                }
+            });
         let suppress_ask_context = is_ask
             && continuation
             && previous_entry.is_some_and(|previous| {
@@ -346,7 +328,7 @@ pub(super) fn render_display_chat_to(
             )?;
             write_thread_lines(out, &buffer)?;
         }
-        if is_ask {
+        if is_ask || shows_delivery {
             last_group = None;
         } else {
             last_group = Some(GroupState::new(display, grouped, entry_date));
@@ -581,14 +563,26 @@ pub(super) fn write_entry_header(
     if let Some(at) = entry.chat.at {
         header.push_str("  ");
         let format = if show_date {
-            "%a, %b %-d %Y · %H:%M"
+            DATED_TIME_FORMAT
         } else {
-            "%H:%M"
+            TIME_FORMAT
         };
         header.push_str(&render::paint(
             render::palette::faint(),
             &at.to_zoned(tz.clone()).strftime(format).to_string(),
         ));
+        if let Some(delivered) = delivery_stamp(&entry.chat) {
+            let delivered = delivered.to_zoned(tz.clone());
+            let format = if delivered.date() != at.to_zoned(tz.clone()).date() {
+                DATED_TIME_FORMAT
+            } else {
+                TIME_FORMAT
+            };
+            header.push_str(&render::paint(
+                render::palette::faint(),
+                &format!(" · delivered {}", delivered.strftime(format)),
+            ));
+        }
     }
     writeln!(out, "{header}")?;
     Ok(())
