@@ -25,7 +25,7 @@ pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
 
 pub use pane_probe::{
     HostedAgentProcess, InPaneAgentProcess, hosted_agent_process_for_root,
-    in_pane_agent_process_for_root, in_pane_agent_start,
+    in_pane_agent_process_for_root,
 };
 pub(crate) use pane_probe::{
     command_starts_with_elevation_wrapper, elevated_in_pane_agent, hosted_agent_absent_under_root,
