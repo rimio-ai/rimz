@@ -56,7 +56,7 @@ impl Default for NotificationsPrefs {
 }
 
 impl NotificationsPrefs {
-    pub fn command(&self) -> Option<&str> {
+    pub(crate) fn command(&self) -> Option<&str> {
         self.command
             .as_deref()
             .map(str::trim)
