@@ -87,7 +87,7 @@ upward-dependencies = ["address"]
 # One compaction composer picks the brief for the agent's seat.
 # Host-mode skill links: plan/apply, plan accessors and reports are shared by launch_plan, exec, explain and uninstall.
 # The Markdown definition loader reads model catalog, defaults and tool rendering.
-surface-budget = 869
+surface-budget = 865
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -3359,7 +3359,7 @@ reason = "The bundle every adapter implements and AgentDefinition holds as a tra
 [[verdict]]
 kind = "item"
 key = "agents::hook_types::context_agent_id"
-reason = "Held adapter unit tests call it (adapters/opencode/tests.rs:269,292, adapters/antigravity/tests.rs:204); this pass may not edit those files, so the widest narrowing that strands no test is the current reach. Same for observed_context and worktree_path (pass 24b)."
+reason = "The binary crate calls it on the publicly re-exported HookOutput (cli/hooks/lifecycle/mod.rs:148,537,542, context.rs:59,441), so pub is its floor; worktree_path has the same floor (cli/hooks/lifecycle/transcript.rs:25,109). The adapter tests under agents/adapters are descendants and floor nothing (pass 24b, corrected in review)."
 
 [[verdict]]
 kind = "item"
@@ -3443,8 +3443,8 @@ reason = "Carried by public RuntimeControlReadiness (runtime_control.rs:7-12) an
 
 [[verdict]]
 kind = "item"
-key = "agents::version::VersionParseErr"
-reason = "The associated error of the public FromStr for CliVersion (version.rs:48-75) (pass 24b)."
+key = "agents::petname::valid_agent_name"
+reason = "The binary crate calls it at cli/paths.rs:66 and cli/hooks/lifecycle/identity.rs:57, so pub is its floor; the store and harness sites inside the library would be served by pub(crate) (pass 24b, added in review)."
 
 [[verdict]]
 kind = "item"
