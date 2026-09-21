@@ -221,7 +221,7 @@ fn render_home(w: &mut impl Write, home: &Home, tally: &mut Tally) -> io::Result
                 tally,
                 Health::Info,
                 format!(
-                    "superseded by RIMZ_HOME; profiles, teams, and skills read from {}",
+                    "overrides RIMZ_HOME; profiles, teams, and skills read from {}",
                     home_relative(agents_home)
                 ),
             ),

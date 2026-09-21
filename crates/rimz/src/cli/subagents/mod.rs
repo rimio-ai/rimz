@@ -52,7 +52,7 @@ enum SubagentsSubcmd {
         /// Child names; at least one.
         #[arg(value_name = "NAME")]
         names: Vec<String>,
-        /// Return when the first named child finishes; print its name.
+        /// Return when the first named child finishes; print its result.
         #[arg(long, conflicts_with = "stream")]
         any: bool,
         /// Stop waiting after this duration.
