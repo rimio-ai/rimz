@@ -180,7 +180,7 @@ rimz reload [--repair]
 
 It never starts a stopped session, creates or closes a pane, or touches an agent process. If the new build fails to start, each sidebar keeps running on its old build.
 
-A room whose sidebar pane was closed has nothing to reload, and the report stays silent about it: that room still counts as a live session, so not even `No running sidebars to reload.` appears. [`rimz sidebar repair`](#repair-sidebars), or `rimz reload --repair`, is what mounts the pane again.
+A room whose sidebar pane was closed has nothing to reload, so the report names it and the verb that fixes it: ``1 room with no sidebar; mount it again with `rimz reload --repair`.`` That room still counts as a live session, so `No running sidebars to reload.` never covers this case. `--repair`, or [`rimz sidebar repair`](#repair-sidebars) on its own, is what mounts the pane again; with `--repair` already passed the line is left out, since the repair runs next.
 
 The report prints a line per non-zero count:
 
@@ -193,6 +193,7 @@ The report prints a line per non-zero count:
 | `Upgraded N presence plugins.`, `Reconciled N presence plugins.`, `N presence plugins already current.` | The Zellij presence plugin in each room. |
 | `Reloaded N stats dashboards.` | Held dashboards restarted. |
 | `Reaped N orphaned sidebar processes.`, `Swept N leftover processes from stopped sessions.` | Cleanup. |
+| ``N rooms with no sidebar; mount it again with `rimz reload --repair`.`` | Live rooms publishing no sidebar at all. Suppressed under `--repair`, which runs that repair next. |
 | `Restarted the shared web daemon.` | The web daemon was running and restarted. |
 | `No running sidebars to reload.` | No live room, no stopped session to sweep, and no dashboard. A second line suggests `rimz start` or `rimz attach`. |
 
