@@ -166,7 +166,12 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
 }
 
 /// Advance each parent row's *displayed* `last_activity` to its freshest
-/// child's. Display-only — the rollup's own `last_activity` is untouched.
+/// child's, so the stall check, the inactive/archive sinks, ranking, and unread
+/// all read a delegating parent as alive while its children work. Display-only
+/// — the rollup's own `last_activity` is untouched. The pre-fold clock is
+/// recorded on the raised row as `own_last_activity`, which the card's
+/// cache-age pin reads: the parent's provider session is quiet for the whole
+/// wait even though the delegated work is not.
 pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
     for row in rows.iter_mut() {
         let Some(agent) = row.as_agent() else {
@@ -182,12 +187,20 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
         if crate::agents::is_turn_dead(status, agent.context.as_ref(), row.last_activity) {
             continue;
         }
-        if let Some(freshest) = agent
+        let Some(freshest) = agent
             .current_sub_agents()
             .map(|child| child.last_activity)
             .max()
-        {
-            row.last_activity = row.last_activity.max(freshest);
+        else {
+            continue;
+        };
+        if freshest <= row.last_activity {
+            continue;
+        }
+        let own = row.last_activity;
+        row.last_activity = freshest;
+        if let Some(agent) = row.as_agent_mut() {
+            agent.own_last_activity = Some(own);
         }
     }
 }

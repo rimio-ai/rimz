@@ -172,6 +172,39 @@ fn agent_card_without_active_time_field_deserializes_as_unknown() {
 }
 
 #[test]
+fn own_last_activity_falls_back_to_the_row_clock_and_stays_off_an_untouched_card() {
+    let mut row = SidebarRow {
+        id: "agent:s1".to_owned(),
+        name: "claude".to_owned(),
+        pane: None,
+        worktree_path: Some("/repo/main".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        channel: None,
+        unread: false,
+        inactive: false,
+        archived: false,
+        attention_score: 0,
+        last_activity: row_time(),
+        card: RowCard::Agent(Box::default()),
+    };
+
+    // A row the child fold never raised keeps the old shape on the wire, and
+    // its cache clock is the row clock.
+    let value = serde_json::to_value(&row).unwrap();
+    assert!(value.get("own_last_activity").is_none());
+    assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), row);
+    assert_eq!(row.own_last_activity(), row_time());
+
+    let own = row_time() - std::time::Duration::from_secs(720);
+    row.as_agent_mut().unwrap().own_last_activity = Some(own);
+    let value = serde_json::to_value(&row).unwrap();
+    assert_eq!(value["own_last_activity"], serde_json::json!(own));
+    let decoded: SidebarRow = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.own_last_activity(), own);
+    assert_eq!(decoded, row);
+}
+
+#[test]
 fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
     let mut agent = SidebarRow {
         id: "agent:s1".to_owned(),

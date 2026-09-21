@@ -233,3 +233,35 @@ fn different_pane_root_does_not_fold_onto_the_primary() {
         Some(10)
     );
 }
+
+#[test]
+fn same_pane_fork_clock_counts_as_the_bound_row_own_clock() {
+    // The forks fold runs ahead of the child fold, so a fork's activity lands
+    // in the bound row's *own* clock — the pane's conversation is what the user
+    // would prompt next, and its cache is the one that would be re-read. Only
+    // the children's activity is separated out.
+    let primary = agent("claude", "primary", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(1_200);
+    let fork = agent("claude", "fork", AgentStatus::Success, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(600);
+    let child = child_state("primary", "child-1", AgentStatus::Running, 10);
+
+    let snapshot = room(vec![primary, fork, child])
+        .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
+    let primary = row(&snapshot, "primary");
+
+    assert_eq!(
+        primary.last_activity,
+        ago(10),
+        "the child's clock folds onto the row clock"
+    );
+    assert_eq!(
+        primary.own_last_activity(),
+        ago(600),
+        "the fork's clock is the bound row's own"
+    );
+}

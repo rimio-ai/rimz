@@ -57,6 +57,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             context_severity: None,
             estimated_active_secs: agent.estimated_active_secs,
             registered_at: agent.registered_at,
+            own_last_activity: None,
             sub_agents: Vec::new(),
             compacting: agent.is_compacting(now),
             compaction_count: agent.compaction_count,
