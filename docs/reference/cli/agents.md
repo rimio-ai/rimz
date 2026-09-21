@@ -387,7 +387,7 @@ The scaffold holds the manifest, a setup guide, the canonical forwarding shim, a
 ```sh
 rimz agents                              # root-agent cards, current channel
 rimz agents '#auth-refresh'              # one lane's cards
-rimz agents list --all                   # every channel in the room
+rimz agents --all                        # every channel in the room
 rimz agents show swift-otter --capture   # full report plus the pane's visible text
 rimz agents logs swift-otter -f          # follow the transcript
 rimz agents history swift-otter -n 10    # per-turn tokens, cost, and outcome
@@ -421,7 +421,7 @@ rimz agents compact @coder               # compact context at the next turn boun
 
 #### `list`
 
-`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. It needs a live room: enter one with `rimz start` or `rimz attach`.
+`rimz agents list [SCOPE]` prints the room's pane-backed root agents as cards in attention order, scoped to the current channel. `SCOPE` (`#channel`, worktree, branch, or directory name) or `-w, --worktree` selects one lane, and `--all` covers every channel; the three conflict. Bare `rimz agents` takes the same `SCOPE`, `-w`, `--all`, and `--json`. It needs a live room: enter one with `rimz start` or `rimz attach`.
 
 ```console
 $ rimz agents

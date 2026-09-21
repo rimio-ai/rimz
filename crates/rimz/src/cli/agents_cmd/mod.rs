@@ -126,6 +126,9 @@ pub struct AgentsArgs {
     command: Option<AgentsSubcmd>,
     #[command(flatten)]
     pub(crate) launch: AgentLaunchArgs,
+    /// Include every lane, not just the current channel (bare `agents`).
+    #[arg(long, conflicts_with_all = ["spec", "worktree"])]
+    all: bool,
     /// Print JSON for `list` and bare `agents` card output.
     #[arg(long)]
     json: bool,
@@ -596,6 +599,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     let AgentsArgs {
         command,
         launch,
+        all,
         json,
     } = args;
     match command {
@@ -731,13 +735,14 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     let args = AgentsArgs {
         command: None,
         launch,
+        all,
         json,
     };
     if args.launch.spec.is_none() {
         reject_launch_flags_without_spec(&args)?;
         return list_agents(
             args.json,
-            false,
+            args.all,
             args.launch.cohort.worktree.clone(),
             globals,
         );
@@ -766,6 +771,7 @@ fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -
     let args = AgentsArgs {
         command: None,
         launch,
+        all: false,
         json,
     };
     let loop_task = rimz::harness::schedule::runner::loop_check_task();
