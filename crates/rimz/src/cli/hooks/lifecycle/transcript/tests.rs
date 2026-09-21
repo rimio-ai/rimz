@@ -988,6 +988,7 @@ fn in_flight_turn_openers_keep_origin_causality_and_spend() {
             agent,
             &started,
             &sections,
+            &[],
             false,
             Some(dir.path()),
         );
@@ -1017,6 +1018,7 @@ fn in_flight_turn_openers_keep_origin_causality_and_spend() {
             agent,
             &started,
             &typed,
+            &[],
             false,
             Some(dir.path()),
         );

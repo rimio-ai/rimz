@@ -84,6 +84,7 @@ pub(super) fn record_user_input_for_lifecycle(
     agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
     sections: &[rimz::store::message::PromptSection<'_>],
+    delivered: &[rimz::store::message::MessageRecord],
     supervised: bool,
     state_root: Option<&std::path::Path>,
 ) {
@@ -94,18 +95,25 @@ pub(super) fn record_user_input_for_lifecycle(
     {
         return;
     }
-    // Narrow only where the classifier had text to judge. A turn start with no
-    // prompt (an antigravity transcript read that found nothing, a plugin that
-    // omits the optional `prompt`) says nothing about who opened the turn, and
-    // the ledger's asymmetry decides the default: a missing record leaves the
-    // five-hour window shut, while a duplicate resolves to the same boundary
-    // in `spending::aggregate::burst_cutoff`.
-    if !sections.is_empty()
-        && !sections.iter().any(|section| {
+    // The turn opens the spend window unless the evidence says something other
+    // than the human opened it. Classified sections are that evidence when the
+    // adapter reported prompt text; when it reported none — antigravity with an
+    // unreadable transcript, a plugin that omits the optional `prompt` — the
+    // records this turn start confirmed are, because a delivery is positive
+    // proof an agent or the harness opened the turn. With neither, the turn is
+    // the human's, as it was before the classifier.
+    let opened_by_human = if sections.is_empty() {
+        delivered.is_empty()
+            || delivered
+                .iter()
+                .any(rimz::store::message::MessageRecord::is_user_input)
+    } else {
+        sections.iter().any(|section| {
             section.origin == rimz::store::message::SectionOrigin::Human
                 && section.record.is_none_or(|record| record.is_user_input())
         })
-    {
+    };
+    if !opened_by_human {
         return;
     }
     let record = rimz::agents::spending::user_input::UserInputRecord {

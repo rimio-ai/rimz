@@ -18,7 +18,7 @@ fn record_user_input_for_lifecycle(
         &[],
     );
     super::record_user_input_for_lifecycle(
-        workspace, agent, recorded, &sections, supervised, state_root,
+        workspace, agent, recorded, &sections, delivered, supervised, state_root,
     );
 }
 
@@ -147,7 +147,7 @@ fn turn_started_records_only_unsupervised_user_inputs() {
         &workspace,
         agent,
         &mixed,
-        &[agent_message],
+        std::slice::from_ref(&agent_message),
         false,
         Some(dir.path()),
     );
@@ -163,7 +163,7 @@ fn turn_started_records_only_unsupervised_user_inputs() {
         human.clone().with_automated(true),
         rimz::store::message::MessageRecord {
             gate: rimz::store::message::DeliveryGate::Resume,
-            ..human
+            ..human.clone()
         },
     ] {
         record_user_input_for_lifecycle(
@@ -176,20 +176,31 @@ fn turn_started_records_only_unsupervised_user_inputs() {
         );
     }
     // A turn start whose prompt the adapter could not read classifies into no
-    // sections at all, and still opens the spend window: antigravity with an
-    // unreadable transcript and a plugin that omits the optional prompt both
-    // reach here on a genuine human turn.
-    super::record_user_input_for_lifecycle(
-        &workspace,
-        agent,
-        &turn_started(),
-        &[],
-        false,
-        Some(dir.path()),
-    );
+    // sections at all — antigravity with an unreadable transcript, a plugin
+    // that omits the optional prompt. What it delivered decides: nothing
+    // confirmed leaves the turn the human's, while a confirmed agent or
+    // harness record is proof that something else opened it.
+    for (delivered, opens_the_window) in [
+        (Vec::new(), true),
+        (vec![agent_message.clone()], false),
+        (vec![human.clone()], true),
+    ] {
+        let before = rimz::agents::spending::user_input::load_in(dir.path()).len();
+        super::record_user_input_for_lifecycle(
+            &workspace,
+            agent,
+            &turn_started(),
+            &[],
+            &delivered,
+            false,
+            Some(dir.path()),
+        );
+        let after = rimz::agents::spending::user_input::load_in(dir.path()).len();
+        assert_eq!(after > before, opens_the_window, "delivered: {delivered:?}");
+    }
 
     let records = rimz::agents::spending::user_input::load_in(dir.path());
-    assert_eq!(records.len(), 4);
+    assert_eq!(records.len(), 5);
     assert!(
         records
             .iter()

@@ -228,6 +228,7 @@ pub(super) fn handle_lifecycle_hook(
             agent,
             recorded,
             &sections,
+            &delivered,
             env_run_id().is_some(),
             user_input_state_root(store),
         );
