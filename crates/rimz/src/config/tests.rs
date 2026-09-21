@@ -1,3 +1,6 @@
+use super::agents::AgentsConfig;
+use super::mux::TmuxSetClipboard;
+use super::web::WebPrefs;
 use super::*;
 use crate::ids::MuxName;
 use std::num::NonZeroU16;

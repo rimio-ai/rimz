@@ -1,8 +1,7 @@
 use super::*;
 use crate::agents::PermissionMode;
-use crate::config::{
-    AgentsConfig, CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig,
-};
+use crate::config::agents::AgentsConfig;
+use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
 use std::collections::BTreeMap;
 use tempfile::tempdir;
 
@@ -348,7 +347,7 @@ fn project_tasks_validate_budget_fields() {
     assert!(matches!(
         err,
         EffectiveConfigErr::Tasks {
-            source: ProjectTasksErr::Budget(crate::config::TaskBudgetError::MissingRunBudget { ref task }),
+            source: ProjectTasksErr::Budget(crate::config::loop_::TaskBudgetError::MissingRunBudget { ref task }),
             ..
         } if task == "wait"
     ));

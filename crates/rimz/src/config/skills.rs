@@ -139,13 +139,16 @@ mod tests {
 
     #[test]
     fn isolation_defaults_to_host_and_round_trips() {
-        let default: crate::config::AgentsConfig = toml::from_str("").unwrap();
+        let default: crate::config::agents::AgentsConfig = toml::from_str("").unwrap();
         assert_eq!(default.isolation, crate::config::Isolation::Host);
-        let sandbox: crate::config::AgentsConfig = toml::from_str("isolation = 'sandbox'").unwrap();
+        let sandbox: crate::config::agents::AgentsConfig =
+            toml::from_str("isolation = 'sandbox'").unwrap();
         assert_eq!(sandbox.isolation.to_string(), "sandbox");
         assert_eq!(
-            toml::from_str::<crate::config::AgentsConfig>(&toml::to_string(&sandbox).unwrap())
-                .unwrap(),
+            toml::from_str::<crate::config::agents::AgentsConfig>(
+                &toml::to_string(&sandbox).unwrap()
+            )
+            .unwrap(),
             sandbox
         );
     }
