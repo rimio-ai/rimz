@@ -67,6 +67,41 @@ fn submitted_sections_cover_every_sender_and_body() {
 }
 
 #[test]
+fn identical_in_flight_records_are_each_matched_once() {
+    let system = |text: &str| {
+        let mut record = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+            .with_sender(MessageSender::System);
+        record.text = text.to_owned();
+        record.status = MessageStatus::Sent;
+        record
+    };
+    let first = system("/compact");
+    let second = system("/compact");
+    // Both headerless sections an aligned batch can leave behind — the
+    // composer text before it and after it — carry the same text here.
+    let mut aligned = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
+        .with_sender(agent_sender("wire", None));
+    aligned.text = "queued".to_owned();
+    let sections = classify_submitted_prompt(
+        "/compact\nType: AGENT_MESSAGE\nFrom: @wire\nContent:\nqueued/compact",
+        &[&aligned],
+        &[&first, &second],
+    );
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| (section.text.as_str(), section.record.map(|r| &r.message_id)))
+            .collect::<Vec<_>>(),
+        vec![
+            ("/compact", Some(&first.message_id)),
+            ("queued", Some(&aligned.message_id)),
+            ("/compact", Some(&second.message_id)),
+        ],
+        "a consumed record cannot answer for a second section"
+    );
+}
+
+#[test]
 fn submitted_sections_preserve_headers_and_composer_residue() {
     let mut record = delivery_message(1, &agent("sess", None), DeliveryGate::Done, None)
         .with_sender(agent_sender("stored", None));
