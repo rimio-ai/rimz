@@ -386,6 +386,9 @@ impl NotificationState {
 }
 
 pub fn spawn_notify_handlers(prefs: &NotificationsPrefs, notification: &Notification) -> usize {
+    if !prefs.enabled {
+        return 0;
+    }
     let vars = notification_template_vars(notification);
     let mut spawned = 0;
     for handler in prefs.effective_handlers() {

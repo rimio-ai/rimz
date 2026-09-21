@@ -77,7 +77,8 @@ pub enum NotifyTraceEvent {
         recheck_unread: bool,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         panes: Vec<PaneId>,
-        /// `no_own_view` | `daemon_view` | `pane_not_in_view` | `not_unread`.
+        /// `notifications_disabled` | `no_own_view` | `daemon_view` |
+        /// `pane_not_in_view` | `not_unread`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         suppressed: Option<String>,
     },

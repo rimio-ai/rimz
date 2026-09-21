@@ -87,7 +87,7 @@ RIMZ_NOTIFY_KIND=waiting \
   sh -c "$HOME/.rimz/approve-reads.sh"
 ```
 
-That proves your script and your push route. It does not prove the `when` clause or the templates, which is what the second check covers. From inside the room, `rimz sidebar notify-test @coder` builds a real notification for a live card and sends it down the real path, handlers included; `--kind <kind>` picks the kind to simulate (default `waiting`) and `--no-command` skips the handlers to test only the banner and the bell. It is a diagnostic rather than a daily verb, so `rimz sidebar --help` leaves it out.
+That proves your script and your push route. It does not prove the `when` clause or the templates, which is what the second check covers. From inside the room, `rimz sidebar notify-test @coder` builds a real notification for a live card and sends it down the real path, handlers included; `--kind <kind>` picks the kind to simulate (default `waiting`) and `--no-command` skips the handlers to test only the banner and the bell. The command refuses while `[notifications] enabled = false`, with or without `--no-command`; set `enabled = true` in the file shown by `rimz config path` first. It is a diagnostic rather than a daily verb, so `rimz sidebar --help` leaves it out.
 
 ### Claude and Codex push on their own
 
@@ -135,7 +135,7 @@ Leave what you did not decide. Whatever the handler ignores stays `? waiting`, r
 
 Everything above is what RimZ does untouched, and `[notifications]` in `~/.rimz/config.toml` changes it.
 
-Four keys quiet it. `sound = "off"` stops the bell and the tab marker, `desktop = "off"` stops the banner, `remind_secs = 0` stops the 60-second nudge, and `enabled = false` stops all of that and the handlers with it, leaving the unread cards in the sidebar untouched. One thing outlives it: a scheduled task that disables itself still fires `loop_disabled` handlers.
+Four keys quiet it. `sound = "off"` stops the bell and the tab marker, `desktop = "off"` stops the banner, `remind_secs = 0` stops the 60-second nudge, and `enabled = false` stops all of that and every handler, including `loop_disabled`, leaving the unread cards in the sidebar untouched.
 
 Two widen it. `triggers = ["waiting", "failed", "success", "paused"]` adds the two statuses that stay quiet by default, so a finished run pings you too, and `suppress_focused = false` pushes even for the pane you are watching.
 

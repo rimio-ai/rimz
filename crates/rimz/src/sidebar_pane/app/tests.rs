@@ -826,6 +826,54 @@ fn notification_targeting_matches_mux_reachability_rules() {
 }
 
 #[test]
+fn disabled_terminal_notifications_write_nothing_and_trace_suppression() {
+    use super::notify::{BellNotice, emit_terminal_notification};
+
+    let ws = workspace();
+    let dir = tempfile::tempdir().unwrap();
+    let diag =
+        crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
+    let mut config = fixtures::serve_config(&ws);
+    config.notification_prefs.enabled = false;
+    config.notification_prefs.desktop = crate::config::DesktopNotificationMode::Osc;
+    config.notification_prefs.sound = crate::config::NotificationSoundMode::Bell;
+    let mut snap = snapshot(&ws);
+    let work = PaneId::from_parts(MuxName::Zellij, "terminal_11");
+    snap.own_view = Some(crate::store::snapshot::SidebarOwnView {
+        sibling_count: 1,
+        working_pane_ids: vec![work.clone()],
+        own_view_is_daemon: false,
+    });
+    let mut output = Vec::new();
+    let backend = CrosstermBackend::new(&mut output);
+    let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 12));
+    let mut terminal =
+        Terminal::with_options(backend, ratatui::TerminalOptions { viewport }).unwrap();
+    assert!(
+        !emit_terminal_notification(
+            &config,
+            &mut terminal,
+            &snap,
+            BellNotice {
+                title: "Test title",
+                body: "Test body",
+                panes: std::slice::from_ref(&work),
+                recheck_unread: false,
+                kind: "waiting",
+            },
+            &diag,
+        )
+        .unwrap()
+    );
+    drop(terminal);
+    assert!(output.is_empty());
+    let trace = std::fs::read_to_string(dir.path().join("notify.log.jsonl")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&trace).unwrap();
+    assert_eq!(record["event"]["fired"], false);
+    assert_eq!(record["event"]["suppressed"], "notifications_disabled");
+}
+
+#[test]
 fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
     use crate::agents::AgentStatus;
 
