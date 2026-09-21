@@ -9,7 +9,7 @@ use tracing::{debug, error};
 use crate::ids::AgentSessionId;
 
 /// The outcome of resolving a subagent event's identity.
-pub(crate) enum SubagentIdentity {
+pub(super) enum SubagentIdentity {
     /// A usable child id distinct from its parent — the only case that yields a
     /// child entity.
     Resolved {
@@ -28,7 +28,7 @@ pub(crate) enum SubagentIdentity {
 /// `child_id.or_else(|| parent_id)` fallback that silently keyed a child onto
 /// its parent. A quarantined identity is logged once with the raw payload so
 /// the anomaly is traceable.
-pub(crate) fn resolve_subagent_identity(
+pub(super) fn resolve_subagent_identity(
     kind: &str,
     event_name: &str,
     child_id: Option<&str>,
@@ -56,7 +56,7 @@ pub(crate) fn resolve_subagent_identity(
 }
 
 /// Validate the shared child/parent identity rule without logging provider-local discovery failures.
-pub(crate) fn validated_subagent_identity(
+pub(super) fn validated_subagent_identity(
     child_id: Option<&str>,
     parent_id: Option<&str>,
 ) -> Option<(AgentSessionId, AgentSessionId)> {
@@ -66,7 +66,7 @@ pub(crate) fn validated_subagent_identity(
 }
 
 /// The outcome of resolving a non-subagent (root-arm) event's identity.
-pub(crate) enum RootIdentity {
+pub(super) enum RootIdentity {
     /// A normal root event: key on the session id, no parent link.
     Root { agent_id: Option<AgentSessionId> },
     /// The event is stamped with a distinct child `agent_id` — it fired inside
@@ -83,7 +83,7 @@ pub(crate) enum RootIdentity {
 /// lives, shared by the adapters whose providers stamp `agent_id` on every
 /// in-subagent payload. A missing or session-equal `agent_id` is a normal root;
 /// quarantine stays `Subagent*`-only.
-pub(crate) fn resolve_root_identity(
+pub(super) fn resolve_root_identity(
     kind: &str,
     event_name: &str,
     agent_id: Option<&str>,

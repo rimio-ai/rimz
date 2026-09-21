@@ -91,9 +91,7 @@ use definition::{
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
 pub use hook_types::{HookOutput, HookReply, HookRouting};
-pub(crate) use identity::{
-    RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
-};
+use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};
 pub(crate) use lifecycle::step;
 pub use lifecycle::{
     AskKind, CONDITION_CHECKPOINT, DELIVERY_CHECKPOINT, LIFECYCLE_EVENT_VERSION, LifecycleEvent,
