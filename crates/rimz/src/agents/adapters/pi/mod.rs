@@ -61,8 +61,8 @@ use super::observation::{payload_context_pct, payload_has_context_observation};
 use super::pricing::PriceBook;
 use super::{
     AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, HookOutput, HookRouting,
-    Result, SubagentIdentity, TranscriptMessage, agent_config_path, non_empty_trimmed,
-    optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
+    Result, SanitizedPrompt, SubagentIdentity, TranscriptMessage, agent_config_path,
+    non_empty_trimmed, optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::transcript::AskQuestion;
 
@@ -536,7 +536,7 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+        observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
         observation.launch.model = parsed.model;
         observation.launch.effort = parsed.effort;
         observation.usage.context_pct = payload_context_pct(payload, None);

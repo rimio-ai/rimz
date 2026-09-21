@@ -43,7 +43,8 @@ use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
     AgentContext, AgentErr, AgentLifecycleObservation, HookOutput, HookRouting, Result,
-    SubagentIdentity, optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
+    SanitizedPrompt, SubagentIdentity, optional_payload_string, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -532,7 +533,7 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
         observation.transcript_path = optional_payload_string(payload, &["transcript_path"]);
         observation.parent_agent_id = parent_agent_id;
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+        observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
         observation.launch.model = parsed.model.clone();
         observation.launch.effort = parsed.effort;
         observation.usage.context_window = parsed

@@ -1243,7 +1243,7 @@ fn prompt_projection(
     } else {
         non_empty_string(observation.task.as_deref())
     };
-    let event_prompt = observation.prompt.clone();
+    let event_prompt = observation.prompt.as_deref().map(ToOwned::to_owned);
     let first_prompt = prior
         .and_then(|state| state.first_prompt.clone())
         .or_else(|| {

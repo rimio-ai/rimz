@@ -61,6 +61,21 @@ fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
     );
 }
 #[test]
+fn turn_start_sanitizes_the_transcript_prompt() {
+    let payload = with(&hook_payload(), [("invocationNum", json!(0))]);
+    for raw in
+        std::iter::once("a real request").chain(crate::agents::CONTROL_TAG_PREFIXES.iter().copied())
+    {
+        let decoded =
+            decode_lifecycle_fields("PreInvocation", &payload, |_, _| Some(raw.to_owned()));
+        assert_eq!(
+            decoded.lifecycle.unwrap().prompt.as_deref(),
+            (raw == "a real request").then_some(raw),
+        );
+    }
+}
+
+#[test]
 fn native_hooks_normalize_lifecycle() {
     let common = hook_payload();
     let tool = |mutates, edits| LifecycleSignal::ToolUsed {

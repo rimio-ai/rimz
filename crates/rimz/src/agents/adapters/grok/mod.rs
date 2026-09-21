@@ -25,8 +25,8 @@ use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
     AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError, FieldPatch,
     HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
-    LocalTokenPatch, RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TurnErrorClass,
-    TurnSettle, TurnSettleOutcome, non_empty_trimmed, sanitize_user_prompt,
+    LocalTokenPatch, RefreshTrigger, Result, SanitizedPrompt, SessionOrigin, TranscriptMessage,
+    TurnErrorClass, TurnSettle, TurnSettleOutcome, non_empty_trimmed,
 };
 use crate::ids::AgentSessionId;
 
@@ -427,7 +427,7 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
         }
         observation.worktree_path = worktree_path;
         observation.prompt = (canonical == "UserPromptSubmit")
-            .then(|| sanitize_user_prompt(parsed.prompt.as_deref()))
+            .then(|| SanitizedPrompt::new(parsed.prompt.as_deref()))
             .flatten();
         observation.task = is_subagent
             .then(|| {

@@ -35,8 +35,9 @@ use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
 use super::{
     AgentLifecycleObservation, AgentTurnError, HookOutput, HookRouting, Result, RootIdentity,
-    SessionOrigin, SubagentIdentity, TurnErrorClass, non_empty_trimmed, optional_payload_string,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    SanitizedPrompt, SessionOrigin, SubagentIdentity, TurnErrorClass, non_empty_trimmed,
+    optional_payload_string, resolve_root_identity, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -348,8 +349,8 @@ fn qwen_lifecycle(
     observation.prompt = (event_name == "UserPromptSubmit")
         .then(|| parse_user_prompt_submit(payload))
         .and_then(|value| {
-            sanitize_user_prompt(value.submitted_prompt.as_deref())
-                .or_else(|| sanitize_user_prompt(value.prompt.as_deref()))
+            SanitizedPrompt::new(value.submitted_prompt.as_deref())
+                .or_else(|| SanitizedPrompt::new(value.prompt.as_deref()))
         });
     observation.task = if let Some(subagent) = &subagent {
         subagent.common.agent_type.clone().or_else(|| {

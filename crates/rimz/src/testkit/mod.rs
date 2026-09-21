@@ -246,7 +246,7 @@ pub mod fleet {
         for i in 0..agents {
             let mut observation = registered_observation(i);
             observation.agent_id = Some(AgentSessionId::from(format!("history-{i}")));
-            observation.prompt = Some(prompt.clone());
+            observation.prompt = crate::agents::SanitizedPrompt::new(Some(&prompt));
             observation.transcript_path = Some(format!("/history/transcripts/history-{i}.jsonl"));
             event_log::append(
                 &paths.events_log,

@@ -84,7 +84,7 @@ use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr, AnswerStep,
     AskReply, FieldPatch, HookOutput, HookRouting, LifecycleRefreshCtx, LocalContextRefresh,
-    LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, Result, RootIdentity,
+    LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, Result, RootIdentity, SanitizedPrompt,
     SessionContextInput, SessionContextRefresh, SubagentIdentity, TranscriptMessage,
     non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
@@ -1716,7 +1716,7 @@ fn build_codex_observation(
         sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref())
     };
     observation.prompt =
-        sanitize_user_prompt(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+        SanitizedPrompt::new(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
     observation.transcript_path = transcript
         .path
         .map(|path| path.to_string_lossy().into_owned());

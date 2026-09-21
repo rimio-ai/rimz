@@ -31,8 +31,8 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh,
-    LocalContextRefreshCtx, LocalSessionObservation, RefreshTrigger, Result, TranscriptMessage,
-    TranscriptStat, optional_payload_string, sanitize_user_prompt,
+    LocalContextRefreshCtx, LocalSessionObservation, RefreshTrigger, Result, SanitizedPrompt,
+    TranscriptMessage, TranscriptStat, optional_payload_string, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 use serde_json::Value;
@@ -342,7 +342,7 @@ impl crate::agents::capabilities::HookCapability for KiroAdapter {
         if event_name == "UserPromptSubmit" {
             let prompt = optional_payload_string(payload, &["prompt"]);
             observation.task = sanitize_user_prompt(prompt.as_deref());
-            observation.prompt = sanitize_user_prompt(prompt.as_deref());
+            observation.prompt = SanitizedPrompt::new(prompt.as_deref());
         }
         if event_name == "Stop" {
             decoded.set_final_message(

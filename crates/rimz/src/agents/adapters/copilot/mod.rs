@@ -41,10 +41,10 @@ use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPol
 use super::observation::payload_has_context_observation;
 use super::{
     AgentLifecycleObservation, AgentTurnError, AskKind, HookOutput, HookRouting,
-    LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin,
-    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity,
-    SubagentSpawnInput, TranscriptMessage, TurnErrorClass, optional_payload_string,
-    resolve_subagent_identity, sanitize_user_prompt,
+    LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SanitizedPrompt,
+    SessionOrigin, SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput,
+    SubagentIdentity, SubagentSpawnInput, TranscriptMessage, TurnErrorClass,
+    optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -511,7 +511,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
         }
         if event_name == "userPromptSubmitted" {
             observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-            observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
+            observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
         }
         decoded.set_final_message(
             (event_name == "agentStop")

@@ -63,10 +63,10 @@ use super::observation::{payload_has_context_observation, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
     AgentHookClass, AgentLifecycleObservation, AgentTurnError, BackgroundShell,
-    BackgroundShellReport, HookOutput, HookRouting, Result, RootIdentity, SessionOrigin,
-    SpawnedSubagent, SubagentIdentity, SubagentObservation, SubagentSpawnInput, TranscriptMessage,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    BackgroundShellReport, HookOutput, HookRouting, Result, RootIdentity, SanitizedPrompt,
+    SessionOrigin, SpawnedSubagent, SubagentIdentity, SubagentObservation, SubagentSpawnInput,
+    TranscriptMessage, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::payload::finished_task_notification_ids;
 use crate::agents::{TurnSettle, TurnSettleOutcome};
@@ -1350,7 +1350,7 @@ fn build_claude_observation(
     observation.parent_agent_id = parent_agent_id;
     observation.task = claude_task(payload, parts.subagent_common());
     observation.prompt =
-        sanitize_user_prompt(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+        SanitizedPrompt::new(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
     observation.transcript_path = transcript_path;
     observation.launch.model = model;
     observation.launch.effort = claude_effort(payload, parts);

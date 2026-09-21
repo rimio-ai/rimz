@@ -568,7 +568,7 @@ fn correlate_subagent_observation(
     observation.agent_name = correlation.agent_name;
     observation.launch.role = correlation.role;
     observation.task = correlation.task;
-    observation.prompt = correlation.prompt;
+    observation.prompt = rimz::agents::SanitizedPrompt::new(correlation.prompt.as_deref());
     observation.launch.model = correlation.model;
     normalize_correlated_subagent_signal(observation);
 }
