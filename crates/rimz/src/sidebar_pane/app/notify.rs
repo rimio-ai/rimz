@@ -22,16 +22,16 @@ pub(super) struct BellNotice<'a> {
     pub kind: &'a str,
 }
 
-pub(super) fn emit_terminal_notification(
+pub(super) fn emit_terminal_notification<W: Write>(
     config: &ServeConfig,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: &mut Terminal<CrosstermBackend<W>>,
     snapshot: &SidebarSnapshot,
     notice: BellNotice<'_>,
     diag: &crate::diag::DiagSink,
 ) -> io::Result<bool> {
     let prefs = &config.notification_prefs;
     let mut bytes = Vec::new();
-    if desktop_notification_targets_renderer(config.mux, snapshot, notice.panes) {
+    if prefs.enabled && desktop_notification_targets_renderer(config.mux, snapshot, notice.panes) {
         bytes.extend(osc::desktop_notification_bytes(
             config.mux,
             prefs.desktop,
@@ -39,7 +39,11 @@ pub(super) fn emit_terminal_notification(
             notice.body,
         ));
     }
-    let bell = bell_decision(snapshot, notice.panes, notice.recheck_unread);
+    let bell = if prefs.enabled {
+        bell_decision(snapshot, notice.panes, notice.recheck_unread)
+    } else {
+        BellDecision::NotificationsDisabled
+    };
     diag.trace_notify(crate::diag::notify::NotifyTraceEvent::BellRing {
         notification_kind: notice.kind.to_owned(),
         fired: bell.fired(),
@@ -70,6 +74,7 @@ pub(super) fn emit_terminal_notification(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BellDecision {
     Fired,
+    NotificationsDisabled,
     NoOwnView,
     DaemonView,
     PaneNotInView,
@@ -84,6 +89,7 @@ impl BellDecision {
     fn suppressed_reason(self) -> Option<&'static str> {
         match self {
             Self::Fired => None,
+            Self::NotificationsDisabled => Some("notifications_disabled"),
             Self::NoOwnView => Some("no_own_view"),
             Self::DaemonView => Some("daemon_view"),
             Self::PaneNotInView => Some("pane_not_in_view"),

@@ -669,6 +669,34 @@ fn command_spawn_receives_notification_env() {
 }
 
 #[test]
+fn disabled_notifications_spawn_no_loop_disabled_handlers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("disabled.txt");
+    let prefs = NotificationsPrefs {
+        enabled: false,
+        handler: vec![crate::config::NotifyHandler {
+            command: format!("printf fired > {}", sh_quote(&out)),
+            when: crate::config::NotifyCondition {
+                kind: vec![NotificationKind::LoopDisabled],
+                ..crate::config::NotifyCondition::default()
+            },
+            ..crate::config::NotifyHandler::default()
+        }],
+        ..NotificationsPrefs::default()
+    };
+    let notification = Notification {
+        agents: Vec::new(),
+        notification_kind: NotificationKind::LoopDisabled,
+        title: "RimZ: loop disabled".to_owned(),
+        body: "Three failed fires.".to_owned(),
+        unread_count: None,
+    };
+
+    assert_eq!(spawn_notify_handlers(&prefs, &notification), 0);
+    assert!(!out.exists());
+}
+
+#[test]
 fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("matched.txt");

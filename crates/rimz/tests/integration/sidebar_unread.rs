@@ -108,6 +108,30 @@ fn sidebar_mark_unread_resolves_from_published_snapshot_without_mux() {
 }
 
 #[test]
+fn sidebar_notify_test_refuses_disabled_notifications_before_target_resolution() {
+    let env = Env::new();
+    write_machine_config(&env, "[notifications]\nenabled = false\n");
+
+    for no_command in [false, true] {
+        let mut command = env.rimz();
+        command.args(["sidebar", "notify-test", "@missing"]);
+        if no_command {
+            command.arg("--no-command");
+        }
+        let out = command.output().expect("notify test");
+        assert!(!out.status.success());
+        assert!(out.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("Notifications are disabled"), "{stderr}");
+        assert!(
+            stderr.contains("[notifications] enabled = true"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("rimz config path"), "{stderr}");
+    }
+}
+
+#[test]
 fn sidebar_notify_test_spawns_configured_command_with_notify_env() {
     let env = Env::new();
     env.install_agent_hooks("claude");

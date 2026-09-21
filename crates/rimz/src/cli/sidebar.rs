@@ -1358,6 +1358,12 @@ struct NotifyTestCommand {
 }
 
 fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> {
+    let prefs = &rimz::config::MachineConfig::load_lenient().notifications;
+    if !prefs.enabled {
+        anyhow::bail!(
+            "Notifications are disabled: set `[notifications] enabled = true` in the RimZ config on this machine (`rimz config path`) to deliver this test."
+        );
+    }
     let resolved = resolve_sidebar_targets(globals, &command.target, command.worktree.as_deref())?;
     let notification_kind = notification_kind_from_cli(&command.kind)?;
     let labels = resolved
@@ -1398,10 +1404,7 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
         unread_count: None,
     };
     if !command.no_command {
-        let prefs = rimz::config::MachineConfig::load_lenient()
-            .notifications
-            .clone();
-        rimz::sidebar::notify::spawn_notify_handlers(&prefs, &notification);
+        rimz::sidebar::notify::spawn_notify_handlers(prefs, &notification);
     }
     let panes = resolved
         .rows

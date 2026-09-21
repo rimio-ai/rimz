@@ -152,7 +152,7 @@ when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `enabled` | `true` | `false` stops banners, bells, nudges, and handlers and leaves the unread cards alone. One thing outlives it: a loop task that disables itself still fires `loop_disabled` handlers. |
+| `enabled` | `true` | `false` stops banners, bells, nudges, and all handlers and leaves the unread cards alone. |
 | `triggers` | `["waiting", "failed"]` | Which newly unread kinds raise a banner or a handler. `paused` and `success` also become unread cards; `running` and `idle` stay quiet. |
 | `desktop` | `"auto"` | `auto` emits terminal OSC notifications under tmux and skips them under Zellij, which drops notification OSCs. `osc` always emits, `off` never does. |
 | `sound` | `"bell"` | `bell` writes a BEL byte and your terminal decides whether it is audible; `off` writes nothing. |
