@@ -75,7 +75,7 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 
 ## Prior sessions
 
-By default a view starts at the current live cohort: the earliest registration among the live root agents in scope (or the targeted agent, for an agent view). After a same-name team or worktree relaunch, the view opens on the living conversation. Earlier lines stay in the log, and a note on stderr counts them:
+By default a view starts at the current live cohort: the earliest registration among the live root agents in scope (or the targeted agent, for an agent view). After a same-name team or worktree relaunch, the view opens on the living conversation. A message written before that registration but delivered after it arrived in the living conversation, so it stays in the default view. Earlier lines stay in the log, and a note on stderr counts them:
 
 ```text
 ⋯ 12 earlier lines from a prior session (Fri, Sep 11 2026) — rimz transcript --all
@@ -109,11 +109,13 @@ Each header names the sender, then `→` and the receiver when there is one, the
 
 A message's time is its creation time when known, otherwise its recorded time. When delivery trails creation by at least 60 seconds, the header reads `12:41 · delivered 12:45`. Delivery on a different local date includes that date, as in `23:58 · delivered Mon, Jun 29 2026 · 00:02`. Such a line gets its own header, and the next line cannot share it. Older entries without a recorded creation time keep their original timestamp.
 
+Lines read in the order they arrived: a message sits where it was delivered, which is where the conversation it opens continues. Its printed time is when it was written, so a waiting message can show an earlier time than the line above it, and says `delivered` whenever that gap reaches a minute.
+
 ### Threads
 
-Each conversation starts at the margin, with replies behind a `│` spine one level deep. A reply back to the sender continues the exchange only while it is the latest conversation; once another conversation's message, prompt, or flip intervenes, it opens at the margin. A hand-off to a third agent also opens its own exchange, as does a reply whose parent is outside the view. Messages, prompts, and flips keep their timestamp order; turn output sits beneath the message that opened its turn, however late it ran. When one turn answers two opening messages, its output sits under the later opener without merging their threads. A thread entry on a different day from its first line shows the date in its header (`Mon, Jun 29 2026 · 00:02`).
+Each conversation starts at the margin, with replies behind a `│` spine one level deep. A reply back to the sender continues the exchange only while it is the latest conversation; once another conversation's message, prompt, or flip intervenes, it opens at the margin. A hand-off to a third agent also opens its own exchange, as does a reply whose parent is outside the view. Messages, prompts, and flips keep their arrival order; turn output sits beneath the message that opened its turn, however late it ran. When one turn answers two opening messages, its output sits under the later opener without merging their threads. A thread entry on a different day from its first line shows the date in its header (`Mon, Jun 29 2026 · 00:02`).
 
-Output with no recorded parent, such as the reply to a prompt typed directly into the agent's pane, threads beneath that agent's most recently arrived opening message at the time of the output. A message still waiting for delivery cannot open that turn. Output stays at the margin when that opener is hidden (see [What the human view hides](#what-the-human-view-hides)). `--flat` turns threading off and uses timestamp order (`at` in JSON).
+Output with no recorded parent, such as the reply to a prompt typed directly into the agent's pane, threads beneath that agent's most recent opening message, which is the last one delivered before the output ran. It stays at the margin when that opener is hidden (see [What the human view hides](#what-the-human-view-hides)). `--flat` turns threading off and leaves the lines in arrival order.
 
 ### Bodies
 
@@ -157,7 +159,7 @@ A scope with nothing to show exits 0 and prints a faint note on stderr. It reads
 
 ## JSON output
 
-`--json` prints one object with the selected entries in timestamp (`at`) order, hidden entries included.
+`--json` prints one object with the selected entries in arrival order (`delivered_at` when it is there, otherwise `at`), hidden entries included.
 
 | Field | Present | Value |
 | --- | --- | --- |
