@@ -675,26 +675,64 @@ fn ensure_rimz_block_registry(root: &Path, files: &[PathBuf]) -> Result<()> {
         }
     }
 
+    #[derive(Default)]
+    struct Named(Vec<String>);
+    impl<'ast> Visit<'ast> for Named {
+        fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+            if let Some(segment) = path.path.segments.last() {
+                self.0.push(segment.ident.to_string());
+            }
+        }
+    }
+
     let registry = root.join("crates/rimz/src/agents/payload.rs");
     let source = fs::read_to_string(&registry)?;
     let parsed = syn::parse_file(&source)?;
     let mut tags = Tags::default();
+    let mut registered = Named::default();
+    let mut variants = Vec::new();
     for item in &parsed.items {
-        if let syn::Item::Impl(item) = item
-            && let syn::Type::Path(ty) = item.self_ty.as_ref()
-            && ty.path.is_ident("RimzBlock")
-        {
-            for member in &item.items {
-                if let syn::ImplItem::Fn(method) = member
-                    && method.sig.ident == "tag"
-                {
-                    tags.visit_block(&method.block);
+        match item {
+            syn::Item::Enum(item) if item.ident == "RimzBlock" => {
+                variants.extend(
+                    item.variants
+                        .iter()
+                        .map(|variant| variant.ident.to_string()),
+                );
+            }
+            syn::Item::Impl(item) if matches!(item.self_ty.as_ref(), syn::Type::Path(ty) if ty.path.is_ident("RimzBlock")) => {
+                for member in &item.items {
+                    match member {
+                        syn::ImplItem::Fn(method) if method.sig.ident == "tag" => {
+                            tags.visit_block(&method.block);
+                        }
+                        syn::ImplItem::Const(item) if item.ident == "ALL" => {
+                            registered.visit_expr(&item.expr);
+                        }
+                        _ => {}
+                    }
                 }
             }
+            _ => {}
         }
     }
-    if tags.0.is_empty() {
-        bail!("RimzBlock::tag must declare the wrapper tag literals");
+    if tags.0.is_empty() || variants.is_empty() {
+        bail!("RimzBlock must declare its variants and their wrapper tag literals");
+    }
+    // `tag` is a wildcard-free match, so a new variant breaks the build there.
+    // Nothing forces it into `ALL`, which is the set `peel_rimz_blocks` walks:
+    // a wrapper missing from it composes fine and is never peeled back out,
+    // which is RimZ-authored text left sitting inside a user prompt.
+    let unregistered = variants
+        .iter()
+        .filter(|variant| !registered.0.contains(variant))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unregistered.is_empty() {
+        bail!(
+            "RimzBlock::ALL must list every variant or peel_rimz_blocks skips it: {}",
+            unregistered.join(", ")
+        );
     }
     let mut violations = Vec::new();
     for path in files {
