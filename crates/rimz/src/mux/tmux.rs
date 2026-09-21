@@ -355,6 +355,10 @@ impl TmuxBackend {
             .cmd()
             .args(["show-options", "-s", "terminal-features"])
             .run()?;
+        let windows = self
+            .cmd()
+            .args(["list-windows", "-t", session, "-F", "#{window_id}"])
+            .run()?;
         let mut commands: Vec<Vec<String>> = Vec::new();
         for (key, value) in tmux_server_options(config) {
             commands.push(vec![
@@ -379,14 +383,19 @@ impl TmuxBackend {
                 value,
             ]);
         }
-        for (key, value) in tmux_window_options(config) {
-            commands.push(vec![
-                "set-window-option".to_owned(),
-                "-t".to_owned(),
-                session.to_owned(),
-                key.to_owned(),
-                value,
-            ]);
+        let window_options = tmux_window_options(config);
+        for window_id in String::from_utf8_lossy(&windows.stdout).lines() {
+            for (key, value) in &window_options {
+                let mut command = vec!["set-window-option".to_owned()];
+                if value.is_none() {
+                    command.push("-u".to_owned());
+                }
+                command.extend(["-t".to_owned(), window_id.to_owned(), (*key).to_owned()]);
+                if let Some(value) = value {
+                    command.push(value.clone());
+                }
+                commands.push(command);
+            }
         }
         commands.extend(tmux_extended_key_bindings(config));
         self.batch(&commands)
