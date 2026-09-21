@@ -2100,6 +2100,18 @@ fn agent_budget_edits_and_views_use_local_day() {
         assert!(output.contains("$10.00"), "rimz {args:?}: {output}");
     }
 
+    // The budget view names its agent the way every other surface does: by the
+    // handle the reader can type back, never by the session id behind it.
+    let view = loop_ok(&env, &["agents", "budget", "@claude"]);
+    assert!(
+        view.contains("agent:  @claude#project"),
+        "budget view must print the handle: {view}"
+    );
+    assert!(
+        !view.contains("sess-budget"),
+        "budget view must not print the session id: {view}"
+    );
+
     let show: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["agents", "show", "@claude", "--json"]))
             .expect("show JSON");
