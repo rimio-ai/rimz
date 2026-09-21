@@ -116,7 +116,7 @@ fn files(home: &Path, namespace: &str) -> Result<Vec<PathBuf>, DefinitionErr> {
     Ok(paths)
 }
 
-pub fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
+pub(super) fn source_paths(agents_home: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for name in ["agents", "subagents", "teams", "traits"] {
         paths.extend(files(agents_home, name).unwrap_or_default());
