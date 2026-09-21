@@ -266,15 +266,6 @@ impl NotificationTrigger {
             AgentStatus::Running | AgentStatus::Idle | AgentStatus::Sleeping => None,
         }
     }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Waiting => "waiting",
-            Self::Failed => "failed",
-            Self::Paused => "paused",
-            Self::Success => "success",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
