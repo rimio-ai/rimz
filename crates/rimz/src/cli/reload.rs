@@ -135,12 +135,12 @@ fn report(
             n(outcome.dead_swept, "leftover process"),
         )?;
     }
-    // Reload only converges sidebars it can find; a room that lost its pane
-    // needs the repair verb, which `--repair` is already running.
+    // Reload only converges sidebars that report in; a room whose sidebar is
+    // gone or unreachable needs the repair verb, which `--repair` runs next.
     if outcome.sidebar_missing > 0 && !repair {
         writeln!(
             out,
-            "{} with no sidebar; mount it again with `rimz reload --repair`.",
+            "{} with no sidebar reporting in; mount or replace it with `rimz reload --repair`.",
             n(outcome.sidebar_missing, "room"),
         )?;
     }
@@ -183,7 +183,9 @@ mod tests {
         let report = rendered(&outcome, false);
         assert!(report.contains("1 room"), "{report}");
         assert!(
-            report.contains("with no sidebar; mount it again with `rimz reload --repair`."),
+            report.contains(
+                "with no sidebar reporting in; mount or replace it with `rimz reload --repair`."
+            ),
             "{report}"
         );
         // `--repair` runs that verb next, so naming it again would be noise.

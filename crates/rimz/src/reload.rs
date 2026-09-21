@@ -467,9 +467,10 @@ fn upgrade_live(
     let current = current_build_claims(&post_wait, build);
     outcome.reexeced += awaiting.intersection(&current).count();
     outcome.unconverged += awaiting.difference(&current).count();
-    // A managed room always runs a sidebar, so a live session publishing no
-    // heartbeat has lost its pane: reload has nothing to converge there and the
-    // report owes the reader the verb that mounts it again.
+    // A managed room always runs a sidebar, so a live session with no fresh,
+    // protocol-current heartbeat has either lost its pane or is running a
+    // renderer this build cannot signal. Reload converges neither, and repair
+    // mounts or replaces both, so the report owes the reader that verb.
     outcome.sidebar_missing += usize::from(post_wait.is_empty());
     // 2. Converge the session's presence plugin onto the current wasm — reload
     //    is the explicit upgrade verb. Stale instances retire only after the
