@@ -64,7 +64,7 @@ Two more files in the directory are managed for you, and you reach both through 
 
 Alongside them, `~/.rimz/` holds `agents.d/` for plugins and `agents/`, `subagents/`, `teams/`, and `traits/` for [Markdown definitions](../reference/definitions.md), plus the shared `skills/` library. You edit those Markdown files directly; `rimz config set` refuses profile and team definition keys.
 
-Two environment variables move the directory. `RIMZ_HOME` moves the whole home. `RIMZ_AGENTS_HOME` moves only the definition trees and the skill library, and it wins over `RIMZ_HOME` for them. `rimz doctor` lists it under HOME with the path it resolved to, labelled `superseded by RIMZ_HOME`; the label is wrong, the path is right.
+Two environment variables move the directory. `RIMZ_HOME` moves the whole home. `RIMZ_AGENTS_HOME` moves only the definition trees and the skill library, and it wins over `RIMZ_HOME` for them. `rimz doctor` lists it under HOME with the path it resolved to.
 
 ### Where RimZ keeps its files
 
