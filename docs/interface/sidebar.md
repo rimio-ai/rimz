@@ -65,7 +65,7 @@ A status glyph leads every agent card and labels every bucket of the cockpit's m
 | `☾` | sleeping | resting until an armed one-shot wait fires | no |
 | `○` | idle | alive, nothing in flight | no |
 
-`?` is always yellow, `!` always red, and `⏸︎` always blue, whatever the card's age. What each status means in an agent's life is [the agent lifecycle](../guide/sidebar.md#the-agent-lifecycle). The mux tab bar reuses `!`, `?`, `⏸︎`, `⢿`, and `✓` as a static suffix on the tab name ([the sidebar guide](../guide/sidebar.md#what-it-is)).
+`?` is always yellow, `!` always red, and `⏸︎` always blue, whatever the card's age. What each status means in an agent's life is [the agent lifecycle](../guide/sidebar.md#the-agent-lifecycle). The mux tab bar reuses `!`, `?`, `⏸︎`, `⢿`, and `✓` as a static suffix on the tab name ([the sidebar guide](../guide/sidebar.md#glance-jump-answer)).
 
 On a process row, `!` means the process is stuck ([process rows](#process-rows)).
 

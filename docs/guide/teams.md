@@ -227,7 +227,7 @@ Taking a team down is three steps, in this order. `rimz teams stop forge` closes
 - [Agents](./fleet.md): launch agents by name and compose the layout a team fills.
 - [Worktrees](./worktrees.md): isolate a team on its own branch for parallel work.
 - [Messaging](./messaging.md): reach a role by handle: park, steer, schedule, and channels.
-- [Examples → forge](../../examples/README.md#agent-teams--teams): the shipped definitions: install, prerequisites, and try-before-install.
+- [Examples → forge](../../examples/README.md#agent-teams): the shipped definitions: install, prerequisites, and try-before-install.
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams): where reusable profiles and teams live.
 - [Teams CLI reference](../reference/cli/teams.md): discover, inspect, install, launch, resume, and drive named teams.
 - [Definitions reference](../reference/definitions.md#teams-and-seats): every roster key, stage rule, and signal-binding field.

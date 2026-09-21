@@ -171,7 +171,7 @@ A chord bound here stops reaching the app in the pane, so it shadows zsh's `Alt`
 
 The file is `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`); reload it with `tmux source-file ~/.tmux.conf` or the `prefix` + `r` binding below. Every option here is catalogued in the [tmux upstream reference](../externals/mux-adapter/tmux-reference.md#options).
 
-tmux is the spartan one out of the box: no mouse, a short scrollback, and thin, untitled pane borders. The blocks below ship as four self-contained modules under [examples/tmux/](../../examples/README.md#tmux--tmux), so your `~/.tmux.conf` stays yours and adopts by reference: [`agents.conf`](../../examples/tmux/agents.conf) (the essentials), [`quality-of-life.conf`](../../examples/tmux/quality-of-life.conf) (copy-mode, window names, splits), [`zellij-keys.conf`](../../examples/tmux/zellij-keys.conf) (the parity chords), and [`theme-tokyonight.conf`](../../examples/tmux/theme-tokyonight.conf) (frames and status bar).
+tmux is the spartan one out of the box: no mouse, a short scrollback, and thin, untitled pane borders. The blocks below ship as four self-contained modules under [examples/tmux/](../../examples/README.md#tmux), so your `~/.tmux.conf` stays yours and adopts by reference: [`agents.conf`](../../examples/tmux/agents.conf) (the essentials), [`quality-of-life.conf`](../../examples/tmux/quality-of-life.conf) (copy-mode, window names, splits), [`zellij-keys.conf`](../../examples/tmux/zellij-keys.conf) (the parity chords), and [`theme-tokyonight.conf`](../../examples/tmux/theme-tokyonight.conf) (frames and status bar).
 
 ### Essentials
 

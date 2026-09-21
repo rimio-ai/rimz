@@ -31,7 +31,6 @@ A shaped agent beats a general one steered by hand: fewer wrong turns, less cont
 rimz agents slim              # the flag stack above, as one word, plus a @slim handle
 rimz agents launch slim       # explicit launch verb, same agent payload
 rimz agents slim,codex        # two agents, side by side in one line
-rimz agents forge -w feat-x   # a whole team, isolated in its own worktree
 ```
 
 **The wrapper stays thin.** `rimz agents slim` does exactly two things on your machine. It renders the profile into the stock CLI's own flags, the `claude --permission-mode auto …` line above and nothing you could not type yourself. Then it runs that command in your Zellij or tmux, in the pane you are standing in for a single agent and in a fresh tab for a layout or a worktree, under a small RimZ launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI, and its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. A launch into your current pane also renames that tab after the profile or channel, and the name stays after the agent exits and you are back in the shell.
