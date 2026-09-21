@@ -52,7 +52,7 @@ enum SubagentsSubcmd {
         /// Child names; at least one.
         #[arg(value_name = "NAME")]
         names: Vec<String>,
-        /// Return when the first named child finishes; print its result block (`--json` for its name alone).
+        /// Return when the first named child finishes; print its result block, or a one-entry map with `--json`.
         #[arg(long, conflicts_with = "stream")]
         any: bool,
         /// Stop waiting after this duration.
