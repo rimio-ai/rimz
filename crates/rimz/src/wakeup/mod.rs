@@ -78,7 +78,7 @@ pub fn reload_all(rt: &RuntimePaths) -> std::result::Result<usize, WakeupErr> {
 }
 
 /// Ask one known sidebar worker to exit cleanly for a supervisor handoff.
-pub fn reload_one(
+pub(crate) fn reload_one(
     rt: &RuntimePaths,
     instance_id: &crate::ids::SidebarInstanceId,
 ) -> std::result::Result<(), WakeupErr> {

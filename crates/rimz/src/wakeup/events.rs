@@ -11,10 +11,10 @@ pub const SIDEBAR_EVENT_VERSION: &str = "rimz.sidebar-event.v2";
 pub const RELOAD_CONTROL_WORD: &str = "reload";
 /// Supervisor-only request for a clean worker exit after a replacement build
 /// has served through its stability window.
-pub const SUPERVISOR_HANDOFF_CONTROL_WORD: &str = "supervisor-handoff";
+pub(crate) const SUPERVISOR_HANDOFF_CONTROL_WORD: &str = "supervisor-handoff";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SidebarEventEnvelope {
+pub(crate) struct SidebarEventEnvelope {
     pub v: String,
     pub workspace_id: WorkspaceId,
     /// `Some` scopes the event to one mux session — pane ids are only
@@ -31,7 +31,7 @@ pub struct SidebarEventEnvelope {
 }
 
 impl SidebarEventEnvelope {
-    pub fn new(
+    pub(crate) fn new(
         workspace_id: WorkspaceId,
         session_name: Option<String>,
         sent_at_ms: u64,
@@ -46,7 +46,7 @@ impl SidebarEventEnvelope {
         }
     }
 
-    pub fn is_current_version(&self) -> bool {
+    pub(crate) fn is_current_version(&self) -> bool {
         self.v == SIDEBAR_EVENT_VERSION
     }
 }
