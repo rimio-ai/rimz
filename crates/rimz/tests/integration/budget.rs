@@ -80,6 +80,57 @@ fn budget_set_raise_clear_and_config_routes() {
 }
 
 #[test]
+fn budget_ignores_ineligible_siblings_and_warns_only_for_fleet_reports() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.rimz_home()).expect("config dir");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[harness]\nbudget = '50/day'\n[accounts.budget]\nclaude = '100/day'\nantigravity = '50/day'\nunknown = '10/day'\n",
+    )
+    .expect("config");
+
+    for args in [
+        vec!["budget", "--account", "claude"],
+        vec!["budget", "--account", "claude", "80/day", "--no-continue"],
+    ] {
+        let inspected = env.rimz().args(args).assert().success().stderr("");
+        let output = String::from_utf8_lossy(&inspected.get_output().stdout);
+        assert!(output.contains("scope:  claude@default account"));
+        assert!(!output.contains("antigravity"));
+        assert!(!output.contains("unknown"));
+    }
+
+    for args in [vec!["budget"], vec!["budget", "20/day", "--no-continue"]] {
+        let inspected = env.rimz().args(&args).assert().success();
+        let output = String::from_utf8_lossy(&inspected.get_output().stdout);
+        let rows = output
+            .lines()
+            .skip_while(|line| !line.starts_with("ACCOUNT"))
+            .skip(1)
+            .map(|line| line.split_whitespace().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![vec![
+                "claude@default",
+                "$80.00/day",
+                "raised",
+                "$0.00",
+                "no"
+            ]]
+        );
+        if args.len() > 1 {
+            assert!(output.contains("cap:    $20.00/day"));
+            assert!(output.contains("source: override"));
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&inspected.get_output().stderr),
+            "rimz: warning: unsupported `accounts.budget.antigravity`; remove it because antigravity has no durable account-spend source with authoritative account-level dollars\nrimz: warning: unknown agent kind in `accounts.budget.unknown`; remove it because no adapter can publish authoritative account-level dollars\n"
+        );
+    }
+}
+
+#[test]
 fn budget_refuses_to_arm_unconfigured_daily_caps() {
     let env = Env::new();
 

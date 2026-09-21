@@ -34,9 +34,6 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         .filter(|kind| !kind.is_empty())
         .map(validate_kind)
         .transpose()?;
-    if account.is_some() || args.value.is_none() {
-        config.accounts.validate_budgets()?;
-    }
     let ctx = Ctx::open(globals)?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -262,6 +259,9 @@ fn inspect(
         for key in logins
             .into_iter()
             .filter(|key| config.accounts.budget(key.kind.as_str()).is_some())
+            .filter(|key| {
+                rimz::config::AccountsConfig::validate_budget_kind(key.kind.as_str()).is_ok()
+            })
         {
             let scope = DailyBudgetScope::Account(key);
             let account = scope.read_ledger(runtime, Some(state));
@@ -286,6 +286,12 @@ fn inspect(
             ]);
         }
         table.render(&mut out)?;
+        let mut stderr = crate::cli::render::err();
+        for kind in config.accounts.budget.keys() {
+            if let Err(detail) = rimz::config::AccountsConfig::validate_budget_kind(kind) {
+                writeln!(stderr, "rimz: warning: {detail}")?;
+            }
+        }
     }
     Ok(())
 }

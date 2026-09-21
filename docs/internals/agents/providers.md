@@ -274,7 +274,7 @@ A spent window supplies a reset clock only after the turn carries a provider-cer
 
 ## Daily dollar caps
 
-`[accounts.budget] <kind> = "100/day"` sets one cap per account of that kind, shared by every room on that account. A kind is eligible only when its adapter's `AccountSpend` concern is wired to authoritative account-level dollar history. Identity, a plan label, quota windows, point-in-time prices, and partial transcript estimates do not qualify. Config parsing, room start, and `rimz budget --account` reject an ineligible kind with the exact key to remove; the ledger ignores stale unsupported config.
+`[accounts.budget] <kind> = "100/day"` sets one cap per account of that kind, shared by every room on that account. A kind is eligible only when its adapter's `AccountSpend` concern is wired to authoritative account-level dollar history. Identity, a plan label, quota windows, point-in-time prices, and partial transcript estimates do not qualify. Strict config parsing and room start reject an ineligible kind with the exact key to remove; `rimz budget --account KIND` validates only the targeted kind. Fleet reports in `cli/budget.rs::inspect` omit ineligible keys and print one warning per key on stderr after the table, including after fleet writes; the ledger ignores stale unsupported config.
 
 The decision input is the local-day spend window the [spending walk](./spending.md#what-reads-the-totals) publishes per account, which the producer accepts at the cache's normal staleness. The ledger, verdict, park, and waiver are [budget.md](../harness/budget.md). On the dashboard, a healthy cap stays quiet; while agents are parked on a crossed account cap, the headline turns alarm-red and appends `$used of $cap/day`.
 
