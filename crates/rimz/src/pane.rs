@@ -73,7 +73,7 @@ pub(crate) fn command_is_claude_host(command: &str) -> bool {
 }
 
 /// Whether this pane runs one of RimZ's managed daemon hosts.
-pub fn pane_runs_daemon_host(pane: &PaneRef) -> bool {
+pub(crate) fn pane_runs_daemon_host(pane: &PaneRef) -> bool {
     pane.spawn_command.as_deref().is_some_and(command_is_host)
         || pane.command.as_deref().is_some_and(command_is_host)
 }
