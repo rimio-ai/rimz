@@ -96,15 +96,6 @@ fn is_elevation_wrapper(program: &str) -> bool {
     matches!(program, "sudo" | "su" | "doas")
 }
 
-/// Start time of the in-pane agent CLI process backing a live pane, found by
-/// working directory. This is the exact single-process case only: a cwd with no
-/// match or multiple same-kind agent CLIs abstains so callers keep pane starts
-/// unknown rather than duplicate one cwd-level timestamp across several panes.
-pub fn in_pane_agent_start(kind: &str, pane_cwd: &str) -> Option<jiff::Timestamp> {
-    let starts = in_pane_agent_starts(kind, pane_cwd);
-    (starts.len() == 1).then_some(starts[0])
-}
-
 /// Start times for in-pane agent CLI processes whose process cwd equals
 /// `pane_cwd`. Callers that know other panes' exact starts subtract those before
 /// deciding whether one unaccounted process remains.
