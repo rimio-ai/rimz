@@ -111,10 +111,8 @@ pub use observation::{
     SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
-pub(crate) use payload::{
-    CONTROL_TAG_PREFIXES, non_empty_trimmed, optional_payload_string, sanitize_user_prompt,
-    stop_payload_errored,
-};
+use payload::{CONTROL_TAG_PREFIXES, optional_payload_string, stop_payload_errored};
+pub(crate) use payload::{non_empty_trimmed, sanitize_user_prompt};
 pub use pricing::{PriceBook, TokenSplit};
 pub use registry::{
     all_definitions, compact_command, definition_by_kind, find_definition, known_kinds,
