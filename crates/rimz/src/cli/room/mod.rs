@@ -970,7 +970,11 @@ fn mux_environment_preflight(mux: MuxName, session_name: &str) -> Result<()> {
         }
         // tmux sockets live under its own short per-user socket directory; the
         // RimZ session name does not participate in an AF_UNIX path budget.
-        MuxName::Tmux => mux_responsive_preflight(mux)?,
+        MuxName::Tmux => {
+            mux_responsive_preflight(mux)?;
+            let caps = rimz::mux::tmux::capabilities().context("checking tmux version")?;
+            tmux_version_preflight(&caps)?;
+        }
     }
     Ok(())
 }
@@ -1033,6 +1037,23 @@ fn zellij_version_preflight() -> Result<()> {
     let found = caps.binary_version.trim();
     anyhow::bail!(
         "Zellij {found} is below RimZ's floor; upgrade Zellij to >= {maj}.{min}.{patch}, or run this room with `--mux tmux`."
+    );
+}
+
+fn tmux_version_preflight(caps: &rimz::mux::tmux::TmuxCapabilities) -> Result<()> {
+    if caps.meets_min_version {
+        return Ok(());
+    }
+    let (maj, min, patch) = rimz::mux::tmux::MIN_TMUX_VERSION;
+    let raw = caps.binary_version.trim();
+    if caps.parsed_version.is_none() {
+        bail!(
+            "`tmux -V` output {raw:?} was not recognised; RimZ needs a release build >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
+        );
+    }
+    let found = raw.strip_prefix("tmux ").unwrap_or(raw);
+    bail!(
+        "tmux {found} is below RimZ's floor; upgrade tmux to >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
     );
 }
 

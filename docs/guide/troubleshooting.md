@@ -103,7 +103,7 @@ The `MULTIPLEXER` section's `log` row names the server log, how far back the sca
 
 RimZ needs Zellij 0.44.2 or newer, or tmux 3.5 or newer ([install one](./installation.md#install-zellij-or-tmux)); pixel pets add tmux 3.6. The `MULTIPLEXER` section reports the backend RimZ resolved and its version against the floor, as `tmux floor: ✓ OK (>= 3.5.0 required)` or `TOO OLD`. Install or upgrade the multiplexer when the row flags it.
 
-`rimz start` refuses to open a room on a Zellij below the floor and names the upgrade. On tmux it opens the room anyway, so the doctor row is your only warning there. When both backends are installed and RimZ resolved the one you did not want, pick explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
+`rimz start` refuses to open a room on either backend below its floor and names the upgrade. An unrecognised tmux version, including a development build, also refuses: install a supported release build or use `--mux zellij`. When both backends are installed and RimZ resolved the one you did not want, pick explicitly with `--zellij`, `--tmux`, or `--mux <name>`.
 
 ### RimZ reports an existing room instead of opening one
 

@@ -405,6 +405,13 @@ exit 0
 
 fn fake_tmux_script() -> &'static str {
     r#"#!/bin/sh
+if [ "$1" = "-S" ]; then
+  shift 2
+fi
+if [ "$1" = "-V" ]; then
+  printf 'tmux 3.5\n'
+  exit 0
+fi
 if [ "$1" = "list-sessions" ]; then
   exit 0
 fi

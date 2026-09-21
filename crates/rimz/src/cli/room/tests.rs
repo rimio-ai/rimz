@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::{
     ResumePromptMode, birth_socket_name, blocks_room_start, resume_prompt_mode,
-    write_project_trust_offer_to,
+    tmux_version_preflight, write_project_trust_offer_to,
 };
 
 use rimz::ids::MuxName;
@@ -16,6 +16,37 @@ fn zellij_birth_preflights_the_state_dir_name_only_when_the_room_is_dead() {
     );
     assert_eq!(birth_socket_name(MuxName::Zellij, true, "repo-abcd"), None);
     assert_eq!(birth_socket_name(MuxName::Tmux, false, "repo-abcd"), None);
+}
+
+#[test]
+fn tmux_version_preflight_names_the_floor_and_release_requirement() {
+    let (maj, min, patch) = rimz::mux::tmux::MIN_TMUX_VERSION;
+    let mut caps = rimz::mux::tmux::TmuxCapabilities {
+        binary_version: "tmux 3.4".to_owned(),
+        parsed_version: Some((3, 4, 0)),
+        meets_min_version: false,
+        popup_supported: false,
+    };
+    assert_eq!(
+        tmux_version_preflight(&caps).unwrap_err().to_string(),
+        format!(
+            "tmux 3.4 is below RimZ's floor; upgrade tmux to >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
+        )
+    );
+    for raw in ["tmux next-3.6", "master", ""] {
+        caps.binary_version = raw.to_owned();
+        caps.parsed_version = None;
+        assert_eq!(
+            tmux_version_preflight(&caps).unwrap_err().to_string(),
+            format!(
+                "`tmux -V` output {raw:?} was not recognised; RimZ needs a release build >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
+            )
+        );
+    }
+    caps.meets_min_version = true;
+    caps.parsed_version = Some((maj, min, patch));
+    caps.binary_version = format!("tmux {maj}.{min}.{patch}");
+    assert!(tmux_version_preflight(&caps).is_ok());
 }
 
 #[test]
