@@ -32,7 +32,7 @@ pub use lifecycle::{
     AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES, SideConversation,
 };
 pub(crate) use queue::DeliverySweepUpdate;
-pub use queue::{DeliveryAck, DeliveryFailureDisposition, EditOutcome, MessageEdit};
+pub use queue::{BlockerUpdate, DeliveryAck, DeliveryFailureDisposition, EditOutcome, MessageEdit};
 
 /// Terminal audit-only message outcome for a target that never resolved to a
 /// durable receiver card.

@@ -301,6 +301,8 @@ Three gates hold that surface, all in the normal test run:
 
 `cargo xtask atlas conform --ratchet` is distinct: it reads target schema v5 from root `refactor-target.toml` and fails only when current dependency sites, escaping surface, or strangler counts exceed the checked-in constraints. `--tighten` only lowers baselines after improvement and removes unused dependency admissions; raising one requires a deliberate target-file edit. The gate is inert when the target file is absent.
 
+A change that adds an item visible outside its module raises that module's `surface-budget`, and neither `check` nor `lint` sees it: `cargo xtask gate` fails at `conform` instead, after every other step has passed. Run `cargo xtask atlas conform --ratchet` yourself when your change adds one, then paste the rule it prints into `refactor-target.toml` with a comment naming the new item and why it escapes. `pub(crate)` counts the same as `pub`, so narrowing visibility does not clear the gate; it is still the right visibility to pick.
+
 ## Continuous integration
 
 CI lives in two workflow trees: `.github/workflows/` for the GitHub origin and `.gitea/workflows/` for the Gitea mirror. Both run the same gates inside the `rimz-ci` image; GitHub pulls `ghcr.io/<owner>/rimz-ci:latest` with the built-in `GITHUB_TOKEN`, while Gitea pulls the configured `RIMZ_CI_IMAGE` with its registry token. Both pipelines run three job groups in parallel:
