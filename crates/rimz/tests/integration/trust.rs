@@ -186,7 +186,7 @@ fn trust_status_shows_stale_field_diff() {
 }
 
 #[test]
-fn trust_rejects_project_layout_table_with_per_machine_fix() {
+fn trust_rejects_project_layout_table_naming_what_replaced_it() {
     let env = Env::new();
     env.write_config(
         &env.project_root,
@@ -198,7 +198,8 @@ fn trust_rejects_project_layout_table_with_per_machine_fix() {
         .assert()
         .failure()
         .stderr(contains("[layout]"))
-        .stderr(contains("per-machine"));
+        .stderr(contains("`placement` under `[agents]`"))
+        .stderr(contains("teams/<name>.md"));
 }
 
 #[test]

@@ -189,13 +189,20 @@ fn revoke_drops_record_and_returns_untrusted() {
 }
 
 #[test]
-fn project_layout_table_fails_with_per_machine_fix() {
+fn project_layout_table_fails_naming_what_replaced_it() {
     let dir = project_with("[[layout.initial_panes]]\nname = \"shell\"\ncommand = \"$SHELL\"\n");
     let config = tempdir().expect("config root");
     let err = status_with_roots(dir.path(), config.path()).expect_err("layout must fail");
     let rendered = err.to_string();
     assert!(rendered.contains("[layout]"), "{rendered}");
-    assert!(rendered.contains("per-machine"), "{rendered}");
+    // Per-machine config has no `[layout]` either, so the fix must name the
+    // keys that took the table over rather than another file.
+    assert!(!rendered.contains("$RIMZ_HOME"), "{rendered}");
+    assert!(
+        rendered.contains("`placement` under `[agents]`"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("teams/<name>.md"), "{rendered}");
 }
 
 #[test]
