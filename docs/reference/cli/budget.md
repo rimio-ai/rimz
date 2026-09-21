@@ -62,7 +62,7 @@ rimz budget +25 --account claude   # raise this room's Claude account cap
 
 An account cap applies to one provider login and sums that login's spend across every room running on it; each room parks only the panes it owns. `--account` resolves the login this room uses for `KIND`, and fails with ``cannot resolve this room's <kind> account; check `rimz accounts list` `` when the room has none.
 
-Account caps need authoritative account-level dollar history, which the built-in Claude, Codex, Grok, OpenCode, and Pi adapters provide (the `spend` column of the [wiring matrix](../agent-support.md#the-wiring-matrix) reads ✓), as does a plugin that declares a spend probe. Any other kind in `[accounts.budget]` is refused by config validation and room start, and also by `rimz budget` whenever it inspects or runs with `--account`: that check covers every key in `[accounts.budget]`, so one unsupported key blocks `rimz budget --account claude` too. The refusal names the key to remove.
+Account caps need authoritative account-level dollar history, which the built-in Claude, Codex, Grok, OpenCode, and Pi adapters provide (the `spend` column of the [wiring matrix](../agent-support.md#the-wiring-matrix) reads ✓), as does a plugin that declares a spend probe. Any other kind in `[accounts.budget]` is refused by config validation and room start. `rimz budget --account KIND` validates only the targeted kind and names the key to remove if it is ineligible; ineligible siblings do not block it or produce warnings.
 
 Every form prints the scope's report, after the change when there is one:
 
@@ -75,7 +75,7 @@ Every form prints the scope's report, after the change when there is one:
 | `parked` | `yes` when the cap has parked agents, otherwise `no`. |
 | `turn cap` | Printed only when `harness.turn_budget` is set, as `$N.NN/turn (source: config; per turn)`. `rimz budget` cannot change it. |
 
-Without `--account`, when `[accounts.budget]` has any key, a table follows with one row per configured login of each capped kind, including logins no agent in this room uses. Its columns `ACCOUNT`, `CAP`, `SOURCE`, `SPEND`, and `PARKED` carry the same values as the fields above, except that `SPEND` prints `$N.NN` without `today`.
+Without `--account`, when `[accounts.budget]` has any key, a table follows with one row per configured login of each eligible capped kind, including logins no agent in this room uses. Its columns `ACCOUNT`, `CAP`, `SOURCE`, `SPEND`, and `PARKED` carry the same values as the fields above, except that `SPEND` prints `$N.NN` without `today`. Each ineligible key is omitted and gets one `rimz: warning: ...` line on stderr after the table, naming the key to remove and why. Fleet writes still proceed and print the same report and warnings afterward.
 
 Any change lifts the scope's park for this room's agents. When the cap had parked the scope, RimZ queues the configured continue prompt to each agent in this room that the park interrupted; `--no-continue` leaves them at rest. Agents another room interrupted on the same account stay at rest.
 

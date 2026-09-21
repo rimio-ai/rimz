@@ -73,7 +73,7 @@ rimz config set accounts.budget.claude 100/day     # each claude account, every 
 
 Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap applies to each [account](./accounts.md) of that provider separately and sums that account across every room running on it, while each room parks only the panes it owns.
 
-An account cap also needs a complete dollar history for that provider on disk, which only some agents publish: Claude, Codex, Grok, Pi, and OpenCode do today. For any other agent, config edits, room start, and `rimz budget --account` refuse the key outright rather than enforce against incomplete dollars.
+An account cap also needs a complete dollar history for that provider on disk, which only some agents publish: Claude, Codex, Grok, Pi, and OpenCode do today. For any other agent, config edits and room start refuse the key outright rather than enforce against incomplete dollars. `rimz budget --account KIND` refuses only if the targeted kind is ineligible, ignoring other keys. Fleet reports omit ineligible kinds and print a warning on stderr for each key to remove; fleet adjustments still proceed.
 
 `rimz budget` reads and adjusts what config armed:
 
