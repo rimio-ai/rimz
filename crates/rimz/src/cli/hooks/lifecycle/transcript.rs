@@ -349,6 +349,7 @@ pub(super) fn record_conversation(
                     };
                     if let Some((offset, message)) = matched {
                         entry.message_id = Some(message.message_id.clone());
+                        entry.enqueued_at = Some(message.enqueued_at);
                         entry.reply_to = message.in_reply_to.clone();
                         if matches!(&message.sender, rimz::store::message::MessageSender::System) {
                             entry.from = Some(rimz::transcript::HARNESS_FROM.to_owned());
