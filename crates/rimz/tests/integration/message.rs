@@ -534,6 +534,124 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
 }
 
 #[test]
+fn sweep_delivers_harness_wake_to_loop_zone_agent() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-loop-zone",
+        "feature-loop-zone",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let mut pane = agent_pane(&env, "claude");
+    pane.view_name = Some("rimzd".to_owned());
+    let pane_fixture = env.write_pane_fixture(&[pane]);
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let wake = MessageRecord::new(
+        env.workspace_id.clone(),
+        &snapshot.agents[0],
+        "wait finished".to_owned(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::Wait,
+    });
+    env.store().queue_message(&wake, "rimz-test").unwrap();
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-loop-zone",
+            "worktree_branch": "feature-loop-zone",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let trace_log = env.project_root.join("zellij-loop-zone-wake-trace.log");
+    run_success(
+        traced_rimz(&env, &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep loop-zone wake",
+    );
+
+    assert_eq!(
+        message_by_id(&env, &wake.message_id).status,
+        MessageStatus::Sent
+    );
+    assert_text_then_enter(
+        &trace_log,
+        "Type: WAIT\nFrom: @rimz\nContent:\nwait finished",
+    );
+}
+
+#[test]
+fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
+    for pinned in [false, true] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        register_running_agent(
+            &env,
+            "sess-missing-pane",
+            "feature-missing-pane",
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+        let pane_fixture = env.write_pane_fixture(&[]);
+        let snapshot = env.store().snapshot_cached().expect("snapshot");
+        let mut wake = MessageRecord::new(
+            env.workspace_id.clone(),
+            &snapshot.agents[0],
+            "wait finished".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Harness {
+            notice: HarnessNotice::Wait,
+        });
+        let blocker = if pinned {
+            wake = wake.with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            "stuck: pinned pane zellij:terminal_3 is not live"
+        } else {
+            "stuck: no live pane"
+        };
+        env.store().queue_message(&wake, "rimz-test").unwrap();
+        run_hook(
+            &env,
+            json!({
+                "hook_event_name": "Stop",
+                "session_id": "sess-missing-pane",
+                "worktree_branch": "feature-missing-pane",
+            }),
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+
+        let trace_log = env.project_root.join("zellij-missing-pane-wake-trace.log");
+        run_success(
+            traced_rimz(&env, &trace_log)
+                .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+                .args(["message", "sweep"]),
+            "sweep unbindable wake",
+        );
+
+        let queued = message_by_id(&env, &wake.message_id);
+        assert_eq!(queued.status, MessageStatus::Queued);
+        assert_eq!(queued.attempts, 0);
+        assert_eq!(queued.pane_id, wake.pane_id);
+        assert_eq!(queued.last_error.as_deref(), Some(blocker));
+        assert!(trace_lines(&trace_log).is_empty());
+        let shown = run_success(
+            env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args([
+                "message",
+                "show",
+                wake.message_id.as_str(),
+            ]),
+            "show unbindable wake",
+        );
+        let shown = String::from_utf8_lossy(&shown.stdout);
+        assert!(shown.contains(blocker), "{shown}");
+    }
+}
+
+#[test]
 fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let env = Env::new();
     env.install_agent_hooks("claude");
