@@ -261,7 +261,7 @@ fn read_published_workspace_snapshot(
     let cache = read_snapshot_cache(&runtime.pane_frame_path(), session);
     let panes = cache
         .as_deref()
-        .map(|frame| SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None))
+        .map(|frame| base.card_admitted_live_panes(frame.to_pane_refs(), None))
         .unwrap_or_default();
     let agent_projection = super::agent_projection::read_published(runtime, session, &panes);
     let store = Store::open_existing(state.clone(), runtime.clone());
@@ -294,7 +294,7 @@ pub fn cached_alive_snapshot(
     crate::store::agent_context::attach_rest_certificates(runtime, &mut base.agents);
     if let Some(frame_panes) = frame_panes {
         let (panes, projection) =
-            read_published_agent_projection(frame_panes, runtime, session, None);
+            read_published_agent_projection(&base, frame_panes, runtime, session, None);
         base = base.with_local_sessions(&panes, projection.local_sessions);
     }
     base
@@ -328,6 +328,7 @@ fn reap_cached_daemon_sessions_with(
 }
 
 fn read_published_agent_projection(
+    snapshot: &SidebarSnapshot,
     frame_panes: Vec<crate::pane::PaneRef>,
     runtime: &RuntimePaths,
     session: &str,
@@ -336,7 +337,7 @@ fn read_published_agent_projection(
     Vec<crate::pane::PaneRef>,
     super::agent_projection::AgentProjection,
 ) {
-    let panes = SidebarSnapshot::card_admitted_live_panes(frame_panes, exclude);
+    let panes = snapshot.card_admitted_live_panes(frame_panes, exclude);
     let projection = super::agent_projection::read_published(runtime, session, &panes);
     (panes, projection)
 }

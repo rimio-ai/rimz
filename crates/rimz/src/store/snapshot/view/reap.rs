@@ -45,7 +45,7 @@ impl SidebarSnapshot {
     pub fn reap_runtime(&mut self, inputs: RuntimeReapInputs<'_>) {
         let admitted_panes = inputs
             .frame_panes
-            .map(|panes| Self::card_admitted_live_panes(panes.to_vec(), inputs.exclude_pane));
+            .map(|panes| self.card_admitted_live_panes(panes.to_vec(), inputs.exclude_pane));
         if let Some(frame_panes) = inputs.frame_panes {
             self.drop_host_pane_agents(frame_panes);
         }
@@ -89,7 +89,7 @@ impl SidebarSnapshot {
     fn drop_host_pane_agents(&mut self, frame_panes: &[PaneRef]) {
         let host_pane_ids = frame_panes
             .iter()
-            .filter(|pane| pane::pane_is_host(pane))
+            .filter(|pane| pane::pane_runs_daemon_host(pane))
             .map(|pane| pane.pane_id.clone())
             .collect::<Vec<_>>();
         if host_pane_ids.is_empty() {

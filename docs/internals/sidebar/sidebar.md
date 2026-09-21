@@ -89,7 +89,7 @@ Where to start reading depends on the question:
 
 Row presence comes from the live pane frame. The producer enumerates the session's panes, reads each pane's foreground command and cwd, resolves the cwd to a worktree, and the fold emits at most one row per admitted pane. No pane id is shared by two rows.
 
-[`pane_admits_card`](../../../crates/rimz/src/store/snapshot/panes.rs) is the admission rule. It excludes the caller's own pane, sidebar chrome, and the remote-control and app-server hosts, and admits every other pane.
+[`pane_admits_card`](../../../crates/rimz/src/store/snapshot/panes.rs) is the admission rule. It excludes the caller's own pane, sidebar chrome, and the remote-control and app-server hosts. In the [`rimzd` view](../rimzd.md) it admits only a pane with an agent durably stamped on it, which keeps the dashboard's infrastructure out while letting a loop-zone run render; every other pane is admitted. The rule is the same list the fold uses for `agent_panes`, so a pane it drops is also unreachable by message delivery.
 
 An agent with no live pane has no row. That covers a subagent, a ghost a kill left in the rollup, and a relaunch the [reaper](../agents/instances.md#session-death) has not yet collapsed. Such an agent cannot resurrect a row or latch onto another pane, and there is no `offline` status.
 

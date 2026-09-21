@@ -124,7 +124,7 @@ pub(crate) fn produce_workspace_snapshot(
     let store = Store::open_existing(state.clone(), runtime.clone());
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, runtime, opts.min_pane_cache_ms);
-    let agent_projection = refresh_agent_projection(Some(&frame), runtime);
+    let agent_projection = refresh_agent_projection(&snapshot, Some(&frame), runtime);
     let workspace = enrich_workspace(
         snapshot,
         Some(&frame),
@@ -417,7 +417,7 @@ fn enrich_with_refresh(
 ) -> SidebarSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
-    let agent_projection = refresh_agent_projection(frame.as_ref(), opts.runtime);
+    let agent_projection = refresh_agent_projection(&snapshot, frame.as_ref(), opts.runtime);
     let folded = enrich(
         snapshot.clone(),
         frame.as_ref(),
@@ -463,14 +463,18 @@ fn enrich_with_refresh(
     )
 }
 
-fn refresh_agent_projection(frame: Option<&PaneFrame>, runtime: &RuntimePaths) -> AgentProjection {
+fn refresh_agent_projection(
+    snapshot: &SidebarSnapshot,
+    frame: Option<&PaneFrame>,
+    runtime: &RuntimePaths,
+) -> AgentProjection {
     let Some(frame) = frame else {
         return AgentProjection {
             wiring: crate::sidebar::agent_projection::probe_current(),
             local_sessions: Vec::new(),
         };
     };
-    let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
+    let panes = snapshot.card_admitted_live_panes(frame.to_pane_refs(), None);
     crate::sidebar::agent_projection::refresh_published(runtime, &frame.session_name, &panes)
 }
 
