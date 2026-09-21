@@ -87,7 +87,9 @@ pub(super) const CONTROL_TAG_PREFIXES: &[&str] = &[
     "<skill name=",
 ];
 
-/// Blocks RimZ composes around a prompt, with one registry for writing and peeling.
+/// The blocks RimZ composes around a prompt it sends. One registry writes them
+/// and peels them, so a new wrapper is a variant here and its tag is spelled
+/// nowhere else; `ensure_rimz_block_registry` holds that.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RimzBlock {
     SystemReminder,
@@ -110,7 +112,9 @@ pub fn wrap_rimz_block(block: RimzBlock, body: &str) -> String {
     format!("<{tag}>\n{body}\n</{tag}>")
 }
 
-/// Remove balanced registered blocks, trimming their joins to paragraph breaks. Malformed nesting leaves the original text untouched.
+/// Remove every balanced registered block, joining what survives with a
+/// paragraph break. Malformed nesting leaves the original text untouched, so a
+/// prompt that merely quotes a tag is never rewritten.
 pub fn peel_rimz_blocks(text: &str) -> String {
     let tags = RimzBlock::ALL.map(|block| {
         let tag = block.tag();
