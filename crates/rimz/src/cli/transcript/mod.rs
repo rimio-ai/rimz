@@ -70,6 +70,9 @@ pub(crate) struct ChatLine {
     pub to: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<jiff::Timestamp>,
+    /// When the line reached the agent, for a line stamped with its creation time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivered_at: Option<jiff::Timestamp>,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
@@ -83,6 +86,13 @@ pub(crate) struct ChatLine {
     pub answers: Vec<rimz::transcript::AskAnswer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage: Option<StageLine>,
+}
+
+impl ChatLine {
+    /// When RimZ learned of this line: delivery for a message that waited, else its own time.
+    pub(crate) fn arrived_at(&self) -> Option<jiff::Timestamp> {
+        self.delivered_at.or(self.at)
+    }
 }
 
 /// A `rimz teams flip`, carried as a conversation line whose `text` is the note.

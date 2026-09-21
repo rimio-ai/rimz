@@ -214,7 +214,7 @@ pub(super) fn hide_harness_turns(
 /// Other entries open no turn.
 pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
     let by_message_id = message_index(entries);
-    let mut latest_opener = HashMap::<&AgentKey, usize>::new();
+    let mut agent_openers = HashMap::<&AgentKey, Vec<usize>>::new();
     let mut openers = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         let LineSource::Log {
@@ -232,7 +232,7 @@ pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
             | TranscriptKind::Message
             | TranscriptKind::SubagentReport
             | TranscriptKind::Wait => {
-                latest_opener.insert(agent, index);
+                agent_openers.entry(agent).or_default().push(index);
                 Vec::new()
             }
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
@@ -243,7 +243,27 @@ pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
                 if entry.chat.reply_to.is_empty() =>
             {
-                latest_opener.get(agent).copied().into_iter().collect()
+                agent_openers
+                    .get(agent)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&candidate| {
+                        entries[candidate]
+                            .chat
+                            .arrived_at()
+                            .zip(entry.chat.at)
+                            .is_none_or(|(arrival, output)| arrival <= output)
+                    })
+                    .max_by(|&left, &right| {
+                        scope::compare_optional_timestamps(
+                            entries[left].chat.arrived_at(),
+                            entries[right].chat.arrived_at(),
+                        )
+                        .then_with(|| left.cmp(&right))
+                    })
+                    .into_iter()
+                    .collect()
             }
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => entry
                 .chat

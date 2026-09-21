@@ -67,6 +67,7 @@ fn render_entry(
             from: from.to_owned(),
             to: to.map(ToOwned::to_owned),
             at: Some(ts(at)),
+            delivered_at: None,
             text: text.to_owned(),
             message_id: None,
             reply_to: Vec::new(),
@@ -1292,6 +1293,86 @@ fn chat_renders_speaker_headers_and_flush_left_bodies() {
         "{out}"
     );
     assert!(!out.contains("user:"), "{out}");
+}
+
+#[test]
+fn parked_message_does_not_steal_an_earlier_turns_output() {
+    let mut parked = render_entry(
+        TranscriptKind::Message,
+        "@reviewer",
+        Some("@claude"),
+        "2026-06-28T04:01:00Z",
+        "parked",
+    );
+    parked.chat.delivered_at = Some(ts("2026-06-28T04:05:00Z"));
+    let entries = vec![
+        entry("2026-06-28T04:00:00Z", "prompt"),
+        parked,
+        assistant_entry("2026-06-28T04:02:00Z", "output"),
+    ];
+    let display = assemble_threads(&entries, 0, false);
+    assert_eq!(display[0].entry.chat.text, "prompt");
+    assert_eq!(display[1].entry.chat.text, "output");
+    assert_eq!(display[0].block, display[1].block);
+    assert_eq!(display[2].entry.chat.text, "parked");
+    assert_ne!(display[0].block, display[2].block);
+}
+
+#[test]
+fn message_json_uses_created_time_and_preserves_delivery() {
+    let mut entry = log_entry(
+        "claude",
+        "receiver",
+        TranscriptKind::Message,
+        Some("@planner"),
+        "hello",
+    );
+    entry.at = ts("2026-06-28T16:45:00Z");
+    entry.enqueued_at = Some(ts("2026-06-28T16:41:00Z"));
+    let json =
+        serde_json::to_value(chat_entry_for_log_entry(&entry, &HashMap::new(), false)).unwrap();
+    assert_eq!(json["at"], "2026-06-28T16:41:00Z");
+    assert_eq!(json["delivered_at"], "2026-06-28T16:45:00Z");
+    entry.enqueued_at = None;
+    let json =
+        serde_json::to_value(chat_entry_for_log_entry(&entry, &HashMap::new(), false)).unwrap();
+    assert_eq!(json["at"], "2026-06-28T16:45:00Z");
+    assert!(json.get("delivered_at").is_none());
+    assert!(json.get("enqueued_at").is_none());
+}
+
+#[test]
+fn delivery_headers_show_waits_and_local_date_changes() {
+    for (delivered, expected) in [
+        ("2026-06-28T16:45:00Z", "12:41 · delivered 12:45"),
+        ("2026-06-28T16:42:00Z", "12:41 · delivered 12:42"),
+        ("2026-06-28T16:41:07Z", "12:41"),
+        (
+            "2026-06-29T04:01:00Z",
+            "12:41 · delivered Mon, Jun 29 2026 · 00:01",
+        ),
+    ] {
+        let mut parked = entry("2026-06-28T16:41:00Z", "hello");
+        parked.chat.delivered_at = Some(ts(delivered));
+        let out = render(&[parked], jiff::civil::date(2026, 6, 28));
+        assert_eq!(out, format!(" user  → @claude  {expected}\nhello\n"));
+    }
+}
+
+#[test]
+fn delivery_stamp_breaks_grouping_before_and_after() {
+    let mut parked = entry("2026-06-28T16:41:00Z", "parked");
+    parked.chat.delivered_at = Some(ts("2026-06-28T16:45:00Z"));
+    let out = render(
+        &[
+            entry("2026-06-28T16:40:00Z", "before"),
+            parked,
+            entry("2026-06-28T16:42:00Z", "after"),
+        ],
+        jiff::civil::date(2026, 6, 28),
+    );
+    assert_eq!(out.matches(" user  → @claude").count(), 3, "{out}");
+    assert!(out.contains("12:41 · delivered 12:45\nparked"), "{out}");
 }
 
 #[test]
