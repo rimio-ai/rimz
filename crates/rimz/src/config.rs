@@ -868,7 +868,7 @@ impl MachineConfig {
 }
 
 /// Diagnose parse, I/O, and semantic failures across the per-machine config files and Markdown definitions.
-/// The core check covers TOML, removed keys, accounts, account budgets, and notifications; the theme check validates every configured palette source. Runtime loading remains lenient; this feeds the start gate, start notices, and `rimz doctor`.
+/// The core check covers TOML, removed keys, accounts, account budgets, and a switched-on `[notifications]` table; the theme check validates every configured palette source. Runtime loading remains lenient; this feeds the start gate, start notices, and `rimz doctor`.
 pub fn broken_machine_files() -> Vec<ConfigErr> {
     broken_machine_files_in(&MachineConfigFiles::machine())
 }
@@ -1093,11 +1093,18 @@ fn parse_core_text_collecting(path: &Path, text: &str) -> Result<Parsed<CoreConf
     parse_toml_collecting(path, text)
 }
 
-/// Validate core TOML, removed keys, accounts, account budgets, and notifications.
+/// Validate core TOML, removed keys, accounts, account budgets, and a switched-on
+/// `[notifications]` table.
+///
+/// A table under `enabled = false` asks for no notifications, so its handlers are
+/// a precondition of nothing and must not refuse a room start. The strict load
+/// still validates it, so `rimz doctor` keeps reporting it.
 fn parse_core_text_strict(path: &Path, text: &str) -> Result<CoreConfig> {
     let core = parse_core_text(path, text)?;
     validate_account_budgets(&core.accounts, path)?;
-    validate_notifications_config(&core.notifications, path)?;
+    if core.notifications.enabled {
+        validate_notifications_config(&core.notifications, path)?;
+    }
     Ok(core)
 }
 
