@@ -241,7 +241,7 @@ Your agents' own session files and the room's archived records stay on disk. A p
 | `--yes` | Skip the `[y/N]` prompt. Required when stdin is not a terminal. |
 | `--no-start` | Stop after step 4 and print ``Room torn down. Run `rimz start` to rebuild it.`` |
 | `--hard` | Also delete the prior-agent carryover, so the store keeps no record of the old room's agents beyond the archived log. The report reads `Records: prior agent rollup cleared.` |
-| `--account <KIND=NAME>` | Rebuild the room under this [provider account](./accounts.md). Repeatable. Cannot be combined with `--no-start`. |
+| `--account <KIND=NAME>` | Rebuild the room under this [provider account](./accounts.md), with no agents. Repeatable. Cannot be combined with `--no-start`. |
 
 A room's accounts are fixed when it is born, so `reset --account` is how you move a running room to a different account.
 

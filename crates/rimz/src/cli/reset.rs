@@ -25,7 +25,7 @@ pub struct ResetArgs {
     /// Archive the current room records but do not seed prior agents on rebirth.
     #[arg(long)]
     pub hard: bool,
-    /// Rebuild the room under this provider account (repeatable).
+    /// Rebuild the room under this provider account (repeatable); the room comes back with no agents.
     #[arg(long, value_name = "KIND=NAME", value_parser = super::accounts::parse_account_flag, conflicts_with = "no_start")]
     pub account: Vec<super::accounts::AccountFlag>,
     /// Path to use as the workspace cwd.
@@ -57,12 +57,7 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
                  pass --yes to confirm without a terminal"
             );
         }
-        if !super::confirm(&format!(
-            "Reset the '{}' room? This deletes the mux session, purges its \
-             resurrection cache, archives its records, clears live coordination \
-             state, signals its orphaned processes, and removes its tmp files.",
-            workspace.session_name
-        ))? {
+        if !super::confirm(&reset_confirmation(&workspace.session_name))? {
             writeln!(std::io::stderr().lock(), "Reset aborted; nothing changed.")?;
             return Ok(());
         }
@@ -96,4 +91,25 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         },
         globals,
     )
+}
+
+fn reset_confirmation(session: &str) -> String {
+    format!(
+        "Reset the '{session}' room? This deletes the mux session, purges its \
+         resurrection cache, archives its records, clears live coordination \
+         state, signals its orphaned processes, and removes its tmp files. \
+         The rebuilt room comes back with no agents; its panes are not seeded again."
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_confirmation_names_the_room_and_empty_rebuild() {
+        let prompt = reset_confirmation("rimz-project");
+        assert!(prompt.starts_with("Reset the 'rimz-project' room?"));
+        assert!(prompt.contains("comes back with no agents; its panes are not seeded again."));
+    }
 }

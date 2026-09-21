@@ -227,6 +227,7 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
         .select(kind, name)
         .ok()
         .and_then(|login| login.home().map(|home| home.display().to_string()));
+    let live = live_rooms_selecting(kind, name);
     let removed = ConfigEditor::machine().remove_named_account(kind, name)?;
     let mut out = render::out();
     if !removed {
@@ -237,9 +238,59 @@ fn remove(kind: &AgentKind, name: &LoginName) -> Result<()> {
     }
     render::finish(writeln!(
         out,
-        "removed {kind} account `{name}`; its home {} and the provider files in it stay on disk, and a room still using it refuses to start until `rimz reset`",
-        render::home_relative(home.as_deref().unwrap_or_default())
+        "{}",
+        removed_notice(
+            kind,
+            name,
+            &render::home_relative(home.as_deref().unwrap_or_default()),
+            &live,
+        )
     ))
+}
+
+/// Live rooms whose frozen selection still names this account. Their provider dashboards stop refreshing once the catalog can no longer select it.
+fn live_rooms_selecting(kind: &AgentKind, name: &LoginName) -> Vec<String> {
+    let inventory = match rimz::room::session::room_inventory() {
+        Ok(inventory) => inventory,
+        Err(err) => {
+            tracing::debug!(%err, "could not inventory rooms before removing account");
+            return Vec::new();
+        }
+    };
+    let mut rooms = Vec::new();
+    for room in inventory.live {
+        let selection = (|| -> Result<RoomLogins> {
+            let paths = rimz::StatePaths::for_workspace(room.workspace_id)?;
+            Ok(rimz::agents::room_logins(&paths.workspace_record)?)
+        })();
+        match selection {
+            Ok(logins) if logins.get(kind) == Some(name) => rooms.push(room.session_name),
+            Ok(_) => {}
+            Err(err) => {
+                tracing::debug!(%err, session = %room.session_name, "could not read room accounts before removing account");
+            }
+        }
+    }
+    rooms
+}
+
+/// What `remove` prints, given the account, its displayed home, and the live rooms still selecting it.
+fn removed_notice(kind: &AgentKind, name: &LoginName, home: &str, live: &[String]) -> String {
+    let mut notice = format!(
+        "removed {kind} account `{name}`; its home {home} and the provider files in it stay on disk, and a room still using it refuses to start until `rimz reset`"
+    );
+    if !live.is_empty() {
+        let (room, verb, possessive, dashboard, target) = if live.len() == 1 {
+            ("room", "is", "its", "dashboard stops", "that room")
+        } else {
+            ("rooms", "are", "their", "dashboards stop", "those rooms")
+        };
+        notice.push_str(&format!(
+            "\nwarning: {room} {} {verb} running on it; {possessive} {kind} {dashboard} refreshing until you add the account back or `rimz reset` {target}",
+            live.join(", ")
+        ));
+    }
+    notice
 }
 
 /// One `--account <kind>=<name>` flag.
@@ -281,6 +332,42 @@ pub(crate) fn requested_logins(flags: &[AccountFlag]) -> Result<RoomLogins> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_notice_without_live_rooms_matches_reference() {
+        assert_eq!(
+            removed_notice(
+                &AgentKind::new_unchecked("claude"),
+                &"work".parse().unwrap(),
+                "~/.rimz/accounts/claude/work",
+                &[]
+            ),
+            "removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk, and a room still using it refuses to start until `rimz reset`"
+        );
+    }
+
+    #[test]
+    fn removed_notice_warns_live_rooms_about_dashboard_and_recovery() {
+        for (live, warning) in [
+            (
+                vec!["rimz-one".to_owned()],
+                "warning: room rimz-one is running on it; its claude dashboard stops refreshing until you add the account back or `rimz reset` that room",
+            ),
+            (
+                vec!["rimz-one".to_owned(), "rimz-two".to_owned()],
+                "warning: rooms rimz-one, rimz-two are running on it; their claude dashboards stop refreshing until you add the account back or `rimz reset` those rooms",
+            ),
+        ] {
+            let notice = removed_notice(
+                &AgentKind::new_unchecked("claude"),
+                &"work".parse().unwrap(),
+                "~/.rimz/accounts/claude/work",
+                &live,
+            );
+            assert_eq!(notice.lines().nth(1), Some(warning));
+            assert_eq!(notice.lines().count(), 2);
+        }
+    }
 
     #[test]
     fn account_flags_parse_kind_and_name_and_refuse_a_repeated_kind() {
