@@ -221,8 +221,6 @@ pub struct TmuxBackend {
     socket: PathBuf,
     /// Memoized `tmux -V` stdout ([`MuxBackend::version`]).
     version: std::sync::OnceLock<String>,
-    /// Guards the one-per-process socket-directory creation in [`Self::cmd`].
-    socket_dir: std::sync::OnceLock<()>,
 }
 
 impl Default for TmuxBackend {
@@ -236,7 +234,6 @@ impl TmuxBackend {
         Self {
             socket: socket.into(),
             version: std::sync::OnceLock::new(),
-            socket_dir: std::sync::OnceLock::new(),
         }
     }
 
@@ -247,23 +244,22 @@ impl TmuxBackend {
     /// command — [`CommandSpec::env`] adds to the inherited environment, so a
     /// `rimz` invoked from inside some other tmux would otherwise leak that
     /// endpoint into commands meant for the managed one.
+    ///
+    /// Creates nothing. tmux answers a read identically whether the socket's
+    /// directory is absent or merely empty (`error connecting to <path> (No
+    /// such file or directory)`), so only birth needs that directory, and
+    /// [`Self::ensure_endpoint_ready`] prepares it there. Keeping it out of
+    /// here is what lets a read-only caller — `rimz doctor` above all — probe
+    /// tmux without touching the runtime tree.
     fn cmd(&self) -> CommandSpec {
-        self.socket_dir.get_or_init(|| {
-            if let Some(parent) = self.socket.parent() {
-                // Best-effort: tmux creates the socket but not its directory.
-                // A genuine failure surfaces with its fix in `ensure_session`,
-                // which owns the precondition.
-                let _ = crate::disk::paths::ensure_private_runtime_dir(parent);
-            }
-        });
         tmux_cmd(&self.socket)
     }
 
     /// Fail fast when the managed endpoint cannot be addressed.
     ///
-    /// `cmd` creates the socket directory best-effort so read paths degrade
-    /// quietly; birth is the entry point that owns the precondition, so it
-    /// reports the real reason instead of letting tmux fail obscurely later.
+    /// Birth is the one entry point that needs the socket directory, so it owns
+    /// the precondition and reports the real reason here instead of letting
+    /// tmux fail obscurely later.
     pub(super) fn ensure_endpoint_ready(&self) -> Result<()> {
         let Some(parent) = self.socket.parent() else {
             return Ok(());
