@@ -15,14 +15,14 @@ expression: screen
 ▌  ▢ ──────────────────────────────────────────    0%▐
 ▌  ▤ 0                                               ▐
 ▌  ⧉ subagents (1)                                   ▐
-▌    ⣾ research — map the renderer                   ▐
+▌    ⣾ research · map the renderer                   ▐
 ▌                                               ◔ <1m▐
 ▎⢄ coder                                             🮇
 ▎  implement                                         🮇
 ▎  ▢ ──────────────────────────────────────────    0%🮇
 ▎  ▤ 0                                               🮇
 ▎  ⧉ subagents (1)                                   🮇
-▎    ⣾ tests — pin the frame                         🮇
+▎    ⣾ tests · pin the frame                         🮇
 ▎                                               ◔ <1m🮇
 ▎⢄ stray                                             🮇
 ▎  observe                                           🮇

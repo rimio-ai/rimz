@@ -151,12 +151,12 @@ pub(super) fn agent_identity_line(
     if row_ctx.tier != Tier::L0
         && let Some(model) = display_model(row)
     {
-        left.push(Span::styled(" · ", theme.muted()));
+        left.push(Span::styled(value_seam(theme), theme.muted()));
         left.push(Span::styled(model, theme.muted()));
         if row_ctx.tier == Tier::L2
             && let Some(reasoning) = display_reasoning(row)
         {
-            left.push(Span::styled(" · ", theme.muted()));
+            left.push(Span::styled(value_seam(theme), theme.muted()));
             left.push(Span::styled(reasoning.to_owned(), theme.muted()));
         }
         // The window token keeps the capability tokens' DIM weight — metadata,
@@ -166,7 +166,7 @@ pub(super) fn agent_identity_line(
         if status != AgentStatus::Idle
             && let Some(window) = display_context_window(row)
         {
-            left.push(Span::styled(" · ", theme.muted()));
+            left.push(Span::styled(value_seam(theme), theme.muted()));
             left.push(Span::styled(
                 window_short(window),
                 window_style(theme, window),

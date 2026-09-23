@@ -5,6 +5,7 @@
 //! cost pinned right, then token totals and cache health with the finished age
 //! pinned right.
 
+use crate::sidebar_pane::render::labels::value_seam;
 use std::collections::HashSet;
 
 use crate::agents::AgentStatus;
@@ -265,7 +266,7 @@ fn pipeline_line(
     // The team drops before the track, so the room a dropped track frees never
     // buys the badge back. A stage with no track of its own keeps it.
     if let Some(team) = team.filter(|_| draws_track || !has_track) {
-        let suffix = format!(" · {team}");
+        let suffix = format!("{}{team}", value_seam(theme));
         if spans_width(&left) + text_width(&suffix) <= width {
             left.push(Span::styled(
                 suffix,
@@ -353,7 +354,7 @@ fn finished_roster_line(
         ));
         if let Some(pipeline) = &group.pipeline {
             spans.push(Span::styled(
-                format!(" · {}", pipeline.stage),
+                format!("{}{}", value_seam(ctx.theme), pipeline.stage),
                 ctx.theme.muted(),
             ));
         }
@@ -456,7 +457,7 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
                 crate::agents::CacheHealth::Alarm => ctx.theme.alarm(Modifier::empty()),
             };
             vec![
-                Span::styled(" · ", ctx.theme.muted()),
+                Span::styled(value_seam(ctx.theme), ctx.theme.muted()),
                 Span::styled(format!("{percent}%"), style),
             ]
         });
@@ -591,11 +592,11 @@ fn group_header(
             format!("{} {}", theme.glyph(role), group.label)
         }
     };
-    let team_suffix = team.map(|team| format!(" · {team}"));
+    let team_suffix = team.map(|team| format!("{}{team}", value_seam(theme)));
     let qualifier_suffix = group
         .label_qualifier
         .as_deref()
-        .map(|qualifier| format!(" · {qualifier}"));
+        .map(|qualifier| format!("{}{qualifier}", value_seam(theme)));
     let full_label = format!(
         "{label_with_prefix}{}{}",
         qualifier_suffix.as_deref().unwrap_or_default(),

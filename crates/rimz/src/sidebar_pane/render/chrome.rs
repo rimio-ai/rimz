@@ -1,5 +1,6 @@
 use crate::agents::AgentStatus;
 use crate::config::{GlyphRole, SidebarKeys};
+use crate::sidebar_pane::render::labels::value_seam;
 use crate::store::snapshot::{
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarSnapshot, TruthNotice,
 };
@@ -103,9 +104,10 @@ pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<L
             .unwrap_or_else(|| "0s".to_owned());
         vec![Line::styled(
             format!(
-                "{} last alert {elapsed} ago: {}  ·  x dismiss",
+                "{} last alert {elapsed} ago: {}{}x dismiss",
                 theme.glyph(GlyphRole::ChromeAlert),
-                alert.reason
+                alert.reason,
+                value_seam(theme)
             ),
             theme.warn(Modifier::DIM),
         )]
@@ -123,9 +125,11 @@ pub(super) fn truth_notice_lines(
     let noun = if notice.carried == 1 { "pane" } else { "panes" };
     vec![Line::styled(
         format!(
-            "{} pane source degraded · {} carried {noun} · {elapsed}",
+            "{} pane source degraded{}{} carried {noun}{}{elapsed}",
             theme.glyph(GlyphRole::ChromeAlert),
-            notice.carried
+            value_seam(theme),
+            notice.carried,
+            value_seam(theme)
         ),
         theme.warn(Modifier::DIM),
     )]
@@ -134,8 +138,9 @@ pub(super) fn truth_notice_lines(
 pub(super) fn gate_notice_lines(theme: &Theme, notice: &GateNotice) -> Vec<Line<'static>> {
     vec![Line::styled(
         format!(
-            "{} pane updates held · {}",
+            "{} pane updates held{}{}",
             theme.glyph(GlyphRole::ChromeAlert),
+            value_seam(theme),
             gate_rule_label(notice.rule)
         ),
         theme.warn(Modifier::DIM),
@@ -266,7 +271,7 @@ fn presence_badge(
             if minutes == 0 {
                 format!("{glyph} idle")
             } else {
-                format!("{glyph} idle · {minutes}m")
+                format!("{glyph} idle{}{minutes}m", value_seam(theme))
             }
         }
         SidebarPresence::Detached => format!("{glyph} away"),

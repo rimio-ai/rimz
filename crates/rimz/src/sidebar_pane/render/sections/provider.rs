@@ -4,6 +4,7 @@
 use crate::agents::{AgentStatus, ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
+use crate::sidebar_pane::render::labels::value_seam;
 use crate::store::snapshot::{RemoteControlBadge, SidebarProviderPanel};
 use crate::{SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
@@ -898,7 +899,7 @@ fn provider_header_left(
         if let Some(plan) = panel.plan.as_deref() {
             left.push(Span::styled(plan.to_owned(), theme.muted()));
             if include_version {
-                left.push(Span::styled(" · ", theme.faint()));
+                left.push(Span::styled(value_seam(theme), theme.faint()));
                 left.push(Span::styled(version, theme.muted()));
             }
         } else if include_version {
@@ -913,7 +914,7 @@ fn provider_header_left(
             left.push(Span::styled(format!(" {version}"), theme.muted()));
         }
         if let Some(plan) = panel.plan.as_deref() {
-            left.push(Span::styled(" · ", theme.faint()));
+            left.push(Span::styled(value_seam(theme), theme.faint()));
             left.push(Span::styled(plan.to_owned(), theme.muted()));
         }
     }

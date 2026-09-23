@@ -23,19 +23,21 @@ use crate::sidebar_pane::render::labels::{
     context_breakdown_spans, context_compaction_spans, context_gauge_spans,
     context_tool_repeat_spans, context_total_spans, elapsed_glyph, emphasize, role_glyph,
     severity_heat_amount, severity_heat_color, subagent_head_style, token_breakdown_spans,
-    token_total_glyph, unread_run_spans, window_style,
+    token_total_glyph, unread_run_spans, value_seam, window_style,
 };
 use crate::sidebar_pane::render::layout::ellipsize;
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 mod bands;
 mod description;
+mod entry;
 mod gauge;
 mod identity;
 mod template;
 mod waits;
 
 use self::{description::*, gauge::*};
+use entry::{Entry, push_entry};
 use identity::{display_context_window, identity_line};
 use template::{CardSlot, CardStage, template};
 
@@ -269,7 +271,7 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
     }
     if wait_count > 0 {
         if agent.sub_agent_count > 0 {
-            left.push(Span::styled(" · ", theme.muted()));
+            left.push(Span::styled(value_seam(theme), theme.muted()));
         }
         left.extend([
             Span::styled(
@@ -339,26 +341,17 @@ fn sub_agent_entry_lines(
         // child thinks (reasoning) or fills (acting) in the live clay, a
         // finished one holds its static `✓`/`!` verdict — one head grammar
         // for the parent's cell and its children's.
-        let mut spans = vec![
-            Span::raw("    "),
-            Span::styled(
-                agent_glyph(theme, sub.status, sub.phase, animation_phase),
-                agent_role_style_at(theme, sub.status, sub.phase, animation_phase),
-            ),
-            Span::raw(" "),
-            Span::styled(sub.name.clone(), theme.body()),
-        ];
+        let lead = Span::styled(
+            agent_glyph(theme, sub.status, sub.phase, animation_phase),
+            agent_role_style_at(theme, sub.status, sub.phase, animation_phase),
+        );
         // Prefer the `subagentStatusLine` description; fall back to the task
         // definition, shown only when it differs from the name (the name already
-        // is the type for most children) so the line never reads `Explore —
-        // Explore`.
+        // is the type for most children) rather than repeating it as a headline.
         let detail = sub
             .description
             .as_deref()
             .or(sub.task.as_deref().filter(|task| *task != sub.name));
-        if let Some(detail) = detail {
-            spans.push(Span::styled(format!(" — {detail}"), theme.body()));
-        }
         // A landed child pins how long ago it finished, ahead of its cost; a
         // live child's elapsed clock rides line 2 instead.
         let mut right = Vec::new();
@@ -377,11 +370,17 @@ fn sub_agent_entry_lines(
                 theme.money_style(Modifier::empty()),
             ));
         }
-        lines.push(pin_right(spans, right, width));
-
-        if let Some(line) = sub_agent_metadata_line(theme, sub, token_col, model_col, width) {
-            lines.push(line);
-        }
+        push_entry(
+            ctx,
+            &mut lines,
+            Entry {
+                lead,
+                kind: sub.name.clone(),
+                headline: detail.map(str::to_owned),
+                right,
+                detail: sub_agent_metadata_line(theme, sub, token_col, model_col, width),
+            },
+        );
     }
     lines
 }
@@ -475,7 +474,7 @@ fn append_sub_agent_model(
     match model {
         Some(model) => {
             if *prev_rendered {
-                left.push(Span::styled(" · ", theme.muted()));
+                left.push(Span::styled(value_seam(theme), theme.muted()));
             } else {
                 left.push(Span::raw(" ".repeat(seam)));
             }
@@ -501,7 +500,7 @@ fn append_sub_agent_effort(
         return;
     };
     if prev_rendered {
-        left.push(Span::styled(" · ", theme.muted()));
+        left.push(Span::styled(value_seam(theme), theme.muted()));
     } else if token_col > 0 || model_col > 0 {
         left.push(Span::raw("   "));
     }
