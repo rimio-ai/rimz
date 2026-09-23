@@ -620,7 +620,8 @@ mod parse {
                 scope: Some(scope),
                 worktree: None,
                 from_pr: None,
-                bg: false
+                bg: false,
+                fresh: false,
             })
                 if scope == "#docs"
         ));
@@ -631,12 +632,32 @@ mod parse {
                 worktree: None,
                 from_pr: Some(rimz::forge::PrTarget { number: 69, .. }),
                 bg: true,
+                fresh: false,
             })
         ));
         assert_clap_error(
             &["rimz", "resume", "#docs", "--from-pr", "69"],
             clap::error::ErrorKind::ArgumentConflict,
         );
+    }
+
+    #[test]
+    fn lane_resume_fresh_preserves_scope_and_background_options() {
+        for argv in [
+            vec!["rimz", "resume", "#docs", "--fresh", "--bg"],
+            vec!["rimz", "resume", "-w", "docs", "--fresh", "--bg"],
+            vec!["rimz", "resume", "--from-pr", "69", "--fresh", "--bg"],
+        ] {
+            let args = parse_agents(&argv);
+            assert!(matches!(
+                args.command,
+                Some(AgentsSubcmd::Resume {
+                    bg: true,
+                    fresh: true,
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]

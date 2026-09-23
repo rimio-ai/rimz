@@ -79,6 +79,7 @@ impl LaneRestoreConfig {
 #[derive(Clone, Debug)]
 pub struct LaneResumeRequest<'a> {
     pub selector: LaneResumeSelector,
+    pub fresh: bool,
     pub agents: &'a [AgentState],
     pub worktrees: &'a [LaneWorktree],
     pub current_root: &'a Path,
@@ -131,6 +132,12 @@ pub enum LaneResumeError {
     PrNotLocal { number: u64 },
     #[error("nothing to resume in '{scope}'")]
     Nothing { scope: String },
+    #[error("cannot relaunch '{scope}' fresh while {labels} are live; use rimz agents stop, or resume without --fresh", labels = .labels.join(", "))]
+    FreshMembersLive { scope: String, labels: Vec<String> },
+    #[error(
+        "no saved team shape in '{scope}'; resume without --fresh, or launch with rimz agents <spec> -w {worktree}"
+    )]
+    FreshNoShape { scope: String, worktree: String },
     #[error("live lane has no focus candidate")]
     LiveNoFocus,
     #[error("live lane agent has no bound pane")]
@@ -224,7 +231,7 @@ struct ResolvedLane {
 
 /// Why a candidate agent was not resumed — surfaced in the start report so a
 /// skipped agent stays visible rather than silently lost.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResumeSkipReason {
     /// The agent's kind has no resume CLI (`crate::agents::capabilities::LaunchCapability::resume_command`).
     NoResumeSupport,
@@ -239,17 +246,23 @@ pub enum ResumeSkipReason {
     /// The session was born under another account than the room launches
     /// under, and its conversation lives in that account's home.
     LoginMismatch,
+    /// A fresh lane restores team tabs, not standalone roots.
+    FreshRelaunch(String),
 }
 
 impl ResumeSkipReason {
-    pub const fn label(self) -> &'static str {
+    pub fn label(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::NoResumeSupport => "no resume CLI",
             Self::NoConversation => "no saved conversation",
             Self::OverCap => "over the resume cap",
             Self::PromptUnsupported => "no prompt replacement",
             Self::LoginMismatch => "different account",
+            Self::FreshRelaunch(spec) => {
+                return format!("no saved team to restore; relaunch with {spec}").into();
+            }
         }
+        .into()
     }
 }
 
@@ -856,6 +869,32 @@ pub fn plan_lane_resume(
         .iter()
         .cloned()
         .partition(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }));
+    if request.fresh {
+        if !live.is_empty() {
+            let peers = candidates.iter().collect::<Vec<_>>();
+            return Err(LaneResumeError::FreshMembersLive {
+                scope: lane.display,
+                labels: live
+                    .iter()
+                    .map(|agent| crate::address::agent_handle(agent, &peers, true))
+                    .collect(),
+            });
+        }
+        if candidates.is_empty() {
+            return Err(LaneResumeError::FreshNoShape {
+                scope: lane.display,
+                worktree: lane.worktree_name,
+            });
+        }
+        return plan_closed_lane(
+            &request,
+            lane,
+            closed,
+            path_exists,
+            session_backed,
+            restore_config()?,
+        );
+    }
     if let Some(mismatch) = closed
         .iter()
         .filter(|agent| !agent.agent_id.is_provisional())
@@ -1208,7 +1247,7 @@ fn plan_closed_lane(
     session_backed: impl Fn(&AgentState) -> bool,
     restore: LaneRestoreConfig,
 ) -> Result<LaneResumeAction, LaneResumeError> {
-    let (team, flat_agents) = split_team_and_flat(
+    let team = plan_team_restore_tabs(
         &closed,
         request.logins,
         &restore.teams,
@@ -1217,22 +1256,54 @@ fn plan_closed_lane(
         Some(request.project_root),
         &path_exists,
         &session_backed,
+        request.fresh,
     );
+    let flat_agents = closed
+        .iter()
+        .filter(|agent| {
+            !team
+                .iter()
+                .any(|planned| planned_team_matches_agent(planned, agent))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let team_panes = team
         .iter()
         .map(|planned| planned.cohort.seeds.len())
         .sum::<usize>();
-    let flat = plan_resume_detailed(
-        &flat_agents,
-        &BTreeSet::new(),
-        ResumeContext {
-            max: request.max.saturating_sub(team_panes),
-            ..request.context(&restore.profiles)
-        },
-        path_exists,
-        &session_backed,
-    );
-    if team.is_empty() && flat.tabs.is_empty() {
+    let flat = if request.fresh {
+        DetailedResumePlan {
+            skipped: flat_agents
+                .iter()
+                .map(|agent| ResumeSkip {
+                    label: build_label(&agent.kind, agent.channel().as_deref(), &lane.path),
+                    reason: ResumeSkipReason::FreshRelaunch(format!(
+                        "rimz agents {} -w {}",
+                        relaunch_spec(
+                            agent.team.as_deref(),
+                            agent.role.as_deref(),
+                            agent.profile.as_deref(),
+                            agent.kind.as_str()
+                        ),
+                        lane.worktree_name
+                    )),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    } else {
+        plan_resume_detailed(
+            &flat_agents,
+            &BTreeSet::new(),
+            ResumeContext {
+                max: request.max.saturating_sub(team_panes),
+                ..request.context(&restore.profiles)
+            },
+            path_exists,
+            &session_backed,
+        )
+    };
+    if team.is_empty() && flat.tabs.is_empty() && !request.fresh {
         return Err(LaneResumeError::Nothing {
             scope: lane.display,
         });
@@ -1245,7 +1316,7 @@ fn plan_closed_lane(
     preflight_kinds.extend(
         flat_agents
             .iter()
-            .filter(|agent| supports_agent_resume(agent) && session_backed(agent))
+            .filter(|agent| !request.fresh && supports_agent_resume(agent) && session_backed(agent))
             .map(|agent| agent.kind.clone()),
     );
     Ok(LaneResumeAction::RestoreClosed {
@@ -1425,6 +1496,7 @@ fn plan_team_restore_tabs(
     project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
+    fresh: bool,
 ) -> Vec<PlannedTeamTab> {
     let mut groups: BTreeMap<(String, PathBuf), Vec<&AgentState>> = BTreeMap::new();
     for agent in agents {
@@ -1453,22 +1525,36 @@ fn plan_team_restore_tabs(
             continue;
         };
         let cells = cohort_cells(&layout);
-        let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
-        // A cohort with a member born under another account plans no tab; its
-        // members fall through to the flat planner, which skips them visibly.
-        let Ok(mut cohort) = plan_cohort_resume(
-            &group_agents,
-            logins,
-            |_| AgentLiveness::Dead,
-            &cells,
-            Some(&team),
-            |path| worktree_exists(path),
-            &session_backed,
-        ) else {
-            continue;
-        };
         let Some(newest) = newest_agent(&group) else {
             continue;
+        };
+        let mut cohort = if fresh {
+            CohortResumePlan {
+                seeds: vec![CohortSeed::Fresh; cells.len()],
+                cwd: Some(cwd.clone()),
+                channel: newest.channel(),
+                fresh: cells
+                    .iter()
+                    .map(|cell| cell.role.clone().unwrap_or_else(|| cell.kind.to_string()))
+                    .collect(),
+                launch_group: None,
+            }
+        } else {
+            let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
+            // A cohort with a member born under another account plans no tab; its
+            // members fall through to the flat planner, which skips them visibly.
+            let Ok(cohort) = plan_cohort_resume(
+                &group_agents,
+                logins,
+                |_| AgentLiveness::Dead,
+                &cells,
+                Some(&team),
+                |path| worktree_exists(path),
+                &session_backed,
+            ) else {
+                continue;
+            };
+            cohort
         };
         let channel = project_root
             .and_then(|project_root| {
@@ -1520,6 +1606,7 @@ pub(super) fn split_team_and_flat(
         project_root,
         worktree_exists,
         session_backed,
+        false,
     );
     let flat = agents
         .iter()
