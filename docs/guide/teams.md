@@ -19,7 +19,7 @@ rimz teams show forge#feat-rate-limits    # where the run stands
 
 Every agent works inside one context window, and everything it does fills it: files read, tool output, discussion, dead ends. A filling window costs more per turn and reasons less sharply, so the window is the real budget a long task runs against. Inside that window attention is divided too: a model weighs everything it holds against everything else, so a design conversation still sitting in context competes with the file being edited.
 
-Subagents are the first tool against that, and a good one. The parent sends an explorer to locate the relevant code and folds back a summary instead of the whole search, and [`rimz subagents`](../reference/cli/subagents.md) adds a durable handle, a result join, and lifecycle control to that child. It stays one window handing out bounded assignments: the child answers once and is finished, and nothing wakes it for a second round.
+Subagents are the first tool against that, and a good one. The parent sends an explorer to locate the relevant code and folds back a summary instead of the whole search, and [`rimz subagents`](../reference/cli/subagents.md) adds a durable handle, a result join, and lifecycle control to that child. The parent can [message the child for a follow-up, including after it stops](../reference/cli/subagents.md#follow-up-messages), but it stays one window handing out bounded assignments and collecting the answers.
 
 A team splits the task itself across windows that stay open:
 

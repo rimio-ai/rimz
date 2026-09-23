@@ -27,6 +27,8 @@ The bare form and `launch` are the same command. `PROFILE` is a `subagents/<name
 
 The child is supervised until the work ends, not just its first clean turn end. If it arms a wait and ends its turn, its run stays `running` and the fleet report waits too. A lost wake with nothing else left to wake the child fails its run with exit `1` and a reason beginning `parked on a wake that never arrived`; its timeout still applies.
 
+After reporting, an interactive child stays alive until the parent ends the turn that received its result. The parent can send a follow-up with `rimz message @<petname>` in that window; a child turn or pending message delays cleanup. One-shot providers exit after answering. A parent's message to an ended child resumes its session when supported ([follow-ups](#follow-up-messages)). A terminal child awaiting receipt is not bounded by the run timeout; parent loss or an explicit stop reclaims it.
+
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
 second=$(rimz subagents reviewer "review the proposed API")
@@ -38,8 +40,8 @@ rimz subagents wait "$first" "$second"
 | `PROMPT` or `--prompt-file <PATH>` | required | The whole assignment. A relative path resolves from the shell's current directory. An empty prompt is refused. |
 | `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
 | `--json` | off | With `--wait`, print the full run record instead of the petname and answer. Refused without `--wait`. |
-| `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Stop the child after this long. Units `s`, `m`, `h`, `d`. |
-| `--keep` | off | Hold the pane after the child finishes and after the parent exits, until `rimz subagents stop` closes it. |
+| `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Bound pending or running work, not a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
+| `--keep` | off | Disable automatic completion cleanup and cleanup on parent exit; hold the pane after provider exit. Explicit stop and the run timeout still apply. |
 | `--isolation host\|sandbox` | the parent's recorded `--isolation` override, else `agents.isolation` | Run the child under this isolation. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
 | `--model`, `--agent`, `--effort`, `--max-turns`, `-- <ARGS>` | from the profile | Override the model, re-base onto another profile or kind, set reasoning effort, cap agentic turns, or append provider argv. |
@@ -205,7 +207,11 @@ Stopping declines the child's result: it leaves the fleet report as described [a
 
 Stopping a parent with `rimz agents stop`, or through `rimz teams stop`, stops its live children first, `--keep` children included.
 
-There is no `restart` or `resume` for a child. To retry, launch the same profile and prompt again. A child is addressable as `@<petname>` for `rimz message` and `rimz pane`, but a supervised child runs one prompt and is not built to read messages mid-run. A message can park against a finished child's address, but nothing resumes the child to read it.
+## Follow-up messages
+
+A child is addressable as `@<petname>` for `rimz message` and `rimz pane`. The parent can message a live interactive child for another turn in the same session. If the child has ended, a message from its parent resumes the same session in the subagent zone and delivers the message as its next prompt. The next result can produce another fleet report; `rimz message --wait` also supports the exchange.
+
+Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory, conversation, login, profile and provider resume support to remain usable; otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
 
 Room recovery also leaves children closed; [rebirth recovery](../../guide/configuration.md#resume) reports interrupted child runs to the parent instead.
 
@@ -248,7 +254,7 @@ Children open in a shared zone instead of splitting the caller's view each time.
 | The caller is solo and already has a child beside its pane | Stacked with that child (a native stack on Zellij, equal-height rows on tmux) |
 | The caller is solo | A column split to the right of the caller's pane; a companion tab when the split fails |
 
-A companion tab starts with two side-by-side columns and adds rows, keeping pane areas roughly equal, up to eight children (four rows per column, not counting the sidebar). A small terminal or rearranged panes can overflow to the next companion tab sooner. When RimZ cannot read the pane layout, the child opens in an ordinary run tab. A finished child's pane closes itself unless `--keep` is set, and a companion tab closes with its last child pane. The full placement rules are in [pane zones](../../internals/harness/subagents.md#pane-zones).
+A companion tab starts with two side-by-side columns and adds rows, keeping pane areas roughly equal, up to eight children (four rows per column, not counting the sidebar). A small terminal or rearranged panes can overflow to the next companion tab sooner. When RimZ cannot read the pane layout, the child opens in an ordinary run tab. An interactive child's pane normally closes after the parent's receiving turn ends; one-shot providers close on exit, and `--keep` holds either pane. A companion tab closes with its last child pane. The full placement rules are in [pane zones](../../internals/harness/subagents.md#pane-zones).
 
 In the sidebar a child appears only under its direct parent's card, never as a duplicate top-level card, and a finished child stays there until the parent's next prompt. The parent's `⧉ subagents (N)` line counts both launched and provider-native children; the [sidebar page](../../interface/sidebar.md#the-card) describes it. A launched child's spend is added to the parent's all-in figures in the sidebar, `agents show`, teams, and [attribution](./agents.md#attribution).
 
