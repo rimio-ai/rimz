@@ -132,7 +132,7 @@ pub enum LaneResumeError {
     PrNotLocal { number: u64 },
     #[error("nothing to resume in '{scope}'")]
     Nothing { scope: String },
-    #[error("cannot relaunch '{scope}' fresh while {labels} are live; use rimz agents stop, or resume without --fresh", labels = .labels.join(", "))]
+    #[error("cannot relaunch '{scope}' fresh with live members {labels}; stop them with rimz agents stop, or resume without --fresh", labels = .labels.join(", "))]
     FreshMembersLive { scope: String, labels: Vec<String> },
     #[error(
         "no saved team shape in '{scope}'; resume without --fresh, or launch with rimz agents <spec> -w {worktree}"
