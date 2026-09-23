@@ -417,7 +417,7 @@ pub(in crate::cli) fn wait_for_subagent_pane_bind(
     bound
 }
 
-pub(super) fn launch_has_bound_pane(
+pub(in crate::cli) fn launch_has_bound_pane(
     agents: &[AgentState],
     kind: &AgentKind,
     launch_id: &AgentSessionId,
