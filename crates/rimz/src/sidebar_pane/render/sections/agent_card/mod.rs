@@ -25,7 +25,7 @@ use crate::sidebar_pane::render::labels::{
     severity_heat_amount, severity_heat_color, subagent_head_style, token_breakdown_spans,
     token_total_glyph, unread_run_spans, value_seam, window_style,
 };
-use crate::sidebar_pane::render::layout::ellipsize;
+use crate::sidebar_pane::render::layout::{ellipsize, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 mod bands;
@@ -470,7 +470,11 @@ fn append_sub_agent_model(
     if model_col == 0 {
         return;
     }
-    let seam = if token_col > 0 { 3 } else { 0 };
+    let seam = if token_col > 0 {
+        text_width(&value_seam(theme))
+    } else {
+        0
+    };
     match model {
         Some(model) => {
             if *prev_rendered {
@@ -502,7 +506,7 @@ fn append_sub_agent_effort(
     if prev_rendered {
         left.push(Span::styled(value_seam(theme), theme.muted()));
     } else if token_col > 0 || model_col > 0 {
-        left.push(Span::raw("   "));
+        left.push(Span::raw(" ".repeat(text_width(&value_seam(theme)))));
     }
     left.push(Span::styled(effort.to_owned(), theme.muted()));
 }
