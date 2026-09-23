@@ -28,6 +28,64 @@ fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
 }
 
 #[test]
+fn terminal_subagent_reopens_for_its_next_turn() {
+    for subagent in [false, true] {
+        let (_dir, paths, mut record) = setup();
+        record.subagent = subagent;
+        record.agent_id = Some("child".into());
+        record.status = RunStatus::Completed;
+        record.completed_at = Some(record.started_at);
+        record.joined_at = Some(record.started_at);
+        record.report_message_id = Some(crate::ids::MessageId::new());
+        record.deadline_at = Some(record.started_at + std::time::Duration::from_secs(30));
+        create(&paths, &record).unwrap();
+        let mut observation = AgentLifecycleObservation::new(
+            Some("stranger".into()),
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
+        record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+            None
+        })
+        .unwrap();
+        assert_eq!(load(&paths, &record.run_id).unwrap(), record);
+        observation.agent_id = Some("child".into());
+        let before = Timestamp::now();
+        record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+            None
+        })
+        .unwrap();
+        let reopened = load(&paths, &record.run_id).unwrap();
+        if !subagent {
+            assert_eq!(reopened, record);
+            continue;
+        }
+        assert_eq!(reopened.status, RunStatus::Running);
+        assert_eq!(reopened.completed_at, None);
+        assert_eq!(reopened.parked_at, None);
+        assert_eq!(reopened.joined_at, None);
+        assert_eq!(reopened.report_message_id, None);
+        assert!(reopened.deadline_at.unwrap() >= before + std::time::Duration::from_secs(30));
+        observation.signal = LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        };
+        assert!(
+            record_lifecycle(
+                &paths,
+                &record.run_id,
+                "claude",
+                &observation,
+                Some("second answer".into()),
+                || None
+            )
+            .unwrap()
+            .is_some()
+        );
+    }
+}
+
+#[test]
 fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
     let (_dir, paths, record) = setup();
     let mut old_json = serde_json::to_value(&record).expect("serialize run");

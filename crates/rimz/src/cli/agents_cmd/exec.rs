@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::sync::mpsc;
 
 const PARK_STRAND_POLL: Duration = Duration::from_secs(5);
+const PARENT_RECEIPT_POLL: Duration = Duration::from_secs(1);
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
@@ -246,6 +247,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         child,
         run_context.as_ref(),
         request.exit_on_run_completion,
+        if request.subagent {
+            StopPolicy::ParentReceived
+        } else {
+            StopPolicy::RunTerminal
+        },
         parent_watchdog,
     )
     .context("supervising agent process")?;
@@ -290,7 +296,7 @@ fn settle_after_exit(
     if let Some(context) = run
         && !parent_ended
     {
-        report_settled_child_or_log(context, invocation);
+        report_settled_child_or_log(context);
     }
     let startup_failure =
         !status.success() && mark_launch_failed_if_provisional(invocation, launch_identity);
@@ -349,7 +355,7 @@ fn settle_after_exit(
     std::process::exit(status.code().unwrap_or(1));
 }
 
-fn report_settled_child_or_log(context: &RunExecContext, invocation: &ExecInvocationContext<'_>) {
+fn report_settled_child_or_log(context: &RunExecContext) {
     let run = match rimz::harness::run::load(context.store.paths(), &context.run_id) {
         Ok(run) => run,
         Err(err) => {
@@ -361,7 +367,7 @@ fn report_settled_child_or_log(context: &RunExecContext, invocation: &ExecInvoca
             return;
         }
     };
-    match super::subagent_report::report_settled_child(invocation.workspace, &context.store, &run) {
+    match super::subagent_report::report_settled_child(&context.workspace, &context.store, &run) {
         Ok(outcome) => tracing::debug!(
             run_id = %context.run_id,
             ?outcome,
@@ -761,6 +767,38 @@ impl RunExecContext {
             .is_some_and(|record| record.status.is_terminal())
     }
 
+    fn parent_received_and_rested(
+        &self,
+        record: &rimz::store::run::RunRecord,
+    ) -> std::result::Result<bool, rimz::store::StoreErr> {
+        // Pane send leaves a prompt Sent. The lifecycle hook records TurnStarted
+        // before confirming Delivered; queue-before-snapshot preserves that order.
+        let messages = self.store.list_messages()?;
+        if record.joined_at.is_none()
+            && !self.store.list_message_history()?.iter().any(|message| {
+                Some(&message.message_id) == record.report_message_id.as_ref()
+                    && message.status == rimz::store::message::MessageStatus::Delivered
+            })
+        {
+            return Ok(false);
+        }
+        let snapshot = self.store.snapshot_cached()?;
+        let Some(child) = snapshot.agents.iter().find(|agent| {
+            agent.kind == record.kind && Some(&agent.agent_id) == record.agent_id.as_ref()
+        }) else {
+            return Ok(false);
+        };
+        if child.holds_open_turn()
+            || messages
+                .iter()
+                .any(|message| !message.status.is_terminal() && message.same_agent_card(child))
+        {
+            return Ok(false);
+        }
+        Ok(!rimz::address::launched_parent(&snapshot.agents, child)
+            .is_some_and(|parent| parent.ended_at.is_none() && parent.holds_open_turn()))
+    }
+
     fn load_record(&self) -> Option<rimz::store::run::RunRecord> {
         match rimz::harness::run::load(self.store.paths(), &self.run_id) {
             Ok(record) => Some(record),
@@ -776,8 +814,16 @@ impl RunExecContext {
     }
 }
 
+#[derive(Clone, Copy)]
+enum StopPolicy {
+    RunTerminal,
+    ParentReceived,
+}
+
 struct RunMonitor {
     self_cleanup: bool,
+    stop_policy: StopPolicy,
+    next_receipt_check: Instant,
     next_park_check: Instant,
     previous: Option<jiff::Timestamp>,
 }
@@ -806,7 +852,29 @@ impl RunMonitor {
                 }
             };
         }
-        self.self_cleanup && context.ready_for_self_cleanup(&record)
+        if !self.self_cleanup {
+            return false;
+        }
+        if matches!(self.stop_policy, StopPolicy::RunTerminal) {
+            return context.ready_for_self_cleanup(&record);
+        }
+        if !record.status.is_terminal() || now < self.next_receipt_check {
+            return false;
+        }
+        self.next_receipt_check = now + PARENT_RECEIPT_POLL;
+        if record.report_message_id.is_none() && record.joined_at.is_none() {
+            report_settled_child_or_log(context);
+        }
+        if !context.ready_for_self_cleanup(&record) {
+            return false;
+        }
+        match context.parent_received_and_rested(&record) {
+            Ok(ready) => ready,
+            Err(error) => {
+                tracing::debug!(run_id = %context.run_id, %error, "could not read subagent output receipt");
+                false
+            }
+        }
     }
 
     /// The strand settle exits a park that is owed nothing; a settled fleet
@@ -1325,6 +1393,7 @@ fn supervise_child(
     child: Child,
     run_monitor: Option<&RunExecContext>,
     self_cleanup: bool,
+    stop_policy: StopPolicy,
     parent_watchdog: Option<rimz::harness::parent_watch::ParentWatch>,
 ) -> Result<ExecOutcome> {
     let (wake_tx, wake_rx) = mpsc::channel();
@@ -1347,6 +1416,8 @@ fn supervise_child(
     let mut next_run_check = Instant::now();
     let mut monitor_state = RunMonitor {
         self_cleanup,
+        stop_policy,
+        next_receipt_check: next_run_check,
         next_park_check: next_run_check,
         previous: None,
     };
@@ -1635,6 +1706,8 @@ mod tests {
             let now = Instant::now();
             let mut monitor = RunMonitor {
                 self_cleanup,
+                stop_policy: StopPolicy::RunTerminal,
+                next_receipt_check: now,
                 next_park_check: now,
                 previous: None,
             };
@@ -1734,6 +1807,8 @@ mod tests {
         let now = Instant::now();
         let mut monitor = RunMonitor {
             self_cleanup: false,
+            stop_policy: StopPolicy::RunTerminal,
+            next_receipt_check: now,
             next_park_check: now,
             previous: None,
         };
@@ -1751,6 +1826,147 @@ mod tests {
         assert_eq!(
             monitor.previous, None,
             "a repaired park is live, not stranded"
+        );
+    }
+
+    #[test]
+    fn terminal_child_waits_for_its_receiving_parent_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = test_workspace(dir.path());
+        let paths = rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let runtime =
+            rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("rt"))
+                .unwrap();
+        let store = rimz::Store::open(paths, runtime).unwrap();
+        let kind = AgentKind::new_unchecked("codex");
+        let observe = |name: &str, signal| {
+            let mut observation =
+                rimz::agents::AgentLifecycleObservation::new(Some(name.into()), signal);
+            observation.agent_name = Some(name.into());
+            observation.pane_id = Some(
+                rimz::ids::PaneId::parse(if name == "child" {
+                    "tmux:%2"
+                } else {
+                    "tmux:%1"
+                })
+                .unwrap(),
+            );
+            if name == "child" {
+                observation.launch.parent_agent_id = Some("parent".into());
+                observation.launch.parent_agent_kind = Some(kind.clone());
+                observation.launch.launch_depth = Some(1);
+            }
+            store
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: "room",
+                    agent_kind: kind.clone(),
+                    event_name: "test",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        };
+        use rimz::agents::LifecycleSignal;
+        let ended = || LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        };
+        observe("parent", LifecycleSignal::Registered);
+        observe("child", LifecycleSignal::Registered);
+        observe("child", ended());
+        let mut record = rimz::store::run::RunRecord::new(
+            workspace.workspace_id.clone(),
+            kind.clone(),
+            PermissionMode::Auto,
+            "work".into(),
+            dir.path().into(),
+        );
+        record.agent_id = Some("child".into());
+        record.agent_name = Some("child".into());
+        record.subagent = true;
+        record.status = rimz::store::run::RunStatus::Completed;
+        rimz::harness::run::create(store.paths(), &record).unwrap();
+        let context = RunExecContext {
+            run_id: record.run_id.clone(),
+            store: store.clone(),
+            session_name: "room".into(),
+            workspace,
+        };
+        let mut now = Instant::now();
+        let mut monitor = RunMonitor {
+            self_cleanup: true,
+            stop_policy: StopPolicy::ParentReceived,
+            next_receipt_check: now,
+            next_park_check: now,
+            previous: None,
+        };
+        assert!(
+            !monitor.poll(&context, now),
+            "unreceived output holds the child"
+        );
+        let reported = context.load_record().unwrap();
+        assert!(
+            reported.report_message_id.is_some(),
+            "report before provider exit"
+        );
+        record = reported;
+        let digest = store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .find(|message| Some(&message.message_id) == record.report_message_id.as_ref())
+            .unwrap();
+        store.record_sent_batch(&[digest], "room").unwrap();
+        observe("parent", LifecycleSignal::TurnStarted { turn_id: None });
+        store
+            .confirm_delivered_for_card(
+                &kind,
+                &"parent".into(),
+                Some("parent"),
+                rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+                "room",
+            )
+            .unwrap();
+        now += Duration::from_secs(1);
+        assert!(!monitor.poll(&context, now));
+        observe("parent", ended());
+        now += Duration::from_secs(1);
+        assert!(monitor.poll(&context, now));
+        record.report_message_id = None;
+        record.joined_at = Some(jiff::Timestamp::now());
+        rimz::harness::run::create(store.paths(), &record).unwrap();
+        observe("child", LifecycleSignal::TurnStarted { turn_id: None });
+        now += Duration::from_secs(1);
+        assert!(!monitor.poll(&context, now));
+        observe("child", ended());
+        observe("parent", LifecycleSignal::Ended);
+        now += Duration::from_secs(1);
+        assert!(monitor.poll(&context, now));
+        let child = store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|agent| agent.agent_id.as_str() == "child")
+            .unwrap();
+        let message = rimz::store::message::MessageRecord::new(
+            record.workspace_id.clone(),
+            &child,
+            "follow up".into(),
+            rimz::store::message::DeliveryGate::Done,
+        );
+        store.queue_message(&message, "room").unwrap();
+        now += Duration::from_secs(1);
+        assert!(
+            !monitor.poll(&context, now),
+            "queued follow-up holds the child"
+        );
+        store.record_sent_batch(&[message], "room").unwrap();
+        now += Duration::from_secs(1);
+        assert!(
+            !monitor.poll(&context, now),
+            "pane send before TurnStarted still holds the child"
         );
     }
 
