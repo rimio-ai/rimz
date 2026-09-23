@@ -80,6 +80,34 @@ fn fresh_lane_refuses_when_no_team_can_be_restored() {
 }
 
 #[test]
+fn fresh_lane_relaunch_specs_are_distinct_and_preserve_place() {
+    for (path, channel, command) in [
+        ("/lane", None, "rimz agents opencode -w lane"),
+        ("/repo", Some("docs"), "rimz agents opencode --channel docs"),
+    ] {
+        let mut agents = [
+            agent("opencode", "old", path, 1),
+            agent("opencode", "new", path, 2),
+        ];
+        for agent in &mut agents {
+            agent.channel = channel.map(str::to_owned);
+        }
+        let selector = LaneResumeSelector::Scope(
+            channel.map_or_else(|| path.to_owned(), |channel| format!("#{channel}")),
+        );
+        let error = LaneCase::new(selector, &agents)
+            .current_root(path)
+            .fresh()
+            .run()
+            .unwrap_err();
+        let LaneResumeError::FreshNoTeam { specs, .. } = error else {
+            panic!("expected no team")
+        };
+        assert_eq!(specs, vec![command], "{path} {channel:?}");
+    }
+}
+
+#[test]
 fn fresh_lane_rebuilds_team_and_skips_flat_roots() {
     let (teams, profiles, commands) = team_configs();
     let mut planner = team_agent("claude", "planner", "planner", "/lane", 1);
