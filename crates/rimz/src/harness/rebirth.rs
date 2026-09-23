@@ -197,6 +197,28 @@ impl RebirthPlan {
                     RebirthChoice::Recover => "rimz.not-resumed",
                 },
             );
+            match crate::harness::run::list(&self.paths) {
+                Ok(runs) => {
+                    for agent in &self.crash_roster {
+                        if agent.parent_agent_id.is_none()
+                            || !unrecovered.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+                        {
+                            continue;
+                        }
+                        let Some(run) = crate::harness::fleet::newest_run(agent, &runs)
+                            .filter(|run| !run.status.is_terminal())
+                        else {
+                            continue;
+                        };
+                        if let Err(err) = crate::harness::run::cancel_and_wake(store, &run.run_id) {
+                            tracing::warn!(workspace = %self.paths.workspace_id, run_id = %run.run_id, error = %err, "rebirth: could not cancel unrecovered child run");
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(workspace = %self.paths.workspace_id, error = %err, "rebirth: could not list unrecovered child runs");
+                }
+            }
         }
         let recovered = resume.tabs.iter().map(ResumeTab::pane_count).sum();
         if choice == RebirthChoice::Recover && recovered > 0 {

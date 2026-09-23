@@ -14,6 +14,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(agents: &[(&str, &Path, bool)]) -> Self {
+        Self::with_children(agents, &[])
+    }
+
+    fn with_children(agents: &[(&str, &Path, bool)], children: &[&str]) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project).expect("project");
@@ -33,6 +37,12 @@ impl Fixture {
                 LifecycleSignal::Registered,
             );
             observation.agent_name = Some((*id).to_owned());
+            if children.contains(id) {
+                observation.parent_agent_id = Some("root".into());
+                observation.launch.parent_agent_id = Some("root".into());
+                observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+                observation.launch.launch_depth = Some(1);
+            }
             observation.worktree_path = Some(worktree.display().to_string());
             observation.worktree_branch = Some("feature".to_owned());
             observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, format!("%{id}")));
@@ -368,6 +378,99 @@ fn recover_ends_only_agents_not_resumed_without_overwriting_worktree_gone_reason
     assert!(!ended.iter().any(|(event, agent_id)| {
         event == "rimz.not-resumed" && agent_id.as_str() == "missing"
     }));
+}
+
+#[test]
+fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
+    use crate::agents::PermissionMode;
+    use crate::harness::run;
+    use crate::store::run::{RunRecord, RunStatus, WakeupFrame, run_socket_path};
+    use std::os::unix::net::UnixDatagram;
+
+    for choice in [RebirthChoice::Recover, RebirthChoice::Fresh] {
+        let dir = tempfile::tempdir().expect("worktrees");
+        let worktree = dir.path().join("lane");
+        let mut fixture = Fixture::with_children(
+            &[
+                ("root", &worktree, true),
+                ("child", &worktree, true),
+                ("finished", &worktree, true),
+            ],
+            &["child", "finished"],
+        );
+        let sockets_dir = tempfile::Builder::new()
+            .prefix("r")
+            .tempdir_in("/tmp")
+            .unwrap();
+        fixture.runtime.sock_dir = sockets_dir.path().to_path_buf();
+        let mut records = Vec::new();
+        for id in ["child", "finished"] {
+            let mut record = RunRecord::new(
+                fixture.paths.workspace_id.clone(),
+                AgentKind::new_unchecked("claude"),
+                PermissionMode::Auto,
+                "task".to_owned(),
+                worktree.clone(),
+            );
+            record.agent_id = Some(id.into());
+            record.keep = true;
+            record.status = if id == "child" {
+                RunStatus::Running
+            } else {
+                RunStatus::Completed
+            };
+            run::create(&fixture.paths, &record).unwrap();
+            records.push(record);
+        }
+        let sockets = records
+            .iter()
+            .map(|record| {
+                let socket =
+                    UnixDatagram::bind(run_socket_path(&fixture.runtime, &record.run_id)).unwrap();
+                socket.set_nonblocking(true).unwrap();
+                socket
+            })
+            .collect::<Vec<_>>();
+        let plan = fixture.inspect(false);
+        assert_eq!(
+            plan.planned.resumed_keys(),
+            BTreeSet::from([(AgentKind::new_unchecked("claude"), "root".into())])
+        );
+        plan.materialize(choice, "rimz-test");
+        let event = match choice {
+            RebirthChoice::Recover => "rimz.not-resumed",
+            RebirthChoice::Fresh => "rimz.recovery-declined",
+        };
+        let ended = ended_events(&fixture);
+        for id in ["child", "finished"] {
+            assert!(ended.contains(&(event.to_owned(), id.into())));
+        }
+        assert_eq!(
+            run::load(&fixture.paths, &records[0].run_id)
+                .unwrap()
+                .status,
+            RunStatus::Canceled,
+            "{choice:?}"
+        );
+        assert_eq!(
+            run::load(&fixture.paths, &records[1].run_id).unwrap(),
+            records[1]
+        );
+        let mut frame = [0; 4096];
+        let count = sockets[0].recv(&mut frame).expect("child waiter awakened");
+        let WakeupFrame::RunCompleted {
+            workspace_id,
+            run_id,
+            status,
+        } = serde_json::from_slice(&frame[..count]).unwrap();
+        assert_eq!(workspace_id, fixture.paths.workspace_id);
+        assert_eq!(run_id, records[0].run_id);
+        assert_eq!(status, RunStatus::Canceled);
+        assert_eq!(
+            sockets[1].recv(&mut frame).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
 }
 
 #[test]
