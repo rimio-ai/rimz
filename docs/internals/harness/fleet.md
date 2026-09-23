@@ -335,13 +335,15 @@ The store remembers agents whose processes are gone, and resume turns those reco
 
 | Path | Trigger | Scope |
 | --- | --- | --- |
-| Room rebirth | a machine reboot or mux crash, at the next `rimz start` | the producer's persisted live roster, intersected with the audit rollup, seeding one tab per live-at-death lane or worktree before the new mux session starts |
+| Room rebirth | a machine reboot or mux crash, at the next `rimz start` | root sessions from the producer's persisted live roster, intersected with the audit rollup, seeding one tab per live-at-death lane or worktree before the new mux session starts |
 | Cohort resume | `rimz agents <spec> --resume` (`--continue` is the visible alias) in a live room | one prior cohort matched from the spec, after its tab or pane was closed |
 | Lane resume | `rimz agents resume <scope>` | one lane, resolved by `harness::resume` |
 
 Rebirth restores a named team in its declared layout, resuming members that can resume and fresh-launching missing or unsupported agent cells so the shape stays whole; other lanes restore as one column. Cohort resume scopes to one exact worktree with `-w <NAME>` or the caller's current worktree, while a resume from the project root takes the newest match for the spec.
 
 Lane resume picks one of four `LaneResumeAction` variants: `List` when no scope was given, `Focus` on the freshest pane when every member is live, `SplitClosed` to plan flat resume commands beside a surviving live member, and `RestoreClosed` to reuse the rebirth team and flat split when every member is closed. In every case the CLI preflights the planned provider kinds through `LaneResumeAction::agent_kinds_needing_preflight` before `LaneRestorePlan::materialize` allocates fresh team identities or any mux action runs, so a missing provider binary fails before it half-rebuilds a room.
+
+Lane `--fresh` restores closed named-team tabs with every cell seeded `CohortSeed::Fresh`, using the current team layout in the saved cwd and channel. New sessions receive new handles and the team's board and memory-file reminders, without requiring saved provider conversations or matching the old login. Flat roots are skipped with their relaunch spec and `-w <worktree>`. `plan_lane_resume` refuses a lane with live root members or no durable candidates (including discovered-only lanes); `--bg` still applies. Team panes count toward `resume.max` as on ordinary resume.
 
 ### What matches what
 
@@ -353,7 +355,9 @@ Lane resume picks one of four `LaneResumeAction` variants: `List` when no scope 
 
 Missing cells launch fresh in the matched cohort's cwd and channel, so the layout stays whole. A matched member whose process is still live refuses the whole resume and names it, because launching beside it would duplicate the addressable role or kind; for a single-agent spec that means a live newest session refuses even when an older one is dead. A kind whose adapter has no native resume argv launches fresh and is reported as such.
 
-Cleanly ended members stay candidates, so a closed team resumes while its worktree still exists. Never candidates: launched children and provider-native subagents (excluded by their parent identity), empty session ids, missing worktrees, and launch placeholders that never adopted a session and are no longer live.
+Cleanly ended members stay candidates, so a closed team resumes while its worktree still exists. No resume path plans a row with a parent identity: `harness::resume::root_session` excludes both RimZ-launched children and provider-native subagents. The parent relaunches any child it still needs. Empty session ids, missing worktrees, and launch placeholders that never adopted a session and are no longer live are also excluded.
+
+The rebirth roster still carries children for crash protection. `RebirthPlan::materialize` stamps unrecovered roster members ended (`rimz.not-resumed` for recovery, `rimz.recovery-declined` for a fresh room) and cancels each excluded child's newest nonterminal run through `run::cancel_and_wake`, including `keep` runs. Already-terminal runs stay untouched. The durable cancellation settles the parent's wait and lets its fleet digest report the result; the waiter wake datagram is best-effort.
 
 Flat resume keeps pane identity when a stamp survives: newest-first candidates sharing one pane collapse to the newest session. A rebirth boundary retires pane stamps, because pane ids renumber across a mux restart; an unstamped root stays a candidate and deduplicates by `(kind, session id)`.
 

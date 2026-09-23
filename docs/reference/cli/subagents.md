@@ -207,6 +207,8 @@ Stopping a parent with `rimz agents stop`, or through `rimz teams stop`, stops i
 
 There is no `restart` or `resume` for a child. To retry, launch the same profile and prompt again. A child is addressable as `@<petname>` for `rimz message` and `rimz pane`, but a supervised child runs one prompt and is not built to read messages mid-run. A message can park against a finished child's address, but nothing resumes the child to read it.
 
+Room recovery also leaves children closed; [rebirth recovery](../../guide/configuration.md#resume) reports interrupted child runs to the parent instead.
+
 ## Discover profiles
 
 ```sh

@@ -242,7 +242,7 @@ A child's lifecycle transitions also fire `agent.*` signals ([loops.md](./loops.
 
 `restart` and `resume` are absent by design. The durable run record does not retain every launch argument needed to reproduce the deadline, wait, and self-close contracts, and a partial reproduction would silently change the child's lifecycle. Relaunching the same profile and prompt is the supported path, matching how agents treat their native Agent tool.
 
-The durable launch record does not stamp which profile namespace produced a child. Generic restart and recovery therefore resolve `[agents.profiles]`, and a subagent-only profile degrades or refuses through the missing-profile path. Persisting the doorway scope with the launch event is the upgrade path.
+The durable launch record does not stamp which profile namespace produced a child. Generic restart therefore resolves `[agents.profiles]`, and a subagent-only profile degrades or refuses through the missing-profile path. Persisting the doorway scope with the launch event is the upgrade path. Resume and rebirth exclude children entirely; [fleet.md § Resume and rebirth](./fleet.md#resume-and-rebirth) owns crash-time run settlement.
 
 A child is addressable as `@<petname>`, but a supervised print-mode provider is not an interactive message consumer, so mid-run steering is not a contract. A message can park against the address; nothing resumes a finished child to consume it.
 

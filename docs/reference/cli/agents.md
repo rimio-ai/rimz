@@ -281,6 +281,7 @@ Resume refuses `PROMPT` (send it with `rimz message` after the session opens), `
 
 ```sh
 rimz agents resume '#docs'        # the docs lane
+rimz agents resume '#docs' --fresh # new team sessions in the lane's saved shape
 rimz agents resume pr-69          # by worktree name
 rimz agents resume -w pr-69       # flag spelling of the same scope
 rimz agents resume --from-pr 69   # the local worktree created from PR 69
@@ -288,6 +289,8 @@ rimz agents resume                # in a worktree: that lane; at the project roo
 ```
 
 `SCOPE` takes a `#channel`, worktree name, branch, directory name, or path, as `agents list` does. `--from-pr <NUMBER|URL>` finds the worktree by its recorded pull-request provenance, then by the name `pr-<N>`. Resolution is local: no network request, no worktree creation.
+
+Members are root sessions: subagent children never come back through resume; their parent relaunches what it still needs. The durable lane listing's `MEMBERS` and `LIVE` counts exclude children.
 
 | Lane state | Result |
 | --- | --- |
@@ -297,6 +300,8 @@ rimz agents resume                # in a worktree: that lane; at the project roo
 
 Each restored agent keeps its session id, role, team, channel, and working directory from the store, so a lane comes back under the same handles after a soft reset. Profiles and team layouts render from the current Markdown definitions. `--bg` keeps focus where it is.
 
+`--fresh` starts new sessions for the lane's closed named teams, with new handles and the same roles, channel, and working directory, using current team layouts. No team name is needed. Members pick up from `blackboard.md`, the `<stage>-notes.md` files, and the code rather than old conversations. Like [fresh cohort relaunch](#relaunch-into-a-named-worktree), it preserves the checkout and files. Standalone roots are skipped with an explicit relaunch command. A lane with live root members, or only provider-discovered sessions and no saved shape, is refused. On this verb `--fresh` works with every scope spelling and `--bg`; it does not inherit the cohort launch flag's conflicts.
+
 When RimZ's own records for a lane are gone, Claude and Codex sessions are recovered from the providers' local session stores: the newest concurrent set of sessions comes back, with exact session ids, as flat panes without roles or teams (those exist only in RimZ). Older, non-overlapping sessions stay closed and are reported by kind and session id. At the project root, the bare listing includes worktree lanes found only in those provider stores.
 
 | Error | Meaning |
@@ -305,6 +310,8 @@ When RimZ's own records for a lane are gone, Claude and Codex sessions are recov
 | `worktree for '#docs' was removed; recreate it with rimz agents <spec> -w docs` | The lane's checkout is gone. |
 | `PR 69 has no local worktree; start one with rimz agents <spec> --from-pr 69` | No local worktree came from that pull request. |
 | `nothing to resume in '#docs'` | Neither RimZ nor the Claude and Codex session stores hold a resumable session for the lane. |
+| `cannot relaunch '#docs' fresh while @coder are live; use rimz agents stop, or resume without --fresh` | Fresh relaunch would duplicate live members; the error names their handles. |
+| `no saved team shape in '#docs'; resume without --fresh, or launch with rimz agents <spec> -w docs` | Fresh relaunch needs durable lane records; provider session files alone cannot reconstruct its shape. |
 
 Resume planning is described in [fleet.md → Resume and rebirth](../../internals/harness/fleet.md#resume-and-rebirth).
 
