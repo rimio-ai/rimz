@@ -283,31 +283,42 @@ Selecting a card only appends lines below it. When the selected agent belongs to
 ### Subagents and waits
 
 ```
-▌  ⧉ subagents (9) · ⧖ waits (4)                  $0.84▐
-▌    ⠁ Explore — map the render path                   ▐
-▌      ◇ 31k · Opus 4.8  · high                   ◔  3m▐
-▌    ✓ review — audit the trust hash        ◔  1m $0.42▐
-▌      ◇ 22k · Haiku 4.5                               ▐
-▌    ◷ in 12m                                     ◔ 18m▐
-▌    ⣾ cargo xtask gate --name foo_test           ◔  4m▐
-▌    ⣾ Run the test suite                         ◔  5m▐
-▌      cargo test --workspace                          ▐
-▌    ⌁ pr.merged · 2h left                        ●  1h▐
-▌    +7 older                                          ▐
+▌  ⧉ subagents (2)                              $0.42▐
+▌    ⠁ review · audit the trust hash                 ▐
+▌      ◇  3k · Haiku 4.5                        ◔ <1m▐
+▌    ✓ Explore · locate the render seam   ◔ <1m $0.42▐
+▌      ◇ 12k · Opus 4.8  · high                      ▐
+```
+
+A card with waits uses the same entry layout:
+
+```
+▌  ⧖ waits (4)                                       ▐
+▌    ◷ timer · in 12m                           ◑ 18m▐
+▌    ⣾ pid · 16776                              ◔  3m▐
+▌    ⣾ command · cargo                          ◔  4m▐
+▌      cargo xtask gate --name foo_test              ▐
+▌    ⌁ signal · pr.merged                       ●  1h▐
+▌      2h left                                       ▐
 ```
 
 `⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md) plus, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
 
 Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card, and that choice outranks selection and `card_density` until the sidebar restarts. In `compact` density, select the card first to reach the line.
 
-| entry | lead | text | right side | second line |
+Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. Without a headline, the separator disappears too. Detail sits on a muted, indented second line.
+
+| entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
-| running subagent | `⠁` while it reasons, `⢿` while it acts | type, then its task | cost, when known | `◇` tokens, model, effort, and elapsed time |
-| finished subagent | `✓` or `!` | type, then its task | time since it finished, then cost | `◇` tokens, model, effort |
-| timer | `◷` | `in 12m`, or `due` once the time passes | time since armed | |
-| watch | working spinner | the command without its program path, `pid 16776`, `app.log changes`, or ``app.log matches `<pattern>` `` | time since armed | |
-| background shell | working spinner | its description, or the command when it has none | time since RimZ first saw it | the command, when there is a description |
-| signal | `⌁` | `pr.merged`, or `pr.merged · 2h left` with a deadline | time since armed | |
+| running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | reported metadata: `◇` tokens, model, effort, and elapsed time |
+| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | time since it finished, then cost | reported metadata: `◇` tokens, model, effort |
+| timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
+| PID | working spinner | `pid · 16776` | time since armed | never |
+| command | working spinner | `command · cargo` (program name) | time since armed | full command, with the program path trimmed |
+| check | working spinner | `check · test` (program name) | time since armed | full command, with the program path trimmed |
+| file | working spinner | `file · app.log changes`, or ``file · app.log matches `<pattern>` `` | time since armed | never |
+| background shell | working spinner | `shell ·` description, else program name, else just `shell` | time since RimZ first saw it | command when known, with the program path trimmed |
+| signal | `⌁` | `signal · pr.merged` (selector) | time since armed | only with a deadline: `2h left`, then `0m left` at or past it |
 
 Entries list in a fixed order, and opening more of the list only appends rows:
 
@@ -318,7 +329,7 @@ Entries list in a fixed order, and opening more of the list only appends rows:
 
 The listed subagents plus `K` equal the count in the line. `K` can exceed the rows it reveals, because a native subagent that was replaced while still running is counted and has no row. The older list folds again when you close the section, send the parent a new prompt, or run `/clear` or `/compact`. Messages from other agents and RimZ's own deliveries leave it open.
 
-A running subagent's clock heats with age like a card's. A finished subagent's clock stays muted, and so does a wait's, since a wait is pending by design. A wait has no clock when its arm time is unknown. A subagent that reported nothing beyond its type shows a single line. Subagents never get a card of their own while their parent's card is visible. Which fields each provider reports for a child is in [sidebar internals](../internals/sidebar/sidebar.md#sub-agent-lists).
+A running subagent's clock heats with age like a card's. A finished subagent's clock stays muted, and so does a wait's, since a wait is pending by design. A wait has no clock when its arm time is unknown. A subagent without metadata shows a single line; command and check waits show their command on a second line. Subagents never get a card of their own while their parent's card is visible. Which fields each provider reports for a child is in [sidebar internals](../internals/sidebar/sidebar.md#sub-agent-lists).
 
 ### Unread and attention marks
 
@@ -339,12 +350,12 @@ Two checks raise `!` without a report from the agent. A working agent that stays
 A sleeping card names its first pending wait in the description:
 
 ```
-▌☾ claude                                              ▐
-▌  wakes in 12m                                        ▐
-▌  ▢ ────────────────────────────────────────────    0%▐
-▌  ▤ 0                                                 ▐
-▌  ⧖ waits (1)                                         ▐
-▌    ◷ in 12m                                     ◔ <1m▐
+▌☾ claude                                  ▐
+▌  wakes in 12m                            ▐
+▌  ▢ ────────────────────────────────    0%▐
+▌  ▤ 0                                     ▐
+▌  ⧖ 1                                     ▐
+▌    ◷ timer · in 12m                 ◔ <1m▐
 ```
 
 | wait | description |
@@ -353,7 +364,7 @@ A sleeping card names its first pending wait in the description:
 | PID | `wakes after pid 16776` |
 | command or check | `wakes after <command>` |
 | file | `wakes when app.log changes`, or ``wakes when app.log matches `<pattern>` `` |
-| signal | `wakes on <selector>`, with ` · 12m left` when it has a deadline |
+| signal | `wakes on pr.merged`, or `wakes on pr.merged · 2h left` with a deadline |
 
 `☾` replaces only an idle or done status. Working, waiting, failed, paused, and waiting on subagents all take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 

@@ -146,7 +146,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `tokens` | the token-accounting markers |
 | `meter` | the drawn gauges, bars, and scrollbar |
 | `clock` | the last-activity age faces |
-| `value` | compact value qualifiers, such as the active-time `approx` marker |
+| `value` | compact value qualifiers, such as the active-time `approx` marker, and the `seam` separator between values (`·`) |
 | `worktree` | the group header's git story: branch and merge, ahead and behind, trunk state, PR and CI state |
 | `pipeline` | a team's stage dots |
 | `card` | the agent card body: subagents, waits, parked background |
