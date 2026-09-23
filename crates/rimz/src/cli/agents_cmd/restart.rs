@@ -179,7 +179,7 @@ pub(in crate::cli) fn restart_resolved(
     }
 }
 
-pub(super) fn relaunch_action(
+pub(in crate::cli) fn relaunch_action(
     agent: &AgentState,
     logins: &rimz::ids::RoomLogins,
     cwd: &Path,

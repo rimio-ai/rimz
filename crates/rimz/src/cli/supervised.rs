@@ -235,7 +235,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     })
 }
 
-fn run_exit_policy(self_cleanup_on_completion: bool) -> (bool, bool) {
+pub(in crate::cli) fn run_exit_policy(self_cleanup_on_completion: bool) -> (bool, bool) {
     (self_cleanup_on_completion, self_cleanup_on_completion)
 }
 

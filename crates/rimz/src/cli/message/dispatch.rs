@@ -78,7 +78,7 @@ pub(super) fn send_message(
     let sender = send::sender_for(caller.as_ref(), current_channel.as_deref(), no_from);
     let steer = matches!(mode, DispatchMode::Steer { .. });
     let wait_started = std::time::Instant::now();
-    let request = DispatchRequest {
+    let request = || DispatchRequest {
         target: target.clone(),
         text: text.clone(),
         target_scope: worktree.clone().or_else(|| channel_flag.clone()),
@@ -96,25 +96,31 @@ pub(super) fn send_message(
             caller_identity: send::caller_identity(caller.as_ref()),
         }),
         mux: globals.mux,
-        mode,
+        mode: mode.clone(),
     };
-    let result = match rimz::message::dispatch::dispatch(workspace, store, request) {
+    let miss = || RecipientMiss {
+        target: &target,
+        text: &text,
+        sender: &sender,
+        worktree: worktree.as_deref(),
+        channel_flag: channel_flag.as_deref(),
+        current_channel: current_channel.as_deref(),
+        create,
+    };
+    let result = match rimz::message::dispatch::dispatch(workspace, store, request()) {
         Ok(result) => result,
         Err(DispatchErr::Recipient(err)) => {
-            return recipient_miss(
-                &ctx,
-                RecipientMiss {
-                    target: &target,
-                    text: &text,
-                    sender: &sender,
-                    worktree: worktree.as_deref(),
-                    channel_flag: channel_flag.as_deref(),
-                    current_channel: current_channel.as_deref(),
-                    create,
-                },
-                err,
-                globals,
-            );
+            if !recipient_miss(&ctx, miss(), err, globals, true)? {
+                return Ok(());
+            }
+            match rimz::message::dispatch::dispatch(workspace, store, request()) {
+                Ok(result) => result,
+                Err(DispatchErr::Recipient(err)) => {
+                    recipient_miss(&ctx, miss(), err, globals, false)?;
+                    return Ok(());
+                }
+                Err(err) => return Err(map_dispatch_err(err)),
+            }
         }
         Err(err) => return Err(map_dispatch_err(err)),
     };
@@ -206,7 +212,8 @@ fn recipient_miss(
     miss: RecipientMiss<'_>,
     err: TargetErr,
     globals: &GlobalFlags,
-) -> Result<()> {
+    allow_resume: bool,
+) -> Result<bool> {
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     if miss.create {
         return crate::cli::agents_cmd::create_on_miss(
@@ -216,14 +223,28 @@ fn recipient_miss(
             miss.current_channel,
             miss.text,
             globals,
-        );
+        )
+        .map(|()| false);
     }
+    let mut resume_error = None;
     if matches!(
         err,
         TargetErr::NoMatch { .. }
             | TargetErr::NoMatchInChannel { .. }
             | TargetErr::PaneUnbound { .. }
     ) {
+        if allow_resume {
+            match crate::cli::subagents::resume_child(
+                ctx,
+                miss.target,
+                miss.worktree.or(miss.channel_flag),
+                miss.current_channel,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(err) => resume_error = Some(format!("{err:#}")),
+            }
+        }
         store.record_unresolved_message(rimz::store::writer::UnresolvedMessage {
             workspace_id: workspace.workspace_id.clone(),
             session_name: &workspace.session_name,
@@ -231,12 +252,16 @@ fn recipient_miss(
             channel: miss.current_channel,
             sender: miss.sender,
             text_len: miss.text.len(),
-            reason: "receiver not found",
+            reason: resume_error.as_deref().unwrap_or("receiver not found"),
         })?;
     }
     let snapshot = store.snapshot_cached()?;
     let mapped = map_queue_target_err(miss.target, err);
-    message_miss(&snapshot, miss.current_channel, &mapped)
+    let mapped = match resume_error {
+        Some(reason) => mapped.context(reason),
+        None => mapped,
+    };
+    message_miss(&snapshot, miss.current_channel, &mapped).map(|()| false)
 }
 
 fn map_dispatch_err(err: DispatchErr) -> anyhow::Error {

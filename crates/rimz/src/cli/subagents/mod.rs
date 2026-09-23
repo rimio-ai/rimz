@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use super::{Ctx, GlobalFlags, agents_cmd, render};
 use rimz::agents::AgentState;
 
+mod resume;
+pub(in crate::cli) use resume::resume_child;
+
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct SubagentsArgs {
@@ -698,8 +701,13 @@ fn newest_run_for_child<'a>(
 ) -> Option<&'a rimz::store::run::RunRecord> {
     runs.iter()
         .filter(|run| {
-            run.agent_id.as_ref() == Some(&child.agent_id)
-                || run.agent_name.as_deref() == child.name.as_deref()
+            run.kind == child.kind
+                && (run.agent_id.as_ref() == Some(&child.agent_id)
+                    || run
+                        .agent_name
+                        .as_ref()
+                        .zip(child.name.as_ref())
+                        .is_some_and(|(run, child)| run == child))
         })
         .max_by_key(|run| run.started_at)
 }

@@ -278,6 +278,8 @@ pub fn dispatch(
     if !rollup_only && let Some(context) = agent_context {
         snapshot = snapshot.with_agent_context(context);
     }
+    // Ended children linger on their parent's card for presentation, not delivery.
+    snapshot.agents.retain(|agent| agent.ended_at.is_none());
 
     let durable_agents = durable_target_agents(store)?;
     let resolution = ResolutionView {
