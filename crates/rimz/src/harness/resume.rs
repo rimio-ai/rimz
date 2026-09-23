@@ -1282,21 +1282,33 @@ fn plan_closed_lane(
         .map(|planned| planned.cohort.seeds.len())
         .sum::<usize>();
     let flat = if request.fresh {
+        let place = if lane.path != crate::utils::path::normalize_path_lexical(request.project_root)
+        {
+            format!(" -w {}", lane.worktree_name)
+        } else {
+            lane.channel
+                .as_ref()
+                .map(|channel| format!(" --channel {channel}"))
+                .unwrap_or_default()
+        };
+        let mut specs = HashSet::new();
         DetailedResumePlan {
             skipped: flat_agents
                 .iter()
-                .map(|agent| ResumeSkip {
-                    label: build_label(&agent.kind, agent.channel().as_deref(), &lane.path),
-                    reason: ResumeSkipReason::FreshRelaunch(format!(
-                        "rimz agents {} -w {}",
+                .filter_map(|agent| {
+                    let spec = format!(
+                        "rimz agents {}{place}",
                         relaunch_spec(
                             agent.team.as_deref(),
                             agent.role.as_deref(),
                             agent.profile.as_deref(),
                             agent.kind.as_str()
-                        ),
-                        lane.worktree_name
-                    )),
+                        )
+                    );
+                    specs.insert(spec.clone()).then(|| ResumeSkip {
+                        label: build_label(&agent.kind, agent.channel().as_deref(), &lane.path),
+                        reason: ResumeSkipReason::FreshRelaunch(spec),
+                    })
                 })
                 .collect(),
             ..Default::default()
