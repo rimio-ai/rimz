@@ -196,6 +196,7 @@
 
 [theme.glyphs.unicode.value]
 ## approx = "≈"
+## seam = "·"
 
 [theme.glyphs.unicode.worktree]
 ## branch = "⑂"
@@ -225,7 +226,6 @@
 ## subagents = "⧉"
 ## waits = "⧖"
 ## wait_timer = "◷"
-## wait_shell = "❯"                  # unused: a running shell job wears the working animation
 ## wait_signal = "⌁"
 ## parked_bg = "⋯"
 
@@ -318,6 +318,7 @@
 
 [theme.glyphs.nerd_font.value]
 ## approx = "≈"
+## seam = "·"
 
 [theme.glyphs.nerd_font.worktree]
 ## branch = ""
@@ -347,7 +348,6 @@
 ## subagents = ""
 ## waits = "󰂠"
 ## wait_timer = "󰔟"
-## wait_shell = "󰞷"                  # unused: a running shell job wears the working animation
 ## wait_signal = "󱜠"
 ## parked_bg = "⋯"
 

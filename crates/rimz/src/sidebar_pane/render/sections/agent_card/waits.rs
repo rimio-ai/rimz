@@ -6,7 +6,7 @@
 //! kind glyph, since nothing runs until it fires. The parent's own status head
 //! carries sleeping. Timers come first, then live watches (command, pid, check,
 //! and file waits, then background shells), then signals. The words come from
-//! `PendingWaitTrigger::summary`; this module adds leads and layout.
+//! `PendingWaitTrigger`'s headline and detail; this module adds leads and layout.
 
 use jiff::Timestamp;
 
@@ -54,7 +54,26 @@ pub(super) fn wait_entry_lines(
             | PendingWaitTrigger::File { .. } => WaitLead::Working,
             PendingWaitTrigger::Signal { .. } => WaitLead::Kind(GlyphRole::CardWaitSignal),
         },
-        text: wait.trigger.summary(ctx.now),
+        text: match &wait.trigger {
+            PendingWaitTrigger::Pid { .. } => {
+                format!(
+                    "{} {}",
+                    wait.trigger.kind_word(),
+                    wait.trigger.headline(ctx.now)
+                )
+            }
+            PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Check { .. } => {
+                wait.trigger.detail(ctx.now).unwrap_or_default()
+            }
+            PendingWaitTrigger::Signal { .. } => {
+                let mut text = wait.trigger.headline(ctx.now);
+                if let Some(detail) = wait.trigger.detail(ctx.now) {
+                    text.push_str(&format!(" {} {detail}", ctx.theme.glyph(GlyphRole::Seam)));
+                }
+                text
+            }
+            _ => wait.trigger.headline(ctx.now),
+        },
         detail: None,
         since: wait.armed_at,
     };

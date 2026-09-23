@@ -74,7 +74,8 @@ upward-dependencies = ["address"]
 # The parent-link predicate is shared by store, harness and CLI consumers.
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
 # Pending-wait vocabulary and rest projection are shared by harness and renderers.
-# Trigger summaries share wording between sleeping descriptions and expanded waits.
+# Trigger words (kind, headline, detail) are shared by sleeping descriptions and
+# the card's type-led wait entries, so no seam lives in the agents layer.
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
 # Model sub-cap matching and parent-axis headroom are shared with the renderer.
@@ -87,7 +88,7 @@ upward-dependencies = ["address"]
 # One compaction composer picks the brief for the agent's seat.
 # Host-mode skill links: plan/apply, plan accessors and reports are shared by launch_plan, exec, explain and uninstall.
 # The Markdown definition loader reads model catalog, defaults and tool rendering.
-surface-budget = 865
+surface-budget = 867
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

@@ -95,6 +95,7 @@ glyph_roles! {
     }
     "value" {
         ValueApprox => "approx",
+        Seam => "seam",
     }
     "worktree" {
         WorktreeBranch => "branch",
@@ -124,7 +125,6 @@ glyph_roles! {
         CardSubagents => "subagents",
         CardWaits => "waits",
         CardWaitTimer => "wait_timer",
-        CardWaitShell => "wait_shell",
         CardWaitSignal => "wait_signal",
         CardParkedBg => "parked_bg",
     }
@@ -392,6 +392,14 @@ mod tests {
 
     #[test]
     fn validates_known_roles_and_one_cell_values() {
+        let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.card]\nwait_shell = \"❯\"\n")
+            .expect_err("removed role")
+            .to_string();
+        assert!(err.contains("unknown sidebar glyph role `card.wait_shell`"));
+
+        toml::from_str::<ThemeGlyphsConfig>("[unicode.value]\nseam = \"|\"\n")
+            .expect("seam override");
+
         let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.tokens]\nnope = \"x\"\n")
             .expect_err("unknown role")
             .to_string();
