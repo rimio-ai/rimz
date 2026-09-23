@@ -4,6 +4,148 @@
 use super::*;
 
 #[test]
+fn fresh_lane_rebuilds_team_and_skips_flat_roots() {
+    let (teams, profiles, commands) = team_configs();
+    let mut planner = team_agent("claude", "planner", "planner", "/lane", 1);
+    planner.login = Some("old".parse().unwrap());
+    let agents = [
+        planner,
+        team_agent("codex", "coder", "coder", "/lane", 2),
+        agent("opencode", "flat", "/lane", 3),
+        child_agent("opencode", "child", "planner", "/lane", 4),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .fresh()
+        .session_backed(|_| false)
+        .restore(|| {
+            Ok(LaneRestoreConfig {
+                teams,
+                profiles,
+                commands,
+            })
+        })
+        .run()
+        .expect("fresh does not require saved conversations or matching accounts");
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected fresh restore");
+    };
+    let [RecoveryEntry::Team(team)] = plan.recovery.entries.as_slice() else {
+        panic!("only the team returns");
+    };
+    assert_eq!(team.cohort.seeds, vec![CohortSeed::Fresh; 2]);
+    assert!(plan.recovery.resumed_keys().is_empty());
+    assert_eq!(plan.skipped().len(), 1);
+    assert!(
+        plan.skipped()[0]
+            .reason
+            .label()
+            .contains("rimz agents opencode -w lane")
+    );
+    assert_eq!(
+        plan.preflight_kinds
+            .iter()
+            .map(AgentKind::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["claude", "codex"])
+    );
+}
+
+#[test]
+fn fresh_lane_refuses_live_members_and_discovered_only_lanes() {
+    let mut root = agent("claude", "root", "/lane", 1);
+    root.name = Some("planner".to_owned());
+    root.name_explicit = true;
+    let agents = [root, agent("codex", "closed", "/lane", 2)];
+    for partial in [true, false] {
+        let error = LaneCase::new(LaneResumeSelector::Current, &agents)
+            .current_root("/lane")
+            .fresh()
+            .liveness(move |agent| {
+                if !partial || agent.agent_id.as_str() == "root" {
+                    live(agent)
+                } else {
+                    dead(agent)
+                }
+            })
+            .run()
+            .expect_err("fresh must not duplicate live roles")
+            .to_string();
+        assert!(error.contains("@planner"), "{error}");
+        assert!(error.contains("rimz agents stop"), "{error}");
+        assert!(error.contains("without --fresh"), "{error}");
+    }
+    let worktrees = [lane_worktree("docs", "docs", None)];
+    let error = LaneCase::new(LaneResumeSelector::Scope("docs".into()), &[])
+        .worktrees(&worktrees)
+        .fresh()
+        .discover(|_| vec![local_session("claude", "native", 1, 2)])
+        .run()
+        .expect_err("native sessions have no saved team shape")
+        .to_string();
+    assert!(error.contains("without --fresh"), "{error}");
+}
+
+#[test]
+fn fresh_lane_materializes_new_team_launches() {
+    let dir = tempfile::tempdir().unwrap();
+    let lane = dir.path().to_str().unwrap();
+    let (teams, profiles, commands) = team_configs();
+    let mut agents = [
+        team_agent("claude", "planner", "planner", lane, 1),
+        team_agent("codex", "coder", "coder", lane, 2),
+    ];
+    for agent in &mut agents {
+        agent.channel = Some("saved-channel".to_owned());
+    }
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root(lane)
+        .fresh()
+        .restore(|| {
+            Ok(LaneRestoreConfig {
+                teams,
+                profiles,
+                commands,
+            })
+        })
+        .run()
+        .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected fresh restore");
+    };
+    let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let paths = crate::disk::paths::StatePaths::under(workspace.clone(), &dir.path().join("state"))
+        .unwrap();
+    let runtime =
+        crate::disk::paths::RuntimePaths::under(workspace, &dir.path().join("runtime")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let tabs = plan.materialize(&store, "rimz-test").unwrap();
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(tabs[0].pane_count(), 2);
+    assert_eq!(tabs[0].cwd, Path::new(lane));
+    for (pane, role) in tabs[0]
+        .layout
+        .columns
+        .iter()
+        .flat_map(|column| &column.panes)
+        .zip(["planner", "coder"])
+    {
+        let request = decode_exec_request(&pane.argv);
+        assert!(matches!(
+            request.action,
+            crate::harness::launch::ExecAction::Launch { .. }
+        ));
+        assert_eq!(request.identity.params.team.as_deref(), Some("forge"));
+        assert_eq!(request.identity.params.role.as_deref(), Some(role));
+        assert_eq!(
+            request.identity.params.channel.as_deref(),
+            Some("saved-channel")
+        );
+        assert!(!["planner", "coder"].contains(&request.identity.launch_id.as_deref().unwrap()));
+    }
+}
+
+#[test]
 fn concurrent_session_set_selects_the_newest_overlap_cluster() {
     // `second` overlaps neither `first` nor `third` on its own, but both
     // bracket it, so the three merge transitively into one working set.

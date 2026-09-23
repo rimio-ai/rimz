@@ -402,6 +402,7 @@ type RestoreFn<'a> = Box<dyn FnOnce() -> Result<LaneRestoreConfig, LaneResumeErr
 /// test names only what it varies.
 struct LaneCase<'a> {
     selector: LaneResumeSelector,
+    fresh: bool,
     agents: &'a [AgentState],
     worktrees: &'a [LaneWorktree],
     current_root: &'a Path,
@@ -418,6 +419,7 @@ impl<'a> LaneCase<'a> {
     fn new(selector: LaneResumeSelector, agents: &'a [AgentState]) -> Self {
         Self {
             selector,
+            fresh: false,
             agents,
             worktrees: &[],
             current_root: Path::new("/repo"),
@@ -433,6 +435,11 @@ impl<'a> LaneCase<'a> {
 
     fn logins(mut self, logins: &'a RoomLogins) -> Self {
         self.logins = logins;
+        self
+    }
+
+    fn fresh(mut self) -> Self {
+        self.fresh = true;
         self
     }
 
@@ -483,6 +490,7 @@ impl<'a> LaneCase<'a> {
         plan_lane_resume(
             LaneResumeRequest {
                 selector: self.selector,
+                fresh: self.fresh,
                 agents: self.agents,
                 worktrees: self.worktrees,
                 current_root: self.current_root,

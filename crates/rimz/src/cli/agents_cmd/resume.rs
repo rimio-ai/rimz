@@ -22,6 +22,7 @@ pub(super) fn resume_lane(
     scope: Option<String>,
     from_pr: Option<rimz::forge::PrTarget>,
     bg: bool,
+    fresh: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let workspace =
@@ -51,6 +52,7 @@ pub(super) fn resume_lane(
     let action = plan_lane_resume(
         LaneResumeRequest {
             selector,
+            fresh,
             agents: &projection.agents,
             worktrees: &worktrees,
             current_root: &workspace.worktree_root,

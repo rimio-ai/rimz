@@ -517,6 +517,9 @@ enum AgentsSubcmd {
         /// Resume the lane developed from this pull request (number or URL).
         #[arg(long, value_name = "PR", value_parser = parse_pr)]
         from_pr: Option<rimz::forge::PrTarget>,
+        /// Start new sessions in the lane's saved shape.
+        #[arg(long)]
+        fresh: bool,
         /// Open without focusing the resumed tab.
         #[arg(long)]
         bg: bool,
@@ -726,8 +729,9 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             worktree,
             from_pr,
             bg,
+            fresh,
         }) => {
-            return resume_lane(scope.or(worktree), from_pr, bg, globals);
+            return resume_lane(scope.or(worktree), from_pr, bg, fresh, globals);
         }
         Some(AgentsSubcmd::Refresh(args)) => return run_refresh(args, globals),
         None => {}

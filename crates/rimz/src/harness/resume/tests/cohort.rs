@@ -746,6 +746,7 @@ fn team_restore_tabs_seed_every_declared_role() {
             Some(Path::new("/repo")),
             |_| true,
             |_| true,
+            false,
         );
 
         let Some(expected) = expected else {
