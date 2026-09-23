@@ -1247,7 +1247,7 @@ fn plan_closed_lane(
     session_backed: impl Fn(&AgentState) -> bool,
     restore: LaneRestoreConfig,
 ) -> Result<LaneResumeAction, LaneResumeError> {
-    let team = plan_team_restore_tabs(
+    let (team, flat_agents) = split_team_and_flat(
         &closed,
         request.logins,
         &restore.teams,
@@ -1258,15 +1258,6 @@ fn plan_closed_lane(
         &session_backed,
         request.fresh,
     );
-    let flat_agents = closed
-        .iter()
-        .filter(|agent| {
-            !team
-                .iter()
-                .any(|planned| planned_team_matches_agent(planned, agent))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
     let team_panes = team
         .iter()
         .map(|planned| planned.cohort.seeds.len())
@@ -1535,7 +1526,7 @@ fn plan_team_restore_tabs(
                 channel: newest.channel(),
                 fresh: cells
                     .iter()
-                    .map(|cell| cell.role.clone().unwrap_or_else(|| cell.kind.to_string()))
+                    .map(|cell| build_label(cell.kind.as_str(), newest.channel().as_deref(), &cwd))
                     .collect(),
                 launch_group: None,
             }
@@ -1596,6 +1587,7 @@ pub(super) fn split_team_and_flat(
     project_root: Option<&Path>,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
+    fresh: bool,
 ) -> (Vec<PlannedTeamTab>, Vec<AgentState>) {
     let team = plan_team_restore_tabs(
         agents,
@@ -1606,7 +1598,7 @@ pub(super) fn split_team_and_flat(
         project_root,
         worktree_exists,
         session_backed,
-        false,
+        fresh,
     );
     let flat = agents
         .iter()
