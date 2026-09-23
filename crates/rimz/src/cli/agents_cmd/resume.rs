@@ -160,7 +160,8 @@ pub(super) fn resume_lane(
             }
             writeln!(
                 std::io::stdout().lock(),
-                "resumed {count} agent{} in '{lane_label}'",
+                "{} {count} agent{} in '{lane_label}'",
+                if fresh { "relaunched" } else { "resumed" },
                 if count == 1 { "" } else { "s" }
             )?;
             Ok(())

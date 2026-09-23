@@ -64,6 +64,22 @@ fn discovered_lane_recovers_unbacked_root_without_recorded_child() {
 }
 
 #[test]
+fn fresh_lane_refuses_when_no_team_can_be_restored() {
+    let agents = [agent("opencode", "flat", "/lane", 1)];
+    let error = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .fresh()
+        .run()
+        .expect_err("fresh needs a restorable team")
+        .to_string();
+    assert!(
+        error.contains("no saved team in '#lane' to relaunch fresh"),
+        "{error}"
+    );
+    assert!(error.contains("rimz agents opencode -w lane"), "{error}");
+}
+
+#[test]
 fn fresh_lane_rebuilds_team_and_skips_flat_roots() {
     let (teams, profiles, commands) = team_configs();
     let mut planner = team_agent("claude", "planner", "planner", "/lane", 1);
