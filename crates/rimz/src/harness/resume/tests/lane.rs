@@ -4,6 +4,66 @@
 use super::*;
 
 #[test]
+fn discovered_lane_never_resumes_or_lists_recorded_children() {
+    let agents = [child_agent(
+        "claude",
+        "child",
+        "parent",
+        "/repo-worktrees/docs",
+        1,
+    )];
+    let worktrees = [lane_worktree("docs", "docs", None)];
+    for selector in [
+        LaneResumeSelector::Scope("docs".into()),
+        LaneResumeSelector::List,
+    ] {
+        let result = LaneCase::new(selector.clone(), &agents)
+            .worktrees(&worktrees)
+            .discover(|_| vec![local_session("claude", "child", 1, 2)])
+            .run();
+        match selector {
+            LaneResumeSelector::List => {
+                let LaneResumeAction::List { lanes } = result.unwrap() else {
+                    panic!("expected list")
+                };
+                assert!(lanes.is_empty());
+            }
+            _ => assert!(matches!(result, Err(LaneResumeError::Nothing { .. }))),
+        }
+    }
+}
+
+#[test]
+fn discovered_lane_recovers_unbacked_root_without_recorded_child() {
+    let agents = [
+        agent("claude", "root", "/lane", 1),
+        child_agent("claude", "child", "root", "/lane", 2),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .session_backed(|_| false)
+        .discover(|_| {
+            vec![
+                local_session("claude", "root", 1, 2),
+                local_session("claude", "child", 3, 4),
+            ]
+        })
+        .run()
+        .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected restore")
+    };
+    assert_eq!(
+        plan.recovery.resumed_keys(),
+        BTreeSet::from([(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("root")
+        )])
+    );
+    assert!(plan.discovery_skipped().is_empty());
+}
+
+#[test]
 fn fresh_lane_rebuilds_team_and_skips_flat_roots() {
     let (teams, profiles, commands) = team_configs();
     let mut planner = team_agent("claude", "planner", "planner", "/lane", 1);

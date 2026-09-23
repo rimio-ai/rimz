@@ -841,7 +841,10 @@ pub fn plan_lane_resume(
             .iter()
             .filter(|worktree| !durable_paths.contains(&worktree.path))
         {
-            let (resume, _) = concurrent_session_set(discover_sessions(&worktree.path));
+            let (resume, _) = concurrent_session_set(without_recorded_children(
+                request.agents,
+                discover_sessions(&worktree.path),
+            ));
             let Some(freshest) = resume.iter().map(|session| session.last_activity).max() else {
                 continue;
             };
@@ -1137,6 +1140,19 @@ fn resume_candidate_key(
     )
 }
 
+fn without_recorded_children(
+    agents: &[AgentState],
+    mut observations: Vec<LocalSessionObservation>,
+) -> Vec<LocalSessionObservation> {
+    let children = agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_some())
+        .map(|agent| (&agent.kind, &agent.agent_id))
+        .collect::<HashSet<_>>();
+    observations.retain(|session| !children.contains(&(&session.kind, &session.session_id)));
+    observations
+}
+
 fn plan_discovered_lane(
     request: &LaneResumeRequest<'_>,
     lane: &ResolvedLane,
@@ -1144,6 +1160,7 @@ fn plan_discovered_lane(
     path_exists: impl Fn(&Path) -> bool,
     profiles: &ProfilesConfig,
 ) -> Result<LaneResumeAction, LaneResumeError> {
+    let observations = without_recorded_children(request.agents, observations);
     if observations.is_empty() {
         return Err(LaneResumeError::Nothing {
             scope: lane.display.clone(),
