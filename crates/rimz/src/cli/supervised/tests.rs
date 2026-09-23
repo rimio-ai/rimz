@@ -615,6 +615,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     assert!(request.close_pane_on_exit);
     assert!(request.exit_on_run_completion);
     assert!(request.subagent);
+    // Together these select the wrapper's parent-receipt hold before it closes the pane.
     assert_eq!(request.team_prompt, Some(team_prompt));
 }
 

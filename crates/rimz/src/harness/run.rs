@@ -517,7 +517,10 @@ fn fold_lifecycle(
     now: Timestamp,
     owed: Option<OwedWake>,
 ) -> LifecycleFold {
-    if record.kind.as_str() != kind || record.status.is_terminal() {
+    let reopen = record.status.is_terminal()
+        && record.subagent
+        && matches!(observation.signal, LifecycleSignal::TurnStarted { .. });
+    if record.kind.as_str() != kind || (record.status.is_terminal() && !reopen) {
         return LifecycleFold::Ignored;
     }
     match (&record.agent_id, &observation.agent_id) {
@@ -528,6 +531,16 @@ fn fold_lifecycle(
             record.agent_name = observation.agent_name.clone().or(record.agent_name.take());
         }
         (None, None) | (Some(_), Some(_)) => {}
+    }
+    if reopen {
+        record.deadline_at = record
+            .deadline_at
+            .map(|deadline| now + (deadline - record.started_at));
+        record.status = RunStatus::Running;
+        record.completed_at = None;
+        record.parked_at = None;
+        record.joined_at = None;
+        record.report_message_id = None;
     }
     if let Some(disposition) = observation.signal.terminal_disposition() {
         if let Some(path) = observation.transcript_path.as_ref() {
@@ -564,7 +577,7 @@ fn fold_lifecycle(
     }
     let first_transcript_path =
         record.transcript_path.is_none() && observation.transcript_path.is_some();
-    if !unparked && record.status != RunStatus::Pending && !first_transcript_path {
+    if !reopen && !unparked && record.status != RunStatus::Pending && !first_transcript_path {
         return LifecycleFold::Ignored;
     }
     record.status = RunStatus::Running;
