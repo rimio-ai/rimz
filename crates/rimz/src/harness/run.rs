@@ -541,6 +541,8 @@ fn fold_lifecycle(
         record.parked_at = None;
         record.joined_at = None;
         record.report_message_id = None;
+        record.last_message = None;
+        record.failure_tail = None;
     }
     if let Some(disposition) = observation.signal.terminal_disposition() {
         if let Some(path) = observation.transcript_path.as_ref() {

@@ -37,6 +37,8 @@ fn terminal_subagent_reopens_for_its_next_turn() {
         record.completed_at = Some(record.started_at);
         record.joined_at = Some(record.started_at);
         record.report_message_id = Some(crate::ids::MessageId::new());
+        record.last_message = Some("first answer".into());
+        record.failure_tail = Some("first failure".into());
         record.deadline_at = Some(record.started_at + std::time::Duration::from_secs(30));
         create(&paths, &record).unwrap();
         let mut observation = AgentLifecycleObservation::new(
@@ -64,6 +66,8 @@ fn terminal_subagent_reopens_for_its_next_turn() {
         assert_eq!(reopened.parked_at, None);
         assert_eq!(reopened.joined_at, None);
         assert_eq!(reopened.report_message_id, None);
+        assert_eq!(reopened.last_message, None);
+        assert_eq!(reopened.failure_tail, None);
         assert!(reopened.deadline_at.unwrap() >= before + std::time::Duration::from_secs(30));
         observation.signal = LifecycleSignal::TurnEnded {
             errored: false,
