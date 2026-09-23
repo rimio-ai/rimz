@@ -210,7 +210,7 @@ fn filters_subagents_and_ended_candidates_but_resumes_paneless_roots() {
 }
 
 #[test]
-fn resumes_pane_backed_launched_children_with_their_ancestry() {
+fn flat_resume_never_plans_a_launched_child() {
     let launched = AgentState {
         parent_agent_id: Some("parent".into()),
         parent_agent_kind: Some(AgentKind::new_unchecked("codex")),
@@ -220,18 +220,8 @@ fn resumes_pane_backed_launched_children_with_their_ancestry() {
 
     let plan = plan(&[launched]);
 
-    assert_eq!(plan.tabs.len(), 1);
-    let request = decode_exec_request(&single_column(&plan.tabs[0])[0]);
-    assert_eq!(request.identity.launch_id.as_deref(), Some("child"));
-    assert_eq!(
-        request.identity.params.parent_agent_id.as_deref(),
-        Some("parent")
-    );
-    assert_eq!(
-        request.identity.params.parent_agent_kind.as_deref(),
-        Some("codex")
-    );
-    assert_eq!(request.identity.params.launch_depth, Some(1));
+    assert!(plan.tabs.is_empty());
+    assert!(plan.skipped.is_empty());
 }
 
 #[test]
@@ -343,8 +333,6 @@ fn flat_resume_replays_every_durable_identity_field() {
         launch_group: Some("launch_group_1".to_owned()),
         launch_ordinal: Some(2),
         channel: Some("design".to_owned()),
-        parent_agent_id: Some("parent".into()),
-        parent_agent_kind: Some(AgentKind::new_unchecked("codex")),
         launch_depth: Some(1),
         ..agent("claude", "a1", "/code/qe", 1)
     };
@@ -361,8 +349,6 @@ fn flat_resume_replays_every_durable_identity_field() {
     assert_eq!(params.launch_group.as_deref(), Some("launch_group_1"));
     assert_eq!(params.launch_ordinal, Some(2));
     assert_eq!(params.channel.as_deref(), Some("design"));
-    assert_eq!(params.parent_agent_id.as_deref(), Some("parent"));
-    assert_eq!(params.parent_agent_kind.as_deref(), Some("codex"));
     assert_eq!(params.launch_depth, Some(1));
 }
 

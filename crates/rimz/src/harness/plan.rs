@@ -82,8 +82,6 @@ pub(super) struct ResumeLaunchIdentity {
     pub launch_group: Option<String>,
     pub launch_ordinal: Option<u32>,
     pub channel: Option<String>,
-    pub parent_agent_id: Option<AgentSessionId>,
-    pub parent_agent_kind: Option<crate::ids::AgentKind>,
     pub launch_depth: Option<u8>,
     pub launched_by: Option<crate::agents::LaunchedBy>,
     pub isolation: Option<crate::config::Isolation>,
@@ -103,8 +101,6 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,
             channel: agent.channel.clone(),
-            parent_agent_id: agent.parent_agent_id.clone(),
-            parent_agent_kind: agent.parent_agent_kind.clone(),
             launch_depth: agent.launch_depth,
             launched_by: agent.launched_by.clone(),
             isolation: agent.isolation,
@@ -933,8 +929,6 @@ pub(super) fn resume_command(
         .filter(|channel| !channel.is_empty())
         .or_else(|| fallback_channel.filter(|channel| !channel.is_empty()));
     let params = crate::agents::LaunchParams {
-        parent_agent_id: identity.parent_agent_id.clone(),
-        parent_agent_kind: identity.parent_agent_kind.clone(),
         launch_depth: identity.launch_depth,
         launched_by: identity.launched_by.clone().map(Box::new),
         profile: identity.profile.clone(),
