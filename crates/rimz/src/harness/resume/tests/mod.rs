@@ -50,6 +50,16 @@ fn team_agent(kind: &str, id: &str, role: &str, worktree: &str, secs_ago: i64) -
     }
 }
 
+/// A launched child of a Claude root, bound to its own pane.
+fn child_agent(kind: &str, id: &str, parent_id: &str, worktree: &str, secs_ago: i64) -> AgentState {
+    AgentState {
+        parent_agent_id: Some(parent_id.into()),
+        parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+        launch_depth: Some(1),
+        ..agent(kind, id, worktree, secs_ago)
+    }
+}
+
 /// An inline-spec member carrying its launch group and cell ordinal.
 fn inline_agent(
     kind: &str,

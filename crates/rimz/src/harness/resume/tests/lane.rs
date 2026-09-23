@@ -338,6 +338,189 @@ fn lane_all_closed_restores_team_first_within_the_cap() {
 }
 
 #[test]
+fn lane_all_closed_drops_launched_children_of_team_and_flat_roots() {
+    let (teams, profiles, commands) = team_configs();
+    let agents = [
+        team_agent("claude", "planner", "planner", "/lane", 1),
+        team_agent("codex", "coder", "coder", "/lane", 2),
+        agent("claude", "flat", "/lane", 3),
+        child_agent("opencode", "planner-child", "planner", "/lane", 4),
+        child_agent("opencode", "flat-child", "flat", "/lane", 5),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .max(128)
+        .restore(|| {
+            Ok(LaneRestoreConfig {
+                teams,
+                profiles,
+                commands,
+            })
+        })
+        .run()
+        .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected closed restore");
+    };
+    let entries = plan
+        .recovery
+        .entries
+        .iter()
+        .map(|entry| match entry {
+            RecoveryEntry::Team(_) => "team",
+            RecoveryEntry::Flat(_) => "flat",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entries, ["team", "flat"]);
+    assert_eq!(
+        plan.recovery
+            .entries
+            .iter()
+            .map(RecoveryEntry::pane_count)
+            .collect::<Vec<_>>(),
+        [2, 1],
+        "launched children must not add flat panes"
+    );
+    for entry in &plan.recovery.entries {
+        match entry {
+            RecoveryEntry::Team(team) => assert_eq!(
+                team.cohort.seeds.iter().map(resume_id).collect::<Vec<_>>(),
+                [Some("planner"), Some("coder")]
+            ),
+            RecoveryEntry::Flat(flat) => {
+                for argv in single_column(&flat.tab) {
+                    assert!(
+                        matches!(
+                            decode_exec_request(&argv).action,
+                            crate::harness::launch::ExecAction::Resume { ref session_id, .. }
+                                if session_id == "flat"
+                        ),
+                        "only the flat root session may resume, not either child"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(
+        plan.preflight_kinds
+            .iter()
+            .map(AgentKind::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["claude", "codex"]),
+        "child providers must not enter preflight"
+    );
+    assert!(
+        plan.recovery.skipped.is_empty(),
+        "children are dropped, not skipped"
+    );
+}
+
+#[test]
+fn lane_partial_resume_drops_closed_launched_child() {
+    let agents = [
+        agent("claude", "live", "/lane", 1),
+        agent("codex", "closed", "/lane", 2),
+        child_agent("opencode", "child", "live", "/lane", 3),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .liveness(|agent| {
+            if agent.agent_id.as_str() == "live" {
+                live(agent)
+            } else {
+                dead(agent)
+            }
+        })
+        .run()
+        .unwrap();
+    let LaneResumeAction::SplitClosed {
+        commands,
+        live_labels,
+        preflight_kinds,
+        ..
+    } = action
+    else {
+        panic!("expected partial split");
+    };
+    assert_eq!(
+        commands.len(),
+        1,
+        "closed child must not receive a resume command"
+    );
+    assert!(matches!(
+        decode_exec_request(&commands[0].argv).action,
+        crate::harness::launch::ExecAction::Resume { ref session_id, .. }
+            if session_id == "closed"
+    ));
+    assert_eq!(preflight_kinds, [AgentKind::new_unchecked("codex")]);
+    assert_eq!(live_labels.len(), 1);
+}
+
+#[test]
+fn lane_live_child_does_not_make_closed_root_live() {
+    let agents = [
+        agent("claude", "root", "/lane", 2),
+        child_agent("codex", "child", "root", "/lane", 1),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .liveness(|agent| {
+            if agent.agent_id.as_str() == "child" {
+                live(agent)
+            } else {
+                dead(agent)
+            }
+        })
+        .run()
+        .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("live child must not make the lane live: {action:?}");
+    };
+    let [RecoveryEntry::Flat(flat)] = plan.recovery.entries.as_slice() else {
+        panic!("expected one flat root tab");
+    };
+    assert_eq!(flat.pane_count(), 1);
+    assert!(matches!(
+        decode_exec_request(&first_argv(&flat.tab)).action,
+        crate::harness::launch::ExecAction::Resume { ref session_id, .. }
+            if session_id == "root"
+    ));
+}
+
+#[test]
+fn lane_listing_excludes_closed_and_live_launched_children() {
+    let agents = [
+        agent("claude", "closed-root", "/closed", 10),
+        child_agent("codex", "closed-child-one", "closed-root", "/closed", 11),
+        child_agent("codex", "closed-child-two", "closed-root", "/closed", 12),
+        agent("claude", "live-root", "/live", 1),
+        child_agent("codex", "live-child", "live-root", "/live", 2),
+    ];
+    let action = LaneCase::new(LaneResumeSelector::List, &agents)
+        .liveness(|agent| {
+            if agent.worktree_path.as_deref() == Some("/live") {
+                live(agent)
+            } else {
+                dead(agent)
+            }
+        })
+        .restore(|| panic!("listing must not load restore config"))
+        .run()
+        .unwrap();
+    let LaneResumeAction::List { lanes } = action else {
+        panic!("expected listing");
+    };
+    assert_eq!(
+        lanes
+            .iter()
+            .map(|lane| (lane.label.as_str(), lane.members, lane.live))
+            .collect::<Vec<_>>(),
+        [("#live", 1, 1), ("#closed", 1, 0)],
+        "MEMBERS and LIVE must exclude closed-child-one, closed-child-two, and live-child"
+    );
+}
+
+#[test]
 fn lane_recovery_materializes_team_first_and_fails_strictly() {
     let dir = tempfile::tempdir().expect("test root");
     let lane = dir.path().join("lane");
