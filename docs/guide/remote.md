@@ -111,6 +111,8 @@ The room and its state both live on the host, in durable flat files under `~/.ri
 
 To bring a room up empty instead, or to rebuild one that came back wrong, run `rimz` with `--no-resume` or `rimz reset` on the host ([reset and clean up](./troubleshooting.md#reset-and-clean-up)).
 
+Recovery brings back root agents, not their subagent children; [rebirth recovery](./configuration.md#resume) explains how interrupted child work is reported to its parent.
+
 Keeping the agent processes themselves alive across a reboot is not something RimZ does. Reach for systemd, tmux-resurrect, or Zellij resurrect on the host to carry them across a restart, and RimZ reattaches to whatever is still running ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
 
 ## Answer asks from your phone

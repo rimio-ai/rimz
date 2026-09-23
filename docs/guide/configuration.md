@@ -186,6 +186,8 @@ Resume covers two moments: bringing the room back after the machine or the multi
 
 **A rebirth after a reboot or multiplexer crash.** RimZ offers to recover the prior agents from the durable record: the prompt defaults to yes, a non-interactive start recovers without asking, and each restored agent comes up idle in its worktree tab. Empty named channels reopen too on a rebirth within the same boot. `on_rebirth = false`, `--no-resume`, and `rimz reset` come up with no agents. `max` (default 128) caps how many loose agents one birth relaunches; team panes are planned before that cap applies, so a large team can exceed it on its own.
 
+Subagent children are never restored. A child's open run cut off by the crash reports as canceled to its parent, which can relaunch the work if it is still needed.
+
 **A park while the room is live.** `auto_continue` is off by default. Turned on, it picks a parked turn back up by typing `auto_continue_text` down the same path as `message --steer`:
 
 - A rate-limit or spend-limit park fires when the account's budget window resets.
