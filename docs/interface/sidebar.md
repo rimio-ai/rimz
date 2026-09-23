@@ -22,13 +22,13 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
 ▌  ▣ ━━━━━━━━━━━━━━━━╺━╺───────────────────────── 38.2%▐    ← context meter
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%              ◔ 8m▐    ← tokens in the window, cache hit, last activity
 ▌  ⧉ subagents (2) · ⧖ waits (3)                  $0.42▐    ← subagents and waits line
-▌    ⠁ Explore — audit the trust hash                  ▐    ← running subagent
+▌    ⠁ Explore · audit the trust hash                  ▐    ← running subagent
 ▌      ◇ 3k · Opus 4.8                            ◔  3m▐    ← its tokens, model, elapsed time
-▌    ✓ Explore — locate the render seam           ◔  1m▐    ← finished subagent, time since it finished
-▌    ◷ in 12m                                     ◔ 18m▐    ← timer wait, time since it was armed
-▌    ⣾ Run the test suite                         ◔  4m▐    ← background shell
+▌    ✓ Explore · locate the render seam           ◔  1m▐    ← finished subagent, time since it finished
+▌    ◷ timer · in 12m                             ◔ 18m▐    ← timer wait, time since it was armed
+▌    ⣾ shell · Run the test suite                 ◔  4m▐    ← background shell
 ▌      cargo test                                      ▐    ← its command
-▌    ⌁ pr.merged                                  ◔  5m▐    ← signal wait
+▌    ⌁ signal · pr.merged                         ◔  5m▐    ← signal wait
 ▎○ zsh                                                 🮇    ← process row
 
  ──────────────────────────────────────────────────────
