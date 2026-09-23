@@ -398,7 +398,7 @@ agent process exits
 
 The probe is the backend's session listing (`MuxBackend::session_accepts_agent_close`). A session that is listed but otherwise unresponsive counts as deliberate; only a failed or timed-out listing marks the server as gone. A live room with missing sidebar chrome still treats a pane close as deliberate.
 
-A deliberate exit records the durable `rimz.agent-ended` trace before any slower cleanup, so that agent stays out of future recovery. Two deliberate exits skip the trace: a supervised non-subagent run that exits on run completion, whose run record already carries the outcome, and a subagent held open by `--keep` ([subagents.md](./subagents.md)). A non-deliberate exit skips both the trace and worktree cleanup, because recovery should come from the sidebar producer's latest live roster instead.
+A deliberate exit records the durable `rimz.agent-ended` trace before any slower cleanup, so that agent stays out of automatic recovery. A parent's message can still [resume its ended child](./subagents.md#follow-ups-and-resume). Two deliberate exits skip the trace: a supervised non-subagent run that exits on run completion, whose run record already carries the outcome, and a subagent held open by `--keep` ([subagents.md](./subagents.md)). A non-deliberate exit skips both the trace and worktree cleanup, because recovery should come from the sidebar producer's latest live roster instead.
 
 After the trace, the wrapper settles in one of three ways, depending on what the launch asked for.
 
@@ -406,7 +406,7 @@ After the trace, the wrapper settles in one of three ways, depending on what the
 
 **Reclaim the worktree.** An agent launched with `--worktree-path` triggers worktree cleanup on supervised-run completion or on a deliberate signal or tab-close exit; the cleanup proves the branch's work landed before removing the tree and deleting its branch. A clean interactive quit does *not* reclaim: it drops to the idle shell and leaves reclamation to `rimz gc`. A signal exit starts the cleanup helper with null stdio in its own process group, so it can finish after the closing pane disappears. The helper, its decision table, and the `gc` sweep are [worktrees.md § Who triggers removal](./worktrees.md#who-triggers-removal).
 
-**Close the pane.** A pane closes itself when the launch set `close_pane_on_exit`, or when a subagent's parent has ended. The supervised-run side of pane reclamation, including background runs and cancellation, is [scripting.md § Reclaiming the run pane](./scripting.md#reclaiming-the-run-pane).
+**Close the pane.** A pane closes itself on provider exit when the launch set `close_pane_on_exit`, or when a non-kept subagent's parent has ended. An interactive subagent normally stays alive through its parent's receiving turn before cleanup stops it. The supervised-run side of pane reclamation, including background runs and cancellation, is [scripting.md § Reclaiming the run pane](./scripting.md#reclaiming-the-run-pane).
 
 ## See also
 

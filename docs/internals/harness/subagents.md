@@ -39,12 +39,12 @@ The doorway is a usability boundary, not a security one. The same launch is expr
 
 | Field | Value | Why |
 | --- | --- | --- |
-| `print` | always `true` | a child is one bounded turn, never a session |
+| `print` | always `true` | selects RimZ's supervised run, not provider print mode; interactive providers can take follow-up turns |
 | `bg` | always `true` | single launch and fanout share one background composition |
 | `subagent` | always `true` | selects the parent stamp, profile namespace, pane zone, and no-delegation rules below |
-| `self_cleanup_on_completion` | `true`, cleared by `--keep` | the wrapper stops the provider at the durable outcome and closes the pane |
-| `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | an unattended child must not run forever |
-| `keep` | `--keep`, default false | holds the pane after completion and past parent exit |
+| `self_cleanup_on_completion` | `true`, cleared by `--keep` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane |
+| `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | bounds pending or running work, not terminal receipt waits |
+| `keep` | `--keep`, default false | disables automatic completion cleanup and the parent watchdog; holds the pane past provider exit |
 | join | none unless `--wait[=DURATION]` | the parent normally keeps moving; the duration limits only the caller's join |
 
 The pass-through fields are `--prompt-file`, `--model`, `--agent` (a re-base onto another profile or kind), `--effort`, `--isolation`, `--description`, `--max-turns`, and trailing argv. The doorway omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output and input formats, retries, and verification: each needs a decision the delegating agent is not placed to make, and each stays reachable through `rimz agents`.
@@ -185,12 +185,16 @@ A plain shell in the project directory cannot derive an in-place team's `<direct
 
 1. The parent launches. Caller policy and ancestry pass, the run record and pane are created, and the petname prints. With `--wait`, the parent then joins.
 2. The child runs until its work ends. A clean turn end with an owed harness wake parks its run as `Running`, so the parent digest still waits for it; otherwise its hooks fold a terminal status into the run record.
-3. The in-pane wrapper sees the terminal record and stops the provider. Once its child-exit fallback guarantees a terminal run, it calls the fleet reporter ([`cli/agents_cmd/subagent_report.rs`](../../../crates/rimz/src/cli/agents_cmd/subagent_report.rs), `report_settled_child`).
+3. The non-kept child's in-pane wrapper sees the terminal, unreported and unjoined record and calls the fleet reporter before stopping the provider ([`cli/agents_cmd/subagent_report.rs`](../../../crates/rimz/src/cli/agents_cmd/subagent_report.rs), `report_settled_child`). The exit path still calls it after its child-exit fallback guarantees a terminal run. One-shot providers exit on their own and close their panes as before; interactive providers stay available for follow-ups.
 4. The reporter reads the launcher's current row (`AgentState::launcher`) and, through [`address::launched_fleet`](../../../crates/rimz/src/address.rs), the newest run of every row that launcher launched: its launched children plus the peers stamped with `launched_by`, so a `rimz agents -p --bg` run from an agent reports the same way. A missing or ended launcher, or any non-terminal newest run, queues nothing.
 5. It keeps the terminal rows with neither `report_message_id` nor `joined_at`, and writes each non-empty `last_message` atomically to `StatePaths::subagents_dir/<handle>.output`, adding a trailing newline if missing. `TmpView::current` maps each path into the parent's view: `/tmp/rimz-subagents/<handle>.output` under sandbox isolation, the host path otherwise. A write or measurement failure aborts before any stamp, so the backstop can retry.
 6. It mints the message id, stamps it onto every listed row as `report_message_id`, and only then queues a parked `MessageSender::Harness { notice: SubagentReport }` with gate `Done`. A queue failure clears the stamps so the backstop can retry. The `SUBAGENT_REPORT` envelope reads `From: @rimz`, and immediate pane delivery is best-effort latency over the durable records.
-7. The wrapper stamps its own row's `ended_at` and closes its pane. With `--keep`, it instead lingers with a stderr line naming `rimz subagents stop`, until a stop signal arrives; parent exit does not reclaim it.
+7. After the parent's receiving turn ends, the wrapper stops the idle child, stamps its own row's `ended_at` and closes its pane. The receipt and hold checks below must all pass. With `--keep`, automatic completion cleanup is off; after provider exit the wrapper lingers with a stderr line naming `rimz subagents stop`, until a stop signal arrives. Parent exit alone does not reclaim it.
 8. The run record survives the close, and the ended child stays under any visible row of its parent's launch, so `list` and `wait` still report the outcome and the card keeps its verdict until the parent's next prompt boundary. A retained child is at rest and never holds its parent in `running` ([model.md](../agents/model.md#observed-ends-and-reaped-ends)); the run record's own outcome is what `list`, `wait`, and the digest report.
+
+[`cli/agents_cmd/exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs), `RunMonitor`, keeps the record poll at 250 ms and checks terminal receipt and hold state at 1 s intervals. Cleanup requires a terminal run, no live waiter, receipt through `joined_at` or a `Delivered` digest in message history, no open child turn, no non-terminal queued message addressed to the child, and no open parent turn. `RunExecContext::parent_received_and_rested` reads the queue and history before `snapshot_cached`, whose rest certificates inform `holds_open_turn`. Pane send leaves a message `Sent`; the receiver's turn hook folds `TurnStarted` before acknowledging `Delivered`. An absent or ended parent counts as having no open turn.
+
+[`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), `fold_lifecycle`, reopens the same terminal subagent run on a matching `TurnStarted`: `Running`, with `completed_at`, `parked_at`, `joined_at`, and `report_message_id` cleared and an existing deadline re-armed to `now + (deadline_at - started_at)`. The next completion is newly terminal again and can produce another digest. Other terminal runs remain absorbing.
 
 `harness::fleet::FleetRuns` is the shared settlement rule for the reporter, its orphan-sweep backstop, and the owed-wake predicate. It selects each member's newest run with matching kind and either session id or a present matching name, deduplicated by run id. A supervised parent parks at a clean end while any selected run is live or terminal but neither joined nor reported; the queued digest then holds it until delivery opens its next turn ([parked runs](./scripting.md#parked-runs)).
 
@@ -234,17 +238,25 @@ Row stamps make repeated passes and races idempotent. Each diagnostic means the 
 
 Neither scan covers a `--keep` child: its wrapper runs no watchdog, and the orphan scan skips kept runs, so only `rimz subagents stop` or a manual pane close ends it. Stopping the parent through `rimz agents stop`, or `rimz teams stop` reaching that parent, stops its live launched children first, kept ones included.
 
+A terminal child awaiting receipt can linger while its parent lives. Its bounds are parent loss through the watchdog or orphan sweep, the parent stop cascade, and `rimz subagents stop`, not `run_timeout`: [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs), `is_overdue`, covers only `Pending` and `Running` records.
+
+### Follow-ups and resume
+
+The parent can message a live interactive child in the same session. For an ended child, [`cli/message/dispatch.rs`](../../../crates/rimz/src/cli/message/dispatch.rs), `recipient_miss`, calls the published `cli/subagents::resume_child` doorway before reporting a miss. It resolves the caller through ancestry against the audit projection and the target only among that caller's launched children. A user shell, peer, or sibling cannot resume it this way.
+
+[`cli/subagents/resume.rs`](../../../crates/rimz/src/cli/subagents/resume.rs) checks the recorded cwd, subagent-profile posture, sandbox skills and capability, trust, login and provider session resume support before opening a pane. A missing session, unsupported resume or degraded posture is a miss with its reason, never a fresh launch. The request reuses the child's session, launch identity, newest run and keep policy; cwd comes from the child without taking checkout ownership. Placement uses the parent's session and the ordinary subagent zone fallbacks. Once a non-ended row binds, dispatch retries once through the normal message path, including reply waits. The message is the next prompt; `TurnStarted` reopens the run and the receiving-turn cleanup rule applies again. Explicit stop, failure and timeout do not prevent a later parent-message resume when its preconditions pass.
+
 ### Signals are not the settlement path
 
 A child's lifecycle transitions also fire `agent.*` signals ([loops.md](./loops.md#the-signal-vocabulary)) carrying `session`, `handle`, and, when recorded, the parent's session id in `parent`. A parent could arm `rimz loop add child-ended --signal agent.ended --match session=<child> --wait --once`, but the digest and `wait` carry the child's text and run identity, while a signal carries only the transition. The self-wait guard refuses a subscription that does not name another agent, so `--match parent=<own session>` alone is rejected.
 
 ## What is left out
 
-`restart` and `resume` are absent by design. The durable run record does not retain every launch argument needed to reproduce the deadline, wait, and self-close contracts, and a partial reproduction would silently change the child's lifecycle. Relaunching the same profile and prompt is the supported path, matching how agents treat their native Agent tool.
+There are no `subagents restart` or `subagents resume` verbs. Parent-message resume continues an existing session; when its preconditions fail, launching the same profile and prompt creates a new child instead.
 
-The durable launch record does not stamp which profile namespace produced a child. Generic restart therefore resolves `[agents.profiles]`, and a subagent-only profile degrades or refuses through the missing-profile path. Persisting the doorway scope with the launch event is the upgrade path. Resume and rebirth exclude children entirely; [fleet.md § Resume and rebirth](./fleet.md#resume-and-rebirth) owns crash-time run settlement.
+The durable launch record does not stamp which profile namespace produced a child. Generic restart therefore resolves `[agents.profiles]`, and a subagent-only profile degrades or refuses through the missing-profile path. Persisting the doorway scope with the launch event is the upgrade path. Room resume and rebirth exclude children entirely; [fleet.md § Resume and rebirth](./fleet.md#resume-and-rebirth) owns crash-time run settlement. The parent-message doorway explicitly selects the subagent profile scope; it does not change generic recovery.
 
-A child is addressable as `@<petname>`, but a supervised print-mode provider is not an interactive message consumer, so mid-run steering is not a contract. A message can park against the address; nothing resumes a finished child to consume it.
+A child is addressable as `@<petname>`. One-shot providers cannot be kept interactive by the wrapper; follow-ups after their exit require provider session resume support.
 
 ## See also
 
