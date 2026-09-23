@@ -774,13 +774,19 @@ impl RunExecContext {
         // Pane send leaves a prompt Sent. The lifecycle hook records TurnStarted
         // before confirming Delivered; queue-before-snapshot preserves that order.
         let messages = self.store.list_messages()?;
-        if record.joined_at.is_none()
-            && !self.store.list_message_history()?.iter().any(|message| {
-                Some(&message.message_id) == record.report_message_id.as_ref()
-                    && message.status == rimz::store::message::MessageStatus::Delivered
-            })
-        {
-            return Ok(false);
+        if record.joined_at.is_none() {
+            // A queued report is not yet delivered; history is read only once it leaves the queue.
+            let Some(report) = record.report_message_id.as_ref() else {
+                return Ok(false);
+            };
+            if messages.iter().any(|message| &message.message_id == report)
+                || !self.store.list_message_history()?.iter().any(|message| {
+                    &message.message_id == report
+                        && message.status == rimz::store::message::MessageStatus::Delivered
+                })
+            {
+                return Ok(false);
+            }
         }
         let snapshot = self.store.snapshot_cached()?;
         let Some(child) = snapshot.agents.iter().find(|agent| {
