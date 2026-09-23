@@ -193,7 +193,7 @@ fn companion_title(caller: &AgentState, theme: &rimz::config::ThemeConfig) -> St
         )
 }
 
-pub(super) fn subagent_companion_title(store: &rimz::Store) -> String {
+pub(in crate::cli) fn subagent_companion_title(store: &rimz::Store) -> String {
     let machine = rimz::config::MachineConfig::load_lenient();
     store
         .runtime_projection(rimz::RuntimeScope::Audit)
@@ -206,7 +206,7 @@ pub(super) fn subagent_companion_title(store: &rimz::Store) -> String {
         .unwrap_or_else(|| "subagents".to_owned())
 }
 
-pub(super) fn lock_subagent_zone(
+pub(in crate::cli) fn lock_subagent_zone(
     store: &rimz::Store,
 ) -> rimz::disk::lock::Result<rimz::disk::lock::WorkspaceLock> {
     rimz::disk::lock::WorkspaceLock::acquire(&store.paths().locks_dir.join("subagent-zone.lock"))
@@ -218,7 +218,7 @@ pub(super) fn lock_subagent_zone(
     clippy::too_many_arguments,
     reason = "one mux effect carries the complete pane birth contract"
 )]
-pub(super) fn split_into_subagent_zone(
+pub(in crate::cli) fn split_into_subagent_zone(
     backend: &dyn rimz::mux::MuxBackend,
     store: &rimz::Store,
     workspace: &rimz::ResolvedWorkspace,
@@ -385,11 +385,11 @@ fn list_subagent_zone_panes(
         .map_err(anyhow::Error::from)
 }
 
-pub(super) fn wait_for_subagent_pane_bind(
+pub(in crate::cli) fn wait_for_subagent_pane_bind(
     store: &rimz::Store,
     kind: &AgentKind,
     launch_id: &AgentSessionId,
-) {
+) -> bool {
     let bound = wait_for_subagent_pane_bind_with(
         || {
             store
@@ -414,15 +414,19 @@ pub(super) fn wait_for_subagent_pane_bind(
             "subagent pane bind was not visible before the launch returned",
         );
     }
+    bound
 }
 
-fn launch_has_bound_pane(
+pub(super) fn launch_has_bound_pane(
     agents: &[AgentState],
     kind: &AgentKind,
     launch_id: &AgentSessionId,
 ) -> bool {
     agents.iter().any(|agent| {
-        agent.kind == *kind && agent.launch_id.as_ref() == Some(launch_id) && agent.pane.is_some()
+        agent.kind == *kind
+            && agent.launch_id.as_ref() == Some(launch_id)
+            && agent.pane.is_some()
+            && agent.ended_at.is_none()
     })
 }
 

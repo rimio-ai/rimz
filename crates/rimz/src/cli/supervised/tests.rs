@@ -272,6 +272,22 @@ fn subagent_zone_strategy_caps_physical_companions_and_reuses_overflow() {
 
 #[test]
 fn subagent_launch_waits_for_wrapper_pane_bind_but_caps_the_wait() {
+    let mut child = agent_state("claude", "child", AgentStatus::Success);
+    child.pane = Some(pane_ref("%2", "subagents"));
+    child.launch_id = Some("launch_child".into());
+    let kind = child.kind.clone();
+    let launch_id = child.launch_id.clone().unwrap();
+    assert!(super::pane::launch_has_bound_pane(
+        std::slice::from_ref(&child),
+        &kind,
+        &launch_id
+    ));
+    child.ended_at = Some(jiff::Timestamp::now());
+    assert!(!super::pane::launch_has_bound_pane(
+        &[child],
+        &kind,
+        &launch_id
+    ));
     let mut probes = 0;
     assert!(super::pane::wait_for_subagent_pane_bind_with(
         || {

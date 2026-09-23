@@ -1092,6 +1092,75 @@ fn queue_add_for_bound_agent_does_not_enumerate_panes() {
 }
 
 #[test]
+fn parent_message_to_ended_child_reports_missing_conversation() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    for id in ["parent", "peer"] {
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            id,
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.agent_name = Some(id.to_owned());
+            },
+        );
+    }
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionEnd",
+        "child",
+        LifecycleSignal::Ended,
+        |observation| {
+            observation.agent_name = Some("otter".to_owned());
+            observation.launch.parent_agent_id = Some("parent".into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+            observation.launch.isolation = Some(rimz::config::Isolation::Host);
+            observation.transcript_path =
+                Some(env.project_root.join("missing.jsonl").display().to_string());
+        },
+    );
+    let audit = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    let child = audit
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == "child")
+        .unwrap();
+    assert!(child.ended_at.is_some(), "{child:?}");
+    for caller in [Some("parent"), Some("peer"), None] {
+        let mut command = env.rimz();
+        if let Some(caller) = caller {
+            command
+                .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+                .env(rimz::harness::launch::ENV_AGENT_ID, caller);
+        }
+        let output = command
+            .args(["message", "@otter", "follow up"])
+            .output()
+            .expect("message");
+        assert!(
+            !output.status.success(),
+            "caller={caller:?}; stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if caller == Some("parent") {
+            assert!(stderr.contains("no recorded conversation"), "{stderr}");
+        } else {
+            assert!(!stderr.contains("cannot resume"), "{stderr}");
+        }
+        assert!(env.store().list_pending_messages().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn message_add_does_not_resolve_reaped_dead_owner_agent() {
     let env = Env::new();
     env.install_agent_hooks("claude");

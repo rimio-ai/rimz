@@ -5,6 +5,23 @@ use jiff::Timestamp;
 
 use super::*;
 
+#[test]
+fn newest_child_run_requires_kind_and_present_names() {
+    let child = AgentState::stub("codex", "child", rimz::agents::AgentStatus::Success);
+    let mut run = rimz::store::run::RunRecord::new(
+        rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp")),
+        child.kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "task".to_owned(),
+        PathBuf::from("/tmp"),
+    );
+    assert!(newest_run_for_child(&[run.clone()], &child).is_none());
+    run.agent_id = Some(child.agent_id.clone());
+    assert!(newest_run_for_child(&[run.clone()], &child).is_some());
+    run.kind = rimz::ids::AgentKind::new_unchecked("claude");
+    assert!(newest_run_for_child(&[run], &child).is_none());
+}
+
 #[derive(Debug, Parser)]
 struct Harness {
     #[command(flatten)]
