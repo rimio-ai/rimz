@@ -388,6 +388,7 @@ fn plan_recovery(
         project_root.as_deref(),
         Path::is_dir,
         resume_session_present,
+        false,
     );
     let team_panes = team
         .iter()

@@ -780,6 +780,7 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
         Some(Path::new("/repo")),
         |_| true,
         |_| true,
+        false,
     );
 
     assert_eq!(tabs.len(), 1);
