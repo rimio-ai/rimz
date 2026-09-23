@@ -39,6 +39,24 @@ fn sleeping_card_describes_its_wait_using_the_snapshot_clock() {
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
         .unwrap()
+        .pending_waits[0]
+        .trigger = crate::agents::PendingWaitTrigger::Signal {
+        selector: "pr.merged".to_owned(),
+        deadline: Some(snapshot.now + jiff::SignedDuration::from_hours(2)),
+    };
+    let lines = group_lines(&snapshot, &theme, 0);
+    assert!(
+        line_texts(&lines)
+            .iter()
+            .any(|line| line.contains("wakes on pr.merged · 2h left"))
+    );
+    let detail = span_for(&lines, "2h left");
+    assert_eq!(detail.style.fg, theme.body().fg);
+    assert!(detail.style.add_modifier.contains(Modifier::ITALIC));
+
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
         .turn_error_label = Some("api error".to_owned());
     let screen = snapshot_to_screen(&snapshot, 44, 20);
     assert!(screen.contains("api error"));

@@ -192,12 +192,12 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     // The finished child collapses to one line: its type + the description of
     // what the parent asked it to do.
     assert!(
-        rendered.contains("Explore — locate the render seam"),
+        rendered.contains("Explore · locate the render seam"),
         "the finished child keeps its type line:\n{rendered}"
     );
     let priced_line = rendered
         .lines()
-        .find(|line| line.contains("Explore — locate the render seam"))
+        .find(|line| line.contains("Explore · locate the render seam"))
         .expect("priced child line");
     assert!(
         priced_line.ends_with("◔ <1m $0.42▐"),
@@ -206,7 +206,7 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     // The running child's leading cell is the thinking orbit (frame 0 at the
     // test's fixed animation phase), the agent-row head vocabulary verbatim.
     assert!(
-        rendered.contains("⠁ review — audit the trust hash"),
+        rendered.contains("⠁ review · audit the trust hash"),
         "a reasoning child wears the thinking head:\n{rendered}"
     );
     // The running child keeps its metadata row — token spend and model left
@@ -313,7 +313,7 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     );
 
     assert!(
-        rendered.contains("explorer — map sidebar"),
+        rendered.contains("explorer · map sidebar"),
         "the child line names its profile:\n{rendered}"
     );
     assert!(
@@ -323,7 +323,7 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     assert!(
         rendered
             .lines()
-            .any(|line| line.contains("explorer — map sidebar") && line.contains("$0.42")),
+            .any(|line| line.contains("explorer · map sidebar") && line.contains("$0.42")),
         "the child cost pins on its line:\n{rendered}"
     );
     assert!(
@@ -679,7 +679,7 @@ fn codex_subagent_renders_nickname_nested_path_and_current_context() {
     );
 
     assert!(
-        rendered.contains("Atlas — research/explore_hooks"),
+        rendered.contains("Atlas · research/explore_hooks"),
         "nickname and flat nested path stay distinct:\n{rendered}"
     );
     assert!(

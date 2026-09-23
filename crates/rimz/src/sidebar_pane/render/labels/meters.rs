@@ -117,7 +117,7 @@ pub(in crate::sidebar_pane::render) fn context_breakdown_spans(
 ) -> Vec<Span<'static>> {
     let mut spans = context_total_spans(theme, severity, filled, fmt);
     // The `·` seam frames the first *rendered* column, wherever it lands.
-    let mut seam = " · ";
+    let mut seam = value_seam(theme);
     for (role, component, value) in [
         (GlyphRole::TokensCacheRead, Component::CacheRead, cache_read),
         (
@@ -131,13 +131,13 @@ pub(in crate::sidebar_pane::render) fn context_breakdown_spans(
         if value == 0 {
             continue;
         }
-        spans.push(Span::styled(seam, theme.muted()));
+        spans.push(Span::styled(seam.clone(), theme.muted()));
         spans.push(Span::styled(
             theme.glyph(role).to_owned(),
             theme.styled(component, Modifier::empty()),
         ));
         spans.push(Span::styled(format!(" {}", fmt(value)), theme.muted()));
-        seam = " ";
+        seam = " ".to_owned();
     }
     spans
 }
@@ -154,7 +154,7 @@ pub(in crate::sidebar_pane::render) fn context_compaction_spans(
         return Vec::new();
     }
     vec![
-        Span::styled(" · ", theme.muted()),
+        Span::styled(value_seam(theme), theme.muted()),
         Span::styled(
             theme.glyph(GlyphRole::TokensCompaction).to_owned(),
             compacting_style(theme),
@@ -177,7 +177,7 @@ pub(in crate::sidebar_pane::render) fn context_tool_repeat_spans(
         return Vec::new();
     };
     vec![
-        Span::styled(" · ", theme.muted()),
+        Span::styled(value_seam(theme), theme.muted()),
         Span::styled(
             theme.glyph(GlyphRole::ToolRepeat).to_owned(),
             theme.warn(Modifier::empty()),

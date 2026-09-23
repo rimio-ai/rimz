@@ -421,7 +421,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             CacheHealth::Caution => theme.warn(Modifier::empty()),
             CacheHealth::Alarm => theme.alarm(Modifier::empty()),
         };
-        left.push(Span::styled(" · ", theme.muted()));
+        left.push(Span::styled(value_seam(theme), theme.muted()));
         left.push(Span::styled(format!("{percent}%"), style));
     }
     left.extend(context_compaction_spans(

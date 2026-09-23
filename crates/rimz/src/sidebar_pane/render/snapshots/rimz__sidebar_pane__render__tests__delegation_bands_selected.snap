@@ -24,7 +24,7 @@ expression: screen
 ▌    ✓ task-0                                   ◔  5m▐
 ▌    ✓ task-8                                   ◔  7m▐
 ▌    ✓ task-5                                   ◔ <t>▐
-▌    ⌁ deploy.done                              ◔ <1m▐
+▌    ⌁ signal · deploy.done                     ◔ <1m▐
 ▌    +2 older                                        ▐
 
 

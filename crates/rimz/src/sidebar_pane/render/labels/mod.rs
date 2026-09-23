@@ -23,6 +23,10 @@ mod meters;
 
 pub(super) use self::{glyphs::*, meters::*};
 
+pub(super) fn value_seam(theme: &Theme) -> String {
+    format!(" {} ", theme.glyph(crate::config::GlyphRole::Seam))
+}
+
 /// The shared idle-age signal: one continuous tone ramp for every age reader —
 /// the clock cluster, the breathing `?`/`!`, and the cockpit attention buckets.
 /// Color slides from warn through caution to alarm once the age leaves the

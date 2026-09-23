@@ -1,30 +1,18 @@
-//! Wait entries share the subagent grammar: the lead shows liveness, line 1 is
-//! the wait itself with the elapsed clock pinned right, and line 2 appears only
-//! for a described background shell, carrying its command. A live watch (a
-//! command, pid, check, or file wait, or a background shell) wears the working animation in
-//! the subordinate wait tone while it runs; a timer or a signal holds its static
-//! kind glyph, since nothing runs until it fires. The parent's own status head
-//! carries sleeping. Timers come first, then live watches (command, pid, check,
-//! and file waits, then background shells), then signals. The words come from
-//! `PendingWaitTrigger`'s headline and detail; this module adds leads and layout.
+//! Type-led wait entries share the subagent layout and pin armed age right. Command and check waits carry their command on line 2; shells do so when a command is known, and signals carry a deadline there when present. Timer, pid, and file waits take one line. Live watches retain the working animation; timers and signals retain their static leads. Waits precede background shells, with signals last.
 
 use jiff::Timestamp;
 
 use crate::agents::{
     BackgroundShell, PendingWait, PendingWaitTrigger, single_line_description, usable_description,
 };
-use crate::proc::command::command_program_basename;
+use crate::proc::command::{command_program_basename, program_label};
 
 use super::*;
 
-enum WaitLead {
-    Kind(GlyphRole),
-    Working,
-}
-
 struct WaitEntry {
-    lead: WaitLead,
-    text: String,
+    lead: String,
+    kind: &'static str,
+    headline: Option<String>,
     detail: Option<String>,
     since: Option<Timestamp>,
 }
@@ -45,36 +33,17 @@ pub(super) fn wait_entry_lines(
     waits: &[PendingWait],
     shells: &[BackgroundShell],
 ) -> Vec<Line<'static>> {
+    let theme = ctx.theme;
+    let working = || role_glyph(theme, AnimationRole::Working, ctx.animation_phase);
     let wait_entry = |wait: &PendingWait| WaitEntry {
         lead: match wait.trigger {
-            PendingWaitTrigger::Timer { .. } => WaitLead::Kind(GlyphRole::CardWaitTimer),
-            PendingWaitTrigger::Pid { .. }
-            | PendingWaitTrigger::Command { .. }
-            | PendingWaitTrigger::Check { .. }
-            | PendingWaitTrigger::File { .. } => WaitLead::Working,
-            PendingWaitTrigger::Signal { .. } => WaitLead::Kind(GlyphRole::CardWaitSignal),
+            PendingWaitTrigger::Timer { .. } => theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
+            PendingWaitTrigger::Signal { .. } => theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
+            _ => working(),
         },
-        text: match &wait.trigger {
-            PendingWaitTrigger::Pid { .. } => {
-                format!(
-                    "{} {}",
-                    wait.trigger.kind_word(),
-                    wait.trigger.headline(ctx.now)
-                )
-            }
-            PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Check { .. } => {
-                wait.trigger.detail(ctx.now).unwrap_or_default()
-            }
-            PendingWaitTrigger::Signal { .. } => {
-                let mut text = wait.trigger.headline(ctx.now);
-                if let Some(detail) = wait.trigger.detail(ctx.now) {
-                    text.push_str(&format!(" {} {detail}", ctx.theme.glyph(GlyphRole::Seam)));
-                }
-                text
-            }
-            _ => wait.trigger.headline(ctx.now),
-        },
-        detail: None,
+        kind: wait.trigger.kind_word(),
+        headline: Some(wait.trigger.headline(ctx.now)),
+        detail: wait.trigger.detail(ctx.now),
         since: wait.armed_at,
     };
     let (signals, others): (Vec<_>, Vec<_>) = waits
@@ -84,65 +53,58 @@ pub(super) fn wait_entry_lines(
     for entry in others
         .into_iter()
         .map(wait_entry)
-        .chain(shells.iter().map(shell_entry))
+        .chain(shells.iter().map(|shell| shell_entry(shell, working())))
         .chain(signals.into_iter().map(wait_entry))
     {
-        push_entry(ctx, &mut lines, entry);
+        let right = entry
+            .since
+            .map(|at| {
+                vec![Span::styled(
+                    elapsed_cluster(theme, age_secs(at, ctx.now)),
+                    theme.muted(),
+                )]
+            })
+            .unwrap_or_default();
+        let detail = entry.detail.map(|detail| {
+            Line::from(trim_spans_to_width(
+                vec![Span::raw("      "), Span::styled(detail, theme.muted())],
+                content_width(ctx.width),
+            ))
+        });
+        push_entry(
+            ctx,
+            &mut lines,
+            Entry {
+                lead: Span::styled(
+                    entry.lead,
+                    theme.styled(Component::WaitHeader, Modifier::empty()),
+                ),
+                kind: entry.kind.to_owned(),
+                headline: entry.headline,
+                right,
+                detail,
+            },
+        );
     }
     lines
 }
 
-/// A described shell reads as its description over its command; otherwise the
-/// command alone takes line 1.
-fn shell_entry(shell: &BackgroundShell) -> WaitEntry {
-    let command = shell
+fn shell_entry(shell: &BackgroundShell, lead: String) -> WaitEntry {
+    let detail = shell
         .command
         .as_deref()
         .and_then(|command| single_line_description(&command_program_basename(command)));
-    let description = shell
+    let headline = shell
         .description
         .as_deref()
         .filter(|value| usable_description(value))
-        .and_then(single_line_description);
-    let (text, detail) = match (description, command) {
-        (Some(description), command) => (description, command),
-        (None, Some(command)) => (command, None),
-        (None, None) => ("background job".to_owned(), None),
-    };
+        .and_then(single_line_description)
+        .or_else(|| shell.command.as_deref().map(program_label));
     WaitEntry {
-        lead: WaitLead::Working,
-        text,
+        lead,
+        kind: "shell",
+        headline,
         detail,
         since: Some(shell.started_at),
-    }
-}
-
-fn push_entry(ctx: &RowCtx<'_>, lines: &mut Vec<Line<'static>>, entry: WaitEntry) {
-    let theme = ctx.theme;
-    let width = content_width(ctx.width);
-    let left = vec![
-        Span::raw("    "),
-        Span::styled(
-            match entry.lead {
-                WaitLead::Kind(role) => theme.glyph(role).to_owned(),
-                WaitLead::Working => role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
-            },
-            theme.styled(Component::WaitHeader, Modifier::empty()),
-        ),
-        Span::raw(" "),
-        Span::styled(entry.text, theme.body()),
-    ];
-    let elapsed = entry
-        .since
-        .map(|at| {
-            let secs = age_secs(at, ctx.now);
-            vec![Span::styled(elapsed_cluster(theme, secs), theme.muted())]
-        })
-        .unwrap_or_default();
-    lines.push(pin_right(left, elapsed, width));
-
-    if let Some(detail) = entry.detail {
-        let detail = vec![Span::raw("      "), Span::styled(detail, theme.muted())];
-        lines.push(Line::from(trim_spans_to_width(detail, width)));
     }
 }

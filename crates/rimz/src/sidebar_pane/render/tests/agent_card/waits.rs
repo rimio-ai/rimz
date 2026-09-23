@@ -90,7 +90,7 @@ fn pending_waits_line_counts_armed_waits() {
     assert!(
         !collapsed_text
             .iter()
-            .any(|line| line.contains("◷ in") || line.contains("make check"))
+            .any(|line| line.contains("◷ timer · in") || line.contains("make check"))
     );
     assert_snapshot(
         "pending_waits_line",
@@ -117,12 +117,13 @@ fn pending_waits_line_counts_armed_waits() {
     assert!(expanded[stats].ends_with("$0.42▐"));
     assert!(expanded[stats + 1].contains("inspect the renderer"));
     assert!(expanded[stats + 2].contains("12k"));
-    assert!(expanded[stats + 3].contains("◷ in 12m"));
-    assert!(expanded[stats + 4].contains(&shell_lead(&theme, "make check")));
+    assert!(expanded[stats + 3].contains("◷ timer · in 12m"));
+    assert!(expanded[stats + 4].contains(&shell_lead(&theme, "command · make")));
+    assert!(expanded[stats + 5].contains("      make check"));
     assert_eq!(
         expanded.len(),
-        stats + 5,
-        "a command wait's command is line 1, with no second line"
+        stats + 6,
+        "a command wait always carries its command on line 2"
     );
 
     for width in [24, 30, 36, 45, 46] {
@@ -173,7 +174,7 @@ fn pending_waits_line_counts_armed_waits() {
     for (offset, glyph) in [
         (3, theme.glyph(GlyphRole::CardWaitTimer).to_owned()),
         (4, role_glyph(&theme, AnimationRole::Working, 0)),
-        (5, theme.glyph(GlyphRole::CardWaitSignal).to_owned()),
+        (6, theme.glyph(GlyphRole::CardWaitSignal).to_owned()),
     ] {
         let lead = with_signal[stats + offset]
             .spans
@@ -183,9 +184,9 @@ fn pending_waits_line_counts_armed_waits() {
         assert_eq!(lead.style.fg, style.fg);
         assert_eq!(lead.style.add_modifier, style.add_modifier);
     }
-    assert!(with_signal_text[stats + 5].contains("⌁ pr.merged"));
+    assert!(with_signal_text[stats + 6].contains("⌁ signal · pr.merged"));
     assert!(
-        with_signal_text[stats + 3..=stats + 5]
+        with_signal_text[stats + 3..=stats + 6]
             .iter()
             .all(|line| !line.contains(theme.glyph(GlyphRole::CardWaits)))
     );
@@ -251,18 +252,13 @@ fn wait_entries_show_trigger_program_and_command() {
     let rows = line_texts(&lines);
     let start = rows
         .iter()
-        .position(|line| line.contains("◷ in 12m"))
+        .position(|line| line.contains("◷ timer · in 12m"))
         .unwrap();
     for (offset, label, seconds, elapsed) in [
-        (0, "◷ in 12m".to_owned(), 1080, "18m"),
-        (1, shell_lead(&theme, "pid 16776"), 180, "3m"),
-        (
-            2,
-            shell_lead(&theme, "cargo xtask gate --name foo_test"),
-            240,
-            "4m",
-        ),
-        (3, "⌁ pr.merged · 2h left".to_owned(), 3600, "1h"),
+        (0, "◷ timer · in 12m".to_owned(), 1080, "18m"),
+        (1, shell_lead(&theme, "pid · 16776"), 180, "3m"),
+        (2, shell_lead(&theme, "command · cargo"), 240, "4m"),
+        (4, "⌁ signal · pr.merged".to_owned(), 3600, "1h"),
     ] {
         assert!(
             rows[start + offset].contains(&label),
@@ -286,10 +282,16 @@ fn wait_entries_show_trigger_program_and_command() {
             theme.muted().fg
         );
     }
-    assert_eq!(rows.len(), start + 4, "no wait entry takes a second line");
+    assert_eq!(
+        rows.len(),
+        start + 6,
+        "command and deadline signal take two lines"
+    );
+    assert!(rows[start + 3].contains("      cargo xtask gate --name foo_test"));
+    assert!(rows[start + 5].contains("      2h left"));
     assert!(!rows.iter().any(|line| line.contains("kill -0")));
     assert!(!rows[start + 2].contains("/usr/bin"));
-    assert_snapshot("wait_entries", snapshot_to_screen(&snapshot, 54, 23));
+    assert_snapshot("wait_entries", snapshot_to_screen(&snapshot, 54, 25));
     let cost_rolls = CostRolls::default();
     let lead_style = theme.styled(Component::WaitHeader, Modifier::empty());
     let mut frames = Vec::new();
@@ -305,32 +307,32 @@ fn wait_entries_show_trigger_program_and_command() {
             assert_eq!(lead.style.fg, lead_style.fg);
             assert_eq!(lead.style.add_modifier, lead_style.add_modifier);
         }
-        frames.push(block.lines[start..=start + 3].to_vec());
+        frames.push(block.lines[start..=start + 4].to_vec());
     }
     assert_eq!(frames[0][0], frames[1][0], "a timer lead is static");
-    assert_eq!(frames[0][3], frames[1][3], "a signal lead is static");
+    assert_eq!(frames[0][4], frames[1][4], "a signal lead is static");
     assert_ne!(frames[0][1], frames[1][1], "a pid wait animates");
     assert_ne!(frames[0][2], frames[1][2], "a command wait animates");
 
     let narrow = group_lines_at_width(&snapshot, &theme, 0, 24);
     let narrow_text = line_texts(&narrow);
-    assert!(narrow_text[start + 3].contains("⌁ pr.merged"));
-    assert!(narrow_text[start + 3].ends_with("1h▐"));
-    assert!(narrow_text[start + 2].contains(&shell_lead(&theme, "cargo")));
+    assert!(narrow_text[start + 4].contains("⌁ signal"));
+    assert!(narrow_text[start + 4].ends_with("1h▐"));
+    assert!(narrow_text[start + 2].contains(&shell_lead(&theme, "command")));
     assert!(!narrow_text[start + 2].contains("foo_test"));
     assert!(
-        narrow[start..=start + 3]
+        narrow[start..=start + 5]
             .iter()
             .all(|line| line.width() == 24)
     );
 
     snapshot.now += Duration::from_secs(720);
     let advanced = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert!(advanced[start].contains("◷ due"));
+    assert!(advanced[start].contains("◷ timer · due"));
     assert!(advanced[start].ends_with("30m▐"));
     assert!(advanced[start + 1].ends_with("15m▐"));
-    assert!(advanced[start + 3].contains("⌁ pr.merged · 108m left"));
-    assert!(advanced[start + 3].ends_with("1h▐"));
+    assert!(advanced[start + 5].contains("108m left"));
+    assert!(advanced[start + 4].ends_with("1h▐"));
     assert!(advanced[start + 2].ends_with("16m▐"));
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -340,10 +342,10 @@ fn wait_entries_show_trigger_program_and_command() {
         due: snapshot.now,
         delay: None,
     };
-    assert!(line_texts(&group_lines(&snapshot, &theme, 0))[start].contains("◷ due"));
+    assert!(line_texts(&group_lines(&snapshot, &theme, 0))[start].contains("◷ timer · due"));
     snapshot.now += Duration::from_secs(6480);
     let expired = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert!(expired[start + 3].contains("⌁ pr.merged · 0m left"));
+    assert!(expired[start + 5].contains("0m left"));
     for (command, detail) in [
         ("env A=b /usr/bin/cargo build", "env A=b cargo build"),
         ("sh -c '/usr/bin/cargo build'", "sh -c 'cargo build'"),
@@ -356,7 +358,7 @@ fn wait_entries_show_trigger_program_and_command() {
             command: command.to_owned(),
         };
         let wrapped = line_texts(&group_lines(&snapshot, &theme, 0));
-        assert!(wrapped[start + 2].contains(&shell_lead(&theme, detail)));
+        assert!(wrapped[start + 3].contains(detail));
     }
 }
 
@@ -385,7 +387,10 @@ fn wait_entry_without_armed_at_has_no_clock() {
         .position(|line| line.contains("waits (1)"))
         .unwrap();
     assert_eq!(rows[stats].trim_matches(['▌', '▐', ' ']), "⧖ waits (1)");
-    assert_eq!(rows[stats + 1].trim_matches(['▌', '▐', ' ']), "⌁ pr.merged");
+    assert_eq!(
+        rows[stats + 1].trim_matches(['▌', '▐', ' ']),
+        "⌁ signal · pr.merged"
+    );
     let narrow = line_texts(&group_lines_at_width(
         &snapshot,
         &Theme::fixed(false),
@@ -393,6 +398,62 @@ fn wait_entry_without_armed_at_has_no_clock() {
         36,
     ));
     assert_eq!(narrow[stats].trim_matches(['▌', '▐', ' ']), "⧖ 1");
+
+    let theme = Theme::fixed_for_theme(
+        false,
+        &toml::from_str::<crate::config::ThemeConfig>("[glyphs.unicode.value]\nseam = '|'")
+            .unwrap(),
+    );
+    let rows = line_texts(&group_lines(&snapshot, &theme, 0));
+    assert!(rows[stats + 1].contains("signal | pr.merged"));
+}
+
+#[test]
+fn check_and_file_waits_have_type_specific_detail_lines() {
+    let mut parent = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("working"),
+    );
+    parent.pending_waits = vec![
+        PendingWait {
+            name: "check".to_owned(),
+            trigger: PendingWaitTrigger::Check {
+                command: "/usr/bin/test -f ready".to_owned(),
+            },
+            armed_at: None,
+        },
+        PendingWait {
+            name: "file".to_owned(),
+            trigger: PendingWaitTrigger::File {
+                path: "app.log".into(),
+                grep: None,
+            },
+            armed_at: None,
+        },
+        PendingWait {
+            name: "match".to_owned(),
+            trigger: PendingWaitTrigger::File {
+                path: "app.log".into(),
+                grep: Some("ready".to_owned()),
+            },
+            armed_at: None,
+        },
+    ];
+    let snapshot = snapshot_with(vec![parent]);
+    let theme = Theme::fixed(false);
+    let rows = line_texts(&group_lines(&snapshot, &theme, 0));
+    let start = rows
+        .iter()
+        .position(|line| line.contains("check · test"))
+        .unwrap();
+    assert!(rows[start + 1].contains("      test -f ready"));
+    assert!(rows[start + 2].contains("file · app.log changes"));
+    assert!(rows[start + 3].contains("file · app.log matches `ready`"));
+    assert_eq!(rows.len(), start + 4);
 }
 
 #[test]
@@ -507,38 +568,40 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
     let rows = line_texts(&lines);
     let timer = rows
         .iter()
-        .position(|line| line.contains("◷ in 12m"))
+        .position(|line| line.contains("◷ timer · in 12m"))
         .unwrap();
-    assert!(rows[timer + 1].contains(&shell_lead(&theme, "make check")));
-    assert!(rows[timer + 2].contains(&shell_lead(&theme, "Run the test suite")));
-    assert!(rows[timer + 2].ends_with(&format!("{}  5m▐", elapsed_glyph(&theme, 300))));
-    assert!(rows[timer + 3].contains("      cargo test --workspace"));
-    assert!(!rows[timer + 3].contains(elapsed_glyph(&theme, 300).as_str()));
-    let detail = lines[timer + 3]
+    assert!(rows[timer + 1].contains(&shell_lead(&theme, "command · make")));
+    assert!(rows[timer + 3].contains(&shell_lead(&theme, "shell · Run the test suite")));
+    assert!(rows[timer + 3].ends_with(&format!("{}  5m▐", elapsed_glyph(&theme, 300))));
+    assert!(rows[timer + 4].contains("      cargo test --workspace"));
+    assert!(!rows[timer + 4].contains(elapsed_glyph(&theme, 300).as_str()));
+    let detail = lines[timer + 4]
         .spans
         .iter()
         .find(|span| span.content == "cargo test --workspace")
         .unwrap();
     assert_eq!(detail.style.fg, theme.muted().fg);
-    assert!(rows[timer + 4].contains(&shell_lead(&theme, "cat <<'EOF' > notes foo EOF")));
-    assert!(!rows[timer + 4].contains(char::is_control));
-    assert!(rows[timer + 4].ends_with(&format!("{}  2m▐", elapsed_glyph(&theme, 120))));
-    assert!(rows[timer + 5].contains(&shell_lead(&theme, "background job")));
-    assert!(rows[timer + 5].ends_with(&format!("{}  1m▐", elapsed_glyph(&theme, 60))));
-    assert!(rows[timer + 6].contains("⌁ pr.merged"));
+    assert!(rows[timer + 5].contains(&shell_lead(&theme, "shell · cat")));
+    assert!(!rows[timer + 5].contains(char::is_control));
+    assert!(rows[timer + 5].ends_with(&format!("{}  2m▐", elapsed_glyph(&theme, 120))));
+    assert!(rows[timer + 7].contains(&shell_lead(&theme, "shell")));
+    assert!(rows[timer + 7].ends_with(&format!("{}  1m▐", elapsed_glyph(&theme, 60))));
+    assert!(rows[timer + 8].contains("⌁ signal · pr.merged"));
     assert_eq!(
         rows.len(),
-        timer + 7,
-        "only the described shell takes a second line"
+        timer + 9,
+        "command and shells with commands take a second line"
     );
+    assert!(rows[timer + 6].contains("      cat <<'EOF' > notes foo EOF"));
+    assert!(!rows[timer + 7].contains("shell ·"));
     assert!(!rows.iter().any(|line| line.contains("bg")));
-    let lead = &lines[timer + 2].spans[2];
+    let lead = &lines[timer + 3].spans[2];
     assert_eq!(lead.content, role_glyph(&theme, AnimationRole::Working, 0));
     assert_eq!(lead.style.fg, Some(theme.component(Component::WaitHeader)));
     assert!(lead.style.add_modifier.is_empty());
     assert_snapshot(
         "background_shell_entries",
-        snapshot_to_screen(&snapshot, 54, 26),
+        snapshot_to_screen(&snapshot, 54, 28),
     );
 
     let narrow = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 36));
@@ -559,5 +622,5 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
         .iter()
         .position(|line| line.contains("⧖ waits (3)"))
         .unwrap();
-    assert!(rows[stats + 1].contains(&shell_lead(&theme, "Run the test suite")));
+    assert!(rows[stats + 1].contains(&shell_lead(&theme, "shell · Run the test suite")));
 }
