@@ -119,6 +119,10 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         cwd.display().to_string(),
     );
     let _guard = supervised::pane::lock_subagent_zone(store)?;
+    let current = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    if supervised::pane::launch_has_bound_pane(&current.agents, &child.kind, launch_id) {
+        return Ok(());
+    }
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
     match supervised::pane::split_into_subagent_zone(
         room.backend(),
