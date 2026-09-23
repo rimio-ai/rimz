@@ -824,6 +824,7 @@ struct RunMonitor {
     self_cleanup: bool,
     stop_policy: StopPolicy,
     next_receipt_check: Instant,
+    reported_revision: Option<jiff::Timestamp>,
     next_park_check: Instant,
     previous: Option<jiff::Timestamp>,
 }
@@ -862,7 +863,13 @@ impl RunMonitor {
             return false;
         }
         self.next_receipt_check = now + PARENT_RECEIPT_POLL;
-        if record.report_message_id.is_none() && record.joined_at.is_none() {
+        // Once per record revision: a fleet with a running sibling stamps nothing,
+        // and the last sibling to settle reports for the whole fleet.
+        if record.report_message_id.is_none()
+            && record.joined_at.is_none()
+            && self.reported_revision != Some(record.updated_at)
+        {
+            self.reported_revision = Some(record.updated_at);
             report_settled_child_or_log(context);
         }
         if !context.ready_for_self_cleanup(&record) {
@@ -1418,6 +1425,7 @@ fn supervise_child(
         self_cleanup,
         stop_policy,
         next_receipt_check: next_run_check,
+        reported_revision: None,
         next_park_check: next_run_check,
         previous: None,
     };
@@ -1708,6 +1716,7 @@ mod tests {
                 self_cleanup,
                 stop_policy: StopPolicy::RunTerminal,
                 next_receipt_check: now,
+                reported_revision: None,
                 next_park_check: now,
                 previous: None,
             };
@@ -1809,6 +1818,7 @@ mod tests {
             self_cleanup: false,
             stop_policy: StopPolicy::RunTerminal,
             next_receipt_check: now,
+            reported_revision: None,
             next_park_check: now,
             previous: None,
         };
@@ -1898,6 +1908,7 @@ mod tests {
             self_cleanup: true,
             stop_policy: StopPolicy::ParentReceived,
             next_receipt_check: now,
+            reported_revision: None,
             next_park_check: now,
             previous: None,
         };

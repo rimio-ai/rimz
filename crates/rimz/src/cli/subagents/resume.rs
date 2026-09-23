@@ -157,7 +157,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     }
     if !supervised::pane::wait_for_subagent_pane_bind(store, &child.kind, launch_id) {
         bail!(
-            "resumed @{} but its pane did not bind within 3 seconds",
+            "resumed @{} but its pane did not bind in time",
             child.name.as_deref().unwrap_or(child.agent_id.as_str())
         );
     }
