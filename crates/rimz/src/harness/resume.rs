@@ -138,6 +138,8 @@ pub enum LaneResumeError {
         "no saved team shape in '{scope}'; resume without --fresh, or launch with rimz agents <spec> -w {worktree}"
     )]
     FreshNoShape { scope: String, worktree: String },
+    #[error("no saved team in '{scope}' to relaunch fresh; launch with:\n{commands}", commands = .specs.join("\n"))]
+    FreshNoTeam { scope: String, specs: Vec<String> },
     #[error("live lane has no focus candidate")]
     LiveNoFocus,
     #[error("live lane agent has no bound pane")]
@@ -1311,7 +1313,20 @@ fn plan_closed_lane(
             &session_backed,
         )
     };
-    if team.is_empty() && flat.tabs.is_empty() && !request.fresh {
+    if request.fresh && team.is_empty() {
+        return Err(LaneResumeError::FreshNoTeam {
+            scope: lane.display,
+            specs: flat
+                .skipped
+                .iter()
+                .filter_map(|skip| match &skip.reason {
+                    ResumeSkipReason::FreshRelaunch(spec) => Some(spec.clone()),
+                    _ => None,
+                })
+                .collect(),
+        });
+    }
+    if team.is_empty() && flat.tabs.is_empty() {
         return Err(LaneResumeError::Nothing {
             scope: lane.display,
         });
