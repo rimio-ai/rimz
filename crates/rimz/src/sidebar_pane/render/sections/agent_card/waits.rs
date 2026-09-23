@@ -9,14 +9,6 @@ use crate::proc::command::{command_program_basename, program_label};
 
 use super::*;
 
-struct WaitEntry {
-    lead: String,
-    kind: &'static str,
-    headline: Option<String>,
-    detail: Option<String>,
-    since: Option<Timestamp>,
-}
-
 /// A wait its watcher is actively working on: it animates while armed.
 pub(super) fn is_live_watch(trigger: &PendingWaitTrigger) -> bool {
     matches!(
@@ -33,63 +25,39 @@ pub(super) fn wait_entry_lines(
     waits: &[PendingWait],
     shells: &[BackgroundShell],
 ) -> Vec<Line<'static>> {
-    let theme = ctx.theme;
-    let working = || role_glyph(theme, AnimationRole::Working, ctx.animation_phase);
-    let wait_entry = |wait: &PendingWait| WaitEntry {
-        lead: match wait.trigger {
-            PendingWaitTrigger::Timer { .. } => theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
-            PendingWaitTrigger::Signal { .. } => theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
-            _ => working(),
-        },
-        kind: wait.trigger.kind_word(),
-        headline: Some(wait.trigger.headline(ctx.now)),
-        detail: wait.trigger.detail(ctx.now),
-        since: wait.armed_at,
-    };
     let (signals, others): (Vec<_>, Vec<_>) = waits
         .iter()
         .partition(|wait| matches!(wait.trigger, PendingWaitTrigger::Signal { .. }));
     let mut lines = Vec::new();
     for entry in others
         .into_iter()
-        .map(wait_entry)
-        .chain(shells.iter().map(|shell| shell_entry(shell, working())))
-        .chain(signals.into_iter().map(wait_entry))
+        .map(|wait| wait_entry(ctx, wait))
+        .chain(shells.iter().map(|shell| shell_entry(ctx, shell)))
+        .chain(signals.into_iter().map(|wait| wait_entry(ctx, wait)))
     {
-        let right = entry
-            .since
-            .map(|at| {
-                vec![Span::styled(
-                    elapsed_cluster(theme, age_secs(at, ctx.now)),
-                    theme.muted(),
-                )]
-            })
-            .unwrap_or_default();
-        let detail = entry.detail.map(|detail| {
-            Line::from(trim_spans_to_width(
-                vec![Span::raw("      "), Span::styled(detail, theme.muted())],
-                content_width(ctx.width),
-            ))
-        });
-        push_entry(
-            ctx,
-            &mut lines,
-            Entry {
-                lead: Span::styled(
-                    entry.lead,
-                    theme.styled(Component::WaitHeader, Modifier::empty()),
-                ),
-                kind: entry.kind.to_owned(),
-                headline: entry.headline,
-                right,
-                detail,
-            },
-        );
+        push_entry(ctx, &mut lines, entry);
     }
     lines
 }
 
-fn shell_entry(shell: &BackgroundShell, lead: String) -> WaitEntry {
+fn wait_entry(ctx: &RowCtx<'_>, wait: &PendingWait) -> Entry {
+    let theme = ctx.theme;
+    let lead = match wait.trigger {
+        PendingWaitTrigger::Timer { .. } => theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
+        PendingWaitTrigger::Signal { .. } => theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
+        _ => role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
+    };
+    entry(
+        ctx,
+        lead,
+        wait.trigger.kind_word(),
+        Some(wait.trigger.headline(ctx.now)),
+        wait.trigger.detail(ctx.now),
+        wait.armed_at,
+    )
+}
+
+fn shell_entry(ctx: &RowCtx<'_>, shell: &BackgroundShell) -> Entry {
     let detail = shell
         .command
         .as_deref()
@@ -100,11 +68,44 @@ fn shell_entry(shell: &BackgroundShell, lead: String) -> WaitEntry {
         .filter(|value| usable_description(value))
         .and_then(single_line_description)
         .or_else(|| shell.command.as_deref().map(program_label));
-    WaitEntry {
-        lead,
-        kind: "shell",
+    entry(
+        ctx,
+        role_glyph(ctx.theme, AnimationRole::Working, ctx.animation_phase),
+        "shell",
         headline,
         detail,
-        since: Some(shell.started_at),
+        Some(shell.started_at),
+    )
+}
+
+/// A wait's words in the shared entry shape: the lead in the wait tone, the
+/// armed age pinned right, and the detail muted on line 2.
+fn entry(
+    ctx: &RowCtx<'_>,
+    lead: String,
+    kind: &str,
+    headline: Option<String>,
+    detail: Option<String>,
+    since: Option<Timestamp>,
+) -> Entry {
+    let theme = ctx.theme;
+    Entry {
+        lead: Span::styled(lead, theme.styled(Component::WaitHeader, Modifier::empty())),
+        kind: kind.to_owned(),
+        headline,
+        right: since
+            .map(|at| {
+                vec![Span::styled(
+                    elapsed_cluster(theme, age_secs(at, ctx.now)),
+                    theme.muted(),
+                )]
+            })
+            .unwrap_or_default(),
+        detail: detail.map(|detail| {
+            Line::from(trim_spans_to_width(
+                vec![Span::raw("      "), Span::styled(detail, theme.muted())],
+                content_width(ctx.width),
+            ))
+        }),
     }
 }
