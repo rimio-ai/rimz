@@ -695,7 +695,7 @@ impl ResumeCandidate {
         logins: &RoomLogins,
         conversation_present: impl FnOnce() -> bool,
     ) -> Option<Self> {
-        if !full_session(agent) {
+        if !root_session(agent) {
             return None;
         }
         Some(Self {
@@ -733,8 +733,6 @@ impl ResumeCandidate {
                 launch_group: None,
                 launch_ordinal: None,
                 channel: None,
-                parent_agent_id: None,
-                parent_agent_kind: None,
                 launch_depth: None,
                 launched_by: None,
                 isolation: None,
@@ -950,7 +948,7 @@ fn resolve_scope_lane(
     let scope = raw_scope.strip_prefix('#').unwrap_or(raw_scope);
     if let Some(agent) = agents
         .iter()
-        .filter(|agent| full_session(agent))
+        .filter(|agent| root_session(agent))
         .filter(|agent| crate::address::agent_in_worktree(agent, scope))
         .min_by(|left, right| {
             newest_cmp(
@@ -1007,7 +1005,7 @@ fn resolve_current_lane(
     }
     let agent = agents
         .iter()
-        .filter(|agent| full_session(agent))
+        .filter(|agent| root_session(agent))
         .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(current.as_path()))
         .min_by(|left, right| {
             newest_cmp(
@@ -1050,7 +1048,7 @@ fn worktree_matches_scope(worktree: &LaneWorktree, scope: &str) -> bool {
 fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<AgentState> {
     let mut candidates = agents
         .iter()
-        .filter(|agent| full_session(agent))
+        .filter(|agent| root_session(agent))
         .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(lane.path.as_path()))
         .filter(|agent| {
             lane.channel
@@ -1079,8 +1077,9 @@ fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<Ag
     candidates
 }
 
-fn full_session(agent: &AgentState) -> bool {
-    !agent.is_provider_subagent()
+/// No resume path plans a row with a parent; the parent relaunches what it still needs.
+fn root_session(agent: &AgentState) -> bool {
+    agent.parent_agent_id.is_none()
         && !agent.agent_id.is_empty()
         && agent
             .worktree_path
@@ -1267,7 +1266,7 @@ fn lane_summaries(
 ) -> Vec<LaneSummary> {
     let mut groups = BTreeMap::<(PathBuf, Option<String>), Vec<AgentState>>::new();
     let root = crate::utils::path::normalize_path_lexical(project_root);
-    for agent in agents.iter().filter(|agent| full_session(agent)) {
+    for agent in agents.iter().filter(|agent| root_session(agent)) {
         let Some(path) = normalized_agent_worktree(agent) else {
             continue;
         };
@@ -1353,25 +1352,12 @@ fn materialize_team_restore_tab(
         let CohortSeed::Resume(agent) = seed else {
             return None;
         };
-        Some(match (agent.parent_agent_id.clone(), agent.launch_depth) {
-            (Some(parent_agent_id), Some(launch_generation)) => {
-                Some(crate::harness::ancestry::LaunchAncestry::Subagent {
-                    parent_agent_id,
-                    parent_agent_kind: agent
-                        .parent_agent_kind
-                        .clone()
-                        .unwrap_or_else(|| agent.kind.clone()),
-                    launch_generation,
-                })
+        Some(agent.launch_depth.map(|launch_generation| {
+            crate::harness::ancestry::LaunchAncestry::Peer {
+                launch_generation,
+                launched_by: agent.launched_by.clone(),
             }
-            (None, Some(launch_generation)) => {
-                Some(crate::harness::ancestry::LaunchAncestry::Peer {
-                    launch_generation,
-                    launched_by: agent.launched_by.clone(),
-                })
-            }
-            _ => None,
-        })
+        }))
     });
     let mut ancestry = resume_ancestries.next().flatten();
     if resume_ancestries.any(|candidate| candidate != ancestry) {
@@ -1442,7 +1428,7 @@ fn plan_team_restore_tabs(
 ) -> Vec<PlannedTeamTab> {
     let mut groups: BTreeMap<(String, PathBuf), Vec<&AgentState>> = BTreeMap::new();
     for agent in agents {
-        if agent.is_provider_subagent() || agent.agent_id.is_empty() {
+        if !root_session(agent) {
             continue;
         }
         let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
