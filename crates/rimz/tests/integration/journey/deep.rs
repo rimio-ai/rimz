@@ -1598,6 +1598,28 @@ fn tmux_settled_subagent_reports_to_parent() {
         );
     }
 
+    let first_digest_line = format!("@{first_name}: completed");
+    let second_digest_line = format!("@{second_name}: canceled");
+    let parent_frame = capture_joined_until(
+        &socket,
+        &parent_pane_raw,
+        |frame| {
+            frame.contains("Type: SUBAGENT_REPORT")
+                && frame.contains("From: @rimz")
+                && frame.contains(&first_digest_line)
+                && frame.contains(&second_digest_line)
+        },
+        CAPTURE_BUDGET,
+    );
+    assert!(
+        parent_frame.contains("Type: SUBAGENT_REPORT")
+            && parent_frame.contains("From: @rimz")
+            && parent_frame.contains(&first_digest_line)
+            && parent_frame.contains(&second_digest_line)
+            && !parent_frame.contains("stub done"),
+        "parent pane did not receive status-only digests:\n{parent_frame}"
+    );
+
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-waited"),
         ("RIMZ_TEST_AGENT_SLEEP_MS", "0"),
@@ -1626,7 +1648,7 @@ fn tmux_settled_subagent_reports_to_parent() {
         &serde_json::json!({
             "hook_event_name": "UserPromptSubmit",
             "session_id": parent_agent.agent_id.as_str(),
-            "prompt": "join the next child inline",
+            "prompt": format!("Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}", fleet_digest.text),
         })
         .to_string(),
         &parent_hook_env,
@@ -1636,6 +1658,16 @@ fn tmux_settled_subagent_reports_to_parent() {
         wait_for_named_agent(&env, "report-parent", true, CAPTURE_BUDGET).status,
         rimz::agents::AgentStatus::Running,
         "the report delivery gate must see an active parent turn"
+    );
+    assert_eq!(
+        env.store()
+            .list_message_history()
+            .expect("read digest receipt")
+            .iter()
+            .find(|message| message.message_id == fleet_digest.message_id)
+            .expect("received fleet digest")
+            .status,
+        rimz::store::message::MessageStatus::Delivered
     );
     let waited = env
         .rimz()
@@ -1687,9 +1719,16 @@ fn tmux_settled_subagent_reports_to_parent() {
                     )
             })
             .count(),
-        1,
+        0,
         "--wait must leave no new digest queued during the parent's turn"
     );
+
+    for run in [&first_run, &waited_run] {
+        assert!(
+            tmux_pane_alive(&socket, &session, run.pane_id.as_ref().unwrap().raw()),
+            "received child must stay alive during the parent's receiving turn"
+        );
+    }
 
     let stopped = env.run_installed_hook_in_pane(
         "codex",
@@ -1706,6 +1745,53 @@ fn tmux_settled_subagent_reports_to_parent() {
         !wait_for_named_agent(&env, "report-parent", true, CAPTURE_BUDGET).holds_open_turn(),
         "the unattended wait must run after the parent turn ended"
     );
+    for run in [&first_run, &waited_run] {
+        let pane = run.pane_id.as_ref().unwrap().raw();
+        let deadline = Instant::now() + CAPTURE_BUDGET;
+        while Instant::now() < deadline && tmux_pane_alive(&socket, &session, pane) {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            !tmux_pane_alive(&socket, &session, pane),
+            "child pane must close after the parent's receiving turn ends"
+        );
+    }
+
+    // The stdin-only stub echoes pasted digests but fires no receiving hooks.
+    let receive_and_finish = |run: &rimz::store::run::RunRecord| {
+        let reported_run = rimz::harness::run::load(env.store().paths(), &run.run_id)
+            .expect("reload reported child");
+        let report = env
+            .store()
+            .list_messages()
+            .expect("read sent digest")
+            .into_iter()
+            .find(|message| Some(&message.message_id) == reported_run.report_message_id.as_ref())
+            .expect("child digest awaiting receipt");
+        for event in ["UserPromptSubmit", "Stop"] {
+            let output = env.run_installed_hook_in_pane(
+                "codex",
+                &serde_json::json!({
+                    "hook_event_name": event,
+                    "session_id": parent_agent.agent_id.as_str(),
+                    "prompt": format!("Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}", report.text),
+                    "last_assistant_message": "received the child result",
+                })
+                .to_string(),
+                &parent_hook_env,
+            );
+            assert!(output.status.success(), "parent {event}: {output:?}");
+        }
+        let pane = run.pane_id.as_ref().unwrap().raw();
+        let deadline = Instant::now() + CAPTURE_BUDGET;
+        while Instant::now() < deadline && tmux_pane_alive(&socket, &session, pane) {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            !tmux_pane_alive(&socket, &session, pane),
+            "child pane must close after the parent's receiving turn ends"
+        );
+    };
 
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-unattended"),
@@ -1766,6 +1852,7 @@ fn tmux_settled_subagent_reports_to_parent() {
             && !unattended_frame.contains("stub done"),
         "unattended join suppressed the parent's native digest: {unattended_run:?}\n{unattended_frame}"
     );
+    receive_and_finish(&unattended_run);
 
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-timed"),
@@ -1843,27 +1930,25 @@ fn tmux_settled_subagent_reports_to_parent() {
             .contains(&format!("@{timed_name}: completed"))
     );
 
-    let first_digest_line = format!("@{first_name}: completed");
-    let second_digest_line = format!("@{second_name}: canceled");
+    let timed_digest_line = format!("@{timed_name}: completed");
     let parent_frame = capture_joined_until(
         &socket,
         &parent_pane_raw,
         |frame| {
             frame.contains("Type: SUBAGENT_REPORT")
                 && frame.contains("From: @rimz")
-                && frame.contains(&first_digest_line)
-                && frame.contains(&second_digest_line)
+                && frame.contains(&timed_digest_line)
         },
         CAPTURE_BUDGET,
     );
     assert!(
         parent_frame.contains("Type: SUBAGENT_REPORT")
             && parent_frame.contains("From: @rimz")
-            && parent_frame.contains(&first_digest_line)
-            && parent_frame.contains(&second_digest_line)
+            && parent_frame.contains(&timed_digest_line)
             && !parent_frame.contains("stub done"),
         "parent pane did not receive status-only digests; timed report: {timed_report:?}\n{parent_frame}"
     );
+    receive_and_finish(&timed_run);
 }
 
 #[test]
@@ -2865,7 +2950,8 @@ fn capture_until_with_join(
             .arg(socket)
             .args(["capture-pane", "-p"]);
         if join_wrapped {
-            command.arg("-J");
+            // Digest recipients can shrink while terminal children await receipt.
+            command.args(["-J", "-S", "-"]);
         }
         let out = command
             .args(["-t", session])
