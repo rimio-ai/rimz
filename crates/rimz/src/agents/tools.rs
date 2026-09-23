@@ -286,7 +286,8 @@ mod tests {
         }
         for (alias, id) in [
             ("astra", "gpt-6-astra"),
-            ("luna", "gpt-5.6-luna"),
+            ("sol", "gpt-6-sol"),
+            ("luna", "gpt-6-luna"),
             ("terra", "gpt-5.6-terra"),
         ] {
             assert_eq!(expand_model_alias("codex", alias), id);

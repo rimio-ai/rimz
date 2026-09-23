@@ -66,7 +66,7 @@ Names must match `[A-Za-z0-9_-]+` and be unique across both definition trees. Re
 
 Children inherit `model`, `mode`, `effort`, `auto-compact`, `budget`, `tools`, `skills`, `subagents`, and `model-reminder`. An explicit child field replaces the inherited value; lists never concatenate. Descriptions and trait lists are local. Parent prompt bodies are retained in order before the child's body. A bodyless definition adds no craft, so it can serve as a model-only preset on its kind base.
 
-Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases expand as `astra` → `gpt-6-astra`, `luna` → `gpt-5.6-luna`, and `terra` → `gpt-5.6-terra`. A kind whose adapter declares native auto-compaction support defaults to `258k`; other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, or `auto-compact` field. Defaults are filled only when supported.
+Defaults apply after inheritance: Claude uses mode `auto` and effort `xhigh`, except `fable` defaults to `high`; Codex and Pi default to effort `xhigh`. Codex aliases expand as `astra` → `gpt-6-astra`, `sol` → `gpt-6-sol`, `luna` → `gpt-6-luna`, and `terra` → `gpt-5.6-terra`. A kind whose adapter declares native auto-compaction support defaults to `258k`; other kinds have no default window. Definitions are rejected at load if their resolved kind cannot render a supplied or inherited `model`, `effort`, or `auto-compact` field. Defaults are filled only when supported.
 
 ### Kind bases
 

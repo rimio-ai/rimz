@@ -470,8 +470,13 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
                 effort: None,
             },
             crate::agents::definition::DefinitionModel {
+                name: "sol",
+                id: "gpt-6-sol",
+                effort: None,
+            },
+            crate::agents::definition::DefinitionModel {
                 name: "luna",
-                id: "gpt-5.6-luna",
+                id: "gpt-6-luna",
                 effort: None,
             },
             crate::agents::definition::DefinitionModel {
