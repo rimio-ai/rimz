@@ -367,7 +367,7 @@ rimz loop add nightly --agent claude --worktree nightly --timeout 4h --budget 5 
 run a codex -p subagent in its own worktree, review its diff, and open a PR."
 ```
 
-That is one scheduled turn, and its prompt hands the agent the room's own tools: it fans work out with [`-p` subagents](./scripting.md#agents-scripting-agents), isolates each fix in a [worktree](./worktrees.md), and could as easily launch a [team](./teams.md) and brief it over [messages](./messaging.md).
+That is one scheduled turn, and its prompt hands the agent the room's own tools: it fans work out with [subagents](./subagents.md), isolates each fix in a [worktree](./worktrees.md), and could as easily launch a [team](./teams.md) and brief it over [messages](./messaging.md).
 
 Leave the room open, detached on your workstation or on a server you reach with [`rimz remote`](./remote.md), and the night runs on the pieces above: [auto-continue](#auto-continue) carries recoverable runs over rate limits, a question or failure trips a [notification handler](./notifications.md) that reaches your phone, and the [permission choice](#permissions-for-an-unattended-run) stays per task. By morning `rimz loop list` and the PR queue show what the night produced.
 

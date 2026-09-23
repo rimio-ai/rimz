@@ -229,7 +229,7 @@ rimz agents wait swift-otter --stream
 rimz agents wait otter fox --any
 ```
 
-**Let agents launch agents.** [`rimz subagents`](./docs/guide/scripting.md#agents-scripting-agents) is the same path packaged for an agent RimZ launched: one command, the parent's checkout and channel inherited, and a petname printed for a later join. Each child is a full agent with its own pane beside the parent's, a nested row in the sidebar, a run record and transcript that outlive the turn, and a question that routes to you instead of failing silently. Launches return at once and the children work in parallel; a parent that does not join gets one report once every child has settled.
+**Let agents launch agents.** [`rimz subagents`](./docs/guide/subagents.md) is the same path packaged for an agent RimZ launched: one command, the parent's checkout and channel inherited, and a petname printed for a later join. Each child is a full agent with its own pane beside the parent's, a nested row in the sidebar, a run record and transcript that outlive the turn, and a question that routes to you instead of failing silently. Launches return at once and the children work in parallel; a parent that does not join gets one report once every child has settled.
 
 ```sh
 # From inside an agent's turn

@@ -200,22 +200,7 @@ A few of these commands, `rimz message --wait` and `rimz providers` among them, 
 
 ## Agents scripting agents
 
-`rimz agents -p` is a plain shell command and agents have shell tools, so the caller does not have to be you. `rimz subagents` packages that path for an agent RimZ launched: one command, the parent's checkout and channel inherited even when its shell has changed directories, and a petname printed for a later join. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The caller sees only commands and durable answers, so its children mix providers freely, the same way a [team](./teams.md) does.
-
-```sh
-# inside a planner turn: launch three bounded audits, then join all three
-rimz subagents fanout --wait <<'JSON'
-[
-  {"profile":"codex","prompt":"review correctness; report concrete findings"},
-  {"profile":"claude","prompt":"review the interface; report concrete findings"},
-  {"profile":"codex","prompt":"review test coverage; report concrete findings"}
-]
-JSON
-```
-
-Each child is a full agent: its own pane beside the parent's, a nested row in the sidebar, a durable run record and transcript that outlive the turn, its own deadline, and a question that routes to you instead of failing silently. Launches return at once and print petnames; RimZ opens the panes one at a time, but the children work in parallel. `--wait` on either form blocks instead and prints each answer under a `--- <petname> ---` header as it lands, exiting nonzero if any child failed. A parent that does not join gets one `SUBAGENT_REPORT` message from `@rimz` once every child has settled, which brings it back to collect the results ([the fleet report](../reference/cli/subagents.md#the-fleet-report)). The task schema, every flag, and where the panes open are in the [`subagents` reference](../reference/cli/subagents.md).
-
-Compare that with an agent's built-in subagents, which run headless inside the parent's harness and vanish with the turn. When the work needs a control that doorway omits, such as `--stdin`, `--verify`, or a separate worktree, the agent calls `rimz agents -p` directly. That starts an independent peer rather than a child: it gets its own card, it is joined with `rimz agents wait <name>` rather than the caller's `rimz subagents` verbs, and it counts toward the launch chain, which stops at three successive agent-started launches by default (`[agents] max-chain-length`). A background peer left unjoined still comes back in the fleet report. When the task belongs to a teammate that is already running, [`rimz message`](./messaging.md) hands it over instead of spawning a fresh turn.
+`rimz agents -p` is a plain shell command and agents have shell tools, so the caller does not have to be you. An agent can start a run exactly as your script does, and `rimz subagents` packages that path for delegation: one command launches a child that runs in its own pane under the parent's card, and the parent gets one report once its children settle. Setting up the children an agent may launch, watching and stopping them, and choosing between a child, a peer run, and a team are the [subagents guide](./subagents.md).
 
 ## See also
 
@@ -225,5 +210,5 @@ Compare that with an agent's built-in subagents, which run headless inside the p
 - [Agents](./fleet.md): the profile, handle, and layout vocabulary these examples use.
 - [Worktrees](./worktrees.md): the isolated branches behind `--worktree` runs.
 - [Agent control CLI](../reference/cli/agents.md#supervised-runs--p): every flag on `-p`, `wait`, `show`, and `stop`.
-- [Subagents CLI](../reference/cli/subagents.md): the child launch surface in full: fields, flags, panes, and the fleet report.
+- [Subagents](./subagents.md): let your agents delegate to supervised children, and watch and stop them.
 - [Supervised runs (internals)](../internals/harness/scripting.md): run records, the wake socket, streaming, and pane cleanup.

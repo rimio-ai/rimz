@@ -1,6 +1,6 @@
 # Subagents
 
-`rimz subagents` lets an agent hand one bounded prompt to a supervised child agent and collect the result. The child is a full RimZ agent: its own pane, provider process, durable run record, petname address, and a card nested under its parent in the sidebar. A launch is the same supervised background run as `rimz agents <PROFILE> <PROMPT> -p --bg --timeout 30m`, with the supervision flags chosen for the caller. The [scripting guide](../../guide/scripting.md#agents-scripting-agents) teaches the workflow, and [subagents.md](../../internals/harness/subagents.md) describes the mechanics.
+`rimz subagents` lets an agent hand one bounded prompt to a supervised child agent and collect the result. The child is a full RimZ agent: its own pane, provider process, durable run record, petname address, and a card nested under its parent in the sidebar. A launch is the same supervised background run as `rimz agents <PROFILE> <PROMPT> -p --bg --timeout 30m`, with the supervision flags chosen for the caller. The [subagents guide](../../guide/subagents.md) teaches the workflow, and [subagents.md](../../internals/harness/subagents.md) describes the mechanics.
 
 Launching, joining, and stopping need a calling agent that RimZ can identify, through its launch environment or its live process ancestry. The read-only verbs work from any shell:
 

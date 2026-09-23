@@ -41,6 +41,7 @@ Each page owns the topics in its row. A fact from another row gets a link, never
 | `insight.md` | What every token and dollar figure means, how each is calculated, and the scopes and windows. |
 | `configuration.md` | Every config key and its default, the `~/.rimz` layout, and rebirth resume. |
 | `theme.md` | Every `[theme]` key table. |
+| `subagents.md` | Delegation through `rimz subagents` from the user's side: child profiles, the `subagents:` allowlist, watching and stopping children, and choosing between a child, a peer run, and a team. |
 | `loops.md` | `loop.toml` and the four hands-off reflexes: auto-continue, auto-redeem, idle compaction, smart compaction. |
 | `multiplexer.md` | Configuring Zellij and tmux, and what a room asserts on the session. |
 | `troubleshooting.md` | The symptom-to-fix mapping and nothing else. |
