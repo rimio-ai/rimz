@@ -5,7 +5,6 @@
 //! cost pinned right, then token totals and cache health with the finished age
 //! pinned right.
 
-use crate::sidebar_pane::render::labels::value_seam;
 use std::collections::HashSet;
 
 use crate::agents::AgentStatus;
@@ -24,7 +23,7 @@ use crate::sidebar_pane::render::fmt::{
 use crate::sidebar_pane::render::labels::{
     TokenColumns, TokenDetail, branch_delta_spans, diff_spans, elapsed_glyph, status_glyph,
     status_rest_style, status_style_at, token_breakdown_spans, token_total_glyph,
-    trunk_glyph_spans,
+    trunk_glyph_spans, value_seam,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
