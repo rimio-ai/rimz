@@ -20,6 +20,27 @@ fn remove_dir_if_exists(path: &Path) -> Result<bool> {
     }
 }
 
+fn remove_runtime_dir_with(
+    path: &Path,
+    remove: impl FnOnce(&Path) -> Result<bool>,
+) -> Result<bool> {
+    // Late runtime writers use the canonical path even after mux teardown.
+    // Detach the old tree first so those writes cannot repopulate the tree
+    // being recursively removed. Runtime hints need no durability barrier.
+    let detached = path.with_extension(format!("reset-{}", uuid::Uuid::now_v7().simple()));
+    match fs::rename(path, &detached) {
+        Ok(()) => {
+            remove(&detached)?;
+            Ok(true)
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(StoreErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 fn count_dir_entries_recursive(path: &Path) -> Result<usize> {
     let entries = match fs::read_dir(path) {
         Ok(entries) => entries,
@@ -197,7 +218,8 @@ impl Store {
         for record in &canceled_runs {
             crate::store::run::wake_run(&self.inner.runtime, record);
         }
-        outcome.runtime_removed = remove_dir_if_exists(&self.inner.runtime.root)?;
+        outcome.runtime_removed =
+            remove_runtime_dir_with(&self.inner.runtime.root, remove_dir_if_exists)?;
         Ok(outcome)
     }
 }
@@ -212,6 +234,40 @@ mod tests {
     use crate::disk::paths::{RuntimePaths, StatePaths};
     use crate::ids::WorkspaceId;
     use crate::store::event::EventEnvelope;
+
+    #[test]
+    fn runtime_cleanup_does_not_race_canonical_path_writers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = dir.path().join("runtime");
+        fs::create_dir(&runtime).expect("runtime directory");
+        fs::write(runtime.join("old-hint"), b"old").expect("old runtime hint");
+
+        let removed = remove_runtime_dir_with(&runtime, |detached| {
+            // Force the late writer into the recursive-cleanup window.
+            fs::create_dir_all(&runtime).expect("late writer recreates runtime");
+            fs::write(runtime.join("late-hint"), b"late").expect("late runtime hint");
+            assert!(detached.join("old-hint").exists());
+            let removed = remove_dir_if_exists(detached)?;
+            assert!(!detached.exists());
+            Ok(removed)
+        })
+        .expect("runtime cleanup succeeds despite late writer");
+
+        assert!(removed);
+        assert!(!runtime.join("old-hint").exists());
+        assert_eq!(fs::read(runtime.join("late-hint")).unwrap(), b"late");
+    }
+
+    #[test]
+    fn runtime_cleanup_accepts_an_absent_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(
+            !remove_runtime_dir_with(&dir.path().join("absent"), |_| {
+                panic!("an absent runtime must not need recursive cleanup")
+            })
+            .expect("absent runtime is already clean")
+        );
+    }
 
     #[test]
     fn soft_reset_writes_carryover_before_archiving_active_log() {
