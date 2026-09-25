@@ -688,15 +688,15 @@ fn slot_lifetime_effort(
         .attention
         .active_grace_secs
         .get();
-    let active_secs = rimz::store::active_time::read_for_keys(
+    let active = rimz::store::active_time::display_secs_for_keys(
         runtime,
         records
             .iter()
             .map(|record| (record.kind.as_str(), record.agent_id.as_str())),
-    )
-    .into_iter()
-    .map(|record| record.display_secs(now, active_grace_secs))
-    .reduce(u64::saturating_add);
+        now,
+        active_grace_secs,
+    );
+    let active_secs = rimz::agents::attribution::seat_active_secs(records, &active);
     Ok((effort, active_secs))
 }
 
