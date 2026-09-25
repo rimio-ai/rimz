@@ -127,7 +127,7 @@ pub struct SandboxInputs<'a> {
     pub project_root: &'a Path,
     pub worktree: Option<&'a Path>,
     pub tmp_dir: &'a Path,
-    /// The launch's scratch dir under `tmp_dir`, bound at `/tmp/scratchpad`.
+    /// The launch's private scratch dir, bound at `/tmp/scratchpad`.
     pub scratch_dir: &'a Path,
     pub skills_dir: &'a Path,
     pub provider_home: Option<ProviderHome>,
@@ -491,6 +491,45 @@ mod tests {
     }
 
     #[test]
+    fn owned_scratch_keeps_the_agent_mount_paths() {
+        let state = StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
+            Path::new("/state"),
+        )
+        .unwrap();
+        let scratch = state.scratch_dir(Some("otter"));
+        let skills = state.agent_skills_dir(Some("otter"));
+        let plan = plan(&SandboxInputs {
+            env: &BTreeMap::new(),
+            cwd: Path::new("/project"),
+            project_root: Path::new("/project"),
+            worktree: None,
+            tmp_dir: &state.tmp_dir,
+            scratch_dir: &scratch,
+            skills_dir: &skills,
+            provider_home: None,
+            provider_home_env_keys: &[],
+            skills: SkillInputs {
+                kind: "claude",
+                home: None,
+                manual: ManualSkill::Frontmatter,
+                callable: None,
+            },
+        })
+        .unwrap();
+        for (host, target) in [(&state.tmp_dir, "/tmp"), (&scratch, "/tmp/scratchpad")] {
+            assert!(plan.plan.mounts.iter().any(|mount| matches!(mount, Mount::Bind { source, target: mounted } if source == host && mounted == Path::new(target))));
+        }
+        assert!(!skills.starts_with(&scratch));
+        let view = TmpView::new(Isolation::Sandbox, Some("otter"), &state);
+        assert_eq!(view.agent_path(&state.shared_dir), Path::new("/tmp/shared"));
+        assert_eq!(
+            view.agent_path(&state.subagents_dir.join("child.output")),
+            Path::new("/tmp/rimz-subagents/child.output")
+        );
+    }
+
+    #[test]
     fn tmp_view_maps_only_sandbox_room_paths() {
         let paths = StatePaths::under(
             crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
@@ -504,7 +543,7 @@ mod tests {
         for (host, agent) in [
             (output.as_path(), "/tmp/rimz-waits/wait-test.output"),
             (own.as_path(), "/tmp/scratchpad/f"),
-            (other.as_path(), "/tmp/agents/fox/f"),
+            (other.as_path(), other.to_str().unwrap()),
             (Path::new("/elsewhere/file"), "/elsewhere/file"),
         ] {
             assert_eq!(sandbox.agent_path(host), Path::new(agent));

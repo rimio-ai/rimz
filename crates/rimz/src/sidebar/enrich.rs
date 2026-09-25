@@ -667,8 +667,8 @@ fn enrich_core(
         let panes = frame.to_pane_refs();
         let admitted_panes = snapshot.card_admitted_live_panes(panes.clone(), None);
         let lazy_pairings = compute_lazy_agent_pairings(&admitted_panes, &snapshot.agents);
-        if producing {
-            log_lazy_pairing_ambiguities(&snapshot, runtime, &lazy_pairings);
+        if producing && let Some(store) = store {
+            log_lazy_pairing_ambiguities(&snapshot, store.paths(), &lazy_pairings);
         }
         // Recomputed from the full pane list (pre-exclusion), before
         // `with_live_panes` consumes `panes` — never trusted from the base,
@@ -764,7 +764,7 @@ fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<Tr
 
 fn log_lazy_pairing_ambiguities(
     snapshot: &SidebarSnapshot,
-    runtime: &RuntimePaths,
+    state: &crate::StatePaths,
     lazy_pairings: &LazyAgentPairingResult,
 ) {
     let diagnostics = lazy_pairings.diagnostics();
@@ -793,7 +793,7 @@ fn log_lazy_pairing_ambiguities(
 
     for pairing in append {
         crate::diag::binding::append(
-            runtime,
+            state,
             &ProducerBindingFallbackLog {
                 event: "producer_lazy_agent_pairing",
                 at: Timestamp::now(),

@@ -33,7 +33,7 @@ const PUBLISH_BYTE_BUDGET: u64 = 64 * 1024;
 /// Stamp recording the last published checkpoint: the `LogExtent` the publish
 /// reflected as content, the publish instant as mtime.
 fn publish_stamp(paths: &StatePaths) -> std::path::PathBuf {
-    paths.locks_dir.join("publish.stamp")
+    paths.cache_dir.join("publish.stamp")
 }
 
 fn write_publish_stamp(paths: &StatePaths, extent: Option<event_log::LogExtent>) {

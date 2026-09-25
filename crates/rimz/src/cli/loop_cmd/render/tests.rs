@@ -487,7 +487,7 @@ fn source_detail_names_definition_path() {
                 StatePaths::for_project_root(&entry.resolved_root())
                     .expect("state paths")
                     .root
-                    .join("loop-instances.json")
+                    .join("records/loop-instances.json")
                     .to_string_lossy()
                     .as_ref(),
             )

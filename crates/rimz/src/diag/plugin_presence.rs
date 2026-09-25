@@ -60,7 +60,11 @@ pub(crate) struct PluginPresenceSample {
 }
 
 fn log_path(state_root: &Path) -> PathBuf {
-    state_root.join(PLUGIN_PRESENCE_LOG_NAME)
+    crate::StatePaths::class_path(
+        state_root,
+        crate::disk::paths::Class::Audit,
+        PLUGIN_PRESENCE_LOG_NAME,
+    )
 }
 
 pub(crate) fn append(state_root: &Path, sample: &PluginPresenceSample) {
@@ -215,6 +219,7 @@ mod tests {
     fn generation_span_reads_rotated_and_current_and_ignores_malformed_tail() {
         let dir = tempfile::tempdir().unwrap();
         let current = log_path(dir.path());
+        std::fs::create_dir_all(current.parent().unwrap()).unwrap();
         let rotated = crate::disk::rotating::rotated_path(&current);
         let sample = |at_ms, pages, failures| {
             serde_json::to_string(&PluginPresenceSample {
@@ -260,6 +265,7 @@ mod tests {
     fn generation_span_takes_its_cause_from_the_window_its_counters_measure() {
         let dir = tempfile::tempdir().unwrap();
         let current = log_path(dir.path());
+        std::fs::create_dir_all(current.parent().unwrap()).unwrap();
         let sample = |at_ms: u64, failure: Option<PluginCommandFailure>| {
             serde_json::to_string(&PluginPresenceSample {
                 at_ms,
@@ -359,6 +365,7 @@ mod tests {
     fn recent_generations_groups_mixed_writers_and_accepts_buildless_samples() {
         let dir = tempfile::tempdir().unwrap();
         let current = log_path(dir.path());
+        std::fs::create_dir_all(current.parent().unwrap()).unwrap();
         std::fs::write(
             current,
             concat!(

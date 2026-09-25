@@ -354,11 +354,11 @@ fn state_paths_resolve_under_the_home() {
     assert_eq!(paths.waits_dir, paths.tmp_dir.join("rimz-waits"));
     assert_eq!(paths.subagents_dir, paths.tmp_dir.join("rimz-subagents"));
     assert_eq!(paths.scratchpad_dir, paths.tmp_dir.join("scratchpad"));
-    assert_eq!(paths.agents_dir, paths.tmp_dir.join("agents"));
+    assert_eq!(paths.agents_dir, paths.root.join("owned/agents"));
     assert_eq!(paths.shared_dir, paths.tmp_dir.join("shared"));
     assert_eq!(
         paths.scratch_dir(Some("otter")),
-        paths.agents_dir.join("otter")
+        paths.agents_dir.join("otter/scratch")
     );
     assert_eq!(paths.scratch_dir(None), paths.scratchpad_dir);
     assert_eq!(paths.transcript_dir.file_name().unwrap(), "transcript");
@@ -369,6 +369,34 @@ fn state_paths_resolve_under_the_home() {
     assert_eq!(paths.room_bin.file_name().unwrap(), "rimz");
     assert_eq!(paths.live_roster.file_name().unwrap(), "live-roster.json");
     assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
+    assert_eq!(paths.events_log, paths.root.join("log/events.log.jsonl"));
+    assert_eq!(paths.messages_dir, paths.root.join("records/messages"));
+    assert_eq!(paths.transcript_dir, paths.root.join("audit/transcript"));
+    assert_eq!(paths.runs_dir, paths.root.join("owned/runs"));
+    assert_eq!(
+        paths.agent_skills_dir(Some("otter")),
+        paths.root.join("owned/agents/otter/skills")
+    );
+    assert_eq!(paths.agent_skills_dir(None), paths.root.join("tmp/skills"));
+    for path in paths.all_paths() {
+        let relative = path.strip_prefix(&paths.root).unwrap();
+        assert!(
+            relative == Path::new("workspace.json")
+                || relative == Path::new("rimz")
+                || [
+                    Class::Log,
+                    Class::Records,
+                    Class::Audit,
+                    Class::Cache,
+                    Class::Owned,
+                    Class::Tmp
+                ]
+                .iter()
+                .any(|class| class.tier() == Tier::State && relative.starts_with(class.dir_name())),
+            "unclassified state path: {}",
+            path.display()
+        );
+    }
 }
 
 #[test]

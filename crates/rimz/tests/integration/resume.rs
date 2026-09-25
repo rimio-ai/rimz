@@ -321,7 +321,7 @@ fn a_rebirth_boundary_clears_a_prior_stamp_but_keeps_the_session_resumable() {
 #[test]
 fn soft_reset_preserves_dead_paneless_resume_identity() {
     let h = Harness::new();
-    std::fs::write(h.store.paths().locks_dir.join("dead-reap.stamp"), b"")
+    std::fs::write(h.store.paths().cache_dir.join("dead-reap.stamp"), b"")
         .expect("defer dead-owner reap");
     let mut planner = registered(
         "sess-planner",

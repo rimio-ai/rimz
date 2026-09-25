@@ -56,7 +56,7 @@ mod tests {
     fn malformed_watermark_reads_as_absent() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = paths(&dir);
-        std::fs::create_dir_all(&paths.root).expect("state root");
+        std::fs::create_dir_all(&paths.cache_dir).expect("cache directory");
         std::fs::write(&paths.doctor_watermark, b"not json").expect("broken watermark");
 
         assert_eq!(read(&paths), None);

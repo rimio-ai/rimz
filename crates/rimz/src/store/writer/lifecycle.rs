@@ -215,7 +215,7 @@ impl Store {
 /// Whether the event log crossed the rotation threshold, claiming the debounce
 /// stamp when it did.
 fn claim_rotation(paths: &StatePaths, rotation_threshold: u64) -> bool {
-    let stamp = paths.locks_dir.join(AUTO_ROTATE_STAMP);
+    let stamp = paths.cache_dir.join(AUTO_ROTATE_STAMP);
     let due = std::fs::metadata(&paths.events_log)
         .is_ok_and(|metadata| metadata.len() >= rotation_threshold)
         && debounce::stamp_due(&stamp, AUTO_ROTATE_DEBOUNCE);

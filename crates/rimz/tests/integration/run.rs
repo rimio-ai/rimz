@@ -1479,7 +1479,8 @@ fn run_exiting_resume_wrapper(
     use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 
     register_running_wait_agent(env, store, "wrapper", session_id.as_str());
-    let instances_path = store.paths().root.join("loop-instances.json");
+    let instances_path = store.paths().root.join("records/loop-instances.json");
+    std::fs::create_dir_all(instances_path.parent().unwrap()).unwrap();
     let instances = Tasks(BTreeMap::from([(
         "wrapper-listener".to_owned(),
         TaskEntry {
@@ -2393,7 +2394,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
 fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
     let env = Env::new();
     let store = env.store();
-    std::fs::write(store.paths().locks_dir.join("dead-reap.stamp"), b"")
+    std::fs::write(store.paths().cache_dir.join("dead-reap.stamp"), b"")
         .expect("defer initial reap");
     let mut stale = rimz::agents::AgentLifecycleObservation::new(
         Some("sess-stale".into()),
@@ -2433,7 +2434,7 @@ fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
     );
     fresh.agent_name = Some("vivid-ocean".to_owned());
     fresh.worktree_branch = Some("fresh".to_owned());
-    std::fs::remove_file(store.paths().locks_dir.join("dead-reap.stamp"))
+    std::fs::remove_file(store.paths().cache_dir.join("dead-reap.stamp"))
         .expect("force convergence reap");
     store
         .append_event(&rimz::EventEnvelope::agent_lifecycle(

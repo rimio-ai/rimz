@@ -457,6 +457,7 @@ fn sandbox_skills_state_failure_still_refuses() {
     std::fs::create_dir_all(root.join("plain")).unwrap();
     std::fs::write(root.join("plain/SKILL.md"), "body\n").unwrap();
     let state = env.store();
+    std::fs::create_dir_all(state.paths().skills_dir.parent().unwrap()).unwrap();
     std::fs::write(&state.paths().skills_dir, "not a directory").unwrap();
     assert!(
         skill_argv(
@@ -1232,7 +1233,7 @@ printf '%s\n' shared > /tmp/team-file
         env.home_root.to_str().unwrap()
     );
 
-    std::fs::write(shim_dir.join("codex"), "#!/bin/sh\nset -eu\ntest \"$(cat /tmp/team-file)\" = shared\nprintf child > /tmp/child-file\ntest ! -e /tmp/scratchpad/same-name\ntest \"$(cat /tmp/agents/scout/same-name)\" = parent\nprintf child > /tmp/scratchpad/same-name\n").unwrap();
+    std::fs::write(shim_dir.join("codex"), "#!/bin/sh\nset -eu\ntest \"$(cat /tmp/team-file)\" = shared\nprintf child > /tmp/child-file\ntest ! -e /tmp/scratchpad/same-name\ntest ! -e /tmp/agents/scout/same-name\nprintf child > /tmp/scratchpad/same-name\n").unwrap();
     request.subagent = true;
     request.identity.name = Some("otter".to_owned());
     env.rimz()

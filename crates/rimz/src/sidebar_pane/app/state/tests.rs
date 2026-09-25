@@ -50,7 +50,8 @@ fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<DiagEvent> {
 }
 
 fn notification_trace_events(root: &std::path::Path) -> Vec<crate::diag::notify::NotifyTraceEvent> {
-    let path = root.join("notify.log.jsonl");
+    let path =
+        crate::StatePaths::class_path(root, crate::disk::paths::Class::Audit, "notify.log.jsonl");
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),

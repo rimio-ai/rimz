@@ -186,7 +186,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 worktree: request.worktree_path.as_deref(),
                 tmp_dir: &inputs.state.tmp_dir,
                 scratch_dir: &scratch_dir,
-                skills_dir: &inputs.state.skills_dir,
+                skills_dir: &inputs
+                    .state
+                    .agent_skills_dir(request.identity.name.as_deref()),
                 provider_home,
                 provider_home_env_keys: adapter.config_home_env_keys(),
                 skills: sandbox::SkillInputs {

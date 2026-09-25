@@ -122,9 +122,10 @@ fn classify_workspace(path: &Path) -> Verdict {
 
 /// Whether a workspace dir holds durable history worth preserving.
 fn workspace_has_history(path: &Path) -> bool {
-    path.join("events.log.jsonl").exists()
-        || path.join("snapshots").join("latest.json").exists()
-        || dir_has_entries(&path.join("events.log.archive"))
+    use crate::disk::paths::{Class, StatePaths};
+    StatePaths::class_path(path, Class::Log, "events.log.jsonl").exists()
+        || StatePaths::class_path(path, Class::Cache, "snapshots/latest.json").exists()
+        || dir_has_entries(&StatePaths::class_path(path, Class::Log, "archive"))
 }
 
 fn dir_has_entries(path: &Path) -> bool {
@@ -174,9 +175,9 @@ mod tests {
 
         // 4. Unreadable record but real history: retained, never deleted.
         let history_dir = workspaces.join("history");
-        fs::create_dir_all(&history_dir).unwrap();
+        fs::create_dir_all(history_dir.join("log")).unwrap();
         fs::write(history_dir.join("workspace.json"), b"{ not json").unwrap();
-        fs::write(history_dir.join("events.log.jsonl"), b"{}\n").unwrap();
+        fs::write(history_dir.join("log/events.log.jsonl"), b"{}\n").unwrap();
 
         let report = prune_dead_workspaces_under(&workspaces, &runtime, false).unwrap();
 

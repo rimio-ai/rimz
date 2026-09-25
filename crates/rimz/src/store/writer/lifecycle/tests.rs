@@ -141,7 +141,7 @@ fn lifecycle_receipt_carries_appended_event_and_suppressed_diagnostics() {
             .unwrap_or(0),
         before
     );
-    assert!(!store.paths().locks_dir.join(AUTO_ROTATE_STAMP).exists());
+    assert!(!store.paths().cache_dir.join(AUTO_ROTATE_STAMP).exists());
     let events = store.read_events().expect("read events");
     assert_eq!(events.len(), 1);
     let EventKind::AgentLifecycle(payload) = events[0].kind() else {
@@ -706,8 +706,8 @@ fn missing_unreadable_and_future_stamps_are_due() {
 #[test]
 fn failed_lifecycle_append_does_not_touch_rotation_stamp() {
     let (_dir, store) = test_store();
-    let stamp = store.paths().locks_dir.join(AUTO_ROTATE_STAMP);
-    std::fs::create_dir(&store.paths().events_log).expect("block event log with directory");
+    let stamp = store.paths().cache_dir.join(AUTO_ROTATE_STAMP);
+    std::fs::create_dir_all(&store.paths().events_log).expect("block event log with directory");
     let registered = observation(LifecycleSignal::Registered);
 
     assert!(

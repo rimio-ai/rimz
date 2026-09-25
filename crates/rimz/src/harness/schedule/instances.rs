@@ -40,7 +40,11 @@ pub(super) enum InstanceErr {
 type Result<T> = std::result::Result<T, InstanceErr>;
 
 pub(super) fn path(state_root: &Path) -> PathBuf {
-    state_root.join("loop-instances.json")
+    crate::StatePaths::class_path(
+        state_root,
+        crate::disk::paths::Class::Records,
+        "loop-instances.json",
+    )
 }
 
 pub(super) fn load_from(state_root: &Path) -> Tasks {
@@ -220,6 +224,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
 
         assert!(load_from(dir.path()).0.is_empty());
+        std::fs::create_dir_all(path(dir.path()).parent().unwrap()).unwrap();
         std::fs::write(path(dir.path()), b"not json").expect("corrupt state");
         assert!(load_from(dir.path()).0.is_empty());
     }

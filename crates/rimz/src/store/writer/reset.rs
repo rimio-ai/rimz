@@ -162,7 +162,7 @@ impl Store {
             }
 
             let mut state_entries_removed = 0;
-            state_entries_removed += remove_diag_logs(&paths.root)?;
+            state_entries_removed += remove_diag_logs(&paths.audit_path(""))?;
             state_entries_removed +=
                 remove_dir_counting_entries(&crate::diag::frames_dir_under(&paths.root))?;
 

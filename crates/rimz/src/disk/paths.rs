@@ -139,7 +139,7 @@ pub struct StatePaths {
     pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
     pub waits_dir: PathBuf,
-    pub locks_dir: PathBuf,
+    pub cache_dir: PathBuf,
     /// Runtime lock reference for writers whose durable API takes only state paths.
     pub workspace_lock: PathBuf,
     pub(crate) publish_lock: PathBuf,
@@ -190,11 +190,15 @@ impl StatePaths {
     /// Paths for `workspace_id` in the dir `dir_name` under `home`.
     pub fn under_named(workspace_id: WorkspaceId, dir_name: WorkspaceDirName, home: &Path) -> Self {
         let root = workspaces_dir_under(home).join(dir_name.as_str());
-        let snapshots_dir = root.join("snapshots");
-        let messages_dir = root.join("messages");
-        let transcript_dir = root.join("transcript");
-        let runs_dir = root.join("runs");
-        let locks_dir = root.join(Class::Locks.dir_name());
+        let cache_dir = Class::Cache.path_under(&root);
+        let records_dir = Class::Records.path_under(&root);
+        let audit_dir = Class::Audit.path_under(&root);
+        let log_dir = Class::Log.path_under(&root);
+        let owned_dir = Class::Owned.path_under(&root);
+        let snapshots_dir = cache_dir.join("snapshots");
+        let messages_dir = records_dir.join("messages");
+        let transcript_dir = audit_dir.join("transcript");
+        let runs_dir = owned_dir.join("runs");
         let tmp_dir = root.join(Class::Tmp.dir_name());
         let runtime =
             RuntimePaths::under_named(workspace_id.clone(), dir_name.clone(), &runtime_home());
@@ -202,15 +206,15 @@ impl StatePaths {
             workspace_id,
             dir_name,
             scratchpad_dir: tmp_dir.join("scratchpad"),
-            agents_dir: tmp_dir.join("agents"),
+            agents_dir: owned_dir.join("agents"),
             shared_dir: tmp_dir.join("shared"),
             subagents_dir: tmp_dir.join("rimz-subagents"),
             waits_dir: tmp_dir.join("rimz-waits"),
+            skills_dir: tmp_dir.join("skills"),
             tmp_dir,
-            skills_dir: root.join("skills"),
-            events_log: root.join("events.log.jsonl"),
-            events_archive_dir: root.join("events.log.archive"),
-            agents_carryover: root.join("agents.carryover.json"),
+            events_log: log_dir.join("events.log.jsonl"),
+            events_archive_dir: log_dir.join("archive"),
+            agents_carryover: records_dir.join("agents-carryover.json"),
             latest_snapshot: snapshots_dir.join("latest.json"),
             rollup_cache: snapshots_dir.join("rollup.json"),
             snapshots_dir,
@@ -221,14 +225,14 @@ impl StatePaths {
             publish_lock: runtime.lock_path("publish.lock"),
             workspace_record: root.join("workspace.json"),
             room_bin: root.join("rimz"),
-            channels_record: root.join("channels.json"),
-            boot_marker: root.join("boot.json"),
-            live_roster: root.join("live-roster.json"),
-            last_death_marker: root.join("last-death.json"),
-            doctor_watermark: root.join("doctor-cleared.json"),
-            auto_gc_stamp: root.join("auto-gc.json"),
-            crashes_dir: root.join("crashes"),
-            locks_dir,
+            channels_record: records_dir.join("channels.json"),
+            boot_marker: records_dir.join("boot.json"),
+            live_roster: cache_dir.join("live-roster.json"),
+            last_death_marker: records_dir.join("last-death.json"),
+            doctor_watermark: cache_dir.join("doctor-cleared.json"),
+            auto_gc_stamp: cache_dir.join("auto-gc.json"),
+            crashes_dir: audit_dir.join("crashes"),
+            cache_dir,
             root,
         }
     }
@@ -249,7 +253,7 @@ impl StatePaths {
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.snapshots_dir)?;
         mkdir_p(&self.runs_dir)?;
-        mkdir_p(&self.locks_dir)?;
+        mkdir_p(&self.cache_dir)?;
         Ok(())
     }
 
@@ -257,21 +261,71 @@ impl StatePaths {
     pub fn ensure_tmp_dir(&self) -> Result<()> {
         ensure_private_runtime_dir(&self.tmp_dir)?;
         mkdir_p(&self.scratchpad_dir)?;
-        mkdir_p(&self.agents_dir)?;
+        ensure_private_runtime_dir(&self.agents_dir)?;
         mkdir_p(&self.shared_dir)?;
         mkdir_p(&self.waits_dir)?;
         mkdir_p(&self.subagents_dir)
     }
 
     /// The launch's private scratch dir, bound at `/tmp/scratchpad` under
-    /// sandbox isolation: `agents/<handle>` for a named agent, the shared
+    /// sandbox isolation: `owned/agents/<handle>/scratch` for a named agent, the shared
     /// `scratchpad` for a launch without a handle. Handles are path-safe
     /// (`petname::valid_agent_name`).
     pub fn scratch_dir(&self, handle: Option<&str>) -> PathBuf {
         handle.map_or_else(
             || self.scratchpad_dir.clone(),
-            |handle| self.agents_dir.join(handle),
+            |handle| self.agents_dir.join(handle).join("scratch"),
         )
+    }
+
+    pub fn agent_skills_dir(&self, handle: Option<&str>) -> PathBuf {
+        handle.map_or_else(
+            || self.skills_dir.clone(),
+            |handle| self.agents_dir.join(handle).join("skills"),
+        )
+    }
+
+    /// Resolve classed files for readers that scan room roots without opening a store.
+    pub fn class_path(root: &Path, class: Class, name: impl AsRef<Path>) -> PathBuf {
+        class.path_under(root).join(name)
+    }
+
+    pub fn audit_path(&self, name: impl AsRef<Path>) -> PathBuf {
+        Self::class_path(&self.root, Class::Audit, name)
+    }
+
+    /// Room-local state paths; runtime lock references are inventoried by RuntimePaths.
+    pub fn all_paths(&self) -> Vec<PathBuf> {
+        vec![
+            self.tmp_dir.clone(),
+            self.scratchpad_dir.clone(),
+            self.agents_dir.clone(),
+            self.shared_dir.clone(),
+            self.subagents_dir.clone(),
+            self.skills_dir.clone(),
+            self.events_log.clone(),
+            self.events_archive_dir.clone(),
+            self.agents_carryover.clone(),
+            self.snapshots_dir.clone(),
+            self.latest_snapshot.clone(),
+            self.rollup_cache.clone(),
+            self.messages_dir.clone(),
+            self.transcript_dir.clone(),
+            self.runs_dir.clone(),
+            self.waits_dir.clone(),
+            self.cache_dir.clone(),
+            self.workspace_record.clone(),
+            self.room_bin.clone(),
+            self.channels_record.clone(),
+            self.boot_marker.clone(),
+            self.live_roster.clone(),
+            self.last_death_marker.clone(),
+            self.doctor_watermark.clone(),
+            self.auto_gc_stamp.clone(),
+            self.crashes_dir.clone(),
+            Class::Audit.path_under(&self.root),
+            Class::Records.path_under(&self.root),
+        ]
     }
 
     pub fn ensure_scratch_dir(&self, handle: Option<&str>) -> Result<PathBuf> {

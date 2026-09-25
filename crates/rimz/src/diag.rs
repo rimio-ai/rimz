@@ -286,7 +286,11 @@ impl DiagSink {
 
 impl Inner {
     fn log_path(&self) -> PathBuf {
-        self.state_root.join(DIAG_LOG_NAME)
+        crate::StatePaths::class_path(
+            &self.state_root,
+            crate::disk::paths::Class::Audit,
+            DIAG_LOG_NAME,
+        )
     }
 
     fn frames_dir(&self) -> PathBuf {
@@ -307,14 +311,17 @@ impl Inner {
 }
 
 pub fn frames_dir_under(state_root: &Path) -> PathBuf {
-    state_root.join(DIAG_FRAMES_DIR)
+    crate::StatePaths::class_path(
+        state_root,
+        crate::disk::paths::Class::Audit,
+        DIAG_FRAMES_DIR,
+    )
 }
 
 pub fn recent_records(workspace_id: WorkspaceId) -> Option<(PathBuf, Vec<DiagEnvelope>)> {
     let path = crate::StatePaths::for_workspace(workspace_id)
         .ok()?
-        .root
-        .join(DIAG_LOG_NAME);
+        .audit_path(DIAG_LOG_NAME);
     let mut records = Vec::new();
     crate::disk::rotating::visit_records(&path, |record: DiagEnvelope| {
         if record.is_current_version() {
@@ -413,11 +420,15 @@ mod tests {
             .collect()
     }
     fn notify_records(dir: &Path) -> Vec<NotifyTraceEnvelope> {
-        std::fs::read_to_string(dir.join("notify.log.jsonl"))
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
+        std::fs::read_to_string(crate::StatePaths::class_path(
+            dir,
+            crate::disk::paths::Class::Audit,
+            "notify.log.jsonl",
+        ))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
     }
 
     #[test]
@@ -521,8 +532,8 @@ mod tests {
         let workspace_id = WorkspaceId::from_project_root(Path::new("/diag-recent-records"));
         let state = crate::StatePaths::for_workspace(workspace_id.clone()).unwrap();
         let _ = std::fs::remove_dir_all(&state.root);
-        std::fs::create_dir_all(&state.root).unwrap();
-        let live_path = state.root.join(DIAG_LOG_NAME);
+        std::fs::create_dir_all(state.audit_path("")).unwrap();
+        let live_path = state.audit_path(DIAG_LOG_NAME);
         let record = |at_ms| {
             DiagEnvelope::new(
                 workspace_id.clone(),
@@ -571,7 +582,7 @@ mod tests {
         let capture_sink = sink(dir.path());
         let first = capture_sink.capture_frame_pair("drop", &1, &2, 42).unwrap();
         let second = capture_sink.capture_frame_pair("drop", &3, &4, 42).unwrap();
-        let frames_dir = dir.path().join(DIAG_FRAMES_DIR);
+        let frames_dir = frames_dir_under(dir.path());
 
         assert_ne!(first, second);
         assert_eq!(
@@ -598,7 +609,7 @@ mod tests {
             ring_sink.capture_frame_pair("drop", &i, &(i + 1), i);
         }
 
-        let frames = std::fs::read_dir(ring_dir.path().join(DIAG_FRAMES_DIR))
+        let frames = std::fs::read_dir(frames_dir_under(ring_dir.path()))
             .unwrap()
             .filter_map(Result::ok)
             .map(|entry| entry.path())

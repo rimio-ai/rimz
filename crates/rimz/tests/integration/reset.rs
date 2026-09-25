@@ -68,7 +68,7 @@ fn reset_archives_records_and_clears_room_state() {
         !paths.skills_dir.exists(),
         "host store creates no skill copies"
     );
-    fs::create_dir(&paths.skills_dir).expect("skills dir");
+    fs::create_dir_all(&paths.skills_dir).expect("skills dir");
     let skill_copy = paths.skills_dir.join("skill-digest");
     fs::create_dir(&skill_copy).expect("skill copy dir");
     fs::write(skill_copy.join("SKILL.md"), b"user-only skill").expect("write skill copy");
@@ -99,13 +99,13 @@ fn reset_archives_records_and_clears_room_state() {
     );
     let diag_log = diag.log_path().unwrap();
     let diag_frames = rimz::diag::frames_dir_under(&paths.root);
-    fs::write(&diag_log, b"diag\n").expect("write diag");
     fs::create_dir_all(&diag_frames).expect("mkdir diag frames");
+    fs::write(&diag_log, b"diag\n").expect("write diag");
     fs::write(diag_frames.join("frame.1.0.test.json"), b"{}").expect("write frame");
 
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("mkdir runtime");
-    fs::write(runtime.live_path("binding.log.jsonl"), b"binding\n").expect("write binding");
+    fs::write(paths.audit_path("binding.log.jsonl"), b"binding\n").expect("write binding");
 
     env.rimz()
         .args(["--mux", "zellij", "reset", "--no-start", "--yes"])
@@ -117,6 +117,10 @@ fn reset_archives_records_and_clears_room_state() {
     assert!(paths.workspace_record.exists(), "workspace identity stays");
     assert!(!paths.events_log.exists(), "active log was archived");
     assert!(!diag_log.exists(), "diag log cleared");
+    assert!(
+        paths.audit_path("binding.log.jsonl").exists(),
+        "binding audit retained"
+    );
     assert!(!diag_frames.exists(), "diag frame captures cleared");
     for class_dir in [&runtime.sock_dir, &runtime.live_dir, &runtime.lanes_dir] {
         assert!(!class_dir.exists(), "disposable runtime class cleared");
