@@ -1390,7 +1390,7 @@ fn wait_for_run_lock_release_path(path: &Path, grace: Duration) -> Result<bool> 
 }
 
 fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> {
-    match file.try_lock() {
+    match crate::disk::lock::try_lock_file(&mut file, path) {
         Ok(()) => {
             let info = RunLockInfo {
                 pid: std::process::id(),
@@ -1417,7 +1417,7 @@ fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> 
 }
 
 fn probe_run_lock_file(mut file: File, path: &Path) -> Result<RunLockState> {
-    match file.try_lock() {
+    match crate::disk::lock::try_lock_file(&mut file, path) {
         Ok(()) => Ok(RunLockState::Available),
         Err(std::fs::TryLockError::WouldBlock) => {
             Ok(RunLockState::Held(read_run_lock_info(&mut file)))

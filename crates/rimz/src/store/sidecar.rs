@@ -93,7 +93,7 @@ impl RecordLock {
             source,
         })?;
         let path = runtime.lock_path(format!("{prefix}.{}.lock", digest(kind, agent_id)));
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
@@ -103,7 +103,7 @@ impl RecordLock {
                 path: path.clone(),
                 source,
             })?;
-        file.lock()
+        crate::disk::lock::lock_file(&mut file, &path)
             .map_err(|source| atomic::AtomicErr::Io { path, source })?;
         Ok(Self { file })
     }

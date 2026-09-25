@@ -573,7 +573,7 @@ impl Drop for SweepRunGuard {
 
 fn try_start_sweep(runtime: &RuntimePaths) -> Result<Option<SweepRunGuard>> {
     let path = runtime.lock_path("message-sweep.lock");
-    let file = std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
@@ -583,7 +583,7 @@ fn try_start_sweep(runtime: &RuntimePaths) -> Result<Option<SweepRunGuard>> {
             path: path.clone(),
             source,
         })?;
-    match file.try_lock() {
+    match crate::disk::lock::try_lock_file(&mut file, &path) {
         Ok(()) => Ok(Some(SweepRunGuard { file })),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(std::fs::TryLockError::Error(source)) => Err(DeliverErr::Io { path, source }),

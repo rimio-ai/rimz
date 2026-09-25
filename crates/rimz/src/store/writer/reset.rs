@@ -214,6 +214,38 @@ mod tests {
     use crate::store::event::EventEnvelope;
 
     #[test]
+    fn reset_preserves_another_threads_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(id.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+        let lock_path = runtime.lock_path("loop-watch-held.lock");
+        let store = Store::open(paths, runtime).unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let thread_path = lock_path.clone();
+        let holder = std::thread::spawn(move || {
+            let _guard = crate::disk::lock::WorkspaceLock::acquire(&thread_path).unwrap();
+            ready_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        ready_rx.recv().unwrap();
+        for hard in [false, true] {
+            store
+                .reset_records_with(hard, true, event_log::rotate)
+                .unwrap();
+            assert!(lock_path.exists());
+            assert!(
+                crate::disk::lock::WorkspaceLock::try_acquire(&lock_path)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+    }
+
+    #[test]
     fn soft_reset_writes_carryover_before_archiving_active_log() {
         let dir = tempfile::tempdir().expect("tempdir");
         let workspace_id = WorkspaceId::from_project_root(dir.path());

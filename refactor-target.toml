@@ -241,6 +241,7 @@ allowed-dependencies = [
 # Lifetime classes expose room runtime paths and lock-preserving cleanup.
 # State classes expose their inventory and shared path routing for root-only readers.
 # Record codecs and cross-room scanners share the layout version, legacy default, and two validation entry points.
+# File-backed lock guards share blocking and immediate inode-checked acquisition.
 surface-budget = 194
 
 [[module]]
@@ -773,6 +774,7 @@ path = "crates/rimz/src/harness/schedule/runner.rs"
 allowed-dependencies = [
     "agents",
     "config",
+    "disk::lock",
     "disk::paths",
     "harness::budget",
     "harness::launch",

@@ -55,6 +55,7 @@ fn collect_workspace_runtime(
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
+    collect_locks(&Class::Locks.path_under(workspace_root), sweep, report)?;
     let live_dir = Class::Live.path_under(workspace_root);
     let heartbeat_dir = live_dir.join("heartbeat");
     let sock_dir = Class::Sock.path_under(workspace_root);
@@ -112,6 +113,38 @@ fn collect_workspace_runtime(
     }
     sweep.remove_dir_if_empty(&live_dir, report)?;
     sweep.remove_dir_if_empty(workspace_root, report)?;
+    Ok(())
+}
+
+fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<()> {
+    for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
+        let entry = entry.map_err(|source| GcErr::ReadDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        let io_err = |source| GcErr::Io {
+            path: path.clone(),
+            source,
+        };
+        if !entry.file_type().map_err(io_err)?.is_file() {
+            continue;
+        }
+        let mut file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(io_err(err)),
+        };
+        match crate::disk::lock::try_lock_file(&mut file, &path) {
+            Ok(()) => sweep.remove_file_if_exists(
+                &path,
+                |report| report.sidecar_files_removed += 1,
+                report,
+            )?,
+            Err(fs::TryLockError::WouldBlock) => continue,
+            Err(fs::TryLockError::Error(err)) => return Err(io_err(err)),
+        }
+    }
     Ok(())
 }
 
@@ -502,6 +535,33 @@ mod tests {
     use crate::ids::{MuxName, SidebarInstanceId};
     use crate::wakeup::heartbeat::SidebarHeartbeat;
     use tempfile::tempdir;
+
+    #[test]
+    fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
+        let temp = tempdir().unwrap();
+        let held_path = temp.path().join("held.lock");
+        let free_path = temp.path().join("free.lock");
+        let held = crate::disk::lock::WorkspaceLock::acquire(&held_path).unwrap();
+        fs::write(&free_path, "old holder").unwrap();
+        let mut preview = GcReport::default();
+        collect_locks(temp.path(), &mut Sweep::new(true), &mut preview).unwrap();
+        assert!(held_path.exists());
+        assert!(free_path.exists());
+        let mut actual = GcReport::default();
+        collect_locks(temp.path(), &mut Sweep::new(false), &mut actual).unwrap();
+        assert_eq!(preview, actual);
+        assert_eq!(actual.sidecar_files_removed, 1);
+        assert!(held_path.exists());
+        assert!(!free_path.exists());
+        assert!(
+            crate::disk::lock::WorkspaceLock::try_acquire(&held_path)
+                .unwrap()
+                .is_none()
+        );
+        drop(held);
+        collect_locks(temp.path(), &mut Sweep::new(false), &mut actual).unwrap();
+        assert!(!held_path.exists());
+    }
 
     #[test]
     fn a_file_vanished_before_its_age_check_is_not_a_candidate() {
