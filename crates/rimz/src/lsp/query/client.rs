@@ -139,23 +139,41 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
     }
     let (uri, position) = match parse_target(target)? {
         Target::Position { path, position } => (uri(&entry.root, &path)?, position),
-        Target::Symbol(name) => match resolve_symbol(
-            &name,
-            request(
-                entry,
-                "workspace/symbol",
-                json!({"query": name.rsplit("::").next().unwrap_or(&name)}),
-            )?,
-        )? {
-            SymbolResolution::Missing => {
-                return Ok(Output::Answer {
-                    result: Value::Null,
-                    document_uri: None,
-                });
+        Target::Symbol(name) => {
+            let resolution = resolve_symbol(
+                &name,
+                request(
+                    entry,
+                    "workspace/symbol",
+                    json!({"query": name.rsplit("::").next().unwrap_or(&name)}),
+                )?,
+            )?;
+            let resolution = match resolution {
+                SymbolResolution::Ambiguous(symbols) => collapse_symbols(symbols, |location| {
+                    Ok(locations(request(
+                        entry,
+                        "textDocument/definition",
+                        json!({
+                            "textDocument": {"uri": location.uri},
+                            "position": location.range.start,
+                        }),
+                    )?)?)
+                })?,
+                resolution => resolution,
+            };
+            match resolution {
+                SymbolResolution::Missing => {
+                    return Ok(Output::Answer {
+                        result: Value::Null,
+                        document_uri: None,
+                    });
+                }
+                SymbolResolution::Ambiguous(symbols) => {
+                    return Ok(Output::Ambiguous { name, symbols });
+                }
+                SymbolResolution::Unique(location) => (location.uri, location.range.start),
             }
-            SymbolResolution::Ambiguous(symbols) => return Ok(Output::Ambiguous { name, symbols }),
-            SymbolResolution::Unique(location) => (location.uri, location.range.start),
-        },
+        }
     };
     let mut params = json!({"textDocument": {"uri": uri}, "position": position});
     let method = match verb {

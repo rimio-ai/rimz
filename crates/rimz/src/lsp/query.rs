@@ -137,6 +137,27 @@ pub enum SymbolResolution {
     Ambiguous(Vec<SymbolInformation>),
 }
 
+fn collapse_symbols(
+    symbols: Vec<SymbolInformation>,
+    mut definition: impl FnMut(&Location) -> std::result::Result<Vec<Location>, QueryErr>,
+) -> std::result::Result<SymbolResolution, QueryErr> {
+    let mut groups = BTreeMap::new();
+    for mut symbol in symbols {
+        if let Ok([resolved]) = <[Location; 1]>::try_from(definition(&symbol.location)?) {
+            symbol.location = resolved;
+        }
+        groups
+            .entry((symbol.location.uri.clone(), symbol.location.range.start))
+            .or_insert(symbol);
+    }
+    let mut symbols: Vec<_> = groups.into_values().collect();
+    Ok(if symbols.len() == 1 {
+        SymbolResolution::Unique(symbols.remove(0).location)
+    } else {
+        SymbolResolution::Ambiguous(symbols)
+    })
+}
+
 pub fn resolve_symbol(name: &str, result: Value) -> Result<SymbolResolution> {
     // Servers report only the innermost container, so `module::Type::method` matches container `Type`.
     let last_segment = |path: &str| path.rsplit("::").next().unwrap_or(path).to_owned();
@@ -308,14 +329,21 @@ impl HoverContents {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Checkout,
+    External,
+}
+
 /// `document_uri` is supplied for document-symbol trees, which omit their own URI.
 pub fn render(
     verb: Verb,
     root: &Path,
     document_uri: Option<&str>,
     result: Value,
+    scope: Scope,
 ) -> Result<String> {
-    render_with_source(verb, root, document_uri, result, |uri, line| {
+    render_with_source(verb, root, document_uri, result, scope, |uri, line| {
         let text = std::fs::read_to_string(file_path(uri)?)?;
         text.lines()
             .nth(line as usize)
@@ -329,6 +357,7 @@ fn render_with_source(
     root: &Path,
     document_uri: Option<&str>,
     result: Value,
+    scope: Scope,
     mut source: impl FnMut(&str, u32) -> Result<String>,
 ) -> Result<String> {
     if result.is_null() {
@@ -426,7 +455,14 @@ fn render_with_source(
                     item,
                 );
             }
-            Ok(finish(
+            let hidden = if scope == Scope::Checkout {
+                let total = sorted.len();
+                sorted.retain(|(path, _, _), _| !Path::new(path).is_absolute());
+                total - sorted.len()
+            } else {
+                0
+            };
+            let mut output = finish(
                 sorted
                     .into_values()
                     .map(|item| {
@@ -437,7 +473,13 @@ fn render_with_source(
                         ))
                     })
                     .collect::<Result<_>>()?,
-            ))
+            );
+            if hidden > 0 {
+                output.push_str(&format!(
+                    "{hidden} outside the checkout hidden; add --external to show them\n"
+                ));
+            }
+            Ok(output)
         }
     }
 }
@@ -475,6 +517,7 @@ mod tests {
             Path::new("/checkout"),
             None,
             json!([{"uri": "file:///checkout/gone.rs", "range": range()}]),
+            Scope::Checkout,
             |_, _| Err(LspErr::Protocol("missing line".into())),
         );
         assert_eq!(result.unwrap(), "gone.rs:2:3\n");
@@ -498,6 +541,50 @@ mod tests {
     }
 
     #[test]
+    fn aliases_collapse_to_definitions_without_guessing() {
+        let location = |file: &str| {
+            serde_json::from_value::<Location>(
+                json!({"uri": format!("file:///checkout/{file}.rs"), "range": range()}),
+            )
+            .unwrap()
+        };
+        let symbols = || {
+            ["alias", "original"]
+                .map(|file| SymbolInformation {
+                    name: "work".into(),
+                    kind: 12,
+                    location: location(file),
+                    container_name: None,
+                })
+                .to_vec()
+        };
+        let resolved = collapse_symbols(symbols(), |_| Ok(vec![location("definition")])).unwrap();
+        assert!(
+            matches!(resolved, SymbolResolution::Unique(found) if found == location("definition"))
+        );
+        for unresolved in [vec![], vec![location("one"), location("two")]] {
+            let resolved = collapse_symbols(symbols(), |candidate| {
+                Ok(if candidate.uri.ends_with("alias.rs") {
+                    unresolved.clone()
+                } else {
+                    vec![location("definition")]
+                })
+            })
+            .unwrap();
+            let SymbolResolution::Ambiguous(symbols) = resolved else {
+                panic!("distinct definitions");
+            };
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(render_ambiguous(Path::new("/checkout"), "work", &symbols).unwrap(), @"
+                ambiguous: 2 symbols named work; rerun with a position
+                function work  alias.rs:2:3
+                function work  definition.rs:2:3
+                ");
+            }
+        }
+    }
+
+    #[test]
     fn incomplete_position_requires_a_column() {
         assert!(
             parse_target("src/lib.rs:12")
@@ -513,7 +600,7 @@ mod tests {
         let uri = "file:///checkout/src/lib.rs";
         let location = json!({"uri": uri, "range": range()});
         let show = |verb, result| {
-            render_with_source(verb, root, Some(uri), result, |_, _| {
+            render_with_source(verb, root, Some(uri), result, Scope::Checkout, |_, _| {
                 Ok("  fn work() {}  ".into())
             })
             .unwrap()
@@ -552,6 +639,44 @@ mod tests {
             show(Verb::Symbols, json!([symbol])),
             show(Verb::Find, json!([symbol]))
         );
+    }
+
+    #[test]
+    fn call_hierarchy_hides_distinct_external_items() {
+        let item = |uri| json!({"name": "work", "kind": 12, "uri": uri, "range": range(), "selectionRange": range()});
+        let inside = item("file:///checkout/lib.rs");
+        let outside = item("file:///other/lib.rs");
+        let other = item("file:///sdk/lib.rs");
+        for verb in [Verb::Callers, Verb::Callees] {
+            let key = if verb == Verb::Callers { "from" } else { "to" };
+            let calls = json!([{key: inside}, {key: outside}, {key: other}, {key: outside}]);
+            assert_eq!(
+                render(
+                    verb,
+                    Path::new("/checkout"),
+                    None,
+                    calls.clone(),
+                    Scope::Checkout
+                )
+                .unwrap(),
+                "work  lib.rs:2:3\n2 outside the checkout hidden; add --external to show them\n"
+            );
+            assert_eq!(
+                render(verb, Path::new("/checkout"), None, calls, Scope::External).unwrap(),
+                "work  /other/lib.rs:2:3\nwork  /sdk/lib.rs:2:3\nwork  lib.rs:2:3\n"
+            );
+            assert_eq!(
+                render(
+                    verb,
+                    Path::new("/checkout"),
+                    None,
+                    json!([{key: outside}]),
+                    Scope::Checkout
+                )
+                .unwrap(),
+                "no results\n1 outside the checkout hidden; add --external to show them\n"
+            );
+        }
     }
 
     #[test]

@@ -32,7 +32,9 @@ pub(super) fn check(percent: u8) -> Result<()> {
             .server_pid
             .and_then(crate::proc::tree_totals)
             .map_or(0, |totals| totals.rss_kb);
-        entry.peak_rss_kb = entry.peak_rss_kb.max(victim_rss_kb);
+        entry.peak_rss_kb = entry
+            .peak_rss_kb
+            .max(entry.server_pid.map_or(0, memory::tree_peak_kb));
         let response = registry::request(
             &entry,
             &serde_json::json!({"op": "stop", "reason": StopReason::MemoryPressure}),
@@ -47,9 +49,7 @@ pub(super) fn check(percent: u8) -> Result<()> {
         if let (Some(pid), Some(token)) = (entry.server_pid, entry.server_start_token.as_deref())
             && crate::proc::process_is_live(pid, Some(token))
         {
-            entry.peak_rss_kb = entry
-                .peak_rss_kb
-                .max(crate::proc::tree_totals(pid).map_or(0, |totals| totals.rss_kb));
+            entry.peak_rss_kb = entry.peak_rss_kb.max(memory::tree_peak_kb(pid));
             match nix::sys::signal::killpg(
                 nix::unistd::Pid::from_raw(pid as i32),
                 nix::sys::signal::Signal::SIGKILL,
