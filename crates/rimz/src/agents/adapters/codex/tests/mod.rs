@@ -4,6 +4,7 @@ use super::transcript::{
     configured_model_at, configured_reasoning_effort_at, with_codex_config_path,
 };
 use super::*;
+
 use crate::agents::PermissionMode;
 use crate::agents::testkit::hook_output;
 use crate::agents::{
@@ -17,6 +18,20 @@ mod install;
 mod lifecycle;
 mod project_trust;
 mod transcript;
+
+#[test]
+fn deadline_context_reply_matches_native_post_tool_contract() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("codex", "PostToolUse");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "hookSpecificOutput": {
+        "additionalContext": "deadline context",
+        "hookEventName": "PostToolUse"
+      }
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"null");
+}
 
 #[test]
 fn host_skills_replace_cli_config_and_use_frontmatter_names() {

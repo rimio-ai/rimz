@@ -11,6 +11,17 @@ use sha2::Sha256;
 use std::time::{Duration, Instant};
 
 #[test]
+fn deadline_context_reply_matches_native_post_tool_contract() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("cursor", "postToolUse");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "additional_context": "deadline context"
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"{}");
+}
+
+#[test]
 fn participant_start_accepts_only_a_nonempty_absolute_project_dir() {
     use std::ffi::OsStr;
 

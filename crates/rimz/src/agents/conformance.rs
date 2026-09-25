@@ -23,6 +23,40 @@ use crate::agents::AskKind;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
+fn hook_context_capability_agrees_with_native_reply_support() {
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
+        let supported = matches!(
+            kind,
+            "claude" | "codex" | "copilot" | "cursor" | "droid" | "grok" | "qwen"
+        );
+        assert_eq!(
+            adapter.spec().capabilities.hook_context,
+            supported,
+            "{kind}"
+        );
+        let mut attached = false;
+        for sample in adapter.conformance().classification {
+            let mut decoded = adapter
+                .decode_hook(sample.event_name, &sample.payload)
+                .unwrap();
+            let before = decoded.reply().clone();
+            if adapter.attach_hook_context(&mut decoded, "deadline context") {
+                attached = true;
+                assert!(supported, "{kind}");
+                assert!(
+                    matches!(decoded.reply(), super::HookReply::Json(value) if value.to_string().contains("deadline context")),
+                    "{kind}"
+                );
+            } else {
+                assert_eq!(decoded.reply(), &before, "{kind}");
+            }
+        }
+        assert_eq!(attached, supported, "{kind}");
+    }
+}
+
+#[test]
 fn builtin_host_skill_switches_are_declared() {
     for adapter in BUILTINS {
         let spec = adapter.spec();

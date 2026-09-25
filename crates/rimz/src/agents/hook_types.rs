@@ -305,6 +305,17 @@ impl HookOutput {
         self.reply = reply;
     }
 
+    pub(super) fn merge_reply_object(&mut self, fields: impl IntoIterator<Item = (String, Value)>) {
+        match &mut self.reply {
+            HookReply::Silent => {
+                self.reply = HookReply::Json(Value::Object(fields.into_iter().collect()))
+            }
+            HookReply::Json(Value::Object(reply)) => reply.extend(fields),
+            // Context-capable adapters emit object replies, never JSON scalars or arrays.
+            HookReply::Json(_) => unreachable!("hook context requires an object reply"),
+        }
+    }
+
     pub(super) fn attach_lifecycle(&mut self, observation: AgentLifecycleObservation) {
         self.replace_fact(
             |fact| matches!(fact, CanonicalHookFact::Lifecycle(_)),

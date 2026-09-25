@@ -178,7 +178,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[("request_user_input", AskKind::Question)],
     },
     capabilities: Capabilities {
-        hook_context: false,
+        hook_context: true,
         native_ask_ui: true,
         transcript_tail_context: true,
         // Codex has no background-task parking.
@@ -673,6 +673,17 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
             spawned_as_internal_app_server(),
             pid.is_some_and(process::pid_is_codex_daemon),
         )
+    }
+
+    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
+        if decoded.event_name() != "PostToolUse" {
+            return false;
+        }
+        decoded.merge_reply_object([(
+            "hookSpecificOutput".to_owned(),
+            serde_json::json!({"hookEventName": "PostToolUse", "additionalContext": text}),
+        )]);
+        true
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {

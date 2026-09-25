@@ -41,6 +41,11 @@ pub trait CoreCapability: Send + Sync {
 
 #[doc(hidden)]
 pub trait HookCapability: CoreCapability {
+    /// Attach additive model context when this native event accepts it.
+    fn attach_hook_context(&self, _decoded: &mut HookOutput, _text: &str) -> bool {
+        false
+    }
+
     /// Normalize hook-emitter process ownership before workspace or store I/O.
     fn hook_ingress(&self, pid: Option<u32>) -> HookIngressDecision {
         HookIngressDecision::Accept(HookIngressAcceptance::agent(pid))

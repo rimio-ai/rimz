@@ -8,6 +8,33 @@ use crate::agents::capabilities::HookCapability;
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentLifecycleObservation, AskKind, HookOutput};
 
+/// Check context attachment and return the native replies for adapter goldens.
+pub(crate) fn deadline_context_replies(
+    kind: &str,
+    post_event: &str,
+) -> (Option<Value>, Option<Value>) {
+    let adapter = crate::agents::definition_by_kind(kind).unwrap();
+    let samples = adapter.conformance().classification;
+    let post = samples
+        .iter()
+        .find(|sample| sample.event_name == post_event)
+        .unwrap();
+    let mut decoded = adapter.decode_hook(post.event_name, &post.payload).unwrap();
+    assert!(adapter.attach_hook_context(&mut decoded, "deadline context"));
+    let post_reply = decoded.json_reply().cloned();
+    let other = samples
+        .iter()
+        .find(|sample| sample.event_name != post_event)
+        .unwrap();
+    let mut decoded = adapter
+        .decode_hook(other.event_name, &other.payload)
+        .unwrap();
+    let before = decoded.reply().clone();
+    assert!(!adapter.attach_hook_context(&mut decoded, "deadline context"));
+    assert_eq!(decoded.reply(), &before);
+    (post_reply, decoded.json_reply().cloned())
+}
+
 /// Decode one native hook payload, asserting the adapter accepted it.
 pub(crate) fn hook_output(
     adapter: &impl HookCapability,

@@ -4,10 +4,24 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::*;
+
 use crate::agents::lifecycle::{LifecycleState, PriorTurnIds, TurnPhase, step};
 use crate::agents::testkit::{hook_lifecycle, hook_output, hook_signal};
 use crate::agents::transcript::TranscriptCursor;
 use crate::agents::{AgentHookClass, AgentStatus, TranscriptPosition, TranscriptRole};
+
+#[test]
+fn deadline_context_reply_matches_native_post_tool_contract() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("droid", "PostToolUse");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "hookSpecificOutput": {
+        "additionalContext": "deadline context"
+      }
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"null");
+}
 
 const TRANSCRIPT_FIXTURE: &str = include_str!("tests/fixtures/droid-0.170.0-transcript-v2.jsonl");
 const SETTINGS_FIXTURE: &str =
