@@ -178,7 +178,7 @@ rimz agents attribution --md                          # credit the lane's agents
 
 ### Steer the fleet
 
-**Message agents like teammates.** Every agent answers to a [handle](./docs/guide/messaging.md), named by kind, profile, or team role: `@codex` reaches the one in your channel, `@codex#feat-a` reaches across the workspace. Every message becomes a durable record you can read back and steer: parked at the turn boundary by default, `--steer` to interrupt the live turn now, `--schedule` to deliver later. The same command serves you, your scripts, and the agents themselves, which use it to talk to each other.
+**Message agents like teammates.** Every agent answers to a [handle](./docs/guide/messaging.md), named by kind, profile, or team role: `@codex` reaches the one in your channel, `@codex#feat-a` reaches across the workspace. Every message becomes a durable record you can read back and steer: parked at the turn boundary by default, `--steer` to write into the live turn now, `--schedule` to deliver later. The same command serves you, your scripts, and the agents themselves, which use it to talk to each other.
 
 ```sh
 # Park at the next turn boundary; address by kind, profile, or team role
@@ -190,7 +190,7 @@ rimz message @coder --after @planner "planner's done: read plan-notes.md and sta
 rimz message @coder --wait "did the migration land? one line"
 rimz message @all --wait --json "status? one line"     # a labeled reply map for the whole channel
 
-# Interrupt the live turn, or schedule for later
+# Write into the live turn now, or schedule for later
 rimz message --steer @claude "stop: the parser test comes first"
 rimz message --schedule 60m @codex#feat-b "run the smoke test"
 

@@ -20,7 +20,7 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
     assert_eq!(
         step(
             WaitPhase::Delivery,
-            false,
+            DeliveryKind::Boundary,
             MessageStatus::Queued,
             card(AgentStatus::Idle, 1),
         ),
@@ -29,7 +29,7 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
     assert_eq!(
         step(
             WaitPhase::Delivery,
-            true,
+            DeliveryKind::Steer,
             MessageStatus::Sent,
             card(AgentStatus::Running, 1),
         ),
@@ -42,7 +42,7 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
             WaitPhase::Reply {
                 turn_started_at: Some(Timestamp::from_second(1).unwrap()),
             },
-            true,
+            DeliveryKind::Steer,
             MessageStatus::Sent,
             card(AgentStatus::Running, 2),
         ),
@@ -54,7 +54,7 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
                 WaitPhase::Reply {
                     turn_started_at: None,
                 },
-                false,
+                DeliveryKind::Boundary,
                 MessageStatus::Delivered,
                 card(status, 1),
             ),
@@ -66,7 +66,12 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
             turn_started_at: None,
         };
         assert_eq!(
-            step(reply, false, MessageStatus::Delivered, card(status, 1)),
+            step(
+                reply,
+                DeliveryKind::Boundary,
+                MessageStatus::Delivered,
+                card(status, 1)
+            ),
             Step::Finish(RunStatus::Completed)
         );
         let never_started = Some(CardView {
@@ -74,7 +79,12 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
             turn_started_at: None,
         });
         assert_eq!(
-            step(reply, false, MessageStatus::Delivered, never_started),
+            step(
+                reply,
+                DeliveryKind::Boundary,
+                MessageStatus::Delivered,
+                never_started
+            ),
             Step::Wait(reply)
         );
     }
@@ -129,7 +139,7 @@ fn sleeping_reply_waits_through_the_wake_turn() {
     };
     let sleeping = step(
         anchored(1),
-        false,
+        DeliveryKind::Boundary,
         MessageStatus::Delivered,
         card(AgentStatus::Sleeping, 1),
     );
@@ -144,7 +154,7 @@ fn sleeping_reply_waits_through_the_wake_turn() {
     );
     let wake = step(
         slept,
-        false,
+        DeliveryKind::Boundary,
         MessageStatus::Delivered,
         card(AgentStatus::Running, 2),
     );
@@ -152,7 +162,7 @@ fn sleeping_reply_waits_through_the_wake_turn() {
     assert_eq!(
         step(
             anchored(2),
-            false,
+            DeliveryKind::Boundary,
             MessageStatus::Delivered,
             card(AgentStatus::Success, 2),
         ),
@@ -176,7 +186,7 @@ fn construction_settled_leg_is_reported_before_store_poll() {
     };
     let mut wait = ReplyWait {
         legs: vec![Leg::new(target, &outcome, 0)],
-        steer: true,
+        kind: DeliveryKind::Steer,
         join: ReplyJoin::Any,
         caller_identity: None,
         tick: 0,
@@ -280,7 +290,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
         snapshot: running,
         messages: vec![message.clone()],
     };
-    assert!(!advance_leg(&mut leg, &store, &running, false).unwrap());
+    assert!(!advance_leg(&mut leg, &store, &running, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.last_message, None);
 
     agent.status = AgentStatus::Idle;
@@ -289,7 +299,7 @@ fn parked_reply_reanchors_when_delivery_starts() {
         snapshot: idle,
         messages: vec![message],
     };
-    assert!(advance_leg(&mut leg, &store, &idle, false).unwrap());
+    assert!(advance_leg(&mut leg, &store, &idle, DeliveryKind::Boundary).unwrap());
     assert_eq!(leg.result().final_message, None);
 }
 
@@ -303,7 +313,7 @@ fn terminal_delivery_failures_win_over_missing_card() {
         MessageStatus::Archived,
     ] {
         assert_eq!(
-            step(WaitPhase::Delivery, false, status, None),
+            step(WaitPhase::Delivery, DeliveryKind::Boundary, status, None),
             Step::DeliveryFailed(status)
         );
     }
@@ -312,7 +322,7 @@ fn terminal_delivery_failures_win_over_missing_card() {
             WaitPhase::Reply {
                 turn_started_at: None,
             },
-            false,
+            DeliveryKind::Boundary,
             MessageStatus::Delivered,
             None,
         ),
@@ -559,7 +569,7 @@ fn youngest_message_yields_cycle() {
 fn wait_with_legs(legs: Vec<Leg>, join: ReplyJoin) -> ReplyWait {
     ReplyWait {
         legs,
-        steer: false,
+        kind: DeliveryKind::Boundary,
         join,
         caller_identity: None,
         tick: 0,

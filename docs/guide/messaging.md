@@ -8,7 +8,7 @@ Every send becomes a durable record before a byte reaches the pane. A busy agent
 
 ```sh
 rimz message @claude "add coverage for the expiry edge cases"     # parks: lands when @claude's turn ends
-rimz message --steer @claude "stop: the parser test comes first"  # interrupts the live turn now
+rimz message --steer @claude "stop: the parser test comes first"  # writes into the live turn now
 rimz message --schedule 60m @codex#feat-a "run the smoke test"    # no earlier than an hour from now
 rimz message @coder --wait "did the migration land? one line"     # ask, and print the reply
 rimz message @all "freeze new work; I'm cutting a release"        # everyone in your channel
@@ -83,7 +83,7 @@ delivered to @planner#auth (msg_06gc05nhj9q2b4t7)
 
 Nothing is locked in until it lands: `rimz message cancel msg_06gc05m0d327d1d0` stops a message still waiting, and `rimz message steer msg_06gc05m0d327d1d0` promotes that exact record past its gate.
 
-**Steer the live turn.** `--steer` interrupts the agent's turn the way typing into its pane would, so you can redirect it mid-thought. If RimZ is already writing a command, message, or answer to that pane, steer waits up to 30 seconds for that write to finish, its submit key included, rather than inserting text halfway through it.
+**Steer the live turn.** `--steer` writes into the live turn now, the way typing into its pane would, so you can redirect it mid-thought. If RimZ is already writing a command, message, or answer to that pane, steer waits up to 30 seconds for that write to finish, its submit key included, rather than inserting text halfway through it.
 
 ```sh
 rimz message --steer @claude "stop: rebase on main first, the parser moved"
@@ -193,7 +193,7 @@ rimz message @coder --wait "did the migration land? one line"    # the reply alo
 rimz message @all --wait --json "status? one line"               # one handle-keyed reply map
 rimz message --all @reviewer --wait --any "first verdict?"       # return on the first reply
 rimz message @codex --wait=5m "open the PR"                      # bound delivery plus turn
-rimz message --steer @claude --wait "answer from this turn"      # the interrupted turn is the reply
+rimz message --steer @claude --wait "answer from this turn"      # the live turn is the reply
 ```
 
 A fan-out wait gathers every reply from the agents' existing contexts and streams them under `@handle:` lines in completion order, while a failed target writes its forensics to stderr and the others keep gathering. `--json` buffers one uniform map instead, whether you asked one agent or twenty. The command exits 0 only when every reply turn completed, and a deadline exits 124 with the unfinished targets marked `timed_out`; the full exit-code table is in [cli/message.md](../reference/cli/message.md#wait-for-replies).

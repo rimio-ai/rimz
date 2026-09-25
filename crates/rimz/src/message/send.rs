@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::Store;
 use crate::agents::AgentState;
 use crate::message::{
-    MessageDraft, Recipient, command_segments, command_submit_delay_from_env,
+    DeliveryKind, MessageDraft, Recipient, command_segments, command_submit_delay_from_env,
     message_interval_from_env,
 };
 use crate::mux::PaneWriter;
@@ -36,17 +36,17 @@ pub(super) enum Receipt {
 /// state.
 pub(super) struct LiveSend {
     force: bool,
-    steer: bool,
+    kind: DeliveryKind,
     pacer: Pacer,
     command_submit_delay: Duration,
 }
 
 impl LiveSend {
     /// Pacing comes from the environment; one value per send batch.
-    pub(super) fn new(force: bool, steer: bool) -> Self {
+    pub(super) fn new(force: bool, kind: DeliveryKind) -> Self {
         Self {
             force,
-            steer,
+            kind,
             pacer: Pacer::from_env(),
             command_submit_delay: command_submit_delay_from_env(),
         }
@@ -122,7 +122,7 @@ pub(super) fn send_batch_to_live_pane(
                         message_id: command.message_id.to_string(),
                     },
                 });
-                if !send.steer {
+                if send.kind == DeliveryKind::Boundary {
                     return Ok(Receipt::CompactionPending);
                 }
             }
@@ -358,7 +358,7 @@ mod tests {
     fn submit_delay_applies_only_to_commands() {
         let send = LiveSend {
             force: false,
-            steer: false,
+            kind: DeliveryKind::Boundary,
             pacer: Pacer::new(Duration::ZERO),
             command_submit_delay: Duration::from_millis(200),
         };
@@ -394,7 +394,7 @@ mod tests {
     fn argument_write_is_paced_from_the_declared_command() {
         let send = LiveSend {
             force: false,
-            steer: false,
+            kind: DeliveryKind::Boundary,
             pacer: Pacer::new(Duration::ZERO),
             command_submit_delay: Duration::from_millis(200),
         };

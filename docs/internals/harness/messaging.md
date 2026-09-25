@@ -127,7 +127,7 @@ Every mode resolves targets through the same parser, writes the same record shap
 | Mode | Flag | Behaviour |
 | --- | --- | --- |
 | Boundary | default | Write now if the receiver can take it, otherwise park for the next qualifying turn boundary. |
-| Steer | `--steer` | Write to the live pane now, interrupting the turn but waiting for any in-flight pane write. Conflicts with `--schedule` and `--on`. |
+| Steer | `--steer` | Writes into the live turn now, waiting for any in-flight pane write. Conflicts with `--schedule` and `--on`. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always park, with a `not_before` floor. |
 
 Steer still writes a `Queued` record first and moves it to `Sent` when the paste lands. When the address resolves only to a durable card with no live pane, steer parks, prints `queued for @handle (msg_...)`, and the retry path delivers once a pane appears.
@@ -415,7 +415,7 @@ Dispatch captures one frame-aligned event-log base before enqueue and copies it 
 
 Each leg is a two-phase machine:
 
-- **Delivery.** Waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into a running turn opens the reply phase from `Sent + Running` instead, because the interrupted turn emits no second `TurnStarted`: the rest of that turn is the reply.
+- **Delivery.** Waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into a running turn opens the reply phase from `Sent + Running` instead, because the live turn emits no second `TurnStarted`: the rest of that turn is the reply.
 - **Reply.** Legs read status through `TurnWaitView`, which loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness message, reads as `Sleeping`. Legs settle through `TurnCompletion`: `Idle` or `Success` completes the leg only once a turn has opened (`turn_started_at` set). `Failed`, a delivery failure, a vanished card, or a skipped waiting input fails it while the other legs keep gathering. `Waiting` and `Paused` stay inside the reply. `Sleeping` stays inside it too and clears the turn anchor, so the turn its wake opens continues the reply instead of ending it. A changed `turn_started_at` while the card is still `Running` proves the reply turn ended and another began between polls.
 
 `TurnWaitView::wake_in_flight(agent, digest)` owns the non-terminal harness-message test. Reply waits pass `false`, counting `Wait` and `Signal` only; the supervised-run owed predicate passes `true` to also count `SubagentReport`. A digest alone still does not hold a reply wait open.

@@ -276,7 +276,18 @@ pub(crate) fn validate_reply_wait(
 #[derive(Clone, Copy)]
 pub(crate) enum ReportMode {
     Steer,
+    Interrupt,
     Boundary,
+}
+
+impl From<rimz::message::DeliveryKind> for ReportMode {
+    fn from(kind: rimz::message::DeliveryKind) -> Self {
+        match kind {
+            rimz::message::DeliveryKind::Boundary => Self::Boundary,
+            rimz::message::DeliveryKind::Steer => Self::Steer,
+            rimz::message::DeliveryKind::Interrupt => Self::Interrupt,
+        }
+    }
 }
 
 pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
@@ -314,7 +325,7 @@ pub(crate) fn report_dispatch(
 ) -> Result<()> {
     match mode {
         ReportMode::Boundary => report_boundary(outcomes, compacted),
-        ReportMode::Steer => report_steer(target, outcomes, compacted),
+        ReportMode::Steer | ReportMode::Interrupt => report_steer(target, outcomes, compacted),
     }
 }
 

@@ -331,6 +331,25 @@ fn execute_prepared_delivery(
         session = %prepared.target.session,
         "queueing loop wake-up"
     );
+    let mode = if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWait {
+        rimz::message::dispatch::DispatchMode::Steer {
+            enter: true,
+            force: false,
+            auto_compact: None,
+        }
+    } else {
+        rimz::message::dispatch::DispatchMode::Boundary {
+            enter: true,
+            gate: DeliveryGate::Done,
+            force: false,
+            // Domain dispatch resolves this from [harness] smart_compact.
+            auto_compact: None,
+            not_before: None,
+            after: Vec::new(),
+            when: Vec::new(),
+        }
+    };
+    let report_mode = crate::cli::send::ReportMode::from(mode.kind());
     let dispatched = rimz::message::dispatch::dispatch(
         &workspace,
         &store,
@@ -345,24 +364,7 @@ fn execute_prepared_delivery(
             allow_fanout: false,
             reply: None,
             mux: globals.mux,
-            mode: if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWait {
-                rimz::message::dispatch::DispatchMode::Steer {
-                    enter: true,
-                    force: false,
-                    auto_compact: None,
-                }
-            } else {
-                rimz::message::dispatch::DispatchMode::Boundary {
-                    enter: true,
-                    gate: DeliveryGate::Done,
-                    force: false,
-                    // Domain dispatch resolves this from [harness] smart_compact.
-                    auto_compact: None,
-                    not_before: None,
-                    after: Vec::new(),
-                    when: Vec::new(),
-                }
-            },
+            mode,
         },
     );
     match dispatched {
@@ -383,11 +385,7 @@ fn execute_prepared_delivery(
                 })
                 .context("loop wait dispatch returned no outcome")?;
             crate::cli::send::report_dispatch(
-                if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWait {
-                    crate::cli::send::ReportMode::Steer
-                } else {
-                    crate::cli::send::ReportMode::Boundary
-                },
+                report_mode,
                 &prepared.target.handle,
                 &result.outcomes,
                 &result.compacted,
