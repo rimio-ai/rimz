@@ -28,6 +28,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 - [Loops](./guide/loops.md): fire agent turns on a clock or a room signal, guard them with a shell check, let agents set their own alarms, and keep the fleet moving through rate limits and full contexts.
 - [Notifications](./guide/notifications.md): the banner and bell you get for free, a handler that pushes to your phone or runs any command you like, and handlers that answer the routine prompt for you.
 - [Budgets](./guide/budget.md): enforce dollar caps on one turn, one agent, one loop task, a room's fleet, or a provider account, resume the work a cap parked, and gate background tasks on the subscription window's surplus.
+- [Shared LSP](./guide/lsp.md): start one language server per checkout at launch and share it read-only among every agent working there, within a memory budget, and see, query, and stop it from your shell.
 
 ## Customization
 
@@ -44,10 +45,8 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 
 ## Reference
 
-- [Shared language servers](./reference/cli/lsp.md): semantic code navigation, server inspection, and configuration.
-
 - [Reference index](./reference/README.md): every reference page by topic.
-- [CLI](./reference/cli.md): the command map and conventions, with a page per scene: [getting started](./reference/cli/getting-started.md), [remote](./reference/cli/remote.md), [web](./reference/cli/web.md), [agents](./reference/cli/agents.md), [subagents](./reference/cli/subagents.md), [teams](./reference/cli/teams.md), [asks](./reference/cli/asks.md), [message](./reference/cli/message.md), [wait](./reference/cli/wait.md), [transcript](./reference/cli/transcript.md), [pane](./reference/cli/pane.md), [events](./reference/cli/events.md), [accounts](./reference/cli/accounts.md), [stats](./reference/cli/stats.md), [budget](./reference/cli/budget.md), [providers](./reference/cli/providers.md), [channels](./reference/cli/channel.md), [worktrees](./reference/cli/worktree.md), [loop](./reference/cli/loop.md), [hooks and trust](./reference/cli/hooks-trust.md), [config](./reference/cli/config.md), and [maintenance](./reference/cli/maintenance.md).
+- [CLI](./reference/cli.md): the command map and conventions, with a page per scene: [getting started](./reference/cli/getting-started.md), [remote](./reference/cli/remote.md), [web](./reference/cli/web.md), [agents](./reference/cli/agents.md), [subagents](./reference/cli/subagents.md), [teams](./reference/cli/teams.md), [asks](./reference/cli/asks.md), [message](./reference/cli/message.md), [wait](./reference/cli/wait.md), [transcript](./reference/cli/transcript.md), [pane](./reference/cli/pane.md), [events](./reference/cli/events.md), [accounts](./reference/cli/accounts.md), [stats](./reference/cli/stats.md), [budget](./reference/cli/budget.md), [providers](./reference/cli/providers.md), [channels](./reference/cli/channel.md), [worktrees](./reference/cli/worktree.md), [loop](./reference/cli/loop.md), [language servers](./reference/cli/lsp.md), [hooks and trust](./reference/cli/hooks-trust.md), [config](./reference/cli/config.md), and [maintenance](./reference/cli/maintenance.md).
 - [Agent support](./reference/agent-support.md): per-agent status, integration surface, and permission-mode mapping for every built-in adapter, including Kimi Code and Grok Build.
 - [Agent plugins](./reference/agent-plugins.md): connect a third-party agent CLI with a bundle: registering and checking it, the manifest, the canonical event envelope, the shim, and the probe contracts. The surface is early and not ready for public use; its contracts change without notice.
 - [Changelog](../CHANGELOG.md): what changed in each release, tagged and dated. RimZ is alpha, so read a release's "Changed" entries before you upgrade.

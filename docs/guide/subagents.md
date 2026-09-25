@@ -69,17 +69,7 @@ Every agent RimZ launches on Claude, Codex, Qwen, or Droid learns its list at la
 
 ## Share code navigation
 
-A native language-server tool can start a full index for every agent and child, multiplying memory use even when they work on the same checkout. Configure a [shared language server](../reference/cli/lsp.md#configuration) to give them one saved-file index instead. Put the server entry in your per-machine config, or review and trust the project's entry, then launch the team as usual. RimZ starts it before panes open if memory permits; children join it rather than starting another.
-
-Agents with a server receive its name and a pointer to `rimz-lsp` in their launch reminder. You can inspect or stop it from your shell:
-
-```sh
-rimz lsp list
-rimz lsp refs GcReport
-rimz lsp stop --server rust
-```
-
-Stopping leaves agents running; their next query says to use grep. Servers also stop after their last agent's release grace or under memory pressure. Remove the config entry to disable sharing on future launches. Claude's native LSP tool is denied when sharing is configured; OpenCode and Grok do not yet have verified native-server suppression. The [reference](../reference/cli/lsp.md) lists supported queries and required-server waiting policy.
+A native language-server tool starts a full index for every agent and child, so a parent with three children can hold four copies of the same index over one checkout. A [shared language server](./lsp.md) gives them one instead: configure it once, launch as usual, and RimZ starts it before panes open if memory permits. A child never starts a server of its own; it joins its parent's when one runs, and its launch reminder names it the same way.
 
 ## Watch and answer children
 
