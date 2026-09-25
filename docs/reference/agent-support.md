@@ -230,6 +230,16 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 
 Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, context files, skills, and working-directory material after RimZ's text. The full prompt is visible in Pi's process arguments.
 
+### Interrupt key
+
+[`rimz message --interrupt`](./cli/message.md#when-a-message-lands) stops a live turn before delivering a fresh prompt. Only agents with a declared interrupt key support this mode.
+
+| Agent | Interrupt key | Unsupported behaviour |
+| --- | :--: | --- |
+| Claude Code | Esc | Supported |
+| Codex | Esc | Supported |
+| Every other agent and process plugins | none | `--interrupt` refused; use `--steer` or park |
+
 ### Auto-compaction window
 
 The `auto-compact` field on a profile or team role sets the agent's native auto-compaction window, as a token count from 100k through 1M inclusive: `"200k"`, `"200000"`, or `"1m"`. RimZ rejects anything outside that range before launch, so `"200"` fails instead of meaning something different to each CLI. This is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction). Which agents accept a trailing instruction when you compact by hand is in [`rimz agents compact`](./cli/agents.md#compact).

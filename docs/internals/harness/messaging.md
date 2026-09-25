@@ -6,7 +6,7 @@
 
 RimZ gives an agent work by typing into its pane. Agents run their stock CLIs in real terminal panes with no API into them, so `rimz message` types on behalf of a human, a script, a loop task, or another agent.
 
-The receiver is usually busy. It can be mid-turn, blocked on a permission prompt, compacting its context, or not yet launched, and typing at the wrong moment either interrupts work in flight or leaves text in a composer nobody submits. One rule handles every case:
+The receiver is usually busy. It can be mid-turn, blocked on a permission prompt, compacting its context, or not yet launched, and typing at the wrong moment either redirects work in flight or leaves text in a composer nobody submits. One rule handles every case:
 
 > **The durable record is the message; the pane write is only an attempt.**
 
@@ -120,7 +120,7 @@ The caller resolver decides whether an invocation is agent-authored before dispa
 
 Daemon-routed adapters, such as Codex 0.137 and later, stay unattributed on the ancestry path: their tool commands run below the shared app-server, whose `RuntimeOwner` cannot say which agent invoked the command.
 
-### Three modes on one timing axis
+### Four modes on one timing axis
 
 Every mode resolves targets through the same parser, writes the same record shape, uses the same pane write, and emits the same audit events. The modes differ only in when the record may deliver.
 
@@ -128,6 +128,7 @@ Every mode resolves targets through the same parser, writes the same record shap
 | --- | --- | --- |
 | Boundary | default | Write now if the receiver can take it, otherwise park for the next qualifying turn boundary. |
 | Steer | `--steer` | Writes into the live turn now, waiting for any in-flight pane write. Conflicts with `--schedule` and `--on`. |
+| Interrupt | `--interrupt` | Press the declared interrupt key once, prove the stop, then deliver as a fresh turn. Claude and Codex declare Escape; other kinds are refused. Conflicts with every other timing mode and with `--after` and `--when`. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always park, with a `not_before` floor. |
 
 Steer still writes a `Queued` record first and moves it to `Sent` when the paste lands. When the address resolves only to a durable card with no live pane, steer parks, prints `queued for @handle (msg_...)`, and the retry path delivers once a pane appears.
@@ -157,7 +158,7 @@ Delivery gates and `when` conditions read status differently, on purpose. Gates 
 
 The park-or-live decision (`dispatch_decision`) takes the first rule that applies:
 
-1. Steer goes live when a pane is bound and parks otherwise.
+1. Steer and interrupt go live when a pane is bound and park otherwise. Interrupt preflights every target before enqueue: a missing key, a live pane without a durable bound session, or an awaiting-input row without `--force` refuses the send, including the whole fan-out. Interrupt always loads agent-context sidecars for that check.
 2. A schedule or an unmet condition parks.
 3. A receiver that cannot take a prompt parks with a reason: its effective status, or its native-input wait. Readiness comes from the exact pane binding when there is one and from the durable card otherwise.
 4. No resolved pane parks.
@@ -216,6 +217,10 @@ The same reactor nudges the sweep when the event's agent is referenced by an unm
 **Auto-continue.** When a persisted park reaches its reset or backoff condition, the producer spawns `rimz agents auto-continue`, which queues a `Resume` message (or reuses the existing one) and calls the same helper ([providers.md § Auto-continue](../agents/providers.md#auto-continue)).
 
 ### The delivery helper
+
+`DeliveryPolicy::Interrupt { force }` shares steer's single-record claim and gate override. Direct interrupt dispatch also claims its newly queued record before pressing the key, so the stop hook cannot deliver that same message during the proof wait. An unproven stop returns `send::Receipt::InterruptUnproven`; `execute_attempt` releases the claim without spending an attempt, retaining the text as `Queued` with `last_error` such as `turn still running 5000ms after escape`. The CLI offers `rimz message interrupt <id>`. The record stores no delivery mode, so the next checkpoint uses normal boundary delivery rather than pressing Escape again.
+
+Ordinary retry retains the claim TTL. Since an unproven interrupt wrote no prompt, `release_message_retry_lease` instead atomically parks the claimed record, undoes its attempt, and clears its lease, comparing its timestamp so a newer claim cannot be released. Missing-session and restarted-turn parks use the same path. The next stop checkpoint can claim immediately; smart-compaction intent and retry diagnostics remain intact. A superseded interrupt claim returns without writing or changing the newer delivery's record.
 
 `rimz message deliver --message-id <id>` is a hidden helper, never run by hand.
 
@@ -296,6 +301,12 @@ A record whose agent has simply not reached a qualifying boundary is not failing
 `mux::PaneWriter` holds one per-pane advisory lock, at `RuntimePaths::pane_write_lock`, across a whole write batch: any compact-first command, every typed segment and pacing delay, the prompt paste, the `Sent` transition, and the final Enter. `rimz answer` and `rimz pane send` take the same lock, from any workspace. Different pane ids are independent; identical Zellij pane ids in separate sessions share a lock, conservatively. Steer waits for the lock instead of preempting another writer. Acquisition times out after 30 seconds as a mux error and follows the ordinary send-error recovery. Because the lock covers the gap between `Sent` and Enter, dispatch does not treat `Sent` records as blocking a fresh boundary send.
 
 ### Paste, then submit
+
+Interrupt adds a separate key leg in `send::interrupt_before_send`. Under its own `PaneWriter`, it rereads `store.snapshot_cached()` and presses the adapter's key only for `Running` or forced `Waiting`. A resting row skips both the key and the wait. It drops that writer before polling the cached row every 250 ms, bounded by `RIMZ_MESSAGE_INTERRUPT_WAIT_MS` (default 5000, capped at 14000, below the 15-second claim TTL). Stop proof is the rested status being neither `Running` nor `Waiting`, including Claude's context-sidecar interruption certificate and Codex's `TurnInterrupted` hook. The consumer uses `effective_status()`: its sleeping overlay only changes Idle/Success, so it preserves this predicate without exposing private `rested_status()`. Missing rows are not proof. After proof, the paste leg acquires a fresh writer and checks that the head is still claimed with this attempt's timestamp before rereading the row; a superseded claim returns without writing. If another turn started while it waited, it parks rather than pasting into that turn. Smart-compaction commands remain inside the paste writer, after the stop, not before Escape.
+
+A clean turn parked on background work already projects to `Success` in `rested_status()`, so it skips the key as a resting turn. Interrupt does not change that agent-state projection.
+
+Two accepted provider hazards remain: the budget parker may press Escape at the same instant, producing double Escape and Claude's rewind dialog; Codex issue #42717 allows a long-running Unified Exec shell to survive a reported interruption. The latter proves the turn stopped, not that every descendant process exited.
 
 A `Prompt` is wrapped in bracketed-paste markers (`ESC[200~` to `ESC[201~`) through `MuxBackend::paste_text`, then Enter is pressed as a separate `send_key`. The close marker is what separates text from submit. Agent composers treat text and a trailing `\r` that arrive in one PTY read as pasted content, with the `\r` a literal newline. The composer leaves paste mode on `ESC[201~`, so the following Enter is a keystroke even when every byte arrives in one read. Adding a delay does not fix a submit problem on this path.
 
@@ -415,7 +426,7 @@ Dispatch captures one frame-aligned event-log base before enqueue and copies it 
 
 Each leg is a two-phase machine:
 
-- **Delivery.** Waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into a running turn opens the reply phase from `Sent + Running` instead, because the live turn emits no second `TurnStarted`: the rest of that turn is the reply.
+- **Delivery.** Waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into a running turn opens the reply phase from `Sent + Running` instead, because the live turn emits no second `TurnStarted`: the rest of that turn is the reply. Interrupt never takes that shortcut: `--interrupt --wait` follows only the fresh turn acknowledged by `Delivered`.
 - **Reply.** Legs read status through `TurnWaitView`, which loads the loop catalog's pending waits, then the message queue, then the rollup. That is the reverse of the order a wake publishes them (message record, row consumed, turn start, delivery ack), so a wake in flight shows in at least one read. A rested agent with pending waits, or with an undelivered `WAIT` or `SIGNAL` harness message, reads as `Sleeping`. Legs settle through `TurnCompletion`: `Idle` or `Success` completes the leg only once a turn has opened (`turn_started_at` set). `Failed`, a delivery failure, a vanished card, or a skipped waiting input fails it while the other legs keep gathering. `Waiting` and `Paused` stay inside the reply. `Sleeping` stays inside it too and clears the turn anchor, so the turn its wake opens continues the reply instead of ending it. A changed `turn_started_at` while the card is still `Running` proves the reply turn ended and another began between polls.
 
 `TurnWaitView::wake_in_flight(agent, digest)` owns the non-terminal harness-message test. Reply waits pass `false`, counting `Wait` and `Signal` only; the supervised-run owed predicate passes `true` to also count `SubagentReport`. A digest alone still does not hold a reply wait open.
@@ -492,6 +503,7 @@ Flags and rendering are in [cli/message.md](../../reference/cli/message.md). Und
 - `message list` and `message show` merge the three sources above. `list` shows only conversation records unless `--system` is passed, independently of `--all`, lane, status, or target; JSON follows the same filter. Human output reports a hidden-system count when it is nonzero, scoped before the row limit, even when no visible rows remain; JSON omits the count. `show` reads every sender class and renders the [ordered check](#the-ordered-check), naming the first unmet condition. The rendered handle comes from the record's enqueue-time `address`, then the live snapshot, then `agent_name` plus channel, then `kind:agent_id`.
 - `message edit` is the single compare-and-swap path for a queued record. It accepts only `Queued`, refuses `Claimed` as in flight, reports terminal records from history, applies the delivery changes, clears `retry_after` so the next sweep sees them, and appends `message.edited` naming the changed fields. Receiver, channel, card, sender, and pane affinity are not editable: retargeting is cancel plus send.
 - `message steer` pushes one queued record through now ([The delivery helper](#the-delivery-helper)).
+- `message interrupt <id> [--force]` pushes one queued record through the key, proof, and fresh-paste path. Claimed and terminal records are refused as for steer.
 - `message requeue` copies a terminal history record into a fresh `Queued` record with a new id, keeping text, receiver, channel, sender, body, delivery settings, and `in_reply_to`, and clearing condition stamps. A terminal row known only from events cannot be requeued, because its text was never stored there.
 - `message cancel` settles named live records. `message clear <target>` settles every open record for one card, and a targetless `message clear` settles the scoped lane. Both include system records hidden from the inbox, and `clear` prints the ids it canceled.
 

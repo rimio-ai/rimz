@@ -44,6 +44,7 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 | --- | --- | --- |
 | Park | default | Delivers now if the agent can take it, otherwise waits for the next turn boundary that `--on` allows. |
 | Steer | `--steer` | Writes into the live turn now. It waits for any RimZ write already in progress to that pane. With no live pane yet, it parks the record. Conflicts with `--on`, `--schedule`, `--after`, and `--when`. |
+| Interrupt | `--interrupt` | Stops the live turn with Escape, waits for the stop, then delivers as a fresh turn. Claude Code and Codex only; other agents are refused. Conflicts with `--steer`, `--on`, `--schedule`, `--after`, and `--when`. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always parks, and the record cannot deliver before that time. After it comes due, the park rules still apply. |
 
 `--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar elder wakes due messages.
@@ -58,6 +59,10 @@ A parked message delivers once all of these hold, checked in this order:
 
 Parking needs the agent's hooks installed and trusted, because turn-end hooks trigger delivery; a send that would park for a kind without them is refused. `rimz message show <id>` names the first unmet condition.
 
+Interrupt skips Escape when the agent is already resting. A native prompt waiting for input is refused unless `--force` is passed, which also cancels that prompt. A live pane without a durable session is refused; a durable session without a live pane parks the message. Unsupported agents, including any unsupported member of a fan-out, are refused before any message is recorded. If RimZ cannot prove the stop within five seconds (`RIMZ_MESSAGE_INTERRUPT_WAIT_MS`, in milliseconds, capped at 14000), it parks the message for the next turn boundary without typing it. Retry with `rimz message interrupt <id>`.
+
+Interrupt requires an existing recipient and refuses `--create`.
+
 ### Receipts
 
 The send prints one line per target:
@@ -66,6 +71,9 @@ The send prints one line per target:
 | --- | --- |
 | `delivered to @coder (msg_…)` | Park mode found the agent free and typed the text. |
 | `sent to @coder (msg_…)` | `--steer` typed the text. |
+| `delivered to @coder (msg_…)` | `--interrupt` found the agent resting or proved its turn stopped, then typed the text. |
+| `queued for @coder (msg_…): turn still running after 5s; retry: rimz message interrupt msg_…` | Interrupt did not prove the stop; no text was typed. |
+| `queued for @coder (msg_…): delivery deferred; send now: rimz message interrupt msg_…` | Interrupt could not deliver, for example because the pane was absent. |
 | `queued for @coder (msg_…) — @coder is running; send now: rimz message steer msg_…` | Parked because of the agent's status. |
 | `queued for @coder (msg_…) — @coder is waiting on input in its pane; answer it or force: rimz message steer msg_… --force` | Parked behind an open prompt. |
 | `queued for @coder (msg_…)` | Parked for a schedule, a condition, an older message, or a missing pane. |
@@ -147,6 +155,8 @@ Read plan.md when the planner finishes.
 
 ## Wait for replies
 
+With `--interrupt --wait`, the turn the prompt starts is the reply. RimZ waits for that prompt's delivery acknowledgement before following the reply, not the interrupted turn's remaining activity.
+
 `--wait` sends or parks one message per target, waits for each reply turn to finish, and prints the replies. It takes an optional total deadline in the attached form `--wait=<DURATION>` (`s`, `m`, or `h`), covering delivery plus the turn. Bare `--wait` takes no value, so it can sit before the text. A user shell's bare wait has no deadline; an agent's bare wait stops after one hour.
 
 | Flag | Effect |
@@ -192,6 +202,8 @@ A wait is refused before sending when a target has no lifecycle state, is not ru
 The last six are final. A final record keeps its text in `audit/messages/<bucket-start>.jsonl`, subject to the room's audit retention. `show`, `list`, and `requeue` read the room's newest 500 final records, so they display or resend a final message while it is among those and still retained.
 
 ## Inbox and queue verbs
+
+`rimz message interrupt <id> [--force]` pushes a queued record with the interrupt policy above, overriding its delivery gate and conditions. Claimed and finished records are refused, as with `steer <id>`. The mode is selected at push time, not stored on the record; a timed-out interrupt follows ordinary parked delivery at the next boundary.
 
 ### List messages
 

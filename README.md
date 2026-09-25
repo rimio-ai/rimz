@@ -79,7 +79,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 - `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result) or on a signal. RimZ emits CI, pull request, agent, and team signals itself, and anything else can emit its own.
 - `rimz wait` lets an agent arm its own timer, command, process, polled check, or file watch and end its turn instead of sleeping.
 - A rate-limit pause resumes the moment the budget window resets, transient API overload retries on a backoff ramp, and smart compaction compacts a filling context before the next message lands, so agents keep working while you are gone.
-- Dollar budgets cap one turn, one agent, one loop task, the room, or a provider account. A turn that crosses a cap is interrupted and parked.
+- Dollar budgets cap one turn, one agent, one loop task, the room, or a provider account. A turn that crosses a cap is stopped and parked.
 - Notification handlers run your own command the moment a row needs eyes: a push to your phone, or a script that answers the routine prompt for you.
 
 ### Work from anywhere
@@ -192,6 +192,7 @@ rimz message @all --wait --json "status? one line"     # a labeled reply map for
 
 # Write into the live turn now, or schedule for later
 rimz message --steer @claude "stop: the parser test comes first"
+rimz message --interrupt @claude "stop: the user changed direction" # stop the turn, then deliver fresh
 rimz message --schedule 60m @codex#feat-b "run the smoke test"
 
 # Pipe context in, or broadcast to everyone
@@ -326,7 +327,7 @@ rimz config set remote_control.codex true
 What each group does, with the depth one link away:
 
 - The modern look wants a truecolor terminal (Ghostty, WezTerm, Kitty, Alacritty) and a Nerd Font, inside RimZ tmux rooms and over `rimz remote` too. The color scheme defaults to TokyoNight Night; `rimz config set theme "Catppuccin Mocha"` picks any bundled scheme from `rimz list-themes`. Pets render as crisp pixels in Ghostty and kitty (tmux additionally needs 3.6+ with `allow-passthrough on`) and as cell art everywhere else, Zellij included. → [theming](./docs/guide/theme.md) · [pets](./docs/guide/pets.md)
-- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction sends the agent's compact command ahead of your text once context passes the threshold, so a long turn lands on a fresh window. Between them the interruptions that would have stalled the fleet until morning clear themselves, and you are left with the decisions that actually need you. The room budget caps what that freedom costs, and the same cap exists per turn, per agent, per loop task, and per provider account. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
+- Auto-continue resumes a parked agent the moment the provider's budget window resets and retries transient API errors on a backoff ramp; smart compaction sends the agent's compact command ahead of your text once context passes the threshold, so a long turn lands on a fresh window. Between them the pauses that would have stalled the fleet until morning clear themselves, and you are left with the decisions that actually need you. The room budget caps what that freedom costs, and the same cap exists per turn, per agent, per loop task, and per provider account. → [loops → keep the fleet moving](./docs/guide/loops.md#keep-the-fleet-moving) · [budgets](./docs/guide/budget.md)
 - The remote-control toggles are the [answer-from-your-phone move](#step-away) above; the [remote guide](./docs/guide/remote.md#answer-asks-from-your-phone) shows exactly what each one runs.
 
 Two more settings change what a room launches under:
