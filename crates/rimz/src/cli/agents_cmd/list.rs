@@ -2,7 +2,7 @@ use super::*;
 
 use super::report::{
     AgentReportEntry, PrInfo, ReportOverrides, build_entry, build_list_report, context_cell,
-    row_for_agent, status_style,
+    row_for_agent, slot_records_for_agent, status_style,
 };
 use crate::cli::render;
 use rimz::config::{GlyphRole, ThemeConfig};
@@ -57,9 +57,9 @@ pub(super) fn list_agents(
         let slots = rimz::agents::attribution::slot_groups(&refs, &lifetimes);
         let active_secs = rimz::store::active_time::display_secs_for_keys(
             &runtime,
-            audit
+            agents
                 .iter()
-                .chain(agents.iter().copied())
+                .flat_map(|agent| slot_records_for_agent(&slots, agent))
                 .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
             now,
             crate::cli::machine_config()
