@@ -21,7 +21,7 @@ An event or timing fix is proven at the consumer's decision point. That the prod
 Two invariants sit underneath that style:
 
 - **Store durability.** Every durable write follows the [store durability contract](./docs/internals/store.md).
-- **Fail-fast on preconditions.** A configured capability that cannot work fails at the entry point with the fix: `rimz start` refuses rather than launching a degraded surface. Best-effort is for latency and enrichment (sidebar wakeups, app-server context), never for a precondition the user switched on. Profile `skills` lists apply only under sandbox isolation; host isolation ignores them on purpose and keeps native skill behaviour.
+- **Fail-fast on preconditions.** A configured capability that cannot work fails at the entry point with the fix: `rimz start` refuses rather than launching a degraded surface. Best-effort is for latency and enrichment (sidebar wakeups, app-server context), never for a precondition the user switched on. Profile `skills` lists apply under both isolations: via the sandbox view or the provider's host-mode switch; host providers without a switch warn and run unrestricted.
 
 ## Product invariants
 
