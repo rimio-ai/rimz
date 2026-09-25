@@ -270,7 +270,8 @@ upward-dependencies = ["sidebar::refresh"]
 # The ended-session reconcile and its retired-row split are pulled by the hook, the exec wrapper and restart.
 # The owed-wake predicate and the launched-fleet settlement rule serve the run fold, the hooks, the digest reporter and its sweep backstop.
 # Child isolation cap and its typed outcome cross the launch/resume CLI seam.
-surface-budget = 531
+# Rebirth checkout roots feed pre-pane language-server admission.
+surface-budget = 532
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
