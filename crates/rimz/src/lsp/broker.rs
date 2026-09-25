@@ -33,6 +33,7 @@ struct Model {
     request_phase: RequestPhase,
     start_requested: bool,
     refusal_epoch: u64,
+    stop_epoch: u64,
     refusal: Option<super::admission::Shortfall>,
     lifetime_peak_kb: u64,
     dormant_ms: Option<u64>,
@@ -64,6 +65,7 @@ impl Model {
             return;
         }
         let now = crate::utils::time::unix_now_ms();
+        self.stop_epoch += 1;
         self.entry.state = if reason.is_terminal() {
             State::Stopped { reason, at_ms: now }
         } else {
@@ -143,6 +145,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             request_phase: RequestPhase::Serving,
             start_requested: false,
             refusal_epoch: 0,
+            stop_epoch: 0,
             refusal: None,
             lifetime_peak_kb: 0,
             dormant_ms: None,
@@ -181,6 +184,9 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             continue;
         }
         let result = lifetime(&shared, &request);
+        if matches!(result, Ok(false)) {
+            continue;
+        }
         if let Err(error) = &result {
             tracing::warn!(%error, "language server stopped");
             shared.stop(StopReason::Crashed);
@@ -252,10 +258,11 @@ fn prepare_start(shared: &Shared, request: &ServeRequest, eager: bool) -> Result
     Ok(true)
 }
 
-fn lifetime(shared: &Shared, request: &ServeRequest) -> Result<()> {
+/// `Ok(false)`: a stop landed before the spawn, so no lifetime ran.
+fn lifetime(shared: &Shared, request: &ServeRequest) -> Result<bool> {
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
     if model.entry.state != State::Starting {
-        return Ok(());
+        return Ok(false);
     }
     let mut server = Server(
         Command::new(&request.config.command[0])
@@ -319,7 +326,7 @@ fn lifetime(shared: &Shared, request: &ServeRequest) -> Result<()> {
         .lifetime_peak_kb
         .max(memory::tree_peak_kb(server.0.id()));
     model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
-    result
+    result.map(|()| true)
 }
 
 fn run(
