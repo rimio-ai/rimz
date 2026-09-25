@@ -43,6 +43,7 @@ use crate::ids::AgentSessionId;
 const UNAMBIGUOUS_FALLBACK_BIN: &str = "cursor-agent";
 
 static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "cursor",
     aliases: &[],
     display_name: "Cursor",

@@ -17,6 +17,7 @@ pub(super) fn run(json: bool) -> Result<()> {
         SkillCheck::Check {
             env: &env,
             library: &library,
+            machine_isolation: machine.agents.isolation,
         }
     } else {
         SkillCheck::Skip
@@ -28,9 +29,11 @@ pub(super) fn run(json: bool) -> Result<()> {
         )?;
     }
     let loaded = load(&home, check, &machine);
+    let warnings = warnings(&loaded, machine.agents.isolation);
     if json {
         render::json_pretty(&serde_json::json!({
             "rows": loaded.rows,
+            "warnings": warnings,
             "errors": loaded.errors.iter().map(|error| serde_json::json!({
                 "path": error.path, "message": error.message,
             })).collect::<Vec<_>>(),
@@ -73,6 +76,14 @@ pub(super) fn run(json: bool) -> Result<()> {
         for error in &loaded.errors {
             writeln!(out, "{error}")?;
         }
+        for warning in &warnings {
+            writeln!(
+                out,
+                "{}: warning: {}",
+                warning.path.display(),
+                warning.message
+            )?;
+        }
     }
     if !loaded.errors.is_empty() {
         bail!("{} definition error(s)", loaded.errors.len());
@@ -103,6 +114,46 @@ fn load(
     loaded
 }
 
+#[derive(serde::Serialize)]
+struct Warning {
+    path: std::path::PathBuf,
+    message: String,
+}
+
+fn warnings(loaded: &LoadedDefinitions, machine: Isolation) -> Vec<Warning> {
+    loaded
+        .rows
+        .iter()
+        .filter_map(|row| {
+            let profiles = if row.namespace == "subagents" {
+                &loaded.subagent_profiles
+            } else {
+                &loaded.agent_profiles
+            };
+            let profile = profiles.0.get(&row.name)?;
+            if profile.skills.is_none()
+                || Isolation::resolve(None, profile.isolation, machine) != Isolation::Host
+            {
+                return None;
+            }
+            let adapter = rimz::agents::find_definition(&row.kind)?;
+            if !matches!(
+                adapter.spec().host_skills,
+                rimz::agents::skills::HostSkills::Unsupported
+            ) {
+                return None;
+            }
+            Some(Warning {
+                path: row.source.clone(),
+                message: rimz::harness::launch_plan::LaunchPlanWarning::HostSkillsUnenforced {
+                    kind: rimz::ids::AgentKind::new_unchecked(&row.kind),
+                }
+                .to_string(),
+            })
+        })
+        .collect()
+}
+
 fn rows<'a>(
     out: &mut impl Write,
     rows: impl Iterator<Item = &'a definitions::DefinitionRow>,
@@ -124,6 +175,53 @@ fn rows<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_skill_warnings_follow_definition_isolation_and_keep_success() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        std::fs::write(
+            root.path().join("agents/pi.md"),
+            "---\ndescription: Pi base\n---\nBase.",
+        )
+        .unwrap();
+        for (name, isolation, skills) in [
+            ("host", "host", "[not-installed]"),
+            ("boxed", "sandbox", "[]"),
+        ] {
+            std::fs::write(
+                root.path().join(format!("agents/{name}.md")),
+                format!(
+                    "---\ndescription: Worker\nagent: pi\nisolation: {isolation}\nskills: {skills}\n---\n"
+                ),
+            )
+            .unwrap();
+        }
+        let env = std::collections::BTreeMap::from([(
+            "HOME".to_owned(),
+            root.path().display().to_string(),
+        )]);
+        let loaded = load(
+            root.path(),
+            SkillCheck::Check {
+                env: &env,
+                library: &root.path().join("skills"),
+                machine_isolation: Isolation::Sandbox,
+            },
+            &Default::default(),
+        );
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let warnings = warnings(&loaded, Isolation::Sandbox);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].path.ends_with("host.md"));
+        let json = serde_json::to_value(&warnings).unwrap();
+        assert!(
+            json[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("pi has no per-launch skill switch")
+        );
+    }
 
     #[test]
     fn validation_keeps_good_rows_and_collects_definition_errors() {
@@ -197,6 +295,7 @@ mod tests {
         let check = SkillCheck::Check {
             env: &env,
             library: &root.path().join("skills"),
+            machine_isolation: Isolation::Host,
         };
         let checked = load(root.path(), check, &Default::default());
         assert!(

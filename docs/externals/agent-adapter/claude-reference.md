@@ -436,6 +436,10 @@ The window is set in three places, and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` wins ov
 
 The valid range is 100K to 1M tokens, capped at the model's context window. The window is where compaction is allowed to fire, not an exact trigger count, and the statusline's `used_percentage` keeps measuring against the full model window.
 
+### Per-launch skill overrides
+
+[`skillOverrides`](https://code.claude.com/docs/en/skills) accepts `"user-invocable-only"`, which leaves explicit `/skill` expansion available while removing model invocation. [`--settings`](https://code.claude.com/docs/en/cli-reference) accepts a file or inline JSON. Local probes on 2.1.282 found that keys are skill directory names, only the last `--settings` takes effect, and `*` is not a wildcard.
+
 ## Agent view
 
 `claude agents` opens agent view, one screen for every background session; `claude --bg`, `/background`, or `←` in a session sends a session to the background ([agent view](https://code.claude.com/docs/en/agent-view)). Agent view first shipped in 2.1.139. `--bg` cannot be combined with `-p`.

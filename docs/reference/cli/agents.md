@@ -325,7 +325,7 @@ rimz agents validate
 rimz agents validate --json
 ```
 
-Reads the machine Markdown definition trees without launching agents or generating files. Human output groups agents, subagents, and teams with their resolved seats, then prints source-attributed errors. JSON emits `{rows, errors}`. Any error exits nonzero. Listed skills are checked against the provider's skill root, then the shared skill library, even with host isolation. See [the format and failure classes](../definitions.md#validation-and-failures).
+Reads the machine Markdown definition trees without launching agents or generating files. Human output groups agents, subagents, and teams with their resolved seats, then prints source-attributed errors and warnings. JSON emits `{rows, errors, warnings}`; warnings carry `path` and `message`. Any error exits nonzero; warnings do not. Host definitions with a skill list and no provider switch warn that the list is unenforced. Listed skills are checked against the provider's skill root, then the shared skill library, even with host isolation. See [the format and failure classes](../definitions.md#validation-and-failures).
 
 ### Discover agent profiles
 
@@ -356,7 +356,7 @@ rimz agents explain coder --prompt > prompt.md
 | a profile or `<team>.<role>` | A fresh launch, resolved exactly as a launch would be. Works without a room. A multi-cell layout is refused. |
 | an `@handle` | What `restart` would run for that recorded agent under the current profile configuration: a resume of the recorded conversation when supported, otherwise a fresh launch with the reason. A fresh-restart plan shows the recorded name and launch id, although a real restart allocates a new id and may pick a new name. Needs existing room state. |
 
-With a profile target, `explain` accepts the launch overrides `--ask`, `--yolo`, `--model`, `--agent`, `--effort`, `--isolation`, `--system-prompt-file`, `--append-system-prompt-file`, `--budget`, and passthrough arguments after `--`, with the same precedence as a launch: `--ask` and `--yolo` replace even a profile's declared permission mode. The report's `overrides` list records the flags you passed, not that each one won. An `@handle` target refuses every override.
+With a profile target, `explain` accepts the launch overrides `--ask`, `--yolo`, `--model`, `--agent`, `--effort`, `--isolation`, `--system-prompt-file`, `--append-system-prompt-file`, `--budget`, and passthrough arguments after `--`, with the same precedence as a launch: `--ask` and `--yolo` replace even a profile's declared permission mode. The report's `overrides` list records the flags you passed, not that each one won. Passthrough arguments are repeated only when preserved in the provider argv; otherwise the list points to that argv instead of exposing replaced values, such as inline Claude settings. An `@handle` target refuses every override.
 
 The default report shows:
 
@@ -365,7 +365,8 @@ The default report shows:
 - the provider argv and the wrapped argv;
 - the launch's environment overrides and unset keys (not the whole ambient environment);
 - prompt sources, the composed prompt text, and how the RimZ reminder is delivered;
-- sandbox mounts, pins, skill copies, and omissions.
+- sandbox mounts, pins, skill copies, and omissions;
+- the skill policy: sandbox view, host provider switch with unlisted keys, or an unenforced-list warning.
 
 `--json` emits the same plan with the fields `isolation` (`host` or `sandbox`), `isolation_source` (`--isolation`, `recorded --isolation` for an `@handle` target, `profile default <name>`, or `machine policy`), `target`, `kind`, `action`, `action_note`, `name`, `launch_id`, `account`, `cwd`, `profile`, `overrides`, `mode`, `model`, `effort`, `budget`, `skills`, `program`, `provider_argv`, `argv`, `env`, `unset`, `redacted_keys`, `prompt`, `sandbox`, and `warnings`.
 

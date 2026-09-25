@@ -1149,6 +1149,7 @@ fn resolve_managed_spawn_state(
         &invocation,
         &workspace.worktree_root,
         &ManagedLaunchState::PendingResolution,
+        None,
     )?;
     Ok(managed_launch)
 }

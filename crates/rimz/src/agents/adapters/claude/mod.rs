@@ -75,6 +75,16 @@ use crate::transcript::AskQuestion;
 /// Everything `const` about Claude Code, in one place. See
 /// [`AgentSpec`] for the spec-vs-trait split.
 static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Switch {
+        flag: "--settings skillOverrides",
+        effect: "user-only",
+        key: |skill| {
+            Ok(crate::agents::skills::ProviderSkillKey::new(
+                skill.name.clone(),
+            ))
+        },
+        render: render_host_skills,
+    },
     kind: "claude",
     aliases: &[],
     display_name: "Claude",
@@ -434,6 +444,69 @@ const CLAUDE_AGENT_TYPES: &[&str] = &[
     "statusline-setup",
     "fork",
 ];
+
+fn render_host_skills(
+    keys: &[crate::agents::skills::ProviderSkillKey],
+    cwd: &Path,
+    artifact_dir: &Path,
+    args: &mut Vec<String>,
+) -> std::result::Result<
+    Option<crate::agents::skills::HostSkillArtifact>,
+    crate::agents::skills::HostSkillArgErr,
+> {
+    use crate::agents::skills::HostSkillArgErr;
+    let matcher = crate::agents::PresetArgMatcher::Flag(vec!["--settings".into()]);
+    let value = matcher
+        .occurrences(args)
+        .into_iter()
+        .last()
+        .map(|item| item.value);
+    let path = value
+        .as_deref()
+        .filter(|value| !value.trim_start().starts_with('{'))
+        .map(|value| cwd.join(value))
+        .unwrap_or_else(|| PathBuf::from("--settings"));
+    let invalid = |reason: String| HostSkillArgErr::Settings {
+        path: path.clone(),
+        reason,
+    };
+    let user_settings = value.is_some();
+    let mut settings: serde_json::Value = match value {
+        Some(value) => {
+            let bytes = if value.trim_start().starts_with('{') {
+                value.into_bytes()
+            } else {
+                std::fs::read(&path).map_err(|error| invalid(error.to_string()))?
+            };
+            crate::agents::jsonc::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?
+        }
+        None => serde_json::json!({}),
+    };
+    let object = settings
+        .as_object_mut()
+        .ok_or_else(|| invalid("expected a JSON object".into()))?;
+    let overrides = object
+        .entry("skillOverrides")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| invalid("skillOverrides must be an object".into()))?;
+    for key in keys {
+        overrides.insert(
+            key.as_str().to_owned(),
+            serde_json::json!("user-invocable-only"),
+        );
+    }
+    matcher.remove_occurrences(args);
+    if user_settings {
+        use sha2::{Digest, Sha256};
+        let digest = hex::encode(Sha256::digest(settings.to_string().as_bytes()));
+        let path = artifact_dir.join(format!("settings.{digest}.json"));
+        args.extend(["--settings".into(), path.display().to_string()]);
+        return Ok(Some((path, settings)));
+    }
+    args.extend(["--settings".into(), settings.to_string()]);
+    Ok(None)
+}
 
 fn render_definition_tools(
     tools: &crate::agents::ToolSet,

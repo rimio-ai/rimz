@@ -63,7 +63,7 @@ An unattended run changes who is watching, not what can execute. The run still d
 
 ## Sandbox isolation
 
-An agent pane runs with everything your user account has: your whole home directory, the host's `/tmp` shared with every other process on the machine, and whatever skills the provider discovers for itself. For a narrower view on Linux, `rimz config set agents.isolation sandbox` gives each agent pane a bubblewrap mount view.
+An agent pane runs with everything your user account has: your whole home directory, the host's `/tmp` shared with every other process on the machine, and the provider's native skill discovery, subject to [host skill lists](./configuration.md#skills) on Claude and Codex. For a narrower view on Linux, `rimz config set agents.isolation sandbox` gives each agent pane a bubblewrap mount view.
 
 Inside the view the agent sees the room's own `/tmp` instead of the host's, and the RimZ skill library merged into its provider's skill root. When the profile carries a [skills list](./configuration.md#skills), only the skills you named stay callable by the model; the rest become skills you invoke by name. RimZ probes bubblewrap before writing the setting, and `rimz start` refuses rather than launching a degraded surface when bubblewrap is missing or unusable.
 
@@ -80,7 +80,7 @@ It also switches one off, deliberately. A provider's own command sandbox would s
 
 The `/tmp` the view mounts is one directory for the whole room, so what one agent writes there its siblings can read. It is the room's own directory rather than the host's, and closing the room removes it; `rimz paths` prints where it sits ([reference](../reference/cli/paths.md)).
 
-To stop using the view, run `rimz config set agents.isolation host` and restart the agents that follow machine policy. A profile with `isolation: sandbox` still chooses the view; edit that default or override it for the launch. An agent launched with an explicit `--isolation sandbox` keeps its own view until you replace it: stop it, then [`rimz agents <spec> --resume --isolation host`](../reference/cli/agents.md#resume-a-cohort) keeps its conversation and records host isolation for later relaunches and children. Profile `skills` lists can stay where they are, since host mode ignores them.
+To stop using the view, run `rimz config set agents.isolation host` and restart the agents that follow machine policy. A profile with `isolation: sandbox` still chooses the view; edit that default or override it for the launch. An agent launched with an explicit `--isolation sandbox` keeps its own view until you replace it: stop it, then [`rimz agents <spec> --resume --isolation host`](../reference/cli/agents.md#resume-a-cohort) keeps its conversation and records host isolation for later relaunches and children. Profile `skills` lists still apply through Claude's or Codex's host switch; other host providers warn and run unrestricted.
 
 ## The Zellij presence plugin
 

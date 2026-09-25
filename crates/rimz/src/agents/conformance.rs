@@ -23,6 +23,19 @@ use crate::agents::AskKind;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
+fn builtin_host_skill_switches_are_declared() {
+    for adapter in BUILTINS {
+        let spec = adapter.spec();
+        assert_eq!(
+            matches!(spec.host_skills, super::skills::HostSkills::Switch { .. }),
+            matches!(spec.kind, "claude" | "codex"),
+            "{}",
+            spec.kind
+        );
+    }
+}
+
+#[test]
 fn named_login_env_resolves_hook_install_under_the_named_home() {
     for (kind, filename) in [("claude", "settings.json"), ("codex", "config.toml")] {
         let temp = tempfile::tempdir().unwrap();

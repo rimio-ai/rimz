@@ -1289,13 +1289,31 @@ fn sandboxed_exec_uses_probed_bwrap_with_trusted_path() {
 }
 
 #[test]
-fn sandbox_skills_under_host_are_ignored_at_provider_exec() {
+fn sandbox_skills_under_host_use_provider_switches() {
     let env = Env::new();
     let shell = write_fake_login_shell(&env, "host-skills-shell", &[]);
     let probe = env.home_root.join("provider-env");
-    for kind in ["codex", "amp"] {
+    let library_skill = env.agents_home().join("skills/unlisted-dir");
+    std::fs::create_dir_all(&library_skill).unwrap();
+    std::fs::write(
+        library_skill.join("SKILL.md"),
+        "---\nname: provider-name\n---\nSkill.\n",
+    )
+    .unwrap();
+    let settings = env.home_root.join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"env":{"ANTHROPIC_API_KEY":"sk-secret-123"},"theme":"dark","skillOverrides":{"kept":"enabled"}}"#,
+    )
+    .unwrap();
+    for kind in ["codex", "amp", "claude"] {
         let shim_dir = write_env_dump_shim(&env, kind);
-        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        let args = if kind == "claude" {
+            vec!["--settings".into(), settings.display().to_string()]
+        } else {
+            Vec::new()
+        };
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), args);
         request.identity.name = Some(format!("host-{kind}"));
         let scratch = env
             .store()
@@ -1311,12 +1329,60 @@ fn sandbox_skills_under_host_are_ignored_at_provider_exec() {
                 .env("RIMZ_TEST_AGENT_ENV_DUMP", &probe)
                 .bounded_output()
                 .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if kind != "amp" && !request.skills.as_ref().unwrap().is_empty() {
+                assert!(!output.status.success(), "missing host skill must refuse");
+                assert!(stderr.contains("missing-skill"), "{stderr}");
+                assert!(
+                    stderr.contains(if kind == "claude" {
+                        ".claude/skills"
+                    } else {
+                        ".agents/skills"
+                    }),
+                    "{stderr}"
+                );
+                assert!(
+                    stderr.contains(&env.agents_home().join("skills").display().to_string()),
+                    "{stderr}"
+                );
+                continue;
+            }
+            if kind == "amp" {
+                assert!(stderr.contains("no per-launch skill switch"), "{stderr}");
+            }
             assert!(
                 output.status.success(),
-                "host launch ignores profile skills for {kind}: {}",
+                "host launch applies profile skills for {kind}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
             let dump = std::fs::read_to_string(&probe).unwrap();
+            let argv: Vec<_> = dump
+                .lines()
+                .filter(|line| line.starts_with("ARGV_"))
+                .map(|line| line.split_once('=').unwrap().1)
+                .collect();
+            if kind == "codex" {
+                assert!(
+                    argv.contains(&"skills.config=[{name=\"provider-name\",enabled=false}]"),
+                    "{argv:?}"
+                );
+            } else if kind == "claude" {
+                use std::os::unix::fs::PermissionsExt;
+                assert!(!dump.contains("sk-secret-123"));
+                assert_eq!(argv.iter().filter(|arg| **arg == "--settings").count(), 1);
+                let index = argv.iter().position(|arg| *arg == "--settings").unwrap();
+                let path = Path::new(argv[index + 1]);
+                assert_eq!(
+                    std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+                let settings: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                assert_eq!(
+                    settings,
+                    serde_json::json!({"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":{"kept":"enabled", "unlisted-dir":"user-invocable-only"}})
+                );
+            }
             assert!(
                 dump.lines()
                     .any(|line| line == format!("RIMZ_SCRATCH={}", scratch.display())),

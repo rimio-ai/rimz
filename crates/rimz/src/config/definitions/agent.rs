@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::{self, ManualSkill, PresetField, ToolSet};
-use crate::config::{Profile, PromptSource, SkillName};
+use crate::config::{Isolation, Profile, PromptSource, SkillName};
 
 use super::frontmatter::AgentFrontmatter;
 use super::{DefinitionErr, LoadedDefinitions, Namespace, SkillCheck, frontmatter, traits};
@@ -276,12 +276,27 @@ impl Resolver<'_> {
             }
             profile.subagents = Some(names);
         }
+        let skill_check = match self.skills {
+            SkillCheck::Check {
+                machine_isolation, ..
+            } if Isolation::resolve(None, fm.isolation, machine_isolation) == Isolation::Host
+                && !agents::find_definition(kind).is_some_and(|definition| {
+                    matches!(
+                        definition.spec().host_skills,
+                        agents::skills::HostSkills::Switch { .. }
+                    )
+                }) =>
+            {
+                SkillCheck::Skip
+            }
+            check => check,
+        };
         profile.skills = skill_policy(
             path,
             kind,
             fm.skills.as_deref(),
             tools.as_ref(),
-            self.skills,
+            skill_check,
         )?;
         let defaults = agents::definition_defaults(kind, fm.model.as_deref());
         profile.isolation = fm.isolation;
@@ -419,36 +434,32 @@ pub(super) fn skill_policy(
         ));
     }
     let mut skills = Vec::new();
+    let definition = agents::find_definition(kind);
+    let discovered = match check {
+        SkillCheck::Check { env, library, .. } => Some(
+            agents::skills::enumerate(
+                definition
+                    .and_then(|definition| definition.skills_home(env))
+                    .as_deref(),
+                Some(library),
+            )
+            .map_err(|error| DefinitionErr::new(path, error.to_string()))?,
+        ),
+        SkillCheck::Skip => None,
+    };
     for name in names(path, "skills", listed)? {
         let skill: SkillName = name.parse().map_err(|_| DefinitionErr::new(path, format!("lists skill {name:?}; rimz reads one bare directory name, so a `<name>:<mode>` suffix, a path, or whitespace is refused")))?;
-        if let SkillCheck::Check { env, library } = check {
-            let definition = agents::find_definition(kind);
+        if let SkillCheck::Check { env, library, .. } = check {
             let candidates: Vec<PathBuf> = definition
                 .and_then(|definition| definition.skills_home(env))
                 .into_iter()
                 .chain([library.to_path_buf()])
                 .map(|root| root.join(&name).join("SKILL.md"))
                 .collect();
-            let mut found = None;
-            for candidate in &candidates {
-                match std::fs::read_to_string(candidate) {
-                    Ok(text) => {
-                        found = Some((candidate, text));
-                        break;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(DefinitionErr::new(
-                            path,
-                            format!(
-                                "lists skill '{name}', unreadable at {}: {error}",
-                                candidate.display()
-                            ),
-                        ));
-                    }
-                }
-            }
-            let Some((skill_path, text)) = found else {
+            let Some(found) = discovered
+                .as_ref()
+                .and_then(|skills| skills.get(skill.as_str()))
+            else {
                 let searched: Vec<String> = candidates
                     .iter()
                     .map(|candidate| candidate.display().to_string())
@@ -461,6 +472,17 @@ pub(super) fn skill_policy(
                     ),
                 ));
             };
+            let skill_path = found.source.join("SKILL.md");
+            let text = std::fs::read_to_string(&skill_path).map_err(|error| {
+                DefinitionErr::new(
+                    path,
+                    format!(
+                        "lists skill '{name}', unreadable at {}: {error}",
+                        skill_path.display()
+                    ),
+                )
+            })?;
+            let skill_path = skill_path.as_path();
             let directory = skill_path.parent().unwrap_or(skill_path);
             let marker = definition.map_or(ManualSkill::Unsupported, |definition| {
                 definition.manual_skill()
@@ -530,7 +552,7 @@ pub(super) fn skill_policy(
                         "policy.allow_implicit_invocation: false",
                     )
                 } else {
-                    (skill_path.clone(), "disable-model-invocation: true")
+                    (skill_path.to_owned(), "disable-model-invocation: true")
                 };
                 return Err(DefinitionErr::new(
                     path,

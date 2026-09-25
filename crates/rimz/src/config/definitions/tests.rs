@@ -642,6 +642,7 @@ fn load_checked(root: &Path) -> LoadedDefinitions {
         SkillCheck::Check {
             env: &env,
             library: &root.join("skills"),
+            machine_isolation: crate::config::Isolation::Sandbox,
         },
         &CommandsConfig::default(),
     )

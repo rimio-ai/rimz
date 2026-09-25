@@ -140,6 +140,7 @@ use transcript_fs::read_transcript_lines;
 use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
 
 pub mod plugins;
+pub mod skills;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentErr {

@@ -167,6 +167,7 @@ pub(super) fn launch_layout(
         for (index, cell) in layout.agent_cells().enumerate() {
             preflight_cell(
                 workspace,
+                store.runtime_paths(),
                 cell,
                 rimz::config::Isolation::resolve(
                     cell.launch.isolation,
@@ -411,6 +412,7 @@ pub(super) fn launch_layout(
 
 fn preflight_cell(
     workspace: &rimz::ResolvedWorkspace,
+    runtime: &rimz::RuntimePaths,
     cell: &rimz::harness::spec::AgentCell,
     isolation: rimz::config::Isolation,
     prompt: Option<&str>,
@@ -435,6 +437,7 @@ fn preflight_cell(
         &workspace.project_root,
         &request,
         &workspace.worktree_root,
+        (isolation == rimz::config::Isolation::Host).then_some(runtime),
     )?;
     rimz::sandbox::preflight(isolation)?;
     Ok(())
@@ -494,6 +497,7 @@ fn launch_resume_layout(
         };
         preflight_cell(
             workspace,
+            store.runtime_paths(),
             cell,
             rimz::config::Isolation::resolve(
                 isolation,

@@ -77,6 +77,8 @@ Codex gates each installed hook behind its own per-hash trust state and silently
 
 `CODEX_DESCRIPTOR` renders launch intent into Codex argv. The initial prompt is positional, after `--`.
 
+Host skill lists render `-c skills.config` entries with `enabled=false` for unlisted frontmatter names (directory fallback), hiding explicit invocation too. CLI skill overrides are replaced; Codex merges the user's file entries. The enumeration and limits are in [host mode](../sandbox.md#host-mode).
+
 | Intent | Codex argv |
 | --- | --- |
 | Resume a session | `codex resume <id>` |

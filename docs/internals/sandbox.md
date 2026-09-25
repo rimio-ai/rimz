@@ -143,7 +143,19 @@ Every launch therefore carries a reminder. Its position among the reminder parag
 
 ## Profile skill views
 
-A profile `skills` list decides which user skills the model may invoke on its own. The list takes effect only under sandbox isolation. Host isolation ignores every list, including `[]` and lists for providers without skill-view support, without a warning, and native discovery and invocation stay unchanged. Config parsing rejects duplicate and invalid names in both modes.
+A profile `skills` list decides which user skills the model may invoke on its own. Sandbox isolation applies a filesystem view; host isolation uses a provider switch where available. Config parsing rejects duplicate and invalid names in both modes.
+
+### Host mode
+
+Claude uses one `--settings` value with `skillOverrides[<directory name>] = "user-invocable-only"` for unlisted skills; explicit `/skill` invocation remains available. Codex uses `-c skills.config=[{name="<frontmatter name>",enabled=false},…]`, falling back to the directory name when frontmatter has no name. Codex hides unlisted skills completely, including explicit `$skill` invocation. Other providers and plugins warn that the list is unenforced, then run unrestricted. The warning appears before the provider starts, in `explain`, and in `validate` for host definitions.
+
+`agents/skills.rs::enumerate` reads the launch environment's provider skill root and RimZ library, with the provider winning a directory-name collision and broken symlinks skipped. Definition loading and validation share this enumeration and the native marker check only where the list is enforced: sandbox-resolved definitions of any kind, or host definitions with `HostSkills::Switch`. Resolution uses the inherited definition isolation default before machine policy. Host definitions without a switch skip both skill lookup and marker checks; callers already inside a sandbox skip definition checks altogether. A listed name missing from both roots refuses a switch-provider launch and names both roots. If two directories share one provider key, their policies must agree; otherwise the launch refuses rather than disabling a listed skill. Entry-point process preflights supply runtime paths when the resolved isolation is host, running the same skill resolution and settings rendering as the exec wrapper before launch allocation or pane mutation. The host gate carries the artifact paths it needs; default reminders do not imply host isolation. Preflight only plans settings artifacts, leaving writes to launch-plan apply.
+
+Claude keeps the last user `--settings` value, parsing inline JSON or a JSONC file relative to the provider's working directory, preserves unrelated keys and listed-skill overrides, and overlays unlisted entries. When the user supplies settings, the single flag points to a content-addressed JSON file under `RuntimePaths::prompt_dir`, written at mode 0600 by launch-plan apply in the exec wrapper. The artifact directory is enforced at mode 0700. Compilation, including `explain`, only plans the file; settings contents never enter provider or wrapped argv. Without user settings, the skill-only object stays inline. Unreadable or invalid settings refuse the launch. Codex replaces CLI `-c` or `--config` overrides for `skills.config`; entries from `[[skills.config]]` in the user's `config.toml` stay in effect, merged by Codex.
+
+Directory names that a profile list cannot name, such as `odd name`, are still enumerated and always unlisted. Claude uses the raw directory name for their switch keys; Codex still prefers the frontmatter name.
+
+Neither provider has a wildcard. Skills installed after launch remain callable until restart. Project-chain skills, Codex's `$CODEX_HOME/skills`, and other native roots outside the two enumerated roots keep native behaviour. Host skill files are never rewritten.
 
 ### Skill roots and user-only markers
 
@@ -167,11 +179,11 @@ Definition validation (`config/definitions/agent.rs::skill_policy`) resolves eac
 
 ### What a list means
 
-`skills = ["merge", "review"]` lists bare skill names. Listed skills stay model-callable. Unlisted skills that RimZ can prepare stay visible but become user-invoked only. `skills = []` makes every available skill user-invoked only.
+`skills = ["merge", "review"]` lists bare skill names. Listed skills stay model-callable. In the sandbox, unlisted skills that RimZ can prepare stay visible but become user-invoked only, and `skills = []` makes every available skill user-invoked only. Host behaviour follows the provider switch described above.
 
 An omitted list inherits the parent profile's, and a child's list replaces its parent's instead of extending it. Once a profile in the chain configures a list, no descendant can return to unconfigured behaviour. When no profile in the chain configures one, invocation behaviour is native.
 
-Listing a skill never lifts a native user-only marker. Listed skills are bound with their host metadata unparsed, so an author's own invocation restrictions still apply.
+Listing a skill never lifts a native user-only marker. In the sandbox, listed skills are bound with their host metadata unparsed, so an author's own invocation restrictions still apply.
 
 ### Building the view
 

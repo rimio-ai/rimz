@@ -239,6 +239,10 @@ Each `-c key=value` or `--config key=value` overrides one loaded configuration k
 | `Logged in using workload identity` | workload identity |
 | `Not logged in` | none |
 
+### Per-launch skill overrides
+
+[`skills.config`](https://developers.openai.com/codex/skills) entries accept `name` or `path` selectors and `enabled=false`; disabled skills are also unavailable to explicit `$skill` invocation. [CLI `-c` overrides](https://developers.openai.com/codex/config-advanced) can supply this array for one run. Local probes on 0.157.0 found that `name` selects the frontmatter name (directory fallback), there is no wildcard, and file `[[skills.config]]` entries remain in effect alongside CLI entries.
+
 ## TUI input and notifications
 
 ### Paste burst

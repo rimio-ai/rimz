@@ -1,4 +1,5 @@
 use super::*;
+
 use crate::agents::PermissionMode;
 use crate::agents::TurnErrorClass;
 use crate::agents::{HookIngressAcceptance, HookIngressDecision, HookIngressIgnoreReason};
@@ -11,6 +12,91 @@ mod install_statusline;
 mod lifecycle;
 mod local_context;
 mod subagents;
+
+#[test]
+fn host_skills_merge_settings_once_and_use_directory_names() {
+    use crate::agents::skills::{HostSkills, SkillDir};
+    let root = tempfile::tempdir().unwrap();
+    let settings = root.path().join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{ // retain other settings
+      "env":{"ANTHROPIC_API_KEY":"sk-secret-123"}, "theme":"dark", "skillOverrides":{"listed":"enabled","unlisted":"enabled"},
+    }"#,
+    )
+    .unwrap();
+    let HostSkills::Switch { key, render, .. } = CLAUDE_DESCRIPTOR.host_skills else {
+        panic!("missing switch")
+    };
+    let skill = SkillDir {
+        name: "unlisted".into(),
+        source: root.path().to_owned(),
+    };
+    std::fs::write(root.path().join("SKILL.md"), "---\nname: different\n---\n").unwrap();
+    let key = key(&skill).unwrap();
+    assert_eq!(key.as_str(), "unlisted");
+    let mut args = vec![
+        "--settings={\"ignored\":true}".to_owned(),
+        "--settings".to_owned(),
+        "settings.json".into(),
+    ];
+    let artifact = render(&[key], root.path(), root.path(), &mut args)
+        .unwrap()
+        .unwrap();
+    let (artifact_path, merged) = &artifact;
+    assert!(!args.join(" ").contains("sk-secret-123"));
+    assert_eq!(args, ["--settings", artifact_path.to_str().unwrap()]);
+    assert!(!artifact_path.exists());
+    assert_eq!(
+        merged,
+        &json!({
+            "env": {"ANTHROPIC_API_KEY": "sk-secret-123"},
+            "theme": "dark",
+            "skillOverrides": {"listed": "enabled", "unlisted": "user-invocable-only"}
+        })
+    );
+    let mut inline = vec!["--settings".into(), merged.to_string()];
+    let inline_artifact = render(&[], root.path(), root.path(), &mut inline).unwrap();
+    assert_eq!(inline_artifact, Some(artifact));
+    assert_eq!(inline, args);
+    let mut bare = Vec::new();
+    assert!(
+        render(&[], root.path(), root.path(), &mut bare)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(bare, ["--settings", r#"{"skillOverrides":{}}"#]);
+    let odd = root.path().join("odd name");
+    std::fs::create_dir(&odd).unwrap();
+    std::fs::write(odd.join("SKILL.md"), "skill").unwrap();
+    let (plan, _) = CLAUDE_DESCRIPTOR
+        .host_skills
+        .apply(
+            &[],
+            Some(root.path()),
+            None,
+            (root.path(), root.path()),
+            &mut Vec::new(),
+        )
+        .unwrap();
+    let crate::agents::skills::HostSkillPlan::Applied { unlisted, .. } = plan else {
+        panic!("missing host skill plan")
+    };
+    assert_eq!(
+        unlisted.iter().map(|key| key.as_str()).collect::<Vec<_>>(),
+        ["odd name"]
+    );
+    let mut invalid = vec![
+        "--settings".into(),
+        root.path().join("missing.json").display().to_string(),
+    ];
+    assert!(
+        render(&[], root.path(), root.path(), &mut invalid)
+            .unwrap_err()
+            .to_string()
+            .contains("missing.json")
+    );
+}
 
 #[test]
 fn hook_ingress_ignores_remote_control_and_preserves_ordinary_owner() {

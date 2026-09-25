@@ -73,6 +73,14 @@ pub(in crate::cli) fn restart_resolved(
 
     let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
     let (action, fresh_reason) = relaunch_action(agent, &logins, &cwd)?;
+    if isolation == rimz::config::Isolation::Host {
+        rimz::harness::launch::preflight_agent_process(
+            &workspace.project_root,
+            &relaunch_request(agent, &posture, action.clone(), None),
+            &cwd,
+            Some(store.runtime_paths()),
+        )?;
+    }
     let fresh_batch = if fresh_reason.is_some() {
         Some(append_fresh_launch(
             store,

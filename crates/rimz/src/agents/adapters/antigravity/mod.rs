@@ -146,6 +146,7 @@ const fn antigravity_event_names<const N: usize>(
 const ANTIGRAVITY_EVENT_NAMES: [&str; 6] = antigravity_event_names(&ANTIGRAVITY_HOOKS);
 
 static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "antigravity",
     aliases: &[],
     display_name: "Antigravity",

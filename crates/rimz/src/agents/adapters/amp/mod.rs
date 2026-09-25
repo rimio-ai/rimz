@@ -34,6 +34,7 @@ use super::{
 use crate::ids::AgentSessionId;
 
 static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "amp",
     aliases: &[],
     display_name: "Amp",

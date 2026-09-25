@@ -48,6 +48,10 @@ pub struct LaunchPlan {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchPlanWarning {
+    #[error(
+        "{kind} has no per-launch skill switch; profile skills are not enforced under host isolation"
+    )]
+    HostSkillsUnenforced { kind: crate::ids::AgentKind },
     #[error("launching with default RimZ launch reminders")]
     DefaultReminders,
     #[error("team `{0}` is no longer configured; launching without the team context reminder")]
@@ -97,7 +101,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         inputs.runtime,
     )?;
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
-    let (mut reminders, warnings) = reminders(&request, inputs.effective, inputs.commands);
+    let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
     reminders.sandbox = inputs.bwrap.is_some();
     let login = crate::agents::room_login(
         &inputs.state.workspace_record,
@@ -132,6 +136,11 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         | AgentProcessStage::LoginShellReentry { process, .. } => process,
     };
     let mut env = inputs.ambient_env.clone();
+    if process.host_skills == Some(crate::agents::skills::HostSkillPlan::Unenforced) {
+        warnings.push(LaunchPlanWarning::HostSkillsUnenforced {
+            kind: request.kind.clone(),
+        });
+    }
     env.extend(process.env.clone());
     let skill_links = if inputs.bwrap.is_none() {
         adapter
@@ -189,6 +198,11 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
 
 pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanErr> {
     plan.runtime.ensure_dirs()?;
+    if let Some((path, settings)) = &plan.process().host_skill_artifact {
+        crate::disk::paths::ensure_private_runtime_dir(&plan.runtime.prompt_dir())?;
+        crate::disk::atomic::write_private_temp_then_rename(path, settings)
+            .map_err(launch::ExecWireErr::PromptWrite)?;
+    }
     prompt_compose::apply_system_prompt(&plan.prompt)?;
     refresh_consensus_copy(plan);
     if let AgentProcessStage::LoginShellReentry {

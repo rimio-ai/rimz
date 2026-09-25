@@ -69,6 +69,7 @@ use crate::transcript::AskQuestion;
 /// Everything `const` about Pi, in one place. See [`AgentSpec`] for the
 /// spec-vs-trait split.
 static PI_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "pi",
     aliases: &[],
     display_name: "Pi",

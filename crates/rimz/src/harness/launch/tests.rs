@@ -287,7 +287,7 @@ fn process_compiler_composes_adapter_and_identity_environment() {
     );
     invocation.identity.params = params;
 
-    let process = compile_agent_process(project.path(), &invocation, project.path())
+    let process = compile_agent_process(project.path(), &invocation, project.path(), None)
         .expect("compiled process");
 
     assert_eq!(process.provider_program, "copilot");
@@ -358,7 +358,7 @@ fn process_compiler_locks_down_only_subagent_launches() {
                 extra_args: profile_args.clone(),
             },
         );
-        let ordinary = compile_agent_process(project.path(), &invocation, project.path())
+        let ordinary = compile_agent_process(project.path(), &invocation, project.path(), None)
             .expect("ordinary process");
         assert_eq!(
             ordinary.provider_argv[1..1 + profile_args.len()],
@@ -366,7 +366,7 @@ fn process_compiler_locks_down_only_subagent_launches() {
         );
 
         invocation.subagent = true;
-        let child = compile_agent_process(project.path(), &invocation, project.path())
+        let child = compile_agent_process(project.path(), &invocation, project.path(), None)
             .expect("subagent process");
         assert!(child.provider_argv.ends_with(&expected_suffix));
     }
@@ -394,13 +394,14 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
                 extra_args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             },
         );
-        let host = compile_agent_process(project.path(), &invocation, project.path())
+        let host = compile_agent_process(project.path(), &invocation, project.path(), None)
             .expect("host process");
         let reminders = LaunchReminders {
             sandbox: true,
             ..LaunchReminders::default()
         };
         let sandboxed = compile_agent_process_with_extra_env(
+            None,
             project.path(),
             &invocation,
             project.path(),
@@ -445,7 +446,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
             },
         );
 
-        let ordinary = compile_agent_process(project.path(), &invocation, project.path())
+        let ordinary = compile_agent_process(project.path(), &invocation, project.path(), None)
             .expect("ordinary process");
         assert!(
             !ordinary
@@ -457,7 +458,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
         );
 
         invocation.subagent = true;
-        let child = compile_agent_process(project.path(), &invocation, project.path())
+        let child = compile_agent_process(project.path(), &invocation, project.path(), None)
             .expect("subagent process");
         assert!(
             child
@@ -477,7 +478,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
         },
     );
     invocation.subagent = true;
-    let child = compile_agent_process(project.path(), &invocation, project.path())
+    let child = compile_agent_process(project.path(), &invocation, project.path(), None)
         .expect("codex subagent process");
     let occurrences = crate::agents::PresetArgMatcher::ConfigKey {
         flags: vec!["-c".to_owned(), "--config".to_owned()],
@@ -516,6 +517,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             },
         );
         let peer = compile_agent_process_with_extra_env(
+            None,
             project.path(),
             &invocation,
             project.path(),
@@ -542,8 +544,9 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             assert!(parse_toml_string_or_raw(&occurrences[0].value).contains(&reminder));
         }
 
-        let without_catalog = compile_agent_process(project.path(), &invocation, project.path())
-            .expect("process without catalog");
+        let without_catalog =
+            compile_agent_process(project.path(), &invocation, project.path(), None)
+                .expect("process without catalog");
         assert!(
             !without_catalog
                 .provider_argv
@@ -554,6 +557,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
         let mut child = invocation;
         child.subagent = true;
         let child = compile_agent_process_with_extra_env(
+            None,
             project.path(),
             &child,
             project.path(),
@@ -599,6 +603,7 @@ fn process_compiler_appends_team_context_for_native_adapters() {
         let invocation = team_request(kind);
         let reminder = rendered(&invocation);
         let process = compile_agent_process_with_extra_env(
+            None,
             project.path(),
             &invocation,
             project.path(),
@@ -625,6 +630,7 @@ fn process_compiler_appends_team_context_for_native_adapters() {
         "{reminder}"
     );
     let process = compile_agent_process_with_extra_env(
+        None,
         project.path(),
         &invocation,
         project.path(),
@@ -683,6 +689,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
             .to_owned();
         assert!(team_reminder.contains("(you) runs on "), "{team_reminder}");
         let process = compile_agent_process_with_extra_env(
+            None,
             project.path(),
             &invocation,
             project.path(),
@@ -723,6 +730,7 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
                 ..LaunchReminders::default()
             };
             let process = compile_agent_process_with_extra_env(
+                None,
                 project.path(),
                 &invocation,
                 project.path(),
@@ -762,6 +770,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 invocation.identity.params.model = Some("gpt-6-astra".to_owned());
                 invocation.identity.params.effort = Some("high".to_owned());
                 let process = compile_agent_process_with_extra_env(
+                    None,
                     project.path(),
                     &invocation,
                     project.path(),
@@ -815,6 +824,7 @@ fn process_compiler_carries_only_the_scratch_line_when_nothing_else_applies() {
     );
     invocation.identity.params.model = Some("fable".to_owned());
     let process = compile_agent_process_with_extra_env(
+        None,
         project.path(),
         &invocation,
         project.path(),
@@ -843,6 +853,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
             ..LaunchReminders::default()
         };
         let process = compile_agent_process_with_extra_env(
+            None,
             project.path(),
             &invocation,
             project.path(),
@@ -863,6 +874,7 @@ fn process_compiler_carries_reminders_in_extension_env_off_argv() {
         );
 
         let bare = compile_agent_process_with_extra_env(
+            None,
             project.path(),
             &invocation,
             project.path(),
@@ -890,7 +902,7 @@ fn process_compiler_merges_subagent_reminder_into_existing_append_flag() {
     );
     invocation.subagent = true;
 
-    let child = compile_agent_process(project.path(), &invocation, project.path())
+    let child = compile_agent_process(project.path(), &invocation, project.path(), None)
         .expect("subagent process");
     let matcher =
         crate::agents::PresetArgMatcher::TextFlag(vec!["--append-system-prompt".to_owned()]);
@@ -933,7 +945,7 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
         );
         invocation.subagent = true;
 
-        let child = compile_agent_process(project.path(), &invocation, project.path())
+        let child = compile_agent_process(project.path(), &invocation, project.path(), None)
             .expect("codex subagent process");
         let matcher = crate::agents::PresetArgMatcher::ConfigKey {
             flags: vec!["-c".to_owned(), "--config".to_owned()],
@@ -980,7 +992,7 @@ fn process_compiler_locks_down_opencode_subagent_environment() {
     );
     invocation.subagent = true;
 
-    let process = compile_agent_process(project.path(), &invocation, project.path())
+    let process = compile_agent_process(project.path(), &invocation, project.path(), None)
         .expect("subagent process");
 
     // OpenCode's TUI drops arguments after `--`; the task must ride `--prompt`.
@@ -1575,8 +1587,8 @@ fn provider_account_stage_validates_and_reenters_once() {
             extra_args: Vec::new(),
         },
     );
-    let expected =
-        compile_agent_process(project.path(), &unbound, project.path()).expect("ordinary process");
+    let expected = compile_agent_process(project.path(), &unbound, project.path(), None)
+        .expect("ordinary process");
     let AgentProcessStage::Ready(ordinary) = compile_agent_process_stage_with_extra_env(
         project.path(),
         &unbound,
@@ -1602,7 +1614,7 @@ fn provider_account_stage_validates_and_reenters_once() {
     finalized_request.provider_account = ProviderAccountState::Finalized {
         binding: binding.clone(),
     };
-    let process = compile_agent_process(project.path(), &finalized_request, project.path())
+    let process = compile_agent_process(project.path(), &finalized_request, project.path(), None)
         .expect("finalized process");
     let raw = process.provider_argv.clone();
     let AgentProcessStage::Ready(mut finalized) = finalize_agent_process_stage(
@@ -1727,6 +1739,8 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         &provider_argv,
     );
     let process = CompiledAgentProcess {
+        host_skills: None,
+        host_skill_artifact: None,
         provider_argv,
         provider_program: "claude".to_owned(),
         argv: wrapped.clone(),

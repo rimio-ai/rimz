@@ -69,6 +69,7 @@ const KIMI_HOOKS: &[HookEventSpec] = &[
 ];
 
 static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "kimi",
     aliases: &[],
     display_name: "Kimi",

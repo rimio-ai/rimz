@@ -42,6 +42,7 @@ use super::{
 use crate::agents::PermissionMode;
 
 static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "qwen",
     aliases: &[],
     display_name: "Qwen Code",

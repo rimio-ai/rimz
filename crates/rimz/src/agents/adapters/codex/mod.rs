@@ -141,6 +141,12 @@ fn spawned_as_internal_app_server() -> bool {
 /// Everything `const` about Codex, in one place. See [`AgentSpec`] for
 /// the spec-vs-trait split.
 static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Switch {
+        flag: "-c skills.config",
+        effect: "hidden",
+        key: host_skill_key,
+        render: render_host_skills,
+    },
     kind: "codex",
     aliases: &[],
     display_name: "Codex",
@@ -488,6 +494,63 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         prefixes: &["gpt-"],
         tools: crate::agents::definition::DefinitionTools::Required(render_definition_tools),
     };
+
+fn host_skill_key(
+    skill: &crate::agents::skills::SkillDir,
+) -> std::result::Result<
+    crate::agents::skills::ProviderSkillKey,
+    crate::agents::skills::HostSkillArgErr,
+> {
+    use crate::agents::skills::{HostSkillArgErr, ProviderSkillKey};
+    let path = skill.source.join("SKILL.md");
+    let text = std::fs::read_to_string(&path).map_err(|error| HostSkillArgErr::Settings {
+        path: path.clone(),
+        reason: error.to_string(),
+    })?;
+    #[derive(serde::Deserialize)]
+    struct Metadata {
+        name: Option<String>,
+    }
+    // Frontmatter Codex cannot read leaves the skill unloadable there, so the
+    // directory name is a harmless key rather than a reason to refuse.
+    let name = crate::config::definitions::frontmatter::split(&path, &text)
+        .ok()
+        .and_then(|(yaml, _)| serde_saphyr::from_str::<Option<Metadata>>(yaml).ok())
+        .flatten()
+        .and_then(|metadata| metadata.name)
+        .filter(|name| !name.trim().is_empty());
+    Ok(ProviderSkillKey::new(
+        name.unwrap_or_else(|| skill.name.clone()),
+    ))
+}
+
+fn render_host_skills(
+    keys: &[crate::agents::skills::ProviderSkillKey],
+    _cwd: &Path,
+    _artifact_dir: &Path,
+    args: &mut Vec<String>,
+) -> std::result::Result<
+    Option<crate::agents::skills::HostSkillArtifact>,
+    crate::agents::skills::HostSkillArgErr,
+> {
+    crate::agents::PresetArgMatcher::ConfigKey {
+        flags: vec!["-c".into(), "--config".into()],
+        key: "skills.config".into(),
+    }
+    .remove_occurrences(args);
+    let entries = keys
+        .iter()
+        .map(|key| {
+            format!(
+                "{{name={},enabled=false}}",
+                toml::Value::String(key.as_str().to_owned())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    args.extend(["-c".into(), format!("skills.config=[{entries}]")]);
+    Ok(None)
+}
 
 fn render_definition_tools(
     tools: &crate::agents::ToolSet,
