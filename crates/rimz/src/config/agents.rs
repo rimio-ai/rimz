@@ -112,12 +112,18 @@ const fn default_max_chain_length() -> u8 {
 pub struct SubagentsConfig {
     /// Supervised-run deadline in the CLI duration syntax (`30m`, `2h`).
     pub timeout: String,
+    /// Warning offsets before the deadline; empty disables warnings.
+    pub warn: Vec<String>,
+    /// Reporting time after the deadline before the kill; `0s` kills at it.
+    pub grace: String,
 }
 
 impl Default for SubagentsConfig {
     fn default() -> Self {
         Self {
             timeout: "30m".to_owned(),
+            warn: vec!["6m".to_owned(), "3m".to_owned()],
+            grace: "3m".to_owned(),
         }
     }
 }
