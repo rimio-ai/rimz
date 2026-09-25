@@ -227,7 +227,12 @@ fn pipeline_line(
                     (GlyphRole::PipelineCurrent, name_style)
                 }
                 PipelinePosition::At(current) if index > current => {
-                    (GlyphRole::PipelineFuture, theme.muted())
+                    let style = if pipeline.visited.contains(&pipeline.stages[index]) {
+                        theme.styled(Component::PipelineRevisited, Modifier::empty())
+                    } else {
+                        theme.muted()
+                    };
+                    (GlyphRole::PipelineFuture, style)
                 }
                 _ => (
                     GlyphRole::PipelinePassed,

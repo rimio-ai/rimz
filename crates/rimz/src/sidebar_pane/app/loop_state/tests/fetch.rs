@@ -34,6 +34,8 @@ fn unchanged_consumer_ticks_only_running_pipeline_clocks() {
         owner: None,
         started_at: Some(jiff::Timestamp::UNIX_EPOCH),
         stage_started_at: Some(jiff::Timestamp::UNIX_EPOCH),
+        stage_prior_secs: 0,
+        visited: Default::default(),
         done_at: None,
     });
     rig.state.dirty = false;

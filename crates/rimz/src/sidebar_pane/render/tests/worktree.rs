@@ -25,6 +25,8 @@ fn pipeline_snapshot() -> SidebarSnapshot {
         owner: Some("coder".to_owned()),
         started_at: Some(fixed_now() - Duration::from_secs(2_832)),
         stage_started_at: Some(fixed_now() - Duration::from_secs(2_832)),
+        stage_prior_secs: 0,
+        visited: Default::default(),
         done_at: None,
     });
     snapshot
@@ -226,18 +228,77 @@ fn pipeline_completion_styles_and_width_admission() {
 }
 
 #[test]
-fn pipeline_clocks_are_independent_and_pinned_right() {
+fn pipeline_revisited_future_dots_are_warm_and_hollow() {
     let mut snapshot = pipeline_snapshot();
     let theme = Theme::fixed(false);
-    for (stage, stage_secs, total_secs, expected) in [
-        ("Implement", Some(1080), Some(3720), "18m / 1h"),
-        ("Implement", None, Some(3720), "1h"),
-        ("Implement", Some(1080), None, "18m"),
-        ("Done", Some(1080), Some(3720), "1h"),
-        ("Implement", None, None, ""),
+    let warm = theme.styled(Component::PipelineRevisited, Modifier::empty());
+    assert_ne!(warm, theme.muted());
+    for (stage, visited, warm_count) in [
+        ("Implement", vec!["Review"], 1),
+        ("Implement", vec!["Explore", "Plan"], 0),
+        ("Done", vec!["Review"], 0),
+        ("Investigate", vec!["Review"], 0),
     ] {
         let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
         pipeline.stage = stage.to_owned();
+        pipeline.visited = visited.into_iter().map(str::to_owned).collect();
+        let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
+        let spans = &lines[1].spans;
+        assert_eq!(
+            spans.iter().filter(|span| span.style == warm).count(),
+            warm_count
+        );
+        for span in spans.iter().filter(|span| span.style == warm) {
+            assert_eq!(span.content, theme.glyph(GlyphRole::PipelineFuture));
+        }
+        if stage == "Implement" {
+            let future = spans
+                .iter()
+                .filter(|span| span.content == theme.glyph(GlyphRole::PipelineFuture))
+                .collect::<Vec<_>>();
+            assert_eq!(future.len(), 2);
+            assert_eq!(
+                future[0].style,
+                if warm_count == 1 { warm } else { theme.muted() }
+            );
+            assert_eq!(future[1].style, theme.muted());
+            for span in spans
+                .iter()
+                .filter(|span| span.content == theme.glyph(GlyphRole::PipelinePassed))
+            {
+                assert_eq!(
+                    span.style,
+                    theme.styled(Component::PipelinePassed, Modifier::empty())
+                );
+            }
+            let current = spans
+                .iter()
+                .find(|span| span.content == theme.glyph(GlyphRole::PipelineCurrent))
+                .unwrap();
+            let name = spans
+                .iter()
+                .find(|span| span.content == "Implement")
+                .unwrap();
+            assert_eq!(current.style, name.style);
+        }
+    }
+}
+
+#[test]
+fn pipeline_clocks_are_independent_and_pinned_right() {
+    let mut snapshot = pipeline_snapshot();
+    let theme = Theme::fixed(false);
+    for (stage, prior, stage_secs, total_secs, expected) in [
+        ("Implement", 1080, Some(7), Some(2832), "18m / 47m"),
+        ("Implement", 0, Some(1080), Some(3720), "18m / 1h"),
+        ("Implement", 0, None, Some(3720), "1h"),
+        ("Implement", 0, Some(1080), None, "18m"),
+        ("Done", 0, Some(1080), Some(3720), "1h"),
+        ("Implement", 0, None, None, ""),
+    ] {
+        let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+        pipeline.stage = stage.to_owned();
+        pipeline.stage_prior_secs = prior;
         pipeline.stage_started_at = stage_secs.map(|s| fixed_now() - Duration::from_secs(s));
         pipeline.started_at = total_secs.map(|s| fixed_now() - Duration::from_secs(s));
         pipeline.done_at = Some(fixed_now());
@@ -253,6 +314,7 @@ fn pipeline_clocks_are_independent_and_pinned_right() {
             assert!(!text.contains('/'));
             continue;
         }
+        assert!(text.contains(expected), "expected {expected} in {text}");
         let clock = line.spans.iter().find(|s| s.content == expected).unwrap();
         assert_eq!(clock.style, theme.muted());
         assert!(text.ends_with(&format!("{expected}🮇")), "{text}");

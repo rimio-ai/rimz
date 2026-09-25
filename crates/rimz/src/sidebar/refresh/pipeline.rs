@@ -98,6 +98,8 @@ fn compute_pipelines(
                 owner: run.stage.owner,
                 started_at: run.started_at,
                 stage_started_at: run.stage_started_at,
+                stage_prior_secs: run.stage_prior_secs,
+                visited: run.visited,
                 done_at: run.done_at,
             },
         );
@@ -158,6 +160,20 @@ mod tests {
             pipeline.stage_started_at,
             Some("2026-09-19T12:01:02Z".parse().unwrap())
         );
+
+        std::fs::write(dir.path().join("blackboard.md"), "Stage: Build (@coder)\n## Progress\n- 2026-09-19 12:00:01 @user: opened Plan\n- 2026-09-19 12:01:02 @planner: Plan -> Build\n- 2026-09-19 12:02:02 @coder: Build -> Review\n- 2026-09-19 12:03:02 @reviewer: Review -> Build\n").unwrap();
+        let flipped = compute(group.clone(), &teams);
+        let pipeline = &flipped[&group.key];
+        assert_eq!(pipeline.stage_prior_secs, 60);
+        assert_eq!(
+            pipeline.visited,
+            ["Plan", "Build", "Review"].map(str::to_owned).into()
+        );
+        assert_eq!(
+            pipeline.stage_started_at,
+            Some("2026-09-19T12:03:02Z".parse().unwrap())
+        );
+        board(dir.path());
 
         let mut normalized = group.clone();
         let mut duplicate = normalized.rows[0].clone();
