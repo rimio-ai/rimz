@@ -78,6 +78,7 @@ pub(super) fn launch_layout(
     if worktree_launch {
         crate::cli::require_worktree_config(&machine_config)?;
     }
+    crate::cli::check_launch_room(globals)?;
     let ctx = Ctx::open(globals)?;
     let cwd = crate::cli::resolve_launch_cwd(args.launch.cwd.as_deref(), ctx.store.paths())?;
     let workspace = &ctx.workspace;

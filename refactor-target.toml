@@ -280,7 +280,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Child isolation cap and its typed outcome cross the launch/resume CLI seam.
 # Rebirth checkout roots feed pre-pane language-server admission.
 # Response paths, publication errors and publication serve CLI receipts/reports; fleet exposes settled rows.
-surface-budget = 536
+# `ancestry::check_launch_room` lets both CLI launch entries refuse before opening a store.
+surface-budget = 537
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -635,7 +636,8 @@ allowed-dependencies = [
     "pane",
     "proc",
 ]
-surface-budget = 10
+# `check_launch_room` shares the pure pinned-room decision with the CLI launch entries.
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/harness/plan.rs"

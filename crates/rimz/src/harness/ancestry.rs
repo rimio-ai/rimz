@@ -135,6 +135,15 @@ pub fn resolve_caller(agents: &[crate::agents::AgentState]) -> Option<CallerIden
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LaunchAncestryError {
     #[error(
+        "launch refused: `--root {root}` resolves to room `{target}`, but the caller `@{caller}` lives in room `{pinned}`; a child launches in its parent's room. Drop `--root`, and pass `--cwd {root}` to run it there."
+    )]
+    RoomMismatch {
+        root: std::path::PathBuf,
+        target: crate::ids::WorkspaceDirName,
+        pinned: crate::ids::WorkspaceDirName,
+        caller: String,
+    },
+    #[error(
         "launch refused: RimZ could not resolve the calling agent's durable launch identity, so it cannot safely verify the configured chain limit. Launching another agent from here is not permitted; do not retry this command."
     )]
     UnresolvedCaller,
@@ -146,6 +155,31 @@ pub enum LaunchAncestryError {
         "launch refused: subagents cannot launch agents or subagents. Do the work yourself and report the result to your caller; do not retry this command."
     )]
     SubagentCaller,
+}
+
+/// Check an explicit launch root against the caller's verified room pin.
+pub fn check_launch_room(
+    caller: Option<&CallerIdentity>,
+    pinned: Option<(&crate::ids::WorkspaceId, &crate::ids::WorkspaceDirName)>,
+    target: (&crate::ids::WorkspaceId, &crate::ids::WorkspaceDirName),
+    root: &std::path::Path,
+) -> Result<(), LaunchAncestryError> {
+    let (Some(caller), Some((pinned_id, pinned_name))) = (caller, pinned) else {
+        return Ok(());
+    };
+    if pinned_id == target.0 {
+        return Ok(());
+    }
+    Err(LaunchAncestryError::RoomMismatch {
+        root: root.to_path_buf(),
+        target: target.1.clone(),
+        pinned: pinned_name.clone(),
+        caller: caller
+            .name
+            .as_deref()
+            .unwrap_or(caller.kind.as_str())
+            .to_owned(),
+    })
 }
 
 /// Resolve the launch generation and optional direct subagent parent.
@@ -250,6 +284,40 @@ pub fn resolve_launch_caller<'a>(
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
+
+    #[test]
+    fn launch_room_requires_matching_verified_pin_only_for_agents() {
+        use crate::ids::{WorkspaceDirName, WorkspaceId};
+        let root = std::path::Path::new("/tmp/x");
+        let pinned_id = WorkspaceId::from_project_root(std::path::Path::new("/agents"));
+        let target_id = WorkspaceId::from_project_root(root);
+        let pinned_name = WorkspaceDirName::mint("agents", &pinned_id, 4);
+        let target_name = WorkspaceDirName::mint("x", &target_id, 4);
+        let pinned = (&pinned_id, &pinned_name);
+        let target = (&target_id, &target_name);
+        let mut caller = CallerIdentity {
+            kind: AgentKind::new_unchecked("claude"),
+            launch_id: None,
+            pane_id: None,
+            name: Some("prompter".to_owned()),
+            profile: None,
+            role: None,
+        };
+        for handle in ["prompter", "claude"] {
+            let error = check_launch_room(Some(&caller), Some(pinned), target, root)
+                .expect_err("different room must refuse");
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "launch refused: `--root /tmp/x` resolves to room `{target_name}`, but the caller `@{handle}` lives in room `{pinned_name}`; a child launches in its parent's room. Drop `--root`, and pass `--cwd /tmp/x` to run it there."
+                )
+            );
+            caller.name = None;
+        }
+        assert!(check_launch_room(Some(&caller), Some(pinned), pinned, root).is_ok());
+        assert!(check_launch_room(Some(&caller), None, target, root).is_ok());
+        assert!(check_launch_room(None, Some(pinned), target, root).is_ok());
+    }
 
     #[test]
     fn distinguishes_peers_subagents_and_chain_limits() {
