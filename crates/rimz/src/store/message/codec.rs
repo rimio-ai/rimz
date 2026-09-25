@@ -12,6 +12,7 @@ use crate::disk::buckets::{bucket_file_name, bucket_files};
 use crate::disk::retention::TRANSCRIPT_FILE_DAYS;
 
 const QUEUE_FILE: &str = "messages.jsonl";
+const HISTORY_READ_LIMIT: usize = 500;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MessageStoreErr {
@@ -54,13 +55,22 @@ pub(in crate::store) fn append_history_many(
 }
 
 pub(in crate::store) fn list_history(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
-    let files = bucket_files(messages_dir).map_err(|source| MessageStoreErr::Io {
+    let mut files = bucket_files(messages_dir).map_err(|source| MessageStoreErr::Io {
         path: messages_dir.to_path_buf(),
         source,
     })?;
+    files.sort();
     let mut messages = Vec::new();
-    for path in files {
-        messages.extend(read_queue_file(&path)?);
+    for path in files.into_iter().rev() {
+        messages.extend(
+            read_queue_file(&path)?
+                .into_iter()
+                .rev()
+                .take(HISTORY_READ_LIMIT - messages.len()),
+        );
+        if messages.len() == HISTORY_READ_LIMIT {
+            break;
+        }
     }
     sort_messages(&mut messages);
     Ok(messages)
@@ -260,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn history_keeps_records_across_buckets_until_gc() {
+    fn history_reads_newest_records_without_opening_older_buckets() {
         let dir = tempdir().unwrap();
         let messages_dir = dir.path().join("messages");
         let agent = agent();
@@ -273,15 +283,23 @@ mod tests {
             );
             message.message_id = fixed_message_id(index as u64);
             message.status = MessageStatus::Delivered;
-            message.updated_at =
-                jiff::Timestamp::from_second(if index == 0 { 0 } else { 604800 }).unwrap();
+            message.updated_at = jiff::Timestamp::from_second(if index == 0 {
+                0
+            } else if index < 251 {
+                604800
+            } else {
+                1209600
+            })
+            .unwrap();
             append_history_many(&messages_dir, std::slice::from_ref(&message)).unwrap();
         }
 
+        // An unreadable older bucket proves the reader stops at its bound.
+        fs::write(messages_dir.join("1970-01-01.jsonl"), b"invalid json\n").unwrap();
         let history = list_history(&messages_dir).unwrap();
-        assert_eq!(history.len(), 501);
-        assert_eq!(history[0].message_id, fixed_message_id(0));
-        assert_eq!(history[500].message_id, fixed_message_id(500));
+        assert_eq!(history.len(), HISTORY_READ_LIMIT);
+        assert_eq!(history[0].message_id, fixed_message_id(1));
+        assert_eq!(history[499].message_id, fixed_message_id(500));
         assert!(messages_dir.join("1970-01-01.jsonl").is_file());
         assert!(messages_dir.join("1970-01-08.jsonl").is_file());
     }
@@ -315,7 +333,7 @@ mod tests {
             append_history_many(&history_dir, &[terminal]).unwrap();
         }
         let history = list_history(&history_dir).unwrap();
-        assert_eq!(history.len(), 501);
+        assert_eq!(history.len(), HISTORY_READ_LIMIT);
         for record in history {
             assert_eq!(
                 serde_json::to_value(record).unwrap()["sender"]["notice"],

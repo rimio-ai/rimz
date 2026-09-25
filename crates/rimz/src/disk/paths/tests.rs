@@ -52,15 +52,33 @@ fn runtime_paths_follow_lifetime_classes() {
     for path in paths.all_paths() {
         let relative = path.strip_prefix(&paths.root).unwrap();
         assert!(
-            [Class::Sock, Class::Live, Class::Lanes, Class::Locks]
-                .iter()
-                .any(
-                    |class| class.tier() == Tier::Runtime && relative.starts_with(class.dir_name())
-                ),
+            Class::RUNTIME.iter().any(
+                |class| class.tier() == Tier::Runtime && relative.starts_with(class.dir_name())
+            ),
             "unclassified runtime path: {}",
             path.display()
         );
     }
+}
+
+#[test]
+fn state_only_writers_use_the_supplied_runtime_locks() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(id.clone(), &dir.path().join("runtime")).unwrap();
+    let paths = StatePaths::under_named(
+        id,
+        runtime.dir_name.clone(),
+        &dir.path().join("state"),
+        &runtime,
+    );
+    assert_eq!(paths.workspace_lock, runtime.lock_path("workspace.lock"));
+    assert_eq!(paths.publish_lock, runtime.lock_path("publish.lock"));
+    assert!(
+        paths
+            .fleet_budget_record
+            .starts_with(dir.path().join("state"))
+    );
 }
 
 #[test]
@@ -404,16 +422,10 @@ fn state_paths_resolve_under_the_home() {
         assert!(
             relative == Path::new("workspace.json")
                 || relative == Path::new("rimz")
-                || [
-                    Class::Log,
-                    Class::Records,
-                    Class::Audit,
-                    Class::Cache,
-                    Class::Owned,
-                    Class::Tmp
-                ]
-                .iter()
-                .any(|class| class.tier() == Tier::State && relative.starts_with(class.dir_name())),
+                || Class::STATE
+                    .iter()
+                    .any(|class| class.tier() == Tier::State
+                        && relative.starts_with(class.dir_name())),
             "unclassified state path: {}",
             path.display()
         );
@@ -745,18 +757,7 @@ fn legacy_config_roots_excludes_the_cache_doctor_reports() {
 #[test]
 fn store_catalog_documents_every_lifetime_class() {
     let catalog = include_str!("../../../../../docs/internals/store.md");
-    for class in [
-        Class::Log,
-        Class::Records,
-        Class::Audit,
-        Class::Cache,
-        Class::Owned,
-        Class::Tmp,
-        Class::Sock,
-        Class::Live,
-        Class::Lanes,
-        Class::Locks,
-    ] {
+    for class in Class::STATE.into_iter().chain(Class::RUNTIME) {
         assert!(
             catalog.contains(&format!("| `{}/` |", class.dir_name())),
             "missing catalog rule for {class:?}"

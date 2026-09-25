@@ -12,24 +12,19 @@ pub(super) fn collect_state(
     dry_run: bool,
     watcher_is_live: &impl Fn(&str) -> std::io::Result<bool>,
 ) -> Result<(Vec<super::ClassReport>, usize)> {
-    let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
-    let agents = match crate::store::snapshot::catch_up_rollup(paths) {
-        Ok((_, agents, _)) => Some(agents),
-        Err(err) => {
-            tracing::warn!(workspace = %paths.dir_name, error = %err, "owned gc skipped with unreadable rollup");
-            None
+    let agents = {
+        let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+        match crate::store::snapshot::catch_up_rollup(paths) {
+            Ok((_, agents, _)) => Some(agents),
+            Err(err) => {
+                tracing::warn!(workspace = %paths.dir_name, error = %err, "owned gc skipped with unreadable rollup");
+                None
+            }
         }
     };
     let mut classes = Vec::new();
     let mut waits_removed = 0;
-    for class in [
-        Class::Log,
-        Class::Records,
-        Class::Audit,
-        Class::Cache,
-        Class::Owned,
-        Class::Tmp,
-    ] {
+    for class in Class::STATE {
         let mut report = GcReport::default();
         let mut sweep = Sweep::new(dry_run);
         let result = match class {
@@ -138,6 +133,7 @@ fn collect_owned(
             sweep.remove_tree(&path, files, report)?;
         }
     }
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
     for run in crate::store::run::list(&paths.runs_dir)? {
         let path = crate::store::run::run_path(&paths.runs_dir, &run.run_id);
         if run.status.is_terminal() && super::collect::is_older_than(&path, retention::OWNED_GRACE)?
@@ -158,7 +154,10 @@ fn collect_tmp(
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
-    let runs = crate::store::run::list(&paths.runs_dir)?;
+    let runs = {
+        let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+        crate::store::run::list(&paths.runs_dir)?
+    };
     for dir in [&paths.waits_dir, &paths.subagents_dir] {
         for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
             let entry = entry.map_err(|source| GcErr::ReadDir {
@@ -211,6 +210,34 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn output_sweep_does_not_hold_the_store_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        paths.ensure_dirs().unwrap();
+        fs::create_dir_all(&paths.waits_dir).unwrap();
+        let output = paths.waits_dir.join("old.output");
+        fs::File::create(&output)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(8 * 86_400))
+            .unwrap();
+        collect_state(&paths, false, &|_| {
+            assert!(
+                crate::disk::lock::WorkspaceLock::try_acquire(&paths.workspace_lock)
+                    .unwrap()
+                    .is_some(),
+                "a hook writer can acquire the store lock during output collection"
+            );
+            Ok(false)
+        })
+        .unwrap();
+        assert!(!output.exists());
+    }
 
     #[test]
     fn tmp_outputs_keep_recent_and_live_owners_and_preview_expiry() {

@@ -578,7 +578,12 @@ fn enrich_core(
                 .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
         );
         snapshot = snapshot.with_active_time(&active_time);
-        crate::harness::budget::project_parks(&mut snapshot, runtime, &machine_config);
+        crate::harness::budget::project_parks(
+            &mut snapshot,
+            runtime,
+            store.map(Store::paths),
+            &machine_config,
+        );
         // Waits are loop-catalog rows, not store state; producer and consumer
         // both attach them here because the rollup base carries none.
         let project_root = snapshot.project_root.clone();
@@ -734,6 +739,7 @@ fn enrich_core(
     crate::harness::budget::project_budget_views(
         &mut snapshot,
         runtime,
+        store.map(Store::paths),
         &machine_config,
         &spending_caches.provider,
         &logins,
@@ -925,6 +931,7 @@ pub fn provider_panels_from_caches(
     crate::harness::budget::project_budget_views(
         &mut snapshot,
         runtime,
+        None,
         &config,
         provider_spending,
         logins,

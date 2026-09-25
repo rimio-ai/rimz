@@ -54,13 +54,21 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let fleet_spend =
         matches!(scope, DailyBudgetScope::Fleet).then(|| live_fleet_spend(&ctx, &config, now));
     if args.value.is_none() {
-        return inspect(store.runtime_paths(), &config, &scope, now, fleet_spend);
+        return inspect(
+            store.runtime_paths(),
+            store.paths(),
+            &config,
+            &scope,
+            now,
+            fleet_spend,
+        );
     }
 
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let scope_state = read_scope_state(store.runtime_paths());
     let was_parked = mutate_scope(
         store.runtime_paths(),
+        store.paths(),
         &scope,
         &config,
         args.value.as_deref().expect("value checked"),
@@ -99,7 +107,14 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
 
-    inspect(store.runtime_paths(), &config, &scope, now, fleet_spend)
+    inspect(
+        store.runtime_paths(),
+        store.paths(),
+        &config,
+        &scope,
+        now,
+        fleet_spend,
+    )
 }
 
 fn live_fleet_spend(ctx: &Ctx, config: &MachineConfig, now: Timestamp) -> f64 {
@@ -138,11 +153,12 @@ fn parse_raise(raw: &str) -> Result<f64> {
 
 fn mutate_scope(
     runtime: &rimz::RuntimePaths,
+    state: &rimz::StatePaths,
     scope: &DailyBudgetScope,
     config: &MachineConfig,
     raw: &str,
 ) -> Result<bool> {
-    let mut ledger = scope.read_ledger(runtime);
+    let mut ledger = scope.read_ledger(runtime, Some(state));
     let was_parked = ledger.parked.is_some();
     match raw.trim() {
         "clear" | "off" => {
@@ -165,7 +181,7 @@ fn mutate_scope(
     }
     ledger.parked = None;
     scope
-        .write_ledger(runtime, &ledger)
+        .write_ledger(runtime, state, &ledger)
         .with_context(|| format!("writing {}", scope.ledger_label()))?;
     Ok(was_parked)
 }
@@ -180,6 +196,7 @@ fn parse_day_cap(raw: &str) -> Result<DayCap> {
 
 fn inspect(
     runtime: &rimz::RuntimePaths,
+    state: &rimz::StatePaths,
     config: &MachineConfig,
     scope: &DailyBudgetScope,
     now: Timestamp,
@@ -192,7 +209,7 @@ fn inspect(
             &runtime.shared_provider_spending_path(),
         )
     });
-    let ledger = scope.read_ledger(runtime);
+    let ledger = scope.read_ledger(runtime, Some(state));
     let mut kv = crate::cli::render::KeyVals::new();
     kv.push("scope", crate::cli::render::cell(scope.label()));
     kv.push(
@@ -247,7 +264,7 @@ fn inspect(
             .filter(|key| config.accounts.budget(key.kind.as_str()).is_some())
         {
             let scope = DailyBudgetScope::Account(key);
-            let account = scope.read_ledger(runtime);
+            let account = scope.read_ledger(runtime, Some(state));
             table.row([
                 crate::cli::render::cell(
                     scope

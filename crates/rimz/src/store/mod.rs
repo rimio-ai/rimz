@@ -110,10 +110,9 @@ pub enum StoreErr {
 pub(crate) type Result<T> = std::result::Result<T, StoreErr>;
 
 impl Store {
-    pub fn open(mut paths: StatePaths, mut runtime: RuntimePaths) -> Result<Self> {
+    pub fn open(mut paths: StatePaths, runtime: RuntimePaths) -> Result<Self> {
         crate::disk::paths::check_workspace_layout(&paths.root)?;
         paths.bind_runtime_locks(&runtime);
-        runtime.bind_state_records(&paths);
         paths.ensure_dirs()?;
         runtime.ensure_dirs()?;
         Ok(Self {
@@ -123,13 +122,12 @@ impl Store {
 
     /// Open an existing store for read paths without creating directories.
     #[must_use]
-    pub fn open_existing(mut paths: StatePaths, mut runtime: RuntimePaths) -> Option<Self> {
+    pub fn open_existing(mut paths: StatePaths, runtime: RuntimePaths) -> Option<Self> {
         if let Err(err) = crate::disk::paths::check_workspace_layout(&paths.root) {
             tracing::warn!(error = %err, "skipping workspace store");
             return None;
         }
         paths.bind_runtime_locks(&runtime);
-        runtime.bind_state_records(&paths);
         if !paths.root.is_dir() {
             return None;
         }

@@ -381,7 +381,12 @@ fn turn_park_projection_ignores_a_stale_turn_entry() {
     .expect("scope state");
 
     let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![state], second);
-    project_parks(&mut snapshot, &runtime, &config);
+    project_parks(
+        &mut snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &config,
+    );
 
     assert!(snapshot.agents[0].budget_park.is_none());
 }
@@ -439,7 +444,12 @@ fn active_absolute_waiver_hides_the_paused_projection() {
         vec![running.clone()],
         Timestamp::from_second(202).expect("timestamp"),
     );
-    project_parks(&mut snapshot, &runtime, &MachineConfig::default());
+    project_parks(
+        &mut snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &MachineConfig::default(),
+    );
     assert!(snapshot.agents[0].budget_park.is_none());
 
     running.status = AgentStatus::Idle;
@@ -448,7 +458,12 @@ fn active_absolute_waiver_hides_the_paused_projection() {
         vec![running],
         Timestamp::from_second(203).expect("timestamp"),
     );
-    project_parks(&mut snapshot, &runtime, &MachineConfig::default());
+    project_parks(
+        &mut snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &MachineConfig::default(),
+    );
     assert!(snapshot.agents[0].budget_park.is_some());
 }
 
@@ -471,7 +486,7 @@ fn fleet_park_projects_only_live_or_interrupted_agents() {
         )
         .expect("fleet ledger");
     assert!(
-        !runtime.fleet_budget_record.exists(),
+        !state_paths(&runtime).fleet_budget_record.exists(),
         "producer park must not create standing choices"
     );
 
@@ -507,7 +522,12 @@ fn fleet_park_projects_only_live_or_interrupted_agents() {
         ],
         now,
     );
-    project_parks(&mut snapshot, &runtime, &config);
+    project_parks(
+        &mut snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &config,
+    );
     let projected = snapshot
         .agents
         .iter()
@@ -736,30 +756,36 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     assert_eq!(legacy_fleet, fleet);
     let fleet_scope = DailyBudgetScope::Fleet;
     assert_eq!(
-        fleet_scope.ledger_path(&runtime),
+        fleet_scope.ledger_path(&runtime, store.paths()),
         store.paths().fleet_budget_record
     );
     fleet_scope
-        .write_ledger(&runtime, &fleet)
+        .write_ledger(&runtime, store.paths(), &fleet)
         .expect("fleet write");
-    let record = std::fs::read(fleet_scope.ledger_path(&runtime)).unwrap();
-    let modified = std::fs::metadata(fleet_scope.ledger_path(&runtime))
+    let record = std::fs::read(fleet_scope.ledger_path(&runtime, store.paths())).unwrap();
+    let modified = std::fs::metadata(fleet_scope.ledger_path(&runtime, store.paths()))
         .unwrap()
         .modified()
         .unwrap();
     assert!(
-        fleet_scope.read_ledger(&runtime).parked.is_none(),
+        fleet_scope
+            .read_ledger(&runtime, Some(store.paths()))
+            .parked
+            .is_none(),
         "CLI mutation clears the producer park"
     );
     fleet_scope
         .merge_park(&runtime, fleet.parked.clone())
         .unwrap();
-    assert_eq!(fleet_scope.read_ledger(&runtime), fleet);
+    assert_eq!(
+        fleet_scope.read_ledger(&runtime, Some(store.paths())),
+        fleet
+    );
     fleet_scope
         .merge_park(&runtime, None)
         .expect("merge fleet park");
     assert_eq!(
-        fleet_scope.read_ledger(&runtime),
+        fleet_scope.read_ledger(&runtime, Some(store.paths())),
         DailyBudgetLedger {
             parked: None,
             ..fleet.clone()
@@ -767,12 +793,12 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
         "producer park writes preserve CLI cap overrides"
     );
     assert_eq!(
-        std::fs::read(fleet_scope.ledger_path(&runtime)).unwrap(),
+        std::fs::read(fleet_scope.ledger_path(&runtime, store.paths())).unwrap(),
         record,
         "producer never rewrites the choices record"
     );
     assert_eq!(
-        std::fs::metadata(fleet_scope.ledger_path(&runtime))
+        std::fs::metadata(fleet_scope.ledger_path(&runtime, store.paths()))
             .unwrap()
             .modified()
             .unwrap(),
@@ -780,7 +806,7 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     );
     store.reset_records(false).unwrap();
     assert_eq!(
-        fleet_scope.read_ledger(store.runtime_paths()),
+        fleet_scope.read_ledger(store.runtime_paths(), Some(store.paths())),
         DailyBudgetLedger {
             parked: None,
             ..fleet.clone()
@@ -809,25 +835,28 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     );
     let account_scope = DailyBudgetScope::Account(LoginKey::default_for(kind.clone()));
     assert_eq!(
-        account_scope.ledger_path(&runtime),
+        account_scope.ledger_path(&runtime, store.paths()),
         runtime
             .persistent_shared_root
             .join("budget.account.claude@default.json")
     );
     account_scope
-        .write_ledger(&runtime, &account)
+        .write_ledger(&runtime, store.paths(), &account)
         .expect("account write");
     assert!(
-        !std::fs::read_to_string(account_scope.ledger_path(&runtime))
+        !std::fs::read_to_string(account_scope.ledger_path(&runtime, store.paths()))
             .expect("account ledger json")
             .contains("override_spec")
     );
-    assert_eq!(account_scope.read_ledger(&runtime), account);
+    assert_eq!(
+        account_scope.read_ledger(&runtime, Some(store.paths())),
+        account
+    );
     account_scope
         .merge_park(&runtime, None)
         .expect("merge account park");
     assert_eq!(
-        account_scope.read_ledger(&runtime),
+        account_scope.read_ledger(&runtime, Some(store.paths())),
         DailyBudgetLedger {
             parked: None,
             ..account.clone()
@@ -865,6 +894,38 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
         .label(),
         "claude account budget: $25.50 of $25.00/day"
     );
+}
+
+#[test]
+fn fleet_choices_use_explicit_state_without_opening_a_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(id.clone(), &dir.path().join("runtime")).unwrap();
+    let state = crate::StatePaths::under_named(
+        id.clone(),
+        runtime.dir_name.clone(),
+        &dir.path().join("state"),
+        &runtime,
+    );
+    let scope = DailyBudgetScope::Fleet;
+    let ledger = DailyBudgetLedger {
+        override_spec: Some("20/day".parse().unwrap()),
+        ..Default::default()
+    };
+    scope.write_ledger(&runtime, &state, &ledger).unwrap();
+    assert_eq!(scope.read_ledger(&runtime, Some(&state)), ledger);
+    let mut snapshot = SidebarSnapshot::build_with_agents(id, Vec::new(), Timestamp::now());
+    let config = toml::from_str("[harness]\nbudget = \"5/day\"\n").unwrap();
+    project_budget_views(
+        &mut snapshot,
+        &runtime,
+        Some(&state),
+        &config,
+        &Default::default(),
+        &RoomLoginSet::new(None, None, BTreeMap::new()),
+    );
+    assert_eq!(snapshot.fleet_budget.unwrap().cap_usd, 20.0);
+    assert!(state.fleet_budget_record.is_file());
 }
 
 #[test]
@@ -957,6 +1018,7 @@ fn park_projection_uses_agent_then_turn_then_fleet_then_account_precedence() {
     DailyBudgetScope::Account(LoginKey::default_for(state.kind.clone()))
         .write_ledger(
             &runtime,
+            &state_paths(&runtime),
             &DailyBudgetLedger {
                 parked: Some(parked),
                 ..Default::default()
@@ -987,7 +1049,12 @@ fn park_projection_uses_agent_then_turn_then_fleet_then_account_precedence() {
     let projected_scope = |state: &AgentState| {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace_id.clone(), vec![state.clone()], now);
-        project_parks(&mut snapshot, &runtime, &config);
+        project_parks(
+            &mut snapshot,
+            &runtime,
+            Some(&state_paths(&runtime)),
+            &config,
+        );
         snapshot.agents[0]
             .budget_park
             .as_ref()
@@ -1004,10 +1071,10 @@ fn park_projection_uses_agent_then_turn_then_fleet_then_account_precedence() {
     write_scope_state(&runtime, &scope_state).expect("clear turn park");
     assert_eq!(projected_scope(&state), Some(BudgetScope::Fleet));
 
-    let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime);
+    let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime, Some(&state_paths(&runtime)));
     fleet.disabled = true;
     DailyBudgetScope::Fleet
-        .write_ledger(&runtime, &fleet)
+        .write_ledger(&runtime, &state_paths(&runtime), &fleet)
         .expect("disable fleet");
     assert_eq!(projected_scope(&state), Some(BudgetScope::Account));
 }
@@ -1045,6 +1112,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
     assert!(
         scope_gate(
             &runtime,
+            &state_paths(&runtime),
             Some(&LoginKey::default_for(kind.clone())),
             &config,
             now
@@ -1052,10 +1120,10 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         .is_some_and(|reason| reason.contains("fleet budget exhausted"))
     );
 
-    let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime);
+    let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime, Some(&state_paths(&runtime)));
     fleet.disabled = true;
     DailyBudgetScope::Fleet
-        .write_ledger(&runtime, &fleet)
+        .write_ledger(&runtime, &state_paths(&runtime), &fleet)
         .expect("disable fleet");
     let spending = crate::agents::spending::Spending::default();
     let provider_day = BTreeMap::from([(
@@ -1078,8 +1146,14 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         },
     );
     assert!(
-        scope_gate(&runtime, Some(&LoginKey::default_for(kind)), &config, now)
-            .is_some_and(|reason| reason.contains("claude@default account budget exhausted"))
+        scope_gate(
+            &runtime,
+            &state_paths(&runtime),
+            Some(&LoginKey::default_for(kind)),
+            &config,
+            now
+        )
+        .is_some_and(|reason| reason.contains("claude@default account budget exhausted"))
     );
 }
 
@@ -1118,7 +1192,14 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
         ..Default::default()
     };
     write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
-    let scopes = evaluate_scopes(&snapshot, &runtime, &config, now, Some(cutoff));
+    let scopes = evaluate_scopes(
+        &snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &config,
+        now,
+        Some(cutoff),
+    );
     assert_eq!(binding_scope_park(&scopes, &default_key), None);
     assert_eq!(
         binding_scope_park(&scopes, &work_key),
@@ -1143,23 +1224,43 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
         ),
     ]);
     write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
-    let scopes = evaluate_scopes(&snapshot, &runtime, &config, now, Some(cutoff));
+    let scopes = evaluate_scopes(
+        &snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &config,
+        now,
+        Some(cutoff),
+    );
     assert_eq!(scopes.daily.len(), 3);
     assert_eq!(binding_scope_park(&scopes, &default_key), None);
     assert_eq!(binding_scope_park(&scopes, &work_key), Some(now));
     enforce(&snapshot, &runtime, None, &config);
     let scope = DailyBudgetScope::Account(work_key.clone());
     assert_eq!(
-        scope.ledger_path(&runtime).file_name().unwrap(),
+        scope
+            .ledger_path(&runtime, &state_paths(&runtime))
+            .file_name()
+            .unwrap(),
         "budget.account.claude@work.json"
     );
-    assert!(scope.read_ledger(&runtime).parked.is_some());
+    assert!(
+        scope
+            .read_ledger(&runtime, Some(&state_paths(&runtime)))
+            .parked
+            .is_some()
+    );
     assert!(
         !DailyBudgetScope::Account(default_key)
-            .ledger_path(&runtime)
+            .ledger_path(&runtime, &state_paths(&runtime))
             .exists()
     );
-    project_parks(&mut snapshot, &runtime, &config);
+    project_parks(
+        &mut snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &config,
+    );
     assert!(snapshot.agents[0].budget_park.is_none());
     assert_eq!(
         snapshot.agents[1]
@@ -1178,7 +1279,14 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
         Some(crate::agents::LoginCatalog::from_config(&config.accounts).expect("catalog")),
         BTreeMap::new(),
     );
-    project_budget_views(&mut snapshot, &runtime, &config, &provider, &logins);
+    project_budget_views(
+        &mut snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &config,
+        &provider,
+        &logins,
+    );
     let panel = snapshot
         .providers
         .iter()
@@ -1189,8 +1297,22 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
     assert!(budget.parked);
     provider.day_by_login.clear();
     write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
-    assert!(scope_gate(&runtime, Some(&work_key), &config, now).is_some());
-    project_parks(&mut snapshot, &runtime, &config);
+    assert!(
+        scope_gate(
+            &runtime,
+            &state_paths(&runtime),
+            Some(&work_key),
+            &config,
+            now
+        )
+        .is_some()
+    );
+    project_parks(
+        &mut snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &config,
+    );
     assert_eq!(
         snapshot.agents[1]
             .budget_park
@@ -1200,11 +1322,34 @@ fn account_budget_isolates_logins_and_projects_the_room_account() {
         12.0
     );
     let unresolved = RoomLoginSet::new(None, None, BTreeMap::new());
-    project_budget_views(&mut snapshot, &runtime, &config, &provider, &unresolved);
+    project_budget_views(
+        &mut snapshot,
+        &runtime,
+        Some(&state_paths(&runtime)),
+        &config,
+        &provider,
+        &unresolved,
+    );
     assert!(
         snapshot
             .providers
             .iter()
             .all(|panel| panel.day_budget.is_none())
     );
+}
+fn state_paths(runtime: &RuntimePaths) -> crate::StatePaths {
+    let home = runtime
+        .root
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    crate::StatePaths::under_named(
+        runtime.workspace_id.clone(),
+        runtime.dir_name.clone(),
+        home,
+        runtime,
+    )
 }

@@ -172,6 +172,7 @@ struct FireContext {
 struct FireScope {
     kind: crate::ids::AgentKind,
     scope_runtime: RuntimePaths,
+    scope_state: StatePaths,
     resolved: Option<ResolvedSingleAgentLaunch>,
     managed_launch: ManagedLaunchState,
     login_key: Option<crate::ids::LoginKey>,
@@ -182,6 +183,7 @@ impl FireScope {
     fn new(
         kind: crate::ids::AgentKind,
         scope_runtime: RuntimePaths,
+        scope_state: StatePaths,
         resolved: Option<ResolvedSingleAgentLaunch>,
     ) -> Self {
         let login_key = crate::agents::RoomLoginSet::for_runtime(&scope_runtime).key(kind.as_str());
@@ -189,6 +191,7 @@ impl FireScope {
             login_key,
             kind,
             scope_runtime,
+            scope_state,
             resolved,
             managed_launch: ManagedLaunchState::Unsupported,
             capacity: OnceCell::new(),
@@ -236,6 +239,7 @@ impl FireContext {
                 let mut scope = FireScope::new(
                     crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
                     runtime,
+                    StatePaths::for_project_root(&workspace.project_root)?,
                     Some(resolved),
                 );
                 scope.managed_launch = managed_launch;
@@ -244,7 +248,12 @@ impl FireContext {
             TaskAction::Deliver(target) => {
                 let project_root = WorkspaceResolver::persisted_project_root(&root)?;
                 let runtime = RuntimePaths::for_project_root(&project_root)?;
-                let mut scope = FireScope::new(target.kind.clone(), runtime, None);
+                let mut scope = FireScope::new(
+                    target.kind.clone(),
+                    runtime,
+                    StatePaths::for_project_root(&project_root)?,
+                    None,
+                );
                 scope.managed_launch = unresolved_managed_state(entry, &target.kind);
                 scope
             }
@@ -390,6 +399,7 @@ impl<'a> TaskFire<'a> {
         if let Some(scope) = &context.scope
             && let Some(reason) = crate::harness::budget::scope_gate(
                 &scope.scope_runtime,
+                &scope.scope_state,
                 scope.login_key.as_ref(),
                 &self.config,
                 self.now,
