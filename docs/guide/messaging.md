@@ -62,7 +62,7 @@ rimz channel rm design                           # remove the record; the agents
 
 Named channels and worktrees share one namespace, so a name belongs to one or the other and never both: `rimz channel new auth` is refused while a worktree named `auth` exists, and `rimz channel rm auth` sends you to [`rimz worktree remove`](./worktrees.md) instead. How channels render on screen, with their headers and groups, is [the sidebar guide](./sidebar.md); the full command surface is [cli/channel.md](../reference/cli/channel.md).
 
-## Park, steer, or schedule
+## Park, steer, interrupt, or schedule
 
 **Park for the next turn boundary.** This is what a send does with no flags at all. The text holds until the agent finishes the turn it is working on, then lands at the boundary, so it never cuts into work in flight. Use it to hand off follow-up without watching for the agent to free up. The default gate, `--on done`, waits for a finished turn: one that succeeded, went idle, or ended with the agent waiting on a timer or watch it armed. `--on any` releases the text after a failed turn too.
 
@@ -90,6 +90,8 @@ rimz message --steer @claude "stop: rebase on main first, the parser moved"
 ```
 
 Steering an agent that has no live pane yet parks the text instead of dropping it, and delivery follows once the pane appears.
+
+**Stop work that is no longer wanted.** Typing a correction into a busy pane does not stop its current tool call. Use `rimz message --interrupt @claude "stop: the user changed direction"` when that work should be canceled: RimZ presses Escape, waits until the agent reports the turn stopped, then types your prompt as a fresh turn. This works with Claude Code and Codex; other agents are refused. If the stop cannot be confirmed, the text stays queued rather than joining the live turn. Use `--force` to also cancel a native prompt waiting for input, or `--interrupt --wait` to print the reply to the new prompt. Keep `--steer` for a correction that can wait behind the current tool, and plain `message` for follow-up at a turn boundary.
 
 **Schedule a floor under delivery.** `--schedule` holds the text until a wall-clock moment: a duration in `s`, `m`, `h`, or `d`, or a 24-hour `HH:MM` time in your configured timezone, with a time already past today meaning tomorrow. The time is an earliest-delivery floor, not an appointment: once it comes due the message parks like any other and lands at the next boundary that takes it. A scheduled message stays out of the queue until it is due, so it never blocks later text to the same agent.
 
