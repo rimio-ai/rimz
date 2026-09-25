@@ -315,7 +315,7 @@ fn run(
                 model.entry.peak_rss_kb = model
                     .entry
                     .peak_rss_kb
-                    .max(crate::proc::tree_totals(server.0.id()).map_or(0, |totals| totals.rss_kb));
+                    .max(memory::tree_peak_kb(server.0.id()));
                 let reason = if !request.root.exists() {
                     Some(StopReason::CheckoutRemoved)
                 } else {

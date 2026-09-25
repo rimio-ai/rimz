@@ -352,7 +352,8 @@ upward-dependencies = [
     "agents",
     "agents::registry",
 ]
-surface-budget = 103
+# The kernel tree high-water reader has Linux and non-Linux definitions.
+surface-budget = 105
 
 [[module]]
 path = "crates/rimz/src/reload.rs"

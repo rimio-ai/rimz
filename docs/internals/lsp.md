@@ -85,6 +85,8 @@ Agents are not messaged. The next `rimz lsp` query against a tombstoned key exit
 
 ## Learned cost
 
+`peak_rss_kb` is the monotonic maximum of summed kernel `VmHWM` over the process tree (`proc::tree_peak_rss_kb`), floored by sampled tree RSS through `lsp::memory::tree_peak_kb`. Housekeeping and watchdog stops refresh it. This catches spikes shorter than the five-second sampling interval. Summed high-water marks can overcount processes that peaked at different times and omit children that have exited; the sampled floor preserves previously observed usage. Off Linux, only the sampled floor is available.
+
 `lsp/history.rs` appends project, checkout, server, peak tree RSS, time to first ready, settings hash, and stop reason to rotating `lsp-history.jsonl` under the RimZ home. Admission takes the maximum of the last five records for the same (project, server, settings) triple, falling back to `memory-estimate` without history. The project is the workspace's `launch_repo_root()`, resolved by `cli/lsp_admission.rs::admit`, so checkouts of one project share learned costs. It travels through admission and the serve request into the registry entry, allowing both the broker and watchdog to record it; the registry key remains checkout/server. Records without a project are skipped when estimating, without migration. The settings hash covers command argv and canonical initialization options. This is an admission input, not a diagnostic log.
 
 ## Freshness
@@ -154,6 +156,10 @@ Trusted project entries replace machine entries whole by name. The empty trust p
 
 ## Query surface
 
+Ambiguous workspace symbols are resolved through `textDocument/definition` for each candidate and grouped by definition URI and start position. Exactly one returned location becomes the candidate's identity; empty or multiple answers keep its own location. One group resolves uniquely, while distinct groups list definition positions without guessing. Request errors propagate.
+
+Callers and callees text output defaults to items inside the checkout. The renderer deduplicates before counting hidden outside items and appends the hidden count with a `--external` hint. That flag includes outside items; JSON remains the raw, unfiltered LSP answer.
+
 `rimz lsp` resolves the checkout from cwd (or `--root`) and registry entries. Position-taking verbs accept `path:line:col` or exact symbol names resolved through `workspace/symbol`; `symbols` takes a file and `find` a search string. Output is compact text; `--json` returns structured results. The rust-analyzer smoke confirmed workspace symbol locations point at names, so their start positions feed navigation directly.
 
 | Verb | LSP request |
@@ -174,7 +180,7 @@ An ambiguous symbol name lists its candidates with positions instead of guessing
 | 3 | No server for this checkout, or a tombstone; the one line names the reason. |
 | 4 | Still indexing after the readiness bound; the line gives the elapsed time. |
 
-`rimz lsp list` shows every machine key with state, tree RSS, observed peak, requests, last request, and leases; `rimz lsp stop` stops one by hand. The [reference](../reference/cli/lsp.md) owns flags.
+`rimz lsp list` shows every machine key with state, tree RSS, the maximum of recorded and live tree peak for live entries, requests, last request, and leases; stopped entries retain the recorded peak. `rimz lsp stop` stops one by hand. The [reference](../reference/cli/lsp.md) owns flags.
 
 The external skill's model-invocation switches are ready for a separate release action. This implementation does not change them.
 

@@ -28,9 +28,9 @@ enum Command {
     /// Find implementations of a trait or interface.
     Impl(Query),
     /// Find functions calling this symbol.
-    Callers(Query),
+    Callers(CallHierarchy),
     /// Find functions called by this symbol.
-    Callees(Query),
+    Callees(CallHierarchy),
     /// Show a file's outline.
     Symbols(Query),
     /// Search workspace symbols.
@@ -64,7 +64,20 @@ struct Query {
     json: bool,
 }
 
+#[derive(Debug, Args)]
+struct CallHierarchy {
+    #[command(flatten)]
+    query: Query,
+    /// Include callers/callees outside the checkout.
+    #[arg(long)]
+    external: bool,
+}
+
 pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
+    let scope = match &args.command {
+        Command::Callers(args) | Command::Callees(args) if args.external => query::Scope::External,
+        _ => query::Scope::Checkout,
+    };
     let (verb, args) = match args.command {
         Command::Serve { request } => {
             return Ok(rimz::lsp::broker::serve(serde_json::from_str(&request)?)?);
@@ -79,8 +92,8 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         Command::Refs(args) => (Verb::Refs, args),
         Command::Hover(args) => (Verb::Hover, args),
         Command::Impl(args) => (Verb::Impl, args),
-        Command::Callers(args) => (Verb::Callers, args),
-        Command::Callees(args) => (Verb::Callees, args),
+        Command::Callers(args) => (Verb::Callers, args.query),
+        Command::Callees(args) => (Verb::Callees, args.query),
         Command::Symbols(args) => (Verb::Symbols, args),
         Command::Find(args) => (Verb::Find, args),
     };
@@ -122,7 +135,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 write!(
                     out,
                     "{}",
-                    query::render(verb, root, document_uri.as_deref(), result)?
+                    query::render(verb, root, document_uri.as_deref(), result, scope)?
                 )?;
             }
         }
@@ -186,7 +199,17 @@ fn list(json: bool) -> Result<()> {
                         .and_then(rimz::proc::tree_totals)
                         .map_or(0, |totals| totals.rss_kb.saturating_mul(1024)),
                 ),
-                rimz::utils::size::decimal_bytes(entry.peak_rss_kb.saturating_mul(1024)),
+                rimz::utils::size::decimal_bytes(
+                    entry
+                        .peak_rss_kb
+                        .max(
+                            entry
+                                .server_pid
+                                .filter(|_| !matches!(entry.state, State::Stopped { .. }))
+                                .map_or(0, rimz::lsp::memory::tree_peak_kb),
+                        )
+                        .saturating_mul(1024),
+                ),
                 entry.request_count.to_string(),
                 entry.last_request_at_ms.map_or_else(
                     || "—".into(),

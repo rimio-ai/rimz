@@ -7,10 +7,10 @@
 ```sh
 rimz lsp def MuxBackend
 rimz lsp refs GcReport
-rimz lsp hover crates/rimz/src/lib.rs:1:1
+rimz lsp hover Store::open
 rimz lsp impl MuxBackend
-rimz lsp callers sweep
-rimz lsp callees sweep
+rimz lsp callers sweep_locked
+rimz lsp callees Store::open
 rimz lsp symbols crates/rimz/src/lib.rs
 rimz lsp find MuxBackend --server rust --json
 ```
@@ -21,19 +21,20 @@ rimz lsp find MuxBackend --server rust --json
 | `refs` | position or exact symbol name | reference locations |
 | `hover` | position or exact symbol name | type and documentation |
 | `impl` | position or exact symbol name | implementation locations |
-| `callers` | position or exact symbol name | incoming call hierarchy items |
-| `callees` | position or exact symbol name | outgoing call hierarchy items |
+| `callers` | position or exact symbol name | incoming call hierarchy items, inside the checkout by default |
+| `callees` | position or exact symbol name | outgoing call hierarchy items, inside the checkout by default |
 | `symbols` | file path | document symbol outline |
 | `find` | search string | workspace symbols matching the server's search |
 
-Positions are `path:line:col`, with one-based line and column; omitting the column is an error. Paths are checkout-relative or absolute. A symbol name is resolved by exact name from workspace search results; `Type::method` matches `method` in container `Type`. Multiple matches list candidates instead of guessing. Rerun with a candidate's position. Text locations use `path:line:col`; navigation includes source lines when available, outlines indent children, and hover prints markup. Empty answers print `no results`.
+Positions are `path:line:col`, with one-based line and column; omitting the column is an error. Paths are checkout-relative or absolute. A symbol name is resolved by exact name from workspace search results; `Type::method` matches `method` in container `Type`. Matches sharing one definition count as one symbol; distinct definitions list candidates instead of guessing. Rerun with a candidate's position. Text locations use `path:line:col`; navigation includes source lines when available, outlines indent children, and hover prints markup. Empty answers print `no results`.
 
-All eight verbs require one target and accept:
+All eight verbs require one target. Query flags:
 
 | Flag | Effect |
 | --- | --- |
 | `--server <NAME>` | Select a configured server name. Otherwise a file's extension selects among checkout entries, or the sole entry is used. Ambiguous selection names this flag in the error. |
 | `--json` | Print the structured LSP result instead of text; ambiguous names print the candidate array. |
+| `--external` | Callers and callees only: include items outside the checkout. Default text output hides these items and ends with `<n> outside the checkout hidden; add --external to show them` when any were hidden. `--json` is always unfiltered. |
 
 The checkout comes from cwd or the global `--root`, using the most deeply enclosing registered checkout when present. Different worktrees have different servers even though they share a room. Queries wait up to 30 seconds for indexing; there is no CLI wait-duration flag.
 
@@ -47,7 +48,7 @@ rimz lsp stop /path/to/checkout --server rust
 rimz lsp stop --all
 ```
 
-`list` covers the whole machine. Text columns are CHECKOUT, SERVER, STATE, RSS, PEAK, REQUESTS, LAST, and LEASES. RSS and PEAK are current and observed peak process-tree memory, displayed in decimal byte units; LAST is seconds since the last query. Stopped entries show their reason. `--json` returns registry entries, including process identities, nonce, state, estimate, timestamps, counters, and leases; peak RSS remains in KiB. Dead entries are swept before listing.
+`list` covers the whole machine. Text columns are CHECKOUT, SERVER, STATE, RSS, PEAK, REQUESTS, LAST, and LEASES. RSS is current process-tree memory; PEAK is the larger of the recorded peak and the live tree peak, including current tree memory, displayed in decimal byte units. The recorded peak sums the kernel's per-process high-water marks over the tree, with the five-second RSS sample as a floor. LAST is seconds since the last query. Stopped entries show their reason and recorded peak. `--json` returns registry entries, including process identities, nonce, state, estimate, timestamps, counters, and leases; peak RSS remains in KiB as recorded. Dead entries are swept before listing.
 
 `stop [CHECKOUT]` defaults to the current checkout (or global `--root`). `--server <NAME>` selects one server when several exist. `--all` stops every machine entry and conflicts with both CHECKOUT and `--server`. Dead entries are swept first; a failure stopping one entry does not prevent attempts on the others. Stop prints one acknowledgment line per entry; no matching entries produce no lines. It has no `--json` flag. A hand stop leaves a tombstone while agents hold leases; queries report `stopped by hand`, not a restart.
 

@@ -187,6 +187,22 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
             .success()
             .stdout("[]\n");
     }
+    env.rimz()
+        .args(["lsp", "def", "alias"])
+        .assert()
+        .success()
+        .stdout("/fixture/definition.rs:1:1\n");
+    env.rimz()
+        .args(["lsp", "callees", "lib.rs:1:4", "--external", "--json"])
+        .assert()
+        .success()
+        .stdout("[]\n");
+    for verb in ["def", "refs", "hover", "impl", "symbols", "find"] {
+        env.rimz()
+            .args(["lsp", verb, "lib.rs:1:4", "--external"])
+            .assert()
+            .code(2);
+    }
     let mut owner = std::process::Command::new("sleep")
         .arg("30")
         .spawn()

@@ -65,15 +65,15 @@ The same command works from your shell, in the checkout, and it is the fastest w
 ```sh
 rimz lsp def MuxBackend                      # where it is defined
 rimz lsp refs GcReport                       # every reference, with the source line
-rimz lsp hover crates/rimz/src/lib.rs:1:1    # type and documentation at a position
+rimz lsp hover Store::open                   # type and documentation; Type::method names a method
 rimz lsp impl MuxBackend                     # implementations of a trait
-rimz lsp callers sweep                       # incoming calls
-rimz lsp callees sweep                       # outgoing calls
+rimz lsp callers sweep_locked                # incoming calls
+rimz lsp callees Store::open                 # outgoing calls
 rimz lsp symbols crates/rimz/src/lib.rs      # a file's outline
 rimz lsp find Mux                            # workspace symbol search
 ```
 
-A name that matches several symbols lists the candidates with positions instead of guessing; rerun with one of them. Add `--json` for the raw LSP result, and `--server <name>` when a checkout has more than one server and the file's extension does not settle it. The checkout is the one enclosing your current directory (or `--root`). Everything about targets, output, and flags is in the [reference](../reference/cli/lsp.md#queries).
+A name that matches several symbols lists the candidates with positions instead of guessing; rerun with one of them. Callers and callees list only code inside the checkout and end with how many were left out, if any; `--external` shows them. Add `--json` for the raw LSP result, and `--server <name>` when a checkout has more than one server and the file's extension does not settle it. The checkout is the one enclosing your current directory (or `--root`). Everything about targets, output, and flags is in the [reference](../reference/cli/lsp.md#queries).
 
 The server answers from the disk, kept current by watching saved files, not from anyone's editor buffer. An unsaved change is invisible to it, which is what you want when several agents share one view.
 

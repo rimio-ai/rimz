@@ -945,6 +945,56 @@ pub fn tree_totals(root_pid: u32) -> Option<TreeTotals> {
     tree_totals_with(root_pid, &stat_metrics, &children, &io_bytes)
 }
 
+#[cfg(target_os = "linux")]
+fn parse_peak_rss_kb(status: &str) -> Option<u64> {
+    status.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key == "VmHWM")
+            .then_some(value.trim())?
+            .strip_suffix(" kB")?
+            .parse()
+            .ok()
+    })
+}
+
+/// Sum kernel resident-memory high-water marks over the live process tree, in KiB.
+#[cfg(target_os = "linux")]
+pub fn tree_peak_rss_kb(root_pid: u32) -> Option<u64> {
+    tree_peak_rss_kb_with(
+        root_pid,
+        &|pid| parse_peak_rss_kb(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?),
+        &children,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn tree_peak_rss_kb(_root_pid: u32) -> Option<u64> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn tree_peak_rss_kb_with(
+    root_pid: u32,
+    peak: &dyn Fn(u32) -> Option<u64>,
+    children: &dyn Fn(u32) -> Vec<u32>,
+) -> Option<u64> {
+    let mut stack = vec![root_pid];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut total = 0_u64;
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        stack.extend(children(pid));
+        match peak(pid) {
+            Some(peak) => total = total.saturating_add(peak),
+            None if pid == root_pid => return None,
+            None => {}
+        }
+    }
+    Some(total)
+}
+
 fn tree_totals_with(
     root_pid: u32,
     stat: &dyn Fn(u32) -> Option<StatMetrics>,
@@ -1006,6 +1056,33 @@ pub fn clk_tck() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tree_peak_reads_high_water_and_rejects_missing_key() {
+        assert_eq!(
+            super::parse_peak_rss_kb("VmHWM:\t    1800 kB\n"),
+            Some(1800)
+        );
+        assert_eq!(super::parse_peak_rss_kb("VmRSS: 100 kB\n"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tree_peak_sums_descendants_and_skips_unreadable_children() {
+        let children = |pid| match pid {
+            1 => vec![2, 3],
+            2 => vec![1, 4],
+            _ => vec![],
+        };
+        let peak = |pid| match pid {
+            1 => Some(100),
+            4 => Some(300),
+            _ => None,
+        };
+        assert_eq!(super::tree_peak_rss_kb_with(1, &peak, &children), Some(400));
+        assert_eq!(super::tree_peak_rss_kb_with(2, &peak, &children), None);
+    }
 
     #[test]
     fn resolve_existing_or_replacement_strips_deleted_suffix_when_replacement_exists() {

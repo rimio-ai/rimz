@@ -8,6 +8,7 @@ fn main() {
     let mut output = std::io::stdout().lock();
     let mut indexed = false;
     let mut changes = Value::Null;
+    let alias_location = |file| json!({"uri": format!("file:///fixture/{file}.rs"), "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}}});
     while let Ok(message) = read_frame(&mut input) {
         let method = message["method"].as_str().unwrap_or("");
         let result = match method {
@@ -27,11 +28,20 @@ fn main() {
                 assert!(indexed, "queries must wait for initialized");
                 if message["params"]["query"] == "changes" {
                     changes.clone()
+                } else if message["params"]["query"] == "alias" {
+                    json!([{"name": "alias", "kind": 12, "location": alias_location("alias")}, {"name": "alias", "kind": 12, "location": alias_location("definition")}])
                 } else {
                     json!([])
                 }
             }
             "textDocument/hover" => json!({"contents": "fixture hover"}),
+            "textDocument/definition"
+                if message["params"]["textDocument"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| uri.starts_with("file:///fixture/")) =>
+            {
+                json!([alias_location("definition")])
+            }
             "shutdown" => Value::Null,
             "exit" => break,
             _ => json!([]),
