@@ -20,7 +20,7 @@ impl From<String> for LaunchId {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Lease {
-    pub launch_id: LaunchId,
+    pub launch_id: Option<LaunchId>,
     pub pid: u32,
     pub start_token: String,
     pub since_ms: u64,
@@ -257,7 +257,9 @@ pub fn sweep_locked() -> Result<Vec<Entry>> {
 fn sweep_at(base: &Path) -> Result<Vec<Entry>> {
     let mut live = Vec::new();
     for entry in read_entries_at(base)? {
-        if is_live_at(base, &entry) {
+        if is_live_at(base, &entry)
+            || crate::proc::process_is_live(entry.broker_pid, Some(&entry.broker_start_token))
+        {
             live.push(entry);
             continue;
         }
@@ -304,7 +306,8 @@ pub fn live_server_names(root: &Path) -> Result<Vec<String>> {
 
 pub fn stop_checkout(root: &Path) -> Result<()> {
     // Worktree removal calls this after the directory has gone; its host path is already absolute.
-    let root = crate::utils::path::normalize_path_lexical(root);
+    let root = std::fs::canonicalize(root)
+        .unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(root));
     acknowledge_all(
         read_entries()?
             .into_iter()
@@ -403,7 +406,7 @@ mod tests {
             last_request_at_ms: None,
             peak_rss_kb: 6,
             leases: vec![Lease {
-                launch_id: "launch-1".to_owned().into(),
+                launch_id: Some("launch-1".to_owned().into()),
                 pid: 3,
                 start_token: "lease-start".into(),
                 since_ms: 200,

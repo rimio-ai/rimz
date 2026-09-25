@@ -179,15 +179,14 @@ fn list(json: bool) -> Result<()> {
                 entry.root.display().to_string(),
                 entry.server,
                 state,
-                format!(
-                    "{} KiB",
+                rimz::utils::size::decimal_bytes(
                     entry
                         .server_pid
                         .filter(|_| !matches!(entry.state, State::Stopped { .. }))
                         .and_then(rimz::proc::tree_totals)
-                        .map_or(0, |totals| totals.rss_kb)
+                        .map_or(0, |totals| totals.rss_kb.saturating_mul(1024)),
                 ),
-                format!("{} KiB", entry.peak_rss_kb),
+                rimz::utils::size::decimal_bytes(entry.peak_rss_kb.saturating_mul(1024)),
                 entry.request_count.to_string(),
                 entry.last_request_at_ms.map_or_else(
                     || "—".into(),
@@ -213,7 +212,10 @@ fn stop(
     all: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let entries = registry::read_entries()?;
+    let entries = {
+        let _lock = registry::lock()?;
+        registry::sweep_locked()?
+    };
     let cwd = std::fs::canonicalize(
         path.or_else(|| globals.root.clone())
             .unwrap_or(std::env::current_dir()?),
@@ -229,14 +231,27 @@ fn stop(
     if !all && entries.len() > 1 {
         anyhow::bail!("multiple language servers; choose --server NAME");
     }
+    let mut errors = Vec::new();
     for entry in entries {
         let response = registry::request(
             entry,
             &serde_json::json!({"op": "stop", "reason": rimz::lsp::registry::StopReason::StoppedByHand}),
             Duration::from_secs(2),
-        )?;
-        if response["ok"] != true {
-            anyhow::bail!("{} did not acknowledge stop", entry.server);
+        );
+        match response {
+            Ok(response) if response["ok"] == true => {}
+            result => {
+                let error = result.err().map_or_else(
+                    || "did not acknowledge stop".into(),
+                    |error| error.to_string(),
+                );
+                errors.push(format!(
+                    "{} ({}): {error}",
+                    entry.server,
+                    entry.root.display()
+                ));
+                continue;
+            }
         }
         writeln!(
             render::out(),
@@ -245,5 +260,6 @@ fn stop(
             entry.root.display()
         )?;
     }
+    anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
     Ok(())
 }

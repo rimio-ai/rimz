@@ -76,11 +76,24 @@ mod tests {
 
     fn lease(pid: u32) -> Lease {
         Lease {
-            launch_id: "launch".to_owned().into(),
+            launch_id: Some("launch".to_owned().into()),
             pid,
             start_token: "token".into(),
             since_ms: 0,
         }
+    }
+
+    #[test]
+    fn anonymous_lease_keeps_broker_alive_until_release() {
+        let lease = serde_json::from_value::<Lease>(
+            json!({"pid": 1, "start_token": "token", "since_ms": 0}),
+        );
+        assert!(lease.is_ok(), "a launch id is an optional label");
+        let mut state = Lifecycle::default();
+        state.register(lease.unwrap());
+        assert_eq!(state.expired(600_000), None);
+        state.retain(600_000, |_| false);
+        assert_eq!(state.expired(660_000), Some(StopReason::Released));
     }
 
     #[test]

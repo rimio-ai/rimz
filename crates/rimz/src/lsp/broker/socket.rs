@@ -19,12 +19,12 @@ enum Operation {
     Hello,
     Status,
     Lease {
-        launch_id: LaunchId,
+        launch_id: Option<LaunchId>,
         pid: u32,
         start_token: String,
     },
     Release {
-        launch_id: LaunchId,
+        launch_id: Option<LaunchId>,
         pid: u32,
     },
     Stop {
@@ -51,6 +51,18 @@ pub(super) fn listen(listener: UnixListener, shared: Arc<Shared>) {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(20))
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::ConnectionAborted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) if matches!(error.raw_os_error(), Some(code) if code == nix::libc::EMFILE || code == nix::libc::ENFILE) =>
+                {
+                    std::thread::sleep(Duration::from_millis(100));
                 }
                 Err(_) => break,
             }

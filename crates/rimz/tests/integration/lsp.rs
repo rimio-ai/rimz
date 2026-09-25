@@ -8,11 +8,17 @@ use rimz::config::{MachineConfig, effective};
 fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
     let env = Env::new();
     crate::common::write_kind_base(&env, "claude");
+    env.install_agent_hooks("claude");
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 1);
+    let shell = crate::common::write_fake_login_shell(&env, "lsp-test-sh", &[]);
+    std::fs::write(env.rimz_home().join("theme.toml"), "[broken").unwrap();
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
     std::fs::write(env.rimz_home().join("config.toml"), "[agents]\nisolation = 'host'\n[lsp]\nreserve-min = '1000000G'\n[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = 'required'\nwait-timeout = '1s'\n").unwrap();
     let output = env
         .rimz()
         .args(["agents", "claude", "inspect", "-p"])
+        .env("SHELL", shell)
+        .env("PATH", crate::common::path_with_front(&agent_bin))
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -112,7 +118,7 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
         serde_json::from_str(&response).unwrap()
     };
     let pid = std::process::id();
-    let lease = json!({"op": "lease", "launch_id": "test", "pid": pid, "start_token": rimz::proc::process_start_token(pid).unwrap()});
+    let lease = json!({"op": "lease", "pid": pid, "start_token": rimz::proc::process_start_token(pid).unwrap()});
     assert_eq!(rpc(lease.clone())["ok"], true);
     assert_eq!(rpc(lease)["ok"], true);
     assert_eq!(
@@ -209,10 +215,7 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
         .assert()
         .code(3)
         .stderr(predicates::str::contains("stopped by hand"));
-    assert_eq!(
-        rpc(json!({"op": "release", "launch_id": "test", "pid": pid}))["ok"],
-        true
-    );
+    assert_eq!(rpc(json!({"op": "release", "pid": pid}))["ok"], true);
     let deadline = Instant::now() + Duration::from_secs(8);
     while broker.try_wait().unwrap().is_none() {
         assert!(
@@ -387,9 +390,14 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_tombstone() {
     });
     let entries = registry::testkit::sweep(runtime.path()).unwrap();
     server.join().unwrap();
-    assert_eq!(entries, [entry]);
+    assert_eq!(entries, std::slice::from_ref(&entry));
     assert!(live_dir.exists());
     assert!(!dead_dir.exists());
+    assert_eq!(
+        registry::testkit::sweep(runtime.path()).unwrap(),
+        [entry],
+        "an unavailable socket must not orphan a live broker"
+    );
 }
 
 #[test]
