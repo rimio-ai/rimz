@@ -18,6 +18,8 @@ const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
 pub enum EffectiveConfigErr {
     #[error("{0}")]
     FailedDefinition(String),
+    #[error("project config cannot set lsp.{0}; move it to ~/.rimz/config.toml")]
+    ProjectLspPolicy(String),
     #[error(transparent)]
     Trust(#[from] trust::TrustErr),
     #[error("cannot access {path}: {source}")]
@@ -86,6 +88,7 @@ pub enum ProjectTasksErr {
 #[derive(Default)]
 struct RepoConfig {
     git_reminder: Option<bool>,
+    lsp_servers: BTreeMap<String, super::LspServerConfig>,
     profiles: ProfilesConfig,
     subagent_profiles: ProfilesConfig,
     teams: TeamsConfig,
@@ -104,6 +107,8 @@ pub struct ProjectTasks {
 /// executable surface stays closed.
 pub struct LaunchAgents {
     pub git_reminder: bool,
+    pub lsp_servers: BTreeMap<String, super::LspServerConfig>,
+    pub untrusted_lsp_servers: Vec<String>,
     pub profiles: ProfilesConfig,
     pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
@@ -136,12 +141,29 @@ pub fn load_with_roots(
         .collect();
     let set_failure = machine.unattributed_definition_failure();
     let machine_subagent_profiles = &machine.subagents.profiles;
+    let mut lsp_servers = machine.lsp.servers.clone();
     let machine = &machine.agents;
     let report = trust::status_with_roots(project_root, config_root)?;
     let config_path = project_root.join(PROJECT_CONFIG_REL);
+    let repo_value = read_repo_value(&config_path)?;
+    if let Some(key) = repo_value.as_ref().and_then(project_lsp_policy_key) {
+        return Err(EffectiveConfigErr::ProjectLspPolicy(key.to_owned()));
+    }
     if report.state != TrustState::Trusted {
+        let untrusted_lsp_servers = repo_value
+            .as_ref()
+            .and_then(|value| {
+                value
+                    .get("lsp")?
+                    .get("servers")?
+                    .as_table()
+                    .map(|servers| servers.keys().cloned().collect())
+            })
+            .unwrap_or_default();
         return Ok(LaunchAgents {
             git_reminder: machine.git_reminder,
+            lsp_servers,
+            untrusted_lsp_servers,
             profiles: machine.profiles.clone(),
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
@@ -153,9 +175,11 @@ pub fn load_with_roots(
         });
     }
 
-    let Some(repo_value) = read_repo_value(&config_path)? else {
+    let Some(repo_value) = repo_value else {
         return Ok(LaunchAgents {
             git_reminder: machine.git_reminder,
+            lsp_servers,
+            untrusted_lsp_servers: Vec::new(),
             profiles: machine.profiles.clone(),
             subagent_profiles: machine_subagent_profiles.clone(),
             teams: machine.teams.clone(),
@@ -174,6 +198,7 @@ pub fn load_with_roots(
                 source.message(),
             )),
         })?;
+    lsp_servers.extend(std::mem::take(&mut repo.lsp_servers));
     let config_dir = config_path.parent().unwrap_or(project_root);
     agents_spec::resolve_prompt_paths(&mut repo.profiles, &mut repo.teams, config_dir);
     agents_spec::resolve_profile_prompt_paths(&mut repo.subagent_profiles, config_dir);
@@ -275,6 +300,8 @@ pub fn load_with_roots(
         })?;
     Ok(LaunchAgents {
         git_reminder: repo.git_reminder.unwrap_or(machine.git_reminder),
+        lsp_servers,
+        untrusted_lsp_servers: Vec::new(),
         profiles,
         subagent_profiles,
         teams,
@@ -557,6 +584,13 @@ fn resolve_project_prompt_path(path: &Path, config_dir: &Path) -> PathBuf {
     }
 }
 
+fn project_lsp_policy_key(value: &toml::Value) -> Option<&'static str> {
+    let lsp = value.get("lsp")?.as_table()?;
+    ["reserve-percent", "reserve-min", "kill-floor-percent"]
+        .into_iter()
+        .find(|key| lsp.contains_key(*key))
+}
+
 fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig, toml::de::Error> {
     let git_reminder = value
         .get("agents")
@@ -565,6 +599,18 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         .cloned()
         .map(toml::Value::try_into)
         .transpose()?;
+    if let Some(key) = project_lsp_policy_key(value) {
+        return Err(serde::de::Error::custom(
+            EffectiveConfigErr::ProjectLspPolicy(key.to_owned()),
+        ));
+    }
+    let lsp_servers = value
+        .get("lsp")
+        .and_then(|lsp| lsp.get("servers"))
+        .cloned()
+        .map(toml::Value::try_into)
+        .transpose()?
+        .unwrap_or_default();
     let profiles = value
         .get("profiles")
         .cloned()
@@ -589,6 +635,7 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         .unwrap_or_default();
     Ok(RepoConfig {
         git_reminder,
+        lsp_servers,
         profiles,
         subagent_profiles,
         teams,

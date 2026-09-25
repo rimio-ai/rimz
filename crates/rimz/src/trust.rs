@@ -676,6 +676,7 @@ struct BirthPromptDismissal {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ProjectConfig {
+    lsp: ProjectLsp,
     pub agents: ProjectAgents,
     pub profiles: BTreeMap<String, ProjectProfile>,
     pub subagents: ProjectSubagents,
@@ -685,6 +686,19 @@ pub struct ProjectConfig {
     /// `[accounts] <kind> = "<name>"`: which provider account a fresh room
     /// launches into. Hashed because it redirects every agent's credentials.
     pub accounts: RoomLogins,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ProjectLsp {
+    servers: BTreeMap<String, ProjectLspServer>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct ProjectLspServer {
+    command: Vec<String>,
+    init_options: Option<Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -795,6 +809,8 @@ pub struct HookConfig {
 /// empty to preserve the pre-collection wire.
 #[derive(Serialize)]
 struct ExecutableSurface<'a> {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    lsp_servers: Vec<ExecutableLspServer<'a>>,
     agents: Vec<ExecutableAgent<'a>>,
     profiles: Vec<ExecutableProfile<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -805,6 +821,13 @@ struct ExecutableSurface<'a> {
     env: &'a BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     accounts: &'a RoomLogins,
+}
+
+#[derive(Serialize)]
+struct ExecutableLspServer<'a> {
+    name: &'a str,
+    command: &'a [String],
+    init_options: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -907,6 +930,21 @@ fn permission_mode_name(mode: PermissionMode) -> &'static str {
 impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
     fn from(config: &'a ProjectConfig) -> Self {
         Self {
+            lsp_servers: config
+                .lsp
+                .servers
+                .iter()
+                .map(|(name, server)| ExecutableLspServer {
+                    name,
+                    command: &server.command,
+                    init_options: server.init_options.as_ref().map(|value| {
+                        // JSON values always serialize; recursively sorting also covers preserve_order builds.
+                        let mut value = value.clone();
+                        value.sort_all_objects();
+                        value.to_string()
+                    }),
+                })
+                .collect(),
             agents: config
                 .agent_entries()
                 .iter()

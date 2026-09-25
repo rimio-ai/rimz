@@ -34,6 +34,7 @@ mod list;
 mod list_pets;
 mod list_themes;
 mod loop_schedule;
+mod lsp;
 mod message;
 mod mux_command;
 mod oauth_usage;

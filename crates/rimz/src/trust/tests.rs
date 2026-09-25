@@ -393,6 +393,11 @@ fn hash_covers_every_documented_surface_field() {
     // pair, not just its case.
     let cases = [
         "",
+        "[lsp.servers.x]\n",
+        "[lsp.servers.x]\ncommand = ['rust-analyzer']\n",
+        "[lsp.servers.x]\ncommand = ['other']\n",
+        "[lsp.servers.x]\ninit-options = { checkOnSave = false }\n",
+        "[lsp.servers.x]\ninit-options = { checkOnSave = true }\n",
         "[[agents]]\nname = \"claude\"\n",
         "[[agents]]\nname = \"claude\"\nlaunch_command = \"claude code\"\n",
         "[[agents]]\nname = \"codex\"\nlaunch_command = \"claude code\"\n",

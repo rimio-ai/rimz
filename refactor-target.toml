@@ -24,7 +24,7 @@ layers = [
     "theme",
 ],
     ["agents", "diag"],
-    ["store"],
+    ["store", "lsp"],
     [
     "address",
     "message",
@@ -63,6 +63,10 @@ path = "crates/rimz/src/address.rs"
 # `role_holders` reopened this by one: the harness takes the Role-tier
 # claimed-wins rule from here instead of matching roles a second time.
 surface-budget = 34
+
+[[module]]
+path = "crates/rimz/src/lsp"
+surface-budget = 74
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -193,7 +197,7 @@ upward-dependencies = [
 # The Markdown definition loader, its rows and errors feed config load and `agents validate`;
 # per-name failures feed launch refusal through the effective-config failed-reference gate.
 # The existing frontmatter splitter supplies Codex's host skill key parser.
-surface-budget = 161
+surface-budget = 164
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -211,7 +215,7 @@ surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/diag"
-surface-budget = 76
+surface-budget = 80
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -232,7 +236,7 @@ allowed-dependencies = [
 # `holds_rimz_home` keeps the home out of project-marker and trust lookups.
 # The runtime pipeline cache path joins the sidebar cache paths.
 # Room entry asks for the legacy roots that can hold config, doctor for all of them.
-surface-budget = 158
+surface-budget = 160
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -278,7 +282,7 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
-surface-budget = 69
+surface-budget = 70
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -429,7 +433,7 @@ surface-budget = 18
 [[module]]
 path = "crates/rimz/src/utils.rs"
 # `tokens` and `env` join `path` and `time` as cross-domain helpers.
-surface-budget = 4
+surface-budget = 5
 
 [[module]]
 path = "crates/rimz/src/web"

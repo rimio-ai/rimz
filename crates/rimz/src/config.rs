@@ -40,6 +40,7 @@ mod gc;
 mod glyphs;
 mod harness;
 mod loop_;
+mod lsp;
 mod mux;
 mod notifications;
 mod pets;
@@ -86,6 +87,7 @@ pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
 pub use loop_::{CheckOn, FileMark, LoopConfig, TaskEntry, TaskTarget, Tasks, WatchSpec};
+pub use lsp::{LspConfig, LspPolicy, LspServerConfig};
 pub use mux::MultiplexerConfig;
 use mux::MuxConfig;
 pub(crate) use mux::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus, ZellijConfig};
@@ -420,6 +422,7 @@ impl ConfigNotices {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MachineConfig {
+    pub lsp: LspConfig,
     /// IANA time zone for displayed times and scheduling. Unset or unknown
     /// falls back to the system zone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -638,6 +641,7 @@ impl MachineConfig {
 
     fn assemble(core: CoreConfig, theme: ThemeConfig, loop_: LoopConfig) -> Self {
         Self {
+            lsp: core.lsp,
             timezone: core.timezone,
             mux: core.mux,
             accounts: core.accounts,
@@ -931,6 +935,7 @@ pub(crate) fn resolve_time_zone(name: Option<&str>) -> jiff::tz::TimeZone {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct CoreConfig {
+    lsp: LspConfig,
     agents: AgentsConfig,
     subagents: SubagentProfilesConfig,
     timezone: Option<String>,
