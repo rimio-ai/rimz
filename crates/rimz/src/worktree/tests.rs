@@ -882,6 +882,216 @@ fn test_worktree_config(parent: &Path) -> WorktreeConfig {
     }
 }
 
+fn hook_config(parent: &Path, created: &str, removed: &str) -> WorktreeConfig {
+    let mut config: WorktreeConfig = toml::from_str(&format!(
+        "[hooks]\ncreated = {}\nremoved = {}\n",
+        toml::Value::String(created.to_owned()),
+        toml::Value::String(removed.to_owned()),
+    ))
+    .unwrap();
+    config.dir = parent.join("worktrees").display().to_string();
+    config
+}
+
+#[test]
+fn created_hook_sees_seeded_tree_and_environment_and_never_runs_on_reuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    std::fs::write(repo.join(".worktreeinclude"), "seed\n").unwrap();
+    std::fs::write(repo.join("seed"), "seeded").unwrap();
+    std::fs::create_dir(repo.join("shared")).unwrap();
+    std::fs::write(repo.join(".worktreelink"), "shared\n").unwrap();
+    let config = hook_config(
+        dir.path(),
+        "test -f seed && test -L shared && printf '%s\\n' \"$PWD\" \"$RIMZ_HOOK_EVENT\" \"$RIMZ_WORKTREE_NAME\" \"$RIMZ_WORKTREE_PATH\" \"$RIMZ_WORKTREE_BRANCH\" \"$RIMZ_WORKTREE_REPO_ROOT\" >> hook-env",
+        ":",
+    );
+    let created = create(&repo, &config, Some("feat/demo"), None, None, false).unwrap();
+    let path = &created.marker.worktree_path;
+    let expected = format!(
+        "{}\nworktree.created\nfeat-demo\n{}\nfeat/demo\n{}\n",
+        path.display(),
+        path.display(),
+        repo.display()
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("hook-env")).unwrap(),
+        expected
+    );
+    create(&repo, &config, Some("feat/demo"), None, None, true).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("hook-env")).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn failed_created_hook_rolls_back_and_fires_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let config = hook_config(
+        dir.path(),
+        "echo stdout-tail; echo stderr-tail >&2; exit 3",
+        "test ! -e \"$RIMZ_WORKTREE_PATH\" && printf '%s\\n' \"$RIMZ_HOOK_EVENT\" > removed",
+    );
+    let err = create(&repo, &config, Some("demo"), None, None, false).expect_err("hook must fail");
+    assert!(matches!(&err, WorktreeErr::CreatedHook { .. }));
+    let message = err.to_string();
+    for expected in [
+        "worktree.created",
+        "3",
+        "stdout-tail",
+        "stderr-tail",
+        "tree removed",
+        "agents.worktree.hooks.created",
+    ] {
+        assert!(message.contains(expected), "{message}");
+    }
+    assert!(!worktree_path(&repo, &config, "demo").unwrap().exists());
+    assert!(git_stdout(&repo, ["rev-parse", "--verify", "refs/heads/demo"]).is_err());
+    assert_eq!(
+        std::fs::read_to_string(repo.join("removed")).unwrap(),
+        "worktree.removed\n"
+    );
+}
+
+#[test]
+fn removed_hook_uses_repo_cwd_and_failure_is_best_effort() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let config = hook_config(
+        dir.path(),
+        ":",
+        "test ! -e \"$RIMZ_WORKTREE_PATH\" && printf '%s\\n' \"$PWD\" \"$RIMZ_HOOK_EVENT\" \"$RIMZ_WORKTREE_NAME\" \"$RIMZ_WORKTREE_PATH\" \"$RIMZ_WORKTREE_BRANCH\" \"$RIMZ_WORKTREE_REPO_ROOT\" > removed; exit 7",
+    );
+    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    remove(&repo, &config, "demo", true, &ProtectionSet::default()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(repo.join("removed")).unwrap(),
+        format!(
+            "{}\nworktree.removed\ndemo\n{}\ndemo\n{}\n",
+            repo.display(),
+            created.marker.worktree_path.display(),
+            repo.display()
+        )
+    );
+}
+
+#[test]
+fn failed_created_hook_reports_rollback_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let config = hook_config(
+        dir.path(),
+        "git worktree lock \"$RIMZ_WORKTREE_PATH\"; echo hook-failed >&2; exit 3",
+        ":",
+    );
+    let err = create(&repo, &config, Some("demo"), None, None, false).expect_err("hook must fail");
+    let message = err.to_string();
+    for expected in [
+        "hook-failed",
+        "rollback failed",
+        "locked",
+        "agents.worktree.hooks.created",
+    ] {
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[test]
+fn sweep_runs_removed_hook_only_after_real_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let config = hook_config(
+        dir.path(),
+        ":",
+        "test ! -e \"$RIMZ_WORKTREE_PATH\" && printf '%s\\n' \"$PWD\" \"$RIMZ_WORKTREE_PATH\" >> swept",
+    );
+    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(&repo);
+    let paths = crate::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let runtime = crate::RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap();
+    let store = crate::Store::open(paths, runtime).unwrap();
+    let protections = ProtectionSet::default();
+    let dry = sweep_owned(&repo, &protections, &store, "test", true, &config.hooks).unwrap();
+    assert_eq!(dry.removed.len(), 1);
+    assert!(!repo.join("swept").exists());
+    assert!(created.marker.worktree_path.exists());
+    let sweep = sweep_owned(&repo, &protections, &store, "test", false, &config.hooks).unwrap();
+    assert_eq!(sweep.removed.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("swept")).unwrap(),
+        format!(
+            "{}\n{}\n",
+            repo.display(),
+            created.marker.worktree_path.display()
+        )
+    );
+}
+
+#[test]
+fn created_hook_timeout_is_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let hooks = crate::config::WorktreeHooks {
+        created: Some("echo before-timeout >&2; sleep 30".to_owned()),
+        ..Default::default()
+    };
+    let start = std::time::Instant::now();
+    let err = hooks::run_hook(
+        &hooks,
+        hooks::WorktreeHookEvent::Created,
+        &created.marker,
+        Duration::from_millis(30),
+    )
+    .expect_err("timeout must fail");
+    assert!(start.elapsed() < Duration::from_secs(5));
+    assert!(err.to_string().contains("timed out"));
+    assert!(err.to_string().contains("before-timeout"));
+}
+
+#[test]
+fn created_hook_failure_output_is_a_bounded_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let hooks = crate::config::WorktreeHooks {
+        created: Some("echo discarded-prefix; printf '%05000d\\n' 0; echo final-out; echo final-err >&2; exit 2".to_owned()),
+        ..Default::default()
+    };
+    let err = hooks::run_hook(
+        &hooks,
+        hooks::WorktreeHookEvent::Created,
+        &created.marker,
+        Duration::from_secs(5),
+    )
+    .expect_err("exit must fail");
+    let message = err.to_string();
+    assert!(!message.contains("discarded-prefix"));
+    assert!(message.contains("final-out"));
+    assert!(message.contains("final-err"));
+    assert!(message.len() < 8500);
+}
+
+#[test]
+fn absent_worktree_hooks_spawn_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
+    let before = crate::proc::testkit::spawn_count();
+    for event in [
+        hooks::WorktreeHookEvent::Created,
+        hooks::WorktreeHookEvent::Removed,
+    ] {
+        hooks::run_hook(&config.hooks, event, &created.marker, Duration::ZERO).unwrap();
+    }
+    assert_eq!(crate::proc::testkit::spawn_count(), before);
+}
+
 #[test]
 fn protection_facts_filter_sidebar_own_and_count_user_panes() {
     let worktree = Path::new("/repo-worktrees/demo");

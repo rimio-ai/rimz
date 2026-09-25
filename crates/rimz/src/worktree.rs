@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::agents::AgentState;
 use crate::agents::attribution::{LaneLifetime, LaneLifetimes};
-use crate::config::{WorktreeBase, WorktreeConfig};
+use crate::config::{WorktreeBase, WorktreeConfig, WorktreeHooks};
 use crate::forge::PrTarget;
 use crate::ids::PaneId;
 use crate::pane::PaneRef;
@@ -24,6 +24,7 @@ use crate::utils::path::normalize_path_lexical;
 use crate::workspace::{ResolvedWorkspace, RootClass};
 
 mod exclude;
+mod hooks;
 mod include;
 mod link;
 mod pr;
@@ -46,6 +47,12 @@ const AUTO_NOUNS: &[&str] = &[
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorktreeErr {
+    #[error(transparent)]
+    HookConfig(#[from] crate::config::WorktreeHooksConfigErr),
+    #[error(
+        "worktree.created hook failed: {reason}\n{rollback}; fix agents.worktree.hooks.created"
+    )]
+    CreatedHook { reason: String, rollback: String },
     #[error("rimz worktrees require a git repository; run from a repo checkout")]
     NotRepo,
     #[error("--worktree requires a git repository-backed room")]
@@ -544,6 +551,7 @@ pub fn create(
     branch: Option<&str>,
     reuse_existing: bool,
 ) -> Result<CreatedWorktree> {
+    config.hooks.validate()?;
     ensure_repo(repo_root)?;
     let FreshWorktree {
         name,
@@ -570,6 +578,7 @@ pub fn create(
             from_pr: None,
         },
         Checkout::NewBranch(&checkout_base_ref),
+        &config.hooks,
     )
 }
 
@@ -717,7 +726,7 @@ pub fn remove(
             }
         }
     }
-    remove_marked_worktree(repo_root, &path, &marker, force)
+    remove_marked_worktree(repo_root, &path, &marker, force, &config.hooks)
 }
 
 /// Resolve one named RimZ-owned worktree without accepting an arbitrary Git
@@ -841,7 +850,9 @@ pub fn sweep_owned(
     store: &crate::Store,
     session_name: &str,
     dry_run: bool,
+    hooks: &WorktreeHooks,
 ) -> Result<WorktreeSweep> {
+    hooks.validate()?;
     let entries = discover_owned(repo_root)?
         .into_iter()
         .map(|entry| {
@@ -868,7 +879,7 @@ pub fn sweep_owned(
             });
             continue;
         }
-        match remove_marked_worktree(repo_root, &entry.path, &entry.marker, false) {
+        match remove_marked_worktree(repo_root, &entry.path, &entry.marker, false, hooks) {
             Ok(removed) => {
                 let retirement = retire_removal(
                     store,
@@ -939,7 +950,9 @@ pub fn remove_marked_worktree(
     path: &Path,
     marker: &WorktreeMarker,
     force: bool,
+    hooks: &WorktreeHooks,
 ) -> Result<RemovalOutcome> {
+    hooks.validate()?;
     ensure_repo(repo_root)?;
     leave_worktree_before_removal(repo_root, path)?;
     let mut args = vec!["worktree", "remove"];
@@ -951,6 +964,14 @@ pub fn remove_marked_worktree(
     git_run(repo_root, args)?;
     if let Err(error) = crate::lsp::registry::stop_checkout(path) {
         tracing::debug!(%error, "language-server checkout removal notification failed");
+    }
+    if let Err(error) = hooks::run_hook(
+        hooks,
+        hooks::WorktreeHookEvent::Removed,
+        marker,
+        hooks::TIMEOUT,
+    ) {
+        tracing::warn!(worktree = %marker.name, error = %error, "worktree.removed hook failed");
     }
     let branch_deletion = delete_branch(repo_root, marker, force)?;
     Ok(RemovalOutcome {
@@ -1269,6 +1290,7 @@ fn add_worktree(
     branch: String,
     provenance: MarkerProvenance,
     checkout: Checkout<'_>,
+    hooks: &WorktreeHooks,
 ) -> Result<CreatedWorktree> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1303,7 +1325,7 @@ fn add_worktree(
             ["worktree", "add", path_arg.as_str(), branch.as_str()],
         )?,
     }
-    finish_worktree(repo_root, name, path, branch, provenance)
+    finish_worktree(repo_root, name, path, branch, provenance, hooks)
 }
 
 fn finish_worktree(
@@ -1312,6 +1334,7 @@ fn finish_worktree(
     path: PathBuf,
     branch: String,
     provenance: MarkerProvenance,
+    hooks: &WorktreeHooks,
 ) -> Result<CreatedWorktree> {
     let MarkerProvenance {
         base_branch,
@@ -1332,6 +1355,21 @@ fn finish_worktree(
     write_marker(&path, &marker)?;
     let included = include::copy_includes(repo_root, &path);
     let linked = link::link_dirs(repo_root, &path);
+    if let Err(error) = hooks::run_hook(
+        hooks,
+        hooks::WorktreeHookEvent::Created,
+        &marker,
+        hooks::TIMEOUT,
+    ) {
+        let rollback = match remove_marked_worktree(repo_root, &path, &marker, true, hooks) {
+            Ok(_) => "tree removed".to_owned(),
+            Err(error) => format!("rollback failed: {error}"),
+        };
+        return Err(WorktreeErr::CreatedHook {
+            reason: error.to_string(),
+            rollback,
+        });
+    }
     Ok(CreatedWorktree {
         marker,
         included,

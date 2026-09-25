@@ -423,6 +423,7 @@ fn sweep_worktrees(
         &store,
         &workspace.session_name,
         dry_run,
+        &super::machine_config().agents.worktree.hooks,
     )?;
     report_sweep(&sweep, dry_run)?;
     let problems = sweep.failed.len()
@@ -520,6 +521,7 @@ pub(super) fn cleanup_worktree(
     let Some(marker) = rimz::worktree::read_marker_for_worktree(path)? else {
         return Ok(());
     };
+    let config = super::machine_config();
     let status = rimz::worktree::status(path, &marker)?;
     if !interactive {
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
@@ -529,7 +531,13 @@ pub(super) fn cleanup_worktree(
         super::worktree_protection::for_wrapper_cleanup(&workspace, globals).protections;
     match protections.assess(path, status) {
         rimz::worktree::RemovalAssessment::Removable => {
-            let removed = remove_for_cleanup(path, &marker, &workspace, false)?;
+            let removed = remove_for_cleanup(
+                path,
+                &marker,
+                &workspace,
+                false,
+                &config.agents.worktree.hooks,
+            )?;
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: removed clean worktree {}",
@@ -542,7 +550,13 @@ pub(super) fn cleanup_worktree(
                 match dirty_choice(path)? {
                     DirtyChoice::Keep => {}
                     DirtyChoice::Remove => {
-                        let removed = remove_for_cleanup(path, &marker, &workspace, true)?;
+                        let removed = remove_for_cleanup(
+                            path,
+                            &marker,
+                            &workspace,
+                            true,
+                            &config.agents.worktree.hooks,
+                        )?;
                         report_kept_branch(&removed);
                     }
                     DirtyChoice::Shell => exec_shell(path)?,
@@ -583,8 +597,10 @@ fn remove_for_cleanup(
     marker: &rimz::worktree::WorktreeMarker,
     workspace: &ResolvedWorkspace,
     force: bool,
+    hooks: &rimz::config::WorktreeHooks,
 ) -> Result<rimz::worktree::RemovalOutcome> {
-    let removed = rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)?;
+    let removed =
+        rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force, hooks)?;
     let store = open_store(workspace);
     match store {
         Ok(store) => {
