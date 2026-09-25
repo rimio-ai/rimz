@@ -63,7 +63,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[],
     },
     capabilities: Capabilities {
-        hook_context: false,
+        hook_context: true,
         // Droid draws its own permission and question prompts; `Notification`
         // announces them without an id or options, so the pane stays the
         // answer surface.
@@ -333,6 +333,17 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
                 )))
             }
         }
+    }
+
+    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
+        if decoded.event_name() != "PostToolUse" {
+            return false;
+        }
+        decoded.merge_reply_object([(
+            "hookSpecificOutput".to_owned(),
+            serde_json::json!({"additionalContext": text}),
+        )]);
+        true
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {

@@ -108,7 +108,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         ],
     },
     capabilities: Capabilities {
-        hook_context: false,
+        hook_context: true,
         native_ask_ui: true,
         transcript_tail_context: false,
         // Claude stamps a live pane on every session, so it opts out of the
@@ -701,6 +701,17 @@ fn deny_native_tool(extra_args: &mut Vec<String>, denied_tool: &str) {
 impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
     fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
         hook_ingress_decision(pid, remote_control::spawned_by_remote_control())
+    }
+
+    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
+        if decoded.event_name() != "PostToolUse" {
+            return false;
+        }
+        decoded.merge_reply_object([(
+            "hookSpecificOutput".to_owned(),
+            serde_json::json!({"hookEventName": "PostToolUse", "additionalContext": text}),
+        )]);
+        true
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {

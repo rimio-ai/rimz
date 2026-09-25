@@ -188,4 +188,31 @@ mod tests {
         assert_eq!(kill_at(&record), None);
         assert_eq!(due_rung(&record, deadline), None);
     }
+
+    #[test]
+    fn stop_uses_exactly_one_provider_channel() {
+        for kind in [
+            "claude", "codex", "copilot", "cursor", "droid", "grok", "qwen",
+        ] {
+            assert_eq!(stop_channel(kind), StopChannel::Hook, "{kind}");
+        }
+        for kind in [
+            "amp",
+            "opencode",
+            "pi",
+            "antigravity",
+            "kimi",
+            "kiro",
+            "unregistered",
+        ] {
+            assert_eq!(stop_channel(kind), StopChannel::Pane, "{kind}");
+        }
+        let mut record = record();
+        let deadline = record.deadline_at.unwrap();
+        assert!(!stop_due_by_pane(&record, deadline));
+        record.kind = AgentKind::new_unchecked("kimi");
+        assert!(stop_due_by_pane(&record, deadline));
+        record.grace = None;
+        assert!(!stop_due_by_pane(&record, deadline));
+    }
 }

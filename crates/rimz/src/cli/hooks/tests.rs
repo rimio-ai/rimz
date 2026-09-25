@@ -57,6 +57,133 @@ fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
     (dir, store)
 }
 
+#[test]
+fn deadline_context_reaches_only_the_root_post_tool_consumer_once() {
+    use rimz::agents::HookReply;
+    use rimz::harness::launch::ENV_RUN_ID;
+    use rimz::store::run::{RunRecord, RunStatus};
+    use std::time::Duration;
+
+    if std::env::var_os("RIMZ_TEST_DEADLINE_FEED").is_none() {
+        let run_id = rimz::RunId::new();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                concat!(
+                    module_path!(),
+                    "::deadline_context_reaches_only_the_root_post_tool_consumer_once"
+                )
+                .split_once("::")
+                .unwrap()
+                .1,
+                "--nocapture",
+            ])
+            .env("RIMZ_TEST_DEADLINE_FEED", "1")
+            .env(ENV_RUN_ID, run_id.as_str())
+            .env_remove(rimz::harness::launch::ENV_AGENT_ID)
+            .env_remove(rimz::harness::launch::ENV_AGENT_NAME)
+            .env("RIMZ_BIN", "/nonexistent/rimz")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let (_dir, store) = hooks_test_store();
+    let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+    let mut record = RunRecord::new(
+        store.paths().workspace_id.clone(),
+        adapter.spec().kind_id(),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        "/tmp/hooks-test".into(),
+    );
+    record.run_id = rimz::RunId::parse(&std::env::var(ENV_RUN_ID).unwrap()).unwrap();
+    record.agent_id = Some("deadline-child".into());
+    record.subagent = true;
+    record.status = RunStatus::Running;
+    record.timeout = Some(Duration::from_secs(1800));
+    record.warn = vec![Duration::from_secs(360), Duration::from_secs(180)];
+    record.grace = Some(Duration::from_secs(180));
+    record.deadline_at = Some(jiff::Timestamp::now() + Duration::from_secs(299));
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let feed = |event, native_child: bool| {
+        let mut payload = serde_json::json!({"session_id":"deadline-child", "cwd":"/tmp/hooks-test", "tool_name":"Read", "tool_input":{}, "tool_response":{}});
+        if native_child {
+            payload["agent_id"] = serde_json::json!("native-child");
+        }
+        let mut decoded = adapter.decode_hook(event, &payload).unwrap();
+        assert_eq!(
+            decoded.lifecycle().unwrap().parent_agent_id.is_some(),
+            native_child
+        );
+        handle_lifecycle_hook(
+            &hooks_test_workspace(Some("main")),
+            &store,
+            adapter,
+            &mut decoded,
+            &payload,
+            rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+            &hooks_test_globals(),
+        )
+        .unwrap();
+        decoded.reply().clone()
+    };
+    assert_eq!(feed("PreToolUse", false), HookReply::Silent);
+    assert_eq!(feed("PostToolUse", true), HookReply::Silent);
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &record.run_id)
+            .unwrap()
+            .deadline_notice_at,
+        None
+    );
+    let reply = |text| {
+        HookReply::Json(
+            serde_json::json!({"hookSpecificOutput":{"hookEventName":"PostToolUse", "additionalContext":text}}),
+        )
+    };
+    assert_eq!(
+        feed("PostToolUse", false),
+        reply(
+            "4m of 30m left. Don't start new investigation; if the task can be finished in a few more steps, finish it, otherwise prepare to report."
+        )
+    );
+    assert_eq!(feed("PostToolUse", false), HookReply::Silent);
+    record = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(
+        record.deadline_notice_at,
+        record.deadline_at.map(|at| at - Duration::from_secs(360))
+    );
+    record.deadline_at = Some(jiff::Timestamp::now() + Duration::from_secs(150));
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    assert_eq!(
+        feed("PostToolUse", false),
+        reply(
+            "2m left. Wrap up now: finish only what is in flight, then report what is done, what is unverified, and what remains."
+        )
+    );
+    record = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+    record.deadline_at = Some(jiff::Timestamp::now() - Duration::from_secs(1));
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    assert_eq!(
+        feed("PostToolUse", false),
+        reply(
+            "Time is up. Stop now and report what is done, what is unverified, and what remains. End your turn."
+        )
+    );
+    assert_eq!(feed("PostToolUse", false), HookReply::Silent);
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &record.run_id)
+            .unwrap()
+            .deadline_notice_at,
+        record.deadline_at
+    );
+}
+
 fn hooks_test_workspace(worktree_branch: Option<&str>) -> rimz::ResolvedWorkspace {
     rimz::ResolvedWorkspace {
         workspace_id: rimz::ids::WorkspaceId::from_project_root(std::path::Path::new(

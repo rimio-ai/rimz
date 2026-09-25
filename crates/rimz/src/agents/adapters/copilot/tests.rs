@@ -8,6 +8,17 @@ use crate::agents::{AgentErr, AgentHookClass, AgentStatus};
 use serde_json::json;
 
 #[test]
+fn deadline_context_reply_matches_native_post_tool_contract() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("copilot", "postToolUse");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "additionalContext": "deadline context"
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"null");
+}
+
+#[test]
 fn version_parser_ignores_the_copilot_update_notice() {
     assert_eq!(
         CopilotAdapter

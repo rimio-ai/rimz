@@ -4,9 +4,24 @@ use std::io::Write as _;
 use serde_json::{Value, json};
 
 use super::*;
+
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 use crate::agents::transcript::TranscriptCursor;
 use crate::agents::{AgentHookClass, AskKind, CostCoverage};
+
+#[test]
+fn deadline_context_reply_matches_native_post_tool_contract() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("qwen", "PostToolUse");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "hookSpecificOutput": {
+        "additionalContext": "deadline context",
+        "hookEventName": "PostToolUse"
+      }
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"null");
+}
 
 const REWOUND_SESSION: &str = include_str!("tests/fixtures/rewound-session.jsonl");
 

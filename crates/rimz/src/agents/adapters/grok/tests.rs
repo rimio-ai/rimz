@@ -1,8 +1,22 @@
 use serde_json::json;
 
 use super::*;
+
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 use crate::agents::{AgentHookClass, ClassificationSample, ClassifiedHook};
+
+#[test]
+fn deadline_context_reply_matches_native_post_tool_contract() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("grok", "PostToolUse");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "hookSpecificOutput": {
+        "additionalContext": "deadline context"
+      }
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"null");
+}
 
 pub(super) fn classification_corpus() -> Vec<ClassificationSample> {
     let mut samples = crate::agents::hook_types::catalog_classification_corpus(GROK_HOOKS);

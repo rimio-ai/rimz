@@ -199,6 +199,22 @@ pub(super) fn handle_lifecycle_hook(
             recorded,
             assistant_message.as_deref(),
         );
+        if recorded.observation.parent_agent_id.is_none()
+            && matches!(
+                recorded.observation.signal,
+                LifecycleSignal::ToolUsed { .. }
+            )
+            && agent.spec().capabilities.hook_context
+            && let Some(run_id) = env_run_id()
+            && let Err(error) = rimz::harness::run::claim_rung(
+                store.paths(),
+                &run_id,
+                jiff::Timestamp::now(),
+                |rung| agent.attach_hook_context(decoded, &rung.text()),
+            )
+        {
+            warn!(%run_id, %error, "lifecycle: failed to claim deadline context");
+        }
         let delivered =
             confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
         record_user_input_for_lifecycle(

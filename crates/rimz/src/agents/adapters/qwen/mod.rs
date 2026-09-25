@@ -73,7 +73,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
         ],
     },
     capabilities: Capabilities {
-        hook_context: false,
+        hook_context: true,
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: false,
@@ -493,6 +493,17 @@ impl crate::agents::capabilities::HookCapability for QwenAdapter {
         super::HookIngressDecision::Accept(super::HookIngressAcceptance::agent(
             pid.and_then(process::hook_owner_pid),
         ))
+    }
+
+    fn attach_hook_context(&self, decoded: &mut HookOutput, text: &str) -> bool {
+        if decoded.event_name() != "PostToolUse" {
+            return false;
+        }
+        decoded.merge_reply_object([(
+            "hookSpecificOutput".to_owned(),
+            serde_json::json!({"hookEventName": "PostToolUse", "additionalContext": text}),
+        )]);
+        true
     }
 
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {

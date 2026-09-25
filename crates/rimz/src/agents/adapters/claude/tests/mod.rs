@@ -14,6 +14,20 @@ mod local_context;
 mod subagents;
 
 #[test]
+fn deadline_context_reply_matches_native_post_tool_contract() {
+    let (post, other) = crate::agents::testkit::deadline_context_replies("claude", "PostToolUse");
+    insta::assert_json_snapshot!(post, @r#"
+    {
+      "hookSpecificOutput": {
+        "additionalContext": "deadline context",
+        "hookEventName": "PostToolUse"
+      }
+    }
+    "#);
+    insta::assert_json_snapshot!(other, @"null");
+}
+
+#[test]
 fn host_skills_merge_settings_once_and_use_directory_names() {
     use crate::agents::skills::{HostSkills, SkillDir};
     let root = tempfile::tempdir().unwrap();
