@@ -198,7 +198,8 @@ upward-dependencies = [
 # The Markdown definition loader, its rows and errors feed config load and `agents validate`;
 # per-name failures feed launch refusal through the effective-config failed-reference gate.
 # The existing frontmatter splitter supplies Codex's host skill key parser.
-surface-budget = 164
+# Worktree lifecycle hooks and their validation error cross the config/worktree seam.
+surface-budget = 166
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -505,7 +506,8 @@ surface-budget = 4
 [[module]]
 path = "crates/rimz/src/config/worktree.rs"
 allowed-dependencies = []
-surface-budget = 4
+# Lifecycle commands and validation are consumed by worktree creation and removal.
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/message/send.rs"
