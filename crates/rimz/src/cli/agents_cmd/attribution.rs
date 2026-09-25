@@ -90,21 +90,14 @@ pub(super) fn attribution(
         .active_grace_secs
         .get();
     let now = jiff::Timestamp::now();
-    let active_secs = rimz::store::active_time::read_for_keys(
+    let active_secs = rimz::store::active_time::display_secs_for_keys(
         ctx.runtime(),
         agents
             .iter()
-            .filter(|agent| !agent.is_launched_child())
             .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
-    )
-    .into_iter()
-    .map(|record| {
-        (
-            (record.kind.clone(), record.agent_id.clone()),
-            record.display_secs(now, active_grace_secs),
-        )
-    })
-    .collect();
+        now,
+        active_grace_secs,
+    );
     let report = rimz::agents::attribution::build(AttributionRequest {
         agents: &agents,
         lifetimes: &lifetimes,

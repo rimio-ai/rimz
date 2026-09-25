@@ -97,7 +97,8 @@ upward-dependencies = ["address"]
 # Host skill discovery, provider switches and their compiled report cross config, harness and CLI seams.
 # Shared-server launches disable provider-native LSP through the launch capability.
 # ContextCapability::prompt_cache_ttl supplies provider cache facts to idle-compaction policy.
-surface-budget = 884
+# The seat active-time sum and its session map are shared by store, sidebar and CLI.
+surface-budget = 886
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

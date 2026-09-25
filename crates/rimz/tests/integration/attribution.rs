@@ -1096,6 +1096,29 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
         ))
         .expect("register child");
 
+    let start = jiff::Timestamp::from_second(1_000).unwrap();
+    for (session, seconds) in [
+        ("sess-attribution-parent", 60),
+        ("sess-attribution-child", 120),
+    ] {
+        rimz::store::active_time::record_progress(
+            &env.runtime_paths(),
+            "claude",
+            session,
+            start,
+            180,
+        )
+        .expect("open active span");
+        rimz::store::active_time::record_stop(
+            &env.runtime_paths(),
+            "claude",
+            session,
+            start + jiff::SignedDuration::from_secs(seconds),
+            180,
+        )
+        .expect("close active span");
+    }
+
     let run_json = |args: &[&str]| {
         let output = env
             .rimz()
@@ -1115,6 +1138,8 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
     let default = run_json(&["agents", "attribution", "--json"]);
     assert_eq!(default["totals"]["agents"], 1);
     assert_eq!(default["totals"]["cost_usd"], 4.0);
+    assert_eq!(default["totals"]["active_secs"], 180);
+    assert_eq!(default["groups"][0]["members"][0]["active_secs"], 180);
     assert!(
         default["groups"][0]["members"][0]["subagents"][0]
             .get("origin")
@@ -1127,6 +1152,7 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
     let all = run_json(&["agents", "attribution", "--all", "--json"]);
     assert_eq!(all["totals"]["agents"], 1);
     assert_eq!(all["totals"]["cost_usd"], 4.0);
+    assert_eq!(all["totals"]["active_secs"], 180);
 
     let markdown = env
         .rimz()
@@ -1137,6 +1163,8 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
         .expect("run Markdown attribution");
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).expect("Markdown utf8");
-    assert!(markdown.contains("  - effort: $4.00\n  - subagents: 1 × explorer · $3.00"));
+    assert!(
+        markdown.contains("  - effort: 3m active · $4.00\n  - subagents: 1 × explorer · $3.00")
+    );
     assert!(!markdown.contains("launched"));
 }

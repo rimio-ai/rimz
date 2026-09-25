@@ -557,7 +557,7 @@ Which agents count:
 
 The panel names the applied `branch <name>` and any `since` boundary above the groups, then groups members by team. Each member line shows handle, provider, and model with effort, followed by labelled lines in the order `effort`, `subagents`, `activity`, `messages`, `tokens`; an unavailable figure's line or part is omitted.
 
-- `effort` is active time and cost. Cost and tokens are all-in: the member plus every subagent it spawned, the same figure `agents show`, `teams show`, and the sidebar report.
+- `effort` is active time and cost. Active time includes the seat and the pane-backed children it launched. Cost and tokens are all-in: the member plus every subagent it spawned, the same figure `agents show`, `teams show`, and the sidebar report.
 - `subagents` breaks that spend down by task as `{count} × {task}, … · {cost}`; the cost is already inside `effort`. Tasks come from provider-reported types and launch profiles, and missing or description-like types group as `other`.
 - `activity` leads with asks, then tool calls.
 - `messages` reads `{n} from you · {n} from teammates · {n} to teammates`, excluding RimZ automation. Sent messages are credited by handle, so a message sent by an excluded session still credits the handle a counted session holds.
@@ -593,7 +593,7 @@ The `--json` document has the keys `schema` (`7`), `generated_at`, `rimz_version
 | model row | `model` (`null` when unnamed), `tokens`, `cost_usd` |
 | `totals` (group and document) | `agents`, `active_secs`, `wall_clock_secs`, `cost_usd`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens` |
 
-`cost_usd` and `tokens` are all-in at every level; `active_secs`, asks, tool calls, compactions, and messages count the member's own seat. `sessions` counts the seat's own sessions, never children. A member's `models` splits that member's figures; the document's `models` is the list the panel and `--md` render, and groups carry none. Active time comes from per-session sidecars that `rimz gc` removes after its runtime retention (`gc.older_than`, 7 days by default); older credit keeps its other figures with `active_secs` set to `null`.
+`cost_usd`, `tokens`, and `active_secs` are all-in at every level; asks, tool calls, compactions, and messages count the member's own seat. `sessions` counts the seat's own sessions, never children. A member's `models` splits that member's figures; the document's `models` is the list the panel and `--md` render, and groups carry none. Active time comes from per-session sidecars that `rimz gc` removes after its runtime retention (`gc.older_than`, 7 days by default); a seat with no retained active-time records keeps its other figures with `active_secs` set to `null`.
 
 #### `top`
 
