@@ -516,6 +516,10 @@ fn rebirth_recovery_globally_orders_fresher_flat_before_team() {
     let plan = fixture.inspect_with(&team_machine(), false);
 
     assert_eq!(plan.preview().labels()[0], "#flat");
+    assert_eq!(
+        plan.checkout_roots(),
+        BTreeSet::from([flat_worktree.as_path(), team_worktree.as_path()])
+    );
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
     assert_eq!(outcome.tabs[0].cwd, flat_worktree);
     assert_eq!(outcome.tabs[1].cwd, team_worktree);

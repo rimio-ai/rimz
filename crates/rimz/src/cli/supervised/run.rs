@@ -572,6 +572,9 @@ fn prepare_supervised(
         )?;
     }
     let mut preflight_launch = agent_cell.launch.clone();
+    if !request.subagent {
+        crate::cli::lsp_admission::admit(&launch.cwd)?;
+    }
     preflight_launch.channel.clone_from(&request.channel);
     let mut launch_invocation =
         rimz::harness::launch::ExecRequest::bare_launch(agent_cell.kind.clone(), Vec::new());

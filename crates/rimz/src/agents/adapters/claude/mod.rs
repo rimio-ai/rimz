@@ -644,44 +644,57 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
     }
 
     fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {
-        const FLAGS: [&str; 2] = ["--disallowedTools", "--disallowed-tools"];
-
-        let mut denied = Vec::new();
-        let mut retained = Vec::with_capacity(extra_args.len());
-        let mut index = 0;
-        while index < extra_args.len() {
-            let arg = &extra_args[index];
-            if FLAGS.contains(&arg.as_str()) {
-                index += 1;
-                while index < extra_args.len() && !extra_args[index].starts_with('-') {
-                    denied.push(extra_args[index].clone());
-                    index += 1;
-                }
-                continue;
-            }
-            if let Some(value) = FLAGS.iter().find_map(|flag| {
-                arg.strip_prefix(flag)
-                    .and_then(|suffix| suffix.strip_prefix('='))
-            }) {
-                denied.push(value.to_owned());
-                index += 1;
-                continue;
-            }
-            retained.push(arg.clone());
-            index += 1;
-        }
-
-        let mut unique_denied = Vec::new();
-        for tool in denied {
-            if tool != "Agent" && !tool.starts_with("Agent(") && !unique_denied.contains(&tool) {
-                unique_denied.push(tool);
-            }
-        }
-        unique_denied.push("Agent".to_owned());
-        retained.push("--disallowedTools".to_owned());
-        retained.extend(unique_denied);
-        *extra_args = retained;
+        deny_native_tool(extra_args, "Agent");
     }
+
+    fn disable_native_lsp_args(&self, extra_args: &mut Vec<String>) {
+        deny_native_tool(extra_args, "LSP");
+    }
+}
+
+fn deny_native_tool(extra_args: &mut Vec<String>, denied_tool: &str) {
+    const FLAGS: [&str; 2] = ["--disallowedTools", "--disallowed-tools"];
+
+    let mut denied = Vec::new();
+    let mut retained = Vec::with_capacity(extra_args.len());
+    let mut index = 0;
+    while index < extra_args.len() {
+        let arg = &extra_args[index];
+        if FLAGS.contains(&arg.as_str()) {
+            index += 1;
+            while index < extra_args.len() && !extra_args[index].starts_with('-') {
+                denied.push(extra_args[index].clone());
+                index += 1;
+            }
+            continue;
+        }
+        if let Some(value) = FLAGS.iter().find_map(|flag| {
+            arg.strip_prefix(flag)
+                .and_then(|suffix| suffix.strip_prefix('='))
+        }) {
+            denied.push(value.to_owned());
+            index += 1;
+            continue;
+        }
+        retained.push(arg.clone());
+        index += 1;
+    }
+
+    let mut unique_denied = Vec::new();
+    for tool in denied {
+        if tool != denied_tool
+            && !tool
+                .strip_prefix(denied_tool)
+                .is_some_and(|suffix| suffix.starts_with('('))
+            && !unique_denied.contains(&tool)
+        {
+            unique_denied.push(tool);
+        }
+    }
+    unique_denied.push(denied_tool.to_owned());
+    retained.push("--disallowedTools".to_owned());
+    retained.extend(unique_denied);
+    *extra_args = retained;
 }
 
 impl crate::agents::capabilities::HookCapability for ClaudeAdapter {

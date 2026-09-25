@@ -342,6 +342,9 @@ pub trait LaunchCapability: CoreCapability {
     /// unchanged for providers without a verified native switch.
     fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}
 
+    /// Disable private language servers when RimZ owns the checkout's servers.
+    fn disable_native_lsp_args(&self, _extra_args: &mut Vec<String>) {}
+
     /// Provider channel for additive launch-scoped system or developer text.
     /// The default leaves callers to deliver the text through the user prompt.
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {

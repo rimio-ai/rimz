@@ -27,6 +27,34 @@ fn terminal_fixture() -> Terminal {
 }
 
 #[test]
+fn shared_language_servers_show_tombstones_and_last_refusal() {
+    let entry = serde_json::from_value(serde_json::json!({
+        "root": "/checkout", "server": "rust", "nonce": "nonce", "broker_pid": 1, "broker_start_token": "token",
+        "server_pid": null, "server_start_token": null,
+        "state": {"stopped": {"reason": "memory pressure", "at_ms": 1}},
+        "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "hash",
+        "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []
+    })).unwrap();
+    let lsp = Probe::Ready(super::super::model::Lsp {
+        servers: vec![super::super::model::LspServer {
+            entry,
+            rss_bytes: 0,
+        }],
+        last_refusal: Some(rimz::diag::lsp::Record {
+            at: "2026-01-01T00:00:00Z".parse().unwrap(),
+            root: "/other".into(),
+            server: "rust".into(),
+            event: "queue_timeout".into(),
+            details: serde_json::json!({"estimate_bytes": 8_000_000_000_u64}),
+        }),
+    });
+    let rendered = strip(|w| render_lsp(w, &lsp, &mut Tally::default()));
+    assert!(rendered.contains("stopped: memory pressure"));
+    assert!(rendered.contains("LEASES"));
+    assert!(rendered.contains("/other rust queue_timeout"));
+}
+
+#[test]
 fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
     for mode in [
         rimz::config::Isolation::Host,
@@ -237,6 +265,10 @@ fn storage_fixture() -> Storage {
 fn report_fixture() -> DoctorReport {
     DoctorReport {
         schema: "rimz.doctor.v1",
+        lsp: Probe::Ready(super::super::model::Lsp {
+            servers: Vec::new(),
+            last_refusal: None,
+        }),
         version: rimz::build_id::VERSION,
         host: Host {
             user: None,

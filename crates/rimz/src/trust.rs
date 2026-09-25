@@ -147,6 +147,7 @@ pub struct BirthPromptOffer {
 /// Human summary of the executable surface in project config.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SurfaceSummary {
+    pub lsp_servers: Vec<String>,
     pub task_names: Vec<String>,
     pub profiles: Vec<String>,
     pub subagent_profiles: Vec<String>,
@@ -159,6 +160,18 @@ pub struct SurfaceSummary {
 impl SurfaceSummary {
     fn from_config(config: &ProjectConfig) -> Self {
         Self {
+            lsp_servers: config
+                .lsp
+                .servers
+                .iter()
+                .map(|(name, server)| {
+                    format!(
+                        "{name}: {}",
+                        shlex::try_join(server.command.iter().map(String::as_str))
+                            .unwrap_or_else(|_| format!("{:?}", server.command))
+                    )
+                })
+                .collect(),
             task_names: config.tasks.keys().cloned().collect(),
             profiles: config.profiles.keys().cloned().collect(),
             subagent_profiles: config.subagents.profiles.keys().cloned().collect(),

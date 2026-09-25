@@ -26,6 +26,7 @@ mod list_themes;
 mod loop_cmd;
 mod loop_timer;
 mod lsp;
+mod lsp_admission;
 mod message;
 mod pane;
 mod paths;

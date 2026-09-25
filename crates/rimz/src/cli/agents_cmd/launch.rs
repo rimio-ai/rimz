@@ -289,6 +289,7 @@ pub(super) fn launch_layout(
     if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
         rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_patterns());
     }
+    crate::cli::lsp_admission::admit(&launch.cwd)?;
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
             std::io::stderr(),
@@ -511,6 +512,7 @@ fn launch_resume_layout(
         .cwd
         .clone()
         .context("cohort resume matched no working directory")?;
+    crate::cli::lsp_admission::admit(&cwd)?;
     if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
         rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_patterns());
     }

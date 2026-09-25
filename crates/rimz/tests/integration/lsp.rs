@@ -5,6 +5,43 @@ use assert_cmd::assert::OutputAssertExt;
 use rimz::config::{MachineConfig, effective};
 
 #[test]
+fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
+    let env = Env::new();
+    crate::common::write_kind_base(&env, "claude");
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), "[agents]\nisolation = 'host'\n[lsp]\nreserve-min = '1000000G'\n[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = 'required'\nwait-timeout = '1s'\n").unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "claude", "inspect", "-p"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("waiting to start language server rust"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("position 1 in the queue"), "{stderr}");
+    assert!(
+        stderr.contains("required but memory stayed short for 1s"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("stop one with rimz lsp stop"), "{stderr}");
+    assert!(
+        rimz::harness::run::list(env.store().paths())
+            .unwrap()
+            .is_empty()
+    );
+    let output = env.rimz().args(["doctor", "--json"]).output().unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["lsp"]["ready"]["last_refusal"]["event"],
+        "queue_timeout"
+    );
+}
+
+#[test]
 fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
     use rimz::lsp::{admission::ServeRequest, registry};
     use serde_json::{Value, json};

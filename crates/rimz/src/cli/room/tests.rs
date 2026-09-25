@@ -49,6 +49,7 @@ fn trust_birth_prompt_offer_renders_only_present_summary_lines() {
     let offer = BirthPromptOffer {
         current_hash: "sha256:test".to_owned(),
         summary: SurfaceSummary {
+            lsp_servers: vec!["rust: rust-analyzer".to_owned()],
             task_names: vec!["sync".to_owned()],
             profiles: Vec::new(),
             subagent_profiles: Vec::new(),
@@ -71,6 +72,7 @@ fn trust_birth_prompt_offer_renders_only_present_summary_lines() {
             "  loop tasks: sync\n",
             "  env for: claude\n",
             "  accounts: claude=work\n",
+            "  language servers: rust: rust-analyzer\n",
             "  hooks: 2\n",
         )
     );

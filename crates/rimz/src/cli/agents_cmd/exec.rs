@@ -144,6 +144,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
     let process = plan.process();
+    if let Some(launch_id) = request.identity.launch_id.as_deref()
+        && let Err(error) = rimz::lsp::lease::register(&provider_cwd, launch_id, std::process::id())
+    {
+        tracing::debug!(%error, "language-server lease registration failed");
+    }
     if let rimz::harness::launch::AgentProcessStage::LoginShellReentry { argv, .. } = &plan.stage {
         let (program, rest) = argv
             .split_first()
@@ -265,6 +270,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         RunExitContext {
             run: run_context.as_ref(),
             keep,
+            checkout: &provider_cwd,
         },
         launch_identity.as_ref(),
         entered_worktree.as_deref(),
@@ -275,6 +281,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
 struct RunExitContext<'a> {
     run: Option<&'a RunExecContext>,
     keep: bool,
+    checkout: &'a Path,
 }
 
 fn settle_after_exit(
@@ -286,7 +293,16 @@ fn settle_after_exit(
     entered_worktree: Option<&Path>,
     outcome: ExecOutcome,
 ) -> ! {
-    let RunExitContext { run, keep } = run_exit;
+    let RunExitContext {
+        run,
+        keep,
+        checkout,
+    } = run_exit;
+    if let Some(launch_id) = request.identity.launch_id.as_deref()
+        && let Err(error) = rimz::lsp::lease::release(checkout, launch_id, std::process::id())
+    {
+        tracing::debug!(%error, "language-server lease release failed");
+    }
     let ExecOutcome {
         status,
         abrupt: child_exit_abrupt,

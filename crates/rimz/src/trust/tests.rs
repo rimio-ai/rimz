@@ -23,6 +23,18 @@ fn blocked_fix_distinguishes_stale_from_untrusted() {
 }
 
 #[test]
+fn trust_offer_names_language_servers_and_commands() {
+    let config: ProjectConfig = toml::from_str(
+        "[lsp.servers.rust]\ncommand = ['rust-analyzer', '--log-file', 'two words']",
+    )
+    .unwrap();
+    assert_eq!(
+        SurfaceSummary::from_config(&config).lsp_servers,
+        ["rust: rust-analyzer --log-file 'two words'"]
+    );
+}
+
+#[test]
 fn empty_project_reports_no_config() {
     let dir = tempdir().expect("tempdir");
     let config = tempdir().expect("config root");

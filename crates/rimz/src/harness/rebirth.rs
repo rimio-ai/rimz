@@ -125,6 +125,11 @@ impl RebirthPlan {
         }
     }
 
+    /// Distinct checkouts that recovery will launch into, before materialization.
+    pub fn checkout_roots(&self) -> std::collections::BTreeSet<&Path> {
+        self.planned.checkout_roots()
+    }
+
     /// Commit post-choice side effects after the multiplexer session exists.
     pub(crate) fn materialize(self, choice: RebirthChoice, session_name: &str) -> ResumePlan {
         let planned_labels = self.planned.labels();

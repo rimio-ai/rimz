@@ -435,6 +435,51 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
 }
 
 #[test]
+fn configured_lsp_denies_native_tool_on_every_launch_action() {
+    for action in [
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+        ExecAction::Resume {
+            session_id: "session".into(),
+            extra_args: Vec::new(),
+        },
+        ExecAction::Fork {
+            session_id: "session".into(),
+            extra_args: Vec::new(),
+        },
+    ] {
+        for subagent in [false, true] {
+            for configured in [false, true] {
+                let mut invocation = request("claude", action.clone());
+                invocation.subagent = subagent;
+                let process = compile_agent_process_with_extra_env(
+                    None,
+                    Path::new("/checkout"),
+                    &invocation,
+                    Path::new("/checkout"),
+                    &BTreeMap::new(),
+                    &LaunchReminders {
+                        lsp_configured: configured,
+                        ..LaunchReminders::default()
+                    },
+                )
+                .expect("process");
+                assert_eq!(
+                    process.provider_argv.iter().any(|arg| arg == "LSP"),
+                    configured
+                );
+                assert_eq!(
+                    process.provider_argv.iter().any(|arg| arg == "Agent"),
+                    subagent
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn process_compiler_appends_subagent_reminder_for_native_adapters() {
     let project = tempfile::tempdir().expect("project");
     for kind in ["claude", "qwen", "droid"] {
@@ -783,6 +828,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                         subagent_catalog: Some(
                             crate::harness::subagent_policy::SubagentCatalog::Disabled,
                         ),
+                        ..LaunchReminders::default()
                     },
                 )
                 .expect("process");
