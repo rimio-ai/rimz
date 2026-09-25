@@ -72,6 +72,7 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
     .unwrap();
     let request = ServeRequest {
         root: env.project_root.canonicalize().unwrap(),
+        project: env.project_root.join("parent-project"),
         server: "rust".into(),
         settings_hash: rimz::lsp::history::settings_hash(&config),
         config,
@@ -226,6 +227,11 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
     }
     assert!(!directory.exists());
 
+    let history = std::fs::read_to_string(env.rimz_home().join("lsp-history.jsonl")).unwrap();
+    let record: Value = serde_json::from_str(history.lines().last().unwrap()).unwrap();
+    assert_eq!(record["project"], json!(request.project));
+    assert_eq!(record["root"], json!(request.root));
+
     let mut broker = env
         .rimz()
         .args([
@@ -320,6 +326,7 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_tombstone() {
     let pid = std::process::id();
     let entry = Entry {
         root: runtime.path().join("checkout"),
+        project: Some(runtime.path().join("project")),
         server: "live".into(),
         nonce: "nonce".into(),
         broker_pid: pid,
@@ -449,6 +456,7 @@ fn lsp_admission_refuses_untrusted_or_missing_program_before_spawn() {
     let runtime = env.runtime_paths();
     let request = AdmissionRequest {
         root: &env.project_root,
+        project: &env.project_root,
         servers: &machine.lsp.servers,
         untrusted_servers: &["rust".to_owned()],
         policy: &machine.lsp,

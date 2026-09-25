@@ -33,6 +33,7 @@ pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> R
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
     let request = AdmissionRequest {
         root: checkout,
+        project: workspace.launch_repo_root(),
         servers: &effective.lsp_servers,
         untrusted_servers: &effective.untrusted_lsp_servers,
         policy: &machine.lsp,
