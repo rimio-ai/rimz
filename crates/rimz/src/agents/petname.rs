@@ -22,7 +22,7 @@ pub fn sender_handle(role: Option<&str>, name: Option<&str>, kind: &AgentKind) -
 }
 
 /// Profile or kind, omitted when it repeats the handle base.
-pub fn sender_label<'a>(
+pub(crate) fn sender_label<'a>(
     handle: &str,
     profile: Option<&'a str>,
     kind: &'a AgentKind,

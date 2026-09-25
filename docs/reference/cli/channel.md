@@ -36,7 +36,7 @@ rimz channel list
 CHANNEL             BACKING    AGENTS
 #fable-pause        worktree   @reviewer @coder @planner
 #provider-accounts  worktree   @fixer
-#rimz               directory  @fable @opus @codex-784 @codex-785 @codex-786
+#rimz               directory  @fable @opus @brave-comet @lucid-atlas @tidy-spire
 ```
 
 `list` prints one row per channel, sorted by name: every named-channel record, every RimZ-owned worktree in a repository room, and every lane where a live agent runs. `AGENTS` lists the live agents' handles, or `-` for an empty channel. A room with no channels prints the header alone.

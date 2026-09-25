@@ -413,7 +413,7 @@ pub enum LayoutErr {
     )]
     RepoProfileEscapesTrust { profile: String, base: String },
     #[error(
-        "invalid profile name `{name}`; profiles cannot be empty or contain whitespace, `,`, `+`, or `/`"
+        "invalid profile name `{name}`; profiles cannot be empty or contain whitespace, `,`, `+`, `/`, `(`, or `)`"
     )]
     InvalidProfileName { name: String },
     #[error("profile name `{name}` is reserved for `rimz agents`")]
@@ -1605,7 +1605,7 @@ fn validate_profile_names(profiles: &ProfilesConfig) -> Result<()> {
         if name.is_empty()
             || name
                 .chars()
-                .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == '/')
+                .any(|ch| ch.is_whitespace() || matches!(ch, ',' | '+' | '/' | '(' | ')'))
         {
             return Err(LayoutErr::InvalidProfileName { name: name.clone() });
         }
