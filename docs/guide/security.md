@@ -22,7 +22,7 @@ A room running Copilot gets one more file. RimZ points Copilot's own telemetry e
 
 ## What can run a command
 
-Inside a workspace, plenty already runs as you: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves. Same-user isolation is no real boundary there, so RimZ does not lean on it. Instead it makes command execution an explicit choice, and only two things in your configuration can make that choice for you: a repository's config, which stays inert until you trust it, and your own notification handlers, which a repository cannot supply.
+Inside a workspace, plenty already runs as you: hooks, postinstall scripts, generated binaries, test runners, and the agents themselves. Same-user isolation is no real boundary there, so RimZ does not lean on it. Instead it makes command execution an explicit choice, and three things in your configuration can make that choice for you: a repository's config, which stays inert until you trust it, and your own notification handlers and worktree hooks, which a repository cannot supply.
 
 ### Project trust
 
@@ -57,6 +57,10 @@ Per-machine loop schedules are a separate matter. A `check = "<shell>"` line in 
 ### Notification handlers
 
 Notification handlers run a command of your choosing when a card needs attention (`[[notifications.handler]]`, or the legacy `[notifications].command`). They live only in your per-machine `~/.rimz/config.toml`, so a clone can never supply one, and they sit outside the trust hash for the same reason. They run under your user id, spawned by the sidebar process, and often carry local push credentials. A handler that acts back on the room should treat pane text and transcripts as untrusted data: match a bounded prompt shape, and stay silent on anything else. Wiring is in [the notifications internals](../internals/sidebar/notifications.md).
+
+### Worktree hooks
+
+Worktree hooks run your commands when RimZ creates or removes a tree (`[agents.worktree.hooks]`). Like notification handlers, they live only in your per-machine `~/.rimz/config.toml`, outside the project trust hash; a clone cannot supply or override them. They run under your user id, spawned by whichever `rimz` process creates or removes the tree. When that process is inside an agent's sandbox view, the hook inherits that view, including the room's `/tmp`; it is not a separate host-side service. Setup and teardown are in [prepare the tree with a hook](./worktrees.md#prepare-the-tree-with-a-hook).
 
 ### An unattended run
 

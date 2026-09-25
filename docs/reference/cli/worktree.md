@@ -43,7 +43,7 @@ created feat-a
   linked : 1 dir(s) from .worktreelink
 ```
 
-`new` runs `git worktree add -b <branch> <path> <base>`, writes the ownership marker, and seeds the tree from the repository's `.worktreeinclude` and `.worktreelink` files ([seed the tree](../../guide/worktrees.md#seed-the-tree)). It launches nothing into the tree. Any open messages still queued on the channel of that name are archived.
+`new` runs `git worktree add -b <branch> <path> <base>`, writes the ownership marker, and seeds the tree from the repository's `.worktreeinclude` and `.worktreelink` files ([seed the tree](../../guide/worktrees.md#seed-the-tree)). It then runs the optional `created` hook; success adds `  hook   : worktree.created ran` to the report, and failure fails the command ([hook lifecycle and errors](../../guide/worktrees.md#prepare-the-tree-with-a-hook)). It launches nothing into the tree. Any open messages still queued on the channel of that name are archived.
 
 Seed only paths Git already ignores. A seed Git neither tracks nor ignores lands as an untracked change in every tree it reaches, which is enough for `sweep` to keep that tree with `uncommitted changes` and for `remove` to refuse it. Linked directories need no `.gitignore` entry: `new` adds each one to the exclude file `git rev-parse --git-path info/exclude` names, which for a linked worktree is usually the main checkout's `.git/info/exclude`.
 
@@ -166,7 +166,7 @@ $ rimz worktree remove feat-a
 removed feat-a
 ```
 
-`remove` runs `git worktree remove` on the tree, deletes its branch, ends the store sessions bound to it, and archives the channel's queued messages. It refuses first, in this order:
+`remove` runs `git worktree remove` on the tree, runs the optional [`removed` hook](../../guide/worktrees.md#prepare-the-tree-with-a-hook), deletes its branch, ends the store sessions bound to it, and archives the channel's queued messages. It refuses first, in this order:
 
 | Refusal | When |
 | --- | --- |
@@ -190,6 +190,8 @@ sweep — would remove 1 · 18 MB · 2 kept
 ```
 
 `sweep` removes every RimZ-owned worktree that is clean, proven landed, and unoccupied, deleting each branch the way `remove` does without `--force`, and then runs `git worktree prune`. It never forces. `--dry-run` prints the same report and removes nothing; in a repository with no RimZ store it prints `sweep — skipped · no RimZ store here` and creates none. A sweep with nothing to remove prints `sweep — nothing to remove · N kept`.
+
+Each removal runs the optional [`removed` hook](../../guide/worktrees.md#prepare-the-tree-with-a-hook); `--dry-run` runs no hooks.
 
 | `kept` reason | Meaning |
 | --- | --- |

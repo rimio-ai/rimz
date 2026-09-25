@@ -27,7 +27,7 @@ Claude Code solves part of this. `claude --worktree` opens the session in a fres
 - **The tree is addressable.** Its name is also a [channel](./messaging.md#channels) name, so `@coder#feat-a` reaches the coder in that tree, and the sidebar groups the tree's panes as one block.
 - **Cleanup proves the work landed.** RimZ reclaims a tree only once its content is verifiably on its base branch, and only a tree it created itself; worktrees from your own workflow keep running beside RimZ's, untouched ([cleanup](#cleanup-once-work-lands)).
 
-The wrapper stays thin: every step is plain Git or a file copy you could run by hand ([what `-w` does on your machine](#what--w-does-on-your-machine)).
+The wrapper stays thin: every step is plain Git, a file operation, or your own shell command ([what `-w` does on your machine](#what--w-does-on-your-machine)).
 
 ## Open a worktree
 
@@ -69,7 +69,7 @@ Everywhere else you get a review-only checkout: the exact PR head on a local bra
 A tracked checkout alone rarely runs. `git worktree add` checks out tracked files at the base ref and nothing else, so the `.env` an agent needs and the fixture cache its tests read never follow it. Two committed, optional files at the repository root tell RimZ what else every new tree carries:
 
 - **`.worktreeinclude`** lists globs for files to copy in: `.env`, local config, credentials the tests need. `*` stays inside a path component and `**` crosses directories, so `.env*` matches the root only and `**/*.key` recurses.
-- **`.worktreelink`** lists directories to symlink-share rather than copy: heavy machine-local data whose contents are intentionally branch-independent, such as downloaded model or fixture caches. Sharing them keeps a new tree cheap instead of duplicating gigabytes. Leave build output directories out of it. A shared one is written by every tree at once, so branches overwrite each other's artifacts; share the compiler's work through a content-addressed cache instead, the way RimZ's own contributors use `sccache` and keep `target/` local ([contributor cache setup](../../CONTRIBUTING.md#fast-local-builds)).
+- **`.worktreelink`** lists directories to symlink-share rather than copy: heavy machine-local data whose contents are intentionally branch-independent, such as downloaded model or fixture caches. Sharing them keeps a new tree cheap instead of duplicating gigabytes. Leave build output directories out of it. A shared one is written by every tree at once, so branches overwrite each other's artifacts; share the compiler's work through a content-addressed cache instead, the way RimZ's own contributors use `sccache` and keep `target/` local ([contributor cache setup](../../CONTRIBUTING.md#fast-local-builds)). To put each tree's own `target/` on another disk, [prepare it with a hook](#prepare-the-tree-with-a-hook).
 
 Both files take one entry per line and ignore blank lines and `#` comments. Because both are committed, every teammate's worktrees seed the same way, and every create reports what it brought in:
 
@@ -88,14 +88,73 @@ Cover every `.worktreeinclude` path in `.gitignore`. A copied file that Git can 
 
 Neither file runs a command. Sources are confined to the project root, absolute patterns and patterns reaching out with `..` are skipped, and a pattern that matches nothing prints a warning and is skipped while the launch continues. The exact copy, symlink, and safety rules are in [the worktree internals](../internals/harness/worktrees.md#seeding-worktreeinclude-and-worktreelink).
 
+### Prepare the tree with a hook
+
+Copying files and sharing directories covers static setup. If your build wrapper instead needs a separate artifact directory on another disk for each tree, it needs a command: create that directory and link `target/` to it before any build starts. A worktree hook runs your setup script once for each new tree, whether you create it directly, launch agents or a team into it, or check out a pull request.
+
+Put the commands in your per-machine `~/.rimz/config.toml`:
+
+```toml
+[agents.worktree.hooks]
+created = "~/bin/rimz-init-target"
+removed = "~/bin/rimz-drop-target"
+```
+
+Both commands are optional; neither runs by default. The script paths above are yours to supply. For an artifact directory, have the setup script choose a destination unique to the repository and worktree, then create and link it. Ignore `target/` in Git so the hook does not leave every tree dirty. The removal script undoes that setup using the same destination.
+
+The lifecycle runs in this order:
+
+1. RimZ creates and marks the tree, then finishes the copies and links from the seed files.
+2. It runs `created` as `sh -c <command>` with the new tree as its working directory, and waits before opening any launch panes. The command gets no stdin; stdout and stderr are captured, not streamed. A ten-minute timeout kills the hook's process group.
+3. A successful hook lets creation continue. `rimz worktree new` adds `  hook   : worktree.created ran` to its report; launches print nothing extra. Successful hook output is discarded.
+4. A nonzero exit, failure to start, or timeout fails creation and attempts to remove the tree and its branch. The error includes bounded tails of stdout and stderr and the config key to fix. If removal also fails, the error says `rollback failed: <error>` instead of `tree removed`; remove the leftover tree before retrying, since a named launch reuses it without rerunning the hook.
+5. Whenever RimZ successfully removes a tree, it runs `removed` from the repository root, after the directory is gone and before deleting the branch. That includes rollback after a failed `created`, explicit removal, sweep, garbage collection, and automatic cleanup. It uses the same shell, capture, and timeout rules. Failure only logs a warning and removal continues; detached cleanup may have no visible output. A dry-run sweep fires nothing.
+
+A successful setup command adds the hook line:
+
+```console
+$ rimz worktree new feat-a
+created feat-a
+  path   : ~/code/query-engine-worktrees/feat-a
+  branch : feat-a
+  base branch: main
+  base   : 1946c748b6ea964ada3fed9ce5347496e2b5232b
+  hook   : worktree.created ran
+```
+
+A setup command that prints `init-out` to stdout, prints `init-err` to stderr, and exits with status 3 reports:
+
+```console
+$ rimz worktree new feat-b
+error: worktree.created hook failed: exit status: 3
+  stdout:
+  init-out
+  stderr:
+  init-err
+  tree removed; fix agents.worktree.hooks.created
+```
+
+Both scripts receive these environment variables, overriding any inherited values with the tree being created or removed:
+
+| Variable | Value |
+| --- | --- |
+| `RIMZ_HOOK_EVENT` | `worktree.created` or `worktree.removed`. |
+| `RIMZ_WORKTREE_NAME` | The dashed tree and channel name, such as `feat-login`. |
+| `RIMZ_WORKTREE_PATH` | The tree's path; for `removed`, the directory that just went away. |
+| `RIMZ_WORKTREE_BRANCH` | The tree's branch, such as `feat/login`. |
+| `RIMZ_WORKTREE_REPO_ROOT` | The repository root the tree was created from. |
+
+Reusing or resuming an existing tree never runs `created`. Trees made before you configured the hook have not run it either: initialize them yourself or remove and recreate them. These commands are machine-local, not part of either seed file or project config ([worktree hook security](./security.md#worktree-hooks)).
+
 ## What `-w` does on your machine
 
-`-w feat-a` runs four steps, each plain Git or a file operation you could rerun by hand:
+`-w feat-a` runs five steps, each plain Git, a file operation, or your configured shell command:
 
 1. **Add the tree.** `git worktree add -b feat-a ../<repo>-worktrees/feat-a <base>`. The directory template and the base ref are the two knobs below.
 2. **Mark it.** Write `rimz-worktree.json` into the tree's Git admin directory, at `.git/worktrees/feat-a/rimz-worktree.json` under the main repository, recording the name, branch, and the base branch and commit that cleanup later measures against. That file is the whole of RimZ's claim on the tree: the checkout itself stays free of RimZ metadata, and every verb that can delete something reads the marker first and does nothing without it.
 3. **Seed it.** Copy the `.worktreeinclude` matches, symlink the `.worktreelink` directories, and register each link in the tree's `.git/info/exclude`.
-4. **Open the layout.** Every pane starts with its working directory in the tree, on a channel named after it.
+4. **Prepare it.** Run the optional [`created` hook](#prepare-the-tree-with-a-hook) and wait for success.
+5. **Open the layout.** Every pane starts with its working directory in the tree, on a channel named after it.
 
 Two per-machine keys under `[agents.worktree]` in `config.toml` tune the first step:
 
