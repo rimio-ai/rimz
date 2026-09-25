@@ -8,6 +8,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
+use super::DeliveryKind;
 use jiff::Timestamp;
 
 use crate::Store;
@@ -195,7 +196,7 @@ impl ReplyPreparation {
     pub(super) fn attach(
         self,
         outcomes: &[DispatchOutcome],
-        steer: bool,
+        kind: DeliveryKind,
         join: ReplyJoin,
     ) -> Result<ReplyWait, ReplyErr> {
         if self.targets.len() != outcomes.len() {
@@ -212,7 +213,7 @@ impl ReplyPreparation {
             .collect();
         Ok(ReplyWait {
             legs,
-            steer,
+            kind,
             join,
             caller_identity: self.caller_identity,
             tick: 0,
@@ -222,7 +223,7 @@ impl ReplyPreparation {
 
 pub struct ReplyWait {
     legs: Vec<Leg>,
-    steer: bool,
+    kind: DeliveryKind,
     join: ReplyJoin,
     caller_identity: Option<(AgentKind, String)>,
     tick: u8,
@@ -295,7 +296,7 @@ impl ReplyWait {
             if leg.done.is_some() {
                 continue;
             }
-            if advance_leg(leg, store, &view, self.steer)? {
+            if advance_leg(leg, store, &view, self.kind)? {
                 newly_settled.push(index);
             }
         }
@@ -566,7 +567,7 @@ enum Step {
 
 fn step(
     phase: WaitPhase,
-    steer: bool,
+    kind: DeliveryKind,
     message_status: MessageStatus,
     card: Option<CardView>,
 ) -> Step {
@@ -582,7 +583,7 @@ fn step(
     match phase {
         WaitPhase::Delivery => {
             let delivered = message_status == MessageStatus::Delivered
-                || (steer
+                || (kind != DeliveryKind::Boundary
                     && message_status == MessageStatus::Sent
                     && card.status == AgentStatus::Running);
             if !delivered {
@@ -623,7 +624,7 @@ fn advance_leg(
     leg: &mut Leg,
     store: &Store,
     view: &TurnWaitView,
-    steer: bool,
+    kind: DeliveryKind,
 ) -> Result<bool, ReplyErr> {
     if let Some(status) =
         current_message_status(store, &view.messages, &leg.message_id, &mut leg.wait_base)?
@@ -662,7 +663,7 @@ fn advance_leg(
     }
     match step(
         leg.phase,
-        steer,
+        kind,
         leg.message_status,
         agent.map(|agent| view.card(agent)),
     ) {

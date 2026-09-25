@@ -1,10 +1,10 @@
 # Message CLI
 
-`rimz message` types text into a running agent's pane and keeps a durable record of every send, so you can inspect, edit, force, or cancel it until it lands. `rimz msg` is a visible alias for the command and all its subcommands. By default a message parks until the agent's current turn ends; `--steer` interrupts the turn now, and `--schedule` holds the message until a time. The [messaging guide](../../guide/messaging.md) teaches the workflow, and [message internals](../../internals/harness/messaging.md) explain the delivery engine.
+`rimz message` types text into a running agent's pane and keeps a durable record of every send, so you can inspect, edit, force, or cancel it until it lands. `rimz msg` is a visible alias for the command and all its subcommands. By default a message parks until the agent's current turn ends; `--steer` writes into the live turn now, and `--schedule` holds the message until a time. The [messaging guide](../../guide/messaging.md) teaches the workflow, and [message internals](../../internals/harness/messaging.md) explain the delivery engine.
 
 ```sh
 rimz message @swift-otter "Add focused tests for the parser."        # park, or deliver now if the agent is free
-rimz message --steer @claude "Inspect the failing test now."          # interrupt the live turn
+rimz message --steer @claude "Inspect the failing test now."          # write into the live turn now
 rimz message --on any @codex#cli-docs "If the run failed, capture the error first."
 rimz message --schedule 14:30 @planner "Restart the review."
 rimz message @coder --after @planner "Read plan.md when the planner finishes."
@@ -43,7 +43,7 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 | Mode | Flag | Behaviour |
 | --- | --- | --- |
 | Park | default | Delivers now if the agent can take it, otherwise waits for the next turn boundary that `--on` allows. |
-| Steer | `--steer` | Types into the live pane now, interrupting the turn. It waits for any RimZ write already in progress to that pane. With no live pane yet, it parks the record. Conflicts with `--on`, `--schedule`, `--after`, and `--when`. |
+| Steer | `--steer` | Writes into the live turn now. It waits for any RimZ write already in progress to that pane. With no live pane yet, it parks the record. Conflicts with `--on`, `--schedule`, `--after`, and `--when`. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always parks, and the record cannot deliver before that time. After it comes due, the park rules still apply. |
 
 `--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar elder wakes due messages.
@@ -154,7 +154,7 @@ Read plan.md when the planner finishes.
 | `--json` | Print one map keyed by agent handle after the join settles. Requires `--wait`. |
 | `--any` | Return when the first reply turn ends, successful or not, and print only that reply. The other messages stay in flight. Requires `--wait`. |
 
-Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting` or `paused` is still in progress, so a script that needs a bound passes a deadline. With `--steer --wait`, the rest of the interrupted turn is the reply.
+Text output for one target is the reply alone. For several targets, each reply prints under an `@handle:` line in completion order, and a failed target writes its failure, with the transcript path when there is one, to stderr without stopping the others. Replies render by the [agent-prose rule](../cli.md#agent-prose). A turn that is `waiting` or `paused` is still in progress, so a script that needs a bound passes a deadline. With `--steer --wait`, the rest of the live turn is the reply.
 
 Each `--json` value carries `status`, `reply` (a string or `null`), and `message_id`, plus `error` when delivery failed, the agent stopped, or the wait aborted:
 

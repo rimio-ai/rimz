@@ -8,6 +8,7 @@
 
 use std::collections::BTreeSet;
 
+use super::DeliveryKind;
 use jiff::Timestamp;
 
 use crate::Store;
@@ -41,6 +42,11 @@ pub struct ReplyRequest {
 
 #[derive(Clone, Debug)]
 pub enum DispatchMode {
+    Interrupt {
+        enter: bool,
+        force: bool,
+        auto_compact: Option<AutoCompact>,
+    },
     Steer {
         enter: bool,
         force: bool,
@@ -62,33 +68,43 @@ pub enum DispatchMode {
 }
 
 impl DispatchMode {
-    fn steer(&self) -> bool {
-        matches!(self, Self::Steer { .. })
+    pub fn kind(&self) -> DeliveryKind {
+        match self {
+            Self::Boundary { .. } => DeliveryKind::Boundary,
+            Self::Steer { .. } => DeliveryKind::Steer,
+            Self::Interrupt { .. } => DeliveryKind::Interrupt,
+        }
     }
 
     fn gate(&self) -> DeliveryGate {
         match self {
-            Self::Steer { .. } => DeliveryGate::Any,
+            Self::Steer { .. } | Self::Interrupt { .. } => DeliveryGate::Any,
             Self::Boundary { gate, .. } => *gate,
         }
     }
 
     fn force(&self) -> bool {
         match self {
-            Self::Steer { force, .. } | Self::Boundary { force, .. } => *force,
+            Self::Steer { force, .. }
+            | Self::Interrupt { force, .. }
+            | Self::Boundary { force, .. } => *force,
         }
     }
 
     fn resolve_auto_compact(&mut self, default: Option<AutoCompact>) {
         let auto_compact = match self {
-            Self::Steer { auto_compact, .. } | Self::Boundary { auto_compact, .. } => auto_compact,
+            Self::Steer { auto_compact, .. }
+            | Self::Interrupt { auto_compact, .. }
+            | Self::Boundary { auto_compact, .. } => auto_compact,
         };
         *auto_compact = (*auto_compact).or(default);
     }
 
     fn needs_agent_context(&self) -> bool {
         match self {
-            Self::Steer { auto_compact, .. } => auto_compact.is_some(),
+            Self::Steer { auto_compact, .. } | Self::Interrupt { auto_compact, .. } => {
+                auto_compact.is_some()
+            }
             Self::Boundary {
                 auto_compact,
                 after,
@@ -203,7 +219,7 @@ pub enum DispatchErr {
     Fanout {
         target: String,
         labels: Vec<String>,
-        steer: bool,
+        kind: DeliveryKind,
     },
     #[error(transparent)]
     Condition(#[from] ConditionErr),
@@ -245,7 +261,7 @@ pub fn dispatch(
             .harness
             .smart_compact,
     );
-    let boundary = !request.mode.steer();
+    let boundary = request.mode.kind() == DeliveryKind::Boundary;
     let mut pending = if boundary {
         store.list_messages()?
     } else {
@@ -308,7 +324,7 @@ pub fn dispatch(
                 .iter()
                 .map(|target| target.label(&snapshot))
                 .collect(),
-            steer: request.mode.steer(),
+            kind: request.mode.kind(),
         });
     }
 
@@ -357,7 +373,7 @@ pub fn dispatch(
             // Preparation exists only when the same request supplied a join mode.
             preparation.attach(
                 &outcomes,
-                mode.steer,
+                mode.kind,
                 reply_join.expect("reply preparation carries join mode"),
             )
         })
@@ -485,7 +501,7 @@ fn agent_needs_live_resolution(
 }
 
 struct PreparedMode {
-    steer: bool,
+    kind: DeliveryKind,
     draft: MessageDraft,
 }
 
@@ -622,13 +638,19 @@ fn prepare_mode(
     sender: &MessageSender,
     automated: bool,
 ) -> Result<PreparedMode> {
+    let kind = mode.kind();
     match mode {
         DispatchMode::Steer {
             enter,
             force,
             auto_compact,
+        }
+        | DispatchMode::Interrupt {
+            enter,
+            force,
+            auto_compact,
         } => Ok(PreparedMode {
-            steer: true,
+            kind,
             draft: MessageDraft {
                 body: MessageBody::Prompt,
                 enter,
@@ -651,7 +673,7 @@ fn prepare_mode(
             after,
             when,
         } => Ok(PreparedMode {
-            steer: false,
+            kind: DeliveryKind::Boundary,
             draft: MessageDraft {
                 body: MessageBody::Prompt,
                 enter,
@@ -820,7 +842,7 @@ fn dispatch_targets(
             dispatch_decision(state.snapshot, state.pending.as_slice(), target, mode, now)
         })
         .collect::<Vec<_>>();
-    let mut live_send = send::LiveSend::new(mode.draft.force, mode.steer);
+    let mut live_send = send::LiveSend::new(mode.draft.force, mode.kind);
     let mut preflighted_logins = BTreeSet::new();
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();
@@ -866,7 +888,7 @@ fn dispatch_decision(
     mode: &PreparedMode,
     now: Timestamp,
 ) -> DispatchDecision {
-    if mode.steer {
+    if mode.kind != DeliveryKind::Boundary {
         return if target.pane.is_some() {
             DispatchDecision::Live
         } else {
@@ -950,12 +972,14 @@ fn dispatch_one(
     let bound = target.bound(state.snapshot);
     let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
     let message_id = message.message_id.clone();
-    let policy = if mode.steer {
-        deliver::DeliveryPolicy::Steer {
+    let policy = match mode.kind {
+        DeliveryKind::Steer => deliver::DeliveryPolicy::Steer {
             force: mode.draft.force,
-        }
-    } else {
-        deliver::DeliveryPolicy::Boundary
+        },
+        DeliveryKind::Interrupt => deliver::DeliveryPolicy::Interrupt {
+            force: mode.draft.force,
+        },
+        DeliveryKind::Boundary => deliver::DeliveryPolicy::Boundary,
     };
     match deliver::execute_attempt(
         deliver::Attempt {
@@ -1141,7 +1165,7 @@ mod tests {
         };
         assert!(target.bound(&snapshot).is_none());
         let mode = PreparedMode {
-            steer: false,
+            kind: DeliveryKind::Boundary,
             draft: MessageDraft {
                 body: MessageBody::Prompt,
                 enter: true,

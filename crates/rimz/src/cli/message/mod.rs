@@ -42,7 +42,7 @@ pub struct MessageArgs {
     /// Deliver after a successful/idle turn (`done`) or after success/idle/failure (`any`).
     #[arg(long, value_parser = parse_gate, default_value = "done", conflicts_with = "steer")]
     on: DeliveryGate,
-    /// Interrupt the live pane now instead of parking for a turn boundary.
+    /// Write into the live turn now instead of parking for a turn boundary.
     #[arg(long, conflicts_with_all = ["schedule", "on"])]
     steer: bool,
     /// Park the message until at least this duration or configured-zone `HH:MM`.

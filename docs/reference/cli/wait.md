@@ -126,7 +126,7 @@ An outcome `--on` filters out records `skipped` in the loop history and retires 
 
 ## The delivered message
 
-A wait arrives as a message from `@rimz` with `Type: WAIT` (see [the message header](./message.md#the-message-header)). It is sent as a steer: it interrupts a working agent at once instead of waiting for the turn to end. Clock and signal deliveries from `rimz loop add --wait` park until the turn ends instead. [`rimz transcript`](./transcript.md) hides wait messages from its rendered view and keeps them in `--json`.
+A wait arrives as a message from `@rimz` with `Type: WAIT` (see [the message header](./message.md#the-message-header)). It is sent as a steer: it writes into the live turn now instead of waiting for the turn to end. Clock and signal deliveries from `rimz loop add --wait` park until the turn ends instead. [`rimz transcript`](./transcript.md) hides wait messages from its rendered view and keeps them in `--json`.
 
 The body never inlines command output; a file pattern match inlines its matched-line preview. It names what was waited on, the verdict, and any non-empty output file with its estimated tokens and line count, and ends with the wait's name in brackets. Only a command watch says `no output` when the file is empty. A timer is one line:
 

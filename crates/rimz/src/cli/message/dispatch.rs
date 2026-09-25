@@ -15,6 +15,8 @@ use rimz::message::reply::{ReplyJoin, ReplyPrepareErr};
 
 pub(super) enum SendKind {
     Steer,
+    #[expect(dead_code, reason = "interrupt CLI is wired in the next task")]
+    Interrupt,
     Boundary {
         gate: DeliveryGate,
         schedule: Option<String>,
@@ -76,7 +78,7 @@ pub(super) fn send_message(
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let current_channel = ctx.channel().map(ToOwned::to_owned);
     let sender = send::sender_for(caller.as_ref(), current_channel.as_deref(), no_from);
-    let steer = matches!(mode, DispatchMode::Steer { .. });
+    let kind = mode.kind();
     let wait_started = std::time::Instant::now();
     let request = || DispatchRequest {
         target: target.clone(),
@@ -134,11 +136,7 @@ pub(super) fn send_message(
         );
     }
     send::report_dispatch(
-        if steer {
-            send::ReportMode::Steer
-        } else {
-            send::ReportMode::Boundary
-        },
+        send::ReportMode::from(kind),
         &target,
         &result.outcomes,
         &result.compacted,
@@ -155,18 +153,27 @@ fn dispatch_mode(
     smart_compact: Option<AutoCompact>,
 ) -> Result<DispatchMode> {
     let machine_config = crate::cli::machine_config();
-    let SendKind::Boundary {
-        gate,
-        schedule,
-        after,
-        when,
-    } = mode
-    else {
-        return Ok(DispatchMode::Steer {
-            enter,
-            force,
-            auto_compact: smart_compact,
-        });
+    let (gate, schedule, after, when) = match mode {
+        SendKind::Interrupt => {
+            return Ok(DispatchMode::Interrupt {
+                enter,
+                force,
+                auto_compact: smart_compact,
+            });
+        }
+        SendKind::Steer => {
+            return Ok(DispatchMode::Steer {
+                enter,
+                force,
+                auto_compact: smart_compact,
+            });
+        }
+        SendKind::Boundary {
+            gate,
+            schedule,
+            after,
+            when,
+        } => (gate, schedule, after, when),
     };
     if create {
         if schedule.is_some() {
@@ -269,12 +276,12 @@ fn map_dispatch_err(err: DispatchErr) -> anyhow::Error {
         DispatchErr::Fanout {
             target,
             labels,
-            steer,
+            kind,
         } => crate::cli::ambiguous_fanout(
-            if steer {
-                "message --steer"
-            } else {
-                "deliver to"
+            match kind {
+                rimz::message::DeliveryKind::Steer => "message --steer",
+                rimz::message::DeliveryKind::Interrupt => "message --interrupt",
+                rimz::message::DeliveryKind::Boundary => "deliver to",
             },
             &target,
             &labels,

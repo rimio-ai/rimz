@@ -5,6 +5,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use super::DeliveryKind;
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -48,6 +49,17 @@ pub enum DeliverErr {
 pub enum DeliveryPolicy {
     Boundary,
     Steer { force: bool },
+    Interrupt { force: bool },
+}
+
+impl DeliveryPolicy {
+    fn kind(self) -> DeliveryKind {
+        match self {
+            Self::Boundary => DeliveryKind::Boundary,
+            Self::Steer { .. } => DeliveryKind::Steer,
+            Self::Interrupt { .. } => DeliveryKind::Interrupt,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,7 +288,7 @@ fn attempt_delivery(
         DeliveryPolicy::Boundary => {
             store.claim_delivery_batch(&candidate.message.message_id, candidate.status, now)?
         }
-        DeliveryPolicy::Steer { .. } => store
+        DeliveryPolicy::Steer { .. } | DeliveryPolicy::Interrupt { .. } => store
             .claim_message_for_steer(&candidate.message.message_id, now)?
             .map(|message| vec![message]),
     };
@@ -304,8 +316,12 @@ fn attempt_delivery(
     }
     // Hook delivery handles one claimed batch; the caller's settle owns any pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend::new(
-        claimed[0].force || matches!(policy, DeliveryPolicy::Steer { force: true }),
-        matches!(policy, DeliveryPolicy::Steer { .. }),
+        claimed[0].force
+            || matches!(
+                policy,
+                DeliveryPolicy::Steer { force: true } | DeliveryPolicy::Interrupt { force: true }
+            ),
+        policy.kind(),
     );
     let send_messages: Vec<MessageRecord> = claimed
         .iter()
@@ -409,7 +425,10 @@ pub(super) fn execute_attempt(
         Ok(send::Receipt::SkippedWaiting) => {
             const WAITING: &str = "agent is waiting on input in its pane";
             if matches!(source, AttemptSource::Fresh { .. })
-                && matches!(policy, DeliveryPolicy::Steer { .. })
+                && matches!(
+                    policy,
+                    DeliveryPolicy::Steer { .. } | DeliveryPolicy::Interrupt { .. }
+                )
             {
                 store.record_send_error(head, WAITING, &workspace.session_name)?;
                 return Ok(AttemptOutcome::SkippedWaiting);
@@ -1010,7 +1029,12 @@ fn delivery_candidate<'a>(
     {
         return Candidacy::Refused(check.verdict());
     }
-    if check.ask.waiting && !matches!(policy, DeliveryPolicy::Steer { force: true }) {
+    if check.ask.waiting
+        && !matches!(
+            policy,
+            DeliveryPolicy::Steer { force: true } | DeliveryPolicy::Interrupt { force: true }
+        )
+    {
         return Candidacy::Refused(check.verdict());
     }
     let (Some(agent), Some(binding)) = (evaluation.agent, evaluation.binding) else {
