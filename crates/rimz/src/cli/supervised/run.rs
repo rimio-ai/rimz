@@ -771,7 +771,7 @@ fn execute_attempt(
     if request.background {
         return Ok(AttemptOutcome::Background {
             response_path: prepared.caller_tmp.as_ref().map(|view| {
-                view.agent_path(&crate::cli::agents_cmd::response_path(
+                view.agent_path(&rimz::harness::run::response_path(
                     prepared.store.paths(),
                     &launch_identity.name,
                 ))

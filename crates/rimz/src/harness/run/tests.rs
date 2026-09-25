@@ -28,6 +28,115 @@ fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
 }
 
 #[test]
+fn responses_follow_each_terminal_transition() {
+    for subagent in [true, false] {
+        for ending in ["lifecycle", "cancel", "timeout"] {
+            let (_dir, paths, mut record) = setup();
+            record.subagent = subagent;
+            record.agent_name = Some("child".into());
+            create(&paths, &record).unwrap();
+            record_assistant_message(
+                &paths,
+                &record.run_id,
+                "claude",
+                &"child".into(),
+                "answer".into(),
+            )
+            .unwrap();
+            match ending {
+                "cancel" => {
+                    cancel(&paths, &record.run_id).unwrap();
+                }
+                "timeout" => {
+                    timeout(&paths, &record.run_id).unwrap();
+                }
+                _ => {
+                    let observation = AgentLifecycleObservation::new(
+                        Some("child".into()),
+                        LifecycleSignal::TurnEnded {
+                            errored: false,
+                            parked_on_background: false,
+                            turn_id: None,
+                        },
+                    );
+                    record_lifecycle(
+                        &paths,
+                        &record.run_id,
+                        "claude",
+                        &observation,
+                        Some("answer".into()),
+                        || None,
+                    )
+                    .unwrap();
+                }
+            }
+            let path = paths.subagents_dir.join("child.output");
+            assert_eq!(path.exists(), subagent, "{ending}");
+            if subagent {
+                assert_eq!(std::fs::read_to_string(path).unwrap(), "answer\n");
+            }
+        }
+    }
+}
+
+#[test]
+fn reopened_response_replaces_or_removes_previous_answer() {
+    for message in [Some("second answer"), Some(""), None] {
+        let (_dir, paths, mut record) = setup();
+        record.subagent = true;
+        record.agent_name = Some("child".into());
+        create(&paths, &record).unwrap();
+        let mut observation = AgentLifecycleObservation::new(
+            Some("child".into()),
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+        );
+        record_lifecycle(
+            &paths,
+            &record.run_id,
+            "claude",
+            &observation,
+            Some("first answer".into()),
+            || None,
+        )
+        .unwrap();
+        let path = paths.subagents_dir.join("child.output");
+        assert!(
+            path.exists(),
+            "terminal lifecycle must publish before returning"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first answer\n");
+        observation.signal = LifecycleSignal::TurnStarted { turn_id: None };
+        record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
+            None
+        })
+        .unwrap();
+        observation.signal = LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        };
+        record_lifecycle(
+            &paths,
+            &record.run_id,
+            "claude",
+            &observation,
+            message.map(str::to_owned),
+            || None,
+        )
+        .unwrap();
+        if message.is_some_and(|message| !message.is_empty()) {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "second answer\n");
+        } else {
+            assert!(!path.exists());
+        }
+    }
+}
+
+#[test]
 fn terminal_subagent_reopens_for_its_next_turn() {
     for subagent in [false, true] {
         let (_dir, paths, mut record) = setup();

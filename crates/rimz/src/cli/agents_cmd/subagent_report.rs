@@ -1,15 +1,15 @@
 //! Durable parent-facing completion digests for launched subagent fleets.
 //!
-//! Run records are stamped together before the digest enters the message
-//! queue. This makes the complete row set visible to inline join cancellation
-//! and lets the wrapper fast path race safely with the producer backstop.
+//! Response files land per child; run records are stamped per fleet before
+//! the digest enters the message queue. This makes the complete row set
+//! visible to inline join cancellation and lets the wrapper fast path race
+//! safely with the producer backstop.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Context;
 use rimz::agents::AgentState;
-use rimz::disk::atomic::{AtomicErr, write_bytes_atomically};
-use rimz::disk::paths::{PathErr, StatePaths};
 use rimz::disk::summary::FileSummary;
 use rimz::harness::fleet::FleetRuns;
 use rimz::harness::run;
@@ -45,9 +45,7 @@ pub(super) enum ReportErr {
     #[error(transparent)]
     Deliver(#[from] rimz::message::deliver::DeliverErr),
     #[error(transparent)]
-    Paths(#[from] PathErr),
-    #[error(transparent)]
-    Atomic(#[from] AtomicErr),
+    Publish(#[from] run::ResponsePublishErr),
     #[error("measuring subagent response file {path}: {source}")]
     Response {
         path: PathBuf,
@@ -59,39 +57,6 @@ pub(super) enum ReportErr {
 struct ResponseFile {
     path: PathBuf,
     summary: FileSummary,
-}
-
-fn write_response_files(
-    paths: &StatePaths,
-    view: &TmpView,
-    rows: &[(&AgentState, &RunRecord)],
-) -> Result<Vec<Option<ResponseFile>>, ReportErr> {
-    paths.ensure_tmp_dir()?;
-    rows.iter()
-        .map(|(child, run)| {
-            let Some(message) = run
-                .last_message
-                .as_deref()
-                .filter(|message| !message.is_empty())
-            else {
-                return Ok(None);
-            };
-            let path = response_path(paths, child_name(child, run));
-            let mut bytes = message.as_bytes().to_vec();
-            if !bytes.ends_with(b"\n") {
-                bytes.push(b'\n');
-            }
-            write_bytes_atomically(&path, &bytes)?;
-            let summary = FileSummary::measure(&path).map_err(|source| ReportErr::Response {
-                path: path.clone(),
-                source,
-            })?;
-            Ok(Some(ResponseFile {
-                path: view.agent_path(&path),
-                summary,
-            }))
-        })
-        .collect()
 }
 
 pub(super) fn report_fleet(
@@ -142,6 +107,13 @@ fn report_fleet_with_kind(
 
     let runs = run::list(store.paths())?;
     let fleet = FleetRuns::of(&projection.agents, &runs, parent);
+    let published = fleet
+        .settled()
+        .into_iter()
+        .map(|(_, record)| {
+            run::publish_response(store.paths(), record).map(|path| (&record.run_id, path))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
     if fleet.any_running() {
         return Ok(ReportOutcome::SiblingsRunning);
     }
@@ -155,7 +127,22 @@ fn report_fleet_with_kind(
         parent.name.as_deref(),
         store.paths(),
     );
-    let responses = write_response_files(store.paths(), &view, &rows)?;
+    let responses = rows
+        .iter()
+        .map(|(_, record)| {
+            let Some(path) = published.get(&record.run_id).and_then(Option::as_ref) else {
+                return Ok(None);
+            };
+            let summary = FileSummary::measure(path).map_err(|source| ReportErr::Response {
+                path: path.clone(),
+                source,
+            })?;
+            Ok(Some(ResponseFile {
+                path: view.agent_path(path),
+                summary,
+            }))
+        })
+        .collect::<Result<Vec<_>, ReportErr>>()?;
     let digest_rows = rows
         .iter()
         .zip(&responses)
@@ -363,11 +350,6 @@ fn format_compact_duration(mut seconds: u64) -> String {
     rendered
 }
 
-/// Where the fleet report writes a settled run's captured final response.
-pub(crate) fn response_path(paths: &StatePaths, agent_name: &str) -> PathBuf {
-    paths.subagents_dir.join(format!("{agent_name}.output"))
-}
-
 fn child_name<'a>(child: &'a AgentState, run: &'a RunRecord) -> &'a str {
     child
         .name
@@ -406,6 +388,7 @@ mod tests {
 
     use rimz::agents::{AgentLifecycleObservation, AgentStatus, LifecycleSignal, PermissionMode};
     use rimz::disk::paths::{RuntimePaths, StatePaths};
+    use rimz::harness::run::response_path;
     use rimz::ids::{AgentKind, WorkspaceId};
     use rimz::store::message::MessageStatus;
     use rimz::store::writer::AgentLifecycleIntent;
@@ -680,6 +663,14 @@ mod tests {
             report_settled_child(&workspace, &store, &peer).unwrap(),
             ReportOutcome::SiblingsRunning
         );
+        let path = response_path(store.paths(), "peer");
+        assert!(path.exists(), "running siblings must not delay publication");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "peer answer\n");
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
         let child = run::fail(store.paths(), &child.run_id).unwrap();
         assert!(matches!(
             report_settled_child(&workspace, &store, &child).unwrap(),
@@ -699,6 +690,10 @@ mod tests {
             std::fs::read_to_string(response_path(store.paths(), "peer")).unwrap(),
             "peer answer\n"
         );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[test]
@@ -709,7 +704,9 @@ mod tests {
             append_agent(&store, name, Some("parent"));
         }
         let first = child_run(&workspace.workspace_id, "first", RunStatus::Completed);
-        let second = child_run(&workspace.workspace_id, "second", RunStatus::Running);
+        let mut second = child_run(&workspace.workspace_id, "second", RunStatus::Completed);
+        second.agent_name = Some("receipt-name".into());
+        second.last_message = Some("joined answer".into());
         for record in [&first, &second] {
             run::create(store.paths(), record).unwrap();
         }
@@ -731,6 +728,14 @@ mod tests {
         assert!(messages[0].text.contains("Your subagent settled"));
         assert!(messages[0].text.contains("@first"));
         assert!(!messages[0].text.contains("@second"));
+        assert!(
+            response_path(store.paths(), "receipt-name").exists(),
+            "joined rows still publish at the run's name"
+        );
+        assert_eq!(
+            std::fs::read_to_string(response_path(store.paths(), "receipt-name")).unwrap(),
+            "joined answer\n"
+        );
     }
 
     #[test]
