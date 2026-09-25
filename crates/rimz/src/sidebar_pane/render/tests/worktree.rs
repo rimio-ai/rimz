@@ -54,10 +54,13 @@ fn render_pipeline_states() {
             snapshot.theme.glyphs.set = Some("nerd_font".to_owned());
         }
         let rendered = snapshot_to_screen(&snapshot, width, 24);
-        assert!(rendered.contains(stage), "{rendered}");
+        assert!(
+            rendered.contains(if width == 22 { "Impleme…" } else { stage }),
+            "{rendered}"
+        );
         if width == 22 {
             assert!(!rendered.contains('◉'), "track drops whole: {rendered}");
-            assert!(rendered.contains("47:12"));
+            assert!(rendered.contains("47m / 47m"));
             assert!(!rendered.contains("forge"), "team drops first: {rendered}");
         }
         assert_snapshot(name, rendered);
@@ -120,6 +123,12 @@ fn pipeline_click_and_status_style_follow_visible_owner() {
                 theme.muted()
             }
         );
+        let name = block.lines[1]
+            .spans
+            .iter()
+            .find(|span| span.content == "Implement")
+            .unwrap();
+        assert_eq!(name.style, current.style);
     }
 }
 
@@ -155,11 +164,12 @@ fn pipeline_completion_styles_and_width_admission() {
                     .any(|span| span.content == theme.glyph(GlyphRole::PipelineDone))
             );
         }
-        let team = line
-            .spans
-            .iter()
-            .find(|span| span.content == " · forge")
-            .unwrap();
+        let team = line.spans.iter().find(|span| span.content == "forge · ");
+        assert!(
+            team.is_some(),
+            "the team badge must lead with its value seam"
+        );
+        let team = team.unwrap();
         assert_eq!(
             team.style,
             theme.styled(Component::TeamLabel, Modifier::empty())
@@ -169,12 +179,19 @@ fn pipeline_completion_styles_and_width_admission() {
     pipeline.stage = "Implement".to_owned();
     pipeline.stage_started_at = Some(fixed_now() - Duration::from_secs(7));
     for (width, expected) in [
-        (32, "  ● ● ◉ ○ ○  Implement (00:07)"),
-        // One column narrower the track drops, and the room it frees must not
-        // buy the team badge back.
-        (31, "  Implement (00:07)"),
-        (22, "  Implement (00:07)"),
-        (17, "  Impl… (00:07)"),
+        (39, "● ● ◉ Implement ○ ○"),
+        (40, "forge · ● ● ◉ Implement ○ ○"),
+        (41, "forge · ● ● ◉ Implement ○ ○"),
+        (31, "Implement"),
+        (32, "● ● ◉ Implement ○ ○"),
+        (33, "● ● ◉ Implement ○ ○"),
+        (21, "Impleme…"),
+        (22, "Implement"),
+        (23, "Implement"),
+        // The clock needs two cells of name beside it (`I…`), never a bare `…`.
+        (14, "Implement"),
+        (15, "I…"),
+        (16, "Im…"),
     ] {
         let lines = group_lines_at_width(&snapshot, &theme, 0, width);
         let text = lines[1]
@@ -183,27 +200,20 @@ fn pipeline_completion_styles_and_width_admission() {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(text.contains(expected), "{width}: {text}");
-        assert!(!text.contains("forge"));
+        assert_eq!(text.contains("forge"), width >= 40, "{width}: {text}");
+        assert_eq!(text.contains('◉'), width >= 32, "{width}: {text}");
+        assert_eq!(text.ends_with("7s / 47m🮇"), width >= 15, "{width}: {text}");
     }
-    // Too narrow for the clock beside any of the name: it goes whole, never
-    // clipped to a plausible wrong time.
-    let lines = group_lines_at_width(&snapshot, &theme, 0, 11);
-    let text = lines[1]
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<String>();
-    assert!(!text.contains('('), "{text}");
     // An undeclared stage has no track to drop, so it keeps its badge at a
-    // width where a tracked stage has just lost both.
+    // width where a tracked stage has lost its badge.
     snapshot.worktree_groups[0].pipeline.as_mut().unwrap().stage = "Investigate".to_owned();
-    let lines = group_lines_at_width(&snapshot, &theme, 0, 31);
+    let lines = group_lines_at_width(&snapshot, &theme, 0, 32);
     let text = lines[1]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(text.contains("Investigate (00:07) · forge"), "{text}");
+    assert!(text.contains("forge · Investigate"), "{text}");
     snapshot.worktree_groups[0].pipeline.as_mut().unwrap().stage = "Implement".to_owned();
     snapshot.worktree_groups[0].label = "pipeline/forge".to_owned();
     let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
@@ -213,6 +223,41 @@ fn pipeline_completion_styles_and_width_admission() {
             .iter()
             .all(|span| !span.content.contains("forge"))
     );
+}
+
+#[test]
+fn pipeline_clocks_are_independent_and_pinned_right() {
+    let mut snapshot = pipeline_snapshot();
+    let theme = Theme::fixed(false);
+    for (stage, stage_secs, total_secs, expected) in [
+        ("Implement", Some(1080), Some(3720), "18m / 1h"),
+        ("Implement", None, Some(3720), "1h"),
+        ("Implement", Some(1080), None, "18m"),
+        ("Done", Some(1080), Some(3720), "1h"),
+        ("Implement", None, None, ""),
+    ] {
+        let pipeline = snapshot.worktree_groups[0].pipeline.as_mut().unwrap();
+        pipeline.stage = stage.to_owned();
+        pipeline.stage_started_at = stage_secs.map(|s| fixed_now() - Duration::from_secs(s));
+        pipeline.started_at = total_secs.map(|s| fixed_now() - Duration::from_secs(s));
+        pipeline.done_at = Some(fixed_now());
+        let lines = group_lines_at_width(&snapshot, &theme, 0, 54);
+        let line = &lines[1];
+        let text = line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(text.starts_with("▎  forge · "), "{text}");
+        if expected.is_empty() {
+            assert!(!text.contains('/'));
+            continue;
+        }
+        let clock = line.spans.iter().find(|s| s.content == expected).unwrap();
+        assert_eq!(clock.style, theme.muted());
+        assert!(text.ends_with(&format!("{expected}🮇")), "{text}");
+        assert_eq!(spans_width(&line.spans), 54);
+    }
 }
 
 #[test]

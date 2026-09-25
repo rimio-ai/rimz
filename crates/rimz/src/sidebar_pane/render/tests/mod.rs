@@ -242,6 +242,9 @@ fn assert_snapshot(name: &str, screen: String) {
             // budget label ahead of its mana bar.
             (r"([◔◑◕●◉]) \d+[smhd]\b", "$1 <t>"),
             (r"\b\d+[hd](\s+[▰▱])", "<t>$1"),
+            // Pipeline clocks sit directly below a worktree header, not in a card.
+            (r"(?m)(^[▎ ][⑂⮌] [^\n]*\n[▎ ] {2}\S[^\n]*? )\d+[smhd] / \d+[smhd](🮇?)$", "$1<t> / <t>$2"),
+            (r"(?m)(^[▎ ][⑂⮌] [^\n]*\n[▎ ] {2}\S[^\n]*? )\d+[smhd](🮇?)$", "$1<t>$2"),
         ],
     }, {
         insta::assert_snapshot!(name, screen);

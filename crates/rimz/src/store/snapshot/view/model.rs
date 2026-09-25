@@ -182,23 +182,35 @@ impl SidebarPipeline {
             .map_or(PipelinePosition::Undeclared, PipelinePosition::At)
     }
 
+    /// Time in the current stage; `None` at `Done`, where only the run total
+    /// has meaning.
     pub fn span_secs(&self, now: jiff::Timestamp) -> Option<u64> {
-        let (start, end) = if self.position() == PipelinePosition::Done {
-            (self.started_at?, now.min(self.done_at?))
-        } else {
-            (self.stage_started_at?, now)
-        };
+        if self.position() == PipelinePosition::Done {
+            return None;
+        }
+        let start = self.stage_started_at?;
         if start > now {
             return None;
         }
-        if end < start {
+        u64::try_from(now.duration_since(start).as_secs()).ok()
+    }
+
+    pub fn total_secs(&self, now: jiff::Timestamp) -> Option<u64> {
+        let start = self.started_at?;
+        let end = if self.position() == PipelinePosition::Done {
+            now.min(self.done_at?)
+        } else {
+            now
+        };
+        if start > end {
             return None;
         }
         u64::try_from(end.duration_since(start).as_secs()).ok()
     }
 
     pub fn clock_running(&self) -> bool {
-        self.stage_started_at.is_some() && self.position() != PipelinePosition::Done
+        (self.stage_started_at.is_some() || self.started_at.is_some())
+            && self.position() != PipelinePosition::Done
     }
 }
 
@@ -568,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_span_uses_the_stage_start_and_the_run_at_done() {
+    fn pipeline_span_uses_the_stage_start_and_stops_at_done() {
         let now = jiff::Timestamp::from_second(200).unwrap();
         let mut run = pipeline("Implement");
         assert_eq!(run.span_secs(now), Some(80));
@@ -578,22 +590,23 @@ mod tests {
         assert_eq!(run.span_secs(now), Some(80));
         run.started_at = Some(jiff::Timestamp::from_second(100).unwrap());
         run.stage = "Done".to_owned();
-        assert_eq!(run.span_secs(now), Some(50));
+        assert_eq!(run.span_secs(now), None);
+        assert_eq!(run.total_secs(now), Some(50));
         run.stage_started_at = None;
-        assert_eq!(run.span_secs(now), Some(50));
+        assert_eq!(run.total_secs(now), Some(50));
         run.done_at = Some(jiff::Timestamp::from_second(250).unwrap());
-        assert_eq!(run.span_secs(now), Some(100));
+        assert_eq!(run.total_secs(now), Some(100));
         run.done_at = Some(jiff::Timestamp::from_second(99).unwrap());
-        assert_eq!(run.span_secs(now), None);
+        assert_eq!(run.total_secs(now), None);
         run.done_at = None;
-        assert_eq!(run.span_secs(now), None);
+        assert_eq!(run.total_secs(now), None);
         run.done_at = Some(now);
         run.started_at = Some(jiff::Timestamp::from_second(201).unwrap());
-        assert_eq!(run.span_secs(now), None);
+        assert_eq!(run.total_secs(now), None);
         run.started_at = Some(jiff::Timestamp::new(199, 500_000_000).unwrap());
-        assert_eq!(run.span_secs(now), Some(0));
+        assert_eq!(run.total_secs(now), Some(0));
         run.started_at = None;
-        assert_eq!(run.span_secs(now), None);
+        assert_eq!(run.total_secs(now), None);
         run.stage = "Implement".to_owned();
         run.stage_started_at = Some(jiff::Timestamp::from_second(201).unwrap());
         assert_eq!(run.span_secs(now), None);
@@ -613,7 +626,24 @@ mod tests {
         assert!(run.clock_running());
         run.started_at = Some(jiff::Timestamp::UNIX_EPOCH);
         run.stage_started_at = None;
+        assert!(run.clock_running());
+        run.started_at = None;
         assert!(!run.clock_running());
+    }
+
+    #[test]
+    fn pipeline_total_runs_to_now_without_a_stage_stamp() {
+        let now = jiff::Timestamp::from_second(200).unwrap();
+        let mut run = pipeline("Implement");
+        assert_eq!(run.total_secs(now), Some(100));
+        run.stage_started_at = None;
+        assert_eq!(run.total_secs(now), Some(100));
+        run.done_at = Some(jiff::Timestamp::from_second(150).unwrap());
+        assert_eq!(run.total_secs(now), Some(100));
+        run.started_at = Some(jiff::Timestamp::from_second(201).unwrap());
+        assert_eq!(run.total_secs(now), None);
+        run.started_at = None;
+        assert_eq!(run.total_secs(now), None);
     }
 
     #[test]

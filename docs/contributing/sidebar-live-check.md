@@ -80,11 +80,11 @@ Run the sequence on both backends, using each room's own card.
 
 ### 1. Producer clock
 
-Run Look for the sidebar labelled `producer`, then its Capture twice, a second or more apart. The pipeline clock should advance. The recorded tmux producer `tmux:%0` advanced `1:42 -> 1:45` over ~3 s; the Zellij producer `zellij:terminal_0` advanced `0:12 -> 0:15` over ~3 s.
+Run Look for the sidebar labelled `producer`, then its Capture twice across a displayed clock-unit boundary: a second apart below a minute, a minute apart below an hour. The compact pipeline clock should advance. The recorded tmux producer advanced `24s -> 26s`, and the Zellij producer `15s -> 17s`.
 
 ### 2. Consumer clock and flip adoption
 
-**2a.** Run Look for a sidebar labelled `consumer`, then its Capture twice, a second or more apart. Its pipeline clock should also advance: the recorded `tmux:%3` showed `1:37 -> 1:40` over ~3 s, and `zellij:terminal_4` showed `0:16 -> 0:19` over ~3 s. Allow a beat after Look before the first capture, or a sidebar that was cold will read its pre-Look frame.
+**2a.** Run Look for a sidebar labelled `consumer`, then its Capture twice across a displayed clock-unit boundary. Its pipeline clock should also advance: the recorded tmux consumer showed `40s -> 42s`, and the Zellij consumer `30s -> 33s`. Allow a beat after Look before the first capture, or a sidebar that was cold will read its pre-Look frame.
 
 **2b.** Keep that consumer watched. Run the card's Flip, then repeat that consumer's Capture and measure from the flip to the first frame showing `Review`. It must replace `Build` within 5 s. The real watched-consumer measurements were:
 
@@ -184,4 +184,3 @@ Two rules for a check whose subject is time:
 - The pipeline line renders no owner name; the click's focus target is the evidence for ownership.
 - Read focus from the mux using the card's Focus command, not `rimz pane list`, which reports no focus on Zellij. Zellij's `is_focused` is per-tab and non-unique ([zellij-reference.md](../externals/mux-adapter/zellij-reference.md#types)): the check reads focus among the team tab's panes, so it proves pane focus inside that tab and not which tab the client is viewing.
 - Stop the room by letting `--for` expire or killing the `xtask sandbox room` PID itself. Killing a wrapper shell leaves the room running. Kill by PID from `pgrep`, not with `pkill -f <pattern>`: the pattern matches the invoking shell's own command line, so `pkill` kills the shell that ran it.
-
