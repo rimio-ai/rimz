@@ -4,7 +4,7 @@ mod lifecycle;
 mod socket;
 mod transport;
 mod watch;
-mod watchdog;
+pub(super) mod watchdog;
 
 use super::{LspErr, Result, admission::ServeRequest, history, memory, registry};
 use lifecycle::{Lifecycle, Readiness};
@@ -22,6 +22,7 @@ struct Shared {
     model: Mutex<Model>,
     changed: Condvar,
     started: Instant,
+    in_flight: std::sync::atomic::AtomicUsize,
 }
 
 struct Model {
@@ -30,6 +31,11 @@ struct Model {
     readiness: Readiness,
     transport: Option<Arc<Transport>>,
     request_phase: RequestPhase,
+    start_requested: bool,
+    refusal_epoch: u64,
+    refusal: Option<super::admission::Shortfall>,
+    lifetime_peak_kb: u64,
+    dormant_ms: Option<u64>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -45,13 +51,29 @@ impl Shared {
 
     fn stop(&self, reason: StopReason) {
         let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
-        if !matches!(model.entry.state, State::Stopped { .. }) {
-            model.entry.state = State::Stopped {
-                reason,
-                at_ms: crate::utils::time::unix_now_ms(),
-            };
-        }
+        model.stop(reason);
         self.changed.notify_all();
+    }
+}
+
+impl Model {
+    fn stop(&mut self, reason: StopReason) {
+        if matches!(self.entry.state, State::Stopped { .. })
+            || (!reason.is_terminal() && matches!(self.entry.state, State::Dormant { .. }))
+        {
+            return;
+        }
+        let now = crate::utils::time::unix_now_ms();
+        self.entry.state = if reason.is_terminal() {
+            State::Stopped { reason, at_ms: now }
+        } else {
+            State::Dormant {
+                since_ms: now,
+                reason: Some(reason),
+            }
+        };
+        self.entry.server_pid = None;
+        self.entry.server_start_token = None;
     }
 }
 
@@ -71,11 +93,10 @@ impl Drop for Server {
 pub fn serve(mut request: ServeRequest) -> Result<()> {
     let root = std::fs::canonicalize(&request.root)?;
     request.root = root.clone();
-    let program = request
-        .config
-        .command
-        .first()
-        .ok_or_else(|| LspErr::Configuration("empty server command".into()))?;
+    if request.config.command.is_empty() {
+        return Err(LspErr::Configuration("empty server command".into()));
+    }
+    super::admission::idle_timeout(&request.policy)?;
     nix::unistd::setsid().map_err(std::io::Error::from)?;
     let pid = std::process::id();
     let entry = Entry {
@@ -88,14 +109,22 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             .ok_or_else(|| LspErr::Protocol("broker has no process start token".into()))?,
         server_pid: None,
         server_start_token: None,
-        state: State::Starting,
+        state: if request.eager {
+            State::Starting
+        } else {
+            State::Dormant {
+                since_ms: crate::utils::time::unix_now_ms(),
+                reason: None,
+            }
+        },
         started_at_ms: crate::utils::time::unix_now_ms(),
         ready_at_ms: None,
-        estimate_bytes: request.estimate_bytes,
+        estimate_bytes: estimate(&request)?,
         settings_hash: request.settings_hash.clone(),
         request_count: 0,
         last_request_at_ms: None,
         peak_rss_kb: 0,
+        restarts: 0,
         leases: Vec::new(),
     };
     let directory = registry::directory(&root, &request.server)?;
@@ -112,111 +141,185 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             readiness: Readiness::default(),
             transport: None,
             request_phase: RequestPhase::Serving,
+            start_requested: false,
+            refusal_epoch: 0,
+            refusal: None,
+            lifetime_peak_kb: 0,
+            dormant_ms: None,
         }),
         changed: Condvar::new(),
         started: Instant::now(),
+        in_flight: std::sync::atomic::AtomicUsize::new(0),
     });
     socket::listen(listener, shared.clone());
     registry::publish(&shared.model.lock().unwrap_or_else(|e| e.into_inner()).entry)?;
 
-    let result = (|| {
-        let mut server = Server(
-            Command::new(program)
-                .args(&request.config.command[1..])
-                .current_dir(&root)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn()?,
-        );
-        memory::raise_oom_score(server.0.id())?;
+    let mut eager = request.eager;
+    let mut last_housekeeping = Instant::now();
+    loop {
+        if last_housekeeping.elapsed() >= Duration::from_secs(5) {
+            housekeeping(&shared, &request)?;
+            last_housekeeping = Instant::now();
+        }
         {
             let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-            model.entry.server_pid = Some(server.0.id());
-            model.entry.server_start_token = crate::proc::process_start_token(server.0.id());
-            registry::publish(&model.entry)?;
+            if matches!(model.entry.state, State::Stopped { .. }) {
+                model.request_phase = RequestPhase::Closing;
+                shared.changed.notify_all();
+                break;
+            }
+            if !eager && !model.start_requested {
+                drop(model);
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            model.start_requested = false;
         }
-        let uri = url::Url::from_directory_path(&root)
-            .map_err(|()| LspErr::Protocol("invalid checkout URI".into()))?;
-        let folders = json!([{"uri": uri.as_str(), "name": root.file_name().unwrap_or_default().to_string_lossy()}]);
-        let options = request.config.init_options.clone().unwrap_or(Value::Null);
-        let (progress_tx, progress) = mpsc::channel();
-        // Piped handles were requested on this child and have not yet been taken.
-        let transport = Transport::start(
-            server.0.stdout.take().expect("piped stdout"),
-            server.0.stdin.take().expect("piped stdin"),
-            options.clone(),
-            folders.clone(),
-            progress_tx,
-        );
-        let (_, initialized) = transport.request("initialize", json!({
-            "processId": pid, "rootUri": uri.as_str(), "workspaceFolders": folders,
-            "initializationOptions": options,
-            "capabilities": {"window": {"workDoneProgress": true}, "workspace": {"configuration": true, "workspaceFolders": true, "didChangeWatchedFiles": {"dynamicRegistration": true}}, "textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": true}}}
-        }))?;
-        shared
-            .model
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .transport = Some(transport.clone());
-        let (watch_tx, events) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |event| {
-            let _ = watch_tx.send(event);
-        })
-        .map_err(|error| LspErr::Protocol(error.to_string()))?;
-        watch::register(&mut watcher, &root, &|path, error| {
-            watch_error(&request, path, error)
-        })?;
-        run(
-            &shared,
-            &request,
-            &mut server,
-            &transport,
-            initialized,
-            progress,
-            (&mut watcher, events),
-        )
-    })();
-    if let Err(error) = &result {
-        tracing::warn!(%error, "language server stopped");
-        shared.stop(StopReason::Crashed);
-    }
-    {
-        // A fallback kill and its history record finish before the broker adopts their tombstone.
-        let _lock = registry::lock()?;
+        let admitted = prepare_start(&shared, &request, eager)?;
+        eager = false;
+        if !admitted {
+            continue;
+        }
+        let result = lifetime(&shared, &request);
+        if let Err(error) = &result {
+            tracing::warn!(%error, "language server stopped");
+            shared.stop(StopReason::Crashed);
+        }
         let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = registry::read_entries()?.into_iter().find(|entry| {
-            entry.nonce == model.entry.nonce && matches!(entry.state, State::Stopped { .. })
-        }) {
-            model.entry.state = entry.state;
-        }
+        model.transport = None;
+        model.entry.server_pid = None;
+        model.entry.server_start_token = None;
         record_stop(
             &model.entry,
+            model.lifetime_peak_kb,
+            model.dormant_ms,
             result.as_ref().err().map(ToString::to_string).as_deref(),
         );
         registry::publish(&model.entry)?;
         shared.changed.notify_all();
     }
-    // A tombstone remains addressable while a launch still holds a lease.
-    loop {
-        let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-        model.lifecycle.retain(shared.elapsed(), |lease| {
-            crate::proc::process_is_live(lease.pid, Some(&lease.start_token))
-        });
-        model.entry.leases = model.lifecycle.leases.clone();
-        if model.entry.leases.is_empty() {
-            model.request_phase = RequestPhase::Closing;
-            break;
-        }
-        registry::publish(&model.entry)?;
-        drop(model);
-        std::thread::sleep(Duration::from_secs(5));
-    }
     let _lock = registry::lock()?;
     drop(_socket);
     std::fs::remove_dir_all(directory)?;
     Ok(())
+}
+
+fn estimate(request: &ServeRequest) -> Result<u64> {
+    Ok(history::estimate(
+        &request.project,
+        &request.server,
+        &request.settings_hash,
+        crate::utils::size::parse_byte_size(&request.config.memory_estimate)
+            .map_err(LspErr::Configuration)?,
+    ))
+}
+
+fn prepare_start(shared: &Shared, request: &ServeRequest, eager: bool) -> Result<bool> {
+    let _lock = if eager { None } else { Some(registry::lock()?) };
+    let estimate = estimate(request)?;
+    if !eager && let Some(shortfall) = super::admission::admit_query(request, estimate)? {
+        let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+        model.start_requested = false;
+        model.refusal_epoch += 1;
+        model.refusal = Some(shortfall);
+        shared.changed.notify_all();
+        return Ok(false);
+    }
+    let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(model.entry.state, State::Stopped { .. }) {
+        return Ok(false);
+    }
+    let now = crate::utils::time::unix_now_ms();
+    model.dormant_ms = match model.entry.state {
+        State::Dormant {
+            since_ms,
+            reason: Some(_),
+        } => {
+            model.entry.restarts += 1;
+            Some(now.saturating_sub(since_ms))
+        }
+        _ => None,
+    };
+    model.start_requested = false;
+    model.entry.state = State::Starting;
+    model.entry.started_at_ms = now;
+    model.entry.ready_at_ms = None;
+    model.entry.estimate_bytes = estimate;
+    model.lifetime_peak_kb = 0;
+    model.readiness = Readiness::default();
+    registry::publish(&model.entry)?;
+    shared.changed.notify_all();
+    Ok(true)
+}
+
+fn lifetime(shared: &Shared, request: &ServeRequest) -> Result<()> {
+    let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+    if model.entry.state != State::Starting {
+        return Ok(());
+    }
+    let mut server = Server(
+        Command::new(&request.config.command[0])
+            .args(&request.config.command[1..])
+            .current_dir(&request.root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()?,
+    );
+    model.entry.server_pid = Some(server.0.id());
+    model.entry.server_start_token = crate::proc::process_start_token(server.0.id());
+    model.lifetime_peak_kb = memory::tree_peak_kb(server.0.id());
+    let published = registry::publish(&model.entry);
+    drop(model);
+    published?;
+    memory::raise_oom_score(server.0.id())?;
+    let uri = url::Url::from_directory_path(&request.root)
+        .map_err(|()| LspErr::Protocol("invalid checkout URI".into()))?;
+    let folders = json!([{"uri": uri.as_str(), "name": request.root.file_name().unwrap_or_default().to_string_lossy()}]);
+    let options = request.config.init_options.clone().unwrap_or(Value::Null);
+    let (progress_tx, progress) = mpsc::channel();
+    // Piped handles were requested on this child and have not yet been taken.
+    let transport = Transport::start(
+        server.0.stdout.take().expect("piped stdout"),
+        server.0.stdin.take().expect("piped stdin"),
+        options.clone(),
+        folders.clone(),
+        progress_tx,
+    );
+    let (_, initialized) = transport.request("initialize", json!({
+            "processId": std::process::id(), "rootUri": uri.as_str(), "workspaceFolders": folders,
+            "initializationOptions": options,
+            "capabilities": {"window": {"workDoneProgress": true}, "workspace": {"configuration": true, "workspaceFolders": true, "didChangeWatchedFiles": {"dynamicRegistration": true}}, "textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": true}}}
+        }))?;
+    shared
+        .model
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .transport = Some(transport.clone());
+    let (watch_tx, events) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = watch_tx.send(event);
+    })
+    .map_err(|error| LspErr::Protocol(error.to_string()))?;
+    watch::register(&mut watcher, &request.root, &|path, error| {
+        watch_error(request, path, error)
+    })?;
+    let result = run(
+        shared,
+        request,
+        &mut server,
+        &transport,
+        initialized,
+        progress,
+        (&mut watcher, events),
+    );
+    let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+    model.lifetime_peak_kb = model
+        .lifetime_peak_kb
+        .max(memory::tree_peak_kb(server.0.id()));
+    model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
+    result
 }
 
 fn run(
@@ -233,7 +336,7 @@ fn run(
 ) -> Result<()> {
     let (watcher, events) = watch;
     let mut initialized = Some(initialized);
-    let mut housekeeping = Instant::now();
+    let mut last_housekeeping = Instant::now();
     loop {
         if let Some(receiver) = &initialized {
             match receiver.try_recv() {
@@ -257,9 +360,12 @@ fn run(
         {
             let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
             for event in progress.try_iter() {
-                model.readiness.progress(&event);
+                model.readiness.progress(&event, shared.elapsed());
             }
-            if matches!(model.entry.state, State::Stopped { .. }) {
+            if matches!(
+                model.entry.state,
+                State::Stopped { .. } | State::Dormant { .. }
+            ) {
                 break;
             }
             let state = model.readiness.state(shared.elapsed());
@@ -305,35 +411,9 @@ fn run(
             shared.stop(StopReason::Crashed);
             break;
         }
-        if housekeeping.elapsed() >= Duration::from_secs(5) {
-            {
-                let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-                model.lifecycle.retain(shared.elapsed(), |lease| {
-                    crate::proc::process_is_live(lease.pid, Some(&lease.start_token))
-                });
-                model.entry.leases = model.lifecycle.leases.clone();
-                model.entry.peak_rss_kb = model
-                    .entry
-                    .peak_rss_kb
-                    .max(memory::tree_peak_kb(server.0.id()));
-                let reason = if !request.root.exists() {
-                    Some(StopReason::CheckoutRemoved)
-                } else {
-                    model.lifecycle.expired(shared.elapsed())
-                };
-                if let Some(reason) = reason {
-                    model.entry.state = State::Stopped {
-                        reason,
-                        at_ms: crate::utils::time::unix_now_ms(),
-                    };
-                    shared.changed.notify_all();
-                }
-                registry::publish(&model.entry)?;
-            }
-            if let Err(error) = watchdog::check(request.policy.kill_floor_percent) {
-                tracing::warn!(%error, "language-server pressure check failed");
-            }
-            housekeeping = Instant::now();
+        if last_housekeeping.elapsed() >= Duration::from_secs(5) {
+            housekeeping(shared, request)?;
+            last_housekeeping = Instant::now();
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -352,6 +432,47 @@ fn run(
     Ok(())
 }
 
+fn housekeeping(shared: &Shared, request: &ServeRequest) -> Result<()> {
+    let idle_timeout = super::admission::idle_timeout(&request.policy)?.as_millis() as u64;
+    {
+        let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+        model.lifecycle.retain(shared.elapsed(), |lease| {
+            crate::proc::process_is_live(lease.pid, Some(&lease.start_token))
+        });
+        model.entry.leases = model.lifecycle.leases.clone();
+        model.lifetime_peak_kb = model
+            .lifetime_peak_kb
+            .max(model.entry.server_pid.map_or(0, memory::tree_peak_kb));
+        model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
+        let reason = if !request.root.exists() {
+            Some(StopReason::CheckoutRemoved)
+        } else if let Some(reason) = model.lifecycle.expired(shared.elapsed()) {
+            Some(reason)
+        } else if model.entry.state == State::Ready
+            && lifecycle::idle_expired(
+                crate::utils::time::unix_now_ms(),
+                model.entry.ready_at_ms,
+                model.entry.last_request_at_ms,
+                shared.in_flight.load(std::sync::atomic::Ordering::SeqCst),
+                idle_timeout,
+            )
+        {
+            Some(StopReason::Idle)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            model.stop(reason);
+            shared.changed.notify_all();
+        }
+        registry::publish(&model.entry)?;
+    }
+    if let Err(error) = watchdog::check(request.policy.kill_floor_percent) {
+        tracing::warn!(%error, "language-server pressure check failed");
+    }
+    Ok(())
+}
+
 fn watch_error(request: &ServeRequest, path: &std::path::Path, error: &str) {
     crate::diag::lsp::append(&crate::diag::lsp::Record {
         at: jiff::Timestamp::now(),
@@ -362,42 +483,35 @@ fn watch_error(request: &ServeRequest, path: &std::path::Path, error: &str) {
     });
 }
 
-fn record_stop(entry: &Entry, error: Option<&str>) {
-    let State::Stopped { reason, at_ms } = &entry.state else {
-        return;
+fn record_stop(entry: &Entry, peak_rss_kb: u64, dormant_ms: Option<u64>, error: Option<&str>) {
+    let (reason, at_ms) = match entry.state {
+        State::Stopped { reason, at_ms } => (reason, at_ms),
+        State::Dormant {
+            reason: Some(reason),
+            since_ms,
+        } => (reason, since_ms),
+        _ => return,
     };
-    let mut recorded = false;
-    crate::disk::rotating::visit_records(
-        &crate::disk::paths::lsp_history_path(),
-        |record: history::Record| {
-            recorded |= record.root == entry.root
-                && record.server == entry.server
-                && record.settings_hash == entry.settings_hash
-                && record.at_ms == *at_ms;
-        },
-    );
-    if recorded {
-        return;
-    }
     history::append(&history::Record {
-        at_ms: *at_ms,
+        at_ms,
         root: entry.root.clone(),
         project: entry.project.clone(),
         server: entry.server.clone(),
         settings_hash: entry.settings_hash.clone(),
-        peak_rss_kb: entry.peak_rss_kb,
+        peak_rss_kb,
         ready_ms: entry
             .ready_at_ms
             .map(|ready| ready.saturating_sub(entry.started_at_ms)),
-        reason: *reason,
+        dormant_ms,
+        reason,
     });
-    if *reason == StopReason::Crashed {
+    if reason == StopReason::Crashed {
         crate::diag::lsp::append(&crate::diag::lsp::Record {
             at: jiff::Timestamp::now(),
             root: entry.root.clone(),
             server: entry.server.clone(),
             event: "crashed".into(),
-            details: json!({"reason": reason, "peak_rss_kb": entry.peak_rss_kb, "error": error}),
+            details: json!({"reason": reason, "peak_rss_kb": peak_rss_kb, "error": error}),
         });
     }
 }

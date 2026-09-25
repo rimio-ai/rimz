@@ -29,6 +29,71 @@ roles:
     owns: [Review]
 "#;
 
+#[test]
+fn done_flip_stops_checkout_server_but_review_does_not() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    let fixture = Fixture::new();
+    fixture.running("coder", None);
+    fixture.running("reviewer", None);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let config = serde_json::from_value(json!({
+        "command": [crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"))],
+        "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"
+    })).unwrap();
+    let request = rimz::lsp::admission::ServeRequest {
+        root: fixture.env.project_root.canonicalize().unwrap(),
+        project: fixture.env.project_root.clone(),
+        server: "rust".into(),
+        settings_hash: rimz::lsp::history::settings_hash(&config),
+        config,
+        policy: rimz::config::LspConfig {
+            reserve_min: "0".into(),
+            reserve_percent: 0,
+            kill_floor_percent: 0,
+            ..Default::default()
+        },
+        eager: false,
+    };
+    let (mut broker, directory) = super::lsp::spawn_test_broker(&fixture.env, &request);
+    let rpc = |value: serde_json::Value| -> serde_json::Value {
+        let mut stream = UnixStream::connect(directory.join("sock")).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        writeln!(stream, "{value}").unwrap();
+        let mut response = String::new();
+        BufReader::new(stream).read_line(&mut response).unwrap();
+        serde_json::from_str(&response).unwrap()
+    };
+    assert_eq!(
+        rpc(
+            json!({"op": "query", "method": "workspace/symbol", "params": {"query": "ready"}, "wait_ms": 4000})
+        )["result"],
+        json!([])
+    );
+    success(fixture.flip("Review", None, Some("Review it.")));
+    assert_eq!(rpc(json!({"op": "status"}))["state"], "ready");
+    success(fixture.flip("Done", None, Some("Finished.")));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let status = rpc(json!({"op": "status"}));
+        if status["state"]["dormant"]["reason"] == "team done" && status["server_pid"].is_null() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Done did not stop server: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        rpc(json!({"op": "stop", "reason": "checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+}
+
 struct Fixture {
     env: Env,
     panes: PathBuf,

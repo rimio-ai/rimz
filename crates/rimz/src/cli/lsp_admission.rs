@@ -46,9 +46,6 @@ pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> R
         for message in result.startup_refused {
             writeln!(super::render::err(), "rimz: {message}; agents use grep")?;
         }
-        for shortfall in result.refused_optional {
-            writeln!(super::render::err(), "{}", refusal(&shortfall))?;
-        }
         if result.wait_for_required.is_empty() {
             return Ok(());
         }
@@ -82,58 +79,4 @@ fn free(shortfall: &Shortfall) -> u64 {
         .available_bytes
         .saturating_sub(shortfall.committed_bytes)
         .saturating_sub(shortfall.reserve_bytes)
-}
-
-fn refusal(shortfall: &Shortfall) -> String {
-    let holders = shortfall
-        .holders
-        .iter()
-        .map(|holder| {
-            format!(
-                "{} {} {}",
-                holder.root.display(),
-                holder.server,
-                bytes(holder.rss_bytes)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let holders = if holders.is_empty() {
-        String::new()
-    } else {
-        format!(" (held: {holders})")
-    };
-    format!(
-        "rimz: language server {} not started: needs {}, {} free after the {} reserve{holders}; agents use grep",
-        shortfall.server,
-        bytes(shortfall.estimate_bytes),
-        bytes(free(shortfall)),
-        bytes(shortfall.reserve_bytes)
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn optional_refusal_names_reserve_and_holders_in_decimal_bytes() {
-        let shortfall = Shortfall {
-            root: "/checkout".into(),
-            server: "rust".into(),
-            estimate_bytes: 8_000_000_000,
-            available_bytes: 15_800_000_000,
-            committed_bytes: 1_000_000_000,
-            reserve_bytes: 9_600_000_000,
-            holders: vec![admission::Holder {
-                root: "/held".into(),
-                server: "rust".into(),
-                rss_bytes: 6_300_000_000,
-            }],
-        };
-        insta::assert_snapshot!(refusal(&shortfall), @"rimz: language server rust not started: needs 8 GB, 5.2 GB free after the 9.6 GB reserve (held: /held rust 6.3 GB); agents use grep");
-        let mut shortfall = shortfall;
-        shortfall.holders.clear();
-        assert!(!refusal(&shortfall).contains("held:"));
-    }
 }

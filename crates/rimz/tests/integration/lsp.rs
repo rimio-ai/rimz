@@ -48,7 +48,7 @@ fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
 }
 
 #[test]
-fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
+fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
     use rimz::lsp::{admission::ServeRequest, registry};
     use serde_json::{Value, json};
     use std::io::{BufRead, BufReader, Write};
@@ -59,7 +59,7 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
     let env = Env::new();
     let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
     let config: rimz::config::LspServerConfig = serde_json::from_value(
-        json!({"command": [stub], "extensions": ["rs"], "root-markers": ["Cargo.toml"]}),
+        json!({"command": [stub], "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"}),
     )
     .unwrap();
     let mut machine = MachineConfig::default();
@@ -78,9 +78,11 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
         config,
         policy: rimz::config::LspConfig {
             kill_floor_percent: 0,
+            reserve_percent: 0,
+            reserve_min: "0".into(),
             ..Default::default()
         },
-        estimate_bytes: 0,
+        eager: false,
     };
     let directory = env
         .runtime_root
@@ -111,7 +113,7 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
     let rpc = |value: Value| -> Value {
         let mut stream = UnixStream::connect(directory.join("sock")).unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
         writeln!(stream, "{value}").unwrap();
         let mut response = String::new();
@@ -119,6 +121,9 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
         serde_json::from_str(&response).unwrap()
     };
     let pid = std::process::id();
+    let status = rpc(json!({"op": "status"}));
+    assert!(status["state"].get("dormant").is_some(), "{status}");
+    assert!(status["server_pid"].is_null());
     let lease = json!({"op": "lease", "pid": pid, "start_token": rimz::proc::process_start_token(pid).unwrap()});
     assert_eq!(rpc(lease.clone())["ok"], true);
     assert_eq!(rpc(lease)["ok"], true);
@@ -131,7 +136,7 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
     );
     let query = |name| {
         rpc(
-            json!({"op": "query", "method": "workspace/symbol", "params": {"query": name}, "wait_ms": 1000}),
+            json!({"op": "query", "method": "workspace/symbol", "params": {"query": name}, "wait_ms": 4000}),
         )
     };
     assert_eq!(query("symbol")["result"], json!([]));
@@ -227,17 +232,43 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
         std::thread::sleep(Duration::from_millis(25));
     }
     env.rimz().args(["lsp", "stop"]).assert().success();
+    let wait_dormant = |reason: &str, timeout: Duration| {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let status = rpc(json!({"op": "status"}));
+            if status["state"]["dormant"]["reason"] == reason && status["server_pid"].is_null() {
+                return status;
+            }
+            assert!(Instant::now() < deadline, "not dormant: {status}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    wait_dormant("stopped by hand", Duration::from_secs(3));
     env.rimz()
-        .args(["lsp", "refs", "anything"])
+        .args(["lsp", "find", "anything", "--json"])
         .assert()
-        .code(3)
-        .stderr(predicates::str::contains("stopped by hand"));
-    assert_eq!(rpc(json!({"op": "release", "pid": pid}))["ok"], true);
+        .success()
+        .stdout("[]\n");
+    let status = rpc(json!({"op": "status"}));
+    assert_eq!(status["restarts"], 1);
+    assert_ne!(status["server_pid"], server_pid);
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(status["server_pid"].as_i64().unwrap() as i32),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    wait_dormant("crashed", Duration::from_secs(1));
+    assert_eq!(query("ready")["result"], json!([]));
+    assert_eq!(rpc(json!({"op": "status"}))["restarts"], 2);
+    assert_eq!(
+        rpc(json!({"op": "stop", "reason": "checkout removed"}))["ok"],
+        true
+    );
     let deadline = Instant::now() + Duration::from_secs(8);
     while broker.try_wait().unwrap().is_none() {
         assert!(
             Instant::now() < deadline,
-            "tombstone did not exit after release"
+            "terminal stop did not exit with a live lease"
         );
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -247,53 +278,61 @@ fn lsp_broker_serves_queries_watches_saves_and_keeps_leased_tombstones() {
     let record: Value = serde_json::from_str(history.lines().last().unwrap()).unwrap();
     assert_eq!(record["project"], json!(request.project));
     assert_eq!(record["root"], json!(request.root));
+    let records: Vec<Value> = history
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0]["reason"], "stopped by hand");
+    assert_eq!(records[1]["reason"], "crashed");
+    assert!(records[0]["dormant_ms"].is_null());
+    assert!(records[1]["dormant_ms"].is_u64());
+    assert!(records[2]["dormant_ms"].is_u64());
 
-    let mut broker = env
-        .rimz()
-        .args([
-            "lsp",
-            "serve",
-            "--request",
-            &serde_json::to_string(&request).unwrap(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !directory.join("entry.json").exists() {
-        assert!(broker.try_wait().unwrap().is_none());
-        assert!(Instant::now() < deadline);
+    let mut request = request;
+    request.policy.idle_timeout = "2s".into();
+    let (mut broker, _) = spawn_test_broker(&env, &request);
+    assert_eq!(query("ready")["result"], json!([]));
+    assert_eq!(query("slow")["result"], json!([]));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let status = rpc(json!({"op": "status"}));
+        if status["state"]["dormant"]["reason"] == "idle" && status["server_pid"].is_null() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "idle server stayed running: {status}"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
+    assert_eq!(query("ready")["result"], json!([]));
+    assert_eq!(rpc(json!({"op": "status"}))["restarts"], 1);
     assert_eq!(
-        rpc(
-            json!({"op": "lease", "launch_id": "crash", "pid": pid, "start_token": rimz::proc::process_start_token(pid).unwrap()})
-        )["ok"],
+        rpc(json!({"op": "stop", "reason": "checkout removed"}))["ok"],
         true
     );
-    assert_eq!(query("ready")["result"], json!([]));
-    let status = rpc(json!({"op": "status"}));
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(status["server_pid"].as_i64().unwrap() as i32),
-        nix::sys::signal::Signal::SIGKILL,
-    )
-    .unwrap();
+    broker.wait().unwrap();
+    request.policy.reserve_min = "1000000G".into();
+    let (mut broker, _) = spawn_test_broker(&env, &request);
     env.rimz()
-        .args(["lsp", "refs", "anything"])
+        .args(["lsp", "find", "anything"])
         .assert()
         .code(3)
-        .stderr(predicates::str::contains("stopped: crashed"));
+        .stderr(predicates::str::contains("not started: memory short"));
+    let status = rpc(json!({"op": "status"}));
+    assert!(status["state"].get("dormant").is_some());
+    assert!(status["server_pid"].is_null());
+    let output = env.rimz().args(["doctor", "--json"]).output().unwrap();
+    assert!(output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["lsp"]["ready"]["last_refusal"]["event"], "refused");
+    assert!(report["lsp"]["ready"]["last_refusal"]["details"]["estimate_bytes"].is_u64());
     assert_eq!(
-        rpc(json!({"op": "release", "launch_id": "crash", "pid": pid}))["ok"],
+        rpc(json!({"op": "stop", "reason": "checkout removed"}))["ok"],
         true
     );
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while broker.try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    broker.wait().unwrap();
 }
 
 #[test]
@@ -309,6 +348,37 @@ fn lsp_project_servers_are_inert_until_trusted_and_overlay_whole_entries() {
     assert!(config.untrusted_lsp_servers.is_empty());
     assert_eq!(config.lsp_servers["rust"].command, ["project-ra"]);
     assert!(config.lsp_servers["rust"].init_options.is_none());
+}
+
+pub(super) fn spawn_test_broker(
+    env: &Env,
+    request: &rimz::lsp::admission::ServeRequest,
+) -> (std::process::Child, std::path::PathBuf) {
+    use std::time::{Duration, Instant};
+    let directory = env
+        .runtime_root
+        .join("rimz/lsp")
+        .join(rimz::lsp::registry::key(&request.root, &request.server).unwrap());
+    let mut broker = env
+        .rimz()
+        .args([
+            "lsp",
+            "serve",
+            "--request",
+            &serde_json::to_string(request).unwrap(),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !directory.join("entry.json").exists() {
+        assert!(broker.try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    (broker, directory)
 }
 
 #[test]
@@ -332,7 +402,7 @@ fn lsp_machine_policy_in_project_is_refused_even_before_trust() {
 }
 
 #[test]
-fn lsp_sweep_removes_reused_pid_but_keeps_live_tombstone() {
+fn lsp_sweep_removes_reused_pid_but_keeps_live_broker() {
     use rimz::lsp::registry::{self, Entry, State};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
@@ -349,9 +419,9 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_tombstone() {
         broker_start_token: rimz::proc::process_start_token(pid).unwrap(),
         server_pid: None,
         server_start_token: None,
-        state: State::Stopped {
-            reason: rimz::lsp::registry::StopReason::MemoryPressure,
-            at_ms: 100,
+        state: State::Dormant {
+            reason: Some(rimz::lsp::registry::StopReason::MemoryPressure),
+            since_ms: 100,
         },
         started_at_ms: 0,
         ready_at_ms: None,
@@ -360,21 +430,13 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_tombstone() {
         request_count: 0,
         last_request_at_ms: None,
         peak_rss_kb: 5,
+        restarts: 0,
         leases: Vec::new(),
     };
     let live_dir = runtime
         .path()
         .join(registry::key(&entry.root, &entry.server).unwrap());
     rimz::disk::atomic::write_temp_then_rename_cache(&live_dir.join("entry.json"), &entry).unwrap();
-    let mut stale = entry.clone();
-    stale.state = State::Ready;
-    registry::testkit::publish(runtime.path(), &stale).unwrap();
-    let published: Entry =
-        serde_json::from_slice(&std::fs::read(live_dir.join("entry.json")).unwrap()).unwrap();
-    assert_eq!(
-        published.state, entry.state,
-        "a stale broker cannot overwrite the watchdog's tombstone"
-    );
     let mut dead = entry.clone();
     dead.server = "dead".into();
     dead.broker_start_token = "not-the-current-process".into();

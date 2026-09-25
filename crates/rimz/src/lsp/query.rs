@@ -104,7 +104,7 @@ pub enum UnavailableReason {
     NoneConfigured,
     #[error("not running")]
     NotRunning,
-    #[error("not started: memory short at launch")]
+    #[error("not started: memory short")]
     MemoryShort,
     #[error("stopped: memory pressure")]
     MemoryPressure,
@@ -711,6 +711,9 @@ mod tests {
             UnavailableReason::Crashed,
             UnavailableReason::CheckoutRemoved,
             UnavailableReason::StoppedByHand,
+            UnavailableReason::Stopped(crate::lsp::registry::StopReason::Idle),
+            UnavailableReason::Stopped(crate::lsp::registry::StopReason::Evicted),
+            UnavailableReason::Stopped(crate::lsp::registry::StopReason::TeamDone),
         ];
         let lines = reasons
             .into_iter()
@@ -726,11 +729,14 @@ mod tests {
             .join("\n");
         insta::assert_snapshot!(lines, @"
         no language server for /checkout (none configured); use grep
-        no language server for /checkout (not started: memory short at launch); use grep
+        no language server for /checkout (not started: memory short); use grep
         no language server for /checkout (stopped: memory pressure); use grep
         no language server for /checkout (stopped: crashed); use grep
         no language server for /checkout (stopped: checkout removed); use grep
         no language server for /checkout (stopped by hand); use grep
+        no language server for /checkout (stopped: idle); use grep
+        no language server for /checkout (stopped: evicted); use grep
+        no language server for /checkout (stopped: team done); use grep
         ");
         let indexing = QueryErr::Indexing {
             server: "rust".into(),

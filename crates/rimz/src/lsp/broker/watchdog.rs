@@ -19,8 +19,10 @@ pub(super) fn check(percent: u8) -> Result<()> {
     };
     let mut entries = registry::read_entries()?;
     entries.retain(|entry| {
-        !matches!(entry.state, State::Stopped { .. })
-            && crate::proc::process_is_live(entry.broker_pid, Some(&entry.broker_start_token))
+        matches!(
+            entry.state,
+            State::Starting | State::Indexing | State::Ready
+        ) && crate::proc::process_is_live(entry.broker_pid, Some(&entry.broker_start_token))
     });
     registry::kill_order(&mut entries);
     for mut entry in entries {
@@ -35,55 +37,57 @@ pub(super) fn check(percent: u8) -> Result<()> {
         entry.peak_rss_kb = entry
             .peak_rss_kb
             .max(entry.server_pid.map_or(0, memory::tree_peak_kb));
-        let response = registry::request(
-            &entry,
-            &serde_json::json!({"op": "stop", "reason": StopReason::MemoryPressure}),
-            Duration::from_secs(2),
-        );
-        if response.is_ok_and(|response| response["ok"] == true)
-            && entry.broker_pid != std::process::id()
-        {
-            // Give the acknowledged broker time to complete graceful shutdown.
-            std::thread::sleep(Duration::from_secs(2));
-        }
-        if let (Some(pid), Some(token)) = (entry.server_pid, entry.server_start_token.as_deref())
-            && crate::proc::process_is_live(pid, Some(token))
-        {
-            entry.peak_rss_kb = entry.peak_rss_kb.max(memory::tree_peak_kb(pid));
-            match nix::sys::signal::killpg(
-                nix::unistd::Pid::from_raw(pid as i32),
-                nix::sys::signal::Signal::SIGKILL,
-            ) {
-                Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
-                Err(error) => return Err(std::io::Error::from(error).into()),
-            }
-            // Memory accounting catches up asynchronously with process death.
-            for _ in 0..100 {
-                if !crate::proc::process_is_live(pid, Some(token)) {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-        entry.state = State::Stopped {
-            reason: StopReason::MemoryPressure,
-            at_ms: crate::utils::time::unix_now_ms(),
-        };
-        registry::publish(&entry)?;
+        stop_victim(&entry, StopReason::MemoryPressure, true)?;
         crate::diag::lsp::append(&kill_record(
             &entry,
             free_before,
             memory::sample()?.available_bytes,
             victim_rss_kb,
         ));
-        if let Some(published) = registry::read_entries()?
-            .into_iter()
-            .find(|published| published.nonce == entry.nonce)
-        {
-            super::record_stop(&published, None);
-        }
     }
     Ok(())
+}
+
+pub(in crate::lsp) fn stop_victim(
+    entry: &registry::Entry,
+    reason: StopReason,
+    kill_fallback: bool,
+) -> Result<bool> {
+    let started = std::time::Instant::now();
+    let response = registry::request(
+        entry,
+        &serde_json::json!({"op": "stop", "reason": reason}),
+        Duration::from_secs(2),
+    );
+    let acknowledged = response.is_ok_and(|response| response["ok"] == true);
+    let (Some(pid), Some(token)) = (entry.server_pid, entry.server_start_token.as_deref()) else {
+        return Ok(acknowledged);
+    };
+    if acknowledged && entry.broker_pid != std::process::id() {
+        let grace = if kill_fallback {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(3)
+        };
+        while started.elapsed() < grace && crate::proc::process_is_live(pid, Some(token)) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    if kill_fallback && crate::proc::process_is_live(pid, Some(token)) {
+        match nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        ) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+        while started.elapsed() < Duration::from_secs(3)
+            && crate::proc::process_is_live(pid, Some(token))
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    Ok(!crate::proc::process_is_live(pid, Some(token)))
 }
 
 fn kill_record(

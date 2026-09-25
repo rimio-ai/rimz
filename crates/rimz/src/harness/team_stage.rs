@@ -450,6 +450,14 @@ fn open_stage(
         tracing::warn!(error = %err, "failed to fire team.stage subscriptions");
     }
     let Some(owner) = opening.owner else {
+        if let Some(root) = opening.board.parent()
+            && let Err(error) = crate::lsp::registry::stop_checkout(
+                root,
+                crate::lsp::registry::StopReason::TeamDone,
+            )
+        {
+            tracing::debug!(%error, "failed to stop language servers at Done");
+        }
         return Ok((event, Delivery::Terminal));
     };
     if opening.self_owned {

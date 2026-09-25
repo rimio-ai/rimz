@@ -40,7 +40,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Stop a shared server without restarting it.
+    /// Free a shared server's memory; the next query restarts it.
     Stop {
         checkout: Option<PathBuf>,
         #[arg(long, conflicts_with = "all")]
@@ -178,13 +178,20 @@ fn list(json: bool) -> Result<()> {
         return Ok(());
     }
     let mut table = render::Table::new([
-        "CHECKOUT", "SERVER", "STATE", "RSS", "PEAK", "REQUESTS", "LAST", "LEASES",
+        "CHECKOUT", "SERVER", "STATE", "RSS", "PEAK", "REQUESTS", "LAST", "RESTARTS", "LEASES",
     ]);
     for entry in entries {
+        let running = matches!(
+            entry.state,
+            State::Starting | State::Indexing | State::Ready
+        );
         let state = match &entry.state {
             State::Starting => "starting".into(),
             State::Indexing => "indexing".into(),
             State::Ready => "ready".into(),
+            State::Dormant { reason, .. } => {
+                reason.map_or_else(|| "dormant".into(), |reason| format!("dormant: {reason}"))
+            }
             State::Stopped { reason, .. } => format!("stopped: {reason}"),
         };
         table.row(
@@ -195,21 +202,18 @@ fn list(json: bool) -> Result<()> {
                 rimz::utils::size::decimal_bytes(
                     entry
                         .server_pid
-                        .filter(|_| !matches!(entry.state, State::Stopped { .. }))
+                        .filter(|_| running)
                         .and_then(rimz::proc::tree_totals)
                         .map_or(0, |totals| totals.rss_kb.saturating_mul(1024)),
                 ),
-                rimz::utils::size::decimal_bytes(
+                rimz::utils::size::decimal_bytes(if running {
                     entry
                         .peak_rss_kb
-                        .max(
-                            entry
-                                .server_pid
-                                .filter(|_| !matches!(entry.state, State::Stopped { .. }))
-                                .map_or(0, rimz::lsp::memory::tree_peak_kb),
-                        )
-                        .saturating_mul(1024),
-                ),
+                        .max(entry.server_pid.map_or(0, rimz::lsp::memory::tree_peak_kb))
+                        .saturating_mul(1024)
+                } else {
+                    0
+                }),
                 entry.request_count.to_string(),
                 entry.last_request_at_ms.map_or_else(
                     || "—".into(),
@@ -220,6 +224,7 @@ fn list(json: bool) -> Result<()> {
                         )
                     },
                 ),
+                entry.restarts.to_string(),
                 entry.leases.len().to_string(),
             ]
             .map(render::cell),
