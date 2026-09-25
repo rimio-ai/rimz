@@ -878,6 +878,14 @@ impl crate::agents::capabilities::TranscriptCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
+    fn prompt_cache_ttl(
+        &self,
+        _model: Option<&str>,
+        account: Option<&crate::agents::AgentAccount>,
+    ) -> Option<std::time::Duration> {
+        (account?.metered == Some(true)).then_some(std::time::Duration::from_secs(60 * 60))
+    }
+
     fn context_window_for_model(&self, model: &str, prices: &PriceBook) -> Option<u64> {
         context_window_for(model, prices)
     }

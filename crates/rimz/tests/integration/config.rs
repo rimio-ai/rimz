@@ -909,6 +909,35 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
 }
 
 #[test]
+fn setup_retires_idle_compaction_keys_and_reruns_on() {
+    let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        "[harness]\nidle_compact = \"auto\"\nidle_compact_after = \"59m\"\n",
+    );
+    let output = env.rimz().args(["setup", "--yes"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("✓ removed harness.idle_compact_after (no longer read)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("✓ removed harness.idle_compact = \"auto\" (no longer read)"),
+        "{stdout}"
+    );
+    let output = env.rimz().args(["setup", "--yes"]).output().unwrap();
+    assert!(output.status.success());
+    let output = env
+        .rimz()
+        .args(["config", "get", "harness.idle_compact"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "on");
+}
+
+#[test]
 fn setup_pty_writes_and_reruns_first_run_answers() {
     let env = Env::new();
 
@@ -922,10 +951,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     assert!(output.contains("✓ truecolor"));
     assert!(output.contains("✓ Nerd Font icons"));
     assert!(output.contains("rocky joins the room"));
-    assert!(
-        output.contains("✓ auto-continue + idle compaction on"),
-        "{output}"
-    );
+    assert!(output.contains("✓ auto-continue on"), "{output}");
     assert!(
         !output.contains("auto-redeem"),
         "no Codex on PATH:\n{output}"
@@ -957,7 +983,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
         .args(["config", "get", "harness.idle_compact"])
         .output()
         .expect("config get idle_compact");
-    assert_eq!(String::from_utf8_lossy(&idle_compact.stdout).trim(), "auto");
+    assert_eq!(String::from_utf8_lossy(&idle_compact.stdout).trim(), "on");
 
     let output = run_setup_pty(&env, "\nn\nn\nn\nn\n", None, &[]);
 
@@ -1015,7 +1041,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     assert!(
         text.contains("auto_continue = true")
             && text.contains("auto_redeem = true")
-            && text.contains("idle_compact = \"auto\""),
+            && text.contains("idle_compact = \"on\""),
         "every offered row enabled:\n{text}"
     );
 }

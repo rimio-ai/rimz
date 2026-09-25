@@ -220,6 +220,5 @@ aggressive_resize = true
 ## turn_budget = "3"              # cap every agent turn at this dollar amount
 ## smart_compact = "70%"          # default for messages/waits ("70%", "120000", or "180k"); unset = off
 ## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's brief for the seat (solo or team member), "" = bare command
-## idle_compact = "auto"           # compact idle agents before the provider cache expires; auto = while another same-channel agent is running
-## idle_compact_after = "59m"      # idle span before compaction
+# idle_compact = "on"             # compact an idle team member before its provider prompt cache expires; on = provider cache TTL minus 3m, off, or a duration such as "25m"
 ## flip_compact = "180k"          # compact on stage hand-off at this context threshold; unset = off

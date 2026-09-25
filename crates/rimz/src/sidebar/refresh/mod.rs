@@ -266,7 +266,7 @@ pub(super) fn refresh_heavy_lanes(
         &config.resume,
         &resume_messages,
     );
-    crate::harness::idle_compact::compact_idle_agents(base, runtime, &config.harness);
+    crate::harness::idle_compact::compact_idle_agents(base, runtime, config);
     crate::harness::auto_redeem::redeem_credits(
         &panels.providers,
         runtime,

@@ -70,6 +70,8 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
         idle_secs: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        idle_after_secs: Option<u64>,
         occupied_tokens: u64,
         message_id: String,
         delivered: bool,
@@ -227,6 +229,7 @@ mod tests {
                 agent_id: AgentSessionId::from("session-2"),
                 label: Some("@planner".to_owned()),
                 idle_secs: 3_540,
+                idle_after_secs: None,
                 occupied_tokens: 180_000,
                 message_id: "msg_3".to_owned(),
                 delivered: true,

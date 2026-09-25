@@ -1,9 +1,9 @@
-//! Producer-side idle compaction: condense a warm, inactive agent context before
-//! its provider prompt cache expires.
+//! Producer-side idle compaction: condense an inactive team member's context
+//! before its provider prompt cache expires.
 //!
-//! The elected producer makes the pure eligibility decision and spawns the
-//! detached `rimz agents idle-compact` helper. The helper owns the durable
-//! message write; this module writes only a disposable pacing record.
+//! The elected producer and the detached `rimz agents idle-compact` helper
+//! share one eligibility decision. The helper owns the durable message write;
+//! this module writes only a disposable spawn-pacing record.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -12,14 +12,17 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::agents::{AgentState, AgentStatus};
-use crate::config::{HarnessConfig, IdleCompactMode};
+use crate::agents::{AgentAccount, AgentState, AgentStatus};
+use crate::config::{IdleCompactMode, MachineConfig, TeamsConfig};
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
 /// Below this fill, re-caching costs less than an extra compaction turn.
 pub const IDLE_COMPACT_MIN_TOKENS: u64 = 50_000;
+
+/// Covers the final generation, producer tick, helper spawn, and submission.
+pub const PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(3 * 60);
 
 /// Bounds duplicate helper spawns while a frame or context reading catches up.
 const IDLE_COMPACT_RESPAWN_THROTTLE: Duration = Duration::from_secs(10 * 60);
@@ -41,50 +44,143 @@ struct FireRecord {
     fired_for_activity: Timestamp,
 }
 
-/// Compact every eligible root agent whose idle threshold is due.
+pub fn fire_point(
+    agent: &AgentState,
+    mode: IdleCompactMode,
+    account: Option<&AgentAccount>,
+) -> Option<Duration> {
+    match mode {
+        IdleCompactMode::Off => None,
+        IdleCompactMode::After(duration) => Some(duration),
+        IdleCompactMode::On => crate::agents::find_definition(agent.kind.as_str())?
+            .prompt_cache_ttl(agent.model.as_deref(), account)?
+            .checked_sub(PROMPT_CACHE_MARGIN)
+            .filter(|duration| !duration.is_zero()),
+    }
+}
+
+pub fn resolve_teams(config: &MachineConfig, project_root: Option<&Path>) -> TeamsConfig {
+    project_root
+        .and_then(|root| {
+            crate::config::effective::load(config, root)
+                .ok()
+                .map(|effective| effective.teams)
+        })
+        .unwrap_or_else(|| config.agents.teams.clone())
+}
+
+pub fn resolve_mode(
+    agent: &AgentState,
+    teams: &TeamsConfig,
+    default: IdleCompactMode,
+) -> IdleCompactMode {
+    agent
+        .team
+        .as_ref()
+        .and_then(|name| teams.0.get(name))
+        .map_or(default, |team| {
+            team.idle_compact(agent.role.as_deref().unwrap_or(""), default)
+        })
+}
+
+fn eligible_seat(agent: &AgentState) -> bool {
+    agent.team.is_some()
+        && !agent.is_provider_subagent()
+        && !agent.agent_id.is_empty()
+        && agent.compacting_since.is_none()
+        && agent.budget_park.is_none()
+        && !agent.is_awaiting_input()
+        && matches!(
+            agent.effective_status(),
+            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
+        )
+        && agent.occupied_context_tokens().is_some_and(|tokens| {
+            tokens >= IDLE_COMPACT_MIN_TOKENS && agent.last_compact_command_tokens != Some(tokens)
+        })
+}
+
+fn cohort_live(agent: &AgentState) -> bool {
+    agent
+        .worktree_path
+        .as_deref()
+        .and_then(|root| super::scratch::board_stage(Path::new(root)))
+        .is_none_or(|stage| stage.name != crate::config::DONE_STAGE)
+}
+
+/// Shared producer/helper decision; spawn pacing is separate from delivery.
+pub fn should_compact(
+    agent: &AgentState,
+    command: Option<&str>,
+    idle_after: Option<Duration>,
+    now: Timestamp,
+) -> bool {
+    let Some(idle_after) = idle_after else {
+        return false;
+    };
+    eligible_seat(agent)
+        && command.is_some()
+        && cohort_live(agent)
+        && now.as_second() - agent.last_activity.as_second()
+            >= idle_after.as_secs().min(i64::MAX as u64) as i64
+}
+
+/// Compact each eligible team member whose idle threshold is due.
 pub(crate) fn compact_idle_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-    config: &HarnessConfig,
+    config: &MachineConfig,
 ) {
-    if config.idle_compact == IdleCompactMode::Off {
-        return;
-    }
+    compact_idle_agents_with(snapshot, runtime, config, |request| {
+        spawn_idle_compact(runtime, request)
+    });
+}
+
+fn compact_idle_agents_with(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    config: &MachineConfig,
+    mut spawn: impl FnMut(&IdleCompactRequest) -> bool,
+) {
+    let teams = std::cell::OnceCell::new();
     for agent in &snapshot.agents {
-        let command = crate::agents::compact_command(agent, config);
-        let occupied = agent.occupied_context_tokens();
-        let record_path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
-        let teammate_working =
-            config.idle_compact == IdleCompactMode::Auto && teammate_working(snapshot, agent);
+        if !eligible_seat(agent) {
+            continue;
+        }
+        let teams = teams.get_or_init(|| resolve_teams(config, snapshot.project_root.as_deref()));
+        let mode = resolve_mode(agent, teams, config.harness.idle_compact);
+        let account =
+            crate::sidebar::refresh::accounts::cached_account(runtime, &agent.login_key());
+        let command = crate::agents::compact_command(agent, &config.harness);
         if !should_compact(
             agent,
             command.as_deref(),
-            occupied,
-            config.idle_compact,
-            config.idle_compact_after(),
+            fire_point(agent, mode, account.as_ref()),
             snapshot.now,
-            teammate_working,
-            read_fire_record(&record_path).as_ref(),
         ) {
+            continue;
+        }
+        let record_path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
+        if !spawn_due(agent, snapshot.now, read_fire_record(&record_path).as_ref()) {
             continue;
         }
         let Some(pane_id) = snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
             continue;
         };
-        let (Some(command), Some(occupied)) = (command, occupied) else {
+        let (Some(command), Some(occupied_tokens)) = (command, agent.occupied_context_tokens())
+        else {
             continue;
         };
         let peers = crate::address::addressable_agents(snapshot);
-        let label = crate::address::agent_handle(agent, &peers, false);
-        if spawn_idle_compact(
-            runtime,
-            &agent.kind,
-            &agent.agent_id,
-            &pane_id,
-            &command,
-            occupied,
-            &label,
-        ) {
+        let request = IdleCompactRequest {
+            workspace_id: runtime.workspace_id.clone(),
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            pane_id,
+            command,
+            occupied_tokens,
+            label: crate::address::agent_handle(agent, &peers, false),
+        };
+        if spawn(&request) {
             write_fire_record(
                 &record_path,
                 &FireRecord {
@@ -96,64 +192,12 @@ pub(crate) fn compact_idle_agents(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn should_compact(
-    agent: &AgentState,
-    compact_command: Option<&str>,
-    occupied: Option<u64>,
-    mode: IdleCompactMode,
-    idle_after: Duration,
-    now: Timestamp,
-    teammate_working: bool,
-    record: Option<&FireRecord>,
-) -> bool {
-    if mode == IdleCompactMode::Off
-        || agent.is_provider_subagent()
-        || agent.agent_id.is_empty()
-        || compact_command.is_none()
-        || agent.compacting_since.is_some()
-        || agent.budget_park.is_some()
-        || agent.is_awaiting_input()
-        || !matches!(
-            agent.effective_status(),
-            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
-        )
-    {
-        return false;
-    }
-    if mode == IdleCompactMode::Auto && !teammate_working {
-        return false;
-    }
-    let idle_secs = now.as_second() - agent.last_activity.as_second();
-    if idle_secs < idle_after.as_secs().min(i64::MAX as u64) as i64 {
-        return false;
-    }
-    let Some(occupied) = occupied.filter(|tokens| *tokens >= IDLE_COMPACT_MIN_TOKENS) else {
-        return false;
-    };
-    if agent.last_compact_command_tokens == Some(occupied) {
-        return false;
-    }
+fn spawn_due(agent: &AgentState, now: Timestamp, record: Option<&FireRecord>) -> bool {
     record.is_none_or(|record| {
         record.fired_for_activity != agent.last_activity
             && now.as_second() - record.fired_at.as_second()
                 >= IDLE_COMPACT_RESPAWN_THROTTLE.as_secs() as i64
     })
-}
-
-fn teammate_working(snapshot: &SidebarSnapshot, candidate: &AgentState) -> bool {
-    let Some(channel) = candidate.channel() else {
-        return false;
-    };
-    snapshot
-        .agents
-        .iter()
-        .filter(|agent| !agent.is_provider_subagent())
-        .any(|agent| {
-            !(agent.kind == candidate.kind && agent.agent_id == candidate.agent_id)
-                && agent.channel().as_deref() == Some(channel.as_str())
-                && agent.effective_status() == AgentStatus::Running
-        })
 }
 
 fn fire_record_path(
@@ -183,30 +227,13 @@ fn write_fire_record(path: &Path, record: &FireRecord) {
     }
 }
 
-fn spawn_idle_compact(
-    runtime: &RuntimePaths,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-    pane_id: &PaneId,
-    command: &str,
-    occupied: u64,
-    label: &str,
-) -> bool {
-    let request = IdleCompactRequest {
-        workspace_id: runtime.workspace_id.clone(),
-        kind: kind.clone(),
-        agent_id: agent_id.clone(),
-        pane_id: pane_id.clone(),
-        command: command.to_owned(),
-        occupied_tokens: occupied,
-        label: label.to_owned(),
-    };
-    let args = crate::child_process::agent_helper_argv("idle-compact", &request);
+fn spawn_idle_compact(runtime: &RuntimePaths, request: &IdleCompactRequest) -> bool {
+    let args = crate::child_process::agent_helper_argv("idle-compact", request);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         workspace = %runtime.workspace_id,
-        kind = %kind,
-        occupied,
+        kind = %request.kind,
+        occupied = request.occupied_tokens,
         "sidebar: compacting idle agent",
     );
     if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "agent-idle-compact")
@@ -226,9 +253,8 @@ fn spawn_idle_compact(
 mod tests {
     use super::*;
     use crate::agents::{AgentStatus, PendingWait, PendingWaitTrigger};
-    use crate::forge::pr_state::{PrLink, PrStateCache};
     use crate::ids::{MuxName, WorkspaceId};
-    use crate::store::snapshot::{PaneAgent, WorktreePrState};
+    use crate::store::snapshot::PaneAgent;
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).expect("timestamp")
@@ -241,6 +267,7 @@ mod tests {
             status,
             ts(activity),
         );
+        agent.team = Some("probe".to_owned());
         agent.usage.total_tokens = Some(tokens);
         agent.worktree_path = Some("/repo/worktree".to_owned());
         agent.worktree_branch = Some("feat/cache".to_owned());
@@ -269,12 +296,8 @@ mod tests {
         should_compact(
             agent,
             Some("/compact"),
-            agent.occupied_context_tokens(),
-            IdleCompactMode::Always,
-            Duration::from_secs(59 * 60),
+            Some(Duration::from_secs(59 * 60)),
             ts(10_000),
-            false,
-            None,
         )
     }
 
@@ -287,23 +310,129 @@ mod tests {
         assert!(!should_compact(
             &candidate,
             None,
-            Some(50_000),
-            IdleCompactMode::Always,
-            Duration::from_secs(59 * 60),
+            Some(Duration::from_secs(59 * 60)),
             ts(10_000),
-            false,
-            None,
         ));
         assert!(!should_compact(
             &candidate,
             Some("/compact"),
-            Some(50_000),
-            IdleCompactMode::Off,
-            Duration::from_secs(59 * 60),
+            fire_point(&candidate, IdleCompactMode::Off, None),
             ts(10_000),
-            false,
-            None,
         ));
+    }
+
+    #[test]
+    fn solo_and_done_cohorts_never_compact() {
+        let mut candidate = agent(AgentStatus::Idle, 6_000, 80_000);
+        candidate.team = None;
+        assert!(!due(&candidate), "solo seats must never compact");
+        candidate.team = Some("probe".to_owned());
+        let root = tempfile::tempdir().unwrap();
+        candidate.worktree_path = Some(root.path().to_string_lossy().into_owned());
+        assert!(due(&candidate), "no board is live");
+        std::fs::write(
+            root.path().join("blackboard.md"),
+            "Stage: Review (@judge)\n",
+        )
+        .unwrap();
+        assert!(due(&candidate));
+        std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        assert!(!due(&candidate), "Done suppresses idle compaction");
+    }
+
+    #[test]
+    fn cache_timing_reaches_the_request_before_expiry() {
+        // Runtime premises: a one-second producer tick, ten seconds to spawn, ten seconds to submit, and two minutes for the previous final generation.
+        const PRODUCER_TICK_BOUND: u64 = 1;
+        const HELPER_SPAWN_BOUND: u64 = 10;
+        const KEYSTROKE_TO_REQUEST_BOUND: u64 = 10;
+        const FINAL_GENERATION_BOUND: u64 = 120;
+        for (kind, model, metered, ttl) in [
+            ("claude", "any", Some(true), Some(3600)),
+            ("codex", "gpt-5.6-terra", None, Some(1800)),
+            ("codex", "gpt-6-luna", Some(false), Some(1800)),
+            ("codex", "gpt-5-codex", Some(true), None),
+            ("claude", "any", Some(false), None),
+            ("claude", "any", None, None),
+            ("amp", "any", Some(true), None),
+        ] {
+            let mut candidate = agent(AgentStatus::Idle, 0, 80_000);
+            candidate.kind = AgentKind::new_unchecked(kind);
+            candidate.model = Some(model.to_owned());
+            let account = metered.map(|metered| crate::agents::AgentAccount {
+                metered: Some(metered),
+                ..Default::default()
+            });
+            let point = fire_point(&candidate, IdleCompactMode::default(), account.as_ref());
+            assert_eq!(
+                point.map(|point| point.as_secs()),
+                ttl.map(|ttl| ttl - 180),
+                "{kind}/{model}/{metered:?}"
+            );
+            if let (Some(point), Some(ttl)) = (point, ttl) {
+                assert!(
+                    point.as_secs()
+                        + PRODUCER_TICK_BOUND
+                        + HELPER_SPAWN_BOUND
+                        + KEYSTROKE_TO_REQUEST_BOUND
+                        + FINAL_GENERATION_BOUND
+                        < ttl
+                );
+                for (idle, expected) in [(point.as_secs(), true), (point.as_secs() - 1, false)] {
+                    assert_eq!(
+                        should_compact(&candidate, Some("/compact"), Some(point), ts(idle as i64)),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn producer_sends_team_brief_and_never_spawns_for_solo() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let mut candidate = agent(AgentStatus::Idle, 6_000, 80_000);
+        candidate.team = Some("probe".to_owned());
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(workspace_id, vec![candidate.clone()], ts(10_000));
+        snapshot.agent_panes.push(PaneAgent {
+            kind: candidate.kind.clone(),
+            kind_ordinal: None,
+            name: None,
+            name_explicit: false,
+            profile: None,
+            role: None,
+            channel: None,
+            agent_id: Some(candidate.agent_id.clone()),
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+            pane_pid: None,
+            worktree_path: candidate.worktree_path.clone(),
+            worktree_branch: candidate.worktree_branch.clone(),
+        });
+        let mut config = crate::config::MachineConfig::default();
+        config.harness.idle_compact = IdleCompactMode::After(Duration::from_secs(59 * 60));
+        let mut requests = Vec::new();
+        compact_idle_agents_with(&snapshot, &runtime, &config, |request| {
+            requests.push(request.clone());
+            true
+        });
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].command,
+            crate::agents::compact_command(&candidate, &config.harness).unwrap()
+        );
+        assert!(requests[0].command.contains("This seat is a team member"));
+        let path = fire_record_path(&runtime, &candidate.kind, &candidate.agent_id);
+        assert_eq!(
+            read_fire_record(&path).unwrap().fired_for_activity,
+            candidate.last_activity
+        );
+        std::fs::remove_file(&path).unwrap();
+        snapshot.agents[0].team = None;
+        compact_idle_agents_with(&snapshot, &runtime, &config, |_| panic!("solo spawn"));
+        assert!(!path.exists());
     }
 
     #[test]
@@ -360,160 +489,12 @@ mod tests {
             fired_at: ts(8_000),
             fired_for_activity: candidate.last_activity,
         };
-        assert!(!should_compact(
-            &candidate,
-            Some("/compact"),
-            Some(80_000),
-            IdleCompactMode::Always,
-            Duration::from_secs(59 * 60),
-            ts(10_000),
-            false,
-            Some(&same_activity),
-        ));
+        assert!(!spawn_due(&candidate, ts(10_000), Some(&same_activity)));
 
         let recent = FireRecord {
             fired_at: ts(9_500),
             fired_for_activity: ts(5_000),
         };
-        assert!(!should_compact(
-            &candidate,
-            Some("/compact"),
-            Some(80_000),
-            IdleCompactMode::Always,
-            Duration::from_secs(59 * 60),
-            ts(10_000),
-            false,
-            Some(&recent),
-        ));
-    }
-
-    #[test]
-    fn auto_requires_a_working_teammate() {
-        let candidate = agent(AgentStatus::Idle, 6_000, 80_000);
-        for teammate_working in [false, true] {
-            assert_eq!(
-                should_compact(
-                    &candidate,
-                    Some("/compact"),
-                    Some(80_000),
-                    IdleCompactMode::Auto,
-                    Duration::from_secs(59 * 60),
-                    ts(10_000),
-                    teammate_working,
-                    None,
-                ),
-                teammate_working
-            );
-        }
-        assert!(due(&candidate), "always ignores teammate activity");
-    }
-
-    #[test]
-    fn auto_requires_another_running_top_level_agent_in_the_same_channel() {
-        let candidate = agent(AgentStatus::Idle, 6_000, 80_000);
-        let mut teammate = agent(AgentStatus::Running, 9_900, 1);
-        teammate.agent_id = AgentSessionId::from("session-2");
-        let mut snapshot = SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(Path::new("/repo")),
-            vec![candidate.clone(), teammate],
-            ts(10_000),
-        );
-        assert!(teammate_working(&snapshot, &candidate));
-
-        for status in [
-            AgentStatus::Idle,
-            AgentStatus::Success,
-            AgentStatus::Waiting,
-        ] {
-            snapshot.agents[1].status = status;
-            assert!(!teammate_working(&snapshot, &candidate));
-        }
-        snapshot.agents[1].status = AgentStatus::Running;
-        snapshot.agents[1].channel = Some("other".to_owned());
-        assert!(!teammate_working(&snapshot, &candidate));
-        snapshot.agents[1].channel = None;
-        snapshot.agents[1].parent_agent_id = Some(candidate.agent_id.clone());
-        assert!(!teammate_working(&snapshot, &candidate));
-        snapshot.agents.pop();
-        snapshot.agents[0].status = AgentStatus::Running;
-        assert!(!teammate_working(&snapshot, &candidate));
-    }
-
-    #[test]
-    fn producer_auto_ignores_open_pr_and_records_one_spawn_with_working_teammate() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
-        runtime.ensure_dirs().expect("runtime dirs");
-        let candidate = agent(AgentStatus::Idle, 6_000, 80_000);
-        let mut snapshot =
-            SidebarSnapshot::build_with_agents(workspace_id, vec![candidate.clone()], ts(10_000));
-        snapshot.agent_panes.push(PaneAgent {
-            kind: candidate.kind.clone(),
-            kind_ordinal: None,
-            name: None,
-            name_explicit: false,
-            profile: None,
-            role: None,
-            channel: None,
-            agent_id: Some(candidate.agent_id.clone()),
-            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
-            pane_pid: None,
-            worktree_path: candidate.worktree_path.clone(),
-            worktree_branch: candidate.worktree_branch.clone(),
-        });
-        let config = HarnessConfig {
-            idle_compact: IdleCompactMode::Auto,
-            idle_compact_after: Some(Duration::from_secs(59 * 60)),
-            ..Default::default()
-        };
-
-        let mut cache = PrStateCache::default();
-        cache.states.insert(
-            candidate.worktree_path.clone().expect("worktree"),
-            PrLink {
-                branch: candidate.worktree_branch.clone(),
-                incarnation: None,
-                state: WorktreePrState::Open,
-                number: None,
-                url: None,
-                ci: None,
-                merge_sha: None,
-            },
-        );
-        write_temp_then_rename_cache(&runtime.pr_state_path(), &cache).expect("write PR cache");
-        compact_idle_agents(&snapshot, &runtime, &config);
-        assert!(
-            read_fire_record(&fire_record_path(
-                &runtime,
-                &candidate.kind,
-                &candidate.agent_id,
-            ))
-            .is_none(),
-            "an open PR alone must not trigger compaction"
-        );
-
-        let mut teammate = agent(AgentStatus::Running, 9_900, 1);
-        teammate.agent_id = AgentSessionId::from("session-2");
-        snapshot.agents.push(teammate);
-
-        compact_idle_agents(&snapshot, &runtime, &config);
-        let record = read_fire_record(&fire_record_path(
-            &runtime,
-            &candidate.kind,
-            &candidate.agent_id,
-        ))
-        .expect("fire record");
-        assert_eq!(record.fired_for_activity, candidate.last_activity);
-        assert!(!should_compact(
-            &candidate,
-            Some("/compact"),
-            Some(80_000),
-            IdleCompactMode::Always,
-            Duration::from_secs(59 * 60),
-            ts(11_000),
-            false,
-            Some(&record),
-        ));
+        assert!(!spawn_due(&candidate, ts(10_000), Some(&recent)));
     }
 }

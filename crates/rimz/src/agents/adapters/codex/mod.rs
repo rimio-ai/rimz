@@ -974,6 +974,24 @@ impl crate::agents::capabilities::TranscriptCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::ContextCapability for CodexAdapter {
+    fn prompt_cache_ttl(
+        &self,
+        model: Option<&str>,
+        _account: Option<&crate::agents::AgentAccount>,
+    ) -> Option<std::time::Duration> {
+        let model = crate::agents::tools::expand_model_alias("codex", model?);
+        let version = model.strip_prefix("gpt-")?.split('-').next()?;
+        if !version
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        {
+            return None;
+        }
+        let (major, minor) = version.split_once('.').unwrap_or((version, "0"));
+        let version = (major.parse::<u64>().ok()?, minor.parse::<u64>().ok()?);
+        (version >= (5, 6)).then_some(std::time::Duration::from_secs(30 * 60))
+    }
+
     /// Codex has no statusline, so app-server-owned metadata (rate-limit
     /// windows, model display name, thread preview/name, version) refreshes
     /// out-of-band on turn boundaries: `SessionStart` populates it early (rate

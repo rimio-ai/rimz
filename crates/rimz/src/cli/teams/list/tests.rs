@@ -70,6 +70,7 @@ fn team() -> Team {
             signals: Vec::new(),
             owns: Vec::new(),
             flip_compact: None,
+            idle_compact: None,
         }],
         leader: Some("planner".to_owned()),
         layout: None,

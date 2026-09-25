@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::agents;
-use crate::config::{FlipCompact, Profile, PromptSource, RoleBinding, Team, TeamSignalBinding};
+use crate::config::{
+    FlipCompact, IdleCompactMode, Profile, PromptSource, RoleBinding, Team, TeamSignalBinding,
+};
 use crate::harness::team_prompt::BUILT_IN_CONSENSUS;
 use crate::store::message::AutoCompact;
 
@@ -189,6 +191,11 @@ fn roster(
             role: handle.to_owned(),
             profile: format!("{name}.{handle}"),
             flip_compact: Some(flip_compact(path, role.flip_compact.as_deref(), &owns)?),
+            idle_compact: role
+                .idle_compact
+                .as_deref()
+                .map(|value| idle_compact(path, value))
+                .transpose()?,
             signals: signals(path, role.signals.as_deref())?,
             owns,
             mode: None,
@@ -357,6 +364,15 @@ impl SeatLoader<'_> {
         profile.append_system_prompt_files = crafts;
         Ok(profile)
     }
+}
+
+fn idle_compact(path: &Path, value: &str) -> Result<IdleCompactMode, DefinitionErr> {
+    value.parse().map_err(|_| {
+        DefinitionErr::new(
+            path,
+            format!("sets `idle-compact: {value}`; rimz takes off, on, or a duration such as 25m"),
+        )
+    })
 }
 
 fn flip_compact(

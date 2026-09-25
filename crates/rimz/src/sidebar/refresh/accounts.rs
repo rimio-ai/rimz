@@ -584,6 +584,14 @@ fn read_accounts_cache(path: &Path) -> AccountsCache {
     crate::disk::atomic::read_json_cache(path)
 }
 
+/// Read a successful published account fact without probing the provider.
+pub fn cached_account(runtime: &RuntimePaths, key: &LoginKey) -> Option<AgentAccount> {
+    let record = read_accounts_cache(&runtime.shared_accounts_path())
+        .logins
+        .remove(key)?;
+    record.ok.then_some(record.account).flatten()
+}
+
 /// Publish the probed account cache atomically so readers never observe a
 /// partially merged provider map. A write failure leaves the prior cache live.
 pub(super) fn write_accounts_cache(path: &Path, cache: &AccountsCache) {

@@ -173,6 +173,7 @@ fn team() -> crate::harness::launch_reminders::TeamReminder {
         signals: Vec::new(),
         owns: Vec::new(),
         flip_compact: None,
+        idle_compact: None,
         auto_compact: None,
         role: role.to_owned(),
         profile: profile.to_owned(),

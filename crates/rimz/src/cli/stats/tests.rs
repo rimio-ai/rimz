@@ -1570,6 +1570,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
                 agent_id: AgentSessionId::from("session-2"),
                 label: Some("@planner".to_owned()),
                 idle_secs: 3_540,
+                idle_after_secs: None,
                 occupied_tokens: 180_000,
                 message_id: "msg_4".to_owned(),
                 delivered: true,
@@ -1708,6 +1709,32 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(json["rollup"]["resumes"], 1);
     assert_eq!(json["rollup"]["sweeps"], 1);
     assert_eq!(json["events"][0]["assist"], "auto_gc");
+}
+
+#[test]
+fn idle_compact_assist_renders_threshold_and_accepts_legacy_record() {
+    let mut value = serde_json::json!({
+        "at": "2026-01-01T00:00:00Z", "assist": "idle_compact",
+        "kind": "claude", "agent_id": "session-2", "label": "@planner",
+        "idle_secs": 3480, "occupied_tokens": 180000, "message_id": "msg_4", "delivered": true
+    });
+    for threshold in [None, Some(3420)] {
+        if let Some(threshold) = threshold {
+            value["idle_after_secs"] = threshold.into();
+        }
+        let record = serde_json::from_value(value.clone()).unwrap();
+        let stats = AssistStats::from_records("7d", vec![record]);
+        let line = benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+        if threshold.is_some() {
+            assert!(
+                line.contains("idle compacted after 58m (threshold 57m)"),
+                "{line}"
+            );
+        } else {
+            assert!(line.contains("idle compacted after"));
+            assert!(!line.contains("threshold"));
+        }
+    }
 }
 
 #[test]
