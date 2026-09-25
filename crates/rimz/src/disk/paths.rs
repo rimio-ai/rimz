@@ -88,8 +88,8 @@ pub(crate) fn require_layout(path: &Path, layout: u32) -> Result<()> {
     Ok(())
 }
 
-/// Check an existing room before reading or mutating its class directories.
-pub(crate) fn check_workspace_layout(root: &Path) -> Result<()> {
+/// Check an existing room before reading or mutating its class directories; return whether its identity record exists.
+pub(crate) fn check_workspace_layout(root: &Path) -> Result<bool> {
     #[derive(serde::Deserialize)]
     struct Layout {
         #[serde(default = "legacy_layout")]
@@ -102,9 +102,10 @@ pub(crate) fn check_workspace_layout(root: &Path) -> Result<()> {
                 path: path.clone(),
                 source: io::Error::new(io::ErrorKind::InvalidData, source),
             })?;
-            require_layout(&path, record.layout)
+            require_layout(&path, record.layout)?;
+            Ok(true)
         }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(source) => Err(PathErr::Io { path, source }),
     }
 }
@@ -130,6 +131,16 @@ pub enum Class {
 }
 
 impl Class {
+    pub(crate) const STATE: [Self; 6] = [
+        Self::Log,
+        Self::Records,
+        Self::Audit,
+        Self::Cache,
+        Self::Owned,
+        Self::Tmp,
+    ];
+    pub(crate) const RUNTIME: [Self; 4] = [Self::Sock, Self::Live, Self::Lanes, Self::Locks];
+
     pub const fn dir_name(self) -> &'static str {
         match self {
             Self::Log => "log",
@@ -201,22 +212,35 @@ impl StatePaths {
     /// Paths for the workspace born at `project_root`: its existing dir, else
     /// a freshly minted `<basename>-<hex>` name. Creates nothing.
     pub fn for_project_root(project_root: &Path) -> Result<Self> {
-        Self::for_project_root_under(project_root, &rimz_home())
+        Self::for_project_root_in(project_root, &rimz_home(), &runtime_home())
     }
 
     /// [`Self::for_project_root`] under an explicit home.
     pub fn for_project_root_under(project_root: &Path, home: &Path) -> Result<Self> {
+        Self::for_project_root_in(project_root, home, home)
+    }
+
+    fn for_project_root_in(project_root: &Path, home: &Path, runtime_root: &Path) -> Result<Self> {
         let workspace_id = WorkspaceId::from_project_root(project_root);
         let dir_name =
             workspace_dir_name_for_root(&workspaces_dir_under(home), &workspace_id, project_root)?;
-        Ok(Self::under_named(workspace_id, dir_name, home))
+        let runtime =
+            RuntimePaths::under_named(workspace_id.clone(), dir_name.clone(), runtime_root);
+        Ok(Self::under_named(workspace_id, dir_name, home, &runtime))
     }
 
     /// Paths for a workspace known only by id: its existing dir, else the
     /// `ws-<24hex>` fallback name. Creates nothing.
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
         let dir_name = workspace_dir_name(&workspaces_dir(), &workspace_id)?;
-        Ok(Self::under_named(workspace_id, dir_name, &rimz_home()))
+        let runtime =
+            RuntimePaths::under_named(workspace_id.clone(), dir_name.clone(), &runtime_home());
+        Ok(Self::under_named(
+            workspace_id,
+            dir_name,
+            &rimz_home(),
+            &runtime,
+        ))
     }
 
     /// [`Self::for_workspace`] under an explicit home, for tests that should not
@@ -225,13 +249,16 @@ impl StatePaths {
     pub fn under(workspace_id: WorkspaceId, home: &Path) -> Result<Self> {
         let dir_name = workspace_dir_name(&workspaces_dir_under(home), &workspace_id)?;
         let runtime = RuntimePaths::under_named(workspace_id.clone(), dir_name.clone(), home);
-        let mut paths = Self::under_named(workspace_id, dir_name, home);
-        paths.bind_runtime_locks(&runtime);
-        Ok(paths)
+        Ok(Self::under_named(workspace_id, dir_name, home, &runtime))
     }
 
     /// Paths for `workspace_id` in the dir `dir_name` under `home`.
-    pub fn under_named(workspace_id: WorkspaceId, dir_name: WorkspaceDirName, home: &Path) -> Self {
+    pub fn under_named(
+        workspace_id: WorkspaceId,
+        dir_name: WorkspaceDirName,
+        home: &Path,
+        runtime: &RuntimePaths,
+    ) -> Self {
         let root = workspaces_dir_under(home).join(dir_name.as_str());
         let cache_dir = Class::Cache.path_under(&root);
         let records_dir = Class::Records.path_under(&root);
@@ -243,9 +270,6 @@ impl StatePaths {
         let transcript_dir = audit_dir.join("transcript");
         let runs_dir = owned_dir.join("runs");
         let tmp_dir = root.join(Class::Tmp.dir_name());
-        let fleet_budget_record = fleet_budget_record(home, &dir_name);
-        let runtime =
-            RuntimePaths::under_named(workspace_id.clone(), dir_name.clone(), &runtime_home());
         Self {
             workspace_id,
             dir_name,
@@ -264,7 +288,7 @@ impl StatePaths {
             snapshots_dir,
             messages_dir,
             message_history_dir: audit_dir.join("messages"),
-            fleet_budget_record,
+            fleet_budget_record: records_dir.join("budget.fleet.json"),
             transcript_dir,
             runs_dir,
             workspace_lock: runtime.lock_path("workspace.lock"),
@@ -519,17 +543,8 @@ pub(crate) fn builds_dir_under(home: &Path) -> PathBuf {
     home.join("builds")
 }
 
-fn fleet_budget_record(home: &Path, dir_name: &WorkspaceDirName) -> PathBuf {
-    Class::Records
-        .path_under(&workspaces_dir_under(home).join(dir_name.as_str()))
-        .join("budget.fleet.json")
-}
-
 #[derive(Clone, Debug)]
 pub struct RuntimePaths {
-    /// State record reference for budget readers holding only runtime paths.
-    /// Inventoried by StatePaths, never reclaimed as runtime state.
-    pub(crate) fleet_budget_record: PathBuf,
     pub workspace_id: WorkspaceId,
     pub dir_name: WorkspaceDirName,
     /// `$XDG_RUNTIME_DIR` or its fallback; hardened, never RimZ-owned.
@@ -599,17 +614,11 @@ impl RuntimePaths {
 
     /// Runtime paths paired with state paths already in hand.
     pub fn for_state(state: &StatePaths) -> Result<Self> {
-        let mut paths = Self::validated(
+        Self::validated(
             state.workspace_id.clone(),
             state.dir_name.clone(),
             &runtime_home(),
-        )?;
-        paths.bind_state_records(state);
-        Ok(paths)
-    }
-
-    pub(crate) fn bind_state_records(&mut self, state: &StatePaths) {
-        self.fleet_budget_record = state.fleet_budget_record.clone();
+        )
     }
 
     /// Account-global runtime paths with no bound room, for readers that run
@@ -662,7 +671,6 @@ impl RuntimePaths {
         let agent_activity_dir = live_dir.join("agent-activity");
         let active_time_dir = live_dir.join("active-time");
         Self {
-            fleet_budget_record: fleet_budget_record(runtime_root, &dir_name),
             workspace_id,
             dir_name,
             runtime_root: runtime_root.to_path_buf(),
@@ -692,7 +700,6 @@ impl RuntimePaths {
     ) -> Result<Self> {
         let mut paths = Self::budgeted(workspace_id, dir_name, runtime_root)?;
         paths.persistent_shared_root = providers_cache_dir();
-        paths.fleet_budget_record = fleet_budget_record(&rimz_home(), &paths.dir_name);
         Ok(paths)
     }
 

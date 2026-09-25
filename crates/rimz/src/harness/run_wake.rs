@@ -63,20 +63,13 @@ pub struct ExpectedRunFrame {
 /// tokio runtime to bind. [`adopt`] moves it into the reactor when the wait
 /// actually starts.
 ///
-/// The runtime sock dir is a class directory the GC removes once it empties,
-/// so the bind recreates it, and removes a stale file at the derived path.
+/// The caller prepares the runtime directory; the bind removes a stale file at the derived path.
 fn bind_run(rt: &RuntimePaths, run_id: &RunId) -> Result<(StdUnixDatagram, PathBuf)> {
     bind_path(run_socket_path(rt, run_id))
 }
 
 fn bind_path(path: PathBuf) -> Result<(StdUnixDatagram, PathBuf)> {
     sock::validate_socket_path(&path)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| RunWakeErr::Bind {
-            path: path.clone(),
-            source,
-        })?;
-    }
     if path.exists() {
         // Derived from a UUIDv7 — a leftover here means a previous waiter
         // crashed without cleanup. Safe to clear.

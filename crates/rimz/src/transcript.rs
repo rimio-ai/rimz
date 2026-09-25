@@ -347,7 +347,8 @@ fn workspaces_with_channel_under(state_root: &Path, channel: &str) -> Vec<KnownW
                 tracing::debug!(workspace = %workspace.workspace_id, root = %workspace.project_root.display(), "skipping workspace whose project root is gone");
                 return false;
             }
-            let paths = StatePaths::under_named(workspace.workspace_id.clone(), workspace.dir_name.clone(), state_root);
+            let runtime = crate::RuntimePaths::under_named(workspace.workspace_id.clone(), workspace.dir_name.clone(), state_root);
+            let paths = StatePaths::under_named(workspace.workspace_id.clone(), workspace.dir_name.clone(), state_root, &runtime);
             match channels(&paths) {
                 Ok(channels) => channels.contains(channel),
                 Err(err) => {

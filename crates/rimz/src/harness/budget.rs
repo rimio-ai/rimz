@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use jiff::{Timestamp, civil::Date, tz::TimeZone};
@@ -257,8 +257,8 @@ impl DailyBudgetScope {
     }
 
     #[cfg(any(test, feature = "testkit"))]
-    pub fn ledger_path(&self, runtime: &RuntimePaths) -> PathBuf {
-        self.file(runtime).path
+    pub fn ledger_path(&self, runtime: &RuntimePaths, state: &crate::StatePaths) -> PathBuf {
+        self.file(runtime, &state.fleet_budget_record).path
     }
 
     pub fn day_spend_usd(
@@ -277,8 +277,17 @@ impl DailyBudgetScope {
         }
     }
 
-    pub fn read_ledger(&self, runtime: &RuntimePaths) -> DailyBudgetLedger {
-        let mut ledger: DailyBudgetLedger = self.file(runtime).read();
+    pub fn read_ledger(
+        &self,
+        runtime: &RuntimePaths,
+        state: Option<&crate::StatePaths>,
+    ) -> DailyBudgetLedger {
+        let mut ledger: DailyBudgetLedger = match self {
+            Self::Fleet => state
+                .map(|state| crate::disk::atomic::read_json_cache(&state.fleet_budget_record))
+                .unwrap_or_default(),
+            Self::Account(key) => account_ledger_file(runtime, key).read(),
+        };
         if matches!(self, Self::Account(_)) {
             ledger.override_spec = None;
         } else {
@@ -293,9 +302,10 @@ impl DailyBudgetScope {
     pub fn write_ledger(
         &self,
         runtime: &RuntimePaths,
+        state: &crate::StatePaths,
         ledger: &DailyBudgetLedger,
     ) -> Result<(), ScopeLedgerWriteError> {
-        let file = self.file(runtime);
+        let file = self.file(runtime, &state.fleet_budget_record);
         match self {
             Self::Fleet => {
                 let mut choices = ledger.clone();
@@ -317,31 +327,38 @@ impl DailyBudgetScope {
         runtime: &RuntimePaths,
         parked: Option<BudgetParkStamp>,
     ) -> Result<(), ScopeLedgerWriteError> {
-        if matches!(self, Self::Fleet) {
-            write_temp_then_rename_cache(&runtime.lane_path("budget.fleet-park.json"), &parked)?;
-            return Ok(());
+        match self {
+            Self::Fleet => {
+                write_temp_then_rename_cache(
+                    &runtime.lane_path("budget.fleet-park.json"),
+                    &parked,
+                )?;
+                Ok(())
+            }
+            Self::Account(key) => account_ledger_file(runtime, key).merge_park(self, parked),
         }
-        self.file(runtime).merge_park(self, parked)
     }
 
-    fn file(&self, runtime: &RuntimePaths) -> ScopeLedgerFile {
+    fn file(&self, runtime: &RuntimePaths, fleet_record: &Path) -> ScopeLedgerFile {
         match self {
             Self::Fleet => ScopeLedgerFile {
-                path: runtime.fleet_budget_record.clone(),
+                path: fleet_record.to_owned(),
                 lock_path: runtime.lock_path("budget.fleet.lock"),
             },
-            Self::Account(key) => {
-                let component = account_ledger_component(key);
-                ScopeLedgerFile {
-                    path: runtime
-                        .persistent_shared_root
-                        .join(format!("budget.account.{component}.json")),
-                    lock_path: runtime
-                        .shared_root
-                        .join(format!("budget.account.{component}.lock")),
-                }
-            }
+            Self::Account(key) => account_ledger_file(runtime, key),
         }
+    }
+}
+
+fn account_ledger_file(runtime: &RuntimePaths, key: &LoginKey) -> ScopeLedgerFile {
+    let component = account_ledger_component(key);
+    ScopeLedgerFile {
+        path: runtime
+            .persistent_shared_root
+            .join(format!("budget.account.{component}.json")),
+        lock_path: runtime
+            .shared_root
+            .join(format!("budget.account.{component}.lock")),
     }
 }
 
@@ -619,16 +636,17 @@ fn evaluate(
 }
 
 /// Stamp ledger park projections onto agent state for producer and consumer
-/// folds. This reads runtime cache files only.
+/// folds. This reads runtime caches and standing fleet choices without writing either.
 pub(crate) fn project_parks(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
+    state: Option<&crate::StatePaths>,
     config: &MachineConfig,
 ) {
     let now = snapshot.now;
     let zone = config.time_zone();
     let fleet_scope = DailyBudgetScope::Fleet;
-    let fleet = fleet_scope.read_ledger(runtime);
+    let fleet = fleet_scope.read_ledger(runtime, state);
     let scope_state = read_scope_state(runtime);
     let provider = crate::agents::spending::read_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
@@ -669,7 +687,7 @@ pub(crate) fn project_parks(
         let scope = DailyBudgetScope::Account(key.clone());
         let account = accounts
             .entry(key)
-            .or_insert_with(|| scope.read_ledger(runtime));
+            .or_insert_with(|| scope.read_ledger(runtime, state));
         agent.budget_park = daily_scope_park(
             &scope, account, runtime, config, &provider, day_cutoff, now, &zone,
         );
@@ -770,7 +788,14 @@ pub(crate) fn enforce(
     let zone = config.time_zone();
     let human_deliveries = delivered_human_messages(store);
     let day_cutoff = local_day_cutoff_secs(now, &zone);
-    let scopes = evaluate_scopes(snapshot, runtime, config, now, day_cutoff);
+    let scopes = evaluate_scopes(
+        snapshot,
+        runtime,
+        store.map(Store::paths),
+        config,
+        now,
+        day_cutoff,
+    );
     let mut scope_state = read_scope_state(runtime);
     let scope_before = scope_state.clone();
     if config.harness.turn_budget.is_none() {
@@ -824,6 +849,7 @@ struct ScopeVerdicts {
 fn evaluate_scopes(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    state: Option<&crate::StatePaths>,
     config: &MachineConfig,
     now: Timestamp,
     day_cutoff: Option<u64>,
@@ -834,7 +860,7 @@ fn evaluate_scopes(
         current_workspace_day(runtime, day_cutoff).unwrap_or_default()
     };
     let fleet_scope = DailyBudgetScope::Fleet;
-    let mut fleet = fleet_scope.read_ledger(runtime);
+    let mut fleet = fleet_scope.read_ledger(runtime, state);
     let fleet_parked_before = fleet.parked.clone();
     let fleet_cap = fleet_scope.effective_cap_usd(&fleet, config);
     let fleet_verdict = evaluate_daily_scope(&mut fleet.parked, fleet_cap, fleet_spend, now);
@@ -856,7 +882,7 @@ fn evaluate_scopes(
     }];
     for key in root_logins {
         let scope = DailyBudgetScope::Account(key.clone());
-        let mut ledger = scope.read_ledger(runtime);
+        let mut ledger = scope.read_ledger(runtime, state);
         let parked_before = ledger.parked.clone();
         let cap = scope.effective_cap_usd(&ledger, config);
         let spend = login_day_usd(&provider, day_cutoff, &key).unwrap_or_default();
@@ -1310,6 +1336,7 @@ pub fn workspace_day_cache(
 pub(crate) fn project_budget_views(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
+    state: Option<&crate::StatePaths>,
     config: &MachineConfig,
     provider: &crate::agents::spending::ProviderSpendingCache,
     logins: &RoomLoginSet,
@@ -1317,7 +1344,7 @@ pub(crate) fn project_budget_views(
     let now = snapshot.now;
     let cutoff = local_day_cutoff_secs(now, &config.time_zone());
     let fleet_scope = DailyBudgetScope::Fleet;
-    let fleet = fleet_scope.read_ledger(runtime);
+    let fleet = fleet_scope.read_ledger(runtime, state);
     snapshot.fleet_budget = fleet_scope
         .effective_cap_usd(&fleet, config)
         .map(|cap_usd| {
@@ -1334,7 +1361,7 @@ pub(crate) fn project_budget_views(
             continue;
         };
         let scope = DailyBudgetScope::Account(key.clone());
-        let ledger = scope.read_ledger(runtime);
+        let ledger = scope.read_ledger(runtime, state);
         panel.day_budget = scope.effective_cap_usd(&ledger, config).map(|cap_usd| {
             let spend_usd = login_day_usd(provider, cutoff, &key).unwrap_or_default();
             crate::store::snapshot::DailyBudgetView {
@@ -1350,6 +1377,7 @@ pub(crate) fn project_budget_views(
 /// a delivered human message can waive their next parked turn.
 pub fn scope_gate(
     runtime: &RuntimePaths,
+    state: &crate::StatePaths,
     login: Option<&LoginKey>,
     config: &MachineConfig,
     now: Timestamp,
@@ -1362,7 +1390,7 @@ pub fn scope_gate(
     for scope in std::iter::once(DailyBudgetScope::Fleet)
         .chain(login.cloned().map(DailyBudgetScope::Account))
     {
-        let ledger = scope.read_ledger(runtime);
+        let ledger = scope.read_ledger(runtime, Some(state));
         let Some(cap) = scope.effective_cap_usd(&ledger, config) else {
             continue;
         };

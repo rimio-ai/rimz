@@ -125,10 +125,16 @@ pub fn collect_classes(
     let rooms = crate::workspace::known_workspaces_under(&root)
         .map_err(|source| GcErr::ReadDir { path: root, source })?;
     for room in rooms {
+        let runtime = paths::RuntimePaths::under_named(
+            room.workspace_id.clone(),
+            room.dir_name.clone(),
+            &paths::runtime_home(),
+        );
         let paths = paths::StatePaths::under_named(
             room.workspace_id,
             room.dir_name.clone(),
             &paths::rimz_home(),
+            &runtime,
         );
         let runtime = paths::RuntimePaths::for_state(&paths)?;
         let (classes, waits_removed) = match classes::collect_state(&paths, dry_run, &|name| {
@@ -161,18 +167,7 @@ pub fn collect_classes(
     }
     for room in &mut report.rooms {
         use paths::Class;
-        for class in [
-            Class::Log,
-            Class::Records,
-            Class::Audit,
-            Class::Cache,
-            Class::Owned,
-            Class::Tmp,
-            Class::Sock,
-            Class::Live,
-            Class::Lanes,
-            Class::Locks,
-        ] {
+        for class in Class::STATE.into_iter().chain(Class::RUNTIME) {
             if !room
                 .classes
                 .iter()
