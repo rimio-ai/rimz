@@ -398,6 +398,20 @@ fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
 }
 
 #[test]
+fn git_reminder_defaults_on_and_parses_override() {
+    let dir = tempdir().expect("tempdir");
+    let defaulted = load_no_fragments(&write_named(&dir, "config.toml", "")).unwrap();
+    assert!(defaulted.agents.git_reminder);
+    let tuned = load_no_fragments(&write_named(
+        &dir,
+        "config.toml",
+        "[agents]\ngit-reminder = false\n",
+    ))
+    .unwrap();
+    assert!(!tuned.agents.git_reminder);
+}
+
+#[test]
 fn subagent_launch_defaults_parse_and_round_trip() {
     let defaulted: AgentsConfig = toml::from_str("").expect("parse defaults");
     assert_eq!(defaulted.subagents.timeout, "30m");

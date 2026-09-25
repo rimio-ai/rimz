@@ -70,6 +70,9 @@ pub struct AgentsConfig {
     /// Maximum successive agent-to-agent launches from a human-started root.
     #[serde(default = "default_max_chain_length", rename = "max-chain-length")]
     pub max_chain_length: u8,
+    /// Carry the launch cwd's git state in the launch reminder.
+    #[serde(rename = "git-reminder")]
+    pub git_reminder: bool,
     pub worktree: WorktreeConfig,
     pub attention: AttentionConfig,
     #[serde(default)]
@@ -88,6 +91,7 @@ impl Default for AgentsConfig {
             placement: LaunchPlacement::default(),
             isolation: Isolation::default(),
             max_chain_length: default_max_chain_length(),
+            git_reminder: true,
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
             subagents: SubagentsConfig::default(),
