@@ -423,6 +423,16 @@ These flags shape a Claude Code launch ([CLI reference](https://code.claude.com/
 
 With snapshot recording on, system-prompt flag text passed on a later `--resume` or `--continue` launch takes effect only after the conversation compacts or in a new conversation ([system prompt flags in resumed conversations](https://code.claude.com/docs/en/cli-usage#system-prompt-flags-in-resumed-conversations)). Before 2.1.265, any system-prompt flag turned recording off.
 
+### Native LSP denial
+
+The upstream [CLI reference](https://code.claude.com/docs/en/cli-reference) documents `--tools` as tool selection and `--disallowedTools` as denial. A local probe with Claude Code 2.1.282 on 2026-09-25 checked their precedence in a Rust checkout:
+
+```sh
+claude -p --tools 'Bash,LSP' --disallowedTools LSP -- 'list your tools'
+```
+
+It exited 0 and listed Bash, not LSP. One-second process samples found no new `rust-analyzer` pid; two pre-existing servers remained unchanged. `--disallowedTools` is variadic: without `--`, it consumed the following prompt as deny rules and the probe failed. This pins the tested version and invocation, not an assertion that the host had no existing servers. RimZ therefore denies `LSP` without stripping it from a profile's allowlist.
+
 ### Auto-compaction window
 
 The window is set in three places, and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` wins over `--autocompact`, which wins over the `autoCompactWindow` setting ([set the auto-compact window](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)). The `/autocompact` command writes the setting.

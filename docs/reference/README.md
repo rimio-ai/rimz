@@ -6,6 +6,8 @@ These pages answer one specific question about the shipped product: what a comma
 
 ## Commands
 
+[Shared language servers](./cli/lsp.md) documents `rimz lsp` queries, inspection, stops, and configuration.
+
 To find a command's page by its name, use the command map in [cli.md](./cli.md). That page also states the rules every command page assumes: the global flags, addressing, which room and backend a command reaches, script output, exit codes, durations, color, and agent prose. This table finds a page by topic.
 
 | Page | What it covers |

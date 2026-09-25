@@ -6,6 +6,10 @@ Grok is an eagerly registered stock-TUI adapter. RimZ launches `grok`, installs 
 
 Only the registry reaches the concrete adapter. The hook catalog, context refresh, account probe, paths, payloads, transcript folding, installation, and spend stay private to the Grok adapter; other modules consume the provider-neutral capabilities.
 
+## Shared language servers
+
+Shared-server gap: this adapter has no verified switch to suppress Grok's native language servers. `disable_native_lsp_args` remains the capability's no-op default; configuring [shared servers](../lsp.md) does not establish exclusive ownership of Grok's language-server processes.
+
 ## Hooks and lifecycle
 
 | Native event | RimZ signal |

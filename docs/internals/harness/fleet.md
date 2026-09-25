@@ -16,7 +16,7 @@ Four rules explain most of the design. When a piece of the code surprises you, o
 
 **One name for one agent.** A member is reachable by an address, `@handle#channel`, and the renderer that prints a handle is the exact inverse of the parser that reads one. Anything RimZ shows you, you can type back.
 
-**No daemon.** The harness runs no resident background service. Scheduled work, message wakeups, and unattended recovery ride the tick of the room's elected sidebar producer, the elder. Roots without an open room can opt into a one-shot OS timer tick, described in [loops.md § The external tick](./loops.md#the-external-tick).
+**No room-wide service.** Scheduled work, message wakeups, and unattended recovery ride the tick of the room's elected sidebar producer, the elder. Roots without an open room can opt into a one-shot OS timer tick, described in [loops.md § The external tick](./loops.md#the-external-tick). An optional [language-server broker](../lsp.md) is a per-server process bounded by agent leases, not a room scheduler.
 
 ## The vocabulary
 
@@ -216,6 +216,7 @@ What RimZ tells the agent about itself arrives as one `<system_reminder>` tag, w
 | 2 | Launch cwd and output of `git status --short`, `git rev-parse --short HEAD`, and `git log -1 --oneline` | git reminder enabled and all three reads succeed |
 | 3 | Sandbox view, or the host scratch line naming `$RIMZ_SCRATCH` ([sandbox.md](../sandbox.md#launch-reminder)) | the sandbox view under sandbox isolation with a successful bubblewrap preflight; the scratch line on every other launch |
 | 4 | Subagent catalog, or the child's no-delegation body | a non-child request with a catalog; every child request |
+| 5 | Shared language-server names and `Skill(rimz-lsp)` navigation | live servers for the checkout, including on child launches |
 
 The inputs come from configuration. For a non-child request the wrapper derives the profile's allowed subagent catalog from effective project and machine configuration. For a team member it resolves the effective team definition: worktree, role and team handles, channel, leader, every seat with its resolved agent, model, and owned stages, session posture, and the declared scratch entries present at launch with their line counts. `model-reminder` is read from the launched profile itself, looked up by the exact `LaunchParams.profile` name in `[subagents.profiles]` for a child and `[agents.profiles]` otherwise, with no walk up the `agent = …` chain. Unset, absent from config, or no profile at all means on. Because the lookup is by name, restart, fork, resume, and rebirth reproduce the same answer. A failed effective-config load warns and falls back to default reminders, which keep the model line. The `sandbox` flag comes from the wrapper's own bubblewrap preflight, so the sandbox paragraph also survives that fallback.
 

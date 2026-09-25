@@ -47,6 +47,7 @@ The hash covers every field that can cause a process to run:
 - `[tasks.<name>]`: the loop `agent`, `prompt`, `prompt-file`, `check` and `verify` commands, `system-prompt-file`, and the run and schedule options
 - `[[hooks]]`: `event`, `command`
 - `[env]`: every key and value
+- `[lsp.servers.<name>]`: server name, executable `command`, and `init-options`; untrusted declarations refuse agent launch, and the trust offer names their commands
 - `[accounts]`: which provider account a fresh room launches into
 
 Every name in those tables is hashed too, so renaming a profile drifts the grant. Any field RimZ can execute has to enter this hash, and a unit test guards the projection by hashing one config per field, every field in the lists above included, and failing when two of them collide. The mechanics, the grant record, and the diff are in [the trust internals](../internals/harness/trust.md); the command is in [the trust reference](../reference/cli/hooks-trust.md#project-trust).
