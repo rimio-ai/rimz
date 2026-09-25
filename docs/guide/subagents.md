@@ -14,7 +14,7 @@ A parent's `rimz subagents codex "map the auth call path"` is the same supervise
 
 1. It checks that the caller is an agent RimZ launched and not itself a child, that the parent's profile allows this child, that the child's reporting hooks are installed and trusted, and, for a Codex child, that the checkout has a recorded Codex directory-trust decision. It also checks the room's and the provider account's daily caps ([budgets](./budget.md)). A failure stops here, before a record or a pane exists.
 2. It writes a durable run record under `~/.rimz/ws/<workspace-dir>/runs/`.
-3. It opens a pane running the child's own CLI, in the parent's checkout and channel, whatever directory the parent's shell has moved to. The first child splits to the right of the parent's pane and later ones stack beside it; a team member's children open in a `<view> subagents` tab after its own, eight to a tab.
+3. It opens a pane running the child's own CLI, in the parent's checkout and channel, whatever directory the parent's shell has moved to. The first child splits to the right of the parent's pane and later ones stack beside it; a team member's children open in a `<view> subagents` tab after its own, eight to a tab in two equal-width columns.
 4. It prints the child's petname, such as `calm-fox`, and returns. The parent keeps working.
 5. When the child's work ends, or its deadline passes, its pane closes. Once every child the parent launched has settled, RimZ writes each final message to `rimz-subagents/<petname>.output` in the room's tmp directory and parks one report for the parent's next turn boundary ([how results come back](#how-results-come-back)).
 

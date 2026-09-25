@@ -95,23 +95,21 @@ pub(super) fn plan_append(panes: &[GridPane], gap: u64) -> Option<GridSplit> {
     })
 }
 
-/// Equal heights within each column and width proportional to its pane count
-/// make areas near-equal without moving processes between columns. Backends may only
-/// approximate these targets when their resize steps are coarse.
+/// Equal column widths and equal heights within each column, without moving
+/// processes between columns. Backends may only approximate these targets when
+/// their resize steps are coarse.
 pub(super) fn balance(panes: &[GridPane], gap: u64) -> Option<Vec<GridPane>> {
     let bands = columns(panes, gap)?;
     let left = panes.iter().map(|pane| pane.x).min()?;
     let top = panes.iter().map(|pane| pane.y).min()?;
     let width = panes.iter().map(|pane| pane.x + pane.cols).max()? - left;
     let height = panes.iter().map(|pane| pane.y + pane.rows).max()? - top;
-    let usable_width = width.checked_sub(gap * (bands.len() - 1) as u64)?;
+    let band_count = bands.len() as u64;
+    let usable_width = width.checked_sub(gap * (band_count - 1))?;
     let mut targets = Vec::with_capacity(panes.len());
     let mut x = left;
-    let mut preceding = 0;
-    for band in bands {
-        let next = preceding + band.len() as u64;
-        let cols = usable_width * next / panes.len() as u64
-            - usable_width * preceding / panes.len() as u64;
+    for (column, band) in (0..).zip(bands) {
+        let cols = usable_width * (column + 1) / band_count - usable_width * column / band_count;
         let usable_height = height.checked_sub(gap * (band.len() - 1) as u64)?;
         let mut y = top;
         for (index, pane) in band.iter().enumerate() {
@@ -130,7 +128,6 @@ pub(super) fn balance(panes: &[GridPane], gap: u64) -> Option<Vec<GridPane>> {
             y += rows + gap;
         }
         x += cols + gap;
-        preceding = next;
     }
     Some(targets)
 }
@@ -184,11 +181,15 @@ mod tests {
                 assert_eq!(cols.len(), 2);
                 assert_eq!(cols[0].len(), count.div_ceil(2), "left column at {count}");
                 assert_eq!(cols[1].len(), count / 2, "right column at {count}");
-                let areas = panes
-                    .iter()
-                    .map(|pane| pane.cols * pane.rows)
-                    .collect::<Vec<_>>();
-                assert!(areas.iter().max().unwrap() - areas.iter().min().unwrap() <= 300);
+                assert!(
+                    cols[0][0].cols.abs_diff(cols[1][0].cols) <= 1,
+                    "widths at {count}"
+                );
+                for band in &cols {
+                    let rows = band.iter().map(|pane| pane.rows);
+                    let spread = rows.clone().max().unwrap() - rows.min().unwrap();
+                    assert!(spread <= 1, "heights at {count}: {band:?}");
+                }
                 assert!(panes.iter().all(|pane| pane.x >= 50 && pane.y >= 1));
             }
             assert!(plan_append(&panes, gap).is_none());
