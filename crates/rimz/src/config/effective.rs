@@ -124,6 +124,7 @@ pub fn load(machine: &MachineConfig, project_root: &Path) -> Result<LaunchAgents
     load_with_roots(machine, project_root, &crate::disk::paths::rimz_home())
 }
 
+/// `trust::status_with_roots` parses `.rimz/config.toml` before anything here reads it, so a malformed project file fails at trust status whatever the trust state.
 pub fn load_with_roots(
     machine: &MachineConfig,
     project_root: &Path,

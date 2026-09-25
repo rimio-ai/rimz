@@ -52,7 +52,7 @@ What happens on a refusal depends on the server's `policy`:
 
 `required` gates admission only. A required server killed later for memory degrades like an optional one; RimZ never stops agents to honour it. Joining a stopped entry prints its reason for either policy, without waiting or restarting. Close its remaining agents and relaunch to get a new server after the tombstone exits.
 
-Admission reuses the launcher's lenient machine config and skips effective config loading when neither machine nor project declares servers. Recovery warns and skips admission on an effective-config error; other launch paths retain their strict effective-config checks. Supervised launches finish provider preflights before admission starts a server.
+Admission reuses the launcher's lenient machine config and skips effective config loading when neither machine nor project declares servers. Recovery warns and skips admission on any admission error, so a config, registry, or memory-sampling failure never blocks Recover; other launch paths retain their strict effective-config checks. Supervised launches finish provider preflights before admission starts a server.
 
 ### Leases and shutdown
 
