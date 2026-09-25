@@ -68,7 +68,8 @@ fn unreadable_machine_config_refuses_worktree_creation() {
         .failure()
         .stderr(contains("cannot create a worktree"))
         .stderr(contains("TOML error"))
-        .stderr(contains(config.display().to_string()));
+        .stderr(contains(config.display().to_string()))
+        .stderr(contains("rimz: warning:").not());
     assert!(!env.home_root.join("project-worktrees/demo").exists());
     assert!(!git_stdout(&env.project_root, &["branch", "--list", "demo"]).contains("demo"));
     env.rimz()
