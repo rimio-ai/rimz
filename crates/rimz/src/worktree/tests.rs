@@ -1035,21 +1035,26 @@ fn created_hook_timeout_is_a_failure() {
     let repo = init_test_repo(dir.path());
     let config = test_worktree_config(dir.path());
     let created = create(&repo, &config, Some("demo"), None, None, false).unwrap();
-    let hooks = crate::config::WorktreeHooks {
-        created: Some("echo before-timeout >&2; sleep 30".to_owned()),
-        ..Default::default()
-    };
-    let start = std::time::Instant::now();
-    let err = hooks::run_hook(
-        &hooks,
-        hooks::WorktreeHookEvent::Created,
-        &created.marker,
-        Duration::from_millis(30),
-    )
-    .expect_err("timeout must fail");
-    assert!(start.elapsed() < Duration::from_secs(5));
-    assert!(err.to_string().contains("timed out"));
-    assert!(err.to_string().contains("before-timeout"));
+    for command in [
+        "echo before-timeout >&2; sleep 30",
+        "echo before-timeout >&2; sleep 1 & exit 0",
+    ] {
+        let hooks = crate::config::WorktreeHooks {
+            created: Some(command.to_owned()),
+            ..Default::default()
+        };
+        let start = std::time::Instant::now();
+        let err = hooks::run_hook(
+            &hooks,
+            hooks::WorktreeHookEvent::Created,
+            &created.marker,
+            Duration::from_millis(30),
+        )
+        .expect_err("timeout must fail");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(err.to_string().contains("timed out"));
+        assert!(err.to_string().contains("before-timeout"));
+    }
 }
 
 #[test]

@@ -230,7 +230,11 @@ pub(crate) fn run_bounded_output(
     let stderr = child.stderr.take().map(read_to_end_thread);
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(status) = child.try_wait()? {
+        // Descendants can retain the output pipes after the direct child exits.
+        if let Some(status) = child.try_wait()?
+            && stdout.as_ref().is_none_or(|reader| reader.is_finished())
+            && stderr.as_ref().is_none_or(|reader| reader.is_finished())
+        {
             return Ok(BoundedOutput {
                 status,
                 stdout: join_reader(stdout),
@@ -1149,15 +1153,17 @@ mod tests {
         #[cfg(unix)]
         #[test]
         fn bounded_output_kills_pipe_holding_grandchildren_on_timeout() {
-            let mut cmd = Command::new("sh");
-            cmd.args(["-c", "sleep 30 & exec sleep 30"]);
-            let started = Instant::now();
+            for script in ["sleep 30 & exec sleep 30", "sleep 1 & exit 0"] {
+                let mut cmd = Command::new("sh");
+                cmd.args(["-c", script]);
+                let started = Instant::now();
 
-            let output =
-                run_bounded_output(&mut cmd, Duration::from_millis(100)).expect("bounded output");
+                let output = run_bounded_output(&mut cmd, Duration::from_millis(100))
+                    .expect("bounded output");
 
-            assert!(output.timed_out);
-            assert!(started.elapsed() < Duration::from_secs(1));
+                assert!(output.timed_out, "{script}");
+                assert!(started.elapsed() < Duration::from_secs(1));
+            }
         }
 
         #[test]
