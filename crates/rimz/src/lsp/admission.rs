@@ -42,6 +42,7 @@ pub fn reserve_bytes(total: u64, percent: u8, minimum: u64) -> u64 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServeRequest {
     pub root: PathBuf,
+    pub project: PathBuf,
     pub server: String,
     pub config: crate::config::LspServerConfig,
     pub policy: crate::config::LspConfig,
@@ -51,6 +52,7 @@ pub struct ServeRequest {
 
 pub struct AdmissionRequest<'a> {
     pub root: &'a Path,
+    pub project: &'a Path,
     pub servers: &'a BTreeMap<String, crate::config::LspServerConfig>,
     pub untrusted_servers: &'a [String],
     pub policy: &'a crate::config::LspConfig,
@@ -396,8 +398,12 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             )));
         }
         let hash = history::settings_hash(config);
-        let estimate =
-            history::estimate(&root, server, &hash, parse_size(&config.memory_estimate)?);
+        let estimate = history::estimate(
+            request.project,
+            server,
+            &hash,
+            parse_size(&config.memory_estimate)?,
+        );
         matched.push((server, config, hash, estimate, timeout(config)?));
     }
     if matched.is_empty() {
@@ -484,6 +490,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         }
         let serve = ServeRequest {
             root: root.clone(),
+            project: request.project.into(),
             server: server.clone(),
             config: config.clone(),
             policy: request.policy.clone(),

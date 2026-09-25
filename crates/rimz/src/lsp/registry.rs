@@ -60,6 +60,7 @@ pub enum StopReason {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Entry {
     pub root: PathBuf,
+    pub project: Option<PathBuf>,
     pub server: String,
     pub nonce: String,
     pub broker_pid: u32,
@@ -391,6 +392,7 @@ mod tests {
     fn registry_round_trip_and_kill_order() {
         let entry = Entry {
             root: "/checkout".into(),
+            project: Some("/project".into()),
             server: "rust".into(),
             nonce: "nonce".into(),
             broker_pid: 1,

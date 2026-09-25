@@ -41,7 +41,7 @@ reserve    = max(reserve-percent × MemTotal / 100, reserve-min)
 admit when available − committed − estimate ≥ reserve
 ```
 
-`committed` is what makes the check honest: a server at 4.4 GB that has reached 6.3 GB before will grow again, and that growth is already spoken for. `estimate` is the learned peak for this (project, server), or the configured `memory-estimate` before any history exists ([Learned cost](#learned-cost)).
+`committed` is what makes the check honest: a server at 4.4 GB that has reached 6.3 GB before will grow again, and that growth is already spoken for. `estimate` is the learned peak for this (project, server, settings) triple, or the configured `memory-estimate` before any history exists ([Learned cost](#learned-cost)).
 
 What happens on a refusal depends on the server's `policy`:
 
@@ -85,7 +85,7 @@ Agents are not messaged. The next `rimz lsp` query against a tombstoned key exit
 
 ## Learned cost
 
-`lsp/history.rs` appends checkout, server, peak tree RSS, time to first ready, settings hash, and stop reason to rotating `lsp-history.jsonl` under the RimZ home. Admission takes the maximum of the last five records for the same checkout/server/settings triple, falling back to `memory-estimate` without history. The settings hash covers command argv and canonical initialization options. This is an admission input, not a diagnostic log.
+`lsp/history.rs` appends project, checkout, server, peak tree RSS, time to first ready, settings hash, and stop reason to rotating `lsp-history.jsonl` under the RimZ home. Admission takes the maximum of the last five records for the same (project, server, settings) triple, falling back to `memory-estimate` without history. The project is the workspace's `launch_repo_root()`, resolved by `cli/lsp_admission.rs::admit`, so checkouts of one project share learned costs. It travels through admission and the serve request into the registry entry, allowing both the broker and watchdog to record it; the registry key remains checkout/server. Records without a project are skipped when estimating, without migration. The settings hash covers command argv and canonical initialization options. This is an admission input, not a diagnostic log.
 
 ## Freshness
 

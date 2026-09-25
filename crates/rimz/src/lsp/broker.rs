@@ -80,6 +80,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     let pid = std::process::id();
     let entry = Entry {
         root: root.clone(),
+        project: Some(request.project.clone()),
         server: request.server.clone(),
         nonce: uuid::Uuid::now_v7().to_string(),
         broker_pid: pid,
@@ -381,6 +382,7 @@ fn record_stop(entry: &Entry, error: Option<&str>) {
     history::append(&history::Record {
         at_ms: *at_ms,
         root: entry.root.clone(),
+        project: entry.project.clone(),
         server: entry.server.clone(),
         settings_hash: entry.settings_hash.clone(),
         peak_rss_kb: entry.peak_rss_kb,
