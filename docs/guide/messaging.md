@@ -24,7 +24,7 @@ A handle resolves through the shortest unique name for a running agent:
 
 - **`@codex`** is a kind. It reaches the one Codex in your channel, and is ambiguous only when several share it.
 - **`@planner`** is a profile or team role you defined in Markdown, so it reaches the right member wherever its pane sits.
-- **`@swift-otter`** is a pet name, and `@codex-2` an ordinal. Either names one specific instance when a kind is not unique enough.
+- **`@swift-otter`** is the pet name listings show when a kind is not unique enough. The ordinal `@codex-2` remains typeable too; either names one specific instance.
 - **`@all`** is every agent in the channel, minus the caller when an agent sends the message.
 
 The `@` sigil is required, so a stray word never reaches an agent: `rimz message coder "…"` fails with ``agent target `coder` must start with `@` (try `@coder`)`` rather than guessing. A raw pane id (`tmux:%1`, `zellij:terminal_3`) is the one address that needs no sigil. Handles are minted when an agent launches, and [the agents guide](./fleet.md) covers how kinds, profiles, and team roles become them.
@@ -256,10 +256,12 @@ Nine statuses cover a record's whole life. `queued` and `claimed` are still live
 
 ```text
 Type: AGENT_MESSAGE
-From: @planner
+From: @swift-otter (planner)
 Content:
 read plan.md and start
 ```
+
+The first token after `From:` is the reply address: here, reply with `rimz message @swift-otter "got it"`. The parenthesized label identifies the sender's profile, or its agent kind when it has no profile; a label that repeats the handle is omitted.
 
 Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come from `@rimz`, with the `Type` naming what produced them:
 

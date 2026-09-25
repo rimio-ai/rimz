@@ -28,7 +28,7 @@ These handles name one agent:
 | `@coder` | A team or ad-hoc role. It follows the launch's current conversation; earlier conversations in the same seat stay readable through `show`, `history`, and `fork` but never receive messages. |
 | `@writer` | An explicit name from a single-agent launch, such as `rimz agents claude --name writer`. |
 | `@swift-otter` | The pet name RimZ gives every launch. |
-| `@claude-2` | A kind plus ordinal. The ordinal appears only when two agents of a kind share one lane. |
+| `@claude-2` | A kind plus ordinal. Still accepted as a selector; listings show the pet name instead. |
 | `@<session-prefix>` | A leading slice of the provider session id. |
 | `@me` | The calling agent, from an agent pane: accepted by single-agent commands, direct messages, and loop delivery targets. `me` is reserved and cannot name an agent, profile, command, or team. |
 
@@ -132,7 +132,7 @@ These flags apply to every agent cell in the launch, and each adapter renders th
 | `--ask`, `--yolo` | Replace the permission posture for this run, including a profile's declared mode; see [Permission-mode cells](#permission-mode-cells). The two conflict. |
 | `--agent <PROFILE\|KIND>` | Re-base every agent cell onto another profile or provider (below). |
 | `--isolation host\|sandbox` | Isolation for this launch instead of the machine's `agents.isolation` (below). |
-| `-n`, `--name <NAME>` | Handle for a single-agent launch: `rimz agents claude --name writer` appears as `@writer`. Without it the agent renders as `@<kind>` when that is unambiguous, and keeps a pet name for exact addressing. |
+| `-n`, `--name <NAME>` | Handle for a single-agent launch: `rimz agents claude --name writer` appears as `@writer`. Without it, after any role or unique profile, the agent renders as `@<kind>` when unambiguous, else its pet name. |
 | `--description <TEXT>` | Seeds the card's second line until the agent names its own session. It never reaches the agent's argv or environment. |
 | `-- <ARGS>...` | Raw arguments appended to every agent cell's command. |
 
@@ -433,13 +433,13 @@ rimz agents compact @coder               # compact context at the next turn boun
 
 ```console
 $ rimz agents
-AGENT         STATUS   MODEL         CTX  TOKENS  AGE
+HANDLE    PROFILE  AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
-@planner      waiting  opus@high      42%     78k   2m
+@planner  planner  claude  waiting  opus@high     42%     78k   2m
   which rotation strategy should we use?
 
-@coder        running  gpt-5.5@high   31%     54k   0s
+@coder    coder    codex   running  gpt-5.5@high  31%     54k   0s
   wire up the refresh-token path
 ```
 
@@ -447,7 +447,9 @@ Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain 
 
 | Column | Shows |
 | --- | --- |
-| `AGENT` | The shortest handle you can type under that header: the role (`@coder`), else the `--name` (`@writer`), else the profile (`@planner`), else `@<kind>`, with an ordinal only when two of a kind share a lane. |
+| `HANDLE` | The shortest handle you can type under that header: the role (`@coder`), else the `--name` (`@writer`), else the profile when unique (`@planner`), else `@<kind>` when unique, else the pet name. Launched agents show the pet name rather than an ordinal. |
+| `PROFILE` | The launch profile, or a faint `-` when absent. |
+| `AGENT` | The provider kind, such as `claude` or `codex`. |
 | `STATUS` | The card status (below). |
 | `MODEL` | Model and effort, as `model@effort`. |
 | `CTX` | Context-window fill. |

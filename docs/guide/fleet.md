@@ -40,7 +40,7 @@ rimz agents slim,codex        # two agents, side by side in one line
 Every agent answers to a handle, and the launcher decides it. `@claude` names a kind, `@planner` names a profile, and `forge.reviewer` names one role of a team. RimZ gives each launch a stable pet name as well (`@swift-otter`), and `--name writer` pins your own (`@writer`). A `#channel` suffix scopes a handle to one channel: every worktree has one, named channels and teams have their own, and a bare handle means the channel you are standing in.
 
 ```sh
-rimz agents focus @claude-2#feat-a   # jump to a specific agent's pane
+rimz agents focus @swift-otter#feat-a # jump to a specific agent's pane
 rimz agents show swift-otter         # its activity, context, placement, and transcript tail
 ```
 
@@ -71,24 +71,24 @@ Add `-w` and the whole layout lands in an isolated Git worktree, the pattern for
 
 Once a few agents are working, the same `rimz agents` command reads the room and drives it: inspect, focus, stop, restart, or compact one agent. Every verb below takes a [handle](#reach-an-agent-by-handle), and they all run from any pane in the room, or from a script anywhere that resolves to the same workspace.
 
-**See the whole room at a glance.** Bare `rimz agents` lists the current channel's cards, grouped by the worktree each lives in and ordered so whoever needs you sits on top:
+**See the whole room at a glance.** Bare `rimz agents` lists the current channel's cards; `--all` includes every channel. Cards group by the worktree each lives in and put whoever needs you on top:
 
 ```console
-$ rimz agents
-AGENT         STATUS   MODEL         CTX  TOKENS  AGE
+$ rimz agents --all
+HANDLE     PROFILE   AGENT   STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
-@planner      waiting  opus@high     42%     78k   2m
+@planner   planner   claude  waiting  opus@high     42%     78k   2m
   which rotation strategy should we use?
 
-@coder        running  gpt-5.5@high  31%     54k   0s
+@coder     coder     codex   running  gpt-5.5@high  31%     54k   0s
   wire up the refresh-token path
 
-@reviewer     idle     opus@high      3%     12k  15m
+@reviewer  reviewer  claude  idle     opus@high      3%     12k  15m
   review the diff once coder lands
 
 query-engine
-@swift-otter  success  opus@high     78%    120k   8m
+@claude    -         claude  success  opus@high     78%    120k   8m
   store refactor
 ```
 
