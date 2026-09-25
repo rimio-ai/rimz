@@ -104,8 +104,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `theme.glyphs.set` and the shorthand `theme.glyphs`; `theme.glyphs.<set>.<namespace>.<role>` | a glyph set name or glyph string |
 | `harness.smart_compact` | a token count (`200k`) or a percentage (`70%`) |
 | `harness.compact_instruction` | any string, including `""` |
-| `harness.idle_compact` | `off`, `auto`, or `always` |
-| `harness.idle_compact_after` | a duration such as `59m` or `2h` |
+| `harness.idle_compact` | `off`, `on` (default), or a duration such as `25m`; see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.budget`, `accounts.budget.<kind>` | an amount ending in `/day` |
 | `harness.turn_budget` | a dollar amount such as `3` or `$2.50` |
 | `resume.auto_redeem_min_gain` | a duration |
@@ -121,8 +120,10 @@ The two shorthands write the full key: `rimz config set theme <name>` sets `them
 | A key RimZ does not know | `` unknown config key `KEY` `` |
 | A whole table, such as `theme.display` or `loop.tasks.<name>` | `` unknown config key `KEY` ``. Set one field inside it, or edit the table in the file. |
 | `notifications.handler` and its fields | `` config key `KEY` is an array of tables; edit <path to config.toml> `` |
-| A value of the wrong type or format | `` invalid value VALUE for `KEY`: ... ``, or a key-specific message such as `harness.idle_compact must be one of off, auto, or always` |
+| A value of the wrong type or format | `` invalid value VALUE for `KEY`: ... ``, or a key-specific message such as `harness.idle_compact must be off, on, or a duration such as 25m` |
 | Any key, when the owning file already has a TOML or validation error | `` cannot set `KEY`: the existing config is invalid `` (or `cannot edit <path> — the file has a TOML error`). Fix the file first. |
+
+Strict configuration loads reject the retired idle-compaction timer key and `idle_compact` values `auto` or `always` with a removed-key error directing you to `rimz setup`, or to remove the timer and set `harness.idle_compact` to `on`, `off`, or a duration. The retired timer is no longer a `get` or `set` key. See [setup's repair](../../guide/setup.md) for preserving current preferences. Lenient runtime loads retain the usual whole-file fallback to built-in defaults when the file is invalid.
 
 ### Keys that do more than write
 

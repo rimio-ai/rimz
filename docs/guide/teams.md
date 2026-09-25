@@ -150,6 +150,8 @@ Handing your own stage to another role requires a clean worktree: commit or disc
 
 A role that hands off can compact its own context on the way out, so it comes back to its next stage light. Markdown roles default to `flip-compact: 120k` when they own Plan and `180k` otherwise, and a role can override the threshold or set it to `"off"`. RimZ checks the outgoing member's occupied context against the threshold first and does nothing below it; at or above, the compaction command goes to that pane for its next turn boundary. A move between two stages the same role owns never compacts, and neither does a flip to `Done`. A compaction that fails never fails the hand-off. The command carries a [brief written for team members](./configuration.md#smart-compaction), which lets the summary drop what the board and the stage files already hold.
 
+Between stages, [idle compaction](./configuration.md#idle-compaction) can keep a resting member's context small before its prompt cache expires. A role's [`idle-compact`](../reference/definitions.md#idle-compaction) overrides the machine setting; leave it absent to inherit, or set it to `off`, `on`, or a duration such as `25m`. This is independent of the hand-off threshold and stops when the board reaches `Done`.
+
 ## Define your own team
 
 A team puts a repeatable division of work in one file, `teams/<name>.md`: YAML frontmatter declares the roster, and the Markdown body is the pipeline every member reads. The shipped `forge` definition is the one to copy from:

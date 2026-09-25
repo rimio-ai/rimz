@@ -95,7 +95,7 @@ The [pets guide](./pets.md) covers the rest: picking a different one, installing
 
 ## Hands-off automation
 
-The last question is the one that matters most, because it is the only one that lets RimZ act without you. An unattended agent stops overnight for reasons that need no judgment: it hits the provider's rate limit mid-turn, or the API drops its stream, or its context sits idle long enough that the provider's warm cache expires and the next message pays to rebuild it. Each stop has a known fix, and RimZ can apply it at the moment it will work. Each fix also spends something of yours: a keystroke into your pane, a credit off your account, or part of a conversation.
+The last question controls hands-off automation. An unattended agent stops overnight for reasons that need no judgment: it hits the provider's rate limit mid-turn, or the API drops its stream, or its context sits idle long enough that the provider's warm cache expires and the next message pays to rebuild it. Each stop has a known fix, and RimZ can apply it at the moment it will work. Each fix also spends something of yours: a keystroke into your pane, a credit off your account, or part of a conversation.
 
 So setup lists three behaviors as rows with their current state and what each one costs, and asks once:
 
@@ -103,9 +103,11 @@ So setup lists three behaviors as rows with their current state and what each on
 | --- | --- |
 | auto-continue | types `continue` into a parked agent's pane after a rate limit or an API error, once the clock says the retry can succeed |
 | auto-redeem | spends one of the reset credits a Codex plan grants, refilling a spent usage window on the spot, when doing so unblocks hours of work. Offered only when `codex` is on the machine |
-| idle compaction | has a long-idle agent summarize its conversation and carry on from the summary, while other agents in its channel are still running. The detail behind the summary is gone |
+| idle compaction | has an idle team member summarize its conversation shortly before its provider prompt cache expires, while its team's board is not `Done`. The detail behind the summary is gone |
 
-`y` turns every listed row on, `n` turns every row off, and `choose` walks them one at a time. Enter keeps each row as it is, so on a fresh machine all three stay off. Whatever you pick, every action these take appends a record you can read back with `rimz stats --assists`.
+`y` turns every listed row on, `n` turns every row off, and `choose` walks them one at a time. Enter keeps each row as it is: on a fresh machine idle compaction is on and the other rows are off. An existing idle-compaction duration counts as on and survives keeping that answer; changing the answer writes `on` or `off`. Whatever you pick, every action these take appends a record you can read back with `rimz stats --assists`.
+
+Setup removes the retired idle-compaction timer key and the old `auto` and `always` modes, reporting each removal before refreshing defaults or reading the configuration for the questions. An existing `off` is kept. This repair also runs with `--yes`.
 
 The rules each one follows, down to which park resumes on which clock, are [loops → keep the fleet moving](./loops.md#keep-the-fleet-moving). The keys and their tuning are [configuration → resume](./configuration.md#resume).
 
@@ -135,7 +137,7 @@ rimz config get resume.auto_continue         # one dotted key
 rimz config set theme.style modern           # edit one dotted key in the file that owns it
 ```
 
-A key left commented keeps following the default the running RimZ build ships, which is what you want for anything you have no opinion about; uncommenting it pins that value as this machine's override. Read the comment before uncommenting: some lines carry an illustrative value rather than the default, `idle_compact = "auto"` among them, where the default is `off`.
+A key left commented keeps following the default the running RimZ build ships, which is what you want for anything you have no opinion about; uncommenting it pins that value as this machine's override. Read the comment before uncommenting: some lines carry an illustrative value rather than the default. The single-`#` line `# idle_compact = "on"` shows the shipped default.
 
 `rimz config set` routes a dotted key to whichever of the three files owns it, validates the value, and writes durably in place, keeping your comments and key order. The whole model, tier by tier and section by section, is the [configuration guide](./configuration.md).
 
