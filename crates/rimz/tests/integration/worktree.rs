@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use assert_cmd::assert::OutputAssertExt;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use rimz::EventEnvelope;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
@@ -47,6 +48,102 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
         exit_on_run_completion: false,
         subagent: false,
         identity: ExecIdentity::default(),
+    }
+}
+
+#[test]
+fn worktree_hooks_run_and_report_without_streaming_output() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), "[agents.worktree.hooks]\ncreated = 'echo captured; pwd > hook-cwd; echo \"$RIMZ_WORKTREE_PATH\" >> hook-cwd'\nremoved = 'echo removed > hook-removed'\n").unwrap();
+    env.write_config(
+        &env.project_root,
+        "[agents.worktree.hooks]\ncreated = 'exit 9'\nremoved = 'exit 9'\n",
+    );
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .env("RIMZ_WORKTREE_PATH", "/inherited/wrong")
+        .assert()
+        .success()
+        .stdout(contains("  hook   : worktree.created ran"))
+        .stdout(contains("captured").not());
+    let path = env.home_root.join("project-worktrees/demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("hook-cwd")).unwrap(),
+        format!("{}\n{}\n", path.display(), marker.worktree_path.display())
+    );
+    env.rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(env.project_root.join("hook-removed")).unwrap(),
+        "removed\n"
+    );
+}
+
+#[test]
+fn failed_worktree_hook_reports_output_and_removes_tree_and_branch() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents.worktree.hooks]\ncreated = 'echo hook-out; echo hook-err >&2; exit 3'\n",
+    )
+    .unwrap();
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("worktree.created"))
+        .stderr(contains("hook-out"))
+        .stderr(contains("hook-err"))
+        .stderr(contains("tree removed"))
+        .stderr(contains("agents.worktree.hooks.created"));
+    assert!(!env.home_root.join("project-worktrees/demo").exists());
+    assert!(!git_stdout(&env.project_root, &["branch", "--list", "demo"]).contains("demo"));
+}
+
+#[test]
+fn worktree_reports_unknown_hook_keys() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents.worktree.hooks]\ncretaed = 'exit 3'\n",
+    )
+    .unwrap();
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success()
+        .stderr(contains("agents.worktree.hooks.cretaed"));
+}
+
+#[test]
+fn blank_worktree_hook_refuses_creation_before_side_effects() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    for event in ["created", "removed"] {
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            format!("[agents.worktree.hooks]\n{event} = '  '\n"),
+        )
+        .unwrap();
+        env.rimz()
+            .args(["worktree", "new", "demo"])
+            .assert()
+            .failure()
+            .stderr(contains(format!("agents.worktree.hooks.{event}")));
+        assert!(!env.home_root.join("project-worktrees/demo").exists());
+        assert!(!git_stdout(&env.project_root, &["branch", "--list", "demo"]).contains("demo"));
     }
 }
 
