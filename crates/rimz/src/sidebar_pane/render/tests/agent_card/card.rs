@@ -79,26 +79,6 @@ fn render_agent_capability_and_window() {
 }
 
 #[test]
-fn estimated_active_time_stays_off_the_identity_line() {
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        None,
-    );
-    claude.model = None;
-    claude.context = None;
-    claude.estimated_active_secs = Some(25 * 60);
-    claude.context = Some(claude_context(fixed_now()));
-    let rendered = snapshot_to_screen(&snapshot_with(vec![claude]), 54, 15);
-
-    assert!(!rendered.contains("≈25m"), "{rendered}");
-    assert!(rendered.contains("$1.27"), "{rendered}");
-}
-
-#[test]
 fn render_cursor_normalized_model_metadata_once() {
     let mut cursor = agent(
         "cursor-1",

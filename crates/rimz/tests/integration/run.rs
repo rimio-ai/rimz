@@ -3089,6 +3089,102 @@ fn agents_scope_positional_lists_one_lane_and_address_hint_is_actionable() {
     );
 }
 
+#[test]
+fn agents_list_and_show_share_seat_active_time() {
+    let env = Env::new();
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    for (id, name, pane, parent) in [
+        ("parent", "seat-parent", "%1", None),
+        ("child", "seat-child", "%2", Some("parent")),
+        ("unknown", "seat-unknown", "%3", None),
+    ] {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.agent_name = Some(name.to_owned());
+        observation.worktree_path = Some(env.project_root.display().to_string());
+        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, pane));
+        if let Some(parent) = parent {
+            observation.launch.parent_agent_id = Some(parent.into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+        }
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("register seat record");
+    }
+    publish_pane_frame(
+        &env,
+        &workspace.session_name,
+        ["%1", "%2", "%3"]
+            .into_iter()
+            .map(|pane| list_pane(&workspace.session_name, pane, "claude", &env.project_root))
+            .collect(),
+    );
+    let start = Timestamp::from_second(1_000).unwrap();
+    for (id, seconds) in [("parent", 60), ("child", 120)] {
+        rimz::store::active_time::record_progress(&env.runtime_paths(), "claude", id, start, 180)
+            .unwrap();
+        rimz::store::active_time::record_stop(
+            &env.runtime_paths(),
+            "claude",
+            id,
+            start + jiff::SignedDuration::from_secs(seconds),
+            180,
+        )
+        .unwrap();
+    }
+    let listed = run_agents_json_command(&env, &workspace.session_name, &["agents", "--all"]);
+    let entries = listed["agents"].as_array().expect("listed agents");
+    let parent = entries
+        .iter()
+        .find(|entry| entry["id"] == "parent")
+        .expect("listed parent");
+    let shown = run_agents_json_command(
+        &env,
+        &workspace.session_name,
+        &["agents", "show", "@seat-parent"],
+    );
+    assert_eq!(parent["stats"]["active_secs"], 180);
+    assert_eq!(
+        parent["stats"]["active_secs"],
+        shown["agent"]["stats"]["active_secs"]
+    );
+    let unknown = entries
+        .iter()
+        .find(|entry| entry["id"] == "unknown")
+        .expect("listed unknown");
+    assert!(unknown["stats"]["active_secs"].is_null());
+    let child = run_agents_json_command(
+        &env,
+        &workspace.session_name,
+        &["agents", "show", "@seat-child"],
+    );
+    assert_eq!(child["agent"]["stats"]["active_secs"], 120);
+
+    let ended = AgentLifecycleObservation::new(Some("parent".into()), LifecycleSignal::Ended);
+    env.store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionEnd",
+            &ended,
+        ))
+        .expect("end parent");
+    let stopped = run_agents_json_command(
+        &env,
+        &workspace.session_name,
+        &["agents", "show", "@seat-parent"],
+    );
+    assert_eq!(stopped["agent"]["stats"]["active_secs"], 180);
+}
+
 fn register_list_agent(
     env: &Env,
     workspace: &rimz::ResolvedWorkspace,

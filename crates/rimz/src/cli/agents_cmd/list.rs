@@ -45,7 +45,37 @@ pub(super) fn list_agents(
         .collect();
     let now = jiff::Timestamp::now();
     if json {
-        return render::json_pretty(&build_list_report(&snapshot, &agents, now, Some(&runtime)));
+        let audit = crate::cli::open_existing_store(&workspace)?
+            .map(|store| store.runtime_projection(rimz::RuntimeScope::Audit))
+            .transpose()
+            .context("reading audit agent rollup")?
+            .map(|projection| projection.agents)
+            .unwrap_or_default();
+        let refs = audit.iter().collect::<Vec<_>>();
+        let lifetimes = rimz::worktree::lane_lifetimes(refs.iter().copied());
+        render::warn_unreadable_lanes(&lifetimes);
+        let slots = rimz::agents::attribution::slot_groups(&refs, &lifetimes);
+        let active_secs = rimz::store::active_time::display_secs_for_keys(
+            &runtime,
+            audit
+                .iter()
+                .chain(agents.iter().copied())
+                .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
+            now,
+            crate::cli::machine_config()
+                .agents
+                .attention
+                .active_grace_secs
+                .get(),
+        );
+        return render::json_pretty(&build_list_report(
+            &snapshot,
+            &agents,
+            now,
+            Some(&runtime),
+            &slots,
+            &active_secs,
+        ));
     }
 
     let machine_config = crate::cli::machine_config();
@@ -331,7 +361,14 @@ mod tests {
         snapshot.agent_panes = vec![test_pane_agent("sess-live", "terminal_1")];
 
         let peers: Vec<&AgentState> = snapshot.pane_bound_roots().collect();
-        let report = build_list_report(&snapshot, &peers, jiff::Timestamp::UNIX_EPOCH, None);
+        let report = build_list_report(
+            &snapshot,
+            &peers,
+            jiff::Timestamp::UNIX_EPOCH,
+            None,
+            &[],
+            &Default::default(),
+        );
         assert_eq!(report.agents[0].handle, "@coder");
     }
 
@@ -415,7 +452,7 @@ mod tests {
         );
 
         let refs = snapshot.agents.iter().collect::<Vec<_>>();
-        let entries = build_list_report(&snapshot, &refs, now, None);
+        let entries = build_list_report(&snapshot, &refs, now, None, &[], &Default::default());
         let linked = entries
             .agents
             .iter()

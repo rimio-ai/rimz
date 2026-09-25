@@ -673,7 +673,7 @@ fn slot_lifetime_effort(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let refs = audit.agents.iter().collect::<Vec<_>>();
-    let records = slot_records_for_agent(&refs, agent);
+    let records = slot_lifetime_records(&refs, agent);
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let effort = rimz::agents::spending::slot_effort(
         &records
@@ -700,7 +700,7 @@ fn slot_lifetime_effort(
     Ok((effort, active_secs))
 }
 
-fn slot_records_for_agent<'a>(
+fn slot_lifetime_records<'a>(
     records: &[&'a AgentState],
     agent: &'a AgentState,
 ) -> Vec<&'a AgentState> {
@@ -714,10 +714,10 @@ fn slot_records_for_agent<'a>(
     let candidates = launched_children.as_deref().unwrap_or(records);
     let lifetimes = rimz::worktree::lane_lifetimes(candidates.iter().copied());
     render::warn_unreadable_lanes(&lifetimes);
-    rimz::agents::attribution::slot_groups(candidates, &lifetimes)
-        .into_iter()
-        .find(|slot| slot.iter().any(|record| record.agent_id == agent.agent_id))
-        .unwrap_or_else(|| vec![agent])
+    super::report::slot_records_for_agent(
+        &rimz::agents::attribution::slot_groups(candidates, &lifetimes),
+        agent,
+    )
 }
 
 fn session_cost(
@@ -916,14 +916,14 @@ mod tests {
         let mut second = first.clone();
         second.agent_id = "second".into();
         let records = [&first, &second];
-        let slot = slot_records_for_agent(&records, &second);
+        let slot = slot_lifetime_records(&records, &second);
 
         assert_eq!(slot.len(), 1);
         assert_eq!(slot[0].agent_id, second.agent_id);
 
         std::fs::create_dir_all(checkout.join(".git")).unwrap();
         std::fs::write(checkout.join(".git/rimz-worktree.json"), "{").unwrap();
-        let unreadable_slot = slot_records_for_agent(&records, &second);
+        let unreadable_slot = slot_lifetime_records(&records, &second);
         assert_eq!(unreadable_slot.len(), 1);
         assert_eq!(unreadable_slot[0].agent_id, second.agent_id);
     }
@@ -944,7 +944,7 @@ mod tests {
         second.agent_id = "child-two".into();
         let records = [&parent, &first, &second];
 
-        let child_slot = slot_records_for_agent(&records, &second);
+        let child_slot = slot_lifetime_records(&records, &second);
 
         assert_eq!(
             child_slot

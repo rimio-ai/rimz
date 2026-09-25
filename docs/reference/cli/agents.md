@@ -483,7 +483,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
 | `model` | `id`, `effort`, and the rendered `label`. |
 | `context` | `fill_pct`, `used_tokens`, `window`, `severity`, `compactions` (completed), and `compacting` (in progress). |
-| `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
+| `stats` | The token split; `cost_usd` (the live session plus the pane-backed children it launched); `active_secs`, RimZ's estimate of active time across the seat's sessions and the pane-backed children it launched, matching `agents show`; `tool_calls`, a map of tool name to count; and `tool_repeat`, the open run of identical tool calls. |
 | `timeline` | Registration, turn-start, activity, and observation timestamps. |
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
 | `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. |
@@ -503,7 +503,7 @@ When room tmp exists, `show` prints its host path and notes that sandboxed panes
 | --- | --- |
 | `--capture` | Append a Capture section framing the pane's visible area, with the pane id in the top border. An agent without a bound pane is an error. |
 | `--ansi` | Keep colors inside the capture frame. |
-| `--json` | Emit the report: the [`list` entry](#list) under `agent`, plus `stale`, the full `ask`, `run`, `messages` (the same filtered list, without the hidden count), `capture`, `tmp_dir`, and `scratch_dir` when they apply. A stopped agent keeps every entry key, with live-only fields such as context severity and active time `null`. |
+| `--json` | Emit the report: the [`list` entry](#list) under `agent`, plus `stale`, the full `ask`, `run`, `messages` (the same filtered list, without the hidden count), `capture`, `tmp_dir`, and `scratch_dir` when they apply. A stopped agent keeps every entry key, with live-only fields such as context severity `null`. Active time includes its seat and launched children while their records are retained; it is `null` only when none remain. A child addressed directly reports its own seat alone. |
 
 #### `logs`
 

@@ -10,7 +10,6 @@ use crate::agents::{
 use crate::diag::record::{DiagEvent, LocalSessionBindRejectReason};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
-use crate::store::active_time::ActiveTimeRecord;
 use crate::store::snapshot::panes::{
     LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
 };
@@ -393,25 +392,6 @@ impl SidebarSnapshot {
                 agent.last_activity = touch.at;
                 agent.tool_repeat = touch.repeat.clone();
             }
-        }
-        self
-    }
-
-    /// Stamp pane-backed sessions' estimated active time from the runtime
-    /// accumulator. Provider-native children retain their wall-span clock.
-    pub fn with_active_time(mut self, records: &[ActiveTimeRecord]) -> Self {
-        let grace_secs = self.attention.active_grace_secs.get();
-        for agent in &mut self.agents {
-            if agent.is_provider_subagent() {
-                continue;
-            }
-            let Some(record) = records
-                .iter()
-                .find(|record| record.kind == agent.kind && record.agent_id == agent.agent_id)
-            else {
-                continue;
-            };
-            agent.estimated_active_secs = Some(record.display_secs(self.now, grace_secs));
         }
         self
     }
