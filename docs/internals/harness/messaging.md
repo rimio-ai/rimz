@@ -328,14 +328,14 @@ Every attributed delivery carries a header before the record text:
 
 ```text
 Type: AGENT_MESSAGE
-From: @sender
+From: @swift-otter (planner)
 Content:
 <message>
 ```
 
 | `Type` | Sent for | `From` |
 | --- | --- | --- |
-| `AGENT_MESSAGE` | A send from an identified agent caller | The sender's handle |
+| `AGENT_MESSAGE` | A send from an identified agent caller | Stable reply address, followed by the profile (else kind) in parentheses unless it repeats the handle base |
 | `USER_MESSAGE` | A human's `rimz message` | `@user` |
 | `SUBAGENT_REPORT` | The status-only fleet digest after all of an agent's launched children and `-p --bg` peer runs settle | `@rimz` |
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
@@ -347,9 +347,9 @@ An unknown harness notice keeps its string and takes ordinary harness delivery (
 
 A handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched teammate in the same lane does not gain a spurious suffix before pane capture lands.
 
-The handle is the shortest unique selector over addressable agents ([fleet.md § Handle classes](./fleet.md#handle-classes) gives the ladder). A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down that ladder.
+`address::agent_sender_handle` uses `agents::petname::sender_handle`: role, else explicit or pet name, else kind. Unlike the [listing handle](./fleet.md#petnames-and-the-canonical-handle), it never depends on a profile's or kind's current uniqueness. A matching live peer supplies identity and channel; otherwise the stored sender fields do. Even a bare-resumed launched agent carries a minted name recovered through ancestry. The kind fallback is for senders with no role or name, such as a hook-registered agent or unknown parent.
 
-The receiver's turn-start hook parses the header into transcript entries ([transcript.md § Writing entries](./transcript.md#writing-entries)).
+The receiver's turn-start hook parses the header into transcript entries ([transcript.md § Writing entries](./transcript.md#writing-entries)). `store::message::parse_sender_handle`, shared by header parsing and submitted-prompt alignment, accepts only `From: @<handle>` or `From: @<handle> (<label>)`: the handle is non-empty and whitespace-free; the label is non-empty, whitespace-free and contains no parentheses; nothing may follow the closing parenthesis. The label is stripped before writing `entry.from`, leaving the bare `@handle[#channel]` reply address.
 
 ## Compaction commands
 

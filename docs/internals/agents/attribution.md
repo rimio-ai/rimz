@@ -41,7 +41,7 @@ Each figure keeps its source boundary.
 | --- | --- |
 | identity, timestamps, tool calls, compaction counts, provider-subagent parent and type | the audit rollup |
 | prompts, agent messages, asks | RimZ's append-only conversation transcript, per session |
-| sent messages | sender handles on received agent messages, best-effort |
+| sent messages | sender handles on received agent messages, matched by `agents::petname::sender_handle` (role, name, kind) and channel, not the displayed list handle; best-effort |
 | tokens and dollars, model rows | each session's provider transcript, parsed once by its adapter and priced through the shared price book |
 | estimated active seconds | per-session active-time sidecars, under the configured silence grace ([model.md](./model.md#activity-clocks)) |
 
