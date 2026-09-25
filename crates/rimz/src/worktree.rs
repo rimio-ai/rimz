@@ -591,7 +591,19 @@ pub fn resolve_launch_checkout(
     config: &WorktreeConfig,
     worktree: Option<&str>,
     from_pr: Option<&PrTarget>,
+    cwd: Option<&Path>,
 ) -> Result<LaunchCheckout> {
+    if let Some(cwd) = cwd {
+        return Ok(LaunchCheckout {
+            cwd: cwd.to_path_buf(),
+            branch: current_branch(cwd),
+            repo_root: None,
+            worktree_name: None,
+            review_only_reason: None,
+            generated_name: false,
+            ownership: CheckoutOwnership::User,
+        });
+    }
     let repo_root = workspace.launch_repo_root();
     if let Some(pr) = from_pr {
         if workspace.cwd_project_root.is_none() && workspace.root_class != RootClass::Repo {

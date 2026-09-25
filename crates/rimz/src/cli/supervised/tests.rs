@@ -311,6 +311,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         prompt: prompt.to_owned(),
         description: None,
         worktree: None,
+        cwd: None,
         from_pr: None,
         channel: None,
         name: None,
@@ -404,6 +405,7 @@ fn subagent_launch_anchors_at_the_parent_checkout() {
         &rimz::config::WorktreeConfig::default(),
         None,
         None,
+        None,
     )
     .expect("launch checkout");
     assert_eq!(launch.cwd, expected);
@@ -421,6 +423,7 @@ fn subagent_launch_anchors_at_the_parent_checkout() {
     let launch = rimz::worktree::resolve_launch_checkout(
         &anchored,
         &rimz::config::WorktreeConfig::default(),
+        None,
         None,
         None,
     )

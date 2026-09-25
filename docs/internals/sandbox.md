@@ -103,6 +103,8 @@ A key present with an empty value is pinned to the empty value. To move a root, 
 
 ## Room tmp
 
+For an explicit launch `--cwd`, `TmpView::host_path` reverses the calling process's view: `/tmp/scratchpad/...` maps to its scratch directory and other `/tmp/...` paths to room tmp. The caller's `RIMZ_ISOLATION`, not machine policy, selects this mapping; a host shell keeps host paths. Relative paths resolve against the calling process's cwd before mapping and canonicalization. Launch records and pane placement use the host path; only the sandbox provider's `--chdir` is lowered back through the launched agent's `TmpView::agent_path`.
+
 Room tmp is one directory per workspace, `~/.rimz/ws/<workspace-dir>/tmp/`, created at mode `0700`. Sandboxed panes see it at `/tmp`. `StatePaths::ensure_tmp_dir` builds its layout:
 
 | Path | Holds |

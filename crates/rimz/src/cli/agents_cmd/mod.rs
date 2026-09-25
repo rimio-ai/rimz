@@ -220,6 +220,9 @@ pub(crate) struct LaunchOverrideArgs {
 
 #[derive(Debug, Default, PartialEq, Args)]
 pub(crate) struct AgentLaunchArgs {
+    /// Working directory for the launched agent; the room stays the caller's.
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["worktree", "from_pr", "resume", "fresh"])]
+    pub(crate) cwd: Option<PathBuf>,
     /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
     #[arg(
         value_name = "SPEC",
@@ -901,6 +904,7 @@ fn into_supervised_request(
     );
     request.description = args.launch.cohort.description;
     request.worktree = args.launch.cohort.worktree;
+    request.cwd = args.launch.cwd;
     request.from_pr = args.launch.cohort.from_pr;
     request.channel = args.launch.cohort.channel;
     request.name = args.launch.name;

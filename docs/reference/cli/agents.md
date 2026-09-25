@@ -144,13 +144,14 @@ Isolation resolves as recorded `--isolation` flag, then the profile's `isolation
 
 ### Channel, worktree, and placement
 
-A launch runs in the room root by default. These flags choose a lane instead:
+A launch runs in the current directory's checkout by default. These flags choose its directory and channel:
 
 | Flag | Effect |
 | --- | --- |
+| `--cwd <DIR>` | Launch in an existing directory without changing rooms or taking worktree ownership. Relative paths resolve against the caller's current directory, in its sandbox view when sandboxed. Missing directories are refused, never created. The channel follows the directory basename unless `--channel` names one. Conflicts with `--worktree`, `--from-pr`, `--resume`, and `--fresh`. |
 | `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on channel `#NAME` in a tab named `#NAME`. Bare `-w` creates a fresh worktree with a generated name. |
 | `--from-pr <NUMBER\|URL>` | Create or reuse a worktree from a pull request's head, named `pr-<N>` unless `-w NAME` names it. |
-| `--channel <NAME>` | Launch into the durable named channel `NAME` in the room root, registering it when missing, in a tab named `#NAME`. Manage channels with [`rimz channel`](./channel.md). |
+| `--channel <NAME>` | Launch into the durable named channel `NAME` in the selected directory, registering it when missing, in a tab named `#NAME`. Manage channels with [`rimz channel`](./channel.md). |
 
 Spell the worktree name without the channel's `#`. `-w feat-a` gives channel `#feat-a`; `-w '#feat-a'` fails with `invalid worktree name`; and an unquoted `-w #feat-a` in a shell with comments enabled reaches RimZ as a bare `-w` and generates a name. A branch-style name is accepted: `-w feat/great` creates branch `feat/great` with worktree, channel, and tab `feat-great`.
 

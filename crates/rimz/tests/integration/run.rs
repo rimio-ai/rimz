@@ -559,6 +559,24 @@ fn subagent_launch_preserves_parent_root_subdirectory() {
 
 #[cfg(unix)]
 fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) {
+    assert_subagent_checkout(fanout, repo_subdir, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_explicit_cwd_keeps_room_and_parent() {
+    assert_subagent_checkout(false, false, Some("."));
+    assert_subagent_checkout(false, false, Some("absolute"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_missing_cwd_refuses_before_launch() {
+    assert_subagent_checkout(false, false, Some("missing"));
+}
+
+#[cfg(unix)]
+fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) {
     let env = Env::new();
     let checkout = if repo_subdir {
         let git = Command::new("git")
@@ -588,7 +606,7 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
     .expect("write fanout tasks");
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
-    trust_codex_project(&env, &checkout);
+    trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = rimz::WorkspaceResolver::resolve(
@@ -651,6 +669,13 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
     } else {
         command.args(["codex", "--prompt-file", "brief.md"]);
     }
+    if let Some(cwd) = cwd {
+        command.arg("--cwd").arg(if cwd == "absolute" {
+            foreign.as_os_str()
+        } else {
+            std::ffi::OsStr::new(cwd)
+        });
+    }
     let output = command
         .current_dir(&foreign)
         .envs(rimz::workspace::pin_env(&env.workspace_id, &env.project_root))
@@ -672,6 +697,14 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
         )
         .bounded_output()
         .expect("launch subagents from foreign cwd");
+    if cwd == Some("missing") {
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("create it first"));
+        assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+        assert!(!trace_path.exists());
+        assert!(!foreign.join("missing").exists());
+        return;
+    }
     assert!(
         output.status.success(),
         "subagent launch failed:\n{}",
@@ -684,7 +717,17 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("child launch history")
         .agents;
-    for record in records {
+    assert_eq!(
+        agents
+            .iter()
+            .find(|agent| agent.name.as_deref() == Some("parent"))
+            .unwrap()
+            .worktree_path
+            .as_deref(),
+        checkout.to_str()
+    );
+    let checkout = if cwd.is_some() { foreign } else { checkout };
+    for record in &records {
         assert!(record.subagent);
         assert_eq!(record.workspace_id, env.workspace_id);
         assert_eq!(record.worktree_path, checkout);
@@ -694,6 +737,12 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
             .find(|agent| agent.name == record.agent_name)
             .expect("child launch card");
         assert_eq!(child.worktree_path.as_deref(), checkout.to_str());
+        if cwd.is_some() {
+            assert_eq!(
+                child.channel().as_deref(),
+                checkout.file_name().and_then(|name| name.to_str())
+            );
+        }
         assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_launch_id));
     }
     let trace = std::fs::read_to_string(&trace_path).expect("read child pane trace");
@@ -703,6 +752,12 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
         .collect::<Vec<_>>();
     assert_eq!(panes.len(), expected_count, "child pane launches: {trace}");
     for pane in panes {
+        if cwd.is_some() {
+            assert!(
+                pane.contains(&format!("RIMZ_WORKTREE_PATH={}", checkout.display())),
+                "{pane}"
+            );
+        }
         let args = pane.split('\t').collect::<Vec<_>>();
         let cwd = args.windows(2).find(|args| args[0] == "--cwd");
         assert_eq!(cwd.map(|args| args[1]), checkout.to_str(), "{pane}");
@@ -723,6 +778,49 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
                 .expect("child prompt artifact");
         assert!(
             matches!(decoded.action, rimz::harness::launch::ExecAction::Launch { prompt: Some(ref actual), .. } if actual == &prompt)
+        );
+    }
+    if cwd.is_some() {
+        let record = &records[0];
+        let child = agents
+            .iter()
+            .find(|agent| agent.name == record.agent_name)
+            .unwrap();
+        store
+            .bind_agent_launch(
+                &rimz::store::writer::AgentLaunchIdentity {
+                    kind: child.kind.clone(),
+                    agent_id: child.agent_id.clone(),
+                    name: child.name.clone().unwrap(),
+                    name_explicit: false,
+                    launch: LaunchParams::default(),
+                    run_id: Some(record.run_id.clone()),
+                    prompt: None,
+                },
+                &workspace.session_name,
+                &checkout,
+                &PaneId::from_parts(MuxName::Zellij, "terminal_3"),
+            )
+            .unwrap();
+        let output = env.rimz()
+            .args(["--mux", "zellij", "agents", "restart", &format!("@{}", child.name.as_deref().unwrap())])
+            .envs(command.get_envs().filter_map(|(key, value)| value.map(|value| (key, value))))
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":1,"title":"codex"}]"#)
+            .bounded_output().unwrap();
+        assert!(
+            output.status.success(),
+            "restart: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let trace = std::fs::read_to_string(&trace_path).unwrap();
+        let reopened = trace
+            .lines()
+            .rev()
+            .find(|line| line.contains("\tnew-pane\t"))
+            .unwrap();
+        assert!(
+            reopened.contains(&format!("\t--cwd\t{}\t", checkout.display())),
+            "{reopened}"
         );
     }
 }

@@ -86,10 +86,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .worktree_path
         .as_deref()
         .map(absolute_lexical_path)
-        .unwrap_or_else(|| match &request.action {
-            rimz::harness::launch::ExecAction::Launch { .. } => Ok(workspace.worktree_root.clone()),
-            _ => std::env::current_dir().context("reading the agent pane cwd"),
-        })
+        .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))
         .inspect_err(|_| {
             mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
             fail_run_on_exec_precondition(run_context.as_ref());

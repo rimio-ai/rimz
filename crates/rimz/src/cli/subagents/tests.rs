@@ -146,6 +146,11 @@ fn waited_single_launch_accepts_json_in_both_forms() {
 
 #[test]
 fn fanout_task_matches_the_single_launch_surface() {
+    let single = parse(&["rimz", "claude", "review this", "--cwd", "/tmp/clean"]);
+    assert_eq!(
+        single.launch.cwd.as_deref(),
+        Some(std::path::Path::new("/tmp/clean"))
+    );
     let fanout = parse(&[
         "rimz",
         "fanout",
@@ -166,6 +171,7 @@ fn fanout_task_matches_the_single_launch_surface() {
         r#"[{
             "profile": "claude",
             "prompt": "review this",
+            "cwd": "/tmp/clean",
             "model": "opus",
             "agent": "reviewer",
             "effort": "high",
@@ -181,6 +187,8 @@ fn fanout_task_matches_the_single_launch_surface() {
         "rimz",
         "claude",
         "review this",
+        "--cwd",
+        "/tmp/clean",
         "--model",
         "opus",
         "--agent",

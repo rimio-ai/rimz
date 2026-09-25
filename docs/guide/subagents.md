@@ -14,13 +14,13 @@ A parent's `rimz subagents codex "map the auth call path"` is the same supervise
 
 1. It checks that the caller is an agent RimZ launched and not itself a child, that the parent's profile allows this child, that the child's reporting hooks are installed and trusted, and, for a Codex child, that the checkout has a recorded Codex directory-trust decision. It also checks the room's and the provider account's daily caps ([budgets](./budget.md)). A failure stops here, before a record or a pane exists.
 2. It writes a durable run record under `~/.rimz/ws/<workspace-dir>/owned/runs/`.
-3. It opens a pane running the child's own CLI, in the parent's checkout and channel, whatever directory the parent's shell has moved to. The first child splits to the right of the parent's pane and later ones stack beside it; a team member's children open in a `<view> subagents` tab after its own, eight to a tab in two equal-width columns.
+3. It opens a pane running the child's own CLI, by default in the parent's checkout and channel, whatever directory the parent's shell has moved to. The first child splits to the right of the parent's pane and later ones stack beside it; a team member's children open in a `<view> subagents` tab after its own, eight to a tab in two equal-width columns.
 4. It prints the child's petname, such as `calm-fox`, and returns. The parent keeps working.
 5. When the child's work ends, or its deadline passes, its pane closes. RimZ writes its non-empty final message to `rimz-subagents/<petname>.output` in the room's tmp directory as that child settles, even while siblings still run. Once every child the parent launched has settled, RimZ parks one report for the parent's next turn boundary ([how results come back](#how-results-come-back)).
 
 Nothing else moves. The child's session file lands where its CLI always writes it, and `rimz agents show @calm-fox` and `rimz transcript @calm-fox` read the run back after the pane is gone.
 
-Children share their parent's checkout. No worktree separates their edits from each other or from the parent, so give an editing child files no one else is touching, or have the parent use `rimz agents -p --worktree` ([choose the right tool](#choose-the-right-tool)).
+Children share their parent's checkout by default. No worktree separates their edits from each other or from the parent, so give an editing child files no one else is touching, or have the parent use `rimz agents -p --worktree` ([choose the right tool](#choose-the-right-tool)). To validate an agent without the project's instruction files, create a clean directory outside the project and pass [`--cwd <DIR>`](../reference/cli/subagents.md#launch-one-child); the child stays in the same room.
 
 ## Give your agents children to launch
 

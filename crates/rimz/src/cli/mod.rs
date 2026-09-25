@@ -763,16 +763,18 @@ fn resolve_launch_checkout(
     config: &rimz::config::MachineConfig,
     worktree: Option<&str>,
     from_pr: Option<&rimz::forge::PrTarget>,
+    cwd: Option<&std::path::Path>,
 ) -> Result<Option<rimz::worktree::LaunchCheckout>> {
     if worktree.is_some() || from_pr.is_some() {
         require_worktree_config(config)?;
     }
     let config = &config.agents.worktree;
-    let name = match rimz::worktree::resolve_launch_checkout(workspace, config, worktree, from_pr) {
-        Ok(launch) => return Ok(Some(launch)),
-        Err(rimz::worktree::WorktreeErr::Unmarked { name, .. }) if from_pr.is_none() => name,
-        Err(err) => return Err(err.into()),
-    };
+    let name =
+        match rimz::worktree::resolve_launch_checkout(workspace, config, worktree, from_pr, cwd) {
+            Ok(launch) => return Ok(Some(launch)),
+            Err(rimz::worktree::WorktreeErr::Unmarked { name, .. }) if from_pr.is_none() => name,
+            Err(err) => return Err(err.into()),
+        };
     let launch = rimz::worktree::resolve_unmanaged_launch_checkout(workspace, config, &name)?;
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
@@ -787,6 +789,37 @@ fn resolve_launch_checkout(
         return Ok(None);
     }
     Ok(Some(launch))
+}
+
+fn resolve_launch_cwd(
+    path: Option<&std::path::Path>,
+    paths: &rimz::StatePaths,
+) -> Result<Option<std::path::PathBuf>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let absolute = std::env::current_dir()
+        .context("reading the caller cwd")?
+        .join(path);
+    let caller = rimz::harness::ancestry::CallerIdentity::from_env();
+    let view = rimz::sandbox::TmpView::current(
+        Some(
+            rimz::config::Isolation::ambient(&rimz::agents::ambient_env())
+                .unwrap_or(rimz::config::Isolation::Host),
+        ),
+        caller.as_ref().and_then(|caller| caller.name.as_deref()),
+        paths,
+    );
+    let host = view.host_path(&absolute);
+    if !host.is_dir() {
+        anyhow::bail!(
+            "--cwd `{}` is not a directory; create it first or pass an existing one",
+            path.display()
+        );
+    }
+    host.canonicalize()
+        .map(Some)
+        .with_context(|| format!("resolving --cwd `{}`", path.display()))
 }
 
 pub(crate) fn confirm_cross_repo_worktree(workspace: &rimz::ResolvedWorkspace) -> Result<bool> {
