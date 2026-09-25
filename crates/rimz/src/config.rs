@@ -368,6 +368,8 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 /// Non-fatal configuration findings retained for user-facing entry points.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConfigNotices {
+    /// Load errors, including TOML diagnoses, retained when a file falls back to defaults.
+    pub unreadable_files: BTreeMap<PathBuf, String>,
     pub unknown_keys: Vec<UnknownConfigKey>,
     pub definition_errors: Vec<DefinitionError>,
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
@@ -555,11 +557,11 @@ impl MachineConfig {
         let theme_path = files.path(MachineConfigFileKind::Theme);
         let loop_path = files.path(MachineConfigFileKind::Loop);
 
-        let core = recover_parsed(files.core_path(), parse_core_text_collecting);
-        let theme = recover_parsed(&theme_path, parse_theme_text_collecting);
-        let loop_ = recover_parsed(&loop_path, parse_loop_text_collecting);
-
         let mut notices = ConfigNotices::default();
+        let core = recover_parsed(files.core_path(), parse_core_text_collecting, &mut notices);
+        let theme = recover_parsed(&theme_path, parse_theme_text_collecting, &mut notices);
+        let loop_ = recover_parsed(&loop_path, parse_loop_text_collecting, &mut notices);
+
         notices.add_unknown_keys(files.core_path(), core.unknown_keys);
         notices.add_unknown_keys(&theme_path, theme.unknown_keys);
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
@@ -1004,7 +1006,7 @@ fn load_parsed_optional<T: Default>(
     load_optional(path, parse).map(Option::unwrap_or_default)
 }
 
-fn recover<T>(result: Result<Option<T>>) -> Option<T> {
+fn recover<T>(result: Result<Option<T>>, notices: &mut ConfigNotices) -> Option<T> {
     match result {
         Ok(opt) => opt,
         Err(err) => {
@@ -1018,6 +1020,14 @@ fn recover<T>(result: Result<Option<T>>) -> Option<T> {
                 detail = %detail,
                 "per-machine config unreadable; using built-in defaults for this file",
             );
+            let message = if detail.is_empty() {
+                err.to_string()
+            } else {
+                format!("{err}: {detail}")
+            };
+            notices
+                .unreadable_files
+                .insert(err.path().to_owned(), message);
             None
         }
     }
@@ -1026,8 +1036,9 @@ fn recover<T>(result: Result<Option<T>>) -> Option<T> {
 fn recover_parsed<T: Default>(
     path: &Path,
     parse: fn(&Path, &str) -> Result<Parsed<T>>,
+    notices: &mut ConfigNotices,
 ) -> Parsed<T> {
-    recover(load_optional(path, parse)).unwrap_or_default()
+    recover(load_optional(path, parse), notices).unwrap_or_default()
 }
 
 fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {

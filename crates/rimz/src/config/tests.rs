@@ -185,6 +185,16 @@ fn lenient_load_falls_back_only_for_the_broken_file() {
     let config = MachineConfig::load_lenient_from(&path, dir.path(), &BTreeMap::new());
     assert_eq!(config.accounts, AccountsConfig::default());
     assert_eq!(config.agents.profiles.0["planner"].agent, "codex");
+    let notice = config.notices.unreadable_files.get(&path).unwrap();
+    assert!(notice.contains("TOML error"));
+    assert!(notice.contains("line 1"));
+    std::fs::write(
+        &path,
+        "[agents.worktree.hooks]\ncreated = 'touch HOOKRAN'\n",
+    )
+    .unwrap();
+    let config = MachineConfig::load_lenient_from(&path, dir.path(), &BTreeMap::new());
+    assert!(config.notices.unreadable_files.is_empty());
 }
 
 #[test]

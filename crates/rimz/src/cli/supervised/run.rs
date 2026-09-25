@@ -429,6 +429,10 @@ fn prepare_supervised(
 ) -> Result<Option<PreparedRun>> {
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
+    let worktree_launch = request.worktree.is_some() || request.from_pr.is_some();
+    if worktree_launch {
+        crate::cli::require_worktree_config(&machine_config)?;
+    }
     let mode = request.permission_mode.unwrap_or(PermissionMode::Auto);
     let store = crate::cli::open_store(&workspace)?;
     // Inside a team's lane, a bare role names that team's role, exactly as it
@@ -552,13 +556,12 @@ fn prepare_supervised(
     )?;
     rimz::sandbox::preflight(isolation)?;
     let prompt = supervised_prompt(request, adapter);
-    let worktree_launch = request.worktree.is_some() || request.from_pr.is_some();
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {
         return Ok(None);
     }
     let Some(launch) = crate::cli::resolve_launch_checkout(
         &workspace,
-        &machine_config.agents.worktree,
+        &machine_config,
         request.worktree.as_deref(),
         request.from_pr.as_ref(),
     )?
