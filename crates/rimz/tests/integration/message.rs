@@ -2257,7 +2257,7 @@ fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
     assert_single_sigil_sent(&out.stdout);
     assert_text_then_enter(
         &trace_log,
-        "Type: AGENT_MESSAGE\nFrom: @codex\nContent:\nping",
+        "Type: AGENT_MESSAGE\nFrom: @swift-otter (codex)\nContent:\nping",
     );
     let sent = env
         .read_events()

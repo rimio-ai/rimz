@@ -69,6 +69,11 @@ fn normalized_paste_is_harness_delivered() {
 
 #[test]
 fn prompt_origin_requires_only_non_user_headers() {
+    let labeled = "Type: AGENT_MESSAGE\nFrom: @calm-fox (planner)\nContent:\nfirst";
+    assert!(prompt_is_harness_delivered(labeled));
+    assert!(prompt_is_harness_delivered(&format!(
+        "{labeled}\n\nType: STAGE\nFrom: @rimz\nContent:\nimplement"
+    )));
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
     let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
     let wait = "Type: WAIT\nFrom: @rimz\nContent:\ncheck back";
@@ -107,6 +112,11 @@ fn prompt_origin_requires_only_non_user_headers() {
 #[test]
 fn message_header_parser_rejects_near_misses() {
     for text in [
+        "Type: AGENT_MESSAGE\nFrom: @coder (plan ner)\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder (planner) extra\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder ()\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder planner\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder ((planner))\nContent:\nship it",
         "Type: SYSTEM_MESSAGE\nFrom: @rimz\nContent:\nship it",
         "Type: AGENT_MESSAGE\nFrom: @coder\nship it",
         "Type: AGENT_MESSAGE\nFrom: coder\nContent:\nship it",
@@ -116,6 +126,20 @@ fn message_header_parser_rejects_near_misses() {
         "ordinary text: with colon",
     ] {
         assert_eq!(parse_message_header(text), None, "{text}");
+    }
+}
+
+#[test]
+fn message_header_parser_strips_only_a_valid_label() {
+    for (header, kind) in [
+        ("AGENT_MESSAGE", HeaderKind::Agent),
+        ("SUBAGENT_REPORT", HeaderKind::Subagent),
+    ] {
+        let prompt = format!("Type: {header}\nFrom: @calm-fox#docs (planner)\nContent:\nship it");
+        assert_eq!(
+            parse_message_header(&prompt),
+            Some((kind, "@calm-fox#docs".to_owned(), "ship it".to_owned()))
+        );
     }
 }
 
@@ -550,6 +574,16 @@ fn delivery_policy_is_per_body_and_sent_time_survives_legacy_records() {
 #[test]
 fn sender_render_uses_attributed_address_precedence() {
     let cases = [
+        (
+            MessageSender::Agent {
+                kind: AgentKind::new_unchecked("claude"),
+                name: None,
+                profile: Some("planner".to_owned()),
+                role: None,
+                channel: None,
+            },
+            "@claude",
+        ),
         (MessageSender::Human, "you"),
         (MessageSender::System, "rimz"),
         (
@@ -583,7 +617,7 @@ fn sender_render_uses_attributed_address_precedence() {
                 role: None,
                 channel: None,
             },
-            "@planner",
+            "@lucid-atlas",
         ),
         (
             MessageSender::Agent {
@@ -1151,6 +1185,50 @@ fn align_submitted_prompt_separates_stray_composer_text() {
     assert_eq!(trailing, Some("after"));
     assert_eq!(leading.map_or(0, str::len), 59);
     assert_eq!(trailing.map_or(0, str::len), 5);
+}
+
+#[test]
+fn labeled_agent_batch_aligns_and_strips_labels() {
+    let recipient = agent("session-recipient", None);
+    let mut first = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        &recipient,
+        "first".to_owned(),
+        DeliveryGate::Done,
+    );
+    first.sender = MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("calm-fox".to_owned()),
+        profile: Some("planner".to_owned()),
+        role: None,
+        channel: Some("docs".to_owned()),
+    };
+    let second = MessageRecord::new(
+        first.workspace_id.clone(),
+        &recipient,
+        "second".to_owned(),
+        DeliveryGate::Done,
+    );
+    let labeled = "Type: AGENT_MESSAGE\nFrom: @calm-fox#docs (planner)\nContent:\nfirst";
+    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
+    let prompt = format!("{labeled}\n\n{human}");
+    let (leading, segments, trailing) =
+        align_submitted_prompt(&prompt, &[&first, &second]).expect("labeled batch aligns");
+    assert_eq!(leading, None);
+    assert_eq!(trailing, None);
+    assert_eq!(segments, [labeled, human]);
+    assert_eq!(
+        parse_message_header(segments[0]),
+        Some((
+            HeaderKind::Agent,
+            "@calm-fox#docs".to_owned(),
+            "first".to_owned()
+        ))
+    );
+    assert_eq!(
+        parse_message_header(segments[1]),
+        Some((HeaderKind::User, "@user".to_owned(), "second".to_owned()))
+    );
 }
 
 #[test]
