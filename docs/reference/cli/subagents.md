@@ -38,6 +38,7 @@ rimz subagents wait "$first" "$second"
 | Flag | Default | Effect |
 | --- | --- | --- |
 | `PROMPT` or `--prompt-file <PATH>` | required | The whole assignment. A relative path resolves from the shell's current directory. An empty prompt is refused. |
+| `--cwd <DIR>` | parent's checkout | Working directory for the child; the room stays the caller's. Uses the same [path resolution as agent launches](./agents.md#channel-worktree-and-placement). |
 | `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
 | `--json` | off | With `--wait`, print the full run record instead of the petname and answer. Refused without `--wait`. |
 | `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Bound pending or running work, not a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
@@ -50,7 +51,7 @@ Run `rimz subagents launch --help` for the exact spellings. The global flags are
 
 The complete launch prompt is capped at 120 KiB (122,880 bytes), counting any instruction text RimZ adds to the prompt for providers without an appended system prompt. `--prompt-file` keeps the brief out of the shell command, but the provider still receives its contents as one argument. An oversized prompt is refused before any run record exists, and the error names the limit; put supporting detail in a file the child is told to read.
 
-The child works in the parent's checkout, the directory the parent itself was launched in, whatever directory the launch command runs from. It joins the parent's lane. When that checkout no longer exists, the launch refuses instead of starting the child elsewhere.
+The child works in the parent's checkout, the directory the parent itself was launched in, whatever directory the launch command runs from, unless `--cwd` names another directory. By default it joins the parent's lane; with `--cwd`, its lane follows that directory's basename. When the parent's checkout no longer exists, the launch refuses instead of starting the child elsewhere. Restart and child resume reuse the child's recorded directory.
 
 A launch refuses before it writes a run record or opens a pane when:
 
@@ -85,6 +86,7 @@ JSON
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `profile` | yes | Profile, agent kind, or command, as for a single launch |
+| `cwd` | no | Existing working directory, as for `--cwd` on a single launch |
 | `prompt` | one of the two | The assignment |
 | `prompt_file` | one of the two | File whose contents become the assignment; a relative path resolves from the current directory |
 | `description` | no | Child card description and fleet report task label |

@@ -371,7 +371,8 @@ allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
 # Exec presents typed skill omissions returned by sandbox preparation.
 # Inspection shares read-only mount/copy plans and explicit application with exec.
 # The launch plan sets the scratch-dir and shared-dir keys the sandbox pins override.
-surface-budget = 24
+# Explicit launch cwd resolution reverses the caller's tmp view through TmpView::host_path.
+surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/room"

@@ -49,6 +49,8 @@ fn child_cap_launch(explicit_host: bool) {
     );
     env.install_agent_hooks("claude");
     let store = env.store();
+    let cwd = store.paths().tmp_dir.join("clean");
+    std::fs::create_dir_all(&cwd).unwrap();
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
     store
         .append_event(&EventEnvelope::agent_launched(
@@ -99,6 +101,8 @@ fn child_cap_launch(explicit_host: bool) {
     command.args(["--mux", "zellij", "subagents", "sysadmin", "work"]);
     if explicit_host {
         command.args(["--isolation", "host"]);
+    } else {
+        command.args(["--cwd", "/tmp/clean"]);
     }
     let output = command
         .env("RIMZ_ISOLATION", "sandbox")
@@ -131,6 +135,12 @@ fn child_cap_launch(explicit_host: bool) {
             .find(|agent| agent.profile.as_deref() == Some("sysadmin"))
             .unwrap();
         assert_eq!(child.isolation, Some(Isolation::Sandbox));
+        assert_eq!(child.worktree_path.as_deref(), cwd.to_str());
+        let trace = std::fs::read_to_string(env.project_root.join("mux.log")).unwrap();
+        assert!(
+            trace.contains(&format!("\t--cwd\t{}\t", cwd.display())),
+            "{trace}"
+        );
     }
 }
 
@@ -1119,6 +1129,16 @@ fn sandboxed_exec_shows_profile_skill_view_and_room_tmp() {
     }
     let env = Env::new();
     enable(&env);
+    let cwd = env.store().paths().tmp_dir.join("clean");
+    std::fs::create_dir_all(&cwd).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(cwd.parent().unwrap())
+            .status()
+            .unwrap()
+            .success()
+    );
     for dir in [
         ".claude/skills/a",
         ".agents/skills/b",
@@ -1153,6 +1173,7 @@ fn sandboxed_exec_shows_profile_skill_view_and_room_tmp() {
         r#"#!/bin/sh
 set -eu
 ls "$HOME/.claude/skills" > /tmp/claude-skills
+printf '%s\n' "$PWD" > /tmp/provider-cwd
 ls "$HOME/.agents/skills" > /tmp/agent-skills
 printf '%s\n' "$TMPDIR" > /tmp/tmpdir
 printf '%s\n' "$HOME" > /tmp/provider-home
@@ -1187,6 +1208,11 @@ printf '%s\n' shared > /tmp/team-file
     let output = env
         .rimz()
         .args(exec_args(&env, &request))
+        .current_dir(&cwd)
+        .envs(rimz::workspace::pin_env(
+            &env.workspace_id,
+            &env.project_root,
+        ))
         .env("PATH", path_with_front(&shim_dir))
         .env("SHELL", shell)
         .env("RIMZ_TEST_HOST_TMP_FILE", host_tmp.path())
@@ -1211,6 +1237,10 @@ printf '%s\n' shared > /tmp/team-file
     assert_eq!(std::fs::read(&bad).unwrap(), metadata.as_bytes());
     let store = env.store();
     let tmp = &store.paths().tmp_dir;
+    assert_eq!(
+        std::fs::read_to_string(tmp.join("provider-cwd")).unwrap(),
+        "/tmp/clean\n"
+    );
     assert_eq!(std::fs::read(tmp.join("non-utf8")).unwrap(), [0xff, 0xfe]);
     assert_eq!(
         std::fs::read_to_string(tmp.join("claude-skills")).unwrap(),

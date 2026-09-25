@@ -268,7 +268,13 @@ fn unmanaged_launch_checkout_preserves_ownership_and_local_work() {
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let config = rimz::config::WorktreeConfig::default();
     assert!(matches!(
-        rimz::worktree::resolve_launch_checkout(&workspace, &config, Some("feat/review"), None),
+        rimz::worktree::resolve_launch_checkout(
+            &workspace,
+            &config,
+            Some("feat/review"),
+            None,
+            None
+        ),
         Err(rimz::worktree::WorktreeErr::Unmarked { .. })
     ));
     let checkout =

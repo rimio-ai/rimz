@@ -761,6 +761,36 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
     .expect("runtime paths");
     let request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
 
+    for (cwd, expected) in [
+        (project.path().to_path_buf(), project.path().to_path_buf()),
+        (state.tmp_dir.join("clean"), PathBuf::from("/tmp/clean")),
+    ] {
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: &cwd,
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: Some(Path::new("/usr/bin/bwrap")),
+            ambient_env: &BTreeMap::from([(
+                "HOME".to_owned(),
+                project.path().display().to_string(),
+            )]),
+        })
+        .expect("compile cwd");
+        assert_eq!(plan.cwd, cwd);
+        assert!(
+            plan.process()
+                .argv
+                .windows(2)
+                .any(|pair| pair[0] == "--chdir" && Path::new(&pair[1]) == expected)
+        );
+    }
+
     let plan = compile(LaunchPlanInputs {
         request: &request,
         cwd: project.path(),

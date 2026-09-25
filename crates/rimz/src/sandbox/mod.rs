@@ -49,6 +49,20 @@ impl TmpView {
         Self::new(isolation, handle, paths)
     }
 
+    pub fn host_path(&self, agent: &Path) -> PathBuf {
+        if !self.sandboxed {
+            return agent.to_path_buf();
+        }
+        let agent = crate::utils::path::normalize_path_lexical(agent);
+        if let Ok(relative) = agent.strip_prefix(SANDBOX_SCRATCH) {
+            return self.scratch_dir.join(relative).components().collect();
+        }
+        if let Ok(relative) = agent.strip_prefix(SANDBOX_TMP) {
+            return self.tmp_dir.join(relative).components().collect();
+        }
+        agent
+    }
+
     pub fn agent_path(&self, host: &Path) -> PathBuf {
         if !self.sandboxed {
             return host.to_path_buf();
@@ -547,7 +561,16 @@ mod tests {
             (Path::new("/elsewhere/file"), "/elsewhere/file"),
         ] {
             assert_eq!(sandbox.agent_path(host), Path::new(agent));
+            assert_eq!(sandbox.host_path(Path::new(agent)), host);
         }
+        assert_eq!(
+            sandbox.host_path(Path::new("/tmp/scratchpad/../shared/x")),
+            paths.tmp_dir.join("shared/x")
+        );
+        assert_eq!(
+            sandbox.host_path(Path::new("/tmp/../home/x")),
+            Path::new("/home/x")
+        );
         assert_eq!(
             TmpView::new(Isolation::Sandbox, None, &paths)
                 .agent_path(&paths.scratchpad_dir.join("f")),
@@ -556,6 +579,10 @@ mod tests {
         let host = TmpView::new(Isolation::Host, Some("otter"), &paths);
         assert_eq!(host.agent_path(&output), output);
         assert_eq!(host.agent_path(&own), own);
+        assert_eq!(
+            host.host_path(Path::new("/tmp/scratchpad/f")),
+            Path::new("/tmp/scratchpad/f")
+        );
     }
 
     #[test]

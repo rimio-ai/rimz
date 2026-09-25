@@ -199,7 +199,13 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 },
             })?;
             process.pin_env(plan.pins.clone());
-            process.argv = sandbox::bwrap_argv(bwrap, &plan.plan, inputs.cwd, &process.argv);
+            let cwd = sandbox::TmpView::current(
+                Some(Isolation::Sandbox),
+                request.identity.name.as_deref(),
+                inputs.state,
+            )
+            .agent_path(inputs.cwd);
+            process.argv = sandbox::bwrap_argv(bwrap, &plan.plan, &cwd, &process.argv);
             Some(plan)
         } else {
             None

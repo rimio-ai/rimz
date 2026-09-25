@@ -415,6 +415,23 @@ mod parse {
 
     #[test]
     fn launch_forms_parse_public_contract() {
+        let _ = parse_agents(&["rimz", "claude", "task", "--cwd", "/tmp/clean"]);
+        let (request, _) = into_supervised_request(parse_agents(&[
+            "rimz",
+            "claude",
+            "task",
+            "-p",
+            "--cwd",
+            "/tmp/clean",
+        ]))
+        .unwrap();
+        assert_eq!(request.cwd.as_deref(), Some(Path::new("/tmp/clean")));
+        for flag in ["--worktree=demo", "--from-pr=12", "--resume", "--fresh"] {
+            let error =
+                AgentsHarness::try_parse_from(["rimz", "claude", "--cwd", "/tmp/clean", flag])
+                    .unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
         let argv: Vec<_> = "rimz claude,codex+term fix-tests --worktree=docs --bg"
             .split_ascii_whitespace()
             .collect();

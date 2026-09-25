@@ -79,6 +79,7 @@ pub(super) fn launch_layout(
         crate::cli::require_worktree_config(&machine_config)?;
     }
     let ctx = Ctx::open(globals)?;
+    let cwd = crate::cli::resolve_launch_cwd(args.launch.cwd.as_deref(), ctx.store.paths())?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     report_unknown_config_keys(&machine_config)?;
@@ -285,6 +286,7 @@ pub(super) fn launch_layout(
         &machine_config,
         args.launch.cohort.worktree.as_deref(),
         args.launch.cohort.from_pr.as_ref(),
+        cwd.as_deref(),
     )?
     else {
         return Ok(());
@@ -313,7 +315,7 @@ pub(super) fn launch_layout(
             .cohort
             .channel
             .as_deref()
-            .or(inferred_lane.as_deref()),
+            .or(inferred_lane.as_deref().filter(|_| cwd.is_none())),
     );
     let launch_requests = launch_identity_requests(
         &layout,
@@ -372,6 +374,21 @@ pub(super) fn launch_layout(
         &layout,
         team_name.as_deref().and_then(|name| teams.0.get(name)),
     );
+    if args.launch.cwd.is_some() {
+        for pane in panes
+            .columns
+            .iter_mut()
+            .flat_map(|column| &mut column.panes)
+        {
+            pane.argv.splice(
+                0..0,
+                [
+                    "env".to_owned(),
+                    format!("{}={}", rimz::workspace::ENV_WORKTREE_PATH, cwd.display()),
+                ],
+            );
+        }
+    }
     super::placement::execute(
         backend,
         store,
@@ -980,6 +997,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         bail!("--from-pr requires an agent spec");
     }
     if args.launch.name.is_some()
+        || args.launch.cwd.is_some()
         || args.launch.cohort.bg
         || args.launch.new_pane
         || args.launch.cohort.new_tab

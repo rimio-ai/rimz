@@ -115,6 +115,7 @@ struct FanoutArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FanoutTask {
+    cwd: Option<PathBuf>,
     profile: Option<String>,
     prompt: Option<String>,
     prompt_file: Option<PathBuf>,
@@ -131,6 +132,9 @@ struct FanoutTask {
     after_help = "Launch several children in parallel. The printed petname is also an address: use `rimz message @petname \"…\"` for a follow-up."
 )]
 struct SubagentLaunchArgs {
+    /// Working directory for the launched agent; the room stays the caller's.
+    #[arg(long, value_name = "DIR")]
+    cwd: Option<PathBuf>,
     /// Configured subagent profile, agent kind, or shared command.
     #[arg(
         value_name = "PROFILE",
@@ -405,6 +409,7 @@ impl FanoutTask {
             .context("parsing timeout")?
             .or(fanout.timeout);
         let launch = SubagentLaunchArgs {
+            cwd: self.cwd,
             profile: self.profile,
             prompt: self.prompt,
             prompt_file: self.prompt_file,
@@ -457,6 +462,7 @@ impl SubagentLaunchArgs {
             .map_err(anyhow::Error::msg)
             .context("parsing agents.subagents.timeout")?;
         Ok(agents_cmd::AgentLaunchArgs {
+            cwd: self.cwd,
             spec: Some(profile),
             prompt: Some(prompt),
             cohort: agents_cmd::CohortLaunchArgs {
@@ -485,6 +491,7 @@ impl SubagentLaunchArgs {
 
 fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
     if args.prompt.is_some()
+        || args.cwd.is_some()
         || args.prompt_file.is_some()
         || args.model.is_some()
         || args.agent.is_some()

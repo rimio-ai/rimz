@@ -435,6 +435,7 @@ fn prepare_supervised(
     }
     let mode = request.permission_mode.unwrap_or(PermissionMode::Auto);
     let store = crate::cli::open_store(&workspace)?;
+    let cwd = crate::cli::resolve_launch_cwd(request.cwd.as_deref(), store.paths())?;
     // Inside a team's lane, a bare role names that team's role, exactly as it
     // does for an interactive launch: in `#forge`, `reviewer` means
     // `forge.reviewer`.
@@ -564,6 +565,7 @@ fn prepare_supervised(
         &machine_config,
         request.worktree.as_deref(),
         request.from_pr.as_ref(),
+        cwd.as_deref(),
     )?
     else {
         return Ok(None);
@@ -631,7 +633,10 @@ fn prepare_supervised(
         &workspace.project_root,
         &launch.cwd,
         team_name.as_deref(),
-        request.channel.as_deref().or(inferred_lane.as_deref()),
+        request
+            .channel
+            .as_deref()
+            .or(inferred_lane.as_deref().filter(|_| cwd.is_none())),
     );
     Ok(Some(PreparedRun {
         workspace,
@@ -726,7 +731,7 @@ fn execute_attempt(
     )?;
     let launch_identity = launch_batch.single_identity()?;
     record.agent_name = Some(launch_identity.name.clone());
-    let pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
+    let mut pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
         runtime: prepared.store.runtime_paths(),
         adapter: prepared.adapter,
         run_id: &run_id,
@@ -750,6 +755,19 @@ fn execute_attempt(
     .inspect_err(|_| {
         let _ = prepared.store.fail_agent_launch_batch(&launch_batch);
     })?;
+    if request.cwd.is_some() {
+        pane.argv.splice(
+            0..0,
+            [
+                "env".to_owned(),
+                format!(
+                    "{}={}",
+                    rimz::workspace::ENV_WORKTREE_PATH,
+                    prepared.launch.cwd.display()
+                ),
+            ],
+        );
+    }
     let waiter = if request.background {
         None
     } else {
