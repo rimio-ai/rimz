@@ -93,6 +93,14 @@ required-features = ["testkit"]
 test = false
 bench = false
 
+# Test-only fixture: a framed stdio language server for broker integration tests.
+[[bin]]
+name = "lsp-server-stub"
+path = "tests/fixtures/lsp-server-stub/main.rs"
+required-features = ["testkit"]
+test = false
+bench = false
+
 # Test-only fixture: a `git`-shaped shim that logs argv to `$RIMZ_TEST_GIT_LOG`
 # then execs the real git. Used by `tests/integration/performance/` to count
 # the cross-process git fork rate and prove the diff-stats single-flight.

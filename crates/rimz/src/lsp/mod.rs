@@ -1,6 +1,7 @@
 //! Machine-shared, checkout-scoped language-server admission and query domain.
 
 pub mod admission;
+pub mod broker;
 pub mod history;
 pub mod lease;
 pub mod memory;
@@ -28,6 +29,8 @@ pub enum LspErr {
     Configuration(String),
     #[error("language-server protocol: {0}")]
     Protocol(String),
+    #[error("language server error {code}: {message}")]
+    Server { code: i64, message: String },
 }
 
 pub type Result<T> = std::result::Result<T, LspErr>;

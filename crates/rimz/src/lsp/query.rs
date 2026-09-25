@@ -1,5 +1,8 @@
 //! Position and symbol resolution plus compact, provider-neutral query output.
 
+mod client;
+pub use client::{Output, execute, select};
+
 use super::protocol::{
     CallHierarchyItem, DocumentSymbol, Location, Position, Range, SymbolInformation,
 };
