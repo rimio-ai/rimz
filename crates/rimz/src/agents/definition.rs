@@ -61,6 +61,7 @@ pub struct LaunchSpec {
     pub permission: LaunchPermissionArgs,
     pub max_turn_flag: Option<&'static str>,
     pub compact_command: Option<CompactCommand>,
+    pub interrupt_key: Option<crate::pane::keys::NamedKey>,
     pub presets: PresetMatchers,
 }
 
@@ -75,6 +76,7 @@ impl LaunchSpec {
         permission: LaunchPermissionArgs::EMPTY,
         max_turn_flag: None,
         compact_command: None,
+        interrupt_key: None,
         presets: PresetMatchers::EMPTY,
     };
 

@@ -109,6 +109,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--use-spec"],
         },
         max_turn_flag: None,
+        interrupt_key: None,
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Trailing,

@@ -57,6 +57,21 @@ fn hook_context_capability_agrees_with_native_reply_support() {
 }
 
 #[test]
+fn interrupt_keys_are_declared_only_for_verified_builtins() {
+    use crate::pane::keys::NamedKey;
+
+    assert_eq!(super::LaunchSpec::EMPTY.interrupt_key, None);
+    for adapter in BUILTINS {
+        let spec = adapter.spec();
+        let expected = match spec.kind {
+            "claude" | "codex" => Some(NamedKey::Escape),
+            _ => None,
+        };
+        assert_eq!(spec.launch.interrupt_key, expected, "{}", spec.kind);
+    }
+}
+
+#[test]
 fn builtin_host_skill_switches_are_declared() {
     for adapter in BUILTINS {
         let spec = adapter.spec();
@@ -432,6 +447,7 @@ system-prompt-file-flag = "--system-prompt-file"
     .expect("manifest");
     let loaded = super::plugins::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+    assert_eq!(loaded.definitions[0].spec().launch.interrupt_key, None);
     assert_eq!(
         loaded.definitions[0]
             .spec()
@@ -963,6 +979,7 @@ setup-doc = "README.md"
     let loaded = super::plugins::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let adapter = loaded.definitions[0];
+    assert_eq!(adapter.spec().launch.interrupt_key, None);
     let conformance = adapter.conformance();
     let native_events = conformance.native_event_names();
 

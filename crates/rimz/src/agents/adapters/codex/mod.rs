@@ -237,6 +237,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &[],
         },
         max_turn_flag: None,
+        interrupt_key: Some(crate::pane::keys::NamedKey::Escape),
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,

@@ -117,6 +117,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--approval-mode", "plan"],
         },
         max_turn_flag: Some("--max-session-turns"),
+        interrupt_key: None,
         compact_command: Some(super::CompactCommand {
             command: "/compress",
             instruction: super::CompactInstruction::Unsupported,

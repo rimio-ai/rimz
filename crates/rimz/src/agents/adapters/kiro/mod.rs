@@ -101,6 +101,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
         fork: None,
         permission: super::LaunchPermissionArgs::EMPTY,
         max_turn_flag: None,
+        interrupt_key: None,
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,
