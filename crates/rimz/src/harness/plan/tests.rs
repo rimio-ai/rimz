@@ -11,6 +11,50 @@ use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 
 #[test]
+fn child_isolation_cap_respects_parent_and_request_source() {
+    use crate::config::Isolation::{Host, Sandbox};
+    for parent in [None, Some(Host), Some(Sandbox)] {
+        for child_override in [None, Some(Host), Some(Sandbox)] {
+            for child_default in [None, Some(Host), Some(Sandbox)] {
+                for machine in [Host, Sandbox] {
+                    let result =
+                        cap_child_isolation(parent, child_override, child_default, machine);
+                    if parent == Some(Sandbox) && child_override == Some(Host) {
+                        assert!(
+                            result
+                                .unwrap_err()
+                                .to_string()
+                                .ends_with("launch it from a host agent or a host shell")
+                        );
+                        continue;
+                    }
+                    let expected_source = if parent == Some(Sandbox) && child_override.is_none() {
+                        match (child_default, machine) {
+                            (Some(Host), _) => Some(ClampSource::ProfileDefault),
+                            (None, Host) => Some(ClampSource::MachinePolicy),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    assert_eq!(
+                        result.unwrap(),
+                        ChildIsolation {
+                            isolation: if expected_source.is_some() {
+                                Some(Sandbox)
+                            } else {
+                                child_override
+                            },
+                            clamped: expected_source,
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn cell_posture_projection_covers_every_agent_cell_field() {
     let mut cell = AgentCell {
         isolation_default: None,

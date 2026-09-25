@@ -42,7 +42,7 @@ rimz subagents wait "$first" "$second"
 | `--json` | off | With `--wait`, print the full run record instead of the petname and answer. Refused without `--wait`. |
 | `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Bound pending or running work, not a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
 | `--keep` | off | Disable automatic completion cleanup and cleanup on parent exit; hold the pane after provider exit. Explicit stop and the run timeout still apply. |
-| `--isolation host\|sandbox` | the parent's recorded `--isolation` override, else `agents.isolation` | Run the child under this isolation. |
+| `--isolation host\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | A sandboxed parent refuses a host override; host defaults clamp to sandbox with a note. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
 | `--model`, `--agent`, `--effort`, `--max-turns`, `-- <ARGS>` | from the profile | Override the model, re-base onto another profile or kind, set reasoning effort, cap agentic turns, or append provider argv. |
 
@@ -94,7 +94,7 @@ JSON
 | `effort` | no | Reasoning effort |
 | `max_turns` | no | Maximum agentic turns |
 
-A task's `timeout` wins over the fanout's `--timeout`, which wins over `[agents.subagents] timeout`. `--keep` applies to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's isolation, and child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
+A task's `timeout` wins over the fanout's `--timeout`, which wins over `[agents.subagents] timeout`. `--keep` applies to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's recorded override, otherwise follows its own definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
 
 | Mode | stdout |
 | --- | --- |

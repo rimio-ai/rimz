@@ -63,8 +63,17 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     }
     let adapter = rimz::agents::find_definition(child.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", child.kind))?;
-    let isolation = rimz::config::Isolation::resolve(
+    let capped = rimz::harness::plan::cap_child_isolation(
+        rimz::config::Isolation::ambient(&rimz::agents::ambient_env()),
         child.isolation,
+        posture.launch.isolation_default,
+        machine.agents.isolation,
+    )?;
+    if let Some(source) = &capped.clamped {
+        supervised::note_isolation_clamp(child.profile.as_deref().unwrap_or(&child.kind), source)?;
+    }
+    let isolation = rimz::config::Isolation::resolve(
+        capped.isolation,
         posture.launch.isolation_default,
         machine.agents.isolation,
     );
@@ -88,7 +97,8 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     let runs = rimz::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
-    let request = resume_request(child, run, &posture, action);
+    let mut request = resume_request(child, run, &posture, action);
+    request.identity.params.isolation = capped.isolation;
     let launch_id = child
         .launch_id
         .as_ref()

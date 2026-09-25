@@ -500,7 +500,7 @@ fn prepare_supervised(
         isolation,
     )?;
     let team_name = resolved.team_name;
-    let layout = resolved.layout;
+    let mut layout = resolved.layout;
     let agent_cells = layout.agent_cells().collect::<Vec<_>>();
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");
@@ -508,7 +508,35 @@ fn prepare_supervised(
     if layout_cell_count(&layout) != 1 {
         bail!("--print requires a single-cell agent layout");
     }
-    let agent_cell = agent_cells[0];
+    // The checks above guarantee exactly one agent cell.
+    let agent_cell = layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+        .find_map(|cell| match cell {
+            rimz::harness::spec::Cell::Agent(agent) => Some(agent),
+            rimz::harness::spec::Cell::Command { .. } => None,
+        })
+        .expect("the layout was checked to contain exactly one agent cell");
+    if request.subagent {
+        let capped = rimz::harness::plan::cap_child_isolation(
+            rimz::config::Isolation::ambient(&rimz::agents::ambient_env()),
+            agent_cell.launch.isolation,
+            agent_cell.isolation_default,
+            machine_config.agents.isolation,
+        )?;
+        agent_cell.launch.isolation = capped.isolation;
+        if let Some(source) = &capped.clamped {
+            supervised::note_isolation_clamp(
+                agent_cell
+                    .launch
+                    .profile
+                    .as_deref()
+                    .unwrap_or(&agent_cell.kind),
+                source,
+            )?;
+        }
+    }
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     let isolation = rimz::config::Isolation::resolve(

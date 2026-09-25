@@ -31,6 +31,119 @@ fn enable(env: &Env) {
     std::fs::write(path, "[agents]\nisolation = \"sandbox\"\n").unwrap();
 }
 
+fn child_cap_launch(explicit_host: bool) {
+    use rimz::agents::LaunchParams;
+    use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+
+    if !explicit_host && !available() {
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "sysadmin",
+        "description: Host worker\nagent: claude\ntools: []\nisolation: host",
+        "Work.",
+    );
+    env.install_agent_hooks("claude");
+    let store = env.store();
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                agent_id: "parent-session".into(),
+                launch_id: Some("parent-launch".into()),
+                agent_name: "parent".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(rimz::ids::PaneId::from_parts(
+                    rimz::ids::MuxName::Zellij,
+                    "terminal_2",
+                )),
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
+        store.runtime_paths(),
+        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
+            session_name: workspace.session_name.clone(),
+            produced_at_ms: rimz::utils::time::unix_now_ms(),
+            writer: None,
+            focused_pane: None,
+            clients: None,
+            panes: serde_json::from_value(serde_json::json!([
+                {"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},
+                {"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}
+            ]))
+            .unwrap(),
+        },
+    )
+    .unwrap();
+    let shim = crate::common::write_failing_agent_shim(&env, "claude", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let presence = env.project_root.join("presence.wasm");
+    std::fs::write(&presence, b"test-presence").unwrap();
+    let mut command = env.rimz();
+    command.args(["--mux", "zellij", "subagents", "sysadmin", "work"]);
+    if explicit_host {
+        command.args(["--isolation", "host"]);
+    }
+    let output = command
+        .env("RIMZ_ISOLATION", "sandbox")
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
+        .env("SHELL", shell).env("PATH", path_with_front(&shim))
+        .env("RIMZ_ZELLIJ_BIN", crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")))
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("mux.log"))
+        .env("RIMZ_PRESENCE_PLUGIN", presence).env("ZELLIJ_PANE_ID", "2")
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#)
+        .bounded_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if explicit_host {
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("launch it from a host agent or a host shell"),
+            "{stderr}"
+        );
+        assert_eq!(store.read_events().unwrap().len(), 1);
+    } else {
+        assert!(output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("sysadmin runs sandboxed: its definition asks for host isolation"),
+            "{stderr}"
+        );
+        let agents = store.snapshot().unwrap().agents;
+        let child = agents
+            .iter()
+            .find(|agent| agent.profile.as_deref() == Some("sysadmin"))
+            .unwrap();
+        assert_eq!(child.isolation, Some(Isolation::Sandbox));
+    }
+}
+
+#[test]
+fn sandboxed_parent_refuses_explicit_host_subagent_without_launch_event() {
+    child_cap_launch(true);
+}
+
+#[test]
+fn sandboxed_parent_clamps_host_profile_subagent_and_records_override() {
+    child_cap_launch(false);
+}
+
 fn environment(env: &Env) -> BTreeMap<String, String> {
     [
         ("HOME", env.home_root.clone()),
