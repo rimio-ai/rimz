@@ -421,7 +421,8 @@ path = "crates/rimz/src/store"
 # The sidebar group record carries a team pipeline and its derived position.
 # A deferred delivery instructs the queue what to do with the recorded blocker, whose words stay with the sweep.
 # The lifetime-class GC reports per-room, per-class removals to the CLI and the auto-GC assist.
-surface-budget = 316
+# Interrupt delivery shares the claim TTL to bound its stop-proof wait.
+surface-budget = 317
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -538,6 +539,7 @@ allowed-dependencies = [
     "config",
     "harness::assist_log",
     "address",
+    "ids",
     "message",
     "mux",
     "pane::keys",
@@ -545,7 +547,8 @@ allowed-dependencies = [
     "store::snapshot",
     "workspace",
 ]
-surface-budget = 9
+# Queued delivery shares the typed interrupt-key preflight with pane sends.
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/mux/mount_proof.rs"

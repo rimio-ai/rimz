@@ -45,6 +45,9 @@ pub struct MessageArgs {
     /// Write into the live turn now instead of parking for a turn boundary.
     #[arg(long, conflicts_with_all = ["schedule", "on"])]
     steer: bool,
+    /// Stop the live turn with the agent's interrupt key, then deliver as a fresh turn. Refused for agents without one.
+    #[arg(long, conflicts_with_all = ["steer", "on", "schedule", "after", "when"])]
+    interrupt: bool,
     /// Park the message until at least this duration or configured-zone `HH:MM`.
     #[arg(long, value_name = "DUR|HH:MM", conflicts_with = "steer")]
     schedule: Option<String>,
@@ -94,6 +97,16 @@ enum MessageSubcmd {
         ))]
         message_id: MessageId,
         /// Send even when the agent is Waiting.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Stop the live turn, then deliver a queued message as a fresh turn.
+    Interrupt {
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::queued_message_ids
+        ))]
+        message_id: MessageId,
+        /// Also cancel a native prompt waiting for input.
         #[arg(long)]
         force: bool,
     },
@@ -223,9 +236,16 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
         Some(MessageSubcmd::List(args)) => list_messages(args, globals),
         Some(MessageSubcmd::Show { message_id, json }) => show_message(message_id, json, globals),
         Some(MessageSubcmd::Edit { message_id, edit }) => edit_message(message_id, edit, globals),
-        Some(MessageSubcmd::Steer { message_id, force }) => {
-            steer_queued_message(message_id, force, globals)
-        }
+        Some(MessageSubcmd::Steer { message_id, force }) => push_queued_message(
+            message_id,
+            deliver::DeliveryPolicy::Steer { force },
+            globals,
+        ),
+        Some(MessageSubcmd::Interrupt { message_id, force }) => push_queued_message(
+            message_id,
+            deliver::DeliveryPolicy::Interrupt { force },
+            globals,
+        ),
         Some(MessageSubcmd::Requeue { message_id, edit }) => {
             requeue_message(message_id, edit, globals)
         }
@@ -253,7 +273,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                     rimz::address::require_mention(&target)?;
                 }
                 bail!(
-                    "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, requeue <id>, cancel <id>..., clear [target], or an @agent target"
+                    "unknown subcommand `{target}`; expected list, show <id>, edit <id>, steer <id>, interrupt <id>, requeue <id>, cancel <id>..., clear [target], or an @agent target"
                 );
             }
             let piped = if args.send.stdin {
@@ -263,7 +283,9 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                 None
             };
             let text = args.text.into_iter().collect();
-            if args.steer {
+            if args.interrupt {
+                send_message(target, SendKind::Interrupt, args.send, text, piped, globals)
+            } else if args.steer {
                 send_message(target, SendKind::Steer, args.send, text, piped, globals)
             } else {
                 send_message(

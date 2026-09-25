@@ -102,9 +102,8 @@ impl DispatchMode {
 
     fn needs_agent_context(&self) -> bool {
         match self {
-            Self::Steer { auto_compact, .. } | Self::Interrupt { auto_compact, .. } => {
-                auto_compact.is_some()
-            }
+            Self::Interrupt { .. } => true,
+            Self::Steer { auto_compact, .. } => auto_compact.is_some(),
             Self::Boundary {
                 auto_compact,
                 after,
@@ -160,6 +159,7 @@ pub enum DispatchOutcome {
 pub enum ParkReason {
     Status(AgentStatus),
     WaitingOnPrompt,
+    InterruptUnproven { wait: std::time::Duration },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,6 +247,12 @@ pub enum DispatchErr {
     },
     #[error("`{label}` cannot receive now and has no durable session to park")]
     NoDurableSession { label: String },
+    #[error(
+        "{label} runs {kind}, which has no interrupt key; use --steer to write into the live turn, or park it"
+    )]
+    NoInterruptKey { label: String, kind: AgentKind },
+    #[error("{label} is waiting on your input in its pane; answer it or pass --force")]
+    WaitingOnInput { label: String },
     #[error(transparent)]
     Login(#[from] crate::agents::RoomLoginErr),
 }
@@ -639,6 +645,39 @@ fn prepare_mode(
     automated: bool,
 ) -> Result<PreparedMode> {
     let kind = mode.kind();
+    if kind == DeliveryKind::Interrupt {
+        for target in recipients {
+            let label = target.label(resolution.snapshot);
+            let target_kind = target
+                .agent
+                .as_ref()
+                .map(|agent| &agent.kind)
+                .or_else(|| target.pane.as_ref().map(|pane| &pane.kind))
+                .ok_or_else(|| DispatchErr::NoDurableSession {
+                    label: label.clone(),
+                })?;
+            if crate::agents::spec_by_kind(target_kind.as_str())
+                .and_then(|spec| spec.launch.interrupt_key)
+                .is_none()
+            {
+                return Err(DispatchErr::NoInterruptKey {
+                    label,
+                    kind: target_kind.clone(),
+                });
+            }
+            let agent = if target.pane.is_some() {
+                target.bound(resolution.snapshot)
+            } else {
+                target.agent.as_ref()
+            }
+            .ok_or_else(|| DispatchErr::NoDurableSession {
+                label: label.clone(),
+            })?;
+            if !mode.force() && agent.effective_status() == AgentStatus::Waiting {
+                return Err(DispatchErr::WaitingOnInput { label });
+            }
+        }
+    }
     match mode {
         DispatchMode::Steer {
             enter,
@@ -970,8 +1009,22 @@ fn dispatch_one(
         return Err(DispatchErr::NoDurableSession { label: handle });
     };
     let bound = target.bound(state.snapshot);
-    let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
+    let mut message = state.enqueue(target, Some(pane), text, mode, &handle)?;
     let message_id = message.message_id.clone();
+    if mode.kind == DeliveryKind::Interrupt {
+        // The stop hook must not deliver this record while its sender waits for proof.
+        let Some(claimed) = state
+            .store
+            .claim_message_for_steer(&message_id, Timestamp::now())?
+        else {
+            return Ok(DispatchOutcome::Queued {
+                label: handle,
+                message_id,
+                reason: None,
+            });
+        };
+        message = claimed;
+    }
     let policy = match mode.kind {
         DeliveryKind::Steer => deliver::DeliveryPolicy::Steer {
             force: mode.draft.force,
@@ -1017,6 +1070,14 @@ fn dispatch_one(
                 label: handle,
                 message_id,
                 reason: None,
+            })
+        }
+        deliver::AttemptOutcome::InterruptUnproven { wait } => {
+            push_pending(state, message);
+            Ok(DispatchOutcome::Queued {
+                label: handle,
+                message_id,
+                reason: Some(ParkReason::InterruptUnproven { wait }),
             })
         }
         deliver::AttemptOutcome::CompactionPending => {

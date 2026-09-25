@@ -18,6 +18,480 @@ use rimz::store::message::{
 
 use crate::common::Env;
 
+fn interrupt_fixture(kind: &str) -> (Env, PathBuf) {
+    let env = Env::new();
+    env.install_agent_hooks(kind);
+    if kind == "codex" {
+        trust_codex_hooks(&env);
+    }
+    for (event, signal) in [
+        ("SessionStart", LifecycleSignal::Registered),
+        (
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ),
+    ] {
+        append_lifecycle(&env, kind, event, "sess-interrupt", signal, |observation| {
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+        });
+    }
+    let panes = env.write_pane_fixture(&[agent_pane(&env, kind)]);
+    (env, panes)
+}
+
+fn is_escape_key(line: &str) -> bool {
+    line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t27"))
+}
+
+fn interrupt_proof_case(kind: &str, queued: bool, force: bool) {
+    let (env, panes) = interrupt_fixture(kind);
+    let message_id = queued.then(|| queue_add(&env, &format!("@{kind}"), "new direction"));
+    if force {
+        push_pending_agent_ask(&env, "sess-interrupt");
+    }
+    let trace = env.project_root.join("interrupt-trace.log");
+    let mut command = traced_rimz(&env, &trace);
+    command
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(id) = &message_id {
+        command.args(["message", "interrupt", id]);
+    } else {
+        command.args([
+            "message",
+            "--interrupt",
+            &format!("@{kind}"),
+            "new direction",
+        ]);
+    }
+    if force {
+        command.arg("--force");
+    }
+    let mut child = command.spawn().expect("interrupt child");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !trace_lines(&trace).iter().any(|line| is_escape_key(line)) {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "interrupt must press Escape before exiting: {:?}",
+            trace_lines(&trace)
+        );
+        assert!(Instant::now() < deadline, "interrupt must press Escape");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !trace_lines(&trace)
+            .iter()
+            .any(|line| is_paste(line, &user_message("new direction")))
+    );
+    // The wait must release the pane lock so native answers and other writers can proceed.
+    let writer = rimz::mux::PaneWriter::open(
+        &env.runtime_paths(),
+        &PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
+    )
+    .expect("interrupt released writer");
+    drop(writer);
+    if kind == "claude" {
+        let now = jiff::Timestamp::now();
+        let mut context = rimz::agents::context::AgentContext::new(kind, now);
+        context.settle = Some(rimz::agents::context::TurnSettle::new(
+            now,
+            rimz::agents::context::TurnSettleOutcome::Interrupted,
+        ));
+        rimz::store::agent_context::write(&env.runtime_paths(), kind, "sess-interrupt", &context)
+            .expect("statusline rest certificate");
+    } else {
+        let owner = dummy_agent_process();
+        let pid = owner.id();
+        reap_later(owner);
+        run_hook_for_owner(
+            &env,
+            kind,
+            json!({"hook_event_name":"Interrupt", "session_id":"sess-interrupt"}),
+            &[("ZELLIJ_PANE_ID", "3")],
+            pid,
+        );
+    }
+    let output = child.wait_with_output().expect("interrupt exits");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines = trace_lines(&trace);
+    assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
+    let escape = lines.iter().position(|line| is_escape_key(line)).unwrap();
+    let paste = lines
+        .iter()
+        .position(|line| is_paste(line, &user_message("new direction")))
+        .expect("paste after proof");
+    let enter = lines.iter().position(|line| is_enter_key(line)).unwrap();
+    assert!(escape < paste && paste < enter, "{lines:?}");
+    let records = env.store().list_messages().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].status, MessageStatus::Sent);
+}
+
+#[test]
+fn interrupt_codex_waits_for_hook_before_paste() {
+    interrupt_proof_case("codex", false, false);
+}
+
+#[test]
+fn interrupt_claude_waits_for_context_before_paste() {
+    interrupt_proof_case("claude", false, false);
+}
+
+#[test]
+fn interrupt_queued_record_waits_for_stop() {
+    interrupt_proof_case("codex", true, false);
+}
+
+#[test]
+fn interrupt_force_cancels_native_ask_before_paste() {
+    interrupt_proof_case("claude", false, true);
+}
+
+#[test]
+fn interrupt_waiting_refuses_before_record() {
+    let (env, panes) = interrupt_fixture("claude");
+    push_pending_agent_ask(&env, "sess-interrupt");
+    let trace = env.project_root.join("interrupt-refused.log");
+    let output = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", panes)
+        .args(["message", "--interrupt", "@claude", "new direction"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--force"));
+    assert!(
+        env.store().list_messages().unwrap().is_empty(),
+        "refuse before persisting"
+    );
+    assert!(
+        env.store().list_message_history().unwrap().is_empty(),
+        "refusal must not terminalize a newly written record"
+    );
+    assert!(trace_lines(&trace).is_empty());
+}
+
+#[test]
+fn interrupt_timeout_parks_without_paste() {
+    let (env, panes) = interrupt_fixture("claude");
+    let trace = env.project_root.join("interrupt-timeout.log");
+    let output = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .env("RIMZ_MESSAGE_INTERRUPT_WAIT_MS", "200")
+            .args(["message", "--interrupt", "@claude", "new direction"]),
+        "interrupt timeout",
+    );
+    let records = env.store().list_messages().unwrap();
+    assert_eq!(records[0].status, MessageStatus::Queued);
+    assert_eq!(
+        records[0].last_error.as_deref(),
+        Some("turn still running 200ms after escape")
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("rimz message interrupt {}", records[0].message_id))
+    );
+    let lines = trace_lines(&trace);
+    assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
+    for _ in 0..3 {
+        run_success(
+            traced_rimz(&env, &trace)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env("RIMZ_MESSAGE_INTERRUPT_WAIT_MS", "200")
+                .args(["message", "interrupt", records[0].message_id.as_str()]),
+            "retry unproven interrupt",
+        );
+        let parked = message_by_id(&env, &records[0].message_id);
+        assert_eq!(parked.status, MessageStatus::Queued);
+        assert_eq!(parked.attempts, 0, "unwritten text spends no attempt");
+    }
+    assert!(
+        !trace_lines(&trace)
+            .iter()
+            .any(|line| is_paste(line, &user_message("new direction")))
+    );
+    run_hook(
+        &env,
+        json!({"hook_event_name":"Stop", "session_id":"sess-interrupt"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", panes)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                records[0].message_id.as_str(),
+            ]),
+        "checkpoint delivery after timeout",
+    );
+    assert_eq!(
+        message_by_id(&env, &records[0].message_id).status,
+        MessageStatus::Sent
+    );
+    run_hook(
+        &env,
+        json!({"hook_event_name":"UserPromptSubmit", "session_id":"sess-interrupt", "prompt":user_message("new direction")}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    assert!(
+        env.store()
+            .list_message_history()
+            .unwrap()
+            .iter()
+            .any(|record| record.message_id == records[0].message_id
+                && record.status == MessageStatus::Delivered)
+    );
+}
+
+#[test]
+fn interrupt_does_not_paste_after_claim_is_replaced() {
+    let (env, panes) = interrupt_fixture("claude");
+    let id = MessageId::parse(&queue_add(&env, "@claude", "new direction")).unwrap();
+    let trace = env.project_root.join("interrupt-reclaimed.log");
+    let mut child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .args(["message", "interrupt", id.as_str()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !trace_lines(&trace).iter().any(|line| is_escape_key(line)) {
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let store = env.store();
+    let writer = rimz::mux::PaneWriter::open(
+        &env.runtime_paths(),
+        &PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
+    )
+    .unwrap();
+    store
+        .release_message_claims(std::slice::from_ref(&id), "another delivery", "rimz-test")
+        .unwrap();
+    let replacement = store
+        .claim_message_for_steer(&id, jiff::Timestamp::now())
+        .unwrap()
+        .unwrap();
+    append_lifecycle(
+        &env,
+        "claude",
+        "Stop",
+        "sess-interrupt",
+        LifecycleSignal::TurnInterrupted { turn_id: None },
+        |_| {},
+    );
+    drop(writer);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !trace_lines(&trace)
+            .iter()
+            .any(|line| is_paste(line, &user_message("new direction"))),
+        "superseded sender must not paste"
+    );
+    let current = message_by_id(&env, &id);
+    assert_eq!(current.status, MessageStatus::Claimed);
+    assert_eq!(current.last_attempt_at, replacement.last_attempt_at);
+    assert_eq!(current.attempts, replacement.attempts);
+}
+
+#[test]
+fn interrupt_idle_skips_escape() {
+    let (env, panes) = interrupt_fixture("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "Stop",
+        "sess-interrupt",
+        LifecycleSignal::TurnInterrupted { turn_id: None },
+        |_| {},
+    );
+    let trace = env.project_root.join("interrupt-idle.log");
+    let output = run_success(
+        traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", panes)
+            .args(["message", "--interrupt", "@claude", "new direction"]),
+        "interrupt idle",
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("delivered to"));
+    assert!(!trace_lines(&trace).iter().any(|line| is_escape_key(line)));
+    assert_text_then_enter(&trace, &user_message("new direction"));
+    assert_eq!(
+        env.store().list_messages().unwrap()[0].status,
+        MessageStatus::Sent
+    );
+}
+
+#[test]
+fn interrupt_keyless_refuses_before_record() {
+    let (env, panes) = interrupt_fixture("pi");
+    let output = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", panes)
+        .args(["message", "--interrupt", "@pi", "new direction"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "keyless kind must refuse");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("has no interrupt key") && stderr.contains("--steer"),
+        "{stderr}"
+    );
+    assert!(env.store().list_messages().unwrap().is_empty());
+}
+
+#[test]
+fn interrupt_fanout_keyless_refuses_entire_send() {
+    let (env, _) = interrupt_fixture("claude");
+    append_lifecycle(
+        &env,
+        "pi",
+        "SessionStart",
+        "sess-keyless",
+        LifecycleSignal::Registered,
+        |_| {},
+    );
+    let output = env
+        .rimz()
+        .args(["message", "--interrupt", "@all", "new direction"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("has no interrupt key"));
+    assert!(
+        env.store().list_messages().unwrap().is_empty(),
+        "whole fanout preflight"
+    );
+}
+
+#[test]
+fn interrupt_unbound_live_pane_refuses_before_record() {
+    let env = Env::new();
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
+    let output = traced_rimz(&env, "interrupt-unbound.log")
+        .env("RIMZ_TEST_PANE_LIST", panes)
+        .args(["message", "--interrupt", "@codex", "new direction"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no durable session"));
+    assert!(env.store().list_messages().unwrap().is_empty());
+}
+
+#[test]
+fn interrupt_without_live_pane_parks_with_interrupt_hint() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "sess-interrupt",
+        LifecycleSignal::Registered,
+        |_| {},
+    );
+    let panes = env.write_pane_fixture(&[]);
+    let output = run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", panes).args([
+            "message",
+            "--interrupt",
+            "@claude",
+            "new direction",
+        ]),
+        "interrupt absent pane",
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("rimz message interrupt"));
+    assert_eq!(
+        env.store().list_messages().unwrap()[0].status,
+        MessageStatus::Queued
+    );
+}
+
+#[test]
+fn interrupt_queued_record_refuses_claimed_and_terminal() {
+    let (env, _) = interrupt_fixture("claude");
+    let id = MessageId::parse(&queue_add(&env, "@claude", "new direction")).unwrap();
+    env.store()
+        .claim_message_for_steer(&id, jiff::Timestamp::now())
+        .unwrap()
+        .unwrap();
+    let output = env
+        .rimz()
+        .args(["message", "interrupt", id.as_str()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("delivery in progress"));
+    env.store()
+        .cancel_message(&id, "rimz-test", "test cancellation")
+        .unwrap();
+    let output = env
+        .rimz()
+        .args(["message", "interrupt", id.as_str()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requeue"));
+}
+
+#[test]
+fn interrupt_conflicts_with_other_timing_modes() {
+    let env = Env::new();
+    for flags in [
+        vec!["--steer"],
+        vec!["--on", "any"],
+        vec!["--schedule", "1m"],
+        vec!["--after", "@claude"],
+        vec!["--when", "@claude idle 1m"],
+    ] {
+        let output = env
+            .rimz()
+            .args(["message", "--interrupt", "@claude", "text"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+    }
+}
+
+#[test]
+fn interrupt_refuses_create_policy_before_delivery() {
+    let (env, panes) = interrupt_fixture("claude");
+    let output = traced_rimz(&env, "interrupt-create.log")
+        .env("RIMZ_TEST_PANE_LIST", panes)
+        .env("RIMZ_MESSAGE_INTERRUPT_WAIT_MS", "1")
+        .args([
+            "message",
+            "--interrupt",
+            "--create",
+            "@claude",
+            "new direction",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "interrupt requires an existing durable recipient, not create-on-miss"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("remove --create"));
+    assert!(env.store().list_messages().unwrap().is_empty());
+}
+
 #[test]
 fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     let env = Env::new();
