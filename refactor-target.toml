@@ -405,7 +405,8 @@ path = "crates/rimz/src/store"
 # A lifecycle receipt names a side conversation's host so the hook credits the host card's clocks.
 # The sidebar group record carries a team pipeline and its derived position.
 # A deferred delivery instructs the queue what to do with the recorded blocker, whose words stay with the sweep.
-surface-budget = 313
+# The lifetime-class GC reports per-room, per-class removals to the CLI and the auto-GC assist.
+surface-budget = 316
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -586,13 +587,20 @@ surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/store/gc"
+# The lifetime-class sweeps read owner liveness (store::runtime, agents), ended rows
+# (store::snapshot), and run status (store::run) to apply the owned-class grace.
 allowed-dependencies = [
+    "(crate)",
+    "agents",
     "disk",
     "ids",
+    "store::run",
+    "store::runtime",
+    "store::snapshot",
     "wakeup",
     "workspace",
 ]
-surface-budget = 12
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"

@@ -405,12 +405,27 @@ while IFS= read -r line; do :; done
         std::fs::read_to_string(tmp.join("child-file")).expect("tmp survives restart"),
         "child-to-room\n"
     );
+    let owned = store.paths().agents_dir.join("reset-proof/scratch/note");
+    std::fs::create_dir_all(owned.parent().unwrap()).unwrap();
+    std::fs::write(&owned, "owned scratch").unwrap();
     env.rimz()
         .args(["--mux", "tmux", "reset", "--no-start", "--yes"])
         .assert_success_within_timeout("reset sandbox room");
-    assert!(!tmp.exists(), "reset removes shared tmp");
+    assert_eq!(
+        std::fs::read_to_string(tmp.join("child-file")).unwrap(),
+        "child-to-room\n"
+    );
+    assert_eq!(std::fs::read_to_string(&owned).unwrap(), "owned scratch");
+    env.rimz()
+        .args(["--mux", "tmux", "reset", "--hard", "--no-start", "--yes"])
+        .assert_success_within_timeout("hard reset sandbox room");
+    assert!(!tmp.exists(), "hard reset removes shared tmp");
+    assert!(
+        !store.paths().agents_dir.exists(),
+        "hard reset removes owned state"
+    );
     assert!(
         !store.paths().skills_dir.exists(),
-        "reset removes skill copies"
+        "hard reset removes skill copies"
     );
 }

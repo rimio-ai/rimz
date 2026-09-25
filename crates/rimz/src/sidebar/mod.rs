@@ -49,7 +49,7 @@ use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
 use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 use crate::wakeup::heartbeat::{
     SIDEBAR_HEARTBEAT_TTL, SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, SidebarSize,
-    fresh_sidebar_heartbeats, mtime_within_ttl, read_current_heartbeats,
+    fresh_sidebar_heartbeats, read_current_heartbeats,
 };
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
@@ -424,50 +424,6 @@ impl ProducerElectionTracker {
     }
 }
 
-/// Remove runtime files left by sidebars that exited without their RAII cleanup
-/// (a SIGKILL skips it): heartbeats aged past the liveness TTL, sockets with no
-/// live owner, and stale read-mark receipts from dead renderers. A live sidebar
-/// re-stamps its heartbeat every tick, so a stale mtime is an honest "owner is
-/// gone". A socket is kept while its owner is fresh (paired by short id) or
-/// still starting up (bound before the first heartbeat — guarded by its own
-/// fresh mtime). Best-effort: a removal race is ignored.
-pub(crate) fn sweep_orphan_runtime(rt: &RuntimePaths) {
-    let instances = fresh_sidebar_instances(rt);
-    let live: HashSet<String> = instances.iter().map(|id| id.short().to_owned()).collect();
-    let live_full: HashSet<String> = instances.iter().map(|id| id.as_str().to_owned()).collect();
-
-    if let Ok(entries) = fs::read_dir(&rt.heartbeat_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if SidebarHeartbeat::is_heartbeat_file(&path) && !mtime_within_ttl(&path) {
-                remove_orphan(&path);
-            }
-        }
-    }
-    if let Ok(entries) = fs::read_dir(&rt.sock_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(short) = sidebar_socket_short_id(&path) else {
-                continue;
-            };
-            if !live.contains(&short) && !mtime_within_ttl(&path) {
-                remove_orphan(&path);
-            }
-        }
-    }
-    if let Ok(entries) = fs::read_dir(&rt.read_marks_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(instance_id) = read_marks::read_mark_file_instance_id(&path) else {
-                continue;
-            };
-            if !live_full.contains(instance_id.as_str()) && !mtime_within_ttl(&path) {
-                remove_orphan(&path);
-            }
-        }
-    }
-}
-
 /// Purge sidebar heartbeats at a session rebirth boundary. Call only while the
 /// workspace's mux session is provably absent: heartbeats are incarnation-scoped
 /// liveness claims and must not outlive their session into a rebirth.
@@ -523,7 +479,7 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
 ) -> SidebarLaunchOutcome {
-    sweep_orphan_runtime(runtime);
+    crate::harness::auto_gc::sweep_runtime_claims(runtime);
     // Fast path before contending — `single_flight`'s contract is that the
     // caller has already missed a fresh read by the time it elects.
     if fresh_sidebar_present(runtime) {
@@ -629,25 +585,6 @@ fn wait_for_fresh_sidebar(rt: &RuntimePaths) {
             return;
         }
         std::thread::sleep(LAUNCH_WAIT_STEP);
-    }
-}
-
-/// Short (12-hex) instance id embedded in a `sidebar.<short>.sock` path, or
-/// `None` for any other file. Mirrors the socket naming in the renderer.
-fn sidebar_socket_short_id(path: &Path) -> Option<String> {
-    let name = path.file_name()?.to_str()?;
-    name.strip_prefix("sidebar.")?
-        .strip_suffix(".sock")
-        .map(str::to_owned)
-}
-
-fn remove_orphan(path: &Path) {
-    match fs::remove_file(path) {
-        Ok(()) => debug!(path = %path.display(), "swept orphaned sidebar runtime file"),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
-            debug!(path = %path.display(), error = %err, "sweeping orphaned runtime file failed")
-        }
     }
 }
 

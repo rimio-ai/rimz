@@ -311,7 +311,7 @@ pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) {
 
 type Result<T> = std::result::Result<T, RunStoreErr>;
 
-fn run_path(runs_dir: &Path, run_id: &RunId) -> PathBuf {
+pub(super) fn run_path(runs_dir: &Path, run_id: &RunId) -> PathBuf {
     runs_dir.join(format!("{run_id}.json"))
 }
 

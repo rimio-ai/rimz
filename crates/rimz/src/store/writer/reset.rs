@@ -56,50 +56,6 @@ fn remove_dir_counting_entries(path: &Path) -> Result<usize> {
     Ok(count)
 }
 
-fn remove_diag_logs(root: &Path) -> Result<usize> {
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(0),
-        Err(source) => {
-            return Err(StoreErr::Io {
-                path: root.to_path_buf(),
-                source,
-            });
-        }
-    };
-    let mut removed = 0;
-    for entry in entries {
-        let entry = entry.map_err(|source| StoreErr::Io {
-            path: root.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("diag.log") {
-            continue;
-        }
-        let meta = fs::symlink_metadata(&path).map_err(|source| StoreErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        if meta.is_dir() {
-            fs::remove_dir_all(&path).map_err(|source| StoreErr::Io {
-                path: path.clone(),
-                source,
-            })?;
-        } else {
-            fs::remove_file(&path).map_err(|source| StoreErr::Io {
-                path: path.clone(),
-                source,
-            })?;
-        }
-        removed += 1;
-    }
-    Ok(removed)
-}
-
 fn cancel_active_runs_for_reset_locked(paths: &super::super::StatePaths) -> Result<Vec<RunRecord>> {
     let mut canceled = Vec::new();
     for mut record in run::list(&paths.runs_dir)? {
@@ -161,14 +117,21 @@ impl Store {
                 crate::workspace::record::write(paths, &record)?;
             }
 
-            let mut state_entries_removed = 0;
-            state_entries_removed += remove_diag_logs(&paths.audit_path(""))?;
-            state_entries_removed +=
-                remove_dir_counting_entries(&crate::diag::frames_dir_under(&paths.root))?;
+            let mut state_entries_removed = remove_dir_counting_entries(&paths.cache_dir)?;
 
             let rotation = rotate(&paths.events_log, &paths.events_archive_dir, 0)?;
             if hard {
+                // The rotation above archived the log; hard reset drops the
+                // active file and keeps the archive, as it always has.
                 remove_file_if_exists(&paths.events_log)?;
+                for class in [
+                    crate::disk::paths::Class::Audit,
+                    crate::disk::paths::Class::Owned,
+                    crate::disk::paths::Class::Tmp,
+                ] {
+                    state_entries_removed +=
+                        remove_dir_counting_entries(&class.path_under(&paths.root))?;
+                }
             }
             let rollup = if hard {
                 RollupInvalidation::Forget
@@ -212,6 +175,39 @@ mod tests {
     use crate::disk::paths::{RuntimePaths, StatePaths};
     use crate::ids::WorkspaceId;
     use crate::store::event::EventEnvelope;
+
+    #[test]
+    fn reset_applies_lifetime_classes() {
+        for hard in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let id = WorkspaceId::from_project_root(dir.path());
+            let paths = StatePaths::under(id.clone(), dir.path()).unwrap();
+            let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+            let store = Store::open(paths.clone(), runtime).unwrap();
+            let audit = crate::diag::DiagSink::under(
+                paths.root.clone(),
+                paths.workspace_id.clone(),
+                "test",
+                None,
+            )
+            .log_path()
+            .unwrap();
+            let owned = paths.agents_dir.join("retired/scratch/note");
+            let tmp = paths.tmp_dir.join("note");
+            let cache = paths.cache_dir.join("obsolete.json");
+            let record = paths.channels_record.clone();
+            for path in [&audit, &owned, &tmp, &cache, &record] {
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, b"retained").unwrap();
+            }
+            store.reset_records(hard).unwrap();
+            assert_eq!(audit.exists(), !hard, "audit retention follows reset mode");
+            assert_eq!(owned.exists(), !hard);
+            assert_eq!(tmp.exists(), !hard);
+            assert!(!cache.exists());
+            assert!(record.exists());
+        }
+    }
 
     #[test]
     fn reset_preserves_another_threads_lock() {

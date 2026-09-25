@@ -4,6 +4,11 @@
 //! session would lose if it died. The next room birth reads this snapshot before
 //! the new producer starts, scopes recovery to it, then clears it at the rebirth
 //! boundary.
+//!
+//! It lives in the records class because nothing rebuilds it and a reset must
+//! not drop it before the rebirth that consumes it. The producer still writes
+//! it with the cache write: it is rewritten on every final fetch from the
+//! sidebar graph, and a write lost to a crash only narrows one recovery.
 
 use std::collections::BTreeSet;
 use std::path::Path;

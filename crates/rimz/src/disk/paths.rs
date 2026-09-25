@@ -268,7 +268,7 @@ impl StatePaths {
             room_bin: root.join("rimz"),
             channels_record: records_dir.join("channels.json"),
             boot_marker: records_dir.join("boot.json"),
-            live_roster: cache_dir.join("live-roster.json"),
+            live_roster: records_dir.join("live-roster.json"),
             last_death_marker: records_dir.join("last-death.json"),
             doctor_watermark: cache_dir.join("doctor-cleared.json"),
             auto_gc_stamp: cache_dir.join("auto-gc.json"),
@@ -382,17 +382,6 @@ impl StatePaths {
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(source) => Err(PathErr::Io {
                 path: self.tmp_dir.clone(),
-                source,
-            }),
-        }
-    }
-
-    pub(crate) fn remove_skills_dir(&self) -> Result<()> {
-        match fs::remove_dir_all(&self.skills_dir) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(PathErr::Io {
-                path: self.skills_dir.clone(),
                 source,
             }),
         }

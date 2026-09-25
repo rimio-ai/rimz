@@ -42,78 +42,173 @@ pub(crate) fn collect_runtime_under(
             continue;
         }
         report.runtime_roots_scanned += 1;
-        collect_workspace_runtime(&root, older_than, &mut sweep, &mut report)?;
+        collect_runtime_classes(&root, older_than, &mut sweep, &mut report)?;
     }
     collect_stale_probe_markers(shared_root, older_than, &mut sweep, &mut report)?;
 
     Ok(report)
 }
 
-fn collect_workspace_runtime(
+fn collect_runtime_classes(
     workspace_root: &Path,
     older_than: Duration,
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
-    collect_locks(&Class::Locks.path_under(workspace_root), sweep, report)?;
-    let live_dir = Class::Live.path_under(workspace_root);
-    let heartbeat_dir = live_dir.join("heartbeat");
-    let sock_dir = Class::Sock.path_under(workspace_root);
-    let read_marks_dir = live_dir.join("read-marks");
-    let activity_dir = live_dir.join("agent-activity");
-    let active_time_dir = live_dir.join("active-time");
-    let context_dir = live_dir.join("agent_context");
-    let subagent_context_dir = live_dir.join("subagent_context");
-    let telemetry_dir = live_dir.join("agent-telemetry");
-    let idle_compact_dir = live_dir.join("idle-compact");
-    let prompt_dir = live_dir.join("prompt");
-    for dir in [
-        &heartbeat_dir,
-        &sock_dir,
-        &read_marks_dir,
-        &activity_dir,
-        &active_time_dir,
-        &context_dir,
-        &subagent_context_dir,
-        &telemetry_dir,
-        &idle_compact_dir,
-        &prompt_dir,
-        &live_dir,
-        workspace_root,
-    ] {
-        sweep.remember_dir_size(dir);
+    sweep.remember_dir_size(workspace_root);
+    let mut classes = Vec::new();
+    for class in [Class::Live, Class::Lanes, Class::Sock, Class::Locks] {
+        let mut removed = GcReport::default();
+        let dir = class.path_under(workspace_root);
+        match class {
+            Class::Live => collect_live(workspace_root, Some(older_than), sweep, &mut removed)?,
+            Class::Lanes => collect_ttl(&dir, older_than, sweep, &mut removed)?,
+            Class::Sock => collect_sock(&dir, sweep, &mut removed)?,
+            Class::Locks => collect_locks(&dir, sweep, &mut removed)?,
+            _ => unreachable!("only runtime classes are selected above"),
+        }
+        classes.push(super::ClassReport {
+            class: class.dir_name().to_owned(),
+            files_removed: removed.heartbeat_files_removed
+                + removed.sidecar_files_removed
+                + removed.sidebar_sockets_removed,
+            bytes_removed: removed.bytes_removed,
+        });
+        report.heartbeat_files_removed += removed.heartbeat_files_removed;
+        report.sidecar_files_removed += removed.sidecar_files_removed;
+        report.sidebar_sockets_removed += removed.sidebar_sockets_removed;
+        report.dirs_removed += removed.dirs_removed;
+        report.bytes_removed += removed.bytes_removed;
     }
-    // An open exporter keeps writing the inode it opened. Preserve both its
-    // file and parent while the room heartbeat is fresh; unlinking either
-    // would silently strand a live Copilot process because reopen behavior is
-    // not part of the verified exporter contract.
-    let room_is_live = !fresh_sidebar_instance_ids(&heartbeat_dir, older_than)?.is_empty();
-    collect_heartbeats(&heartbeat_dir, &sock_dir, older_than, sweep, report)?;
-    collect_stale_read_marks(&read_marks_dir, &heartbeat_dir, older_than, sweep, report)?;
-    collect_stale_sidecars(&activity_dir, older_than, sweep, report)?;
-    collect_stale_sidecars(&active_time_dir, older_than, sweep, report)?;
-    collect_stale_sidecars(&context_dir, older_than, sweep, report)?;
-    collect_stale_sidecars(&subagent_context_dir, older_than, sweep, report)?;
-    collect_stale_sidecars(&idle_compact_dir, older_than, sweep, report)?;
-    collect_stale_sidecars(&prompt_dir, older_than, sweep, report)?;
-    if !room_is_live {
-        collect_stale_sidecars(&telemetry_dir, older_than, sweep, report)?;
-    }
-    sweep.remove_dir_if_empty(&heartbeat_dir, report)?;
-    sweep.remove_dir_if_empty(&sock_dir, report)?;
-    sweep.remove_dir_if_empty(&read_marks_dir, report)?;
-    sweep.remove_dir_if_empty(&activity_dir, report)?;
-    sweep.remove_dir_if_empty(&active_time_dir, report)?;
-    sweep.remove_dir_if_empty(&context_dir, report)?;
-    sweep.remove_dir_if_empty(&subagent_context_dir, report)?;
-    sweep.remove_dir_if_empty(&idle_compact_dir, report)?;
-    sweep.remove_dir_if_empty(&prompt_dir, report)?;
-    if !room_is_live {
-        sweep.remove_dir_if_empty(&telemetry_dir, report)?;
-    }
-    sweep.remove_dir_if_empty(&live_dir, report)?;
+    report.rooms.push(super::RoomReport {
+        name: workspace_root
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        classes,
+    });
     sweep.remove_dir_if_empty(workspace_root, report)?;
     Ok(())
+}
+
+/// The live class expires by mtime. Its one retention exception is agent-telemetry: preserve the exporter file and directory while the room is live, since the external exporter holds the inode open and has no verified reopen contract. With no class TTL, only dead renderer claims expire at the heartbeat protocol TTL.
+fn collect_live(
+    workspace_root: &Path,
+    class_ttl: Option<Duration>,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<()> {
+    let dir = Class::Live.path_under(workspace_root);
+    let heartbeat = dir.join("heartbeat");
+    let read_marks = dir.join("read-marks");
+    let telemetry = dir.join("agent-telemetry");
+    let protocol_ttl = crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL;
+    let live = fresh_sidebar_instance_ids(&heartbeat, class_ttl.unwrap_or(protocol_ttl))?;
+    let keep_telemetry = !live.is_empty();
+    for (path, _, _) in sweep.files_under(&dir)? {
+        if keep_telemetry && path.starts_with(&telemetry) {
+            continue;
+        }
+        let threshold = match class_ttl {
+            Some(ttl) => ttl,
+            None if path.parent() == Some(heartbeat.as_path())
+                && SidebarHeartbeat::is_heartbeat_file(&path) =>
+            {
+                protocol_ttl
+            }
+            None if path.parent() == Some(read_marks.as_path())
+                && sidebar_instance_id_from_json_name(&path)
+                    .is_some_and(|id| !live.contains(id.as_str())) =>
+            {
+                protocol_ttl
+            }
+            None => continue,
+        };
+        if is_older_than(&path, threshold)? {
+            sweep.remove_file_if_exists(
+                &path,
+                |report| {
+                    if path.parent() == Some(heartbeat.as_path())
+                        && SidebarHeartbeat::is_heartbeat_file(&path)
+                    {
+                        report.heartbeat_files_removed += 1;
+                    } else {
+                        report.sidecar_files_removed += 1;
+                    }
+                },
+                report,
+            )?;
+        }
+    }
+    sweep.remove_empty_dirs(&dir, keep_telemetry.then_some(telemetry.as_path()), report)
+}
+
+pub(super) fn collect_ttl(
+    dir: &Path,
+    ttl: Duration,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<()> {
+    for (path, _, _) in sweep.files_under(dir)? {
+        if is_older_than(&path, ttl)? {
+            sweep.remove_file_if_exists(
+                &path,
+                |report| report.sidecar_files_removed += 1,
+                report,
+            )?;
+        }
+    }
+    sweep.remove_empty_dirs(dir, None, report)
+}
+
+fn collect_sock(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<()> {
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::FileTypeExt;
+
+    for (path, _, _) in sweep.files_under(dir)? {
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(source) => return Err(GcErr::Io { path, source }),
+        };
+        if !metadata.file_type().is_socket() {
+            continue;
+        }
+        let address = UnixAddr::new(&path).map_err(|source| GcErr::Io {
+            path: path.clone(),
+            source: source.into(),
+        })?;
+        for kind in [SockType::Datagram, SockType::Stream] {
+            let probe = socket(AddressFamily::Unix, kind, SockFlag::SOCK_NONBLOCK, None).map_err(
+                |source| GcErr::Io {
+                    path: path.clone(),
+                    source: source.into(),
+                },
+            )?;
+            match connect(probe.as_raw_fd(), &address) {
+                Err(nix::errno::Errno::EPROTOTYPE) => continue,
+                Err(nix::errno::Errno::ECONNREFUSED) => {
+                    sweep.remove_file_if_exists(
+                        &path,
+                        |report| report.sidebar_sockets_removed += 1,
+                        report,
+                    )?;
+                }
+                _ => {}
+            }
+            break;
+        }
+    }
+    sweep.remove_empty_dirs(dir, None, report)
+}
+
+pub(super) fn collect_claims(runtime: &crate::RuntimePaths) -> Result<()> {
+    let mut sweep = Sweep::new(false);
+    let mut report = GcReport::default();
+    collect_live(&runtime.root, None, &mut sweep, &mut report)?;
+    collect_sock(&runtime.sock_dir, &mut sweep, &mut report)
 }
 
 fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<()> {
@@ -144,46 +239,6 @@ fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result
             Err(fs::TryLockError::WouldBlock) => continue,
             Err(fs::TryLockError::Error(err)) => return Err(io_err(err)),
         }
-    }
-    Ok(())
-}
-
-/// Reap stale per-session sidecar files — activity heartbeats, active-time
-/// accumulators, statusline context sidecars, and per-subagent context
-/// sidecars. A paired advisory lock keeps its stable inode while the JSON
-/// record exists; orphaned locks become ordinary stale sidecars on a later
-/// sweep.
-fn collect_stale_sidecars(
-    dir: &Path,
-    older_than: Duration,
-    sweep: &mut Sweep,
-    report: &mut GcReport,
-) -> Result<()> {
-    let Some(entries) = read_dir_if_exists(dir)? else {
-        return Ok(());
-    };
-
-    for entry in entries {
-        let entry = entry.map_err(|source| GcErr::ReadDir {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) == Some("lock")
-            && path.with_extension("json").exists()
-        {
-            continue;
-        }
-        if !is_older_than(&path, older_than)? {
-            continue;
-        }
-        sweep.remove_file_if_exists(
-            &path,
-            |report| {
-                report.sidecar_files_removed += 1;
-            },
-            report,
-        )?;
     }
     Ok(())
 }
@@ -245,41 +300,6 @@ fn is_probe_marker(name: &str) -> bool {
         && !name.ends_with(".lock")
 }
 
-fn collect_stale_read_marks(
-    read_marks_dir: &Path,
-    heartbeat_dir: &Path,
-    older_than: Duration,
-    sweep: &mut Sweep,
-    report: &mut GcReport,
-) -> Result<()> {
-    let live_instances = fresh_sidebar_instance_ids(heartbeat_dir, older_than)?;
-    let Some(entries) = read_dir_if_exists(read_marks_dir)? else {
-        return Ok(());
-    };
-
-    for entry in entries {
-        let entry = entry.map_err(|source| GcErr::ReadDir {
-            path: read_marks_dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        let Some(instance_id) = sidebar_instance_id_from_json_name(&path) else {
-            continue;
-        };
-        if live_instances.contains(instance_id.as_str()) || !is_older_than(&path, older_than)? {
-            continue;
-        }
-        sweep.remove_file_if_exists(
-            &path,
-            |report| {
-                report.sidecar_files_removed += 1;
-            },
-            report,
-        )?;
-    }
-    Ok(())
-}
-
 fn fresh_sidebar_instance_ids(
     heartbeat_dir: &Path,
     older_than: Duration,
@@ -305,100 +325,91 @@ fn fresh_sidebar_instance_ids(
     Ok(live_instances)
 }
 
-fn collect_heartbeats(
-    heartbeat_dir: &Path,
-    sock_dir: &Path,
-    older_than: Duration,
-    sweep: &mut Sweep,
-    report: &mut GcReport,
-) -> Result<()> {
-    let Some(entries) = read_dir_if_exists(heartbeat_dir)? else {
-        return Ok(());
-    };
-
-    for entry in entries {
-        let entry = entry.map_err(|source| GcErr::ReadDir {
-            path: heartbeat_dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let heartbeat_kind = heartbeat_kind(name);
-        if heartbeat_kind.is_none() || !is_older_than(&path, older_than)? {
-            continue;
-        }
-
-        if heartbeat_kind == Some(HeartbeatKind::Sidebar)
-            && let Some(socket) = stale_sidebar_socket(&path, sock_dir)
-        {
-            sweep.remove_file_if_exists(
-                &socket,
-                |report| {
-                    report.sidebar_sockets_removed += 1;
-                },
-                report,
-            )?;
-        }
-        sweep.remove_file_if_exists(
-            &path,
-            |report| {
-                report.heartbeat_files_removed += 1;
-            },
-            report,
-        )?;
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HeartbeatKind {
-    Sidebar,
-}
-
-fn heartbeat_kind(name: &str) -> Option<HeartbeatKind> {
-    if name.starts_with("sidebar.") && name.ends_with(".json") {
-        Some(HeartbeatKind::Sidebar)
-    } else {
-        None
-    }
-}
-
-fn stale_sidebar_socket(heartbeat_path: &Path, sock_dir: &Path) -> Option<PathBuf> {
-    let bytes = fs::read(heartbeat_path).ok()?;
-    let hb: SidebarHeartbeat = serde_json::from_slice(&bytes).ok()?;
-    if sidebar_socket_is_owned_by_workspace(&hb.wakeup_socket, sock_dir) {
-        Some(hb.wakeup_socket)
-    } else {
-        None
-    }
-}
-
-fn sidebar_socket_is_owned_by_workspace(socket: &Path, sock_dir: &Path) -> bool {
-    if socket.parent() != Some(sock_dir) {
-        return false;
-    }
-    socket
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("sidebar.") && name.ends_with(".sock"))
-}
-
 fn sidebar_instance_id_from_json_name(path: &Path) -> Option<SidebarInstanceId> {
     let name = path.file_name()?.to_str()?;
     let id = name.strip_prefix("sidebar.")?.strip_suffix(".json")?;
     SidebarInstanceId::parse(id).ok()
 }
 
-struct Sweep {
+pub(super) struct Sweep {
     dry_run: bool,
     planned: HashSet<PathBuf>,
     dir_bytes: HashMap<PathBuf, u64>,
 }
 
 impl Sweep {
-    fn new(dry_run: bool) -> Self {
+    pub(super) fn files_under(&mut self, dir: &Path) -> Result<Vec<(PathBuf, SystemTime, u64)>> {
+        self.remember_dir_size(dir);
+        let mut files = Vec::new();
+        for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
+            let entry = entry.map_err(|source| GcErr::ReadDir {
+                path: dir.to_owned(),
+                source,
+            })?;
+            let path = entry.path();
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(source) => return Err(GcErr::Io { path, source }),
+            };
+            if metadata.is_dir() {
+                files.extend(self.files_under(&path)?);
+            } else {
+                let modified = metadata.modified().map_err(|source| GcErr::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+                files.push((path, modified, metadata.len()));
+            }
+        }
+        Ok(files)
+    }
+
+    pub(super) fn remove_empty_dirs(
+        &mut self,
+        root: &Path,
+        keep: Option<&Path>,
+        report: &mut GcReport,
+    ) -> Result<()> {
+        let mut dirs: Vec<_> = self
+            .dir_bytes
+            .keys()
+            .filter(|dir| dir.starts_with(root) && keep.is_none_or(|keep| !dir.starts_with(keep)))
+            .cloned()
+            .collect();
+        dirs.sort();
+        for dir in dirs.into_iter().rev() {
+            self.remove_dir_if_empty(&dir, report)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn remove_tree(
+        &mut self,
+        path: &Path,
+        files: usize,
+        report: &mut GcReport,
+    ) -> Result<()> {
+        let bytes = crate::disk::usage::dir_size(path);
+        if !self.dry_run {
+            match fs::remove_dir_all(path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(source) => {
+                    return Err(GcErr::Io {
+                        path: path.to_owned(),
+                        source,
+                    });
+                }
+            }
+        }
+        self.record_removed(path, bytes, report, |report| {
+            report.sidecar_files_removed += files
+        });
+        Ok(())
+    }
+
+    pub(super) fn new(dry_run: bool) -> Self {
         Self {
             dry_run,
             planned: HashSet::new(),
@@ -412,7 +423,7 @@ impl Sweep {
         }
     }
 
-    fn remove_file_if_exists(
+    pub(super) fn remove_file_if_exists(
         &mut self,
         path: &Path,
         increment: impl FnOnce(&mut GcReport),
@@ -507,7 +518,7 @@ impl Sweep {
 
 /// A file that vanished between the listing and the stat (a concurrent sweep
 /// or an atomic publish renaming its temp) is not a candidate.
-fn is_older_than(path: &Path, older_than: Duration) -> Result<bool> {
+pub(super) fn is_older_than(path: &Path, older_than: Duration) -> Result<bool> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -535,6 +546,35 @@ mod tests {
     use crate::ids::{MuxName, SidebarInstanceId};
     use crate::wakeup::heartbeat::SidebarHeartbeat;
     use tempfile::tempdir;
+
+    #[test]
+    fn runtime_classes_expire_lanes_and_probe_unlistened_sockets() {
+        let temp = tempdir().unwrap();
+        let rt =
+            RuntimePaths::under(WorkspaceId::from_project_root(temp.path()), temp.path()).unwrap();
+        rt.ensure_dirs().unwrap();
+        let lane = rt.lane_path("stale.json");
+        fs::write(&lane, b"{}").unwrap();
+        fs::File::open(&lane)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+        let dead = rt.sock_dir.join("run.dead.sock");
+        drop(std::os::unix::net::UnixDatagram::bind(&dead).unwrap());
+        let live = rt.sock_dir.join("run.live.sock");
+        let _listener = std::os::unix::net::UnixDatagram::bind(&live).unwrap();
+        let mut report = GcReport::default();
+        collect_runtime_classes(
+            &rt.root,
+            Duration::from_secs(3600),
+            &mut Sweep::new(false),
+            &mut report,
+        )
+        .unwrap();
+        assert!(!lane.exists(), "every stale lane expires");
+        assert!(!dead.exists(), "unlistened run sockets are reclaimed");
+        assert!(live.exists(), "listening sockets survive regardless of age");
+    }
 
     #[test]
     fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
@@ -669,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_gc_keeps_an_old_lock_while_its_sidecar_is_live() {
+    fn runtime_gc_expires_old_live_entries_even_with_a_fresh_sibling() {
         let temp = tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(temp.path());
         let rt = RuntimePaths::under(workspace_id, temp.path()).unwrap();
@@ -692,9 +732,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.sidecar_files_removed, 0);
+        assert_eq!(report.sidecar_files_removed, 1);
         assert!(context.exists(), "fresh sidecar is kept");
-        assert!(lock.exists(), "its advisory lock keeps a stable inode");
+        assert!(
+            !lock.exists(),
+            "the live class has no paired-file exception"
+        );
     }
 
     #[test]
@@ -821,16 +864,16 @@ mod tests {
     }
 
     #[test]
-    fn runtime_gc_removes_stale_sidebar_heartbeats_and_sidebar_socket_only() {
+    fn runtime_gc_expires_all_live_entries_and_probes_socket_listeners() {
         let temp = tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(temp.path());
         let rt = RuntimePaths::under(workspace_id.clone(), temp.path()).unwrap();
         rt.ensure_dirs().unwrap();
 
         let stale_socket = rt.sock_dir.join("sidebar.stale.sock");
-        fs::write(&stale_socket, b"socket placeholder").unwrap();
+        drop(std::os::unix::net::UnixDatagram::bind(&stale_socket).unwrap());
         let run_socket = rt.sock_dir.join("run.123456789abc.sock");
-        fs::write(&run_socket, b"run socket placeholder").unwrap();
+        let _listener = std::os::unix::net::UnixDatagram::bind(&run_socket).unwrap();
 
         let stale_sidebar = SidebarHeartbeat::new(
             workspace_id.clone(),
@@ -847,7 +890,7 @@ mod tests {
         fs::write(&legacy_unknown_path, b"{}").unwrap();
 
         let old = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&stale_socket, &stale_sidebar_path, &legacy_unknown_path] {
+        for path in [&stale_sidebar_path, &legacy_unknown_path] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
 
@@ -865,12 +908,12 @@ mod tests {
         assert_eq!(report.sidebar_sockets_removed, 1);
         assert!(!stale_sidebar_path.exists());
         assert!(!stale_socket.exists());
-        assert!(legacy_unknown_path.exists());
-        assert!(run_socket.exists(), "run sockets are not GC-owned");
+        assert!(!legacy_unknown_path.exists());
+        assert!(run_socket.exists(), "a listening run socket survives");
     }
 
     #[test]
-    fn runtime_gc_keeps_stale_read_marks_while_owner_heartbeat_is_fresh() {
+    fn runtime_gc_expires_read_marks_at_class_ttl_even_with_a_fresh_owner() {
         let temp = tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(temp.path());
         let rt = RuntimePaths::under(workspace_id.clone(), temp.path()).unwrap();
@@ -906,8 +949,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.sidecar_files_removed, 0);
-        assert!(read_marks.exists(), "live owner's read marks are kept");
+        assert_eq!(report.sidecar_files_removed, 1);
+        assert!(
+            !read_marks.exists(),
+            "the class TTL applies even with a live owner"
+        );
     }
 
     #[test]

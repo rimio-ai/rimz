@@ -49,7 +49,7 @@ fn sidebar_snapshot_does_not_create_an_abandoned_state_scaffold() {
 }
 
 #[test]
-fn gc_removes_stale_sidebar_heartbeat_and_leaves_unknown_file() {
+fn gc_expires_stale_live_entries_including_unknown_heartbeat_names() {
     let env = Env::new();
     let rt = env.runtime_paths();
     rt.ensure_dirs().expect("runtime dirs");
@@ -88,10 +88,7 @@ fn gc_removes_stale_sidebar_heartbeat_and_leaves_unknown_file() {
         !heartbeat_path.exists(),
         "stale heartbeat should be removed"
     );
-    assert!(
-        unknown_file.exists(),
-        "unknown heartbeat file is not a runtime GC target"
-    );
+    assert!(!unknown_file.exists(), "all stale live-class files expire");
 }
 
 #[test]
@@ -483,6 +480,38 @@ fn gc_json_emits_report() {
     assert!(
         value.get("reclaimed_bytes").is_some(),
         "json includes reclaimed_bytes: {value}"
+    );
+}
+
+#[test]
+fn gc_preserves_owned_state_when_the_rollup_needs_repair() {
+    let env = Env::new();
+    register_running_agent(&env, "needs-repair", "main");
+    let store = env.store();
+    let paths = store.paths();
+    let owned = paths.agents_dir.join("unresolved/scratch");
+    std::fs::create_dir_all(&owned).unwrap();
+    std::fs::write(owned.join("note"), "retain until ownership can be read").unwrap();
+    std::fs::File::open(owned.parent().unwrap())
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(8 * 86_400))
+        .unwrap();
+    let mut bytes = std::fs::read(&paths.events_log).unwrap();
+    let first_newline = bytes.iter().position(|byte| *byte == b'\n').unwrap();
+    bytes[..first_newline].fill(0);
+    std::fs::write(&paths.events_log, &bytes).unwrap();
+    for cache in [&paths.latest_snapshot, &paths.rollup_cache] {
+        let _ = std::fs::remove_file(cache);
+    }
+
+    env.rimz().args(["gc", "--json"]).assert().success();
+    assert!(
+        owned.join("note").exists(),
+        "unreadable ownership never means unowned"
+    );
+    assert!(
+        std::fs::metadata(&paths.events_log).unwrap().len() < bytes.len() as u64,
+        "gc still repairs the current log"
     );
 }
 

@@ -33,6 +33,19 @@ pub fn teardown_room(
     runtime: &RuntimePaths,
     state: &StatePaths,
 ) -> TeardownReport {
+    let mut report = teardown_runtime(backend, workspace_id, session_name, runtime);
+    report.tmp_removed = state.remove_tmp_dir().inspect_err(|err| {
+        tracing::warn!(path = %state.tmp_dir.display(), error = %err, "room tmp removal failed");
+    }).is_ok();
+    report
+}
+
+pub(super) fn teardown_runtime(
+    backend: &dyn MuxBackend,
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    runtime: &RuntimePaths,
+) -> TeardownReport {
     // Delete the session first, so the only server matching this exact name in
     // the sweep below is the corpse — never a freshly-born replacement.
     let session_killed = backend.kill_session(session_name).is_ok();
@@ -44,16 +57,10 @@ pub fn teardown_room(
     // mux server is cleanup, not destruction.
     let processes_swept =
         crate::mux::recovery::sweep_orphan_processes(workspace_id.as_str(), session_name, true);
-    let tmp_removed = state.remove_tmp_dir().inspect_err(|err| {
-        tracing::warn!(path = %state.tmp_dir.display(), error = %err, "room tmp removal failed");
-    }).is_ok();
-    let skills_removed = state.remove_skills_dir().inspect_err(|err| {
-        tracing::warn!(path = %state.skills_dir.display(), error = %err, "room skill copies removal failed");
-    }).is_ok();
     TeardownReport {
         session_killed,
         cache_removed,
         processes_swept,
-        tmp_removed: tmp_removed && skills_removed,
+        tmp_removed: false,
     }
 }

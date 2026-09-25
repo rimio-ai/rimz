@@ -324,6 +324,7 @@ impl AssistEvent {
                 messages_archived,
                 problems,
                 error,
+                ..
             } => Self::Gc {
                 at: record.at,
                 workspace_id,
