@@ -96,7 +96,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
 
 `Delivered` means the agent acknowledged: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`. Neither event confirms the other body.
 
-The six terminal states are final. A terminal transition removes the record from `messages/messages.jsonl`, appends the full record to `messages/history.jsonl`, and appends a `message.*` audit event without text ([Storage and audit](#storage-and-audit)).
+The six terminal states are final. A terminal transition removes the record from `records/messages/messages.jsonl`, appends the full record to `audit/messages/<bucket-start>.jsonl`, and appends a `message.*` audit event without text ([Storage and audit](#storage-and-audit)).
 
 | Trigger | Terminal status |
 | --- | --- |
@@ -464,14 +464,14 @@ Durations accept `s`, `m`, `h`, and `d`; zero is rejected. Wall-clock `HH:MM` re
 ## Storage and audit
 
 ```text
-messages/messages.jsonl   live Queued, Claimed, and Sent records
-messages/history.jsonl    terminal records, with text
-events.log.jsonl          message.* audit events, without text
+records/messages/messages.jsonl   live Queued, Claimed, and Sent records
+audit/messages/<bucket-start>.jsonl    terminal records, with text
+log/events.log.jsonl          message.* audit events, without text
 ```
 
-The queue file holds only live records and is the truth. One queue transaction rewrites `messages.jsonl` when the live set changed, then appends terminal records to history, then appends the audit events, then runs history retention: past 512 KiB, history is rewritten to the newest 500 records in `msg_` order. Every write holds the workspace lock; the queue rewrite uses temp-file-plus-rename and history uses the append helper ([store.md § Write classes](../store.md#write-classes)). The queue file is created lazily, so an empty workspace costs the hook path one missing-file stat, and a missing file reads as no live records.
+The queue file holds only live records and is the truth. One queue transaction rewrites `messages.jsonl` when the live set changed, then appends terminal records to history, then appends the audit events. History uses the shared epoch-aligned seven-day bucket rule from `disk/buckets.rs`, keyed by each record's `updated_at`; readers scan all buckets. The audit class sweep owns age and size retention. Every write holds the workspace lock; the queue rewrite uses temp-file-plus-rename and history uses the append helper ([store.md § Write classes](../store.md#write-classes)). The queue file is created lazily, so an empty workspace costs the hook path one missing-file stat, and a missing file reads as no live records.
 
-History and retention are audit, so a failure in either warns and leaves the queue transition standing. This order matters with mixed binaries: if a history file an older binary cannot parse could fail the transaction, the queue would keep a record its caller believes settled and the next sweep would deliver it again. Retention still runs synchronously under the workspace lock, because an unlocked rewrite could drop a concurrent append. A crash between the queue rewrite and the appends costs the terminal text and its audit event, never queue state.
+History is audit, so an append failure warns and leaves the queue transition standing. This order matters with mixed binaries: if a history file an older binary cannot parse could fail the transaction, the queue would keep a record its caller believes settled and the next sweep would deliver it again. A crash between the queue rewrite and the appends costs the terminal text and its audit event, never queue state.
 
 The store reads through `list()` (live), `list_history()` (terminal, with text), and `list_pending()` (`Queued` only).
 

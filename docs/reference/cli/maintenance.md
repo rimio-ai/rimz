@@ -230,9 +230,9 @@ rimz reset [--yes] [--no-start] [--hard] [--account <KIND=NAME>]... [PATH]
 `reset` tears down the room for `PATH` (default `.`) and rebuilds it empty. Use it when a room is stuck, or came back wrong after a reboot. In order, it:
 
 1. deletes the room's multiplexer session and purges the multiplexer's resurrection cache for it;
-2. signals the room's orphaned processes and removes its runtime files, per-room tmp directory, and skill copies;
+2. signals the room's orphaned processes and clears disposable runtime classes, keeping lock inodes;
 3. cancels the room's active supervised runs, which report `canceled` to anyone waiting on them;
-4. archives the active event log, deletes the room's diagnostic logs, and clears its recorded provider accounts;
+4. archives the active event log, clears rebuildable caches and its recorded provider accounts;
 5. starts the room again and attaches, with no prior agents recovered.
 
 Your agents' own session files and the room's archived records stay on disk. A plain reset keeps the prior-agent carryover as history; the reborn room still starts with no agents.
@@ -241,7 +241,7 @@ Your agents' own session files and the room's archived records stay on disk. A p
 | --- | --- |
 | `--yes` | Skip the `[y/N]` prompt. Required when stdin is not a terminal. |
 | `--no-start` | Stop after step 4 and print ``Room torn down. Run `rimz start` to rebuild it.`` |
-| `--hard` | Also delete the prior-agent carryover, so the store keeps no record of the old room's agents beyond the archived log. The report reads `Records: prior agent rollup cleared.` |
+| `--hard` | Also delete prior-agent carryover, audit history (transcripts, messages, diagnostics), owned state (runs, scratch, skill copies), and room tmp. The rotated log archive remains. |
 | `--account <KIND=NAME>` | Rebuild the room under this [provider account](./accounts.md), with no agents. Repeatable. Cannot be combined with `--no-start`. |
 
 A room's accounts are fixed when it is born, so `reset --account` is how you move a running room to a different account.
@@ -250,13 +250,9 @@ Reset refuses before prompting or changing anything when `--mux` names a backend
 
 The report goes to stderr before the rebuild:
 
-```console
-Reset: session deleted, 1 cache entry removed, 2 orphan processes swept.
-Tmp and skill copies: cleared.
-Records: archived 48213 bytes to /home/me/.rimz/ws/myrepo-f89e/events.log.archive/events.0192f3a4-7c1e-7b20-9d6a-3f4e5a6b7c8d.jsonl.
-Records: canceled 0 runs, removed 3 debug entries, runtime removed.
-Records: prior agent rollup kept (4 agents).
-```
+The report names the session deletion, process sweep, preserved temporary files, archive path, canceled runs, removed cache entries, and whether the prior-agent rollup was kept. Hard reset additionally removes audit, owned state, and tmp.
+
+Soft reset keeps transcripts, message history, run records, agent scratch and skill copies, room tmp, and standing fleet budget choices. `--hard` deletes `audit/`, `owned/`, `tmp/`, the active log and carryover; the rotated log archive remains. Neither reset removes runtime `locks/`.
 
 What reset does to the store is in [store internals](../../internals/store.md#maintenance).
 
@@ -272,12 +268,12 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 | --- | --- | --- |
 | `worktrees` | Current repository | Removes RimZ-owned worktrees that are clean, landed, and unoccupied, the same sweep as [`rimz worktree sweep`](./worktree.md#sweep-landed-worktrees). |
 | `workspaces` | Machine | Deletes workspace stores that provably hold nothing: the project folder is gone, or a `rimz start` was abandoned before any history. A store whose record is unreadable but which holds history is kept and reported. |
-| `runtime` | Machine | Removes sidebar heartbeats, sockets, and sidecar files older than `--older-than`, and stale provider probe markers. |
+| `runtime` | Machine | Applies room lifetime-class rules and removes stale shared provider probe markers. Live/lanes use `--older-than`; sockets use a connect probe and locks a try-lock. |
 | `temp files` | Machine | Removes temp files (`*.tmp.<pid>.<nonce>`) older than `--older-than`, left by a process killed mid-write. |
 | `messages` | Current workspace | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. |
 | `event log` | Current workspace | Cuts a corrupt tail off the event log. |
 | `agent cache` | Current workspace | Prunes prior-agent carryover older than 14 days. |
-| `loop schedules` | Machine | Removes loop delivery tasks whose target agent is gone and RimZ-owned instance rows that no longer compile to an action, and prunes [wait output files](./wait.md) older than 14 days that nothing claims. |
+| `loop schedules` | Machine | Removes loop delivery tasks whose target agent is gone and RimZ-owned instance rows that no longer compile to an action, and prunes [wait output files](./wait.md) older than 7 days that nothing claims. |
 
 | Flag | Default | Effect |
 | --- | --- | --- |
@@ -297,30 +293,17 @@ Every open room runs `gc` on its own once a day, with the `gc.older_than` cutoff
 
 `gc` shows progress while it runs, then prints a line per area with its verdict: `✓` healthy, `✦` acted, `⚠` warning, `✗` failed, `–` skipped. Each kept, removed, or failed worktree gets its own line under `worktrees`.
 
-```console
-$ rimz gc
-gc — reclaimed 21 MB
-  checked 8 areas · cutoff 7d
+The header gives total reclaimed bytes and the area count/cutoff. It then lists each room with one `class · file count · bytes` row per lifetime class, followed by the eight area verdicts and any kept/removed worktree reasons.
 
-  ✦ worktrees       1 removed · 21 MB · 2 kept
-      kept: api-redesign — in use
-      kept: auth-fix — not merged yet
-      removed: guides-tune  21 MB  merged, branch deleted
-  ✓ workspaces      4 healthy
-  ✓ runtime         5 roots scanned, all fresh
-  ✓ temp files      none orphaned
-  ✓ messages        queue clean
-  ✓ event log       intact
-  ✓ agent cache     clean
-  ✓ loop schedules  none dead
-```
+The second line counts the areas that ran (`checked 4 of 8 areas` when the four store and schedule areas are skipped). The header adds a problem count (`· 1 problem`) when a worktree removal failed, a workspace record was unreadable, or the event log needed repair. Problems do not change the exit code: `gc` exits 0 whenever the sweep completes. Automatic-sweep assist records additionally carry `class_bytes`, the reclaimed bytes summed by class across rooms.
 
-The second line counts the areas that ran (`checked 4 of 8 areas` when the four store and schedule areas are skipped). The header adds a problem count (`· 1 problem`) when a worktree removal failed, a workspace record was unreadable, or the event log needed repair. Problems do not change the exit code: `gc` exits 0 whenever the sweep completes.
+Owned state has a seven-day grace; audit files expire after 30 days or oldest-first above 64 MiB. `--older-than` does not change those policies. Layout-1 rooms are retained with a migration reason.
 
 ### JSON output
 
 | Field | Content |
 | --- | --- |
+| `rooms` | Per-room `name`, `classes` (`class`, `files_removed`, `bytes_removed`). |
 | `dry_run` | `true` under `--dry-run`. |
 | `older_than_secs` | The cutoff in seconds. |
 | `reclaimed_bytes` | Bytes removed, or that would be removed, across all areas. |

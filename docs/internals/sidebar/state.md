@@ -6,7 +6,7 @@
 
 A room holds one store and one sidebar per tab, and every sidebar paints the whole fleet live, several times a second, in several processes at once.
 
-Half the inputs are cheap. The store rollup is a lock-free read of `snapshots/latest.json` plus an incremental fold over the log tail it does not yet cover, and the runtime sidecars and lane caches are small JSON files behind stat gates.
+Half the inputs are cheap. The store rollup is a lock-free read of `cache/snapshots/latest.json` plus an incremental fold over the log tail it does not yet cover, and the runtime sidecars and lane caches are small JSON files behind stat gates.
 
 The other half are expensive. The pane roster costs a multiplexer IPC round trip or a plugin hop, git costs forks per worktree, and provider accounts, usage, and pricing cost subprocesses and network. Paying those once per tab per tick would saturate the mux server and the machine, and a room sits idle most of the time anyway.
 
@@ -130,7 +130,7 @@ One cycle runs four steps.
 
 1. **Observe the role.** One tracker lookup decides producer or consumer for this cycle, and a role change emits a diagnostic.
 2. **Try to skip.** An ordinary consumer request stamps the files its fold would read and compares them with the [skip memo](#the-skip-memo). An unchanged stamp posts an `Unchanged` outcome, which clears single-flight state without replacing the snapshot. The app restamps the held snapshot's `now` and marks the frame dirty only when a pipeline clock is live; a quiet room without one gains no repaint.
-3. **Fast fold.** The producer folds the rollup, pane frame, and sidecars, then publishes the result as `workspace-projection.json`. A consumer tries to [adopt](#adoption-and-fallback) that publication and falls back to the same full fold in process.
+3. **Fast fold.** The producer folds the rollup, pane frame, and sidecars, then publishes the result as `lanes/workspace-projection.json`. A consumer tries to [adopt](#adoption-and-fallback) that publication and falls back to the same full fold in process.
 4. **Produce, if due.** `ProducerCadence::start_attempt_if_due` decides by mode: a `Normal` request produces when this renderer is the producer, no attempt started in the current data tick, and the published frame is at least one tick old; `ProducerFreshPanes` always produces on the producer; `HardRefresh` always produces. The produce resolves panes (a pane cache younger than the [pane TTL](#cadences) skips the mux read), refreshes group roots, publishes, and folds again with the fresh frame. The producer then projects each tab's name from live-agent status and the pane frame and forwards a rename only when the name differs; the release rule for pane-named tabs is [multiplexers.md → Tab names](../multiplexers.md#tab-names). A failed mux write is logged, retried at most once per pane observation, and never fails the snapshot.
 
 A produce runs behind a panic guard. An unwind costs one degraded outcome, the loop holds its last good frame, and the next cycle refolds cold from a fresh cursor instead of trusting a base the panic may have torn.
@@ -153,17 +153,17 @@ A frameless fold, which a cold consumer or a CLI caller wanting rollup metadata 
 
 ### Adoption and fallback
 
-A consumer adopts `workspace-projection.json` only when the publication describes the same world it sees: matching projection schema version (`WORKSPACE_PROJECTION_SCHEMA_VERSION`), matching session name, and an exact match on the source tuple of rollup generation, rollup offset, pane-frame topology stamp, pane-frame metrics stamp, and config generation; a `latest.json` written at another `SNAPSHOT_VERSION` also forces the fallback, because the consumer reads its rollup extent — and so builds a source tuple to compare — only at the matching version. On a match it clones the parse-cached projection and applies its own `project_local`. On any miss, including an absent, corrupt, or mixed-build file, it runs the full local fold, which costs no mux read and no git fork.
+A consumer adopts `lanes/workspace-projection.json` only when the publication describes the same world it sees: matching projection schema version (`WORKSPACE_PROJECTION_SCHEMA_VERSION`), matching session name, and an exact match on the source tuple of rollup generation, rollup offset, pane-frame topology stamp, pane-frame metrics stamp, and config generation; a `cache/snapshots/latest.json` written at another `SNAPSHOT_VERSION` also forces the fallback, because the consumer reads its rollup extent — and so builds a source tuple to compare — only at the matching version. On a match it clones the parse-cached projection and applies its own `project_local`. On any miss, including an absent, corrupt, or mixed-build file, it runs the full local fold, which costs no mux read and no git fork.
 
 The miss rate rises with write load by construction. The consumer's rollup offset is the live log length at its read, while the producer stamps its publication with the extent of its own last fold, and every commit sends its `StoreDelta` wakeup before the debounced checkpoint publish. During a burst a consumer wakes ahead of the producer's republish, so it falls back. A stale projection is never adopted to avoid that; the fallback is the freshness path, and it stays cheap because the consumer's cursor folds only the appended frames over a carryover parsed once per file identity.
 
 The producer serializes the projection once per fold and republishes only when the bytes change, so a quiet room writes nothing while time-window verdicts still land when they flip.
 
-The pipeline lane reads one board per eligible staged-team group every refresher pass, with no TTL or event-log scan. It resolves trusted repo-local teams once through `config::effective::load` when a project root is available, falling back to machine teams on error or without a root. A group needs a single team, a staged definition, exactly one distinct non-empty lexically normalized worktree path among that team's rows, and a readable board with a `Stage:` line. With no team groups, it skips team resolution and board reads but still clears stale cache entries. The version-2 record carries `stage_started_at` alongside the run's `started_at` and `done_at`. The stage stamp comes from the latest parseable ledger entry into the current stage from a different stage (an `opened` entry counts); same-stage re-flips do not reset it. `SidebarPipeline::span_secs` uses stage age outside `Done`, with no run-start fallback, and is `None` at `Done`. `total_secs` measures from the run start to snapshot time, or to the stop at `Done`, capped at snapshot time. `clock_running` requires either start stamp and a position outside `Done`. `enrich_core` projects the cache by group key onto `SidebarWorktreeGroup.pipeline`; absent entries become `None`. `pipeline.json` participates in both consumer input stamps, so a changed board publication invalidates the skip memo rather than waiting for its backstop. Rendering uses only snapshot time; the app's `Unchanged` restamp keeps a consumer's running clock moving without a new fold.
+The pipeline lane reads one board per eligible staged-team group every refresher pass, with no TTL or event-log scan. It resolves trusted repo-local teams once through `config::effective::load` when a project root is available, falling back to machine teams on error or without a root. A group needs a single team, a staged definition, exactly one distinct non-empty lexically normalized worktree path among that team's rows, and a readable board with a `Stage:` line. With no team groups, it skips team resolution and board reads but still clears stale cache entries. The version-2 record carries `stage_started_at` alongside the run's `started_at` and `done_at`. The stage stamp comes from the latest parseable ledger entry into the current stage from a different stage (an `opened` entry counts); same-stage re-flips do not reset it. `SidebarPipeline::span_secs` uses stage age outside `Done`, with no run-start fallback, and is `None` at `Done`. `total_secs` measures from the run start to snapshot time, or to the stop at `Done`, capped at snapshot time. `clock_running` requires either start stamp and a position outside `Done`. `enrich_core` projects the cache by group key onto `SidebarWorktreeGroup.pipeline`; absent entries become `None`. `lanes/pipeline.json` participates in both consumer input stamps, so a changed board publication invalidates the skip memo rather than waiting for its backstop. Rendering uses only snapshot time; the app's `Unchanged` restamp keeps a consumer's running clock moving without a new fold.
 
 ### The skip memo
 
-The unchanged check compares one of two input stamps. After a successful adoption the memo holds a slim six-input stamp: the event log, `latest.json`, `snapshot.json`, `workspace-projection.json`, `pipeline.json`, and the config generation. After a fallback it holds the full set (`filtered_runtime_inputs` in `consumer.rs`), which adds the rollup and carryover caches, the workspace record, the runtime lane caches (`unread.json`, link stats, `metrics-sample.json`, `codex-daemon-reap.json`, and the rest), the agent projection, the sidecar and message directories including `messages/queue.json` and `read-marks/`, the per-room spending, budget, and auto-continue files, and the account-global `budget.account.*.json`.
+The unchanged check compares one of two input stamps. After a successful adoption the memo holds a slim six-input stamp: the event log, `cache/snapshots/latest.json`, `lanes/snapshot.json`, `lanes/workspace-projection.json`, `lanes/pipeline.json`, and the config generation. After a fallback it holds the full set (`filtered_runtime_inputs` in `consumer.rs`), which adds the rollup and carryover caches, the workspace record, the runtime lane caches (`lanes/unread.json`, link stats, `lanes/metrics-sample.json`, `lanes/codex-daemon-reap.json`, and the rest), the agent projection, the sidecar and message directories including `records/messages/messages.jsonl` and `live/read-marks/`, the per-room spending, budget, and auto-continue files, and the account-global `budget.account.*.json`.
 
 Producer cycles, forced folds, fresh-pane requests, hard refreshes, and failed folds all clear the memo, and `CONSUMER_UNCHANGED_BACKSTOP_MS` (30 seconds) forces a real fold regardless. Correctness never depends on the skip.
 
@@ -175,7 +175,7 @@ Room-local lanes live in the workspace runtime directory beside the store's runt
 
 ### The pane frame
 
-`snapshot.json` is the topology everything else enriches, and the most important file in the plane. [`PaneFrame`](../../../crates/rimz/src/sidebar/frame.rs) carries tabs and panes, each pane with its current and rotated-out previous process record, child pids, sampled resource metrics, plus `viewed_panes`, the session `focused_pane` register, and client presence. The producer writes it ([`produce/panes.rs`](../../../crates/rimz/src/sidebar/produce/panes.rs)), and every renderer's fold reads it.
+`lanes/snapshot.json` is the topology everything else enriches, and the most important file in the plane. [`PaneFrame`](../../../crates/rimz/src/sidebar/frame.rs) carries tabs and panes, each pane with its current and rotated-out previous process record, child pids, sampled resource metrics, plus `viewed_panes`, the session `focused_pane` register, and client presence. The producer writes it ([`produce/panes.rs`](../../../crates/rimz/src/sidebar/produce/panes.rs)), and every renderer's fold reads it.
 
 Three properties matter downstream:
 
@@ -189,10 +189,10 @@ The producer repairs raced-null processes, missing cwds, and briefly omitted pan
 
 | Lane | Writer | Carries |
 | --- | --- | --- |
-| `workspace-projection.json` | Producer fetch worker | The renderer-independent half of the fold plus the source tuple a consumer validates it against. |
-| `agent-projection.json` | Producer fetch worker | For one session: normalized admitted agent kinds, default launch models, the sorted admitted `(kind, absolute workspace)` inputs, and provider-validated local-session observations. |
+| `lanes/workspace-projection.json` | Producer fetch worker | The renderer-independent half of the fold plus the source tuple a consumer validates it against. |
+| `lanes/agent-projection.json` | Producer fetch worker | For one session: normalized admitted agent kinds, default launch models, the sorted admitted `(kind, absolute workspace)` inputs, and provider-validated local-session observations. |
 
-The producer builds `agent-projection.json` in one pass that batches discovery per represented kind and probes wiring behind exact input stamps, then writes and wakes at most once, and only when the content differs. Consumers parse it once, validate the session, and bind observations through the intersection of published and current inputs, so a newly added input waits for the next publication and a removed one disappears at once. A missing, malformed, or wrong-session file fails closed.
+The producer builds `lanes/agent-projection.json` in one pass that batches discovery per represented kind and probes wiring behind exact input stamps, then writes and wakes at most once, and only when the content differs. Consumers parse it once, validate the session, and bind observations through the intersection of published and current inputs, so a newly added input waits for the next publication and a removed one disappears at once. A missing, malformed, or wrong-session file fails closed.
 
 ### Presence hints
 
@@ -200,10 +200,10 @@ These files are the multiplexer's side of the channel, written outside the sideb
 
 | Lane | Writer | Carries |
 | --- | --- | --- |
-| `pane-topology.json` | Zellij presence plugin, through `rimz sidebar wake` | The pane roster (live panes, tab names, foreground commands, geometry) and full client views, from which the host derives attached-client count, terminal `viewed_panes`, and unique-live focus. |
-| `presence-desired.json` | Zellij room-owner flows (birth, reload repair and upgrade, web sharing) | The requested plugin build and configuration identity that ranks competing writers ([multiplexers.md → Writer fencing](../multiplexers.md#writer-fencing)). |
-| `presence.stamp` | Zellij plugin, tmux control-mode watch | A liveness mark carrying its own `written_at_ms`, so `rimz doctor` reads the same age the producer does. While it is fresh, the pane lane relaxes to the longer event-mode TTL. |
-| `client-presence-probe.stamp` | tmux producer | The latest `list-clients` attempt. Success and failure both suppress another attempt for `PRESENCE_SAMPLE_TTL`. Neither pane truth nor a fold input. |
+| `lanes/pane-topology.json` | Zellij presence plugin, through `rimz sidebar wake` | The pane roster (live panes, tab names, foreground commands, geometry) and full client views, from which the host derives attached-client count, terminal `viewed_panes`, and unique-live focus. |
+| `lanes/presence-desired.json` | Zellij room-owner flows (birth, reload repair and upgrade, web sharing) | The requested plugin build and configuration identity that ranks competing writers ([multiplexers.md → Writer fencing](../multiplexers.md#writer-fencing)). |
+| `live/presence.stamp` | Zellij plugin, tmux control-mode watch | A liveness mark carrying its own `written_at_ms`, so `rimz doctor` reads the same age the producer does. While it is fresh, the pane lane relaxes to the longer event-mode TTL. |
+| `live/client-presence-probe.stamp` | tmux producer | The latest `list-clients` attempt. Success and failure both suppress another attempt for `PRESENCE_SAMPLE_TTL`. Neither pane truth nor a fold input. |
 
 ### Enrichment lanes
 
@@ -211,14 +211,14 @@ The fetch worker publishes process metrics and group roots alongside pane produc
 
 | Lane | Scope | Carries |
 | --- | --- | --- |
-| `diff-stats.json` | Room | Per-worktree git facts in two stamped halves: edit-sensitive (added and removed lines, dirty and untracked state, branch, merge or rebase in progress) and commit-shaped (ahead and behind, landed marker, did-work marker, `--from-pr` provenance), plus the group-root set. The landed and did-work proofs are [worktrees.md → What the sidebar asks](../harness/worktrees.md#what-the-sidebar-asks). |
-| `pr-state.json` | Room | Pull-request links and CI verdicts by worktree path ([PR state](#pr-state)). |
-| `metrics-sample.json` | Room | Per-pane resource samples and pane-to-root-pid bindings. The figures publish on the pane frame. |
-| `codex-daemon-reap.json` | Room | Codex daemon-mode reap inputs: live daemon PIDs and the app-server's loaded-thread list, stamped `produced_at_ms`. The producer re-probes every `CODEX_DAEMON_REAP_TTL` (30 seconds); readers accept a record for `CODEX_DAEMON_REAP_STALE` (90 seconds) so a replacement probe overlaps the previous evidence. An absent, unreadable, or stale record reaps nothing and reports Codex daemon health unknown. |
-| `workspace-spending.<hash>.json` | Room | The cockpit spend tally, headline cutoff, and live-card session keys excluded from walked headline USD. A consumer reads the file named by its own scope hash and requires a matching `scope_hash`. When that misses because its cached roots lag the producer's, it serves the one remaining publication, since the producer prunes every other; two candidates or none leave the tally absent. |
-| `cohort-spend.json` | Room | Lifetime dollars, token split, and retained active time for each finished multi-agent group, plus each seat's lifetime dollars and tokens keyed by agent-row id. Refreshed for collapsible groups only, every `COHORT_SPEND_TTL` (60 seconds), through the shared cross-session effort aggregator, and projected onto `SidebarWorktreeGroup::cohort_effort`; renderers never parse transcripts. Only records born in their checkout's current lifetime count ([attribution.md](../agents/attribution.md#selecting-records)). An unreadable checkout contributes no seat totals and is logged. |
-| `link-stats.json` | Room | The latest remote-SSH probe stats behind the footer link badge ([remote.md](../remote.md)). |
-| `pipeline.json` | Room | Version 2: stage lists, board stage and owner, stage-entry timestamp (`stage_started_at`), and run start/stop timestamps (`started_at`, `done_at`) by group key. Published by `refresh/pipeline.rs` every refresher pass only when content changes, using `write_temp_then_rename_cache`; a version mismatch reads as empty. Projected onto `SidebarWorktreeGroup.pipeline`. |
+| `lanes/diff-stats.json` | Room | Per-worktree git facts in two stamped halves: edit-sensitive (added and removed lines, dirty and untracked state, branch, merge or rebase in progress) and commit-shaped (ahead and behind, landed marker, did-work marker, `--from-pr` provenance), plus the group-root set. The landed and did-work proofs are [worktrees.md → What the sidebar asks](../harness/worktrees.md#what-the-sidebar-asks). |
+| `lanes/pr-state.json` | Room | Pull-request links and CI verdicts by worktree path ([PR state](#pr-state)). |
+| `lanes/metrics-sample.json` | Room | Per-pane resource samples and pane-to-root-pid bindings. The figures publish on the pane frame. |
+| `lanes/codex-daemon-reap.json` | Room | Codex daemon-mode reap inputs: live daemon PIDs and the app-server's loaded-thread list, stamped `produced_at_ms`. The producer re-probes every `CODEX_DAEMON_REAP_TTL` (30 seconds); readers accept a record for `CODEX_DAEMON_REAP_STALE` (90 seconds) so a replacement probe overlaps the previous evidence. An absent, unreadable, or stale record reaps nothing and reports Codex daemon health unknown. |
+| `lanes/workspace-spending.<hash>.json` | Room | The cockpit spend tally, headline cutoff, and live-card session keys excluded from walked headline USD. A consumer reads the file named by its own scope hash and requires a matching `scope_hash`. When that misses because its cached roots lag the producer's, it serves the one remaining publication, since the producer prunes every other; two candidates or none leave the tally absent. |
+| `lanes/cohort-spend.json` | Room | Lifetime dollars, token split, and retained active time for each finished multi-agent group, plus each seat's lifetime dollars and tokens keyed by agent-row id. Refreshed for collapsible groups only, every `COHORT_SPEND_TTL` (60 seconds), through the shared cross-session effort aggregator, and projected onto `SidebarWorktreeGroup::cohort_effort`; renderers never parse transcripts. Only records born in their checkout's current lifetime count ([attribution.md](../agents/attribution.md#selecting-records)). An unreadable checkout contributes no seat totals and is logged. |
+| `lanes/link-stats.json` | Room | The latest remote-SSH probe stats behind the footer link badge ([remote.md](../remote.md)). |
+| `lanes/pipeline.json` | Room | Version 2: stage lists, board stage and owner, stage-entry timestamp (`stage_started_at`), and run start/stop timestamps (`started_at`, `done_at`) by group key. Published by `refresh/pipeline.rs` every refresher pass only when content changes, using `write_temp_then_rename_cache`; a version mismatch reads as empty. Projected onto `SidebarWorktreeGroup.pipeline`. |
 | `provider-spending.json` | Account-global | Fleet and provider spend totals plus the walk stamp ([spending.md](../agents/spending.md)). |
 | `spending.json` | Account-global | The incremental transcript parse cache behind the spend walk ([spending.md](../agents/spending.md#the-incremental-cache)). |
 | `pricing-cache.json` | Account-global | The remote token-price refresh over the embedded snapshot ([spending.md](../agents/spending.md#token-pricing)). |
@@ -230,7 +230,7 @@ The fetch worker publishes process metrics and group roots alongside pane produc
 
 ### PR state
 
-`pr-state.json` answers, for each worktree the room shows, which pull request belongs to it and what CI says. The record and reader are `forge::pr_state`; the producer-only probe that writes it is [`sidebar/refresh/pr.rs`](../../../crates/rimz/src/sidebar/refresh/pr.rs), which shells out to `gh` or `tea`. The file is absent when the forge is unsupported.
+`lanes/pr-state.json` answers, for each worktree the room shows, which pull request belongs to it and what CI says. The record and reader are `forge::pr_state`; the producer-only probe that writes it is [`sidebar/refresh/pr.rs`](../../../crates/rimz/src/sidebar/refresh/pr.rs), which shells out to `gh` or `tea`. The file is absent when the forge is unsupported.
 
 A link belongs to one checkout incarnation. Each link is stamped with its PR head branch and the RimZ worktree marker's creation time (`TargetStamp`), so a branch switch or a recreated managed worktree drops the old link and resolves again. An open PR matches by branch alone, because a live push updates it. A merged or closed PR attaches to a managed worktree only when it was created no earlier than the marker, within `TERMINAL_PR_CLOCK_SKEW` (5 minutes); a `--from-pr` checkout keeps its named PR, and a missing marker or forge timestamp accepts the candidate. The trunk checkout never matches a PR, so a same-named fork branch cannot attach a false badge.
 
@@ -263,19 +263,19 @@ Unless marked, these live in the workspace runtime directory.
 
 | File | Purpose |
 | --- | --- |
-| `heartbeat/sidebar.<instance>.json` | Liveness for election, launch gating, and wakeup fanout, named by the full instance id, plus the renderer's pane size that `rimz sidebar frame` draws at. The eldest fresh heartbeat is the producer. |
+| `live/heartbeat/sidebar.<instance>.json` | Liveness for election, launch gating, and wakeup fanout, named by the full instance id, plus the renderer's pane size that `rimz sidebar frame` draws at. The eldest fresh heartbeat is the producer. |
 | `sock/sidebar.<short-id>.sock` | The renderer's wakeup datagram socket, named by the short instance id to fit the AF_UNIX path limit. |
-| `focus-anchor.json` | The durable jump intent, viewport offset, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
-| `unread.json`, `read-marks/sidebar.<instance>.json` | Open unread episodes and the per-renderer read receipts every fold merges. |
-| `loop-fire.json` | The elder's loop-task arm and fire stamps for this room. |
-| `authoritative-pane-probe.json` | One single-flight winner's authoritative mux pane observation, shared by every sidebar's liveness watchdog. |
-| `sidebar-width.json` | The room-runtime sidebar width the renderers settled on. |
-| `sidebar-filter.json` | The room-runtime cockpit lens every renderer adopts. |
-| `binding.log.jsonl` | Append-only pane-bind decisions ([sidebar.md](./sidebar.md#the-binding-ladder)). |
-| `live-roster.json` (state directory) | The producer's pane-backed live root-agent set, read by rebirth recovery ([sidebar.md → Resume-on-rebirth](./sidebar.md#resume-on-rebirth), [store.md → session death](../store.md#session-death)). |
-| `diag.log.jsonl` (state directory) | Typed anomaly records ([diagnostics.md](../diagnostics.md)). |
+| `lanes/focus-anchor.json` | The durable jump intent, viewport offset, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
+| `lanes/unread.json`, `live/read-marks/sidebar.<instance>.json` | Open unread episodes and the per-renderer read receipts every fold merges. |
+| `lanes/loop-fire.json` | The elder's loop-task arm and fire stamps for this room. |
+| `lanes/authoritative-pane-probe.json` | One single-flight winner's authoritative mux pane observation, shared by every sidebar's liveness watchdog. |
+| `lanes/sidebar-width.json` | The room-runtime sidebar width the renderers settled on. |
+| `lanes/sidebar-filter.json` | The room-runtime cockpit lens every renderer adopts. |
+| `audit/binding.log.jsonl` (state directory) | Append-only pane-bind decisions ([sidebar.md](./sidebar.md#the-binding-ladder)). |
+| `records/live-roster.json` (state directory) | The producer's pane-backed live root-agent set, read by rebirth recovery ([sidebar.md → Resume-on-rebirth](./sidebar.md#resume-on-rebirth), [store.md → session death](../store.md#session-death)). |
+| `audit/diag.log.jsonl` (state directory) | Typed anomaly records ([diagnostics.md](../diagnostics.md)). |
 
-`snapshots/latest.json` and `snapshots/rollup.json` are not sidebar files: the store's write tail publishes them into the state directory ([store.md → the read path](../store.md#the-read-path)).
+`cache/snapshots/latest.json` and `cache/snapshots/rollup.json` are not sidebar files: the store's write tail publishes them into the state directory ([store.md → the read path](../store.md#the-read-path)).
 
 Heartbeats are bounded by TTL while the session lives and by purge at rebirth: a birth that has proven the session absent deletes heartbeat files before creating the replacement session.
 
@@ -345,8 +345,8 @@ View switches follow their own rule on both backends: landing on launch chrome e
 A push channel lets a change a writer already knows about reach every renderer within one wakeup instead of a poll window. The producer's pull stays the structural backstop behind all of them.
 
 - **Store and sidecar writers** post a `StoreDelta` after every durable write or context-sidecar merge, so status, tokens, and cost repaint within one wakeup.
-- **The Zellij presence plugin** publishes topology snapshots and client observations through `rimz sidebar wake`. The host accepts one writer under the topology lock, derives focus, runs the projector, publishes `pane-topology.json`, and stamps `presence.stamp`. What the plugin sends, how often, and how competing writers are fenced and retired is [multiplexers.md → The Zellij presence plugin](../multiplexers.md#the-zellij-presence-plugin).
-- **The tmux control-mode watch**, run by the elder, keeps only out-of-order stream state, maps subscription and focus lines into the same transitions, stamps `presence.stamp`, and feeds the same projector ([multiplexers.md → The control-mode presence watch](../multiplexers.md#the-control-mode-presence-watch)).
+- **The Zellij presence plugin** publishes topology snapshots and client observations through `rimz sidebar wake`. The host accepts one writer under the topology lock, derives focus, runs the projector, publishes `lanes/pane-topology.json`, and stamps `live/presence.stamp`. What the plugin sends, how often, and how competing writers are fenced and retired is [multiplexers.md → The Zellij presence plugin](../multiplexers.md#the-zellij-presence-plugin).
+- **The tmux control-mode watch**, run by the elder, keeps only out-of-order stream state, maps subscription and focus lines into the same transitions, stamps `live/presence.stamp`, and feeds the same projector ([multiplexers.md → The control-mode presence watch](../multiplexers.md#the-control-mode-presence-watch)).
 - **The elder's transcript watcher** ([`transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs)) watches each live session whose adapter declares `transcript_tail_context`, Codex and Copilot included, and runs the stat-gated refresh on write to cover mid-turn gaps between progress hooks. A watcher that never starts costs nothing, because the producer-tick refresh stays unconditional.
 - **The elder's cache refresher** ([`cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs)) ticks on the data cadence, rechecks the election each pass, refreshes the heavy lanes from the last published pane frame, fires due loop tasks (including the watch-lost backstop for a dead `rimz wait` watcher), wakes due scheduled messages, and emits [forge signals](#pr-state). A panic resets only its rollup cursor, and the next tick retries from cache.
 
@@ -356,7 +356,7 @@ Focus buys a fast tick for the work the user is watching. The producer folds `Pa
 
 Client presence is classified against the reader's `now_ms` by `SidebarPresence::classify`: `Detached` when no human client remains, `Idle` once input has been quiet for `[sidebar] afk_after_secs` (15 minutes by default), and `Active` otherwise. Only tmux reports an input clock (`client_activity`), so an attached Zellij room stays `Active` until every client detaches. The tmux clock advances only on real input, including input over SSH, so remote tmux rooms honour the setting too.
 
-tmux presence is sampled, not pushed. While a client is attached the producer re-samples every `PRESENCE_SAMPLE_TTL` (1 second), writing `client-presence-probe.stamp` before the attempt so event-driven fetches cannot burst probes. An unchanged sample leaves `snapshot.json` and its wake untouched, and a failed fallback focus probe carries the prior presence and viewed panes forward from `snapshot.json`.
+tmux presence is sampled, not pushed. While a client is attached the producer re-samples every `PRESENCE_SAMPLE_TTL` (1 second), writing `live/client-presence-probe.stamp` before the attempt so event-driven fetches cannot burst probes. An unchanged sample leaves `lanes/snapshot.json` and its wake untouched, and a failed fallback focus probe carries the prior presence and viewed panes forward from `lanes/snapshot.json`.
 
 ## Fusion rules
 
@@ -375,7 +375,7 @@ Fusion is pure over pulled truth, the event store, and `now_ms`. It runs on the 
 
 ## Focus intent
 
-Every RimZ-initiated focus action, a user jump or an automatic repair, is a durable two-phase intent in `focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)). The file is workspace-wide and client-scoped. It carries a nonce, the session, the target pane, the origin, the exact pre-action client map, the viewport offset, and the frozen row order from the source frame.
+Every RimZ-initiated focus action, a user jump or an automatic repair, is a durable two-phase intent in `lanes/focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)). The file is workspace-wide and client-scoped. It carries a nonce, the session, the target pane, the origin, the exact pre-action client map, the viewport offset, and the frozen row order from the source frame.
 
 The intent has two states:
 

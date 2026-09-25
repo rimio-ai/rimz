@@ -6,7 +6,7 @@
 
 The transcript is a RimZ-owned conversation log, separate from each provider's native session files. Ended agents, past channels, and their asks and answers stay readable after the native files rotate away.
 
-Hook and delivery paths append entries to fixed 7-day buckets (`FILE_DAYS`) at `transcript/<bucket-start>.jsonl` in the workspace store, under the workspace lock. The buckets are append-only and never pruned. Readers sort by recorded timestamp, so a bucket boundary carries no ordering meaning.
+Hook and delivery paths append entries to fixed 7-day buckets (`FILE_DAYS`) at `audit/transcript/<bucket-start>.jsonl` in the workspace store, under the workspace lock. The shared `disk/buckets.rs` helper names the UTC date at the start of each epoch-aligned seven-day window. Buckets are append-only; the [audit class sweep](../store.md#what-is-on-disk) bounds retention. Readers sort by recorded timestamp, so a bucket boundary carries no ordering meaning.
 
 Every transcript reader skips legacy paste fragments written by RimZ 0.4.3 and earlier: a `Prompt` with no `from` or `message_id` whose entire trimmed text is one `<pasted_content id="X">` or `</pasted_content id="X">` tag line. These are provider wrappers, not human prompts; genuine prompts containing a wrapper pair mid-text stay. The append-only files are not rewritten.
 

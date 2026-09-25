@@ -12,32 +12,32 @@ Diagnostic logs live in persistent state because an investigation starts after t
 
 | Surface | Location | Records | Owner |
 | --- | --- | --- | --- |
-| `diag.log.jsonl` | workspace state dir | typed anomaly records, rate-limited | this page |
-| `diag-frames/` | workspace state dir, `0700` | prior and offending pane-frame pairs | [Frame captures](#frame-captures) |
-| `notify.log.jsonl` | workspace state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md#the-trace-log) |
-| `plugin-presence.log.jsonl` | workspace state dir | Zellij presence-plugin keepalive samples | [below](#zellij-presence-plugin-telemetry) |
+| `audit/diag.log.jsonl` | workspace state dir | typed anomaly records, rate-limited | this page |
+| `audit/diag-frames/` | workspace state dir, `0700` | prior and offending pane-frame pairs | [Frame captures](#frame-captures) |
+| `audit/notify.log.jsonl` | workspace state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md#the-trace-log) |
+| `audit/plugin-presence.log.jsonl` | workspace state dir | Zellij presence-plugin keepalive samples | [below](#zellij-presence-plugin-telemetry) |
 | `focus-repairs.log.jsonl` | account-global `~/.rimz/logs/`, beside the assist history | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
-| `binding.log.jsonl` | workspace runtime dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
+| `audit/binding.log.jsonl` | workspace state dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
 | `lsp.log.jsonl` | machine `~/.rimz/logs/` | shared-server refusals, queue timeouts, watch errors, kills, and crashes | [lsp.md](./lsp.md#visibility) |
-| `topology-writer-conflict.json` | workspace runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
+| `lanes/topology-writer-conflict.json` | workspace runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 
-The `diag/` module owns the JSONL surfaces, and all of them share the append, decoded-visit, and generation-path helper in [`disk::rotating`](../../crates/rimz/src/disk/rotating.rs). A log rotates to one kept generation (`<name>.1.jsonl`): workspace logs at 1 MiB, the focus-repair log at the assist history's 4 MiB. A failed append logs at debug and the calling path continues. A reader visits the retained generation, then the active file, and skips missing files and malformed lines.
+The `diag/` module owns the JSONL surfaces, and all of them share the append, decoded-visit, and generation-path helper in [`disk::rotating`](../../crates/rimz/src/disk/rotating.rs). A log rotates to one kept generation (`<name>.1.jsonl`): the four workspace logs at the shared 1-MiB cap (`disk::retention::ROTATING_LOG_MAX_BYTES`), the focus-repair log at the assist history's 4 MiB. A failed append logs at debug and the calling path continues. A reader visits the retained generation, then the active file, and skips missing files and malformed lines.
 
 The LSP log rotates at 4 MiB and carries timestamp, checkout root, server name, event, and structured details. `rimz doctor` reads its latest refusal or queue timeout for human inspection. An unavailable `rimz lsp` query uses a matching memory-refusal record only to explain its exit-3 reason; diagnostics never decide server availability. The separate `~/.rimz/lsp-history.jsonl` is an admission input owned by `lsp/history.rs`, not diagnostics.
 
-The first three surfaces carry workspace identity through one [`DiagSink`](../../crates/rimz/src/diag.rs). A disabled sink keeps the same methods and does nothing, so emitting callsites need no `#[cfg]` or branch. The notification trace and the binding log belong to their own subsystems and share only the rotating helper; the rest of this page is `diag.log.jsonl` and its captures.
+The first three surfaces carry workspace identity through one [`DiagSink`](../../crates/rimz/src/diag.rs). A disabled sink keeps the same methods and does nothing, so emitting callsites need no `#[cfg]` or branch. The notification trace and the binding log belong to their own subsystems and share only the rotating helper; the rest of this page is `audit/diag.log.jsonl` and its captures.
 
 ### Zellij presence-plugin telemetry
 
-`plugin-presence.log.jsonl` holds the samples the presence plugin's keepalive delivers ([`plugin_presence.rs`](../../crates/rimz/src/diag/plugin_presence.rs), appended from `sidebar::presence`). Each sample carries the exact `(loaded_at_ms, plugin_id)` generation and plugin build; the rest of its fields are listed in [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin).
+`audit/plugin-presence.log.jsonl` holds the samples the presence plugin's keepalive delivers ([`plugin_presence.rs`](../../crates/rimz/src/diag/plugin_presence.rs), appended from `sidebar::presence`). Each sample carries the exact `(loaded_at_ms, plugin_id)` generation and plugin build; the rest of its fields are listed in [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin).
 
-`rimz doctor` lists the presence-plugin panes loaded in the live session and joins each id to its newest telemetry generation. A plugin is active when it is the fresh topology cache's writer, rejected when it is the stale writer in `topology-writer-conflict.json`, and inactive otherwise; a build that differs from the desired plugin build is marked outdated. When the live listing fails, Doctor reports the probe unavailable rather than presenting retained telemetry as live.
+`rimz doctor` lists the presence-plugin panes loaded in the live session and joins each id to its newest telemetry generation. A plugin is active when it is the fresh topology cache's writer, rejected when it is the stale writer in `lanes/topology-writer-conflict.json`, and inactive otherwise; a build that differs from the desired plugin build is marked outdated. When the live listing fails, Doctor reports the probe unavailable rather than presenting retained telemetry as live.
 
 Memory growth and stale-writer rejections are informational, several loaded plugins point to `rimz reload`, and a recent genuine failure delta is actionable. Pages climbing with the Zellij server's RSS put a leak in the plugin's WASM linear memory; flat pages under climbing RSS put the growth in Zellij-native state on the plugin command path. Samples that lack a build or split failure counts report those fields as unknown.
 
 ## The record envelope
 
-Every line in `diag.log.jsonl` is one `DiagEnvelope` from [`record.rs`](../../crates/rimz/src/diag/record.rs):
+Every line in `audit/diag.log.jsonl` is one `DiagEnvelope` from [`record.rs`](../../crates/rimz/src/diag/record.rs):
 
 | Field | Meaning |
 | --- | --- |
@@ -187,11 +187,11 @@ One condition can write several records, and one record can stand for many occur
 - **Kinds that skip the identity limit.** `health_alert`, `renderer_panic`, `renderer_exit`, `producer_elected`, `producer_demoted`, `client_reaped`, `topology_write_rejected`, and the three width traces go through `emit_unlimited`: only the kind ceiling applies, so each occurrence is its own line.
 - **The observer adds no limit of its own.** Its writer thread emits every draft it receives through the sink; `dropped_msgs` separately counts drafts the full channel shed.
 - **One fault, many instances.** Every renderer records its own stream, so a published-frame problem records once per renderer while a node-local fusion or gating problem records on one. The count of distinct `instance_id` values inside an episode separates the two.
-- **Captures churn faster than records.** The capture ring can turn over within hours in a busy room, so copy `diag-frames/` pairs out at the start of an investigation.
+- **Audit retention.** The room's 30-day/64-MiB audit sweep can remove captures, so copy `audit/diag-frames/` pairs out at the start of an investigation.
 
 ## Frame captures
 
-`frame_rejected`, `pane_count_drop`, and `pane_carry_forward` records name their capture in `frames_ref`. Captures live in `diag-frames/`, a private `0700` ring beside the log that keeps the last eight prior/offending pairs. Each pair is one `frame.<at_ms>.<seq>.<kind>.json` file holding `prior` and `offending`, written as a disposable cache (atomic rename, no fsync).
+`frame_rejected`, `pane_count_drop`, and `pane_carry_forward` records name their capture in `frames_ref`. Captures live in `audit/diag-frames/`, a private `0700` directory beside the log, bounded by the audit sweep rather than a write-time ring. Each pair is one `frame.<at_ms>.<seq>.<kind>.json` file holding `prior` and `offending`, written as a disposable cache (atomic rename, no fsync).
 
 Frame captures may contain command lines, cwd values, and other pane metadata. They sit behind the same local-filesystem privacy boundary as the rest of the workspace state directory.
 
@@ -203,12 +203,12 @@ Each incident keeps the source severity apart from its state (`investigate`, `co
 
 Doctor's message probe ([`cli/doctor/messages.rs`](../../crates/rimz/src/cli/doctor/messages.rs)) calls an open record stuck once it carries `attempts` above one, an unconfirmed send, or any `last_error`. A wake the sweep deferred because its receiver has no live pane records that error in its first 30-second window ([messaging](./harness/messaging.md#scheduling-and-wakeups)), so it is a doctor problem row from that first window until the pane returns and the next defer clears the sentence. That is deliberate: an undeliverable message is exactly what the health surface is for, and the row disappears on its own once the receiver is bindable again.
 
-`rimz doctor --clear` writes the watermark `doctor-cleared.json` beside the log. Doctor then hides diagnostics, the last incident marker, durable message failures, and multiplexer server-log records at or before its `cleared_at` timestamp. The logs, incident archive, and event log are untouched, so deleting the watermark restores the full retained history.
+`rimz doctor --clear` writes the watermark `cache/doctor-cleared.json`. Doctor then hides diagnostics, the last incident marker, durable message failures, and multiplexer server-log records at or before its `cleared_at` timestamp. The logs, incident archive, and event log are untouched, so deleting the watermark restores the full retained history.
 
 The log is plain JSONL. A kind census is the fastest orientation on an unfamiliar one (sample output):
 
 ```console
-$ DIAG="$(rimz paths --json | jq -r .state_dir)"/diag.log.jsonl
+$ DIAG="$(rimz paths --json | jq -r .state_dir)"/audit/diag.log.jsonl
 $ jq -r '.event.kind' "$DIAG" | sort | uniq -c | sort -rn | head
     311 sidebar_width_settle
     197 link_alert
@@ -234,7 +234,7 @@ jq 'select(.event.kind == "renderer_exit") | .event.cause' "$DIAG"              
 
 One pass over the log answers an episode's three questions in order: what the user saw, where truth went wrong, and why.
 
-1. **Build the timeline.** Run the timeline one-liner above, or `rimz doctor` for the recent incidents, and cluster records by `at_ms`. An episode reads as a burst across kinds. Copy the matching `diag-frames/` pairs out now, before the ring turns over.
+1. **Build the timeline.** Run the timeline one-liner above, or `rimz doctor` for the recent incidents, and cluster records by `at_ms`. An episode reads as a burst across kinds. Copy the matching `audit/diag-frames/` pairs out now, before the ring turns over.
 2. **Locate the fault in published truth or the local fold.** Every `frame_anomaly` carries the pulled snapshot's scalars beside the rendered ones. For `row_presence_flap`, read the missing-edge frame stamp and `gap_evidence.pulled_row_present` and `pulled_pane_present`: false membership puts the gap in pulled truth, true membership in the renderer's committed fold. The distinct `instance_id` count is a second signal.
 3. **Attribute the cause.** Producer records in the same window name it: the carry kinds as described above, `frame_rejected` for held implausible reads, `pane_count_drop` for published shrinks, `gate_hold` for renderer-side holds. The frame stamp (`produced_at_ms`) joins producer records, observer records, and capture filenames across the episode.
 4. **Diff the captures.** Each capture holds the last good frame beside the offending one; `jq '{prior: (.prior.tabs | length), offending: (.offending.tabs | length)}'` shows a whole-tab omission at a glance.

@@ -603,7 +603,7 @@ Success does not clear the record because wakes run far more often than telemetr
 
 Three consecutive fork failures clear the configured `rimz_bin` and retry one `alive` wake through `rimz` on PATH; a successful fork resets the count.
 
-The keepalive carries WASM memory pages, uptime, per-bucket command counts (completed, succeeded, stale-writer rejections, topology failures, other failures), the retained failure, and the Zellij version into the rotating `plugin-presence.log.jsonl`. That file is the leak-investigation surface, because it separates plugin linear-memory growth from Zellij-native RSS growth.
+The keepalive carries WASM memory pages, uptime, per-bucket command counts (completed, succeeded, stale-writer rejections, topology failures, other failures), the retained failure, and the Zellij version into the rotating `audit/plugin-presence.log.jsonl`. That file is the leak-investigation surface, because it separates plugin linear-memory growth from Zellij-native RSS growth.
 
 ## tmux backend
 

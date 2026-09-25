@@ -14,7 +14,7 @@ Four rules follow from having no daemon, and they explain most of the module.
 
 **Every fire is at-most-once per occurrence.** The elder writes the fire stamp before it spawns the runner, so a hot tick cannot spawn the same occurrence twice, and a per-task advisory run lock stops two runs from overlapping. A start that fails keeps that stamp: the occurrence is spent, the next tick does not retry it, and the failure is recorded instead (below).
 
-**An event fires in the process that produced it.** A clock needs a timekeeper and an event does not: whoever emits a signal resolves the subscribers and spawns their runs itself. Signal and watch triggers therefore work with no room open and never touch `loop-fire.json`. The cost is that nothing queues a signal, so a signal is never replayed ([The signal vocabulary](#the-signal-vocabulary)).
+**An event fires in the process that produced it.** A clock needs a timekeeper and an event does not: whoever emits a signal resolves the subscribers and spawns their runs itself. Signal and watch triggers therefore work with no room open and never touch `lanes/loop-fire.json`. The cost is that nothing queues a signal, so a signal is never replayed ([The signal vocabulary](#the-signal-vocabulary)).
 
 **Every fire appends exactly one history row.** Gated, skipped, overlapped, expired, delivered, completed, or errored, a fire records one `LoopRunRecord`. That log is the durable trace of what automation did, so it must be complete. A fire that produced no row of its own is no exception: the launch site appends a `start failed` row in-process, because no helper that never ran can report its own failure.
 
@@ -29,7 +29,7 @@ Every path below is under `crates/rimz/src/`; `schedule/` means `harness/schedul
 | [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs), [`overlay_store.rs`](../../../crates/rimz/src/harness/schedule/overlay_store.rs) | RimZ-owned instance rows with locked insert, remove, and rename, and the locked persistence the overlays share. |
 | [`schedule/arming.rs`](../../../crates/rimz/src/harness/schedule/arming.rs), [`strikes.rs`](../../../crates/rimz/src/harness/schedule/strikes.rs) | Machine-local overlays: enablement, bounded pauses, effective arming and source defaults through `ArmState::resolve`, the effective-last-fire rule, and consecutive failure counts. |
 | [`schedule/config_edit.rs`](../../../crates/rimz/src/harness/schedule/config_edit.rs) | Comment-preserving TOML edits to machine `loop.toml` and project `.rimz/config.toml`. |
-| [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) | Clock firing shared by the elder and the external tick: root ownership, arm-on-first-sight, due planning, `loop-fire.json`, and how the detached `rimz loop run <name>` is hosted. |
+| [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) | Clock firing shared by the elder and the external tick: root ownership, arm-on-first-sight, due planning, `lanes/loop-fire.json`, and how the detached `rimz loop run <name>` is hosted. |
 | [`cli/loop_timer.rs`](../../../crates/rimz/src/cli/loop_timer.rs) | The systemd user timer and launchd agent: install, status, removal, unit rendering, and the external tick. |
 | [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) | `TaskFire`: the gate ladder, the run lock, the check, prompt preparation, the prepared effect, and the one terminal history transition; `stop_task`, the stop ladder. |
 | [`schedule/runner/prompt.rs`](../../../crates/rimz/src/harness/schedule/runner/prompt.rs) | `compose_wait`: the wait line, the verdict line, the evidence, and the verbatim note. |
@@ -67,7 +67,7 @@ Three sources back the catalog.
 | --- | --- | --- |
 | `Config` | `~/.rimz/loop.toml` | per-machine automation, like a crontab; never inherited by a clone |
 | `Project` | `<root>/.rimz/config.toml` under `[tasks.*]` | shared automation that travels with the repository; inert until trusted and enabled on this machine |
-| `Instance` | `~/.rimz/ws/<workspace-dir>/loop-instances.json` | RimZ-owned runtime rows: one-shots, poll-until rows, `once` subscriptions, and every session-pinned delivery, including recurring clocks and standing signals |
+| `Instance` | `~/.rimz/ws/<workspace-dir>/records/loop-instances.json` | RimZ-owned runtime rows: one-shots, poll-until rows, `once` subscriptions, and every session-pinned delivery, including recurring clocks and standing signals |
 
 The instance store keeps runtime churn out of user config. An agent that arms `rimz wait --in 30m` writes an instance row, not `loop.toml`, and the row retires itself after it fires. `TaskCatalog::load(Some(root))` reads that workspace's instances and `load(None)` reads machine tasks only. Wait rows found in `loop.toml` stay `Config` rows, and `rimz gc` reaps them.
 
@@ -154,7 +154,7 @@ The arming stamp sets the edge each shape reads. A calendar task first seen afte
 
 1. Load the runnable tasks for the room's project root, dropping untrusted project rows.
 2. Keep only tasks whose normalized `root` maps to this room's `WorkspaceId`, so each room fires only its own tasks. `rimz loop add` writes a canonical absolute root; a hand-edited `~` or relative root is expanded and canonicalized before the ownership check, display, and execution.
-3. Plan every task against `loop-fire.json`, the per-room map from task name to last-fire timestamp in the workspace runtime directory.
+3. Plan every task against `lanes/loop-fire.json`, the per-room map from task name to last-fire timestamp in the workspace runtime directory.
 4. Write the new state, then spawn a detached `rimz loop run <name>` with null stdio for each fire. A spawn that fails records a `start failed` row for that task and is left off the fired list; the stamp written in this step stays as it is.
 
 The plan decides each task from its stamp, first matching row wins:
@@ -205,7 +205,7 @@ Then the action runs. `TaskFirePlan` returns `Done` (a gate already produced the
 
 A closed gate costs nothing and adds no strike; a recurring task keeps polling until the condition clears. The surplus gate fails closed: an account with no window reading keeps it shut, because spending against an unknown budget is the failure the gate exists to prevent.
 
-The run lock is `loop-run-<name>.lock` beside `loop-fire.json`, holding the holder's `{pid, started_at}`. The kernel releases it when the runner exits or crashes, and display probes read it without rewriting it. `runner::stop_task` is the stop ladder behind `rimz loop stop`, with the CLI passing its supervised cancellation in as a closure:
+The run lock is `locks/loop-run-<name>.lock`, separate from `lanes/loop-fire.json`, holding the holder's `{pid, started_at}`. The kernel releases it when the runner exits or crashes, and display probes read it without rewriting it. `runner::stop_task` is the stop ladder behind `rimz loop stop`, with the CLI passing its supervised cancellation in as a closure:
 
 1. Probe the lock; a free lock reports no active run.
 2. Cancel the newest active run through the durable path and wait five seconds.
@@ -385,7 +385,7 @@ The stage owner does not learn of a flip through a subscription. `team_stage` di
 
 `fire_signal` never touches an instance row, so a sibling observation leaves the subscription armed. The runner consumes a one-shot once its delivery is dispatched, and a standing subscription stays.
 
-Nothing queues a match. Signal firing leaves `loop-fire.json` untouched, and a subscription written one second after the emit misses it. The elder may stamp a signal row when it first sees the catalog, but `fire_signal` never consults that stamp. A signal reaches only the subscriptions armed in that workspace at that instant, which is what lets an emitter run with no room open.
+Nothing queues a match. Signal firing leaves `lanes/loop-fire.json` untouched, and a subscription written one second after the emit misses it. The elder may stamp a signal row when it first sees the catalog, but `fire_signal` never consults that stamp. A signal reaches only the subscriptions armed in that workspace at that instant, which is what lets an emitter run with no room open.
 
 ### The watch verdict
 
@@ -425,7 +425,7 @@ A file watch compares existence, size, modification time, and identity (`dev`, `
 
 Cancel removes the row first, then `stop_watcher` sends SIGTERM to the lock holder's process group, stopping the watcher and its command together. Non-positive PIDs are rejected, and an absent process counts as stopped. If a watcher dies without firing, the elder's watch-lost rule fires the `Lost` verdict after the 30-second grace, with the output file's tail as evidence.
 
-`signal::wait_output_path` derives `<StatePaths.tmp_dir>/rimz-waits/<name>.output` for arming, watching, and lost-watcher evidence. `WatchOutcome::measured` records the file's byte size, line count, and estimated tokens (`utils::tokens::estimate` over at most the first 1 MiB, scaled by length beyond it), and maps the host path through `sandbox::TmpView::current` (machine policy, since no recipient is known yet) to the agent-visible `output_path`: `/tmp/rimz-waits/<name>.output` under sandbox isolation, the host path otherwise. A failed measurement warns and records a zero summary, which renders as `· no output` for command watches and no output segment for polled watches, like an empty file. Room teardown removes the file; in a long-lived room gc prunes it only when there is no catalog row, no running watcher, and no write in the 14-day retention. The run record keeps the tail for `rimz loop logs`.
+`signal::wait_output_path` derives `<StatePaths.tmp_dir>/rimz-waits/<name>.output` for arming, watching, and lost-watcher evidence. `WatchOutcome::measured` records the file's byte size, line count, and estimated tokens (`utils::tokens::estimate` over at most the first 1 MiB, scaled by length beyond it), and maps the host path through `sandbox::TmpView::current` (machine policy, since no recipient is known yet) to the agent-visible `output_path`: `/tmp/rimz-waits/<name>.output` under sandbox isolation, the host path otherwise. A failed measurement warns and records a zero summary, which renders as `· no output` for command watches and no output segment for polled watches, like an empty file. Room teardown removes the file; in a long-lived room gc prunes it only when there is no running watcher and no write in the seven-day grace. The run record keeps the tail for `rimz loop logs`.
 
 ## Waits
 

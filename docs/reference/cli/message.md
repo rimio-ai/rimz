@@ -189,7 +189,7 @@ A wait is refused before sending when a target has no lifecycle state, is not ru
 | `abandoned` | Delivery attempts failed repeatedly before anything reached the pane. |
 | `archived` | The recipient, its channel, or a watched `--when` agent ended first. |
 
-The last six are final. A final record keeps its text in `messages/history.jsonl`, which holds the most recent final records, so `show` can display it and `requeue` can send it again.
+The last six are final. A final record keeps its text in `audit/messages/<bucket-start>.jsonl`, subject to the room's audit retention, so `show` can display it and `requeue` can send it again while retained.
 
 ## Inbox and queue verbs
 

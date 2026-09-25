@@ -62,7 +62,7 @@ Each scope reads a different figure.
 
 The `/day` baseline is stamped on the first evaluation of a local date and re-stamped when the date changes, so one long-lived session measures each calendar day separately while the provider's counter keeps climbing.
 
-A turn entry in `budget.scopes.json` is keyed by the agent and holds the `turn_started_at` it was stamped for. When the agent's `turn_started_at` changes, the entry is replaced before comparison: the baseline moves to the current cost and the old park and interrupt throttle go with it, so the first tick of a new turn reads zero even when the prior turn ended over cap. An agent with no `turn_started_at` loses its entry.
+A turn entry in `lanes/budget.scopes.json` is keyed by the agent and holds the `turn_started_at` it was stamped for. When the agent's `turn_started_at` changes, the entry is replaced before comparison: the baseline moves to the current cost and the old park and interrupt throttle go with it, so the first tick of a new turn reads zero even when the prior turn ended over cap. An agent with no `turn_started_at` loses its entry.
 
 Both daily reads are guarded against the wrong day. Each compares the cache's `day_cutoff_secs` with the local-day start computed from `now`, and a cache stamped for another day contributes nothing. A stale cache therefore holds a cap open instead of parking the fleet on yesterday's total.
 
@@ -70,20 +70,21 @@ Both daily reads are guarded against the wrong day. Each compares the cache's `d
 
 | File | Location | Holds |
 | --- | --- | --- |
-| `budget.<digest>.json` | room runtime root | one agent: the spec, a runtime raise or disable, the day baseline, the park stamp, the interrupt throttle, the waiver |
-| `budget.scopes.json` | room runtime root | per-agent turn entries (baseline, park, throttle), plus each agent's fleet and account waiver, park threshold, and interrupt throttle |
-| `budget.fleet.json` | room runtime root | this room's fleet scope: a runtime override, raise, or disable, and the park stamp |
+| `lanes/budget.<digest>.json` | room runtime `lanes/` | one agent: the spec, a runtime raise or disable, the day baseline, the park stamp, the interrupt throttle, the waiver |
+| `lanes/budget.scopes.json` | room runtime `lanes/` | per-agent turn entries (baseline, park, throttle), plus each agent's fleet and account waiver, park threshold, and interrupt throttle |
+| `records/budget.fleet.json` | room state | standing fleet override, raise, or disable; durable CLI-only writes |
+| `lanes/budget.fleet-park.json` | room runtime | producer-owned park stamp; the CLI clears it on mutation |
 | `budget.account.<kind>@<account>.json` | machine-shared state root | one account: a runtime raise or disable, and the park stamp |
 
 The room runtime root is `RuntimePaths::root`; the account ledger sits under `RuntimePaths::persistent_shared_root`, with its lock file under `shared_root`. A kind name with characters outside ASCII alphanumerics, `-`, and `_` is replaced in the filename by `kind-` and 16 hex characters of its SHA-256 (`account_ledger_component`).
 
-The agent digest comes from [`store/sidecar.rs`](../../../crates/rimz/src/store/sidecar.rs): the first 32 hex characters of a SHA-256 over the kind and session id, which keeps session ids out of filenames. Auto-continue parks (`auto-continue.<digest>.json`) and idle-compaction fire records (`idle-compact/<digest>.json`) use the same digest.
+The agent digest comes from [`store/sidecar.rs`](../../../crates/rimz/src/store/sidecar.rs): the first 32 hex characters of a SHA-256 over the kind and session id, which keeps session ids out of filenames. Auto-continue parks (`lanes/auto-continue.<digest>.json`) and idle-compaction fire records (`live/idle-compact/<digest>.json`) use the same digest.
 
-Every ledger is cache-class: written through `write_temp_then_rename_cache`, rebuildable, and safe to delete. Losing one loses a park, never money.
+Fleet choices survive reboot and soft reset. The producer writes only the separate park lane through `write_temp_then_rename_cache`, never the durable record. Agent and turn ledgers remain disposable session state.
 
-The fleet and account ledgers are shared between the producer and `rimz budget`, so their writes take a lock file. The producer never writes a whole scope ledger: `ScopeLedgerFile::merge_park` re-reads the file under the lock and replaces only `parked`, so a tick cannot overwrite a cap change the CLI just made. The CLI reads without the lock and writes the whole ledger under it; the park it might overwrite is one the CLI clears anyway.
+The account ledger remains shared between the producer and `rimz budget`, so its writes take a lock file. The fleet has no locked park merge: its two files have separate steady writers, and a CLI clear raced by a producer tick is corrected on the next Under or Disabled verdict. The producer never writes a whole scope ledger: `ScopeLedgerFile::merge_park` re-reads the file under the lock and replaces only `parked`, so a tick cannot overwrite a cap change the CLI just made. The CLI reads without the lock and writes the whole ledger under it; the park it might overwrite is one the CLI clears anyway.
 
-The account ledger is the only machine-shared one. Every room with an agent on that account evaluates the same account spend against the same ledger, but each room interrupts only its own panes, and interrupt and waiver state stay in each room's `budget.scopes.json`. A raise from one room clears the shared park, so every room's next tick stops projecting the account park onto its agents. Only the room that ran the command queues continue prompts, and only to the agents it interrupted; agents another room interrupted stay at rest.
+The account ledger is the only machine-shared one. Every room with an agent on that account evaluates the same account spend against the same ledger, but each room interrupts only its own panes, and interrupt and waiver state stay in each room's `lanes/budget.scopes.json`. A raise from one room clears the shared park, so every room's next tick stops projecting the account park onto its agents. Only the room that ran the command queues continue prompts, and only to the agents it interrupted; agents another room interrupted stay at rest.
 
 ## The verdict
 
@@ -106,7 +107,7 @@ spend vs cap  ──────┼── under cap ─────────�
 
 `Under` is restorative. Clearing the park stamp and throttle means that raising a cap above current spend un-parks the agent on the next tick, with no separate reset path. A `/day` rollover goes further and clears the park, the throttle, and the waiver together with the baseline.
 
-The two daily scopes run a smaller fold, `evaluate_daily_scope`, once per tick per scope: a cap, a spend, and a park stamp, with no waiver. Their waivers are per agent instead, kept in `budget.scopes.json` by `evaluate_scope_waiver`, so one person answering one agent does not un-park the whole fleet.
+The two daily scopes run a smaller fold, `evaluate_daily_scope`, once per tick per scope: a cap, a spend, and a park stamp, with no waiver. Their waivers are per agent instead, kept in `lanes/budget.scopes.json` by `evaluate_scope_waiver`, so one person answering one agent does not un-park the whole fleet.
 
 The turn scope runs `evaluate_turn_scope` per root agent after the rebase described in [Where the spend comes from](#where-the-spend-comes-from). An at-or-over reading parks with no waiver. The next human prompt starts a new turn and clears the park through that rebase. A teammate-triggered turn meets the same cap, while message delivery gates keep background and agent-to-agent traffic from reopening a `Paused` agent ([messaging.md](./messaging.md#status-lifecycle)).
 
@@ -124,11 +125,11 @@ Programmatic entry points ignore the waiver; see [the fail-fast gate](#the-fail-
 
 [`enforce`](../../../crates/rimz/src/harness/budget.rs) runs on the producer's refresh tick (`sidebar/refresh/mod.rs`) against a snapshot with the live day spend applied. It evaluates the daily scopes once, then walks every root agent, skipping provider-native subagents and empty or provisional ids:
 
-1. **Evaluate.** One agent verdict from the agent's own ledger, one turn verdict from its `budget.scopes.json` entry, and one scope verdict from the first parked daily scope that binds it (the fleet, or its own account) combined with its scope waiver.
+1. **Evaluate.** One agent verdict from the agent's own ledger, one turn verdict from its `lanes/budget.scopes.json` entry, and one scope verdict from the first parked daily scope that binds it (the fleet, or its own account) combined with its scope waiver.
 2. **Classify.** When every verdict is under or disabled, the agent's budget auto-continue record is cleared and the walk moves on. When none parks (a waiver is running), nothing else happens.
 3. **Arm the day reset.** A daily scope park, or a parked `/day` agent cap, arms a budget auto-continue record with the next local midnight as its deadline, provided `pause_applies` holds for the agent. Every other park, including a turn-only park whose reset is a prompt, clears the record. The `Budget` park class is [providers.md § Auto-continue](../agents/providers.md#auto-continue).
 4. **Interrupt.** A `Running` agent with a live bound pane gets the detached `rimz agents budget-park` helper, unless an interrupt for one of its current parks was sent within `INTERRUPT_RETRY_SECS` (120 seconds). An agent that keeps running past a park is interrupted again every two minutes. The throttle stamps are set only when the helper spawns.
-5. **Persist.** A changed agent ledger is written back, each changed daily park is merged into its scope ledger, and a changed `budget.scopes.json` is rewritten.
+5. **Persist.** A changed agent ledger is written back, each changed daily park is merged into its scope ledger, and a changed `lanes/budget.scopes.json` is rewritten.
 
 The helper, [`cli/agents_cmd/budget_park.rs`](../../../crates/rimz/src/cli/agents_cmd/budget_park.rs), does the two things the producer may not: touch a pane and write to the store. It checks that the pane is still bound to the agent and refuses otherwise, presses Esc, then moves every non-terminal run record of that agent to `budget_exceeded` through `harness::run::budget_exceeded` and wakes each run it wrote. The run transition happens even when the keypress fails, and the helper reports the keypress error afterwards. The cost it records is the agent's own (`total_cost_usd`, falling back to the agent ledger's park stamp), never the fleet or account figure: a run record describes its own spend, and the broader figure only explains why the pane stopped.
 

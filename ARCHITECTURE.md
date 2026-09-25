@@ -78,12 +78,12 @@ State is tiers of plain files, scoped by what each one outlives. [`disk/paths.rs
 workspace store         ~/.rimz/ws/<basename>-<hex>/
   one room's durable truth: the framed event log and the records beside it,
   plus the producer caches that survive a reboot
-  tmp/ and skills/ hold room-owned temporary files and rewritten skill copies,
-  not durable records; teardown removes both
+  log/, records/, audit/, cache/, owned/, tmp/ group files by lifetime;
+  workspace.json (layout: 2) and rimz remain room identity at the root
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/  (or /tmp/rimz-<uid>/…)
-  one room's disposable tier: wakeup sockets, heartbeats, read receipts,
-  enrichment sidecars, wait watcher locks, and active-time accumulators
+  sock/, live/, lanes/, locks/ group disposable coordination by lifetime;
+  reset and teardown clear the first three, never held lock inodes
 
 shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
   the account-global election locks and the spending service's versioned socket
@@ -95,12 +95,12 @@ machine-wide persistent ~/.rimz/{accounts,builds,loops,logs,web,cache}/
   accounts/<kind>/<name>/ provider homes RimZ placed, builds/<build_id>/rimz
   immutable executable generations, the loop registry, append-only logs, the
   browser daemon pid/port records and credential, the broadcast room allowlist,
-  and cache/ for everything RimZ can rebuild: downloaded assets, the presence
-  plugin, and cache/providers/ (accounts, rate limits, credits, spend, pricing)
+  and cache/ for downloaded assets, the presence plugin, and cache/providers/
+  (accounts, rate limits, credits, spend, pricing, and account budget ledgers)
   ~/.rimz/lsp-history.jsonl holds learned peaks; logs/lsp.log.jsonl holds evidence
 ```
 
-One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent. Two persistent dirs sit at the ends of that scale: `cache/` is safe to delete, at the cost of a cold provider dashboard and one full spending walk, and `accounts/` holds provider logins (credentials, settings, transcripts) that nothing can regenerate and no RimZ command removes. The store tier's durability contract (temp-file-plus-rename, the framed log, and the write classes) is [store.md](./docs/internals/store.md); the provider files are [providers.md](./docs/internals/agents/providers.md) and [spending.md](./docs/internals/agents/spending.md); the loop registry is [loops.md](./docs/internals/harness/loops.md); executable staging is [sidebar.md → Build promotion](./docs/internals/sidebar/sidebar.md#build-promotion).
+One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent. Provider caches rebuild at the cost of a cold dashboard and one full spending walk, but machine-shared account budget ledgers in that same tree also hold user choices. `accounts/` holds provider logins (credentials, settings, transcripts) that nothing can regenerate and no RimZ command removes. The store tier's durability contract (temp-file-plus-rename, the framed log, and the write classes) is [store.md](./docs/internals/store.md); the provider files are [providers.md](./docs/internals/agents/providers.md) and [spending.md](./docs/internals/agents/spending.md); the loop registry is [loops.md](./docs/internals/harness/loops.md); executable staging is [sidebar.md → Build promotion](./docs/internals/sidebar/sidebar.md#build-promotion).
 
 ## Code and crate structure
 
