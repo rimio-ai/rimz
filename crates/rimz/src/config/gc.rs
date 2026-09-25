@@ -2,10 +2,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::disk::retention::DEFAULT_OLDER_THAN;
 use crate::utils::time::{DurationUnit, parse_duration_units};
-
-/// Default age past which `rimz gc` reclaims runtime artifacts and orphan temps.
-const DEFAULT_OLDER_THAN: Duration = Duration::from_secs(7 * 86_400);
 
 const OLDER_THAN_UNITS: &[DurationUnit] = &[
     DurationUnit::Second,

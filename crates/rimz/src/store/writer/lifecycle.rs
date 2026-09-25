@@ -15,8 +15,7 @@ use crate::workspace::record;
 use super::{Store, debounce};
 use crate::store::Result;
 
-const MIB: u64 = 1024 * 1024;
-pub const DEFAULT_EVENT_LOG_ROTATE_BYTES: u64 = 64 * MIB;
+pub use crate::disk::retention::DEFAULT_EVENT_LOG_ROTATE_BYTES;
 const AUTO_ROTATE_DEBOUNCE: Duration = Duration::from_secs(60);
 const AUTO_ROTATE_STAMP: &str = "auto-rotate.stamp";
 

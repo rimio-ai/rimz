@@ -10,6 +10,7 @@ use jiff::Timestamp;
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths, cache_home};
+use crate::disk::retention::CRASH_ARCHIVE_RETENTION;
 use crate::harness::resume::{
     MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, ResumePlan, plan_resume_detailed,
     resume_session_present, split_team_and_flat,
@@ -18,8 +19,6 @@ use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::mux::{MuxBackend, ResumeTab};
 use crate::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
 use crate::{Store, channel};
-
-const CRASH_ARCHIVE_RETENTION: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RebirthErr {

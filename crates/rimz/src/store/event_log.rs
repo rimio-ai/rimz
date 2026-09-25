@@ -7,7 +7,6 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -24,8 +23,7 @@ pub(super) use recovery::repair;
 pub use rotation::{PruneOutcome, RotationOutcome};
 pub(super) use rotation::{newest_archives, prune_archive, rotate};
 
-pub const DEFAULT_RETENTION_ARG: &str = "14d";
-pub const DEFAULT_RETENTION: Duration = Duration::from_secs(14 * 86_400);
+pub use crate::disk::retention::{DEFAULT_RETENTION, DEFAULT_RETENTION_ARG};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EventLogErr {
