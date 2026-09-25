@@ -61,6 +61,7 @@ Each of these subsystems is one page at the top of `docs/internals/`.
 | [remote.md](./remote.md) | SSH attach: targets and aliases, the connect loop and reconnect pacing, terminal hygiene, the connection panel, link health, port forwarding, web tunnels, and bandwidth attribution. |
 | [web.md](./web.md) | Browser access: the writable and broadcast ttyd daemons, the trusted-header gate, room attach and the session picker, sharing a room, the credential, the browser client, remote rooms, and the security boundaries. |
 | [stats.md](./stats.md) | The `rimz stats` panel: where its figures come from, windows, the heatmap and breakdowns, terminal fitting, the held dashboard, and the machine-readable surfaces. |
+| [lsp.md](./lsp.md) | Shared language servers (planned): per-checkout servers shared read-only by a room's agents, launch-time admission against free memory, leases, the kill order under memory pressure, learned cost, the broker, and the `rimz lsp` query surface. |
 | [diagnostics.md](./diagnostics.md) | Diagnostic evidence: the durable log and its record envelope, the event taxonomy, the frame-stream observer, retention, frame captures, reading an episode, and off-box error reporting. |
 
 ## Cost and profiling
