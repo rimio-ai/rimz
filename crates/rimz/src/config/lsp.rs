@@ -10,6 +10,7 @@ pub struct LspConfig {
     pub reserve_percent: u8,
     pub reserve_min: String,
     pub kill_floor_percent: u8,
+    pub idle_timeout: String,
     pub servers: BTreeMap<String, LspServerConfig>,
 }
 
@@ -19,6 +20,7 @@ impl Default for LspConfig {
             reserve_percent: 10,
             reserve_min: "8G".to_owned(),
             kill_floor_percent: 5,
+            idle_timeout: "10m".to_owned(),
             servers: BTreeMap::new(),
         }
     }
