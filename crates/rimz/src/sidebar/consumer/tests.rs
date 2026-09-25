@@ -89,7 +89,6 @@ fn dir_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'static
         ("agent_context_dir", runtime.agent_context_dir.clone()),
         ("subagent_context_dir", runtime.subagent_context_dir.clone()),
         ("agent_activity_dir", runtime.agent_activity_dir.clone()),
-        ("active_time_dir", runtime.active_time_dir.clone()),
         ("read_marks_dir", runtime.read_marks_dir.clone()),
     ]
 }
@@ -491,7 +490,6 @@ fn consumer_fold_inputs_stamp_changes_for_each_dir_input() {
         "agent_context_dir",
         "subagent_context_dir",
         "agent_activity_dir",
-        "active_time_dir",
         "read_marks_dir",
     ] {
         let fixture = StampFixture::new();

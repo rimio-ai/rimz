@@ -216,6 +216,8 @@ pub(super) fn build_list_report(
     agents: &[&AgentState],
     now: Timestamp,
     runtime: Option<&rimz::RuntimePaths>,
+    slots: &[Vec<&AgentState>],
+    active_secs: &rimz::agents::attribution::ActiveSecs,
 ) -> AgentListReport {
     let identity = SelfIdentity::from_env();
     let me = identity.resolve(snapshot);
@@ -240,6 +242,10 @@ pub(super) fn build_list_report(
                     now,
                     ReportOverrides {
                         runtime,
+                        active_secs: rimz::agents::attribution::seat_active_secs(
+                            slot_records_for_agent(slots, agent),
+                            active_secs,
+                        ),
                         ..ReportOverrides::default()
                     },
                 )
@@ -250,6 +256,17 @@ pub(super) fn build_list_report(
         schema: AGENT_REPORT_SCHEMA,
         agents,
     }
+}
+
+pub(super) fn slot_records_for_agent<'a>(
+    slots: &[Vec<&'a AgentState>],
+    agent: &'a AgentState,
+) -> Vec<&'a AgentState> {
+    slots
+        .iter()
+        .find(|slot| slot.iter().any(|record| record.agent_id == agent.agent_id))
+        .cloned()
+        .unwrap_or_else(|| vec![agent])
 }
 
 pub(super) fn build_entry(
@@ -341,9 +358,7 @@ pub(super) fn build_entry(
                 .map(|tokens| tokens.output)
                 .or(agent.usage.output_tokens),
             cost_usd,
-            active_secs: overrides
-                .active_secs
-                .or_else(|| card.and_then(|card| card.estimated_active_secs)),
+            active_secs: overrides.active_secs,
             tool_calls: agent.tool_calls.clone(),
             tool_repeat: agent.tool_repeat.clone(),
         },
@@ -758,7 +773,6 @@ mod tests {
                 phase: TurnPhase::Acting,
                 context: Some(context),
                 context_severity: Some(ContextSeverity::Yellow),
-                estimated_active_secs: Some(754),
                 sub_agent_count: 1,
                 sub_agents: vec![SidebarSubAgent {
                     id: "child".to_owned(),
@@ -802,7 +816,10 @@ mod tests {
             &peers,
             Some(&state.agent_id),
             now,
-            ReportOverrides::default(),
+            ReportOverrides {
+                active_secs: Some(754),
+                ..ReportOverrides::default()
+            },
         );
 
         insta::assert_json_snapshot!("full_agent_report", entry);
@@ -917,7 +934,14 @@ mod tests {
             now,
         );
         let agents = rimz::address::addressable_agents(&snapshot);
-        let list = build_list_report(&snapshot, &agents, now, Some(&runtime));
+        let list = build_list_report(
+            &snapshot,
+            &agents,
+            now,
+            Some(&runtime),
+            &[],
+            &Default::default(),
+        );
         assert_eq!(list.agents[0].budget.cap.as_deref(), Some("$6.00/day"));
         assert_eq!(list.agents[0].budget.spent_usd, Some(5.25));
 

@@ -137,7 +137,7 @@ impl SidebarSnapshot {
         // hidden roots' clocks onto whichever one currently owns the pane. A fork
         // is the same conversation to whoever prompts the pane next, so this runs
         // first and its clock counts as the row's own.
-        forks::fold_same_pane_clocks_onto_bound_row(&mut rows, &self.agents);
+        forks::fold_same_pane_activity_onto_bound_row(&mut rows, &self.agents);
         // A delegating parent's work is its children's, so their activity advances
         // the parent row's displayed clock before the stall check reads it. The
         // clock it replaces stays on the card for the cache-age pin.

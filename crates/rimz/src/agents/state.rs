@@ -776,11 +776,6 @@ pub struct AgentState {
     /// Same enrich-only discipline as `context_pct`: display, never routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
-    /// Runtime-sidecar projection of this root session's estimated working
-    /// time. Rebuilt on every enrichment fold and kept out of the durable
-    /// rollup wire.
-    #[serde(skip)]
-    pub estimated_active_secs: Option<u64>,
     /// Runtime-ledger projection. The producer and consumers rebuild it from
     /// the budget cache; the event reducer never treats it as durable truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1047,7 +1042,6 @@ impl From<AgentStateWire> for AgentState {
             budget: wire.budget,
             usage: wire.usage,
             context: wire.context,
-            estimated_active_secs: None,
             budget_park: wire.budget_park,
             pending_waits: wire.pending_waits,
             background_shells: wire.background_shells,
@@ -1158,7 +1152,6 @@ impl AgentState {
             budget: None,
             usage: AgentUsageSummary::default(),
             context: None,
-            estimated_active_secs: None,
             budget_park: None,
             pending_waits: Vec::new(),
             background_shells: Vec::new(),
