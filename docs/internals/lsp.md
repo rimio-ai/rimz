@@ -66,7 +66,7 @@ Admission waits up to five seconds under the admission lock for the broker's ent
 
 ### The watchdog
 
-Every live broker samples free memory on its five-second housekeeping cadence. Below `kill-floor-percent` of total memory, the machine-lock winner selects victims and re-samples between stops. It first sends a socket stop with reason `memory pressure`; without acknowledgment within two seconds, it uses token-guarded SIGKILL on the server pid and publishes the tombstone itself. Servers receive `oom_score_adj = 800` so the kernel favors them over agents if it acts first.
+Every live broker samples free memory on its five-second housekeeping cadence. Below `kill-floor-percent` of total memory, the machine-lock winner selects victims and re-samples between stops. It first sends a socket stop with reason `memory pressure`, allowing another broker two seconds to shut down after acknowledgment. A server still alive is killed with token-guarded SIGKILL on its process group; when the elected broker selects itself, it kills its server group directly rather than waiting on its own housekeeping loop. Each server starts as a process-group leader, so shutdown also kills its cargo and proc-macro children. The watchdog records free bytes before and after the stop, victim tree RSS in KiB, and peak RSS in the `killed` diagnostic. Servers receive `oom_score_adj = 800` so the kernel favors them over agents if it acts first.
 
 ### Who is killed first
 
@@ -87,7 +87,7 @@ Agents are not messaged. The next `rimz lsp` query against a tombstoned key exit
 
 ## Freshness
 
-`lsp/broker/watch.rs` batches `notify` events into `workspace/didChangeWatchedFiles`. Only configured extensions pass; `.git`, `target`, and `node_modules` components are excluded. Create, change, delete, and rename events map to LSP event types. Freshness depends on the server handling these notifications, not on unsaved editor buffers. Watch traffic never increments request counters.
+`lsp/broker/watch.rs` batches `notify` events into `workspace/didChangeWatchedFiles`. Non-recursive watches cover individual directories, excluding `.git`, `target`, and `node_modules` before registration. Created or moved-in directories gain watches; a scan also forwards files saved before registration. Only configured extensions pass. Create, change, delete, and rename events map to LSP event types. Freshness depends on the server handling these notifications, not on unsaved editor buffers. Watch traffic never increments request counters.
 
 ## The broker
 
@@ -98,6 +98,8 @@ It is spawned through `child_process::spawn_detached_rimz` and calls `setsid`. T
 The 0600 newline-JSON socket accepts `hello`, `lease`, `release`, `query`, `stop`, and `status`; responses carry the nonce. Queries carry `method`, `params`, and `wait_ms`, returning raw LSP `result`, elapsed `indexing`, or `error`. Only queries increment counters. The CLI owns verb semantics, not the broker.
 
 The broker answers `hello` before publishing its first entry, without taking `admission.lock`: admission holds that lock while waiting for publication. Server pid/token remain nullable until spawn. Per-key publication locking prevents a racing refresh from overwriting a stop.
+
+If the initial entry is not published within five seconds, optional admission returns a refusal and records it diagnostically while the launch proceeds. Required admission fails with the server name and a command/configuration fix. Stop reasons use `registry::StopReason`, serialized as the existing human-readable strings in registry, socket, and history records. The broker acknowledges both capability registration and unregistration with `null`.
 
 Two traps follow from spawning:
 

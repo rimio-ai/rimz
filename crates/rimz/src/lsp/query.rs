@@ -108,17 +108,18 @@ pub enum UnavailableReason {
     #[error("stopped by hand")]
     StoppedByHand,
     #[error("stopped: {0}")]
-    Stopped(String),
+    Stopped(super::registry::StopReason),
 }
 
 impl UnavailableReason {
-    pub fn stopped(reason: &str) -> Self {
+    pub fn stopped(reason: &super::registry::StopReason) -> Self {
+        use super::registry::StopReason;
         match reason {
-            "memory pressure" => Self::MemoryPressure,
-            "crashed" => Self::Crashed,
-            "checkout removed" => Self::CheckoutRemoved,
-            "stopped by hand" => Self::StoppedByHand,
-            reason => Self::Stopped(reason.to_owned()),
+            StopReason::MemoryPressure => Self::MemoryPressure,
+            StopReason::Crashed => Self::Crashed,
+            StopReason::CheckoutRemoved => Self::CheckoutRemoved,
+            StopReason::StoppedByHand => Self::StoppedByHand,
+            reason => Self::Stopped(*reason),
         }
     }
 }

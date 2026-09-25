@@ -324,7 +324,7 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_tombstone() {
         server_pid: None,
         server_start_token: None,
         state: State::Stopped {
-            reason: "memory pressure".into(),
+            reason: rimz::lsp::registry::StopReason::MemoryPressure,
             at_ms: 100,
         },
         started_at_ms: 0,

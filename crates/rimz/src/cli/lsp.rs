@@ -232,7 +232,7 @@ fn stop(
     for entry in entries {
         let response = registry::request(
             entry,
-            &serde_json::json!({"op": "stop", "reason": "stopped by hand"}),
+            &serde_json::json!({"op": "stop", "reason": rimz::lsp::registry::StopReason::StoppedByHand}),
             Duration::from_secs(2),
         )?;
         if response["ok"] != true {

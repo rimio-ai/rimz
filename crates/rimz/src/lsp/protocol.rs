@@ -110,26 +110,6 @@ pub enum QueryRequest {
     OutgoingCalls { item: CallHierarchyItem },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "method", content = "params")]
-pub enum ServerRequest {
-    #[serde(rename = "workspace/configuration")]
-    Configuration { items: Vec<ConfigurationItem> },
-    #[serde(rename = "workspace/workspaceFolders")]
-    WorkspaceFolders,
-    #[serde(rename = "client/registerCapability")]
-    RegisterCapability { registrations: Vec<Value> },
-    #[serde(rename = "window/workDoneProgress/create")]
-    CreateProgress { token: Value },
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ConfigurationItem {
-    pub section: Option<String>,
-    #[serde(rename = "scopeUri")]
-    pub scope_uri: Option<String>,
-}
-
 pub fn read_frame(reader: &mut impl BufRead) -> Result<Value> {
     let mut length = None;
     let mut header_bytes = 0;

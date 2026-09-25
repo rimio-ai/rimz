@@ -82,6 +82,7 @@ pub struct Wait {
 
 #[derive(Default)]
 pub struct Admitted {
+    pub startup_refused: Vec<String>,
     pub admitted: Vec<registry::Entry>,
     pub refused_optional: Vec<Shortfall>,
     pub wait_for_required: Vec<Wait>,
@@ -501,19 +502,18 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             ["lsp", "serve", "--request", &payload],
             "lsp-broker",
         )?;
-        let started = Instant::now();
         let path = registry::directory(&root, server)?.join("entry.json");
-        let entry = loop {
-            match std::fs::read(&path) {
-                Ok(bytes) => break serde_json::from_slice::<registry::Entry>(&bytes)?,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound
-                        && started.elapsed() < Duration::from_secs(5) =>
-                {
-                    std::thread::sleep(Duration::from_millis(20))
-                }
-                Err(error) => return Err(error.into()),
-            }
+        let Some(entry) = await_startup(
+            &root,
+            server,
+            config.policy,
+            &path,
+            Duration::from_secs(5),
+            &mut result,
+        )?
+        else {
+            queue.refused_optional.insert(server.clone());
+            continue;
         };
         entries.push(entry.clone());
         result.admitted.push(entry);
@@ -524,9 +524,88 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
     Ok(result)
 }
 
+fn await_startup(
+    root: &Path,
+    server: &str,
+    policy: LspPolicy,
+    path: &Path,
+    timeout: Duration,
+    result: &mut Admitted,
+) -> Result<Option<registry::Entry>> {
+    let started = Instant::now();
+    loop {
+        match std::fs::read(path) {
+            Ok(bytes) => return Ok(Some(serde_json::from_slice(&bytes)?)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if started.elapsed() >= timeout {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let message = format!(
+        "language server {server} did not start within 5s; check the server command, or remove [lsp.servers.{server}]"
+    );
+    if policy == LspPolicy::Required {
+        return Err(LspErr::Configuration(message));
+    }
+    crate::diag::lsp::append(&crate::diag::lsp::Record {
+        at: jiff::Timestamp::now(),
+        root: root.to_owned(),
+        server: server.to_owned(),
+        event: "refused".into(),
+        details: serde_json::json!({"reason": message}),
+    });
+    result.startup_refused.push(message);
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_publication_refuses_optional_but_errors_required_with_fix() {
+        let mut result = Admitted::default();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("entry.json");
+        assert!(
+            await_startup(
+                root.path(),
+                "rust",
+                LspPolicy::Optional,
+                &path,
+                Duration::ZERO,
+                &mut result,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(result.startup_refused.len(), 1);
+        assert!(result.startup_refused[0].contains("language server rust did not start within 5s"));
+        let error = await_startup(
+            root.path(),
+            "rust",
+            LspPolicy::Required,
+            &path,
+            Duration::ZERO,
+            &mut result,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("check the server command"));
+        assert!(error.contains("[lsp.servers.rust]"));
+        assert_eq!(result.startup_refused.len(), 1);
+        assert!(
+            crate::diag::lsp::recent()
+                .iter()
+                .any(|record| record.root == root.path()
+                    && record.event == "refused"
+                    && record.details["reason"] == result.startup_refused[0])
+        );
+    }
 
     #[test]
     fn required_queue_admits_only_the_oldest_when_memory_frees_and_times_out_with_holders() {

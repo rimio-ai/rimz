@@ -83,7 +83,9 @@ fn request(entry: &Entry, method: &str, params: Value) -> std::result::Result<Va
         if error["code"] == -32003 {
             return Err(QueryErr::Unavailable {
                 root: entry.root.clone(),
-                reason: UnavailableReason::stopped(error["message"].as_str().unwrap_or("crashed")),
+                reason: UnavailableReason::stopped(
+                    &serde_json::from_value(error["message"].clone()).map_err(LspErr::from)?,
+                ),
             });
         }
         return Err(LspErr::Protocol(error.to_string()).into());
