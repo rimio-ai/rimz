@@ -1956,6 +1956,7 @@ fn lsp_configuration_has_documented_defaults() {
     assert_eq!(value["lsp"]["reserve-percent"], 10);
     assert_eq!(value["lsp"]["reserve-min"], "8G");
     assert_eq!(value["lsp"]["kill-floor-percent"], 5);
+    assert_eq!(value["lsp"]["idle-timeout"], "10m");
     assert_eq!(value["lsp"]["servers"]["rust"]["policy"], "optional");
     assert_eq!(value["lsp"]["servers"]["rust"]["wait-timeout"], "10m");
     assert_eq!(value["lsp"]["servers"]["rust"]["memory-estimate"], "8G");

@@ -40,6 +40,7 @@ fn project_lsp_policy_is_machine_only() {
         "reserve-percent = 20",
         "reserve-min = '2G'",
         "kill-floor-percent = 5",
+        "idle-timeout = '1m'",
     ] {
         let value = toml::from_str(&format!("[lsp]\n{field}")).unwrap();
         let error = repo_config_from_value(&value)

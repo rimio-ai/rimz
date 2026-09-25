@@ -587,9 +587,14 @@ fn resolve_project_prompt_path(path: &Path, config_dir: &Path) -> PathBuf {
 
 fn project_lsp_policy_key(value: &toml::Value) -> Option<&'static str> {
     let lsp = value.get("lsp")?.as_table()?;
-    ["reserve-percent", "reserve-min", "kill-floor-percent"]
-        .into_iter()
-        .find(|key| lsp.contains_key(*key))
+    [
+        "reserve-percent",
+        "reserve-min",
+        "kill-floor-percent",
+        "idle-timeout",
+    ]
+    .into_iter()
+    .find(|key| lsp.contains_key(*key))
 }
 
 fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig, toml::de::Error> {

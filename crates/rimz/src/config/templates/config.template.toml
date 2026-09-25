@@ -170,6 +170,7 @@ aggressive_resize = true
 # reserve-percent = 10                # keep at least this percentage of total memory free
 # reserve-min = "8G"                   # minimum reserve; G is decimal, GiB is binary
 # kill-floor-percent = 5              # stop shared servers below this free-memory percentage
+# idle-timeout = "10m"                # stop ready servers after this long without queries (s/m/h)
 ## [lsp.servers.rust]
 ## command = ["rust-analyzer"]
 ## extensions = ["rs"]
