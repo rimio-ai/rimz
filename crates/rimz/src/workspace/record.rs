@@ -22,6 +22,8 @@ use crate::workspace::{ResolvedWorkspace, RootClass};
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceRecordErr {
     #[error(transparent)]
+    Layout(#[from] crate::disk::paths::PathErr),
+    #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
     #[error("cannot access {path}: {source}")]
     Io {
@@ -41,6 +43,8 @@ pub type Result<T> = std::result::Result<T, WorkspaceRecordErr>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceRecord {
+    #[serde(default = "crate::disk::paths::legacy_layout")]
+    pub layout: u32,
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
     /// Active worktree cwd for room-local helper panes. Older records fall
@@ -78,6 +82,7 @@ fn default_root_class() -> RootClass {
 impl WorkspaceRecord {
     pub(crate) fn from_resolved(workspace: &ResolvedWorkspace) -> Self {
         Self {
+            layout: crate::disk::paths::WORKSPACE_LAYOUT,
             workspace_id: workspace.workspace_id.clone(),
             project_root: workspace.project_root.clone(),
             worktree_root: Some(workspace.worktree_root.clone()),
@@ -99,7 +104,9 @@ pub fn write(paths: &StatePaths, record: &WorkspaceRecord) -> Result<()> {
 
 #[must_use = "durability barrier; check the result"]
 pub(super) fn write_path(path: &Path, record: &WorkspaceRecord) -> Result<()> {
-    write_temp_then_rename(path, record)?;
+    let mut record = record.clone();
+    record.layout = crate::disk::paths::WORKSPACE_LAYOUT;
+    write_temp_then_rename(path, &record)?;
     Ok(())
 }
 
@@ -118,6 +125,13 @@ pub fn read_optional(path: &Path) -> Result<Option<WorkspaceRecord>> {
 }
 
 pub fn read(path: &Path) -> Result<WorkspaceRecord> {
+    let record = read_any_layout(path)?;
+    crate::disk::paths::require_layout(path, record.layout)?;
+    Ok(record)
+}
+
+// Build retention must preserve executables still referenced by older rooms.
+pub(crate) fn read_any_layout(path: &Path) -> Result<WorkspaceRecord> {
     let bytes = fs::read(path).map_err(|source| WorkspaceRecordErr::Io {
         path: path.to_path_buf(),
         source,
@@ -142,6 +156,7 @@ mod tests {
         let workspace = WorkspaceResolver::resolve(&project, None).unwrap();
         let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
         let mut record = WorkspaceRecord::from_resolved(&workspace);
+        record.layout = 1;
         record.rimz_bin = Some(dir.path().join("builds/build/rimz"));
         record.rimz_build = Some("build".to_owned());
         record.logins = Some(RoomLogins::from([(
@@ -153,6 +168,7 @@ mod tests {
         let loaded = read(&paths.workspace_record).unwrap();
 
         assert_eq!(loaded.workspace_id, workspace.workspace_id);
+        assert_eq!(loaded.layout, crate::disk::paths::WORKSPACE_LAYOUT);
         assert_eq!(loaded.project_root, workspace.project_root);
         assert_eq!(
             loaded.worktree_root.as_ref(),
@@ -178,6 +194,7 @@ mod tests {
         .expect("legacy record parses");
 
         assert_eq!(record.rimz_bin, None);
+        assert_eq!(record.layout, 1);
         assert_eq!(record.rimz_build, None);
         assert_eq!(record.worktree_root, None);
         assert_eq!(record.logins, None);

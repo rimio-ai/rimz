@@ -4,6 +4,8 @@
 
 The shape that every module in `crates/rimz` follows. Pick the closest existing module before inventing; the team values consistency over novelty.
 
+Room state and runtime paths are constructed only in `disk/paths.rs`, through the lifetime-class path API. `cargo xtask invariants` enforces this boundary outside tests; provider trees, host skill directories, and sandbox mount views are not room roots.
+
 ## CLI shape
 
 The CLI is parsed with `clap` derive at the top level. Shared option groups are split into their own structs and embedded with `#[clap(flatten)]` so each subcommand inherits them without restating fields.

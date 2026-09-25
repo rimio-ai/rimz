@@ -225,6 +225,7 @@ mod tests {
         record::write(
             paths,
             &record::WorkspaceRecord {
+                layout: 2,
                 workspace_id: paths.workspace_id.clone(),
                 project_root,
                 worktree_root: None,

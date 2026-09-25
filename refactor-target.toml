@@ -240,7 +240,8 @@ allowed-dependencies = [
 # Room writers and collectors share retention policy below store and diagnostics.
 # Lifetime classes expose room runtime paths and lock-preserving cleanup.
 # State classes expose their inventory and shared path routing for root-only readers.
-surface-budget = 190
+# Record codecs and cross-room scanners share the layout version, legacy default, and two validation entry points.
+surface-budget = 194
 
 [[module]]
 path = "crates/rimz/src/forge"

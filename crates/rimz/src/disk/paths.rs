@@ -31,6 +31,10 @@ use crate::sock::SockBudget;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathErr {
+    #[error(
+        "workspace {path} uses layout {layout}; this binary requires layout 2; follow docs/internals/store-layout-migration.md to reset or migrate it"
+    )]
+    Layout { path: PathBuf, layout: u32 },
     #[error("io error preparing {path}: {source}")]
     Io {
         path: PathBuf,
@@ -67,6 +71,43 @@ pub enum PathErr {
 }
 
 type Result<T> = std::result::Result<T, PathErr>;
+
+pub(crate) const WORKSPACE_LAYOUT: u32 = 2;
+
+pub(crate) const fn legacy_layout() -> u32 {
+    1
+}
+
+pub(crate) fn require_layout(path: &Path, layout: u32) -> Result<()> {
+    if layout != WORKSPACE_LAYOUT {
+        return Err(PathErr::Layout {
+            path: path.to_path_buf(),
+            layout,
+        });
+    }
+    Ok(())
+}
+
+/// Check an existing room before reading or mutating its class directories.
+pub(crate) fn check_workspace_layout(root: &Path) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Layout {
+        #[serde(default = "legacy_layout")]
+        layout: u32,
+    }
+    let path = root.join("workspace.json");
+    match fs::read(&path) {
+        Ok(bytes) => {
+            let record: Layout = serde_json::from_slice(&bytes).map_err(|source| PathErr::Io {
+                path: path.clone(),
+                source: io::Error::new(io::ErrorKind::InvalidData, source),
+            })?;
+            require_layout(&path, record.layout)
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(PathErr::Io { path, source }),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tier {
@@ -436,7 +477,10 @@ fn find_workspace_dir(
         .cloned()
     {
         match recorded_workspace_id(&ws_dir.join(name.as_str())) {
-            Some(recorded) if recorded == workspace_id.as_str() => return Ok(Some(name)),
+            Some(recorded) if recorded == workspace_id.as_str() => {
+                check_workspace_layout(&ws_dir.join(name.as_str()))?;
+                return Ok(Some(name));
+            }
             Some(_) => {}
             None if may_own_unrecorded(&name) => unrecorded.push(name),
             None => {}

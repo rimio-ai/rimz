@@ -108,6 +108,11 @@ enum Verdict {
 }
 
 fn classify_workspace(path: &Path) -> Verdict {
+    if let Err(err @ crate::disk::paths::PathErr::Layout { .. }) =
+        crate::disk::paths::check_workspace_layout(path)
+    {
+        return Verdict::Retain(err.to_string());
+    }
     match record::read(&path.join("workspace.json")) {
         Ok(record) if record.project_root.exists() => Verdict::Keep,
         Ok(record) => Verdict::Remove(
@@ -115,6 +120,7 @@ fn classify_workspace(path: &Path) -> Verdict {
             Some(record.project_root),
             Some(record.workspace_id),
         ),
+        Err(err @ record::WorkspaceRecordErr::Layout(_)) => Verdict::Retain(err.to_string()),
         Err(err) if workspace_has_history(path) => Verdict::Retain(err.to_string()),
         Err(_) => Verdict::Remove(PruneReason::AbandonedScaffold, None, None),
     }
@@ -147,6 +153,22 @@ fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn legacy_room_is_retained_even_without_new_layout_history() {
+        let home = tempdir().unwrap();
+        let room = home.path().join("old-abcd");
+        fs::create_dir_all(&room).unwrap();
+        fs::write(room.join("workspace.json"), br#"{"workspace_id":"old"}"#).unwrap();
+        assert!(
+            matches!(classify_workspace(&room), Verdict::Retain(reason) if reason.contains("layout 1"))
+        );
+        let report =
+            prune_dead_workspaces_under(home.path(), &home.path().join("runtime"), false).unwrap();
+        assert!(report.removed.is_empty());
+        assert_eq!(report.retained_unreadable.len(), 1);
+        assert!(room.join("workspace.json").exists());
+    }
 
     #[test]
     fn prune_reaps_dead_roots_and_scaffolds_but_keeps_history() {
@@ -250,6 +272,7 @@ mod tests {
         use crate::workspace::record::WorkspaceRecord;
         fs::create_dir_all(dir).unwrap();
         let record = WorkspaceRecord {
+            layout: 2,
             workspace_id: id.clone(),
             project_root: project_root.to_path_buf(),
             worktree_root: None,

@@ -86,6 +86,7 @@ pub(in crate::backend::zellij) fn publish_room_bin(state_root: &Path, opts: &Sid
     rimz::workspace::record::write(
         &state,
         &rimz::workspace::record::WorkspaceRecord {
+            layout: 2,
             workspace_id: opts.workspace_id.clone(),
             project_root: opts.project_root.clone(),
             worktree_root: None,

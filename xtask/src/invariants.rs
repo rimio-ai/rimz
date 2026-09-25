@@ -37,6 +37,7 @@ fn is_agent_spend_parser_path(path: &Path, agents_root: &Path) -> bool {
 pub(crate) fn invariants(root: &Path) -> Result<()> {
     let files = tracked_text_files(root)?;
     ensure_banned_imports(root, &files)?;
+    ensure_classed_paths(root, &files)?;
     ensure_hook_stdio(root, &files)?;
     ensure_normalized_agent_process_decisions(root, &files)?;
     ensure_private_agent_adapter_boundary(root, &files)?;
@@ -70,6 +71,50 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_rolling_release_is_single_writer(root)?;
     ensure_stable_release_dispatches_docs(root)?;
     ensure_inline_tests_stay_small(&files)?;
+    Ok(())
+}
+
+fn ensure_classed_paths(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let src = root.join("crates/rimz/src");
+    // These roots are provider trees, host skill directories, and sandbox views,
+    // not room state or runtime roots.
+    let non_room_roots = [
+        ("agents/spending/discovery.rs", "tree.root.join("),
+        ("agents/spending/discovery.rs", "self.root.join("),
+        (
+            "agents/spending/discovery.rs",
+            "tree.declaration.root.join(",
+        ),
+        ("agents/skill_links.rs", "plan.root.join("),
+        ("sandbox/mod.rs", "view.root.join("),
+    ];
+    for path in files {
+        if !path.starts_with(&src)
+            || path == &src.join("disk/paths.rs")
+            || path.starts_with(src.join("testkit"))
+            || is_test_source_path(root, path)
+        {
+            continue;
+        }
+        let source = fs::read_to_string(path)?;
+        for (line_number, line) in lines_outside_inline_tests(&source) {
+            let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+            if non_room_roots.iter().any(|(relative, expression)| {
+                path == &src.join(relative) && compact.contains(expression)
+            }) {
+                continue;
+            }
+            if [".root.join(", ".runtime_root.join(", ".rimz_root.join("]
+                .iter()
+                .any(|needle| compact.contains(needle))
+            {
+                bail!(
+                    "{}:{line_number}: room paths must be built in disk/paths.rs",
+                    path.display()
+                );
+            }
+        }
+    }
     Ok(())
 }
 

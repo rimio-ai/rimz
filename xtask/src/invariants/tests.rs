@@ -2,6 +2,28 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
+#[test]
+fn classed_paths_rejects_caller_bypass_and_allows_path_owner_and_tests() {
+    let root = temp_repo_root("classed-paths");
+    let source = root.join("crates/rimz/src");
+    std::fs::create_dir_all(source.join("disk")).unwrap();
+    let caller = source.join("caller.rs");
+    let owner = source.join("disk/paths.rs");
+    let tests = source.join("tests.rs");
+    let bypass = "let path = state.root.join(\"file\");\n";
+    for path in [&caller, &owner, &tests] {
+        std::fs::write(path, bypass).unwrap();
+    }
+    assert!(
+        ensure_classed_paths(&root, &[caller])
+            .unwrap_err()
+            .to_string()
+            .contains("room paths")
+    );
+    ensure_classed_paths(&root, &[owner, tests]).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

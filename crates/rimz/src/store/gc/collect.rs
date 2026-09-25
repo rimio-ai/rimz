@@ -16,6 +16,7 @@ use crate::wakeup::heartbeat::SidebarHeartbeat;
 
 #[must_use = "maintenance report; surface it to the caller"]
 pub(crate) fn collect_runtime_under(
+    state_root: &Path,
     runtime_root: &Path,
     shared_root: &Path,
     older_than: Duration,
@@ -32,6 +33,12 @@ pub(crate) fn collect_runtime_under(
         })?;
         let root = entry.path();
         if !root.is_dir() {
+            continue;
+        }
+        if let Err(err) =
+            crate::disk::paths::check_workspace_layout(&state_root.join(entry.file_name()))
+        {
+            tracing::warn!(error = %err, "skipping workspace runtime sweep");
             continue;
         }
         report.runtime_roots_scanned += 1;
@@ -555,6 +562,7 @@ mod tests {
 
         let report = collect_runtime_under(
             &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
             false,
@@ -617,6 +625,7 @@ mod tests {
 
         let report = collect_runtime_under(
             &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
             false,
@@ -644,6 +653,7 @@ mod tests {
 
         let preview = collect_runtime_under(
             &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
             true,
@@ -654,6 +664,7 @@ mod tests {
         assert!(rt.agent_activity_dir.exists(), "dry-run keeps emptied dirs");
 
         let applied = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
@@ -687,6 +698,7 @@ mod tests {
 
         let preview = collect_runtime_under(
             &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
             true,
@@ -697,6 +709,7 @@ mod tests {
         assert!(stale.exists(), "dry-run keeps stale telemetry");
 
         let applied = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
@@ -734,6 +747,7 @@ mod tests {
         write_json(&rt.sidebar_heartbeat_path(&instance_id), &heartbeat);
 
         let report = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
@@ -778,6 +792,7 @@ mod tests {
         }
 
         let report = collect_runtime_under(
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
@@ -824,6 +839,7 @@ mod tests {
 
         let report = collect_runtime_under(
             &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
             false,
@@ -862,6 +878,7 @@ mod tests {
 
         let report = collect_runtime_under(
             &temp.path().join("rimz/ws"),
+            &temp.path().join("rimz/ws"),
             &temp.path().join("rimz/shared"),
             Duration::from_secs(3600),
             false,
@@ -884,7 +901,9 @@ mod tests {
         for name in ["project-abcd", "unfinished"] {
             fs::create_dir_all(workspaces.join(name)).unwrap();
         }
-        let report = collect_runtime_under(&workspaces, &shared, Duration::ZERO, false).unwrap();
+        let report =
+            collect_runtime_under(&workspaces, &workspaces, &shared, Duration::ZERO, false)
+                .unwrap();
         assert_eq!(report.runtime_roots_scanned, 2);
         assert!(!workspaces.join("project-abcd").exists());
         assert!(!workspaces.join("unfinished").exists());
@@ -892,5 +911,25 @@ mod tests {
 
     fn write_json<T: serde::Serialize>(path: &Path, value: &T) {
         fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn runtime_sweep_preserves_legacy_rooms() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let runtime = temp.path().join("runtime");
+        fs::create_dir_all(state.join("old-abcd")).unwrap();
+        fs::create_dir_all(runtime.join("old-abcd")).unwrap();
+        fs::write(state.join("old-abcd/workspace.json"), b"{}").unwrap();
+        let report = collect_runtime_under(
+            &state,
+            &runtime,
+            &temp.path().join("shared"),
+            Duration::ZERO,
+            false,
+        )
+        .unwrap();
+        assert_eq!(report.runtime_roots_scanned, 0);
+        assert!(runtime.join("old-abcd").exists());
     }
 }
