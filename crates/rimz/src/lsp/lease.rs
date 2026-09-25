@@ -3,7 +3,7 @@
 use super::{LspErr, Result, registry};
 use std::path::Path;
 
-pub fn register(root: &Path, launch_id: &str, pid: u32) -> Result<()> {
+pub fn register(root: &Path, launch_id: Option<&str>, pid: u32) -> Result<()> {
     let start_token = crate::proc::process_start_token(pid)
         .ok_or_else(|| LspErr::Protocol(format!("cannot identify lease process {pid}")))?;
     registry::acknowledge_all(
@@ -12,8 +12,9 @@ pub fn register(root: &Path, launch_id: &str, pid: u32) -> Result<()> {
     )
 }
 
-pub fn release(root: &Path, launch_id: &str, pid: u32) -> Result<()> {
-    let root = crate::utils::path::normalize_path_lexical(root);
+pub fn release(root: &Path, launch_id: Option<&str>, pid: u32) -> Result<()> {
+    let root = std::fs::canonicalize(root)
+        .unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(root));
     registry::acknowledge_all(
         registry::read_entries()?
             .into_iter()

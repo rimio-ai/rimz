@@ -48,8 +48,24 @@ pub fn select(
         root: root.into(),
         reason: if servers.is_empty() {
             UnavailableReason::NoneConfigured
-        } else {
+        } else if crate::diag::lsp::recent().iter().any(|record| {
+            record.root == root
+                && record.event == "refused"
+                && servers.get(&record.server).is_some_and(|config| {
+                    server.map_or_else(
+                        || {
+                            extension.is_none_or(|extension| {
+                                config.extensions.iter().any(|ext| ext == extension)
+                            })
+                        },
+                        |server| record.server == server,
+                    )
+                })
+                && record.details.get("estimate_bytes").is_some()
+        }) {
             UnavailableReason::MemoryShort
+        } else {
+            UnavailableReason::NotRunning
         },
     })?;
     if let State::Stopped { reason, .. } = &entry.state {
@@ -125,7 +141,11 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
         Target::Position { path, position } => (uri(&entry.root, &path)?, position),
         Target::Symbol(name) => match resolve_symbol(
             &name,
-            request(entry, "workspace/symbol", json!({"query": name}))?,
+            request(
+                entry,
+                "workspace/symbol",
+                json!({"query": name.rsplit("::").next().unwrap_or(&name)}),
+            )?,
         )? {
             SymbolResolution::Missing => {
                 return Ok(Output::Answer {

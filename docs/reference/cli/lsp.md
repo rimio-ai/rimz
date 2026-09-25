@@ -26,7 +26,7 @@ rimz lsp find MuxBackend --server rust --json
 | `symbols` | file path | document symbol outline |
 | `find` | search string | workspace symbols matching the server's search |
 
-Positions are `path:line:col`, with one-based line and column. Paths are checkout-relative or absolute. A symbol name is resolved by exact name from workspace search results; multiple matches list candidates instead of guessing. Rerun with a candidate's position. Text locations use `path:line:col`; navigation includes source lines when available, outlines indent children, and hover prints markup. Empty answers print `no results`.
+Positions are `path:line:col`, with one-based line and column; omitting the column is an error. Paths are checkout-relative or absolute. A symbol name is resolved by exact name from workspace search results; `Type::method` matches `method` in container `Type`. Multiple matches list candidates instead of guessing. Rerun with a candidate's position. Text locations use `path:line:col`; navigation includes source lines when available, outlines indent children, and hover prints markup. Empty answers print `no results`.
 
 All eight verbs require one target and accept:
 
@@ -47,9 +47,9 @@ rimz lsp stop /path/to/checkout --server rust
 rimz lsp stop --all
 ```
 
-`list` covers the whole machine. Text columns are CHECKOUT, SERVER, STATE, RSS, PEAK, REQUESTS, LAST, and LEASES. RSS and PEAK are current and observed peak process-tree KiB; LAST is seconds since the last query. Stopped entries show their reason. `--json` returns registry entries, including process identities, nonce, state, estimate, timestamps, counters, and leases. Dead entries are swept before listing.
+`list` covers the whole machine. Text columns are CHECKOUT, SERVER, STATE, RSS, PEAK, REQUESTS, LAST, and LEASES. RSS and PEAK are current and observed peak process-tree memory, displayed in decimal byte units; LAST is seconds since the last query. Stopped entries show their reason. `--json` returns registry entries, including process identities, nonce, state, estimate, timestamps, counters, and leases; peak RSS remains in KiB. Dead entries are swept before listing.
 
-`stop [CHECKOUT]` defaults to the current checkout (or global `--root`). `--server <NAME>` selects one server when several exist. `--all` stops every machine entry and conflicts with both CHECKOUT and `--server`. Stop prints one acknowledgment line per entry; no matching entries produce no lines. It has no `--json` flag. A hand stop leaves a tombstone while agents hold leases; queries report `stopped by hand`, not a restart.
+`stop [CHECKOUT]` defaults to the current checkout (or global `--root`). `--server <NAME>` selects one server when several exist. `--all` stops every machine entry and conflicts with both CHECKOUT and `--server`. Dead entries are swept first; a failure stopping one entry does not prevent attempts on the others. Stop prints one acknowledgment line per entry; no matching entries produce no lines. It has no `--json` flag. A hand stop leaves a tombstone while agents hold leases; queries report `stopped by hand`, not a restart.
 
 ## Exit codes
 
@@ -60,6 +60,8 @@ rimz lsp stop --all
 | 2 | Invalid command line, flag, or argument. |
 | 3 | No server for the checkout, or the server stopped. The stderr line names the reason and grep fallback. |
 | 4 | Still indexing after the wait bound. The stderr line gives elapsed time. |
+
+An absent configured server reports `not running`. A matching memory-refusal diagnostic for that checkout and server instead reports `not started: memory short at launch`.
 
 Other failures follow the [CLI error conventions](../cli.md). `--json` does not change the stderr form of exits 3 and 4.
 

@@ -1,5 +1,15 @@
 //! Human byte sizes shared by configuration and command-line parsing.
 
+pub fn decimal_bytes(bytes: u64) -> String {
+    for (factor, unit) in [(1_000_000_000_u64, "GB"), (1_000_000, "MB"), (1_000, "KB")] {
+        if bytes >= factor {
+            let amount = format!("{:.1}", bytes as f64 / factor as f64);
+            return format!("{} {unit}", amount.strip_suffix(".0").unwrap_or(&amount));
+        }
+    }
+    format!("{bytes} B")
+}
+
 pub fn parse_byte_size(raw: &str) -> std::result::Result<u64, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {

@@ -2,6 +2,7 @@
 
 use super::{LspErr, Result, history, memory, registry};
 use crate::config::LspPolicy;
+use crate::utils::size::decimal_bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -233,16 +234,6 @@ impl std::fmt::Display for QueueTimeout {
     }
 }
 
-fn decimal_bytes(bytes: u64) -> String {
-    for (factor, unit) in [(1_000_000_000_u64, "GB"), (1_000_000, "MB"), (1_000, "KB")] {
-        if bytes >= factor {
-            let amount = format!("{:.1}", bytes as f64 / factor as f64);
-            return format!("{} {unit}", amount.strip_suffix(".0").unwrap_or(&amount));
-        }
-    }
-    format!("{bytes} B")
-}
-
 #[cfg(feature = "testkit")]
 pub mod testkit {
     use super::*;
@@ -435,6 +426,10 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             .iter()
             .find(|entry| entry.root == root && entry.server == *server)
         {
+            if let registry::State::Stopped { reason, .. } = &entry.state {
+                result.startup_refused.push(format!("language server {server} stopped: {reason}; servers are never restarted; close its agents, then relaunch"));
+                queue.refused_optional.insert(server.clone());
+            }
             result.admitted.push(entry.clone());
             continue;
         }

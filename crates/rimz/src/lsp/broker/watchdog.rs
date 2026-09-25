@@ -80,7 +80,7 @@ pub(super) fn check(percent: u8) -> Result<()> {
             .into_iter()
             .find(|published| published.nonce == entry.nonce)
         {
-            super::record_stop(&published);
+            super::record_stop(&published, None);
         }
     }
     Ok(())

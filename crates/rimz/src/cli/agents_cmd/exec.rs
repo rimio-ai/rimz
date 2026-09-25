@@ -144,9 +144,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
     let process = plan.process();
-    if let Some(launch_id) = request.identity.launch_id.as_deref()
-        && let Err(error) = rimz::lsp::lease::register(&provider_cwd, launch_id, std::process::id())
-    {
+    if let Err(error) = rimz::lsp::lease::register(
+        &provider_cwd,
+        request.identity.launch_id.as_deref(),
+        std::process::id(),
+    ) {
         tracing::debug!(%error, "language-server lease registration failed");
     }
     if let rimz::harness::launch::AgentProcessStage::LoginShellReentry { argv, .. } = &plan.stage {
@@ -298,9 +300,11 @@ fn settle_after_exit(
         keep,
         checkout,
     } = run_exit;
-    if let Some(launch_id) = request.identity.launch_id.as_deref()
-        && let Err(error) = rimz::lsp::lease::release(checkout, launch_id, std::process::id())
-    {
+    if let Err(error) = rimz::lsp::lease::release(
+        checkout,
+        request.identity.launch_id.as_deref(),
+        std::process::id(),
+    ) {
         tracing::debug!(%error, "language-server lease release failed");
     }
     let ExecOutcome {

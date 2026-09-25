@@ -740,7 +740,17 @@ fn birth_managed_room(
                 }
                 if choice == RebirthChoice::Recover {
                     for root in plan.checkout_roots() {
-                        crate::cli::lsp_admission::admit(root)?;
+                        if let Err(error) =
+                            crate::cli::lsp_admission::admit(root, &machine_config())
+                        {
+                            if error
+                                .downcast_ref::<rimz::config::effective::EffectiveConfigErr>()
+                                .is_none()
+                            {
+                                return Err(error);
+                            }
+                            tracing::warn!(%error, "language-server admission skipped: project config could not be loaded");
+                        }
                     }
                 }
                 NormalRebirth::Selected {

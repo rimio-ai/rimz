@@ -164,7 +164,9 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             let _ = watch_tx.send(event);
         })
         .map_err(|error| LspErr::Protocol(error.to_string()))?;
-        watch::register(&mut watcher, &root)?;
+        watch::register(&mut watcher, &root, &|path, error| {
+            watch_error(&request, path, error)
+        })?;
         run(
             &shared,
             &request,
@@ -175,7 +177,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             (&mut watcher, events),
         )
     })();
-    if let Err(error) = result {
+    if let Err(error) = &result {
         tracing::warn!(%error, "language server stopped");
         shared.stop(StopReason::Crashed);
     }
@@ -188,7 +190,10 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         }) {
             model.entry.state = entry.state;
         }
-        record_stop(&model.entry);
+        record_stop(
+            &model.entry,
+            result.as_ref().err().map(ToString::to_string).as_deref(),
+        );
         registry::publish(&model.entry)?;
         shared.changed.notify_all();
     }
@@ -270,12 +275,24 @@ fn run(
             }
         }
         if initialized.is_none() {
+            let report = |path: &std::path::Path, error: &str| watch_error(request, path, error);
             let batch = events
                 .try_iter()
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|error| LspErr::Protocol(error.to_string()))?;
-            let batch = watch::register_created(watcher, &request.root, batch)?;
-            let changes = watch::changes(&request.root, &request.config.extensions, batch);
+                .filter_map(|event| match event {
+                    Ok(event) => Some(event),
+                    Err(error) => {
+                        report(&request.root, &error.to_string());
+                        None
+                    }
+                })
+                .collect();
+            let batch = watch::register_created(watcher, &request.root, batch, &report)?;
+            let changes = watch::changes(
+                &request.root,
+                &request.config.extensions,
+                &request.config.root_markers,
+                batch,
+            );
             if changes["changes"]
                 .as_array()
                 .is_some_and(|changes| !changes.is_empty())
@@ -334,7 +351,17 @@ fn run(
     Ok(())
 }
 
-fn record_stop(entry: &Entry) {
+fn watch_error(request: &ServeRequest, path: &std::path::Path, error: &str) {
+    crate::diag::lsp::append(&crate::diag::lsp::Record {
+        at: jiff::Timestamp::now(),
+        root: request.root.clone(),
+        server: request.server.clone(),
+        event: "watch_error".into(),
+        details: json!({"path": path, "error": error}),
+    });
+}
+
+fn record_stop(entry: &Entry, error: Option<&str>) {
     let State::Stopped { reason, at_ms } = &entry.state else {
         return;
     };
@@ -368,7 +395,7 @@ fn record_stop(entry: &Entry) {
             root: entry.root.clone(),
             server: entry.server.clone(),
             event: "crashed".into(),
-            details: json!({"reason": reason, "peak_rss_kb": entry.peak_rss_kb}),
+            details: json!({"reason": reason, "peak_rss_kb": entry.peak_rss_kb, "error": error}),
         });
     }
 }

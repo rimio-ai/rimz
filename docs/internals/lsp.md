@@ -48,13 +48,15 @@ What happens on a refusal depends on the server's `policy`:
 | Policy | Refused admission |
 | --- | --- |
 | `optional` (default) | The launch proceeds without that server. The launch reminder omits its name, and a diagnostic record names the shortfall. |
-| `required` | The launch waits in first-come order among required waiters before panes open. The launcher's terminal prints the wait and queue position every five seconds; there is no pre-launch sidebar row. At `wait-timeout` the launch fails with the fix, naming memory needed, memory free, and the holders. Optional launches do not queue behind required ones. |
+| `required` | The launch waits in first-come order among required waiters before panes open. Admission polls every five seconds; the launcher's terminal prints the wait when the queue position changes. There is no pre-launch sidebar row. At `wait-timeout` the launch fails with the fix, naming memory needed, memory free, and the holders. Optional launches do not queue behind required ones. |
 
-`required` gates admission only. A required server killed later for memory degrades like an optional one; RimZ never stops agents to honour it.
+`required` gates admission only. A required server killed later for memory degrades like an optional one; RimZ never stops agents to honour it. Joining a stopped entry prints its reason for either policy, without waiting or restarting. Close its remaining agents and relaunch to get a new server after the tombstone exits.
+
+Admission reuses the launcher's lenient machine config and skips effective config loading when neither machine nor project declares servers. Recovery warns and skips admission on an effective-config error; other launch paths retain their strict effective-config checks. Supervised launches finish provider preflights before admission starts a server.
 
 ### Leases and shutdown
 
-`cli/agents_cmd/exec.rs::run_exec` registers leases after `launch_plan::apply`; `settle_after_exit` explicitly releases them on resident-wrapper paths. Each lease carries launch id, wrapper pid, and process start token. The broker reaps dead owners every five seconds, rejecting pid reuse; direct `exec` preserves the wrapper pid. It does not read store or pane state. Worktree removal calls `registry::stop_checkout` best-effort, and the broker checks root existence every five seconds as a backstop.
+`cli/agents_cmd/exec.rs::run_exec` registers leases after `launch_plan::apply`; `settle_after_exit` explicitly releases them on resident-wrapper paths. Each lease carries an optional launch id, wrapper pid, and process start token. Recovery of older sessions without launch ids still takes a lease; absent and null ids are accepted on the wire. The broker reaps dead owners every five seconds, rejecting pid reuse; direct `exec` preserves the wrapper pid. It does not read store or pane state. Worktree removal calls `registry::stop_checkout` best-effort, and the broker checks root existence every five seconds as a backstop.
 
 The last release arms a 60-second grace, canceled by a new lease, to cover restart's gap. A fork takes its own lease. A broker never leased exits after five minutes. There is no idle timeout. Queue tickets likewise carry an owner pid/start token; abandoned tickets are removed, and dropping the launcher's `WaitQueue` removes its ticket.
 
@@ -87,7 +89,7 @@ Agents are not messaged. The next `rimz lsp` query against a tombstoned key exit
 
 ## Freshness
 
-`lsp/broker/watch.rs` batches `notify` events into `workspace/didChangeWatchedFiles`. Non-recursive watches cover individual directories, excluding `.git`, `target`, and `node_modules` before registration. Created or moved-in directories gain watches; a scan also forwards files saved before registration. Only configured extensions pass. Create, change, delete, and rename events map to LSP event types. Freshness depends on the server handling these notifications, not on unsaved editor buffers. Watch traffic never increments request counters.
+`lsp/broker/watch.rs` batches `notify` events into `workspace/didChangeWatchedFiles`. Non-recursive watches cover individual directories, excluding `.git`, `target`, and `node_modules` before registration. Created or moved-in directories gain watches; a scan also forwards files saved before registration. Configured extensions and file names in `root-markers` pass, including manifest edits such as `Cargo.toml`. Removed directories and rename source paths are forwarded as Deleted so the server drops the old tree. Create, change, delete, and rename events map to LSP event types. A directory that cannot be watched and notify error events produce `watch_error` diagnostics rather than stopping the server; freshness is degraded for missed events. Errors that end the broker's run are included in its `crashed` diagnostic. Freshness depends on the server handling these notifications, not on unsaved editor buffers. Watch traffic never increments request counters.
 
 ## The broker
 
@@ -110,13 +112,13 @@ Two traps follow from spawning:
 
 | Record | Where | Lifetime | Truth |
 | --- | --- | --- | --- |
-| Registry entry per key: root/server, broker and server pids/tokens, nonce, state (`starting`, `indexing`, `ready`, or a `stopped` tombstone), start/ready times, estimate/settings hash, request count, last request time, peak RSS, leases | machine-level, under `disk::paths::runtime_rimz_root`, atomic writes | through lease lifetime and shutdown grace; runtime files do not survive reboot | a live socket answering with the entry's nonce; a pid alone proves nothing |
+| Registry entry per key: root/server, broker and server pids/tokens, nonce, state (`starting`, `indexing`, `ready`, or a `stopped` tombstone), start/ready times, estimate/settings hash, request count, last request time, peak RSS, leases | machine-level, under `disk::paths::runtime_rimz_root`, atomic writes | through lease lifetime and shutdown grace; runtime files do not survive reboot | matching broker process start token retains ownership; a nonce-checked socket serves requests |
 | Cost history | machine-level under the RimZ home, rotating JSONL | durable | append-only |
 | Kills, refusals, and queue timeouts | `diag/` diagnostic records | durable | append-only |
 
 The registry is machine-level rather than per-room because admission budgets one machine's memory across every room on it.
 
-`disk::paths::lsp_runtime_dir()` holds `admission.lock`, owner-tagged `queue/` tickets, and one directory per key: the first 16 hex characters of the canonical checkout SHA-256 plus server name. Each directory has `entry.json`, `sock`, and a publication lock. There is no shared registry JSON file. `registry::sweep_locked`, used by admission and `list`, removes dead entries using process tokens and nonce-checked hello; live tombstones remain. Socket paths are validated against the Unix path budget.
+`disk::paths::lsp_runtime_dir()` holds `admission.lock`, owner-tagged `queue/` tickets, and one directory per key: the first 16 hex characters of the canonical checkout SHA-256 plus server name. Each directory has `entry.json`, `sock`, and a publication lock. There is no shared registry JSON file. `registry::sweep_locked`, used by admission, `list`, and `stop`, retains entries while the broker process token is live even when hello fails; an unavailable socket must not orphan a live server. Live tombstones remain. Socket paths are validated against the Unix path budget.
 
 ## Configuration
 

@@ -26,11 +26,16 @@ pub fn parse_target(raw: &str) -> Result<Target> {
     let column = parts.next();
     let line = parts.next();
     let path = parts.next();
+    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
     let (Some(column), Some(line), Some(path)) = (column, line, path) else {
+        if line.is_some() && column.is_some_and(numeric) {
+            return Err(LspErr::Protocol(format!(
+                "invalid position {raw}; use path:line:col with 1-based line and column"
+            )));
+        }
         return Ok(Target::Symbol(raw.to_owned()));
     };
     // Rust qualified symbol names contain colons too; only a numeric suffix denotes an editor position.
-    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
     if !numeric(column) && !numeric(line) {
         return Ok(Target::Symbol(raw.to_owned()));
     }
@@ -97,6 +102,8 @@ impl QueryErr {
 pub enum UnavailableReason {
     #[error("none configured")]
     NoneConfigured,
+    #[error("not running")]
+    NotRunning,
     #[error("not started: memory short at launch")]
     MemoryShort,
     #[error("stopped: memory pressure")]
@@ -131,6 +138,9 @@ pub enum SymbolResolution {
 }
 
 pub fn resolve_symbol(name: &str, result: Value) -> Result<SymbolResolution> {
+    let (container, name) = name
+        .rsplit_once("::")
+        .map_or((None, name), |(container, name)| (Some(container), name));
     let symbols: Vec<SymbolInformation> = if result.is_null() {
         Vec::new()
     } else {
@@ -138,7 +148,11 @@ pub fn resolve_symbol(name: &str, result: Value) -> Result<SymbolResolution> {
     };
     let mut matches: Vec<_> = symbols
         .into_iter()
-        .filter(|symbol| symbol.name == name)
+        .filter(|symbol| {
+            symbol.name == name
+                && container
+                    .is_none_or(|container| symbol.container_name.as_deref() == Some(container))
+        })
         .collect();
     Ok(match matches.len() {
         0 => SymbolResolution::Missing,
@@ -324,11 +338,12 @@ fn render_with_source(
             }
             let mut lines = Vec::new();
             for location in sorted.into_values() {
-                lines.push(format!(
-                    "{}  {}",
-                    position_text(root, &location.uri, location.range.start)?,
-                    source(&location.uri, location.range.start.line)?.trim()
-                ));
+                let mut line = position_text(root, &location.uri, location.range.start)?;
+                if let Ok(text) = source(&location.uri, location.range.start.line) {
+                    line.push_str("  ");
+                    line.push_str(text.trim());
+                }
+                lines.push(line);
             }
             Ok(finish(lines))
         }
@@ -429,6 +444,54 @@ mod tests {
 
     fn range() -> Value {
         json!({"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 6}})
+    }
+
+    #[test]
+    fn configured_but_absent_server_has_neutral_reason() {
+        let config = serde_json::from_value(serde_json::json!({"command": ["server"], "extensions": ["rs"], "root-markers": ["Cargo.toml"]})).unwrap();
+        let error = select(
+            Path::new("/no-refusal-record"),
+            Vec::new(),
+            &BTreeMap::from([("rust".into(), config)]),
+            Some("rust"),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "no language server for /no-refusal-record (not running); use grep"
+        );
+    }
+
+    #[test]
+    fn missing_source_does_not_discard_locations() {
+        let result = render_with_source(
+            Verb::Refs,
+            Path::new("/checkout"),
+            None,
+            json!([{"uri": "file:///checkout/gone.rs", "range": range()}]),
+            |_, _| Err(LspErr::Protocol("missing line".into())),
+        );
+        assert_eq!(result.unwrap(), "gone.rs:2:3\n");
+    }
+
+    #[test]
+    fn qualified_symbols_match_their_container() {
+        let symbol = |container| json!({"name": "method", "containerName": container, "kind": 12, "location": {"uri": "file:///checkout/lib.rs", "range": range()}});
+        assert!(matches!(
+            resolve_symbol("Type::method", json!([symbol("Type"), symbol("Other")])).unwrap(),
+            SymbolResolution::Unique(_)
+        ));
+    }
+
+    #[test]
+    fn incomplete_position_requires_a_column() {
+        assert!(
+            parse_target("src/lib.rs:12")
+                .unwrap_err()
+                .to_string()
+                .contains("path:line:col")
+        );
     }
 
     #[test]

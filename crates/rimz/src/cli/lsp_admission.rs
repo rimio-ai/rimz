@@ -2,14 +2,31 @@
 
 use anyhow::Result;
 use rimz::lsp::admission::{self, AdmissionRequest, Shortfall, WaitQueue};
+use rimz::utils::size::decimal_bytes as bytes;
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-pub(super) fn admit(checkout: &Path) -> Result<()> {
-    let machine = rimz::config::MachineConfig::load()?;
+pub(super) fn admit(checkout: &Path, machine: &rimz::config::MachineConfig) -> Result<()> {
     let workspace = rimz::workspace::WorkspaceResolver::resolve(checkout, None)?;
-    let effective = rimz::config::effective::load(&machine, workspace.launch_repo_root())?;
+    if machine.lsp.servers.is_empty() {
+        let declares_servers =
+            match std::fs::read_to_string(workspace.launch_repo_root().join(".rimz/config.toml")) {
+                Ok(text) => toml::from_str::<toml::Value>(&text).map_or(true, |value| {
+                    value
+                        .get("lsp")
+                        .and_then(|lsp| lsp.get("servers"))
+                        .is_some_and(|servers| {
+                            servers.as_table().is_none_or(|servers| !servers.is_empty())
+                        })
+                }),
+                Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+            };
+        if !declares_servers {
+            return Ok(());
+        }
+    }
+    let effective = rimz::config::effective::load(machine, workspace.launch_repo_root())?;
     if effective.lsp_servers.is_empty() && effective.untrusted_lsp_servers.is_empty() {
         return Ok(());
     }
@@ -80,23 +97,18 @@ fn refusal(shortfall: &Shortfall) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ");
+    let holders = if holders.is_empty() {
+        String::new()
+    } else {
+        format!(" (held: {holders})")
+    };
     format!(
-        "rimz: language server {} not started: needs {}, {} free after the {} reserve (held: {holders}); agents use grep",
+        "rimz: language server {} not started: needs {}, {} free after the {} reserve{holders}; agents use grep",
         shortfall.server,
         bytes(shortfall.estimate_bytes),
         bytes(free(shortfall)),
         bytes(shortfall.reserve_bytes)
     )
-}
-
-fn bytes(bytes: u64) -> String {
-    for (factor, unit) in [(1_000_000_000_u64, "GB"), (1_000_000, "MB"), (1_000, "KB")] {
-        if bytes >= factor {
-            let amount = format!("{:.1}", bytes as f64 / factor as f64);
-            return format!("{} {unit}", amount.strip_suffix(".0").unwrap_or(&amount));
-        }
-    }
-    format!("{bytes} B")
 }
 
 #[cfg(test)]
@@ -119,5 +131,8 @@ mod tests {
             }],
         };
         insta::assert_snapshot!(refusal(&shortfall), @"rimz: language server rust not started: needs 8 GB, 5.2 GB free after the 9.6 GB reserve (held: /held rust 6.3 GB); agents use grep");
+        let mut shortfall = shortfall;
+        shortfall.holders.clear();
+        assert!(!refusal(&shortfall).contains("held:"));
     }
 }

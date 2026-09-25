@@ -572,9 +572,6 @@ fn prepare_supervised(
         )?;
     }
     let mut preflight_launch = agent_cell.launch.clone();
-    if !request.subagent {
-        crate::cli::lsp_admission::admit(&launch.cwd)?;
-    }
     preflight_launch.channel.clone_from(&request.channel);
     let mut launch_invocation =
         rimz::harness::launch::ExecRequest::bare_launch(agent_cell.kind.clone(), Vec::new());
@@ -618,6 +615,9 @@ fn prepare_supervised(
         ),
     )?;
     supervised::preflight_program(&process)?;
+    if !request.subagent {
+        crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
+    }
     let kind = adapter.spec().kind_id();
     if let Some(channel) = request.channel.as_deref() {
         rimz::channel::register(&workspace, store.paths(), channel)?;

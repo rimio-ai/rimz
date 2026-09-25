@@ -77,7 +77,7 @@ pub(super) fn resume_lane(
 
     let cwd = match &action {
         LaneResumeAction::SplitClosed { cwd, .. } | LaneResumeAction::RestoreClosed { cwd, .. } => {
-            crate::cli::lsp_admission::admit(cwd)?;
+            crate::cli::lsp_admission::admit(cwd, &machine_config)?;
             cwd.as_path()
         }
         LaneResumeAction::List { .. } | LaneResumeAction::Focus { .. } => {
