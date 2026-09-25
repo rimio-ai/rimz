@@ -117,7 +117,9 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
     if workspace.root_class != RootClass::Repo {
         bail!("rimz worktree requires a git repository; cd into a repo checkout");
     }
-    let config = super::machine_config().agents.worktree.clone();
+    let machine_config = super::machine_config();
+    super::report_unknown_config_keys(&machine_config)?;
+    let config = machine_config.agents.worktree.clone();
     match command {
         WorktreeSubcmd::New {
             name,
@@ -181,12 +183,12 @@ fn new_worktree(
             &workspace.session_name,
         )
         .context("archiving messages for recreated worktree channel")?;
-    report_created(&created);
+    report_created(&created, config.hooks.created.is_some());
     Ok(())
 }
 
 #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
-fn report_created(created: &rimz::worktree::CreatedWorktree) {
+fn report_created(created: &rimz::worktree::CreatedWorktree, created_hook_ran: bool) {
     let marker = &created.marker;
     println!("created {}", marker.name);
     println!(
@@ -220,6 +222,9 @@ fn report_created(created: &rimz::worktree::CreatedWorktree) {
     }
     if created.linked > 0 {
         println!("  linked : {} dir(s) from .worktreelink", created.linked);
+    }
+    if created_hook_ran {
+        println!("  hook   : worktree.created ran");
     }
 }
 
