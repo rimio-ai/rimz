@@ -442,16 +442,16 @@ fn teardown_rooms(
             }
         };
         let backend = mux::backend_for(room.mux);
-        let report = rimz::room::teardown::teardown_room(
+        let (report, tmp) = rimz::room::teardown::teardown_room(
             backend.as_ref(),
             &room.workspace_id,
             &room.session_name,
             &runtime,
             &state,
         );
-        if !report.tmp_removed {
+        if let Err(err) = tmp {
             failures.push(format!(
-                "remove tmp and skill copies for {}",
+                "remove tmp and skill copies for {}: {err}",
                 room.session_name
             ));
         }
