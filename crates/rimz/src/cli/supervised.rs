@@ -241,6 +241,18 @@ pub(in crate::cli) fn run_exit_policy(self_cleanup_on_completion: bool) -> (bool
     (self_cleanup_on_completion, self_cleanup_on_completion)
 }
 
+pub(in crate::cli) fn note_isolation_clamp(
+    profile: &str,
+    source: &rimz::harness::plan::ClampSource,
+) -> Result<()> {
+    use std::io::Write as _;
+    writeln!(
+        std::io::stderr(),
+        "rimz: {profile} runs sandboxed: {source}, and a subagent never runs looser than its parent"
+    )?;
+    Ok(())
+}
+
 pub(super) fn install_run_interrupt_flag() -> Result<RunCancellation> {
     let flag = RUN_INTERRUPT_SIGNAL_RECEIVED
         .get_or_init(RunCancellation::new)

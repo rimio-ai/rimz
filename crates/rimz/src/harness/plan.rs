@@ -151,6 +151,61 @@ pub fn effective_resume_isolation(
     cell.or(stored)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ChildIsolation {
+    pub isolation: Option<crate::config::Isolation>,
+    pub clamped: Option<ClampSource>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ClampSource {
+    ProfileDefault,
+    MachinePolicy,
+}
+
+impl std::fmt::Display for ClampSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ProfileDefault => "its definition asks for host isolation",
+            Self::MachinePolicy => "machine policy asks for host isolation",
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "a subagent never runs looser than its parent: --isolation host is unavailable under a sandboxed parent; launch it from a host agent or a host shell"
+)]
+pub struct ChildIsolationErr;
+
+pub fn cap_child_isolation(
+    parent: Option<crate::config::Isolation>,
+    child_override: Option<crate::config::Isolation>,
+    child_default: Option<crate::config::Isolation>,
+    machine: crate::config::Isolation,
+) -> Result<ChildIsolation, ChildIsolationErr> {
+    use crate::config::Isolation;
+    if parent != Some(Isolation::Sandbox)
+        || Isolation::resolve(child_override, child_default, machine) == Isolation::Sandbox
+    {
+        return Ok(ChildIsolation {
+            isolation: child_override,
+            clamped: None,
+        });
+    }
+    if child_override == Some(Isolation::Host) {
+        return Err(ChildIsolationErr);
+    }
+    Ok(ChildIsolation {
+        isolation: Some(Isolation::Sandbox),
+        clamped: Some(if child_default.is_some() {
+            ClampSource::ProfileDefault
+        } else {
+            ClampSource::MachinePolicy
+        }),
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveLaunchError {
     #[error(transparent)]

@@ -262,7 +262,8 @@ upward-dependencies = ["sidebar::refresh"]
 # The board run (stage plus ledger times) feeds the sidebar pipeline lane.
 # The ended-session reconcile and its retired-row split are pulled by the hook, the exec wrapper and restart.
 # The owed-wake predicate and the launched-fleet settlement rule serve the run fold, the hooks, the digest reporter and its sweep backstop.
-surface-budget = 528
+# Child isolation cap and its typed outcome cross the launch/resume CLI seam.
+surface-budget = 531
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -627,7 +628,8 @@ allowed-dependencies = [
     "workspace",
 ]
 # Typed explicit-vs-default permission mode and resumed-seed isolation cross into the CLI launcher.
-surface-budget = 29
+# Shared child isolation cap, outcome, clamp source, and refusal.
+surface-budget = 33
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"

@@ -14,7 +14,7 @@ The profile default travels beside `skills` as `isolation_default` through `Reso
 
 The exec wrapper stamps `effective_isolation` on `agent.attached` before provider startup, independently of the recorded override. `AgentState::runs_in(machine)` reads this durable stamp; older rows fall back to override then machine policy. Observers read the stamp, while relaunches resolve the current definition rather than replaying the stamp.
 
-A subagent launched without its own `--isolation` inherits its parent's recorded override, not its profile default. Otherwise it follows its own definition and then machine policy. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's room tmp.
+A subagent launched without its own `--isolation` inherits its parent's recorded override, not its profile default. Otherwise it follows its own definition and then machine policy. `harness::plan::cap_child_isolation` caps this choice against the parent's effective `RIMZ_ISOLATION`, at supervised child launch and parent-message child resume. Under a sandboxed parent, an explicit or recorded host override refuses with the fix: launch from a host agent or host shell. A host profile default or host machine policy instead clamps to sandbox, prints a note naming the profile and source, and records `Some(Sandbox)` as the child's override so restart and resume preserve it. A host parent or absent ambient isolation imposes no cap. This is a consistency rule, not containment; ordinary agent launches, teams, forks, and loops are not capped. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's room tmp.
 
 ## Preflight
 
