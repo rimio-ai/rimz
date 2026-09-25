@@ -82,11 +82,7 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
     writeln!(
         stderr,
         "Tmp and skill copies: {}.",
-        if teardown.tmp_removed {
-            "cleared"
-        } else {
-            "removal failed"
-        }
+        if records.hard { "cleared" } else { "kept" }
     )?;
     match &records.rotation {
         rimz::store::event_log::RotationOutcome::Rotated {
