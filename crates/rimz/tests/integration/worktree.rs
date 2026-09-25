@@ -52,6 +52,35 @@ fn worktree_exec_request(worktree: &Path) -> ExecRequest {
 }
 
 #[test]
+fn unreadable_machine_config_refuses_worktree_creation() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    let config = env.rimz_home().join("config.toml");
+    std::fs::write(
+        &config,
+        "[agents.worktree.hooks]\ncreated = touch HOOKRAN\n",
+    )
+    .unwrap();
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("cannot create a worktree"))
+        .stderr(contains("TOML error"))
+        .stderr(contains(config.display().to_string()));
+    assert!(!env.home_root.join("project-worktrees/demo").exists());
+    assert!(!git_stdout(&env.project_root, &["branch", "--list", "demo"]).contains("demo"));
+    env.rimz()
+        .args(["worktree", "list"])
+        .assert()
+        .success()
+        .stderr(contains("warning:"))
+        .stderr(contains("TOML error"))
+        .stderr(contains(config.display().to_string()));
+}
+
+#[test]
 fn worktree_hooks_run_and_report_without_streaming_output() {
     let env = Env::new();
     init_repo(&env.project_root);

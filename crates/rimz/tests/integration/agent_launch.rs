@@ -1354,6 +1354,44 @@ fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
 
 #[cfg(unix)]
 #[test]
+fn unreadable_machine_config_blocks_worktree_launch_before_store_events() {
+    let env = Env::new();
+    if !init_launch_repo(&env.project_root) {
+        return;
+    }
+    env.install_agent_hooks("claude");
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    let config = env.rimz_home().join("config.toml");
+    std::fs::write(
+        &config,
+        "[agents.worktree.hooks]\ncreated = touch HOOKRAN\n",
+    )
+    .unwrap();
+    env.rimz()
+        .args(["agents", "claude,codex", "--new-pane"])
+        .assert()
+        .failure()
+        .stderr(contains("single agent cell"));
+    for args in [
+        vec!["agents", "claude", "-p", "test hook", "-w", "demo"],
+        vec!["agents", "claude", "-w", "demo", "--fresh"],
+        vec!["agents", "claude", "-p", "test hook", "--from-pr", "1"],
+        vec!["agents", "claude", "--from-pr", "1"],
+    ] {
+        env.rimz()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(contains("cannot create a worktree"))
+            .stderr(contains("TOML error"))
+            .stderr(contains(config.display().to_string()));
+        assert!(!env.state_path_for(&env.project_root).events_log.exists());
+        assert!(!env.home_root.join("project-worktrees").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn failed_created_hook_blocks_launch_before_store_events() {
     let env = Env::new();
     if !init_launch_repo(&env.project_root) {

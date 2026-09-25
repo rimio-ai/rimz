@@ -760,10 +760,14 @@ fn choose(prompt: &str, choices: &[&str], default: usize) -> Result<Option<usize
 
 fn resolve_launch_checkout(
     workspace: &rimz::ResolvedWorkspace,
-    config: &rimz::config::WorktreeConfig,
+    config: &rimz::config::MachineConfig,
     worktree: Option<&str>,
     from_pr: Option<&rimz::forge::PrTarget>,
 ) -> Result<Option<rimz::worktree::LaunchCheckout>> {
+    if worktree.is_some() || from_pr.is_some() {
+        require_worktree_config(config)?;
+    }
+    let config = &config.agents.worktree;
     let name = match rimz::worktree::resolve_launch_checkout(workspace, config, worktree, from_pr) {
         Ok(launch) => return Ok(Some(launch)),
         Err(rimz::worktree::WorktreeErr::Unmarked { name, .. }) if from_pr.is_none() => name,
@@ -839,8 +843,26 @@ pub(crate) fn machine_config() -> std::sync::Arc<rimz::config::MachineConfig> {
     rimz::config::MachineConfig::load_lenient()
 }
 
+fn require_worktree_config(config: &rimz::config::MachineConfig) -> Result<()> {
+    let path = rimz::config::MachineConfig::config_path();
+    if let Some(error) = config.notices.unreadable_files.get(&path) {
+        anyhow::bail!(
+            "cannot create a worktree: {error}; correct {}, then retry; `rimz config get` shows the strict error",
+            path.display(),
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -> Result<()> {
     let mut stderr = std::io::stderr().lock();
+    for (path, error) in &config.notices.unreadable_files {
+        writeln!(
+            stderr,
+            "rimz: warning: {error}; using built-in defaults for this file; correct {}; `rimz config get` shows the strict error",
+            path.display(),
+        )?;
+    }
     for notice in &config.notices.unknown_keys {
         writeln!(
             stderr,

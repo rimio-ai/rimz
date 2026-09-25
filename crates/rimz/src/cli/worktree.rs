@@ -126,7 +126,10 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             base,
             from_pr,
             branch,
-        } => new_worktree(&workspace, &config, name, base, from_pr, branch),
+        } => {
+            super::require_worktree_config(&machine_config)?;
+            new_worktree(&workspace, &config, name, base, from_pr, branch)
+        }
         WorktreeSubcmd::List { json } => list_worktrees(&workspace, json),
         WorktreeSubcmd::Sweep { dry_run } => sweep_worktrees(&workspace, globals, dry_run),
         WorktreeSubcmd::Cd { name } => cd_worktree(&workspace, &config, &name),

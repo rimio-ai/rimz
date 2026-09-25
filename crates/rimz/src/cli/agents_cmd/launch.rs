@@ -72,10 +72,15 @@ pub(super) fn launch_layout(
     if args.launch.cohort.fresh && explicit_worktree_name.is_none() {
         bail!("--fresh needs a named worktree (-w NAME) whose prior cohort it replaces");
     }
+    let machine_config = machine_config();
+    let worktree_launch =
+        args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some();
+    if worktree_launch {
+        crate::cli::require_worktree_config(&machine_config)?;
+    }
     let ctx = Ctx::open(globals)?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
-    let machine_config = machine_config();
     report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
     let lane = args
@@ -210,8 +215,6 @@ pub(super) fn launch_layout(
             ancestry.as_ref(),
         );
     }
-    let worktree_launch =
-        args.launch.cohort.worktree.is_some() || args.launch.cohort.from_pr.is_some();
     let channel_launch = args.launch.cohort.channel.is_some();
     let placement = apply_in_place_downgrade(
         resolve_placement(
@@ -279,7 +282,7 @@ pub(super) fn launch_layout(
 
     let Some(launch) = crate::cli::resolve_launch_checkout(
         workspace,
-        &machine_config.agents.worktree,
+        &machine_config,
         args.launch.cohort.worktree.as_deref(),
         args.launch.cohort.from_pr.as_ref(),
     )?
