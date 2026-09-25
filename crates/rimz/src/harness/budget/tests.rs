@@ -905,7 +905,6 @@ fn fleet_choices_use_explicit_state_without_opening_a_store() {
         id.clone(),
         runtime.dir_name.clone(),
         &dir.path().join("state"),
-        &runtime,
     );
     let scope = DailyBudgetScope::Fleet;
     let ledger = DailyBudgetLedger {
@@ -1346,10 +1345,5 @@ fn state_paths(runtime: &RuntimePaths) -> crate::StatePaths {
         .unwrap()
         .parent()
         .unwrap();
-    crate::StatePaths::under_named(
-        runtime.workspace_id.clone(),
-        runtime.dir_name.clone(),
-        home,
-        runtime,
-    )
+    crate::StatePaths::under_named(runtime.workspace_id.clone(), runtime.dir_name.clone(), home)
 }

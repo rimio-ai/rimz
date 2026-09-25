@@ -580,11 +580,7 @@ impl ZellijBackend {
         &self,
         workspace_id: &WorkspaceId,
     ) -> Option<crate::disk::paths::RuntimePaths> {
-        match &self.runtime_dir {
-            Some(dir) => crate::disk::paths::RuntimePaths::under(workspace_id.clone(), dir),
-            None => crate::disk::paths::RuntimePaths::for_workspace(workspace_id.clone()),
-        }
-        .ok()
+        self.runtime_paths_for_workspace(workspace_id.clone()).ok()
     }
 
     fn focus_restore_target(
@@ -1629,18 +1625,7 @@ impl MuxBackend for ZellijBackend {
                 .and_then(|cols| u16::try_from(cols).ok())
                 .filter(|cols| *cols > 0)
         })();
-        let runtime = match self.runtime_dir.as_deref() {
-            Some(root) => {
-                crate::disk::paths::RuntimePaths::under(opts.sidebar.workspace_id.clone(), root)
-            }
-            None => {
-                crate::disk::paths::RuntimePaths::for_workspace(opts.sidebar.workspace_id.clone())
-            }
-        }
-        .map_err(|err| MuxErr::Output {
-            program: "zellij".to_owned(),
-            reason: format!("cannot resolve sidebar runtime paths: {err}"),
-        })?;
+        let runtime = self.runtime_paths_for_workspace(opts.sidebar.workspace_id.clone())?;
         let width = crate::mux::SidebarWidth::from_config(
             &crate::config::MachineConfig::load_lenient().theme,
         );

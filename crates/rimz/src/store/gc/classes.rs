@@ -35,6 +35,9 @@ pub(super) fn collect_state(
                 &mut report,
             ),
             Class::Audit => collect_audit(&paths.audit_path(""), &mut sweep, &mut report),
+            Class::Locks => {
+                super::collect::collect_locks(&paths.lock_path(""), &mut sweep, &mut report)
+            }
             Class::Owned => match &agents {
                 Some(agents) => collect_owned(paths, agents, &mut sweep, &mut report),
                 None => Ok(()),
@@ -239,6 +242,10 @@ mod tests {
         .unwrap();
         paths.ensure_dirs().unwrap();
         fs::create_dir_all(&paths.waits_dir).unwrap();
+        let pane_lock = paths.lock_path("pane-write/free.lock");
+        let held_path = paths.lock_path("sidebar-launch.lock");
+        let held = crate::disk::lock::WorkspaceLock::acquire(&held_path).unwrap();
+        drop(crate::disk::lock::WorkspaceLock::acquire(&pane_lock).unwrap());
         let output = paths.waits_dir.join("old.output");
         fs::File::create(&output)
             .unwrap()
@@ -255,6 +262,13 @@ mod tests {
         })
         .unwrap();
         assert!(!output.exists());
+        assert!(
+            !paths.workspace_lock.exists(),
+            "idle workspace lock has no exemption"
+        );
+        assert!(!pane_lock.exists(), "nested room locks are swept too");
+        assert!(held_path.exists(), "busy state lock survives");
+        drop(held);
     }
 
     #[test]

@@ -42,20 +42,28 @@ fn known_room_keeps_empty_class_roots() {
     collect_claims(&rt).unwrap();
     assert!(rt.sock_dir.is_dir());
     assert!(rt.locks_dir.is_dir());
-    assert!(!rt.lock_path("free.lock").exists());
+    assert!(
+        rt.lock_path("free.lock").exists(),
+        "runtime sweep leaves state locks alone"
+    );
 }
 
 #[test]
-fn runtime_classes_expire_lanes_and_probe_unlistened_sockets() {
+fn runtime_classes_preserve_lanes_and_probe_unlistened_sockets() {
     let temp = tempdir().unwrap();
     let rt = RuntimePaths::under(WorkspaceId::from_project_root(temp.path()), temp.path()).unwrap();
     rt.ensure_dirs().unwrap();
-    let lane = rt.lane_path("stale.json");
-    fs::write(&lane, b"{}").unwrap();
-    fs::File::open(&lane)
-        .unwrap()
-        .set_modified(SystemTime::now() - Duration::from_secs(7200))
-        .unwrap();
+    let lanes = [
+        rt.lane_path("loop-fire.json"),
+        rt.lane_path("message-wake.json"),
+    ];
+    for lane in &lanes {
+        fs::write(lane, b"{}").unwrap();
+        fs::File::open(lane)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(30 * 86_400))
+            .unwrap();
+    }
     let dead = rt.sock_dir.join("run.dead.sock");
     drop(std::os::unix::net::UnixDatagram::bind(&dead).unwrap());
     age_socket(&dead);
@@ -83,7 +91,9 @@ fn runtime_classes_expire_lanes_and_probe_unlistened_sockets() {
         &mut report,
     )
     .unwrap();
-    assert!(!lane.exists(), "every stale lane expires");
+    for lane in lanes {
+        assert!(lane.exists(), "quiet lanes must not expire");
+    }
     assert!(!dead.exists(), "unlistened run sockets are reclaimed");
     assert!(live.exists(), "listening sockets survive regardless of age");
     assert!(

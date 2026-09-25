@@ -136,16 +136,10 @@ pub fn collect_classes(
             ..RoomReport::default()
         }));
     for room in scan.workspaces {
-        let runtime = paths::RuntimePaths::under_named(
-            room.workspace_id.clone(),
-            room.dir_name.clone(),
-            &paths::runtime_home(),
-        );
         let paths = paths::StatePaths::under_named(
             room.workspace_id,
             room.dir_name.clone(),
             &paths::rimz_home(),
-            &runtime,
         );
         let runtime = match paths::RuntimePaths::for_state(&paths) {
             Ok(runtime) => runtime,

@@ -51,11 +51,10 @@ impl Fixture {
         assert!(count > 0, "fixture needs at least one worktree");
         let env = Env::new();
         let real_git = find_git()?;
-        // Birth creates the workspace dir before any sidebar runs; the
+        // Birth creates the workspace and lock dirs before any sidebar runs; the
         // id-only `--workspace-id` snapshot resolves its runtime dir by that
         // name, record or not.
-        std::fs::create_dir_all(env.state_path_for(&env.project_root).root)
-            .expect("mkdir workspace dir");
+        let _ = env.store();
 
         // Pane cwd is the worktree. With no recorded workspace, the snapshot's
         // project root is `None`, so each cwd groups as a `Worktree` and the git

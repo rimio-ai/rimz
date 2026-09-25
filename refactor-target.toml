@@ -243,7 +243,8 @@ allowed-dependencies = [
 # Record codecs and cross-room scanners share the layout version, legacy default, and two validation entry points.
 # File-backed lock guards share blocking and immediate inode-checked acquisition.
 # Root-only readers share history probes and the remaining room retention policy.
-surface-budget = 197
+# Explicit state pairing and runtime-only preparation keep lock identity independent of runtime roots.
+surface-budget = 199
 
 [[module]]
 path = "crates/rimz/src/forge"

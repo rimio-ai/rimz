@@ -560,7 +560,7 @@ Zellij 0.44 runs one wasm instance per connected client and can keep instances f
 
 Every topology payload carries its plugin build and configuration plus the fallback generation `(loaded_at_ms, plugin_id)`. Owner launches atomically publish the desired identity in `presence-desired.json`.
 
-[`sidebar::presence`](../../crates/rimz/src/sidebar/presence.rs) holds the workspace-runtime `topology-writer.lock` for at most one second across the desired-record and cache reads, the rank comparison, cache replacement, and conflict update. A lock or write failure rejects the wake; nothing falls back to an unlocked write.
+[`sidebar::presence`](../../crates/rimz/src/sidebar/presence.rs) holds the state `locks/topology-writer.lock` for at most one second across the desired-record and cache reads, the rank comparison, cache replacement, and conflict update. A lock or write failure rejects the wake; nothing falls back to an unlocked write.
 
 A writer matching both desired fields outranks every non-matching writer; load time, then plugin id, break ties. Without a desired record, ranking is generation order, and a payload without writer identity ranks at generation zero.
 

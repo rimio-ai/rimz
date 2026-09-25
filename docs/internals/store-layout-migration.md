@@ -59,7 +59,8 @@ Use this instead of deleting the selected state directory. Old names below come 
     set -eu
     cd "$migration_room"
     jq -e '(.layout // 1) == 1' workspace.json
-    mkdir -p log records/messages audit/messages cache owned tmp
+    rm -rf -- locks
+    mkdir -p log records/messages audit/messages cache owned tmp locks
     migration_move() {
         if test -e "$1"; then mv -- "$1" "$2"; fi
     }
@@ -91,17 +92,17 @@ Use this instead of deleting the selected state directory. Old names below come 
         jq '{override_spec, raised_cap_usd, disabled} | with_entries(select(.value != null))' \
             "$migration_old_runtime/budget.fleet.json" > records/budget.fleet.json
     fi
-    rm -rf -- snapshots auto-gc.json doctor-cleared.json locks skills tmp messages
+    rm -rf -- snapshots auto-gc.json doctor-cleared.json skills tmp messages
     jq '.layout = 2' workspace.json > workspace.json.layout-tmp
     mv -- workspace.json.layout-tmp workspace.json
 )
 ```
 
-The old `locks/*.stamp` files are debounce caches, not flock files. Discard them with old locks; writers recreate stamps under `cache/` and flocks under runtime `locks/`. Old `tmp/agents/<handle>/` scratch and room-wide `skills/` copies are discarded, not moved into owned units. `live-roster.json` is preserved under records because rebirth cannot rebuild it. If the old reset already removed files, the optional moves skip them. In particular, its runtime cleanup loses the old fleet choices and binding log: restore saved copies at their old paths before running the move, or reapply the fleet cap with `rimz budget` afterward.
+The old `locks/*.stamp` files are debounce caches, not flock files. Discard them with old locks; writers recreate stamps under `cache/` and every room flock under state `locks/`. The move recreates that directory after discarding the old contents. Old `tmp/agents/<handle>/` scratch and room-wide `skills/` copies are discarded, not moved into owned units. `live-roster.json` is preserved under records because rebirth cannot rebuild it. If the old reset already removed files, the optional moves skip them. In particular, its runtime cleanup loses the old fleet choices and binding log: restore saved copies at their old paths before running the move, or reapply the fleet cap with `rimz budget` afterward.
 
 The history filename rule is the UTC date at `floor(unix_seconds / 604800) * 604800`, followed by `.jsonl`, not the file's arbitrary calendar day. The block uses legacy history mtime (positive Unix time on this machine); `1970-01-01.jsonl` and `1970-01-08.jsonl` are the first two windows. New writers use each message's `updated_at`. Moving preserves mtime, so the audit sweep can immediately remove old history under the 30-day/64-MiB rule. Transcript buckets already use this naming rule. No framed log payloads or message records are rewritten.
 
-After every room is stopped and moved or reset, delete the runtime room trees as above. Install the merged binary before reopening: an old binary must not write into a layout-2 room.
+After every room is stopped and moved or reset, delete the entire old runtime room trees as above, including any runtime `locks/`; no room flock remains there. Install the merged binary before reopening: an old binary must not write into a layout-2 room.
 
 ## Verify
 

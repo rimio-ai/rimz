@@ -412,7 +412,7 @@ fn freshest_matching_sidebar_heartbeat(
 ) -> Option<SystemTime> {
     // The runtime tree holds no records, so the dir name comes from the state tree.
     let state = StatePaths::under(record.workspace_id.clone(), state_root).ok()?;
-    let runtime = RuntimePaths::under_named(state.workspace_id, state.dir_name, runtime_root);
+    let runtime = RuntimePaths::for_state_under(&state, runtime_root);
     let heartbeats =
         crate::wakeup::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir).ok()?;
     heartbeats

@@ -293,11 +293,7 @@ impl ZellijBackend {
         match &self.runtime_dir {
             Some(dir) => {
                 let state = self.state_paths_for_workspace(workspace_id)?;
-                Ok(RuntimePaths::under_named(
-                    state.workspace_id,
-                    state.dir_name,
-                    dir,
-                ))
+                Ok(RuntimePaths::for_state_under(&state, dir))
             }
             None => RuntimePaths::for_workspace(workspace_id).map_err(|err| MuxErr::Output {
                 program: "zellij".to_owned(),

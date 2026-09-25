@@ -27,7 +27,7 @@ There is no general RimZ daemon. Store writes belong to CLI or hook subprocesses
 
 Optional [shared language servers](./docs/internals/lsp.md) each have a hidden `rimz lsp serve` broker: one stdio server and a nonce-checked Unix query socket per checkout/server key. Agent wrappers hold process leases; the broker exits after their release grace, retaining stopped tombstones while leases live. Admission and the memory watchdog coordinate across rooms with a machine lock. Brokers write their own runtime entries, learned cost history, and diagnostics, never agent store state.
 
-The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar elder. Its fires run in transient user scopes under systemd and in their own process groups, so they and any room they birth outlive the tick. Spawn and scheduled check-only fires open their root's room if needed, leaving its elder to own later occurrences. Signals follow the same shape: whichever process observes the event (`rimz events emit`, the sidebar producer's forge diff, a lifecycle write) fires the tasks listening for it in place, and a `rimz wait -- <command>` watcher is a detached subprocess holding a runtime lock for its command's lifetime ([loops.md](./docs/internals/harness/loops.md#the-signal-vocabulary)).
+The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar elder. Its fires run in transient user scopes under systemd and in their own process groups, so they and any room they birth outlive the tick. Spawn and scheduled check-only fires open their root's room if needed, leaving its elder to own later occurrences. Signals follow the same shape: whichever process observes the event (`rimz events emit`, the sidebar producer's forge diff, a lifecycle write) fires the tasks listening for it in place, and a `rimz wait -- <command>` watcher is a detached subprocess holding a state-tier lock for its command's lifetime ([loops.md](./docs/internals/harness/loops.md#the-signal-vocabulary)).
 
 ```text
 terminal emulator
@@ -78,12 +78,13 @@ State is tiers of plain files, scoped by what each one outlives. [`disk/paths.rs
 workspace store         ~/.rimz/ws/<basename>-<hex>/
   one room's durable truth: the framed event log and the records beside it,
   plus the producer caches that survive a reboot
-  log/, records/, audit/, cache/, owned/, tmp/ group files by lifetime;
+  log/, records/, audit/, cache/, owned/, tmp/, locks/ group files by lifetime;
+  every room flock lives in locks/, never cleared by reset or teardown
   workspace.json (layout: 2) and rimz remain room identity at the root
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/  (or /tmp/rimz-<uid>/…)
-  sock/, live/, lanes/, locks/ group disposable coordination by lifetime;
-  reset and teardown clear the first three, never held lock inodes
+  sock/, live/, lanes/ group disposable coordination by lifetime;
+  reset and teardown clear all three; lanes have no age sweep
 
 shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
   the account-global election locks and the spending service's versioned socket

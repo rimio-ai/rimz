@@ -71,10 +71,10 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `cache/` | State | Rebuildable; cleared on reset, no age sweep. |
 | `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live or its directory or a direct child is newer than 7 days. Unknown handles use the same mtime grace. Runs: terminal and record mtime older than 7 days. Restorability does not extend the grace. |
 | `tmp/` | State | Room lifetime; unclaimed wait and subagent outputs older than 7 days are also swept. |
+| `locks/` | State | Try-lock and unlink while held; keep busy files. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
 | `sock/` | Runtime | Remove sockets whose connect probe is refused, after the sidebar heartbeat TTL startup grace. |
 | `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exception: keep agent telemetry while its room is live, because the external exporter holds its inode open. |
-| `lanes/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days). |
-| `locks/` | Runtime | Try-lock and unlink while held; keep busy files. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
+| `lanes/` | Runtime | No age sweep; reset, teardown, room death and reboot reclaim coordination state, including quiet schedules and user choices. |
 
 ### The workspace store
 
@@ -110,6 +110,12 @@ owned/runs/<run_id>.json                      supervised-run records
 tmp/{scratchpad,shared}/                      handleless scratch and shared files
 tmp/rimz-subagents/<name>.output              child responses
 tmp/rimz-waits/<name>.output                  watched-command output
+locks/*.lock                                 workspace, publish, subagent-zone, loop-instances,
+                                             loop-run-<name>, loop-watch-<name>, message-sweep,
+                                             sidebar-launch, snapshot, topology-writer,
+                                             authoritative-pane-probe, focus-anchor, pr-state,
+                                             diff-stats, budget.fleet, and sidecar locks
+locks/pane-write/<hex-pane-id>.lock           pane write serialization
 workspace.json                               room record, layout: 2
 rimz                                         stable room executable
 ```
@@ -169,12 +175,6 @@ lanes/{diff-stats,cohort-spend,pipeline,pr-state,metrics-sample}.json enrichment
 lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats}.json coordination
 lanes/{budget.scopes,budget.fleet-park,budget.<digest>,auto-continue.<digest>}.json session state
 lanes/workspace-spending.<prefix>.json room spend projection
-locks/*.lock                         workspace, publish, subagent-zone, loop-instances,
-                                     loop-run-<name>, loop-watch-<name>, message-sweep,
-                                     sidebar-launch, snapshot, topology-writer,
-                                     authoritative-pane-probe, focus-anchor, pr-state,
-                                     diff-stats, budget.fleet, and sidecar locks
-locks/pane-write/<hex-pane-id>.lock   pane write serialization
 ```
 
 Other subsystems publish their own latency files into the same directory, and each catalog belongs to the module that writes it:
@@ -363,15 +363,15 @@ The recovery flow from roster to repopulated panes is [fleet.md → Resume and r
 
 For layout-1 rooms, follow the [post-merge migration guide](./store-layout-migration.md); there is no in-product layout migrator.
 
-`rimz reset` cancels active runs, clears the room account selection, stages carryover on a soft reset, and rotates the log. It clears `cache/` (including handleless skill copies) and runtime `sock/`, `live/`, `lanes/`; each runtime directory is renamed before recursive deletion so late writers cannot refill the detached tree. It never removes `locks/`. Soft reset keeps audit, owned state, tmp, and records, including standing fleet budget choices. `--hard` additionally removes the active log, carryover, `audit/`, `owned/` except `owned/runs/`, and `tmp/`; it keeps the log archive just written. Canceled run records stay loadable for waiters until terminal-run GC reclaims them after its seven-day grace. Provider-owned sessions remain outside this boundary. Ordinary teardown removes tmp and disposable runtime classes but never owned state; the reset birth path uses runtime-only teardown so soft reset does not lose tmp.
+`rimz reset` cancels active runs, clears the room account selection, stages carryover on a soft reset, and rotates the log. It clears `cache/` (including handleless skill copies) and runtime `sock/`, `live/`, `lanes/`; each runtime directory is renamed before recursive deletion so late writers cannot refill the detached tree. It never removes state `locks/`. Soft reset keeps audit, owned state, tmp, and records, including standing fleet budget choices. `--hard` additionally removes the active log, carryover, `audit/`, `owned/` except `owned/runs/`, and `tmp/`; it keeps the log archive just written. Canceled run records stay loadable for waiters until terminal-run GC reclaims them after its seven-day grace. Provider-owned sessions remain outside this boundary. Ordinary teardown removes tmp and disposable runtime classes but never owned state; the reset birth path uses runtime-only teardown so soft reset does not lose tmp.
 
-`rimz gc` applies the class table to every known layout-2 room, with per-room/per-class counts and bytes in text and additive JSON `rooms[].classes[]`. Layout-1 rooms are retained and reported with `retained_reason`, without class sweeping or adoption. `rimz list` also shows those rooms with the migration guide. `--dry-run` plans removals without deleting files; locks instead report `locks_would_check`, without acquiring them or claiming removal. `--older-than` controls live/lanes and orphan atomic-write temp TTL, not owned or audit retention. The elected sidebar producer remains the sole automatic trigger, once daily after a five-minute settle; its assist record includes `class_bytes`.
+`rimz gc` applies the class table to every known layout-2 room, with per-room/per-class counts and bytes in text and additive JSON `rooms[].classes[]`. Layout-1 rooms are retained and reported with `retained_reason`, without class sweeping or adoption. `rimz list` also shows those rooms with the migration guide. `--dry-run` plans removals without deleting files; locks instead report `locks_would_check`, without acquiring them or claiming removal. `--older-than` controls live and orphan atomic-write temp TTL, not owned or audit retention. The elected sidebar producer remains the sole automatic trigger, once daily after a five-minute settle; its assist record includes `class_bytes`.
 
 GC also prunes provably dead workspaces and landed worktrees, shared stale provider probes, and orphan atomic-write temps. In the current workspace it repairs the event log, archives orphaned messages, reconciles stale sent messages, and prunes carryover past 14 days; these mutating maintenance operations are skipped for a dry run.
 
 ## What survives what
 
-Soft reset keeps `records/`, `audit/`, `owned/`, `tmp/` and archived logs; hard reset also drops audit, owned state except `owned/runs/`, tmp, and carryover. Both keep runtime lock inodes. Reboot drops runtime, not state. Teardown drops tmp, not owned state. Age-based GC is independent of these boundaries.
+Soft reset keeps `records/`, `audit/`, `owned/`, `tmp/` and archived logs; hard reset also drops audit, owned state except `owned/runs/`, tmp, and carryover. Both keep state lock inodes. Reboot drops runtime, not state. Teardown drops tmp, not owned state. Age-based GC is independent of these boundaries.
 
 | Event | Store | Live sockets and heartbeats | Multiplexer session |
 | --- | --- | --- | --- |
