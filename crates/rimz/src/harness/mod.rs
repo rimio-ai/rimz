@@ -6,6 +6,7 @@ pub(crate) mod auto_continue;
 pub mod auto_gc;
 pub mod auto_redeem;
 pub mod budget;
+pub mod deadline;
 pub mod fleet;
 pub mod idle_compact;
 pub mod launch;

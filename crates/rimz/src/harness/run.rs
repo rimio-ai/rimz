@@ -122,6 +122,8 @@ pub struct SupervisedRunRequest {
     pub budget: Option<crate::harness::budget::BudgetSpec>,
     pub max_turns: Option<u32>,
     pub timeout: Option<std::time::Duration>,
+    pub warn: Vec<std::time::Duration>,
+    pub grace: Option<std::time::Duration>,
     pub keep: bool,
     pub retries: u32,
     pub verify: Option<String>,
@@ -164,6 +166,8 @@ impl SupervisedRunRequest {
             budget: None,
             max_turns: None,
             timeout: None,
+            warn: Vec::new(),
+            grace: None,
             keep: false,
             retries: 0,
             verify: None,
@@ -403,15 +407,44 @@ pub fn timeout_if_due(
     paths: &StatePaths,
     run_id: &RunId,
     now: Timestamp,
+    harvest: Option<String>,
 ) -> Result<(RunRecord, bool)> {
     update_record(paths, run_id, |record, _| {
-        if !record.deadline_at.is_some_and(|deadline| deadline <= now)
+        if !super::deadline::kill_due(record, now)
             || !record.mark_terminal(RunStatus::TimedOut, now)
         {
             return Ok(RecordMutation::Keep(false));
         }
+        if record.last_message.is_none() {
+            record.last_message = harvest;
+        }
         Ok(RecordMutation::Write(true))
     })
+}
+
+pub fn claim_rung(
+    paths: &StatePaths,
+    run_id: &RunId,
+    now: Timestamp,
+    attach: impl FnOnce(&super::deadline::Rung) -> bool,
+) -> Result<Option<super::deadline::Rung>> {
+    // Records are published atomically, so an unlocked read can rule out the
+    // common case (no rung due) without taking the workspace lock on every tool
+    // hook; a due rung is re-checked under the lock.
+    if super::deadline::due_rung(&load(paths, run_id)?, now).is_none() {
+        return Ok(None);
+    }
+    update_record(paths, run_id, |record, _| {
+        let Some(rung) = super::deadline::due_rung(record, now) else {
+            return Ok(RecordMutation::Keep(None));
+        };
+        if !attach(&rung) {
+            return Ok(RecordMutation::Keep(None));
+        }
+        record.deadline_notice_at = Some(rung.at());
+        Ok(RecordMutation::Write(Some(rung)))
+    })
+    .map(|(_, rung)| rung)
 }
 
 pub fn budget_exceeded(
@@ -603,9 +636,12 @@ fn fold_lifecycle(
         (None, None) | (Some(_), Some(_)) => {}
     }
     if reopen {
-        record.deadline_at = record
-            .deadline_at
-            .map(|deadline| now + (deadline - record.started_at));
+        record.deadline_at = record.timeout.map(|timeout| now + timeout).or_else(|| {
+            record
+                .deadline_at
+                .map(|deadline| now + (deadline - record.started_at))
+        });
+        record.deadline_notice_at = None;
         record.status = RunStatus::Running;
         record.completed_at = None;
         record.parked_at = None;

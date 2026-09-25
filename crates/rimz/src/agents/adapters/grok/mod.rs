@@ -57,6 +57,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[],
     },
     capabilities: Capabilities {
+        hook_context: false,
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: false,

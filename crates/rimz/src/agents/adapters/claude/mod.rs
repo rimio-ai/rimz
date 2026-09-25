@@ -108,6 +108,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
         ],
     },
     capabilities: Capabilities {
+        hook_context: false,
         native_ask_ui: true,
         transcript_tail_context: false,
         // Claude stamps a live pane on every session, so it opts out of the

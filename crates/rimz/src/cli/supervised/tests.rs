@@ -329,6 +329,8 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         budget: None,
         max_turns: None,
         timeout: None,
+        warn: Vec::new(),
+        grace: None,
         keep: false,
         retries: 0,
         verify: None,

@@ -428,6 +428,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
             blocking: &[],
         },
         capabilities: Capabilities {
+            hook_context: false,
             native_ask_ui: manifest.capabilities.native_ask_ui,
             transcript_tail_context: false,
             registers_lazily: manifest.capabilities.registers_lazily,

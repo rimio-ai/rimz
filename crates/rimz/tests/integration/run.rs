@@ -69,9 +69,17 @@ fn run_record_json_shape_is_pinned() {
     assert_eq!(old.output_tokens, None);
     assert_eq!(old.last_message, None);
     assert_eq!(old.deadline_at, None);
+    assert_eq!(old.timeout, None);
+    assert_eq!(old.grace, None);
+    assert!(old.warn.is_empty());
+    assert_eq!(old.deadline_notice_at, None);
     assert_eq!(old.completed_at, None);
 
     record.keep = true;
+    record.timeout = Some(Duration::from_secs(1800));
+    record.grace = Some(Duration::from_secs(180));
+    record.warn = vec![Duration::from_secs(360), Duration::from_secs(180)];
+    record.deadline_notice_at = Some(now);
     record.verify = Some(RunVerify {
         cmd: "true".into(),
         attempts: 1,
@@ -84,6 +92,10 @@ fn run_record_json_shape_is_pinned() {
     record.completed_at = Some(now);
     let mut populated = required;
     populated["keep"] = json!(true);
+    populated["timeout"] = json!("30m");
+    populated["grace"] = json!("3m");
+    populated["warn"] = json!(["6m", "3m"]);
+    populated["deadline_notice_at"] = json!("2026-01-01T00:00:00Z");
     populated["verify"] = json!({
         "cmd": "true",
         "attempts": 1,

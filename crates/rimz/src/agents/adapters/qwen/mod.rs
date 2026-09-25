@@ -73,6 +73,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
         ],
     },
     capabilities: Capabilities {
+        hook_context: false,
         native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: false,

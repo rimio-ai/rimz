@@ -242,18 +242,106 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
         &paths,
         &record.run_id,
         deadline - std::time::Duration::from_secs(1),
+        None,
     )
     .expect("check early deadline");
     assert!(!wrote);
 
     let (settled, wrote) =
-        timeout_if_due(&paths, &record.run_id, deadline).expect("settle due deadline");
+        timeout_if_due(&paths, &record.run_id, deadline, None).expect("settle due deadline");
     assert!(wrote);
     assert_eq!(settled.status, RunStatus::TimedOut);
     assert_eq!(settled.completed_at, Some(deadline));
 
-    let (_, wrote) = timeout_if_due(&paths, &record.run_id, deadline).expect("repeat due deadline");
+    let (_, wrote) =
+        timeout_if_due(&paths, &record.run_id, deadline, None).expect("repeat due deadline");
     assert!(!wrote);
+}
+
+#[test]
+fn stop_is_claimed_once_and_reopen_rearms_the_original_timeout() {
+    let (_dir, paths, mut record) = setup();
+    let now: Timestamp = "2026-01-01T01:00:00Z".parse().unwrap();
+    record.subagent = true;
+    record.timeout = Some(std::time::Duration::from_secs(1800));
+    record.grace = Some(std::time::Duration::from_secs(180));
+    record.started_at = now - std::time::Duration::from_secs(7200);
+    record.deadline_at = Some(now - std::time::Duration::from_secs(1));
+    create(&paths, &record).unwrap();
+    assert_eq!(
+        claim_rung(&paths, &record.run_id, now, |_| false).unwrap(),
+        None
+    );
+    assert_eq!(
+        load(&paths, &record.run_id).unwrap().deadline_notice_at,
+        None
+    );
+    assert_eq!(
+        claim_rung(&paths, &record.run_id, now, |_| true).unwrap(),
+        Some(super::super::deadline::Rung::Stop {
+            at: record.deadline_at.unwrap()
+        })
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            claim_rung(&paths, &record.run_id, now, |_| panic!("already claimed")).unwrap(),
+            None
+        );
+    }
+    let mut record = load(&paths, &record.run_id).unwrap();
+    assert_eq!(record.deadline_notice_at, record.deadline_at);
+    let observation = AgentLifecycleObservation::new(
+        Some("child".into()),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
+    for elapsed in [0, 3600] {
+        record.status = RunStatus::Completed;
+        let reopen_at = now + std::time::Duration::from_secs(elapsed);
+        fold_lifecycle(&mut record, "claude", &observation, None, reopen_at, None);
+        assert_eq!(
+            record.deadline_at,
+            Some(reopen_at + std::time::Duration::from_secs(1800))
+        );
+        assert_eq!(record.deadline_notice_at, None);
+    }
+}
+
+#[test]
+fn kill_harvest_is_write_once_and_published_only_after_grace() {
+    for existing in [None, Some("existing answer")] {
+        let (_dir, paths, mut record) = setup();
+        record.subagent = true;
+        record.agent_name = Some("child".into());
+        record.status = RunStatus::Running;
+        record.last_message = existing.map(str::to_owned);
+        record.deadline_at = Some(record.started_at);
+        record.grace = Some(std::time::Duration::from_secs(180));
+        create(&paths, &record).unwrap();
+        let (_, wrote) = timeout_if_due(
+            &paths,
+            &record.run_id,
+            record.started_at,
+            Some("partial answer".into()),
+        )
+        .unwrap();
+        assert!(!wrote);
+        assert_eq!(load(&paths, &record.run_id).unwrap(), record);
+        let (settled, wrote) = timeout_if_due(
+            &paths,
+            &record.run_id,
+            record.started_at + std::time::Duration::from_secs(180),
+            Some("partial answer".into()),
+        )
+        .unwrap();
+        assert!(wrote);
+        assert_eq!(settled.status, RunStatus::TimedOut);
+        let expected = existing.unwrap_or("partial answer");
+        assert_eq!(settled.last_message.as_deref(), Some(expected));
+        assert_eq!(
+            std::fs::read_to_string(paths.subagents_dir.join("child.output")).unwrap(),
+            format!("{expected}\n")
+        );
+    }
 }
 
 #[test]

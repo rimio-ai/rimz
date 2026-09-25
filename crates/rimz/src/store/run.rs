@@ -9,6 +9,7 @@ use std::fs;
 use std::io;
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -174,6 +175,26 @@ pub struct RunRecord {
     /// Producer-enforced wall-clock deadline for this supervised attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_at: Option<Timestamp>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::utils::time::duration_serde::optional"
+    )]
+    pub timeout: Option<Duration>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::utils::time::duration_serde::optional"
+    )]
+    pub grace: Option<Duration>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "crate::utils::time::duration_serde::list"
+    )]
+    pub warn: Vec<Duration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_notice_at: Option<Timestamp>,
     pub updated_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<Timestamp>,
@@ -222,6 +243,10 @@ impl RunRecord {
             last_message: None,
             started_at: now,
             deadline_at: None,
+            timeout: None,
+            grace: None,
+            warn: Vec::new(),
+            deadline_notice_at: None,
             updated_at: now,
             completed_at: None,
             parked_at: None,
@@ -464,6 +489,10 @@ mod tests {
         assert_eq!(old.provider_pid, None);
         assert_eq!(old.provider_process_start, None);
         assert_eq!(old.parked_at, None);
+        assert_eq!(old.timeout, None);
+        assert_eq!(old.grace, None);
+        assert!(old.warn.is_empty());
+        assert_eq!(old.deadline_notice_at, None);
     }
 
     #[test]
