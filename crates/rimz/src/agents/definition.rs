@@ -1021,6 +1021,8 @@ impl LifecycleAnnotations {
 /// Operational policy that cannot be derived from integration coverage.
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
+    /// Accepts additive model context in a native post-tool hook reply.
+    pub hook_context: bool,
     /// Renders its own ask UI in the pane — permission prompts, plan
     /// approvals, questions — so RimZ can mark the agent waiting while the
     /// prompt stays in the native UI. An agent without one (pi gates tools

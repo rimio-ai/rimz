@@ -71,6 +71,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[("ask_user", AskKind::Question)],
     },
     capabilities: Capabilities {
+        hook_context: false,
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: false,

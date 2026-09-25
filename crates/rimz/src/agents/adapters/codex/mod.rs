@@ -178,6 +178,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         blocking: &[("request_user_input", AskKind::Question)],
     },
     capabilities: Capabilities {
+        hook_context: false,
         native_ask_ui: true,
         transcript_tail_context: true,
         // Codex has no background-task parking.

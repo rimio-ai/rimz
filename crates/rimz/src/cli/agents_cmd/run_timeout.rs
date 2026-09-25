@@ -19,8 +19,8 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
         .flatten();
     let now = Timestamp::now();
     let (record, wrote) =
-        rimz::harness::run::timeout_if_due(ctx.store.paths(), &request.run_id, now)?;
-    let deadline_due = record.deadline_at.is_some_and(|deadline| deadline <= now);
+        rimz::harness::run::timeout_if_due(ctx.store.paths(), &request.run_id, now, None)?;
+    let deadline_due = rimz::harness::deadline::kill_at(&record).is_some_and(|at| at <= now);
     if !wrote && !(record.status == rimz::store::run::RunStatus::TimedOut && deadline_due) {
         return Ok(());
     }

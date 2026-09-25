@@ -98,7 +98,8 @@ upward-dependencies = ["address"]
 # Shared-server launches disable provider-native LSP through the launch capability.
 # ContextCapability::prompt_cache_ttl supplies provider cache facts to idle-compaction policy.
 # The seat active-time sum and its session map are shared by store, sidebar and CLI.
-surface-budget = 886
+# Native post-tool context attachment crosses the adapter/CLI hook seam.
+surface-budget = 887
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -285,7 +286,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Response paths, publication errors and publication serve CLI receipts/reports; fleet exposes settled rows.
 # `ancestry::check_launch_room` lets both CLI launch entries refuse before opening a store.
 # PROMPT_CACHE_MARGIN, fire_point, resolve_teams, resolve_mode and should_compact share one idle-compaction decision between producer and detached CLI helper.
-surface-budget = 542
+# Deadline rungs, channel policy and locked claims serve the CLI and producer.
+surface-budget = 553
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -629,7 +631,8 @@ surface-budget = 29
 path = "crates/rimz/src/utils/time.rs"
 allowed-dependencies = []
 # One compact duration formatter serves config serialization and CLI reports.
-surface-budget = 9
+# Crate-visible compact duration serde adapters serve durable run records.
+surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"
@@ -746,6 +749,8 @@ allowed-dependencies = [
     "disk::paths",
     "forge",
     "harness::budget",
+    # Locked rung claims and timeout settlement share the pure deadline policy.
+    "harness::deadline",
     "harness::owed",
     "ids",
     "proc",
@@ -753,7 +758,8 @@ allowed-dependencies = [
 ]
 # The lifecycle fold parks on an owed wake, and the stranded-park settle reads the same predicate.
 # Response paths, the publisher and its typed error cross the CLI/library boundary.
-surface-budget = 35
+# Hook and pane consumers claim each deadline rung through the same locked CAS.
+surface-budget = 36
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

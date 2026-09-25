@@ -7,8 +7,9 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use super::deadline::{kill_due, stop_due_by_pane};
 use crate::ids::{RunId, WorkspaceId};
-use crate::store::run::{RunRecord, RunStatus};
+use crate::store::run::RunRecord;
 use crate::{RuntimePaths, StatePaths};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,15 +35,13 @@ pub(crate) fn enforce(
             return None;
         }
     };
-    for record in records.iter().filter(|record| is_overdue(record, now)) {
+    for record in records
+        .iter()
+        .filter(|record| kill_due(record, now) || stop_due_by_pane(record, now))
+    {
         spawn_timeout_helper(runtime, record);
     }
     Some(records)
-}
-
-fn is_overdue(record: &RunRecord, now: Timestamp) -> bool {
-    matches!(record.status, RunStatus::Pending | RunStatus::Running)
-        && record.deadline_at.is_some_and(|deadline| deadline <= now)
 }
 
 fn spawn_timeout_helper(runtime: &RuntimePaths, record: &RunRecord) {
@@ -71,6 +70,7 @@ mod tests {
     use super::*;
     use crate::agents::PermissionMode;
     use crate::ids::{AgentKind, WorkspaceId};
+    use crate::store::run::RunStatus;
 
     fn record() -> RunRecord {
         RunRecord::new(
@@ -86,16 +86,16 @@ mod tests {
     fn only_nonterminal_records_past_their_deadline_are_overdue() {
         let now = Timestamp::now();
         let mut run = record();
-        assert!(!is_overdue(&run, now));
+        assert!(!kill_due(&run, now));
 
         run.deadline_at = Some(now - Duration::from_secs(1));
-        assert!(is_overdue(&run, now));
+        assert!(kill_due(&run, now));
 
         run.status = RunStatus::Completed;
-        assert!(!is_overdue(&run, now));
+        assert!(!kill_due(&run, now));
 
         run.status = RunStatus::Running;
         run.deadline_at = Some(now + Duration::from_secs(1));
-        assert!(!is_overdue(&run, now));
+        assert!(!kill_due(&run, now));
     }
 }

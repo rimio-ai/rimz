@@ -142,6 +142,87 @@ pub fn format_duration_compact(duration: Duration) -> String {
     format!("{seconds}s")
 }
 
+/// Serde adapters for compact, whole-second durations in durable records.
+pub(crate) mod duration_serde {
+    use crate::utils::time::{
+        DurationUnit, Result, TimeInputErr, format_duration_compact, parse_duration_units,
+    };
+    use serde::{Deserialize, Serialize};
+    use std::time::Duration;
+
+    #[derive(Clone, Copy, Serialize, Deserialize)]
+    #[serde(try_from = "String", into = "String")]
+    struct CompactDuration(Duration);
+
+    impl TryFrom<String> for CompactDuration {
+        type Error = TimeInputErr;
+
+        fn try_from(value: String) -> Result<Self> {
+            parse_duration_units(
+                &value,
+                &[
+                    DurationUnit::Second,
+                    DurationUnit::Minute,
+                    DurationUnit::Hour,
+                    DurationUnit::Day,
+                ],
+            )
+            .map(Self)
+        }
+    }
+
+    impl From<CompactDuration> for String {
+        fn from(value: CompactDuration) -> Self {
+            format_duration_compact(value.0)
+        }
+    }
+
+    pub(crate) mod optional {
+        use crate::utils::time::duration_serde::CompactDuration;
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+        use std::time::Duration;
+
+        pub(crate) fn serialize<S: Serializer>(
+            value: &Option<Duration>,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            value.map(CompactDuration).serialize(serializer)
+        }
+
+        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> std::result::Result<Option<Duration>, D::Error> {
+            Option::<CompactDuration>::deserialize(deserializer)
+                .map(|value| value.map(|value| value.0))
+        }
+    }
+
+    pub(crate) mod list {
+        use crate::utils::time::duration_serde::CompactDuration;
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+        use std::time::Duration;
+
+        pub(crate) fn serialize<S: Serializer>(
+            value: &[Duration],
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            value
+                .iter()
+                .copied()
+                .map(CompactDuration)
+                .collect::<Vec<_>>()
+                .serialize(serializer)
+        }
+
+        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> std::result::Result<Vec<Duration>, D::Error> {
+            Vec::<CompactDuration>::deserialize(deserializer)
+                .map(|values| values.into_iter().map(|value| value.0).collect())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
