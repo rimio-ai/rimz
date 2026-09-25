@@ -125,8 +125,6 @@ This indexes what lives where. Runtime shape and the single-binary rationale liv
 
 **Top-level modules** in `crates/rimz/src/`, by purpose:
 
-- Shared language servers: `lsp/` owns admission, process leases, registry, cost history, broker, saved-file watching, memory watchdog, and read-only queries.
-
 - Durable file mechanics — `disk` atomic publish and fsync, the RimZ home and workspace-dir path resolution, rotating JSONL append, workspace lock, single-flight election, stat-keyed parse cache; `disk::usage` disk-usage measurement; `disk::summary` output-file measurement (bytes, lines, estimated tokens).
 - Identity and reach — `address` agent-address grammar, renderer, pane binding, launch-instance grouping and lineage; `workspace` resolution, its durable `workspace.json` record, and the room identity pin (`RIMZ_*` env keys); `web`; `channel`; `worktree`; `forge` and the PR-state record (`forge::pr_state`).
 - Transcript, panes, and seams — `transcript`; `pane` identity, sidebar-chrome and daemon-host classification, named keys; `sock`; `ids`; `trust`; `wakeup`, the sidebar wire of renderer heartbeat records, event vocabulary, and best-effort datagram fanout.
@@ -134,6 +132,7 @@ This indexes what lives where. Runtime shape and the single-binary rationale liv
 - Daemon view — `daemon_view` spec and reconciliation; `daemon_content` supervisors; `remote_control` provider-neutral readiness/toggle coordination.
 - Process and config — `config`, `observability`, `agent_activity`, `lane`, `proc` user-shell selection and process inspection, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
 - Install lifecycle — `update` install-origin detection, release verification, and atomic binary replacement; `uninstall` machine-wide removal mechanics.
+- Shared language servers — `lsp/` admission, process leases, registry, cost history, broker, saved-file watching, memory watchdog, and read-only queries.
 
 ## Documentation map
 
@@ -147,8 +146,6 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 - [sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen: cockpit, agent cards, provider dashboard, rendered frames, glyph legend.
 
 **Reference** — `docs/reference/` answers a specific flag or field, and [its README](./docs/reference/README.md) indexes the pages by topic. [cli.md](./docs/reference/cli.md) is the command map and indexes a page per scene under `docs/reference/cli/`; [agent-support.md](./docs/reference/agent-support.md) carries per-agent status, integration surface, and permission-mode mapping for every built-in adapter, and [agent-plugins.md](./docs/reference/agent-plugins.md) the external bundle, canonical wire, and probe contracts.
-
-[Language servers](./docs/reference/cli/lsp.md) owns `rimz lsp` verbs, flags, exit codes, and configuration; [LSP internals](./docs/internals/lsp.md) owns admission, leases, the broker, and memory policy.
 
 **Internals** — `docs/internals/` documents each subsystem for people who read the code; [README.md](./docs/internals/README.md) is the index and the per-page table. The three multi-doc subsystems (`agents/`, `harness/`, `sidebar/`) keep a folder; every other subsystem is one flat file.
 

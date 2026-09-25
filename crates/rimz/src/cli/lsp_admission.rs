@@ -22,6 +22,7 @@ pub(super) fn admit(checkout: &Path) -> Result<()> {
         runtime: &runtime,
     };
     let mut queue = WaitQueue::default();
+    let mut shown = Vec::new();
     loop {
         let result = admission::admit_launch(&request, &mut queue)?;
         for shortfall in result.refused_optional {
@@ -30,6 +31,16 @@ pub(super) fn admit(checkout: &Path) -> Result<()> {
         if result.wait_for_required.is_empty() {
             return Ok(());
         }
+        let positions: Vec<_> = result
+            .wait_for_required
+            .iter()
+            .map(|wait| (wait.shortfall.server.clone(), wait.position))
+            .collect();
+        if positions == shown {
+            std::thread::sleep(Duration::from_secs(5));
+            continue;
+        }
+        shown = positions;
         for wait in result.wait_for_required {
             writeln!(
                 super::render::err(),

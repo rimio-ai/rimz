@@ -212,13 +212,18 @@ impl std::fmt::Display for QueueTimeout {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let held_by = if holders.is_empty() {
+            String::new()
+        } else {
+            format!(", held by {holders}")
+        };
         let free = shortfall
             .available_bytes
             .saturating_sub(shortfall.committed_bytes)
             .saturating_sub(shortfall.reserve_bytes);
         write!(
             formatter,
-            "language server {} is required but memory stayed short for {}: needs {}, {} free, held by {holders}; stop one with rimz lsp stop, or lower [lsp] reserve-percent",
+            "language server {} is required but memory stayed short for {}: needs {}, {} free{held_by}; stop one with rimz lsp stop, or lower [lsp] reserve-percent",
             shortfall.server,
             self.wait_timeout,
             decimal_bytes(shortfall.estimate_bytes),
