@@ -80,6 +80,30 @@ fn responses_follow_each_terminal_transition() {
 }
 
 #[test]
+fn response_lands_before_the_terminal_record() {
+    let (_dir, paths, mut record) = setup();
+    record.subagent = true;
+    record.agent_name = Some("child".into());
+    record.last_message = Some("answer".into());
+    create(&paths, &record).unwrap();
+    let record_path = paths.runs_dir.join(format!("{}.json", record.run_id));
+
+    let result = update_record(&paths, &record.run_id, |record, now| {
+        // A non-empty directory where the record renames to fails the write, even as root.
+        std::fs::remove_file(&record_path).unwrap();
+        std::fs::create_dir_all(record_path.join("squat")).unwrap();
+        record.mark_terminal(RunStatus::Canceled, now);
+        Ok(RecordMutation::Write(()))
+    });
+
+    assert!(result.is_err(), "the record write must fail");
+    assert_eq!(
+        std::fs::read_to_string(paths.subagents_dir.join("child.output")).unwrap(),
+        "answer\n"
+    );
+}
+
+#[test]
 fn reopened_response_replaces_or_removes_previous_answer() {
     for message in [Some("second answer"), Some(""), None] {
         let (_dir, paths, mut record) = setup();

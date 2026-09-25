@@ -330,7 +330,7 @@ fn update_record<T>(
         RecordMutation::Keep(outcome) => Ok((record, outcome)),
         RecordMutation::Write(outcome) => {
             record.updated_at = now;
-            crate::store::run::write(&paths.runs_dir, &record)?;
+            // Waiters read the record unlocked, so a terminal record must imply its file.
             if !was_terminal
                 && record.status.is_terminal()
                 && record.subagent
@@ -338,6 +338,7 @@ fn update_record<T>(
             {
                 tracing::warn!(run_id = %record.run_id, error = %err, "publishing subagent response failed");
             }
+            crate::store::run::write(&paths.runs_dir, &record)?;
             Ok((record, outcome))
         }
     }
