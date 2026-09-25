@@ -87,10 +87,10 @@ pub struct Admitted {
     pub wait_for_required: Vec<Wait>,
 }
 
-/// Keep this guard across five-second polls; dropping a launch removes its queue files.
+/// Keep this guard across five-second polls; dropping a launch removes its queue file.
 #[derive(Default)]
 pub struct WaitQueue {
-    tickets: BTreeMap<String, Ticket>,
+    ticket: Option<Ticket>,
     refused_optional: BTreeSet<String>,
 }
 
@@ -244,39 +244,50 @@ pub mod testkit {
     pub fn queue_order(directory: &Path) -> Result<Vec<PathBuf>> {
         queue_paths_at(directory)
     }
+
+    pub fn enqueue_servers(directory: &Path, estimates: &[u64]) -> Result<WaitQueue> {
+        let mut queue = WaitQueue::default();
+        let need_bytes = estimates.iter().copied().sum();
+        for _ in estimates {
+            enqueue_at(directory, need_bytes, &mut queue)?;
+        }
+        Ok(queue)
+    }
 }
 
-fn enqueue(server: &str, need_bytes: u64, queue: &mut WaitQueue) -> Result<()> {
-    if queue.tickets.contains_key(server) {
-        return Ok(());
-    }
+fn enqueue(need_bytes: u64, queue: &mut WaitQueue) -> Result<&Ticket> {
+    enqueue_at(
+        &crate::disk::paths::lsp_runtime_dir().join("queue"),
+        need_bytes,
+        queue,
+    )
+}
+
+fn enqueue_at<'a>(
+    directory: &Path,
+    need_bytes: u64,
+    queue: &'a mut WaitQueue,
+) -> Result<&'a Ticket> {
     let pid = std::process::id();
     let start_token = crate::proc::process_start_token(pid)
         .ok_or_else(|| LspErr::Protocol("cannot identify queue owner".into()))?;
-    let name = format!(
-        "{:020}-{}",
-        crate::utils::time::unix_now_ms(),
-        uuid::Uuid::now_v7()
-    );
-    let path = crate::disk::paths::lsp_runtime_dir()
-        .join("queue")
-        .join(name);
+    let ticket = queue.ticket.get_or_insert_with(|| Ticket {
+        path: directory.join(format!(
+            "{:020}-{}",
+            crate::utils::time::unix_now_ms(),
+            uuid::Uuid::now_v7()
+        )),
+        started: Instant::now(),
+    });
     crate::disk::atomic::write_temp_then_rename_cache(
-        &path,
+        &ticket.path,
         &QueueRecord {
             need_bytes,
             pid,
             start_token,
         },
     )?;
-    queue.tickets.insert(
-        server.to_owned(),
-        Ticket {
-            path,
-            started: Instant::now(),
-        },
-    );
-    Ok(())
+    Ok(ticket)
 }
 
 fn timeout(config: &crate::config::LspServerConfig) -> Result<Duration> {
@@ -393,10 +404,22 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         matched.push((server, config, hash, estimate, timeout(config)?));
     }
     if matched.is_empty() {
+        queue.ticket = None;
         return Ok(Admitted::default());
     }
     let _lock = registry::lock()?;
     let mut entries = registry::sweep_locked()?;
+    let required_need = matched
+        .iter()
+        .filter(|(server, config, ..)| {
+            config.policy == LspPolicy::Required
+                && !entries
+                    .iter()
+                    .any(|entry| entry.root == root && entry.server == **server)
+        })
+        .fold(0_u64, |need, (_, _, _, estimate, _)| {
+            need.saturating_add(*estimate)
+        });
     let mut result = Admitted::default();
     for (server, config, settings_hash, estimate_bytes, wait_timeout) in matched {
         if queue.refused_optional.contains(server) {
@@ -406,7 +429,6 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             .iter()
             .find(|entry| entry.root == root && entry.server == *server)
         {
-            queue.tickets.remove(server);
             result.admitted.push(entry.clone());
             continue;
         }
@@ -433,8 +455,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         if config.policy == LspPolicy::Required
             && (decision != Decision::Admit || !queue_paths()?.is_empty())
         {
-            enqueue(server, estimate_bytes, queue)?;
-            let ticket = &queue.tickets[server];
+            let ticket = enqueue(required_need, queue)?;
             let position = queue_paths()?
                 .iter()
                 .position(|path| path == &ticket.path)
@@ -489,9 +510,11 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
                 Err(error) => return Err(error.into()),
             }
         };
-        queue.tickets.remove(server);
         entries.push(entry.clone());
         result.admitted.push(entry);
+    }
+    if result.wait_for_required.is_empty() {
+        queue.ticket = None;
     }
     Ok(result)
 }

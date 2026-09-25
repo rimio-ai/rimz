@@ -187,3 +187,28 @@ fn lsp_admission_refuses_untrusted_or_missing_program_before_spawn() {
             .contains("install it or remove [lsp.servers.rust]")
     );
 }
+
+#[test]
+fn lsp_required_launch_has_one_queue_slot_for_all_its_servers() {
+    use rimz::lsp::admission::testkit::{enqueue_servers, queue_order};
+
+    let directory = tempfile::tempdir().unwrap();
+    let older = enqueue_servers(directory.path(), &[8000, 4000]).unwrap();
+    let older_paths = queue_order(directory.path()).unwrap();
+    assert_eq!(
+        older_paths.len(),
+        1,
+        "one queue file per launch, not per server"
+    );
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&older_paths[0]).unwrap()).unwrap();
+    assert_eq!(record["need_bytes"], 12000);
+    let newer = enqueue_servers(directory.path(), &[2000]).unwrap();
+    let paths = queue_order(directory.path()).unwrap();
+    assert_eq!(paths.len(), 2);
+    assert_eq!(paths[0], older_paths[0]);
+    drop(older);
+    assert_eq!(queue_order(directory.path()).unwrap(), [paths[1].clone()]);
+    drop(newer);
+    assert!(queue_order(directory.path()).unwrap().is_empty());
+}
