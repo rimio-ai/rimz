@@ -108,6 +108,11 @@ enum Verdict {
 }
 
 fn classify_workspace(path: &Path) -> Verdict {
+    if crate::StatePaths::has_legacy_history(path) {
+        return Verdict::Retain(
+            "legacy history: see docs/internals/store-layout-migration.md".to_owned(),
+        );
+    }
     if let Err(err @ crate::disk::paths::PathErr::Layout { .. }) =
         crate::disk::paths::check_workspace_layout(path)
     {
@@ -128,10 +133,10 @@ fn classify_workspace(path: &Path) -> Verdict {
 
 /// Whether a workspace dir holds durable history worth preserving.
 fn workspace_has_history(path: &Path) -> bool {
-    use crate::disk::paths::{Class, StatePaths};
-    StatePaths::class_path(path, Class::Log, "events.log.jsonl").exists()
-        || StatePaths::class_path(path, Class::Cache, "snapshots/latest.json").exists()
-        || dir_has_entries(&StatePaths::class_path(path, Class::Log, "archive"))
+    let history = crate::StatePaths::history_paths(path);
+    history.events_log.exists()
+        || history.latest_snapshot.exists()
+        || dir_has_entries(&history.events_archive_dir)
 }
 
 fn dir_has_entries(path: &Path) -> bool {
@@ -153,6 +158,28 @@ fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn legacy_history_survives_without_a_readable_record() {
+        let home = tempdir().unwrap();
+        let room = home.path().join("legacy");
+        fs::create_dir_all(&room).unwrap();
+        fs::write(room.join("events.log.jsonl"), b"history").unwrap();
+        for record in [None, Some("broken"), Some(r#"{"layout":2}"#)] {
+            if let Some(record) = record {
+                fs::write(room.join("workspace.json"), record).unwrap();
+            }
+            let report =
+                prune_dead_workspaces_under(home.path(), &home.path().join("runtime"), false)
+                    .unwrap();
+            assert!(report.removed.is_empty());
+            assert_eq!(report.retained_unreadable.len(), 1);
+            assert!(room.join("events.log.jsonl").exists());
+        }
+        let gone = home.path().join("gone-project");
+        write_record(&room, &WorkspaceId::from_project_root(&gone), &gone);
+        assert!(matches!(classify_workspace(&room), Verdict::Retain(_)));
+    }
 
     #[test]
     fn legacy_room_is_retained_even_without_new_layout_history() {

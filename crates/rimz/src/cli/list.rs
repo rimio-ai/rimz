@@ -42,12 +42,16 @@ pub struct ListArgs {
 
 #[derive(Clone, Debug, Serialize)]
 struct WorkspaceRow {
-    workspace_id: String,
+    workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace_dir: Option<String>,
     project_root: String,
     session_name: String,
     running_on: Option<String>,
     last_activity: Option<Timestamp>,
     last_death: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retained_reason: Option<String>,
 }
 
 pub fn run(args: ListArgs, _globals: &GlobalFlags) -> Result<()> {
@@ -60,13 +64,15 @@ pub fn run(args: ListArgs, _globals: &GlobalFlags) -> Result<()> {
 }
 
 fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
-    let known = rimz::workspace::known_workspaces().context("reading known workspaces")?;
+    let scan = rimz::workspace::scan_workspaces_under(&workspaces_dir())
+        .context("reading known workspaces")?;
     let zellij_sessions = backend_sessions(MuxName::Zellij);
     let tmux_sessions = backend_sessions(MuxName::Tmux);
     let now = SystemTime::now();
     let root = workspaces_dir();
 
-    let mut rows: Vec<WorkspaceRow> = known
+    let mut rows: Vec<WorkspaceRow> = scan
+        .workspaces
         .into_iter()
         .filter_map(|known| {
             let workspace_dir = root.join(known.dir_name.as_str());
@@ -85,15 +91,31 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
                 return None;
             }
             Some(WorkspaceRow {
-                workspace_id: known.workspace_id.as_str().to_owned(),
+                workspace_id: Some(known.workspace_id.as_str().to_owned()),
+                workspace_dir: None,
                 project_root: known.project_root.display().to_string(),
                 session_name: known.session_name,
                 running_on,
                 last_activity: last_activity.and_then(|at| Timestamp::try_from(at).ok()),
                 last_death,
+                retained_reason: None,
             })
         })
         .collect();
+    rows.extend(
+        scan.retained
+            .into_iter()
+            .map(|(name, reason)| WorkspaceRow {
+                workspace_id: None,
+                workspace_dir: Some(name),
+                project_root: String::new(),
+                session_name: String::new(),
+                running_on: None,
+                last_activity: None,
+                last_death: None,
+                retained_reason: Some(reason),
+            }),
+    );
     rows.sort_by(|a, b| {
         // Running sessions first, then by most recent activity, then by id.
         match (a.running_on.is_some(), b.running_on.is_some()) {
@@ -109,11 +131,7 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
 }
 
 fn death_for(workspace_dir: &std::path::Path) -> Option<String> {
-    let path = rimz::StatePaths::class_path(
-        workspace_dir,
-        rimz::disk::paths::Class::Records,
-        "last-death.json",
-    );
+    let path = rimz::StatePaths::history_paths(workspace_dir).last_death_marker;
     let marker: LastDeathMarker = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     Some(death_summary(&marker))
 }
@@ -135,10 +153,10 @@ fn death_summary(marker: &LastDeathMarker) -> String {
 /// move when the workspace is in use. Used purely for the operator's reattach
 /// decision and the default recency filter; never gates correctness.
 fn activity_for(workspace_dir: &std::path::Path) -> Option<SystemTime> {
-    use rimz::disk::paths::{Class, StatePaths};
+    let history = rimz::StatePaths::history_paths(workspace_dir);
     let candidates = [
-        StatePaths::class_path(workspace_dir, Class::Log, "events.log.jsonl"),
-        StatePaths::class_path(workspace_dir, Class::Cache, "snapshots/latest.json"),
+        history.events_log,
+        history.latest_snapshot,
         workspace_dir.join("workspace.json"),
     ];
     candidates
@@ -196,7 +214,13 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
             render::palette::faint()
         };
         table.row([
-            render::cell(row.workspace_id.as_str()).fg(render::palette::accent()),
+            render::cell(
+                row.workspace_id
+                    .as_deref()
+                    .or(row.workspace_dir.as_deref())
+                    .unwrap_or("-"),
+            )
+            .fg(render::palette::accent()),
             render::cell(row.session_name.as_str()),
             render::cell(row.project_root.as_str()).fg(render::palette::body()),
             render::cell(running).fg(running_style),
@@ -207,6 +231,9 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
 }
 
 fn last_seen(row: &WorkspaceRow) -> String {
+    if let Some(reason) = &row.retained_reason {
+        return format!("retained: {reason}");
+    }
     let activity = row
         .last_activity
         .as_ref()
@@ -304,12 +331,14 @@ mod tests {
         last_activity: Option<Timestamp>,
     ) -> WorkspaceRow {
         WorkspaceRow {
-            workspace_id: "ws_000000000000000000000000".to_owned(),
+            workspace_id: Some("ws_000000000000000000000000".to_owned()),
+            workspace_dir: None,
             project_root: "/repo".to_owned(),
             session_name: "rimz-repo-000000".to_owned(),
             running_on: running_on.map(str::to_owned),
             last_activity,
             last_death: last_death.map(str::to_owned),
+            retained_reason: None,
         }
     }
 }

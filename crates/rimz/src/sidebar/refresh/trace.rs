@@ -7,8 +7,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::RuntimePaths;
-
-const TRACE_MAX_BYTES: u64 = 1_048_576;
+use crate::disk::retention::TRACE_MAX_BYTES;
 
 pub(super) fn duration_ms(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)

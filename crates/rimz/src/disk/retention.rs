@@ -13,3 +13,5 @@ pub const AUDIT_RETENTION: Duration = Duration::from_secs(30 * 86_400);
 pub const AUDIT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 pub const ROTATING_LOG_MAX_BYTES: u64 = 1_048_576;
 pub const TRANSCRIPT_FILE_DAYS: u32 = 7;
+pub const RESUME_OUTCOME_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
+pub const TRACE_MAX_BYTES: u64 = 1_048_576;

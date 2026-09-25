@@ -76,6 +76,7 @@ fn read_dir_if_exists(path: &Path) -> Result<Option<ReadDir>> {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GcReport {
+    pub locks_would_check: usize,
     pub runtime_roots_scanned: usize,
     pub heartbeat_files_removed: usize,
     pub sidecar_files_removed: usize,
@@ -93,6 +94,8 @@ pub struct GcReport {
 pub struct RoomReport {
     pub name: String,
     pub classes: Vec<ClassReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -100,6 +103,7 @@ pub struct ClassReport {
     pub class: String,
     pub files_removed: usize,
     pub bytes_removed: u64,
+    pub locks_would_check: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -122,9 +126,16 @@ pub fn collect_classes(
         dry_run,
     )?;
     let root = paths::workspaces_dir();
-    let rooms = crate::workspace::known_workspaces_under(&root)
+    let scan = crate::workspace::scan_workspaces_under(&root)
         .map_err(|source| GcErr::ReadDir { path: root, source })?;
-    for room in rooms {
+    report
+        .rooms
+        .extend(scan.retained.into_iter().map(|(name, reason)| RoomReport {
+            name,
+            retained_reason: Some(reason),
+            ..RoomReport::default()
+        }));
+    for room in scan.workspaces {
         let runtime = paths::RuntimePaths::under_named(
             room.workspace_id.clone(),
             room.dir_name.clone(),
@@ -136,7 +147,13 @@ pub fn collect_classes(
             &paths::rimz_home(),
             &runtime,
         );
-        let runtime = paths::RuntimePaths::for_state(&paths)?;
+        let runtime = match paths::RuntimePaths::for_state(&paths) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                tracing::warn!(workspace = %paths.dir_name, error = %err, "state gc skipped inaccessible runtime paths");
+                continue;
+            }
+        };
         let (classes, waits_removed) = match classes::collect_state(&paths, dry_run, &|name| {
             watcher_is_live(&runtime, name)
         }) {
@@ -162,10 +179,14 @@ pub fn collect_classes(
             report.rooms.push(RoomReport {
                 name: room.dir_name.to_string(),
                 classes,
+                retained_reason: None,
             });
         }
     }
     for room in &mut report.rooms {
+        if room.retained_reason.is_some() {
+            continue;
+        }
         use paths::Class;
         for class in Class::STATE.into_iter().chain(Class::RUNTIME) {
             if !room

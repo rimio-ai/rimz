@@ -4,6 +4,22 @@ use crate::ids::{MuxName, SidebarInstanceId};
 use crate::wakeup::heartbeat::SidebarHeartbeat;
 use tempfile::tempdir;
 
+fn age_socket(path: &Path) {
+    let at = nix::sys::time::TimeSpec::from_duration(
+        (SystemTime::now() - Duration::from_secs(7200))
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap(),
+    );
+    nix::sys::stat::utimensat(
+        nix::fcntl::AT_FDCWD,
+        path,
+        &at,
+        &at,
+        nix::sys::stat::UtimensatFlags::NoFollowSymlink,
+    )
+    .unwrap();
+}
+
 #[test]
 fn known_room_keeps_empty_class_roots() {
     let temp = tempdir().unwrap();
@@ -42,6 +58,21 @@ fn runtime_classes_expire_lanes_and_probe_unlistened_sockets() {
         .unwrap();
     let dead = rt.sock_dir.join("run.dead.sock");
     drop(std::os::unix::net::UnixDatagram::bind(&dead).unwrap());
+    age_socket(&dead);
+    let starting = rt.sock_dir.join("starting.sock");
+    let socket = nix::sys::socket::socket(
+        nix::sys::socket::AddressFamily::Unix,
+        nix::sys::socket::SockType::Stream,
+        nix::sys::socket::SockFlag::empty(),
+        None,
+    )
+    .unwrap();
+    use std::os::fd::AsRawFd;
+    nix::sys::socket::bind(
+        socket.as_raw_fd(),
+        &nix::sys::socket::UnixAddr::new(&starting).unwrap(),
+    )
+    .unwrap();
     let live = rt.sock_dir.join("run.live.sock");
     let _listener = std::os::unix::net::UnixDatagram::bind(&live).unwrap();
     let mut report = GcReport::default();
@@ -55,6 +86,10 @@ fn runtime_classes_expire_lanes_and_probe_unlistened_sockets() {
     assert!(!lane.exists(), "every stale lane expires");
     assert!(!dead.exists(), "unlistened run sockets are reclaimed");
     assert!(live.exists(), "listening sockets survive regardless of age");
+    assert!(
+        starting.exists(),
+        "a socket between bind and listen survives"
+    );
 }
 
 #[test]
@@ -70,7 +105,8 @@ fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
     assert!(free_path.exists());
     let mut actual = GcReport::default();
     collect_locks(temp.path(), &mut Sweep::new(false), &mut actual).unwrap();
-    assert_eq!(preview, actual);
+    assert_eq!(preview.sidecar_files_removed, 0);
+    assert_eq!(preview.locks_would_check, 2);
     assert_eq!(actual.sidecar_files_removed, 1);
     assert!(held_path.exists());
     assert!(!free_path.exists());
@@ -353,6 +389,7 @@ fn runtime_gc_expires_all_live_entries_and_probes_socket_listeners() {
 
     let stale_socket = rt.sock_dir.join("sidebar.stale.sock");
     drop(std::os::unix::net::UnixDatagram::bind(&stale_socket).unwrap());
+    age_socket(&stale_socket);
     let run_socket = rt.sock_dir.join("run.123456789abc.sock");
     let _listener = std::os::unix::net::UnixDatagram::bind(&run_socket).unwrap();
 

@@ -373,6 +373,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
     );
     let copy = skill_bind_source(&argv, &root.join("plain"));
     assert!(copy.starts_with(&state.paths().skills_dir));
+    assert!(!copy.starts_with(&state.paths().tmp_dir));
     assert!(!copy.exists());
     rimz::sandbox::apply(&prepared).unwrap();
     assert!(state.paths().tmp_dir.is_dir());

@@ -241,7 +241,7 @@ Your agents' own session files and the room's archived records stay on disk. A p
 | --- | --- |
 | `--yes` | Skip the `[y/N]` prompt. Required when stdin is not a terminal. |
 | `--no-start` | Stop after step 4 and print ``Room torn down. Run `rimz start` to rebuild it.`` |
-| `--hard` | Also delete prior-agent carryover, audit history (transcripts, messages, diagnostics), owned state (runs, scratch, skill copies), and room tmp. The rotated log archive remains. |
+| `--hard` | Also delete prior-agent carryover, audit history (transcripts, messages, diagnostics), owned state except run records, and room tmp. Canceled run records and the rotated log archive remain. |
 | `--account <KIND=NAME>` | Rebuild the room under this [provider account](./accounts.md), with no agents. Repeatable. Cannot be combined with `--no-start`. |
 
 A room's accounts are fixed when it is born, so `reset --account` is how you move a running room to a different account.
@@ -252,7 +252,7 @@ The report goes to stderr before the rebuild:
 
 The report names the session deletion, process sweep, preserved temporary files, archive path, canceled runs, removed cache entries, and whether the prior-agent rollup was kept. Hard reset additionally removes audit, owned state, and tmp.
 
-Soft reset keeps transcripts, message history, run records, agent scratch and skill copies, room tmp, and standing fleet budget choices. `--hard` deletes `audit/`, `owned/`, `tmp/`, the active log and carryover; the rotated log archive remains. Neither reset removes runtime `locks/`.
+Soft reset keeps transcripts, message history, run records, agent scratch and handled skill copies, room tmp, and standing fleet budget choices. Both resets clear handleless skill copies in `cache/skills/`. `--hard` deletes `audit/`, `owned/` except `owned/runs/`, `tmp/`, the active log and carryover; the rotated log archive remains. Run waiters can read Canceled after reset; terminal run records are reclaimed after the owned GC grace. Neither reset removes runtime `locks/`.
 
 What reset does to the store is in [store internals](../../internals/store.md#maintenance).
 

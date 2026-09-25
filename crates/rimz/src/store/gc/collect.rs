@@ -81,6 +81,7 @@ fn collect_runtime_classes(
                 + removed.sidecar_files_removed
                 + removed.sidebar_sockets_removed,
             bytes_removed: removed.bytes_removed,
+            locks_would_check: removed.locks_would_check,
         });
         report.heartbeat_files_removed += removed.heartbeat_files_removed;
         report.sidecar_files_removed += removed.sidecar_files_removed;
@@ -89,6 +90,7 @@ fn collect_runtime_classes(
         report.bytes_removed += removed.bytes_removed;
     }
     report.rooms.push(super::RoomReport {
+        retained_reason: None,
         name: workspace_root
             .file_name()
             .unwrap_or_default()
@@ -183,6 +185,9 @@ fn collect_sock(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<
         if !metadata.file_type().is_socket() {
             continue;
         }
+        if !is_older_than(&path, crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL)? {
+            continue;
+        }
         let address = UnixAddr::new(&path).map_err(|source| GcErr::Io {
             path: path.clone(),
             source: source.into(),
@@ -230,6 +235,10 @@ fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result
             source,
         };
         if !entry.file_type().map_err(io_err)?.is_file() {
+            continue;
+        }
+        if sweep.dry_run {
+            report.locks_would_check += 1;
             continue;
         }
         let mut file = match fs::OpenOptions::new().read(true).write(true).open(&path) {

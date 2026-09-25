@@ -242,7 +242,8 @@ allowed-dependencies = [
 # State classes expose their inventory and shared path routing for root-only readers.
 # Record codecs and cross-room scanners share the layout version, legacy default, and two validation entry points.
 # File-backed lock guards share blocking and immediate inode-checked acquisition.
-surface-budget = 194
+# Root-only readers share history probes and the remaining room retention policy.
+surface-budget = 197
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -449,7 +450,8 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
-surface-budget = 25
+# Maintenance reports incompatible rooms without changing compatible-only scanner callers.
+surface-budget = 27
 
 [[module]]
 path = "crates/rimz/src/wakeup"

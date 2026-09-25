@@ -22,7 +22,7 @@ All room runtime trees are disposable after their processes stop, including `tmp
 
 ## Stop, then reset (recommended)
 
-Before replacing the installed binary, stop each team's live cohort with `rimz teams stop <team#channel>` in its project. There is no top-level `rimz stop`: use the old room executable's `reset --yes --no-start` for each old room. This closes the mux session, sweeps its processes, cancels runs and archives the active log. The old reset also removes diagnostic captures and room tmp/skills; copy anything you intend to preserve before that boundary. Do not launch another room until migration finishes.
+Before replacing the installed binary, stop each team's live cohort with `rimz teams stop <team#channel>` in its project. There is no top-level `rimz stop`: use the old room executable's `reset --yes --no-start` for each old room. This closes the mux session, sweeps its processes, cancels runs and archives the active log. The old reset also removes diagnostic captures, room tmp and rewritten skill copies; copy anything you intend to preserve before that boundary. Do not launch another room until migration finishes.
 
 Choose the old room from the listing, then run:
 
@@ -126,5 +126,7 @@ rimz agents history "$migration_agent"
 The GC report has per-room `rooms[].classes[]` rows; no room should report incompatible layout. `agents history` reads provider turn history; use `rimz message list` to inspect retained message history as well. A fresh reset has no retained agents to inspect.
 
 ## Safe to delete afterwards
+
+Layout-2 handleless rewritten skills live in `cache/skills/<sha256>/`, outside room tmp. They are rebuildable, cleared by reset, and not age-swept. Handled copies remain under `owned/agents/<handle>/skills/`.
 
 With no room processes left, runtime `ws/tmp*-*` orphans can be deleted. Inspect state directories without `workspace.json` before deleting: absence alone does not prove they lack history, and GC deliberately retains unreadable stores that have it. Project files, provider homes, config and staged builds are outside this cleanup. This committed guide is only a migration aid; removing a local copy after verification changes no runtime state.
