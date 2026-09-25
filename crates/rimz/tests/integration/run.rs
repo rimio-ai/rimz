@@ -1500,6 +1500,7 @@ fn run_exiting_resume_wrapper(
     .expect("arm wrapper subscription");
 
     let request = ExecRequest {
+        isolation_default: None,
         kind: kind.clone(),
         action: ExecAction::Resume {
             session_id: session_id.to_string(),

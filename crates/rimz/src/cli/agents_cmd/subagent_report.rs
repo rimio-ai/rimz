@@ -150,7 +150,11 @@ fn report_fleet_with_kind(
         return Ok(ReportOutcome::NothingToReport);
     }
 
-    let view = TmpView::current(parent.isolation, parent.name.as_deref(), store.paths());
+    let view = TmpView::current(
+        Some(parent.runs_in(crate::cli::machine_config().agents.isolation)),
+        parent.name.as_deref(),
+        store.paths(),
+    );
     let responses = write_response_files(store.paths(), &view, &rows)?;
     let digest_rows = rows
         .iter()

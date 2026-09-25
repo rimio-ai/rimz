@@ -17,6 +17,7 @@ const CLAUDE_HOOK_CONFIG: &str =
 
 fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
+        isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action,
         system_prompt_file: None,

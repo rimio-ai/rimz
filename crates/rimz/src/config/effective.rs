@@ -174,6 +174,14 @@ pub fn load_with_roots(
     agents_spec::resolve_prompt_paths(&mut repo.profiles, &mut repo.teams, config_dir);
     agents_spec::resolve_profile_prompt_paths(&mut repo.subagent_profiles, config_dir);
     for name in repo.profiles.0.keys() {
+        if repo.profiles.0[name].isolation.is_some() {
+            return Err(EffectiveConfigErr::Agents {
+                path: config_path.clone(),
+                source: LayoutErr::RepoProfileSetsIsolation {
+                    profile: name.clone(),
+                },
+            });
+        }
         agents_spec::resolve_profile(name, &repo.profiles).map_err(|source| {
             let source = match source {
                 LayoutErr::UnknownProfileBase { profile, base }
@@ -190,6 +198,14 @@ pub fn load_with_roots(
         })?;
     }
     for name in repo.subagent_profiles.0.keys() {
+        if repo.subagent_profiles.0[name].isolation.is_some() {
+            return Err(EffectiveConfigErr::Agents {
+                path: config_path.clone(),
+                source: LayoutErr::RepoProfileSetsIsolation {
+                    profile: name.clone(),
+                },
+            });
+        }
         agents_spec::resolve_profile(name, &repo.subagent_profiles).map_err(|source| {
             let source = match source {
                 LayoutErr::UnknownProfileBase { profile, base }

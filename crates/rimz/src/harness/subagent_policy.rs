@@ -140,6 +140,7 @@ mod tests {
         let profiles = ProfilesConfig(BTreeMap::from([(
             "planner".to_owned(),
             Profile {
+                isolation: None,
                 auto_compact: None,
                 agent: "claude".to_owned(),
                 description: None,
@@ -189,6 +190,7 @@ mod tests {
         let subagent_profiles = ProfilesConfig(BTreeMap::from([(
             "explorer".to_owned(),
             Profile {
+                isolation: None,
                 auto_compact: None,
                 agent: "claude".to_owned(),
                 description: Some("Finds files and traces code paths".to_owned()),

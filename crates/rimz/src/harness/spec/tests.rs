@@ -49,6 +49,7 @@ fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
 fn profile(agent: &str) -> Profile {
     Profile {
         agent: agent.to_owned(),
+        isolation: None,
         description: None,
         subagents: None,
         model_reminder: None,
@@ -105,6 +106,28 @@ fn profile_skills_inherit_replace_and_clear() {
 }
 
 #[test]
+fn profile_isolation_inherits_without_becoming_a_launch_override() {
+    for (child, expected) in [("", "host"), ("isolation = 'sandbox'", "sandbox")] {
+        let profiles = ProfilesConfig(BTreeMap::from([
+            (
+                "parent".to_owned(),
+                toml::from_str("agent = 'claude'\nisolation = 'host'").unwrap(),
+            ),
+            (
+                "child".to_owned(),
+                toml::from_str(&format!("agent = 'parent'\n{child}")).unwrap(),
+            ),
+        ]));
+        let cell = agent_cell("child", &profiles, &CommandsConfig::default());
+        let request =
+            crate::harness::launch::ExecRequest::fresh(&cell, Default::default(), None, false);
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["isolation_default"], expected);
+        assert!(request.identity.params.isolation.is_none());
+    }
+}
+
+#[test]
 fn rebased_profile_skills_preserve_explicit_empty() {
     let mut base = ResolvedProfile::bare("codex");
     base.skills = Some(vec!["merge".parse().unwrap()]);
@@ -116,6 +139,23 @@ fn rebased_profile_skills_preserve_explicit_empty() {
     let mut cleared = original;
     cleared.skills = Some(Vec::new());
     assert_eq!(rebase_onto(cleared, Some(&base)).skills, Some(Vec::new()));
+}
+
+#[test]
+fn rebased_profile_isolation_keeps_the_job_default() {
+    use crate::config::Isolation::{Host, Sandbox};
+    let mut base = ResolvedProfile::bare("codex");
+    base.isolation_default = Some(Sandbox);
+    let mut original = ResolvedProfile::bare("claude");
+    assert_eq!(
+        rebase_onto(original.clone(), Some(&base)).isolation_default,
+        Some(Sandbox)
+    );
+    original.isolation_default = Some(Host);
+    assert_eq!(
+        rebase_onto(original, Some(&base)).isolation_default,
+        Some(Host)
+    );
 }
 
 fn profiles(entries: impl IntoIterator<Item = (&'static str, Profile)>) -> ProfilesConfig {
@@ -710,6 +750,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
         "planner",
         Profile {
             agent: "claude".to_owned(),
+            isolation: None,
             description: None,
             subagents: None,
             model_reminder: None,

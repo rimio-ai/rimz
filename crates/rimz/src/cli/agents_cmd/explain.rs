@@ -177,11 +177,11 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let adapter = rimz::agents::find_definition(request.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", request.kind))?;
-    let isolation = request
-        .identity
-        .params
-        .isolation
-        .unwrap_or(machine.agents.isolation);
+    let isolation = Isolation::resolve(
+        request.identity.params.isolation,
+        request.isolation_default,
+        machine.agents.isolation,
+    );
     rimz::sandbox::preflight_skills(
         isolation,
         &request.kind,
@@ -248,6 +248,8 @@ fn validate_target_overrides(args: &ExplainArgs) -> Result<()> {
 
 #[derive(Serialize)]
 struct ExplainReport<'a> {
+    isolation: Isolation,
+    isolation_source: String,
     target: &'a str,
     kind: &'a rimz::ids::AgentKind,
     action: &'static str,
@@ -435,6 +437,23 @@ impl<'a> ExplainReport<'a> {
             warnings.extend(links.shadowed_report(links.shadowed()));
         }
         Ok(Self {
+            isolation: if bwrap.is_some() {
+                Isolation::Sandbox
+            } else {
+                Isolation::Host
+            },
+            isolation_source: if params.isolation.is_some() && args.target.starts_with('@') {
+                "recorded --isolation".to_owned()
+            } else if params.isolation.is_some() {
+                "--isolation".to_owned()
+            } else if request.isolation_default.is_some() {
+                format!(
+                    "profile default {}",
+                    params.profile.as_deref().unwrap_or(request.kind.as_str())
+                )
+            } else {
+                "machine policy".to_owned()
+            },
             target: &args.target,
             kind: &request.kind,
             action: match request.action {
@@ -554,6 +573,13 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     let mut output = render::out();
     writeln!(output, "Plan")?;
     let mut plan = render::KeyVals::new().indent(2);
+    plan.push(
+        "isolation",
+        render::cell(format!(
+            "{} ({})",
+            report.isolation, report.isolation_source
+        )),
+    );
     plan.push(
         "target",
         render::cell(report.target).fg(render::palette::identity(report.kind.as_str())),

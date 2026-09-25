@@ -63,7 +63,11 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     }
     let adapter = rimz::agents::find_definition(child.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", child.kind))?;
-    let isolation = child.isolation.unwrap_or(machine.agents.isolation);
+    let isolation = rimz::config::Isolation::resolve(
+        child.isolation,
+        posture.launch.isolation_default,
+        machine.agents.isolation,
+    );
     rimz::sandbox::preflight_skills(
         isolation,
         &child.kind,
@@ -186,6 +190,7 @@ fn resume_request(
         append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
         team_prompt: posture.launch.team_prompt.clone(),
         skills: posture.launch.skills.clone(),
+        isolation_default: posture.launch.isolation_default,
         identity: ExecIdentity {
             name: child.name.clone(),
             name_explicit: true,

@@ -320,6 +320,9 @@ impl ReducerState {
         if let Some(isolation) = payload.isolation {
             state.isolation = Some(isolation);
         }
+        if let Some(isolation) = payload.effective_isolation {
+            state.effective_isolation = Some(isolation);
+        }
         state.pane = Some(PaneRef {
             pane_pid: payload.pane_pid,
             ..PaneRef::from_id(payload.pane_id.clone())
@@ -652,6 +655,7 @@ fn carried_base(
         state.launch_id = prior.launch_id.clone();
         state.mode = prior.mode;
         state.isolation = prior.isolation;
+        state.effective_isolation = prior.effective_isolation;
         state.launch_group = prior.launch_group.clone();
         state.launch_ordinal = prior.launch_ordinal;
         state.pane = prior.pane.clone();
@@ -898,6 +902,7 @@ fn inherit_launch_identity(
     successor.login.clone_from(&predecessor.login);
     successor.mode = predecessor.mode;
     successor.isolation = predecessor.isolation;
+    successor.effective_isolation = predecessor.effective_isolation;
     successor.role.clone_from(&predecessor.role);
     successor.team.clone_from(&predecessor.team);
     successor.launch_group.clone_from(&predecessor.launch_group);

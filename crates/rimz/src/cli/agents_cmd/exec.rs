@@ -15,7 +15,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &args.request,
     )
     .context("decoding hidden agent exec request")?;
-    let invocation = ExecInvocationContext::new(&workspace);
+    let mut invocation = ExecInvocationContext::new(&workspace);
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let launch_identity = exec_launch_identity(envelope.request())?;
     let machine_config = crate::cli::machine_config();
@@ -47,12 +47,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         fail_run_on_exec_precondition(run_context.as_ref());
         anyhow::bail!(detail);
     }
-    let isolation = envelope
-        .request()
-        .identity
-        .params
-        .isolation
-        .unwrap_or(machine_config.agents.isolation);
+    let isolation = rimz::config::Isolation::resolve(
+        envelope.request().identity.params.isolation,
+        envelope.request().isolation_default,
+        machine_config.agents.isolation,
+    );
     let adapter = rimz::agents::find_definition(envelope.request().kind.as_str());
     let bwrap = rimz::sandbox::preflight_skills(
         isolation,
@@ -67,6 +66,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
         fail_run_on_exec_precondition(run_context.as_ref());
     })?;
+    invocation.effective_isolation = Some(isolation);
     let request = match envelope.materialize() {
         Ok(request) => request,
         Err(err) => {
@@ -159,6 +159,9 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     }
     if let Some(identity) = launch_identity.as_ref() {
         record_own_launch_pane(&invocation, identity);
+        if attach_target.is_none() {
+            attach_own_launch_pane(&invocation, identity);
+        }
     }
     if let Some(target) = attach_target.as_ref() {
         record_own_resume_pane(
@@ -719,6 +722,7 @@ fn leave_worktree_before_cleanup(path: &Path) {
 struct ExecInvocationContext<'a> {
     workspace: &'a rimz::ResolvedWorkspace,
     store: RefCell<Option<rimz::Store>>,
+    effective_isolation: Option<rimz::config::Isolation>,
 }
 
 impl<'a> ExecInvocationContext<'a> {
@@ -726,6 +730,7 @@ impl<'a> ExecInvocationContext<'a> {
         Self {
             workspace,
             store: RefCell::new(None),
+            effective_isolation: None,
         }
     }
 
@@ -1056,6 +1061,7 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
                 current.agent_id.as_str(),
             ),
             None,
+            invocation.effective_isolation,
         )?;
         Ok(())
     });
@@ -1065,7 +1071,7 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
             launch_id = %identity.agent_id,
             pane = %pane_id,
             error = %err,
-            "could not transfer completed subagent pane ownership to its wrapper",
+            "could not attach launch pane ownership to its wrapper",
         );
     }
 }
@@ -1090,6 +1096,7 @@ fn record_own_resume_pane(
             &pane_id,
             runtime_owner,
             isolation,
+            invocation.effective_isolation,
         )?;
         Ok(())
     }) {

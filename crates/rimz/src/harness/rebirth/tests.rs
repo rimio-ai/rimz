@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
-use crate::config::{Profile, RoleBinding, Team};
+use crate::config::{Isolation, Profile, RoleBinding, Team};
 use crate::harness::plan::CohortSeed;
 use crate::harness::resume::RecoveryEntry;
 use crate::ids::{MuxName, PaneId};
@@ -588,6 +588,7 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
                 None,
             ),
             Some(Isolation::Sandbox),
+            Some(Isolation::Sandbox),
         )
         .unwrap();
     let projection = store
@@ -640,6 +641,42 @@ fn sandbox_requirement_follows_resumed_agents_effective_isolation() {
     stamp_sandbox("live");
     assert!(fixture.inspect(false).preview().requires_sandbox());
     assert!(!fixture.inspect(true).preview().requires_sandbox());
+}
+
+#[test]
+fn rebirth_preflights_the_current_profile_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    let fixture = Fixture::new(&[("live", &live, true)]);
+    let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).unwrap();
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("live")),
+        LifecycleSignal::Registered,
+    );
+    observation.launch.profile = Some("boxed".to_owned());
+    store
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.paths.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let mut machine = MachineConfig::default();
+    for (isolation, sandbox) in [("sandbox", true), ("host", false)] {
+        machine.agents.profiles.0.insert(
+            "boxed".to_owned(),
+            toml::from_str(&format!("agent = 'claude'\nisolation = '{isolation}'")).unwrap(),
+        );
+        assert_eq!(
+            fixture
+                .inspect_with(&machine, false)
+                .preview()
+                .requires_sandbox(),
+            sandbox
+        );
+    }
 }
 
 #[test]
@@ -908,6 +945,7 @@ fn team_machine() -> MachineConfig {
     machine.agents.profiles.0.insert(
         "claude-plan".to_owned(),
         Profile {
+            isolation: None,
             auto_compact: None,
             agent: "claude".to_owned(),
             description: None,
@@ -926,6 +964,7 @@ fn team_machine() -> MachineConfig {
     machine.agents.profiles.0.insert(
         "codex-code".to_owned(),
         Profile {
+            isolation: None,
             auto_compact: None,
             agent: "codex".to_owned(),
             description: None,

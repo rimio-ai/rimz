@@ -13,6 +13,7 @@ use crate::ids::{AgentKind, AgentSessionId};
 #[test]
 fn cell_posture_projection_covers_every_agent_cell_field() {
     let mut cell = AgentCell {
+        isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
         auto_compact: None,
@@ -29,6 +30,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         },
     };
     let AgentCell {
+        isolation_default,
         kind: _,
         auto_compact: _,
         args,
@@ -42,6 +44,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
     assert_eq!(
         ResumeLaunchPosture::from(&cell),
         ResumeLaunchPosture {
+            isolation_default,
             isolation: launch.isolation,
             args,
             system_prompt_file,
@@ -58,6 +61,11 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         cell.skills.clone_from(&skills);
         assert_eq!(ResumeLaunchPosture::from(&cell).skills, skills);
     }
+    cell.isolation_default = Some(crate::config::Isolation::Host);
+    assert_eq!(
+        ResumeLaunchPosture::from(&cell).isolation_default,
+        cell.isolation_default
+    );
 }
 
 fn role_binding(role: &str) -> RoleBinding {
@@ -80,6 +88,7 @@ fn role_binding(role: &str) -> RoleBinding {
 
 fn agent_cell_with_role(role: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
+        isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
         args: Vec::new(),
@@ -158,6 +167,7 @@ fn exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
 
 fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
+        isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         auto_compact: None,
         args: args.iter().map(|value| (*value).to_owned()).collect(),
@@ -202,6 +212,7 @@ fn configured_profile(
 ) -> Profile {
     Profile {
         agent: agent.to_owned(),
+        isolation: None,
         description: None,
         subagents: None,
         model_reminder: None,
@@ -1211,6 +1222,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
         .permission_args(PermissionMode::Auto);
     let cell = |args, mode| {
         Cell::Agent(AgentCell {
+            isolation_default: None,
             kind: AgentKind::new_unchecked("codex"),
             auto_compact: None,
             args,
@@ -1303,6 +1315,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
 #[test]
 fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
     let explicit = Cell::Agent(AgentCell {
+        isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         auto_compact: None,
         args: vec!["--model".to_owned(), "gpt-6-astra".to_owned()],
@@ -1680,6 +1693,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
 #[test]
 fn launch_request_names_and_metadata() {
     let layout = LayoutSpec::single(Cell::Agent(AgentCell {
+        isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         auto_compact: None,
         args: Vec::new(),
@@ -1966,6 +1980,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
         agent.isolation = stored;
         agent.mode = Some(PermissionMode::Ask);
         let mut layout = LayoutSpec::single(Cell::agent(agent.kind.clone()));
+        layout.agent_cells_mut().next().unwrap().isolation_default = Some(Host);
         let preset = crate::agents::LaunchPreset {
             model: Some("x".to_owned()),
             ..Default::default()
@@ -2017,13 +2032,14 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
         .unwrap();
         let request = exec_request(&panes.columns[0].panes[0].argv);
         assert_eq!(request.identity.params.isolation, expected);
+        assert_eq!(request.isolation_default, Some(Host));
         assert_eq!(
-            request
-                .identity
-                .params
-                .isolation
-                .unwrap_or(machine.agents.isolation),
-            expected.unwrap_or(Sandbox)
+            crate::config::Isolation::resolve(
+                request.identity.params.isolation,
+                request.isolation_default,
+                machine.agents.isolation
+            ),
+            expected.unwrap_or(Host)
         );
         assert_eq!(request.identity.params.mode, Some(PermissionMode::Yolo));
         assert_eq!(request.identity.params.model.as_deref(), Some("x"));
@@ -2170,6 +2186,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     )
     .expect("runtime");
     let cell = Cell::Agent(AgentCell {
+        isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
         args: Vec::new(),
@@ -2273,6 +2290,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     )
     .expect("runtime");
     let cell = Cell::Agent(AgentCell {
+        isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
         args: vec!["--profile-declared".to_owned()],

@@ -29,6 +29,7 @@ fn planner_profiles() -> ProfilesConfig {
     profiles.0.insert(
         "planner".to_owned(),
         Profile {
+            isolation: None,
             auto_compact: None,
             agent: "claude".to_owned(),
             description: None,
@@ -107,6 +108,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
         Profile {
+            isolation: None,
             auto_compact: None,
             agent: "claude".to_owned(),
             description: Some("Plans the main lane".to_owned()),
@@ -125,6 +127,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.subagents.profiles.0.insert(
         "child-only".to_owned(),
         Profile {
+            isolation: None,
             auto_compact: None,
             agent: "codex".to_owned(),
             description: Some("Child profile".to_owned()),
@@ -339,6 +342,7 @@ fn hidden_helper_requests_round_trip_through_cli() {
 
 fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
+        isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action,
         system_prompt_file: None,
@@ -800,6 +804,7 @@ mod parse {
             ..LaunchParams::default()
         };
         let input = ExecRequest {
+            isolation_default: None,
             kind: AgentKind::new_unchecked("claude"),
             action: ExecAction::Launch {
                 prompt: Some("fix it".to_owned()),
@@ -1357,6 +1362,7 @@ mod launch_options {
         machine.agents.profiles.0.insert(
             "warn".to_owned(),
             rimz::config::Profile {
+                isolation: None,
                 auto_compact: None,
                 agent: "codex".to_owned(),
                 description: None,
@@ -2369,6 +2375,7 @@ fn plural_wait_json_entry_includes_last_message() {
 
 fn bare_exec_args() -> ExecRequest {
     ExecRequest {
+        isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         action: ExecAction::Launch {
             prompt: None,

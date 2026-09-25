@@ -15,6 +15,7 @@ pub(super) struct AgentFrontmatter {
     #[serde(rename = "name")]
     _name: Option<String>,
     pub agent: Option<String>,
+    pub isolation: Option<crate::config::Isolation>,
     pub description: Option<String>,
     pub model: Option<String>,
     pub mode: Option<PermissionMode>,
@@ -44,6 +45,7 @@ impl AgentFrontmatter {
             )* };
         }
         inherit!(
+            isolation,
             model,
             mode,
             effort,

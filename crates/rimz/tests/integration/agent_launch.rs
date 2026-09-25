@@ -55,6 +55,7 @@ fn init_launch_repo(path: &std::path::Path) -> bool {
 #[cfg(unix)]
 fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
     ExecRequest {
+        isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action: ExecAction::Launch {
             prompt: prompt.map(ToOwned::to_owned),
@@ -736,6 +737,7 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
                 launch: LaunchParams {
                     profile: Some("worker".to_owned()),
                     model: Some("fable".to_owned()),
+                    isolation: Some(rimz::config::Isolation::Host),
                     ..Default::default()
                 },
                 state: AgentLaunchState::Bound,
@@ -765,6 +767,7 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
     assert_eq!(report["name"], "worker");
     assert_eq!(report["launch_id"], "launch_explain_worker");
     assert_eq!(report["model"], "opus");
+    assert_eq!(report["isolation_source"], "recorded --isolation");
     assert_eq!(report["env"]["RIMZ_AGENT_NAME"], "worker");
     assert!(
         report["provider_argv"]
@@ -919,6 +922,55 @@ fn launch_identity_and_parentage_survive_event_log_rotation() {
 
 #[cfg(unix)]
 #[test]
+fn profile_default_exec_stamps_effective_isolation_not_an_override() {
+    use rimz::config::Isolation;
+    let env = Env::new();
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = \"sandbox\"\n",
+    )
+    .unwrap();
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    let launch_id = "launch_profile_default";
+    seed_provisional_agent_launch(&env, launch_id, "pruner");
+    let mut request = fresh_exec("codex", None);
+    request.isolation_default = Some(Isolation::Host);
+    request.identity.name = Some("pruner".to_owned());
+    request.identity.launch_id = Some(launch_id.to_owned());
+    let dump = env.home_root.join("profile.env");
+    env.rimz()
+        .args(exec_args(&env, &request))
+        .arg("--root")
+        .arg(&env.project_root)
+        .env("SHELL", "/definitely/not/a/shell")
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .env("TMUX_PANE", "%4")
+        .assert_success_within_timeout("profile-default host exec");
+    assert!(
+        std::fs::read_to_string(dump)
+            .unwrap()
+            .contains("RIMZ_ISOLATION=host")
+    );
+    let events = env.store().read_events().unwrap();
+    let mut attached = false;
+    for event in events {
+        match event.kind() {
+            EventKind::AgentLaunch(payload) => assert_eq!(payload.launch.isolation, None),
+            EventKind::AgentAttach(payload) => {
+                attached = true;
+                assert_eq!(payload.isolation, None);
+                assert_eq!(payload.effective_isolation, Some(Isolation::Host));
+            }
+            _ => {}
+        }
+    }
+    assert!(attached);
+}
+
+#[cfg(unix)]
+#[test]
 fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
     let env = Env::new();
     let shim_dir = write_env_dump_shim(&env, "codex");
@@ -938,6 +990,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
 
     let dump = env.home_root.join("codex-resume.env");
     let mut resume = ExecRequest {
+        isolation_default: None,
         kind: kind.clone(),
         action: ExecAction::Resume {
             session_id: session_id.to_string(),
@@ -980,6 +1033,10 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
     let attach = &attaches[0];
     assert_eq!(attach.agent_id, session_id);
     assert_eq!(attach.isolation, Some(rimz::config::Isolation::Host));
+    assert_eq!(
+        attach.effective_isolation,
+        Some(rimz::config::Isolation::Host)
+    );
     assert_eq!(attach.pane_id.as_str(), "tmux:%4");
     assert_eq!(attach.pane_pid, Some(attach.runtime_owner.pid));
     assert_ne!(attach.runtime_owner.pid, 0);
@@ -1003,6 +1060,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         let shim_dir = write_env_dump_shim(&env, "codex");
         let dump = env.home_root.join("codex-no-attach.env");
         let request = ExecRequest {
+            isolation_default: None,
             kind: kind.clone(),
             action,
             system_prompt_file: None,
@@ -1752,6 +1810,68 @@ fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
         },
     );
     env.store().append_event(&event).expect("append launch");
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_isolation_is_preflighted_before_launch() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.rimz_home().join("agents")).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = \"host\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        env.rimz_home().join("agents/codex.md"),
+        "---\ndescription: Base.\n---\nBase.",
+    )
+    .unwrap();
+    std::fs::write(
+        env.rimz_home().join("agents/boxed.md"),
+        "---\ndescription: Boxed.\nagent: codex\nisolation: sandbox\ntools: [Bash]\n---\n",
+    )
+    .unwrap();
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    let bwrap = shim_dir.join("bwrap");
+    std::fs::write(
+        &bwrap,
+        "#!/bin/sh\necho profile-bwrap-refuses >&2\nexit 1\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = env
+        .rimz()
+        .current_dir(&env.project_root)
+        .env("PATH", path_with_front(&shim_dir))
+        .args(["agents", "boxed"])
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("profile-bwrap-refuses"), "{stderr}");
+    assert!(env.store().read_events().unwrap().is_empty());
+    std::fs::write(
+        env.rimz_home().join("agents/boxed.md"),
+        "---\ndescription: Boxed.\nagent: codex\nisolation: host\ntools: [Bash]\n---\n",
+    )
+    .unwrap();
+    let output = env
+        .rimz()
+        .current_dir(&env.project_root)
+        .env("PATH", path_with_front(&shim_dir))
+        .args(["agents", "explain", "boxed", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["isolation"], "host");
+    assert_eq!(report["isolation_source"], "profile default boxed");
 }
 
 /// `--resume` preflights a matched session on the isolation it will run

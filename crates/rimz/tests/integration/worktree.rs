@@ -30,6 +30,7 @@ use crate::common::exec_args;
 #[cfg(unix)]
 fn worktree_exec_request(worktree: &Path) -> ExecRequest {
     ExecRequest {
+        isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
         action: ExecAction::Launch {
             prompt: None,

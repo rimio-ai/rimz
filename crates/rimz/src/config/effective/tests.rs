@@ -37,6 +37,7 @@ fn load(machine: &AgentsConfig, project_root: &Path, config_root: &Path) -> Resu
 fn profile(agent: &str, args: Option<&str>) -> Profile {
     Profile {
         agent: agent.to_owned(),
+        isolation: None,
         description: None,
         subagents: None,
         model_reminder: None,
@@ -534,6 +535,25 @@ fn repo_profile_cannot_inherit_machine_profile() {
             ..
         } if profile == "child" && base == "machine-base"
     ));
+}
+
+#[test]
+fn repo_profiles_cannot_set_isolation_in_either_scope() {
+    for namespace in ["profiles", "subagents.profiles"] {
+        let project = tempdir().expect("project");
+        let config = tempdir().expect("config");
+        write_project_config(
+            &project,
+            &format!("[{namespace}.child]\nagent = \"claude\"\nisolation = \"host\"\n"),
+        );
+        crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
+        let err = effective_profiles(&ProfilesConfig::default(), project.path(), config.path())
+            .expect_err("machine-only isolation");
+        assert!(err.to_string().contains("--isolation"), "{err}");
+        assert!(
+            matches!(err, EffectiveConfigErr::Agents { source: LayoutErr::RepoProfileSetsIsolation { profile }, .. } if profile == "child")
+        );
+    }
 }
 
 #[test]

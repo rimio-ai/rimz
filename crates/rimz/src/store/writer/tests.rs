@@ -208,6 +208,7 @@ fn attach_agent_pane_records_process_owned_placement() {
             &pane_id,
             owner.clone(),
             Some(crate::config::Isolation::Sandbox),
+            Some(crate::config::Isolation::Sandbox),
         )
         .expect("attach resumed agent");
 

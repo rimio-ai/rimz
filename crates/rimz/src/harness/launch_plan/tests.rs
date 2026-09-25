@@ -14,6 +14,7 @@ fn exec_launch_reminders(
 
 fn request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
+        isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
         action,
         system_prompt_file: None,
@@ -85,6 +86,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             name.to_owned(),
             crate::config::Profile {
                 agent: agent.to_owned(),
+                isolation: None,
                 model_reminder: Some(model_reminder),
                 description: None,
                 subagents: None,
@@ -105,6 +107,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
             name.to_owned(),
             crate::config::Profile {
                 agent: "claude".to_owned(),
+                isolation: None,
                 model_reminder: Some(model_reminder),
                 description: None,
                 subagents: None,

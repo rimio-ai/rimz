@@ -89,7 +89,8 @@ upward-dependencies = ["address"]
 # Host-mode skill links: plan/apply, plan accessors and reports are shared by launch_plan, exec, explain and uninstall.
 # The Markdown definition loader reads model catalog, defaults and tool rendering.
 # Sender reply handles and labels are shared by address, store and CLI consumers.
-surface-budget = 869
+# AgentState::runs_in shares the durable effective-isolation decision with CLI observers.
+surface-budget = 870
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"

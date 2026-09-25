@@ -58,6 +58,29 @@ fn resume_replays_the_profile_declared_posture() {
 }
 
 #[test]
+fn relaunch_rereads_profile_isolation_without_replaying_the_effective_stamp() {
+    use crate::config::Isolation::{Host, Sandbox};
+    let agent = AgentState {
+        profile: Some("planner".to_owned()),
+        effective_isolation: Some(Host),
+        ..agent("claude", "a1", "/code/qe", 1)
+    };
+    for isolation in [Host, Sandbox] {
+        let profiles = profiles(
+            "planner",
+            Profile {
+                isolation: Some(isolation),
+                ..profile("claude")
+            },
+        );
+        let plan = plan_profiled(agent.clone(), &profiles);
+        let request = decode_exec_request(&single_pane_argv(&plan));
+        assert_eq!(request.isolation_default, Some(isolation));
+        assert_eq!(request.identity.params.isolation, None);
+    }
+}
+
+#[test]
 fn resume_leaves_one_off_launch_values_out_of_the_posture() {
     // `model` on the rollup is observed, not declared — the user may have
     // switched it mid-session with `/model`. Only the profile speaks here.
