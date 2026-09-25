@@ -12,6 +12,8 @@ pub struct Record {
     pub settings_hash: String,
     pub peak_rss_kb: u64,
     pub ready_ms: Option<u64>,
+    #[serde(default)]
+    pub dormant_ms: Option<u64>,
     pub reason: super::registry::StopReason,
 }
 
@@ -77,6 +79,7 @@ mod tests {
                 settings_hash: "a".into(),
                 peak_rss_kb,
                 ready_ms: None,
+                dormant_ms: None,
                 reason: crate::lsp::registry::StopReason::Released,
             })
             .collect();

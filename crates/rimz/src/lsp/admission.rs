@@ -46,7 +46,7 @@ pub struct ServeRequest {
     pub server: String,
     pub config: crate::config::LspServerConfig,
     pub policy: crate::config::LspConfig,
-    pub estimate_bytes: u64,
+    pub eager: bool,
     pub settings_hash: String,
 }
 
@@ -87,7 +87,6 @@ pub struct Wait {
 pub struct Admitted {
     pub startup_refused: Vec<String>,
     pub admitted: Vec<registry::Entry>,
-    pub refused_optional: Vec<Shortfall>,
     pub wait_for_required: Vec<Wait>,
 }
 
@@ -95,7 +94,7 @@ pub struct Admitted {
 #[derive(Default)]
 pub struct WaitQueue {
     ticket: Option<Ticket>,
-    refused_optional: BTreeSet<String>,
+    startup_refused: BTreeSet<String>,
 }
 
 struct Ticket {
@@ -289,10 +288,10 @@ fn enqueue_at<'a>(
     Ok(ticket)
 }
 
-fn timeout(config: &crate::config::LspServerConfig) -> Result<Duration> {
+fn parse_timeout(raw: &str) -> Result<Duration> {
     use crate::utils::time::{DurationUnit, parse_duration_units};
     parse_duration_units(
-        &config.wait_timeout,
+        raw,
         &[
             DurationUnit::Second,
             DurationUnit::Minute,
@@ -300,6 +299,107 @@ fn timeout(config: &crate::config::LspServerConfig) -> Result<Duration> {
         ],
     )
     .map_err(|error| LspErr::Configuration(error.to_string()))
+}
+
+pub(super) fn idle_timeout(policy: &crate::config::LspConfig) -> Result<Duration> {
+    parse_timeout(&policy.idle_timeout)
+        .map_err(|error| LspErr::Configuration(format!("lsp.idle-timeout: {error}; use s/m/h")))
+}
+
+fn eviction_candidates(
+    mut entries: Vec<registry::Entry>,
+    root: &Path,
+    server: &str,
+    now: u64,
+) -> Vec<registry::Entry> {
+    const IDLE_FLOOR_MS: u64 = 120_000;
+    const YOUNG_PROTECTION_MS: u64 = 300_000;
+    entries.retain(|entry| {
+        entry.state == registry::State::Ready
+            && (entry.root != root || entry.server != server)
+            && crate::proc::process_is_live(entry.broker_pid, Some(&entry.broker_start_token))
+            && entry.ready_at_ms.is_some_and(|ready| {
+                now.saturating_sub(ready) >= YOUNG_PROTECTION_MS
+                    && now.saturating_sub(ready.max(entry.last_request_at_ms.unwrap_or(ready)))
+                        >= IDLE_FLOOR_MS
+            })
+    });
+    registry::kill_order(&mut entries);
+    entries
+}
+
+/// The broker owns admission.lock until it publishes its new Starting reservation.
+pub(super) fn admit_query(
+    request: &ServeRequest,
+    estimate_bytes: u64,
+) -> Result<Option<Shortfall>> {
+    let minimum = crate::utils::size::parse_byte_size(&request.policy.reserve_min)
+        .map_err(LspErr::Configuration)?;
+    let mut candidates = eviction_candidates(
+        registry::sweep_locked()?,
+        &request.root,
+        &request.server,
+        crate::utils::time::unix_now_ms(),
+    )
+    .into_iter();
+    loop {
+        let entries = registry::read_entries()?;
+        let memory = memory::sample()?;
+        let (committed_bytes, holders) = committed_bytes(&entries);
+        let reserve_bytes =
+            reserve_bytes(memory.total_bytes, request.policy.reserve_percent, minimum);
+        if decide(
+            memory.available_bytes,
+            committed_bytes,
+            estimate_bytes,
+            reserve_bytes,
+            LspPolicy::Optional,
+        ) == Decision::Admit
+        {
+            return Ok(None);
+        }
+        let Some(victim) = candidates.next() else {
+            let shortfall = Shortfall {
+                root: request.root.clone(),
+                server: request.server.clone(),
+                estimate_bytes,
+                available_bytes: memory.available_bytes,
+                committed_bytes,
+                reserve_bytes,
+                holders,
+            };
+            record_shortfall("refused", &shortfall)?;
+            return Ok(Some(shortfall));
+        };
+        let current = entries
+            .into_iter()
+            .filter(|entry| entry.nonce == victim.nonce)
+            .collect();
+        let Some(victim) = eviction_candidates(
+            current,
+            &request.root,
+            &request.server,
+            crate::utils::time::unix_now_ms(),
+        )
+        .pop() else {
+            continue;
+        };
+        let rss = victim
+            .server_pid
+            .and_then(crate::proc::tree_totals)
+            .map_or(0, |totals| totals.rss_kb);
+        if super::broker::watchdog::stop_victim(&victim, registry::StopReason::Evicted, false)? {
+            crate::diag::lsp::append(&crate::diag::lsp::Record {
+                at: jiff::Timestamp::now(),
+                root: victim.root,
+                server: victim.server,
+                event: "evicted".into(),
+                details: serde_json::json!({"reason": registry::StopReason::Evicted, "peak_rss_kb": victim.peak_rss_kb,
+                    "free_before_bytes": memory.available_bytes, "free_after_bytes": memory::sample()?.available_bytes,
+                    "victim_rss_kb": rss, "for": {"root": request.root, "server": request.server}}),
+            });
+        }
+    }
 }
 
 fn record_shortfall(event: &str, shortfall: &Shortfall) -> Result<()> {
@@ -313,13 +413,15 @@ fn record_shortfall(event: &str, shortfall: &Shortfall) -> Result<()> {
     Ok(())
 }
 
-pub fn committed_bytes(entries: &[registry::Entry]) -> (u64, Vec<Holder>) {
+fn committed_bytes(entries: &[registry::Entry]) -> (u64, Vec<Holder>) {
     let mut committed = 0_u64;
     let mut holders = Vec::new();
-    for entry in entries
-        .iter()
-        .filter(|entry| !matches!(entry.state, registry::State::Stopped { .. }))
-    {
+    for entry in entries.iter().filter(|entry| {
+        matches!(
+            entry.state,
+            registry::State::Starting | registry::State::Indexing | registry::State::Ready
+        )
+    }) {
         let rss_bytes = entry
             .server_pid
             .and_then(crate::proc::tree_totals)
@@ -340,6 +442,7 @@ fn committed_growth(estimate: u64, rss: u64) -> u64 {
 
 /// One bounded admission pass. The CLI prints outcomes and polls required waits every five seconds.
 pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Result<Admitted> {
+    idle_timeout(request.policy)?;
     if let Some(server) = request.untrusted_servers.first() {
         return Err(LspErr::Configuration(format!(
             "project config declares language server {server} but the project is not trusted; run rimz trust"
@@ -404,7 +507,13 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             &hash,
             parse_size(&config.memory_estimate)?,
         );
-        matched.push((server, config, hash, estimate, timeout(config)?));
+        matched.push((
+            server,
+            config,
+            hash,
+            estimate,
+            parse_timeout(&config.wait_timeout)?,
+        ));
     }
     if matched.is_empty() {
         queue.ticket = None;
@@ -425,68 +534,58 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         });
     let mut result = Admitted::default();
     for (server, config, settings_hash, estimate_bytes, wait_timeout) in matched {
-        if queue.refused_optional.contains(server) {
+        if queue.startup_refused.contains(server) {
             continue;
         }
         if let Some(entry) = entries
             .iter()
             .find(|entry| entry.root == root && entry.server == *server)
         {
-            if let registry::State::Stopped { reason, .. } = &entry.state {
-                result.startup_refused.push(format!("language server {server} stopped: {reason}; servers are never restarted; close its agents, then relaunch"));
-                queue.refused_optional.insert(server.clone());
-            }
             result.admitted.push(entry.clone());
             continue;
         }
-        let memory = memory::sample()?;
-        let (committed_bytes, holders) = committed_bytes(&entries);
-        let reserve_bytes =
-            reserve_bytes(memory.total_bytes, request.policy.reserve_percent, minimum);
-        let shortfall = Shortfall {
-            root: root.clone(),
-            server: server.clone(),
-            estimate_bytes,
-            available_bytes: memory.available_bytes,
-            committed_bytes,
-            reserve_bytes,
-            holders,
-        };
-        let decision = decide(
-            memory.available_bytes,
-            committed_bytes,
-            estimate_bytes,
-            reserve_bytes,
-            config.policy,
-        );
-        if config.policy == LspPolicy::Required
-            && (decision != Decision::Admit || !queue_paths()?.is_empty())
-        {
-            let ticket = enqueue(required_need, queue)?;
-            let position = queue_paths()?
-                .iter()
-                .position(|path| path == &ticket.path)
-                .map_or(1, |position| position + 1);
-            let required =
-                required_decision(decision, position, ticket.started.elapsed(), wait_timeout);
-            if required == RequiredDecision::Timeout {
-                record_shortfall("queue_timeout", &shortfall)?;
-                return Err(queue_timeout(&config.wait_timeout, &shortfall));
+        if config.policy == LspPolicy::Required {
+            let memory = memory::sample()?;
+            let (committed_bytes, holders) = committed_bytes(&entries);
+            let reserve_bytes =
+                reserve_bytes(memory.total_bytes, request.policy.reserve_percent, minimum);
+            let shortfall = Shortfall {
+                root: root.clone(),
+                server: server.clone(),
+                estimate_bytes,
+                available_bytes: memory.available_bytes,
+                committed_bytes,
+                reserve_bytes,
+                holders,
+            };
+            let decision = decide(
+                memory.available_bytes,
+                committed_bytes,
+                estimate_bytes,
+                reserve_bytes,
+                config.policy,
+            );
+            if decision != Decision::Admit || !queue_paths()?.is_empty() {
+                let ticket = enqueue(required_need, queue)?;
+                let position = queue_paths()?
+                    .iter()
+                    .position(|path| path == &ticket.path)
+                    .map_or(1, |position| position + 1);
+                let required =
+                    required_decision(decision, position, ticket.started.elapsed(), wait_timeout);
+                if required == RequiredDecision::Timeout {
+                    record_shortfall("queue_timeout", &shortfall)?;
+                    return Err(queue_timeout(&config.wait_timeout, &shortfall));
+                }
+                if required == RequiredDecision::Wait {
+                    result.wait_for_required.push(Wait {
+                        shortfall,
+                        position,
+                        remaining: wait_timeout.saturating_sub(ticket.started.elapsed()),
+                    });
+                    continue;
+                }
             }
-            if required == RequiredDecision::Wait {
-                result.wait_for_required.push(Wait {
-                    shortfall,
-                    position,
-                    remaining: wait_timeout.saturating_sub(ticket.started.elapsed()),
-                });
-                continue;
-            }
-        }
-        if decision == Decision::RefusedOptional {
-            record_shortfall("refused", &shortfall)?;
-            queue.refused_optional.insert(server.clone());
-            result.refused_optional.push(shortfall);
-            continue;
         }
         let serve = ServeRequest {
             root: root.clone(),
@@ -494,7 +593,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             server: server.clone(),
             config: config.clone(),
             policy: request.policy.clone(),
-            estimate_bytes,
+            eager: config.policy == LspPolicy::Required,
             settings_hash,
         };
         let payload = serde_json::to_string(&serve)?;
@@ -514,7 +613,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             &mut result,
         )?
         else {
-            queue.refused_optional.insert(server.clone());
+            queue.startup_refused.insert(server.clone());
             continue;
         };
         entries.push(entry.clone());
@@ -567,6 +666,50 @@ fn await_startup(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_timeout_validation_names_machine_key_and_units() {
+        let policy = crate::config::LspConfig {
+            idle_timeout: "tomorrow".into(),
+            ..Default::default()
+        };
+        let error = idle_timeout(&policy).unwrap_err().to_string();
+        assert!(error.contains("idle-timeout"), "{error}");
+        assert!(error.contains("s/m/h"), "{error}");
+    }
+
+    #[test]
+    fn eviction_protects_busy_young_unready_and_own_servers_then_uses_lru() {
+        let pid = std::process::id();
+        let base: registry::Entry = serde_json::from_value(serde_json::json!({
+            "root": "/victim", "server": "rust", "nonce": "n", "broker_pid": pid,
+            "broker_start_token": crate::proc::process_start_token(pid).unwrap(),
+            "server_pid": null, "server_start_token": null, "state": "ready",
+            "started_at_ms": 0, "ready_at_ms": 100_000, "estimate_bytes": 100,
+            "settings_hash": "s", "request_count": 1, "last_request_at_ms": 480_000,
+            "peak_rss_kb": 0, "leases": []
+        }))
+        .unwrap();
+        let mut entries = vec![base; 8];
+        for (index, entry) in entries.iter_mut().enumerate() {
+            entry.server = index.to_string();
+        }
+        entries[1].last_request_at_ms = Some(480_001);
+        entries[2].ready_at_ms = Some(300_001);
+        entries[3].ready_at_ms = None;
+        entries[4].state = registry::State::Indexing;
+        entries[5].root = "/self".into();
+        entries[6].last_request_at_ms = Some(300_000);
+        entries[7].broker_start_token = "dead".into();
+        let candidates = eviction_candidates(entries, Path::new("/self"), "5", 600_000);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|entry| entry.server.as_str())
+                .collect::<Vec<_>>(),
+            ["6", "0"]
+        );
+    }
 
     #[test]
     fn missing_publication_refuses_optional_but_errors_required_with_fix() {

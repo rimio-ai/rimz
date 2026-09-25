@@ -48,22 +48,6 @@ pub fn select(
         root: root.into(),
         reason: if servers.is_empty() {
             UnavailableReason::NoneConfigured
-        } else if crate::diag::lsp::recent().iter().any(|record| {
-            record.root == root
-                && record.event == "refused"
-                && servers.get(&record.server).is_some_and(|config| {
-                    server.map_or_else(
-                        || {
-                            extension.is_none_or(|extension| {
-                                config.extensions.iter().any(|ext| ext == extension)
-                            })
-                        },
-                        |server| record.server == server,
-                    )
-                })
-                && record.details.get("estimate_bytes").is_some()
-        }) {
-            UnavailableReason::MemoryShort
         } else {
             UnavailableReason::NotRunning
         },
@@ -89,6 +73,12 @@ fn request(entry: &Entry, method: &str, params: Value) -> std::result::Result<Va
         &json!({"op": "query", "method": method, "params": params, "wait_ms": 30_000}),
         Duration::from_secs(95),
     )?;
+    if response.get("refused").is_some() {
+        return Err(QueryErr::Unavailable {
+            root: entry.root.clone(),
+            reason: UnavailableReason::MemoryShort,
+        });
+    }
     if let Some(indexing) = response.get("indexing") {
         return Err(QueryErr::Indexing {
             server: entry.server.clone(),

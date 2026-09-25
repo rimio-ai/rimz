@@ -170,6 +170,15 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
     let _: QueryRequest = serde_json::from_value(json!({"method": method, "params": params}))?;
     let deadline = Instant::now() + Duration::from_millis(wait_ms.min(30_000));
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+    let refusal_epoch = model.refusal_epoch;
+    shared
+        .in_flight
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let _in_flight = QueryFlight(&shared.in_flight);
+    if matches!(model.entry.state, State::Dormant { .. }) {
+        model.start_requested = true;
+        shared.changed.notify_all();
+    }
     loop {
         match &model.entry.state {
             State::Stopped { reason, .. } => {
@@ -178,9 +187,14 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
             State::Ready => break,
             _ => {}
         }
+        if model.refusal_epoch > refusal_epoch {
+            return Ok(json!({"refused": model.refusal}));
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Ok(json!({"indexing": {"elapsed_ms": shared.elapsed()}}));
+            return Ok(
+                json!({"indexing": {"elapsed_ms": crate::utils::time::unix_now_ms().saturating_sub(model.entry.started_at_ms)}}),
+            );
         }
         model = shared
             .changed
@@ -197,22 +211,47 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
         Ok(request) => request,
         Err(error) => {
             tracing::debug!(%error, "language-server transport closed");
-            shared.stop(StopReason::Crashed);
+            transport_failed(shared, &transport);
             return Ok(json!({"error": {"code": -32003, "message": StopReason::Crashed}}));
         }
     };
     let response = receiver.recv_timeout(Duration::from_secs(60));
     transport.cancel(id);
     if matches!(&response, Ok(Err(error)) if !matches!(error, LspErr::Server { .. })) {
-        shared.stop(StopReason::Crashed);
+        transport_failed(shared, &transport);
     }
     let model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-    if let State::Stopped { reason, .. } = &model.entry.state {
+    if let State::Stopped { reason, .. }
+    | State::Dormant {
+        reason: Some(reason),
+        ..
+    } = &model.entry.state
+    {
         return Ok(json!({"error": {"code": -32003, "message": reason}}));
     }
     match response {
         Ok(result) => Ok(json!({"result": result?})),
         Err(error) => Err(LspErr::Protocol(format!("query did not answer: {error}"))),
+    }
+}
+
+struct QueryFlight<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl Drop for QueryFlight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn transport_failed(shared: &Shared, transport: &Arc<super::Transport>) {
+    let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+    if model
+        .transport
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, transport))
+    {
+        model.stop(StopReason::Crashed);
+        shared.changed.notify_all();
     }
 }
 
@@ -233,14 +272,20 @@ mod tests {
                 readiness: Readiness::default(),
                 transport: None,
                 request_phase: RequestPhase::Serving,
+                start_requested: false,
+                refusal_epoch: 0,
+                refusal: None,
+                lifetime_peak_kb: 0,
+                dormant_ms: None,
             }),
             changed: Condvar::new(),
             started: Instant::now(),
+            in_flight: std::sync::atomic::AtomicUsize::new(0),
         };
         let response = query(&shared, "workspace/symbol", json!({"query": "symbol"}), 1).unwrap();
         assert!(response.get("indexing").is_some());
         assert!(response.get("result").is_none());
-        shared.stop(StopReason::MemoryPressure);
+        shared.stop(StopReason::CheckoutRemoved);
         assert_eq!(
             query(
                 &shared,
@@ -250,6 +295,54 @@ mod tests {
             )
             .unwrap()["error"]["code"],
             -32003
+        );
+        shared.model.lock().unwrap().entry.state = State::Dormant {
+            since_ms: 0,
+            reason: None,
+        };
+        let response = query(&shared, "workspace/symbol", json!({"query": "symbol"}), 0).unwrap();
+        assert!(response.get("indexing").is_some());
+        assert!(
+            shared.model.lock().unwrap().start_requested,
+            "dormant query must ask main thread to start"
+        );
+        let shared = Arc::new(shared);
+        let waiting = shared.clone();
+        let query_thread = std::thread::spawn(move || {
+            query(
+                &waiting,
+                "workspace/symbol",
+                json!({"query": "symbol"}),
+                1000,
+            )
+            .unwrap()
+        });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while shared.in_flight.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        {
+            let mut model = shared.model.lock().unwrap();
+            model.refusal_epoch += 1;
+            model.refusal = Some(crate::lsp::admission::Shortfall {
+                root: "/checkout".into(),
+                server: "rust".into(),
+                estimate_bytes: 100,
+                available_bytes: 0,
+                committed_bytes: 0,
+                reserve_bytes: 0,
+                holders: vec![],
+            });
+            shared.changed.notify_all();
+        }
+        assert_eq!(
+            query_thread.join().unwrap()["refused"]["estimate_bytes"],
+            100
+        );
+        assert_eq!(
+            shared.in_flight.load(std::sync::atomic::Ordering::SeqCst),
+            0
         );
     }
 }

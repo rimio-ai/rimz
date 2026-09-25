@@ -106,7 +106,7 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     }
     if !reminders.lsp_servers.is_empty() {
         paragraphs.push(format!(
-            "Language servers {} serve this checkout, shared read-only with every agent working in it. Navigate and explore code through Skill(rimz-lsp).",
+            "Language servers {} are shared read-only with every agent in this checkout. A server starts on the first query; the first answer may take its startup time. Navigate and explore code through Skill(rimz-lsp).",
             reminders.lsp_servers.iter().map(|server| escape_reminder_text(server)).collect::<Vec<_>>().join(", ")
         ));
     }

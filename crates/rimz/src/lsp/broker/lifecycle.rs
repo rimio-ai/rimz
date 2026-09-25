@@ -3,6 +3,19 @@
 use crate::lsp::registry::{Lease, State, StopReason};
 use serde_json::Value;
 
+pub(super) fn idle_expired(
+    now: u64,
+    ready_at: Option<u64>,
+    last_request: Option<u64>,
+    in_flight: usize,
+    timeout: u64,
+) -> bool {
+    in_flight == 0
+        && ready_at.is_some_and(|ready| {
+            now.saturating_sub(ready.max(last_request.unwrap_or(ready))) >= timeout
+        })
+}
+
 #[derive(Default)]
 pub(super) struct Lifecycle {
     pub(super) leases: Vec<Lease>,
@@ -40,13 +53,15 @@ pub(super) struct Readiness {
     initialized_at: Option<u64>,
     open: Vec<Value>,
     ended: bool,
+    last_progress_at: Option<u64>,
 }
 
 impl Readiness {
     pub(super) fn initialized(&mut self, now: u64) {
         self.initialized_at = Some(now);
     }
-    pub(super) fn progress(&mut self, params: &Value) {
+    pub(super) fn progress(&mut self, params: &Value, now: u64) {
+        self.last_progress_at = Some(now);
         let token = &params["token"];
         match params["value"]["kind"].as_str() {
             Some("begin") if !self.open.contains(token) => self.open.push(token.clone()),
@@ -61,7 +76,11 @@ impl Readiness {
         let Some(initialized) = self.initialized_at else {
             return State::Starting;
         };
-        if self.open.is_empty() && (self.ended || now.saturating_sub(initialized) >= 10_000) {
+        let settled = self.last_progress_at.map_or_else(
+            || now.saturating_sub(initialized) >= 10_000,
+            |last| self.ended && now.saturating_sub(last) >= 2_000,
+        );
+        if self.open.is_empty() && settled {
             State::Ready
         } else {
             State::Indexing
@@ -73,6 +92,16 @@ impl Readiness {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn idle_expiry_waits_for_readiness_and_in_flight_queries() {
+        assert!(!idle_expired(20_000, None, None, 0, 2_000));
+        assert!(!idle_expired(20_000, Some(10_000), None, 1, 2_000));
+        assert!(!idle_expired(11_999, Some(10_000), Some(5_000), 0, 2_000));
+        assert!(idle_expired(12_000, Some(10_000), Some(5_000), 0, 2_000));
+        assert!(!idle_expired(16_999, Some(10_000), Some(15_000), 0, 2_000));
+        assert!(idle_expired(17_000, Some(10_000), Some(15_000), 0, 2_000));
+    }
 
     fn lease(pid: u32) -> Lease {
         Lease {
@@ -124,11 +153,13 @@ mod tests {
         state.initialized(100);
         assert_eq!(state.state(10_099), State::Indexing);
         assert_eq!(state.state(10_100), State::Ready);
-        state.progress(&json!({"token": "a", "value": {"kind": "begin"}}));
-        state.progress(&json!({"token": 2, "value": {"kind": "begin"}}));
-        state.progress(&json!({"token": "a", "value": {"kind": "end"}}));
+        state.progress(&json!({"token": "a", "value": {"kind": "begin"}}), 200);
+        state.progress(&json!({"token": "a", "value": {"kind": "end"}}), 300);
+        assert_eq!(state.state(301), State::Indexing);
+        state.progress(&json!({"token": 2, "value": {"kind": "begin"}}), 400);
         assert_eq!(state.state(30_000), State::Indexing);
-        state.progress(&json!({"token": 2, "value": {"kind": "end"}}));
-        assert_eq!(state.state(30_001), State::Ready);
+        state.progress(&json!({"token": 2, "value": {"kind": "end"}}), 30_000);
+        assert_eq!(state.state(31_999), State::Indexing);
+        assert_eq!(state.state(32_000), State::Ready);
     }
 }

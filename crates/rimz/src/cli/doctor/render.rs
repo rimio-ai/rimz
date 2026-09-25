@@ -225,6 +225,10 @@ fn render_lsp(
                 State::Starting => (Health::Info, "starting".to_owned()),
                 State::Indexing => (Health::Info, "indexing".to_owned()),
                 State::Ready => (Health::Ok, "ready".to_owned()),
+                State::Dormant { reason, .. } => (
+                    Health::Neutral,
+                    reason.map_or_else(|| "dormant".into(), |reason| format!("dormant: {reason}")),
+                ),
                 State::Stopped { reason, .. } => (Health::Warn, format!("stopped: {reason}")),
             };
             table.row([

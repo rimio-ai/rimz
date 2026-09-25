@@ -27,11 +27,11 @@ fn terminal_fixture() -> Terminal {
 }
 
 #[test]
-fn shared_language_servers_show_tombstones_and_last_refusal() {
+fn shared_language_servers_show_dormant_reason_and_last_refusal() {
     let entry = serde_json::from_value(serde_json::json!({
         "root": "/checkout", "server": "rust", "nonce": "nonce", "broker_pid": 1, "broker_start_token": "token",
         "server_pid": null, "server_start_token": null,
-        "state": {"stopped": {"reason": "memory pressure", "at_ms": 1}},
+        "state": {"dormant": {"reason": "memory pressure", "since_ms": 1}},
         "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "hash",
         "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []
     })).unwrap();
@@ -49,7 +49,7 @@ fn shared_language_servers_show_tombstones_and_last_refusal() {
         }),
     });
     let rendered = strip(|w| render_lsp(w, &lsp, &mut Tally::default()));
-    assert!(rendered.contains("stopped: memory pressure"));
+    assert!(rendered.contains("dormant: memory pressure"));
     assert!(rendered.contains("LEASES"));
     assert!(rendered.contains("/other rust queue_timeout"));
 }

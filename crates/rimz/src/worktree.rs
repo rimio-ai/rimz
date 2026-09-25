@@ -974,7 +974,9 @@ pub fn remove_marked_worktree(
     let path_arg = path.to_string_lossy();
     args.push(path_arg.as_ref());
     git_run(repo_root, args)?;
-    if let Err(error) = crate::lsp::registry::stop_checkout(path) {
+    if let Err(error) =
+        crate::lsp::registry::stop_checkout(path, crate::lsp::registry::StopReason::CheckoutRemoved)
+    {
         tracing::debug!(%error, "language-server checkout removal notification failed");
     }
     if let Err(error) = hooks::run_hook(

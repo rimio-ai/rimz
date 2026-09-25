@@ -32,7 +32,14 @@ pub enum State {
     Starting,
     Indexing,
     Ready,
-    Stopped { reason: StopReason, at_ms: u64 },
+    Dormant {
+        since_ms: u64,
+        reason: Option<StopReason>,
+    },
+    Stopped {
+        reason: StopReason,
+        at_ms: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, thiserror::Error)]
@@ -55,6 +62,24 @@ pub enum StopReason {
     #[serde(rename = "never leased")]
     #[error("never leased")]
     NeverLeased,
+    #[serde(rename = "idle")]
+    #[error("idle")]
+    Idle,
+    #[serde(rename = "evicted")]
+    #[error("evicted")]
+    Evicted,
+    #[serde(rename = "team done")]
+    #[error("team done")]
+    TeamDone,
+}
+
+impl StopReason {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::CheckoutRemoved | Self::Released | Self::NeverLeased
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -75,6 +100,8 @@ pub struct Entry {
     pub request_count: u64,
     pub last_request_at_ms: Option<u64>,
     pub peak_rss_kb: u64,
+    #[serde(default)]
+    pub restarts: u64,
     pub leases: Vec<Lease>,
 }
 
@@ -96,12 +123,7 @@ pub fn kill_order(entries: &mut [Entry]) {
     entries.sort_by(|left, right| {
         let rank = |entry: &Entry| {
             (
-                entry.request_count != 0,
-                if entry.request_count == 0 {
-                    entry.started_at_ms
-                } else {
-                    entry.last_request_at_ms.unwrap_or(entry.started_at_ms)
-                },
+                entry.last_request_at_ms.unwrap_or(entry.started_at_ms),
                 entry.started_at_ms,
             )
         };
@@ -139,19 +161,7 @@ fn publish_at(directory: &Path, entry: &Entry) -> Result<()> {
     crate::disk::paths::ensure_private_runtime_dir(directory)?;
     let _lock = crate::disk::lock::WorkspaceLock::acquire(&directory.join("entry.lock"))?;
     let path = directory.join("entry.json");
-    let mut entry = entry.clone();
-    match std::fs::read(&path) {
-        Ok(bytes) => {
-            let previous: Entry = serde_json::from_slice(&bytes)?;
-            // The watchdog can stop a server while its broker still holds an older in-memory state.
-            if previous.nonce == entry.nonce && matches!(previous.state, State::Stopped { .. }) {
-                entry.state = previous.state;
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    crate::disk::atomic::write_temp_then_rename_cache(&path, &entry)?;
+    crate::disk::atomic::write_temp_then_rename_cache(&path, entry)?;
     Ok(())
 }
 
@@ -250,7 +260,7 @@ fn is_live_at(base: &Path, entry: &Entry) -> bool {
         .is_ok()
 }
 
-/// Call under the admission lock; live tombstones remain queryable.
+/// Call under the admission lock; only dead brokers are swept.
 pub fn sweep_locked() -> Result<Vec<Entry>> {
     sweep_at(&crate::disk::paths::lsp_runtime_dir())
 }
@@ -305,7 +315,7 @@ pub fn live_server_names(root: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-pub fn stop_checkout(root: &Path) -> Result<()> {
+pub fn stop_checkout(root: &Path, reason: StopReason) -> Result<()> {
     // Worktree removal calls this after the directory has gone; its host path is already absolute.
     let root = std::fs::canonicalize(root)
         .unwrap_or_else(|_| crate::utils::path::normalize_path_lexical(root));
@@ -313,7 +323,7 @@ pub fn stop_checkout(root: &Path) -> Result<()> {
         read_entries()?
             .into_iter()
             .filter(|entry| entry.root == root),
-        &serde_json::json!({"op": "stop", "reason": StopReason::CheckoutRemoved}),
+        &serde_json::json!({"op": "stop", "reason": reason}),
     )
 }
 
@@ -345,7 +355,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_checkout_removal_and_lease_expiry_are_terminal() {
+        for reason in [
+            StopReason::Released,
+            StopReason::NeverLeased,
+            StopReason::CheckoutRemoved,
+        ] {
+            assert!(reason.is_terminal(), "{reason} ends the broker");
+        }
+        for reason in [
+            StopReason::MemoryPressure,
+            StopReason::Crashed,
+            StopReason::StoppedByHand,
+        ] {
+            assert!(!reason.is_terminal(), "{reason} permits restart");
+        }
+    }
+
+    #[test]
     fn stop_reasons_preserve_wire_strings() {
+        for text in ["idle", "evicted", "team done"] {
+            let reason = serde_json::from_value::<StopReason>(serde_json::json!(text));
+            assert!(reason.is_ok(), "{text} must be a stop reason");
+            assert_eq!(serde_json::to_value(reason.unwrap()).unwrap(), text);
+        }
         for (reason, text) in [
             (StopReason::Released, "released"),
             (StopReason::CheckoutRemoved, "checkout removed"),
@@ -407,6 +440,7 @@ mod tests {
             request_count: 0,
             last_request_at_ms: None,
             peak_rss_kb: 6,
+            restarts: 0,
             leases: vec![Lease {
                 launch_id: Some("launch-1".to_owned().into()),
                 pid: 3,
@@ -434,11 +468,24 @@ mod tests {
                 .iter()
                 .map(|entry| entry.server.as_str())
                 .collect::<Vec<_>>(),
-            ["unused-old", "unused-new", "used-old", "used-new"]
+            ["unused-old", "used-old", "unused-new", "used-new"]
         );
-        entries[3].last_request_at_ms = entries[2].last_request_at_ms;
+        entries[3].last_request_at_ms = entries[1].last_request_at_ms;
         entries[3].started_at_ms = 50;
         kill_order(&mut entries);
-        assert_eq!(entries[2].server, "used-new");
+        assert_eq!(entries[1].server, "used-new");
+    }
+
+    #[test]
+    fn dormant_state_preserves_stop_context() {
+        for reason in [serde_json::Value::Null, serde_json::json!("idle")] {
+            let value = serde_json::json!({"dormant": {"since_ms": 42, "reason": reason}});
+            let state = serde_json::from_value::<State>(value.clone());
+            assert!(
+                state.is_ok(),
+                "dormant must be addressable without a server"
+            );
+            assert_eq!(serde_json::to_value(state.unwrap()).unwrap(), value);
+        }
     }
 }

@@ -26,6 +26,9 @@ fn main() {
             }
             "workspace/symbol" => {
                 assert!(indexed, "queries must wait for initialized");
+                if message["params"]["query"] == "slow" {
+                    std::thread::sleep(std::time::Duration::from_secs(8));
+                }
                 if message["params"]["query"] == "changes" {
                     changes.clone()
                 } else if message["params"]["query"] == "alias" {
