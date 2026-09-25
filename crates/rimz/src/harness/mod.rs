@@ -10,6 +10,7 @@ pub mod fleet;
 pub mod idle_compact;
 pub mod launch;
 mod launch_context;
+mod launch_git;
 pub mod launch_plan;
 pub mod launch_reminders;
 pub mod orphan_sweep;

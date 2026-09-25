@@ -506,6 +506,73 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
     }
 }
 
+#[test]
+fn git_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() {
+    let project = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec![
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "base",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(repo.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let machine = crate::config::MachineConfig::default();
+    let mut effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .unwrap();
+    let workspace_id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(workspace_id, project.path()).unwrap();
+    for subagent in [false, true] {
+        for enabled in [false, true] {
+            effective.git_reminder = enabled;
+            for cwd in [project.path(), repo.path()] {
+                let mut request =
+                    ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+                request.subagent = subagent;
+                let plan = compile(LaunchPlanInputs {
+                    request: &request,
+                    cwd,
+                    project_root: project.path(),
+                    rimz_bin: Path::new("/bin/rimz"),
+                    runtime: &runtime,
+                    state: &state,
+                    effective: Some(&effective),
+                    commands: &machine.agents.commands,
+                    accounts: &machine.accounts,
+                    bwrap: None,
+                    ambient_env: &BTreeMap::new(),
+                })
+                .unwrap();
+                assert_eq!(
+                    plan.process().reminder.contains("$ git status --short"),
+                    enabled && cwd == repo.path()
+                );
+                assert!(plan.warnings.is_empty());
+                assert!(!repo.path().join(".git/index.lock").exists());
+            }
+        }
+    }
+}
+
 /// A room whose `workspace.json` freezes `logins`, with the machine config
 /// that declares those accounts.
 fn room_with_accounts(
