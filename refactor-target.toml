@@ -244,7 +244,7 @@ allowed-dependencies = [
 # File-backed lock guards share blocking and immediate inode-checked acquisition.
 # Root-only readers share history probes and the remaining room retention policy.
 # Explicit state pairing and runtime-only preparation keep lock identity independent of runtime roots.
-surface-budget = 199
+surface-budget = 201
 
 [[module]]
 path = "crates/rimz/src/forge"

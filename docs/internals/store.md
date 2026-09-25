@@ -115,7 +115,6 @@ locks/*.lock                                 workspace, publish, subagent-zone, 
                                              sidebar-launch, snapshot, topology-writer,
                                              authoritative-pane-probe, focus-anchor, pr-state,
                                              diff-stats, budget.fleet, and sidecar locks
-locks/pane-write/<hex-pane-id>.lock           pane write serialization
 workspace.json                               room record, layout: 2
 rimz                                         stable room executable
 ```
