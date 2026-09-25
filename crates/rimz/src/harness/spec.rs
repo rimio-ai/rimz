@@ -93,6 +93,7 @@ pub struct Column {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentCell {
+    pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
     pub args: Vec<String>,
     pub auto_compact: Option<String>,
@@ -128,6 +129,7 @@ impl Cell {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            isolation_default: None,
             launch: crate::agents::LaunchParams::default(),
         })
     }
@@ -159,6 +161,7 @@ impl Cell {
 /// A profile chain flattened to the concrete adapter kind that can be executed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProfile {
+    pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
     pub layers: Vec<String>,
     pub launch: crate::agents::LaunchParams,
@@ -186,11 +189,13 @@ impl ResolvedProfile {
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             skills: None,
+            isolation_default: None,
             args: None,
         }
     }
 
     fn fill_missing(&mut self, layer: &Profile) {
+        self.isolation_default = self.isolation_default.or(layer.isolation);
         if self.skills.is_none() {
             self.skills.clone_from(&layer.skills);
         }
@@ -412,6 +417,10 @@ pub enum LayoutErr {
         "repo profile `{profile}` references machine-only profile `{base}`; repo profiles may inherit only repo profiles or built-in agent kinds"
     )]
     RepoProfileEscapesTrust { profile: String, base: String },
+    #[error(
+        "repo profile `{profile}` sets isolation; declare it in ~/.rimz/agents/<name>.md or pass --isolation"
+    )]
+    RepoProfileSetsIsolation { profile: String },
     #[error(
         "invalid profile name `{name}`; profiles cannot be empty or contain whitespace, `,`, `+`, `/`, `(`, or `)`"
     )]
@@ -1443,6 +1452,7 @@ fn agent_cell_from(
 ) -> AgentCell {
     AgentCell {
         kind: resolved.kind.clone(),
+        isolation_default: resolved.isolation_default,
         args,
         auto_compact: resolved.auto_compact.clone(),
         system_prompt_file: resolved.system_prompt_file.clone(),
@@ -1927,6 +1937,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
         original.skills.clone_from(&base.skills);
     }
     // Keep the role-field merge aligned with ResolvedProfile::fill_missing.
+    original.isolation_default = original.isolation_default.or(base.isolation_default);
     original.launch.mode = original.launch.mode.or(base.launch.mode);
     if original.launch.budget.is_none() {
         original.launch.budget.clone_from(&base.launch.budget);

@@ -310,6 +310,7 @@ fn zellij_agent_exec_command(
     let path = path_with_front(agent_bin);
     let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
     let request = rimz::harness::launch::ExecRequest {
+        isolation_default: None,
         kind: rimz::ids::AgentKind::new_unchecked("claude"),
         action: rimz::harness::launch::ExecAction::Resume {
             session_id: agent_id.to_owned(),

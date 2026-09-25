@@ -86,6 +86,7 @@ fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
         Path::new("/bin/rimz"),
         h.store.runtime_paths(),
         &ExecRequest {
+            isolation_default: None,
             kind: AgentKind::new_unchecked(kind),
             action: ExecAction::Resume {
                 session_id: id.to_owned(),

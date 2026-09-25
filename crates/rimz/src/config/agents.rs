@@ -171,6 +171,10 @@ pub enum Isolation {
 }
 
 impl Isolation {
+    pub fn resolve(override_: Option<Self>, profile_default: Option<Self>, machine: Self) -> Self {
+        override_.or(profile_default).unwrap_or(machine)
+    }
+
     /// The provider's isolation, stamped on every launch so a parent's value never leaks into a child.
     pub const ENV: &str = "RIMZ_ISOLATION";
 
@@ -209,6 +213,8 @@ impl std::str::FromStr for Isolation {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<Isolation>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

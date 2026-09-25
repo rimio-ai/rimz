@@ -388,6 +388,7 @@ fn tmux_agent_exec_command(
     let path = path_with_front(agent_bin);
     let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
     let request = rimz::harness::launch::ExecRequest {
+        isolation_default: None,
         kind: rimz::ids::AgentKind::new_unchecked("claude"),
         action: rimz::harness::launch::ExecAction::Resume {
             session_id: agent_id.to_owned(),
@@ -434,6 +435,7 @@ fn tmux_direct_resume_command(
 ) -> Vec<String> {
     let path = path_with_front(agent_bin);
     let request = rimz::harness::launch::ExecRequest {
+        isolation_default: None,
         kind: rimz::ids::AgentKind::new_unchecked(kind),
         action: rimz::harness::launch::ExecAction::Resume {
             session_id: agent_id.to_owned(),
@@ -477,6 +479,7 @@ fn tmux_failing_agent_exec_command(env: &Env, agent_bin: &Path, launch_id: &str)
     let path = path_with_front(agent_bin);
     let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
     let request = rimz::harness::launch::ExecRequest {
+        isolation_default: None,
         kind: rimz::ids::AgentKind::new_unchecked("codex"),
         action: rimz::harness::launch::ExecAction::Launch {
             prompt: None,

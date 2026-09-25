@@ -8,9 +8,13 @@ The code lives in `crates/rimz/src/sandbox/`: `mod.rs` plans the mounts, pins, a
 
 ## Choosing the isolation
 
-A launch runs under its recorded `--isolation` override (`LaunchParams.isolation`, carried in the exec envelope) when it has one, and under current machine policy otherwise. A repository cannot choose either, because `agents.isolation` lives in machine config outside the trust hash.
+A launch resolves isolation through `Isolation::resolve`: the recorded `--isolation` override wins, then the profile's `isolation: host|sandbox`, then current machine `agents.isolation`. Repository profiles in either namespace are refused if they set `isolation`; machine definitions and policy stay outside the trust hash. Team roles inherit the named definition's default and cannot declare their own.
 
-The override travels with the launch. Restart, fork, and rebirth replay a recorded override and otherwise read the current machine policy. Cohort resume accepts `--isolation host|sandbox` on both `rimz agents` and `rimz teams`: the flag replaces the stored override, and omission preserves it. Matched seeds are preflighted on that effective isolation; the exec wrapper re-stamps a present override on `agent.attached` before the provider starts. A subagent launched without its own `--isolation` inherits its parent's recorded override. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's room tmp.
+The profile default travels beside `skills` as `isolation_default` through `ResolvedProfile`, `AgentCell`, `ResumeLaunchPosture`, and `ExecRequest`; it never enters `LaunchParams.isolation`. Restart, fork, resume, and rebirth re-read the profile, so editing its default changes the next launch unless a recorded override wins. Cohort resume accepts `--isolation host|sandbox` on both `rimz agents` and `rimz teams`: the flag replaces the stored override, and omission preserves it. Matched seeds are preflighted on that effective isolation.
+
+The exec wrapper stamps `effective_isolation` on `agent.attached` before provider startup, independently of the recorded override. `AgentState::runs_in(machine)` reads this durable stamp; older rows fall back to override then machine policy. Observers read the stamp, while relaunches resolve the current definition rather than replaying the stamp.
+
+A subagent launched without its own `--isolation` inherits its parent's recorded override, not its profile default. Otherwise it follows its own definition and then machine policy. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's room tmp.
 
 ## Preflight
 
@@ -20,9 +24,10 @@ Every entry point that can start a sandboxed agent probes bubblewrap first and r
 | --- | --- |
 | `rimz config set agents.isolation sandbox` | Before writing the value. |
 | `rimz start` and detached room ensure (`cli/room/mod.rs`) | When machine policy is sandbox. |
-| `rimz start` recovering a rebirth | When the plan includes an agent whose recorded override, or machine policy, is sandbox (`RebirthPreview::requires_sandbox`). |
+| `rimz start` recovering a rebirth | When a planned launch resolves to sandbox from its override, current profile default, or machine policy (`RebirthPreview::requires_sandbox`). |
 | `rimz agents launch`, `restart`, `fork`, supervised runs | For the launch's effective isolation. |
-| Cohort resume (`launch_resume_layout` in `cli/agents_cmd/launch.rs`) | For each resumed agent's recorded override, else machine policy. |
+| Cohort resume (`launch_resume_layout` in `cli/agents_cmd/launch.rs`) | For each resumed agent's effective isolation. |
+| Parent-message child resume (`cli/subagents/resume.rs`) | For the child's effective isolation after re-reading its profile. |
 | The exec wrapper (`cli/agents_cmd/exec.rs`) | For the launch's effective isolation; a failure marks the launch failed and fails its run. |
 | `rimz agents explain` | For the explained launch's isolation. |
 | `rimz doctor` | Always; reports mode, binary path, version, probe verdict, and fix. In host mode the check is informational. |
@@ -110,7 +115,7 @@ Room tmp is one directory per workspace, `~/.rimz/ws/<workspace-dir>/tmp/`, crea
 
 Three callers ensure the layout. Room birth does so under sandbox policy, `launch_plan::apply` on every launch (with the launch's scratch dir), and the output writers (wait arming in `harness/schedule/arm.rs`, subagent reports in `cli/agents_cmd/subagent_report.rs`) on demand in either isolation mode. Host mode therefore has room tmp too, for RimZ's own output files.
 
-`sandbox::TmpView` maps host paths to agent paths for output records and messages. Under sandbox isolation a path inside the recipient's own scratch dir becomes `/tmp/scratchpad/<relative path>`, and any other path inside room tmp becomes `/tmp/<relative path>`, so another agent's `agents/<handle>/f` stays `/tmp/agents/<handle>/f`; every other path, and every path under host isolation, stays a host path. `TmpView::current` takes the recipient's recorded override, falling back to machine policy, and its handle, falling back to the shared `scratchpad/`. Subagent reports pass the parent's override and handle. Wait watchers and signal firing pass neither, so a wait armed by an agent whose override differs from machine policy names its output path as machine policy maps it.
+`sandbox::TmpView` maps host paths to agent paths for output records and messages. Under sandbox isolation a path inside the recipient's own scratch dir becomes `/tmp/scratchpad/<relative path>`, and any other path inside room tmp becomes `/tmp/<relative path>`, so another agent's `agents/<handle>/f` stays `/tmp/agents/<handle>/f`; every other path, and every path under host isolation, stays a host path. `TmpView::current` takes an isolation, falling back to machine policy, and a handle, falling back to the shared `scratchpad/`. Subagent reports pass the parent's `runs_in(machine)` and handle. Wait watchers and signal firing pass neither, so a wait armed by an agent whose isolation differs from machine policy names its output path as machine policy maps it.
 
 Room tmp is separate from host `/tmp`, not hidden from the host. The host state path stays reachable inside and outside the sandbox, and host processes can read the directory directly. `rimz agents show` prints the host path when the directory exists, and the agent's scratch dir host path when that exists.
 

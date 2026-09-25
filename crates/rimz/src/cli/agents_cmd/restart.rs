@@ -49,7 +49,11 @@ pub(in crate::cli) fn restart_resolved(
     let posture = restart_posture(agent, workspace, &machine_config)?;
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
-    let isolation = agent.isolation.unwrap_or(machine_config.agents.isolation);
+    let isolation = rimz::config::Isolation::resolve(
+        agent.isolation,
+        posture.launch.isolation_default,
+        machine_config.agents.isolation,
+    );
     rimz::sandbox::preflight_skills(
         isolation,
         &agent.kind,
@@ -252,6 +256,7 @@ pub(super) fn relaunch_request(
         append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
         team_prompt: posture.launch.team_prompt.clone(),
         skills: posture.launch.skills.clone(),
+        isolation_default: posture.launch.isolation_default,
         close_pane_on_exit: true,
         identity: rimz::harness::launch::ExecIdentity {
             name: identity_name.map(ToOwned::to_owned),
@@ -321,6 +326,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         append_system_prompt_files: Vec::new(),
         team_prompt: None,
         skills: posture.launch.skills.clone(),
+        isolation_default: posture.launch.isolation_default,
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
             role: agent.role.clone(),
@@ -455,6 +461,7 @@ mod tests {
         assert_eq!(
             request,
             ExecRequest {
+                isolation_default: None,
                 kind: agent.kind.clone(),
                 action: ExecAction::Resume {
                     session_id: "a1".to_owned(),

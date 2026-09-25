@@ -347,6 +347,7 @@ fn launch_event_uses_flat_compact_wire_shape() {
 fn attach_event_uses_typed_compact_wire_shape() {
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%4");
     let payload = AgentAttachPayload {
+        effective_isolation: None,
         agent_id: AgentSessionId::from("sess-1"),
         isolation: Some(crate::config::Isolation::Sandbox),
         launch_id: Some(AgentSessionId::from("launch-1")),

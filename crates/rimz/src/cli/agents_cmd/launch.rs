@@ -168,9 +168,11 @@ pub(super) fn launch_layout(
             preflight_cell(
                 workspace,
                 cell,
-                cell.launch
-                    .isolation
-                    .unwrap_or(machine_config.agents.isolation),
+                rimz::config::Isolation::resolve(
+                    cell.launch.isolation,
+                    cell.isolation_default,
+                    machine_config.agents.isolation,
+                ),
                 prompt.filter(|_| Some(index) == prompt_agent_index),
             )?;
         }
@@ -424,6 +426,7 @@ fn preflight_cell(
     let mut request =
         rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
     request.skills.clone_from(&cell.skills);
+    request.isolation_default = cell.isolation_default;
     request.action = rimz::harness::launch::ExecAction::Launch {
         prompt: prompt.map(str::to_owned),
         extra_args: cell.args.clone(),
@@ -492,7 +495,11 @@ fn launch_resume_layout(
         preflight_cell(
             workspace,
             cell,
-            isolation.unwrap_or(machine_config.agents.isolation),
+            rimz::config::Isolation::resolve(
+                isolation,
+                cell.isolation_default,
+                machine_config.agents.isolation,
+            ),
             None,
         )?;
     }

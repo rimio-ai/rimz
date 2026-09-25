@@ -133,6 +133,7 @@ fn attach_event(
         "session",
         &AgentKind::new_unchecked(kind),
         AgentAttachPayload {
+            effective_isolation: None,
             agent_id: AgentSessionId::from(agent_id),
             isolation: None,
             launch_id: launch_id.map(AgentSessionId::from),
@@ -304,6 +305,35 @@ fn identified_attach_seeds_a_discovered_resume() {
     assert_eq!(
         state.pane.as_ref().map(|pane| &pane.pane_id),
         Some(&PaneId::parse("tmux:%4").expect("pane id"))
+    );
+}
+
+#[test]
+fn attach_effective_isolation_roundtrips_without_stamping_an_override() {
+    let mut event = serde_json::to_value(attach_event(
+        "codex",
+        "profile-launch",
+        Some("profile-launch"),
+        "tmux:%4",
+        Some(84),
+        84,
+    ))
+    .unwrap();
+    event["params"]["effective_isolation"] = json!("host");
+    let event = serde_json::from_value(event).unwrap();
+    let states = reduce_agent_states(&[event]);
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].isolation, None);
+    let value = serde_json::to_value(&states[0]).unwrap();
+    assert_eq!(value["effective_isolation"], "host");
+    let state: AgentState = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        state.runs_in(crate::config::Isolation::Sandbox),
+        crate::config::Isolation::Host
+    );
+    assert_eq!(
+        serde_json::to_value(state).unwrap()["effective_isolation"],
+        "host"
     );
 }
 
@@ -1255,6 +1285,7 @@ fn resumed_fork_events(provider_pane: &str) -> Vec<EventEnvelope> {
             "session",
             &AgentKind::new_unchecked("codex"),
             AgentAttachPayload {
+                effective_isolation: None,
                 agent_id: AgentSessionId::from("primary"),
                 isolation: None,
                 launch_id: Some(AgentSessionId::from("launch_coder")),
@@ -1525,6 +1556,7 @@ fn launch_identity_retry_inspects_only_same_instance_candidates() {
         "session",
         &AgentKind::new_unchecked("codex"),
         AgentAttachPayload {
+            effective_isolation: None,
             agent_id: AgentSessionId::from("conversation-a"),
             isolation: None,
             launch_id: Some(AgentSessionId::from("launch-coder")),

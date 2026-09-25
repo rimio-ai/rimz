@@ -484,6 +484,10 @@ pub(super) struct PlannedResumeTab {
     tab: ResumeTab,
     freshest: Timestamp,
     resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+    isolations: Vec<(
+        Option<crate::config::Isolation>,
+        Option<crate::config::Isolation>,
+    )>,
 }
 
 impl PlannedResumeTab {
@@ -573,6 +577,34 @@ pub(super) struct RecoveryPlan {
 }
 
 impl RecoveryPlan {
+    pub(super) fn requires_sandbox(&self, machine: crate::config::Isolation) -> bool {
+        use crate::config::Isolation;
+        self.entries.iter().any(|entry| match entry {
+            RecoveryEntry::Flat(planned) => {
+                planned.isolations.iter().any(|&(override_, default)| {
+                    Isolation::resolve(override_, default, machine) == Isolation::Sandbox
+                })
+            }
+            RecoveryEntry::Team(planned) => planned
+                .layout
+                .agent_cells()
+                .zip(&planned.cohort.seeds)
+                .any(|(cell, seed)| {
+                    let override_ = match seed {
+                        CohortSeed::Resume(agent) => {
+                            crate::harness::plan::effective_resume_isolation(
+                                cell.launch.isolation,
+                                agent.isolation,
+                            )
+                        }
+                        CohortSeed::Fresh => cell.launch.isolation,
+                    };
+                    Isolation::resolve(override_, cell.isolation_default, machine)
+                        == Isolation::Sandbox
+                }),
+        })
+    }
+
     pub(super) fn new(
         teams: TeamsConfig,
         team: Vec<PlannedTeamTab>,
@@ -615,6 +647,7 @@ impl RecoveryPlan {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn resumed_keys(&self) -> BTreeSet<(AgentKind, AgentSessionId)> {
         let mut keys = self.base_resumed.clone();
         keys.extend(self.entries.iter().flat_map(RecoveryEntry::resumed_keys));
@@ -1855,6 +1888,13 @@ fn plan_resume_candidates_detailed(
             &posture.launch,
         );
         let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
+        let isolation = (
+            crate::harness::plan::effective_resume_isolation(
+                posture.launch.isolation,
+                candidate.identity.isolation,
+            ),
+            posture.launch.isolation_default,
+        );
         let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);
         let resumed_key = (
             candidate.identity.kind.clone(),
@@ -1867,12 +1907,14 @@ fn plan_resume_candidates_detailed(
                     name: Some(candidate.identity.kind.to_string()),
                 });
                 tab.resumed.insert(resumed_key.clone());
+                tab.isolations.push(isolation);
                 plan.resumed.insert(resumed_key);
             }
         } else {
             let resumed = BTreeSet::from([resumed_key.clone()]);
             tabs.push(PlannedResumeTab {
                 identity,
+                isolations: vec![isolation],
                 tab: ResumeTab {
                     label: tab_label,
                     cwd: candidate.cwd,

@@ -78,7 +78,11 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     if args.isolation.is_some() {
         seed.launch.isolation = args.isolation;
     }
-    let isolation = seed.launch.isolation.unwrap_or(config.agents.isolation);
+    let isolation = rimz::config::Isolation::resolve(
+        seed.launch.isolation,
+        posture.launch.isolation_default,
+        config.agents.isolation,
+    );
     rimz::sandbox::preflight_skills(
         isolation,
         &seed.kind,
@@ -108,6 +112,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
             team_prompt: posture.launch.team_prompt.clone(),
             skills: posture.launch.skills.clone(),
+            isolation_default: posture.launch.isolation_default,
             ..rimz::harness::launch::ExecRequest::bare_launch(seed.kind.clone(), Vec::new())
         },
         &seed.cwd,
@@ -156,6 +161,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
             team_prompt: posture.launch.team_prompt.clone(),
             skills: posture.launch.skills.clone(),
+            isolation_default: posture.launch.isolation_default,
             close_pane_on_exit: placement != Placement::SamePane,
             identity: rimz::harness::launch::ExecIdentity {
                 name: Some(launch.name.clone()),

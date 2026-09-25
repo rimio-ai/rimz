@@ -449,7 +449,11 @@ fn prepare_supervised(
         machine_config.agents.max_chain_length,
     )?;
     let caller_tmp = caller.map(|caller| {
-        rimz::sandbox::TmpView::current(caller.isolation, caller.name.as_deref(), store.paths())
+        rimz::sandbox::TmpView::current(
+            Some(caller.runs_in(machine_config.agents.isolation)),
+            caller.name.as_deref(),
+            store.paths(),
+        )
     });
     // The room pin keeps the store and effective config on the same project root.
     let workspace = supervised::anchor_subagent_workspace(workspace, request, caller, globals)?;
@@ -507,7 +511,11 @@ fn prepare_supervised(
     let agent_cell = agent_cells[0];
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
-    let isolation = isolation.unwrap_or(machine_config.agents.isolation);
+    let isolation = rimz::config::Isolation::resolve(
+        agent_cell.launch.isolation,
+        agent_cell.isolation_default,
+        machine_config.agents.isolation,
+    );
     rimz::sandbox::preflight_skills(
         isolation,
         &agent_cell.kind,
@@ -545,6 +553,7 @@ fn prepare_supervised(
     };
     launch_invocation.system_prompt_file = agent_cell.system_prompt_file.clone();
     launch_invocation.skills.clone_from(&agent_cell.skills);
+    launch_invocation.isolation_default = agent_cell.isolation_default;
     launch_invocation
         .append_system_prompt_files
         .clone_from(&agent_cell.append_system_prompt_files);
@@ -698,6 +707,7 @@ fn execute_attempt(
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
         team_prompt: agent_cell.team_prompt.as_ref(),
         skills: agent_cell.skills.as_deref(),
+        isolation_default: agent_cell.isolation_default,
         self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
         subagent: request.subagent,
         provider_account_binding: prepared.managed_launch.binding(),

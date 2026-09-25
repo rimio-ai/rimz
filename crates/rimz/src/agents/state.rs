@@ -652,9 +652,11 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<crate::agents::PermissionMode>,
     /// The launch's `--isolation` override, carried forward like `mode`;
-    /// `None` follows machine `agents.isolation`.
+    /// `None` follows the current profile default, then machine policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<crate::config::Isolation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_isolation: Option<crate::config::Isolation>,
     /// The `[agents.teams]` role this agent launched as (`planner`, `coder`),
     /// stamped by the launch event and carried forward like `profile`. The
     /// agent answers to `@<role>` when that role uniquely names it in scope.
@@ -903,6 +905,8 @@ struct AgentStateWire {
     mode: Option<crate::agents::PermissionMode>,
     #[serde(default)]
     isolation: Option<crate::config::Isolation>,
+    #[serde(default)]
+    effective_isolation: Option<crate::config::Isolation>,
     role: Option<String>,
     team: Option<String>,
     launch_group: Option<String>,
@@ -1011,6 +1015,7 @@ impl From<AgentStateWire> for AgentState {
             login: wire.login,
             mode: wire.mode,
             isolation: wire.isolation,
+            effective_isolation: wire.effective_isolation,
             role: wire.role,
             team: wire.team,
             launch_group: wire.launch_group,
@@ -1074,6 +1079,11 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    pub fn runs_in(&self, machine: crate::config::Isolation) -> crate::config::Isolation {
+        self.effective_isolation
+            .unwrap_or_else(|| crate::config::Isolation::resolve(self.isolation, None, machine))
+    }
+
     /// The compaction seat: `Team` when the agent launched under a team.
     /// `team` is launch-stamped and carried forward on rebirth, so the seat
     /// survives restarts and resumes.
@@ -1113,6 +1123,7 @@ impl AgentState {
             login: None,
             mode: None,
             isolation: None,
+            effective_isolation: None,
             role: None,
             team: None,
             launch_group: None,

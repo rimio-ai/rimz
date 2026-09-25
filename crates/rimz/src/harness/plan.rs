@@ -111,6 +111,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
 /// Finalized cell values applied by a resume launch.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumeLaunchPosture {
+    pub isolation_default: Option<crate::config::Isolation>,
     pub isolation: Option<crate::config::Isolation>,
     pub args: Vec<String>,
     pub system_prompt_file: Option<crate::config::PromptSource>,
@@ -132,6 +133,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
+            isolation_default: cell.isolation_default,
             mode: cell.launch.mode,
             model: cell.launch.model.clone(),
             effort: cell.launch.effort.clone(),
@@ -141,7 +143,7 @@ impl From<&AgentCell> for ResumeLaunchPosture {
 }
 
 /// A resumed session's isolation: the launch's `--isolation` override, else
-/// the stored value. `None` follows machine `agents.isolation`.
+/// the stored value. `None` follows the profile default, then machine policy.
 pub fn effective_resume_isolation(
     cell: Option<crate::config::Isolation>,
     stored: Option<crate::config::Isolation>,
@@ -956,6 +958,7 @@ pub(super) fn resume_command(
             append_system_prompt_files: posture.append_system_prompt_files.clone(),
             team_prompt: posture.team_prompt.clone(),
             skills: posture.skills.clone(),
+            isolation_default: posture.isolation_default,
             close_pane_on_exit: true,
             identity: crate::harness::launch::ExecIdentity {
                 name: identity.name.clone(),

@@ -457,6 +457,8 @@ impl ProviderAccountState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
     pub action: ExecAction,
     #[serde(default)]
@@ -499,6 +501,7 @@ impl ExecRequest {
             append_system_prompt_files: cell.append_system_prompt_files.clone(),
             team_prompt: cell.team_prompt.clone(),
             skills: cell.skills.clone(),
+            isolation_default: cell.isolation_default,
             identity,
             worktree_path,
             close_pane_on_exit,
@@ -517,6 +520,7 @@ impl ExecRequest {
             append_system_prompt_files: Vec::new(),
             team_prompt: None,
             skills: None,
+            isolation_default: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

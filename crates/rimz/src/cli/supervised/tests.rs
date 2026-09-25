@@ -602,6 +602,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         files: vec!["/team/pipeline.md".into()],
     };
     let pane = run_pane_cmd(RunPaneCmdArgs {
+        isolation_default: None,
         runtime: &runtime,
         adapter: rimz::agents::definition_by_kind("codex").unwrap(),
         run_id: &run_id,

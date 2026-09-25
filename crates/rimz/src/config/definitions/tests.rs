@@ -1,6 +1,33 @@
 use super::*;
 use crate::config::{CommandsConfig, SkillName};
 
+#[test]
+fn isolation_defaults_inherit_but_roles_cannot_set_them() {
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/admin.md",
+        "agent: claude\nisolation: host\ntools: [Bash]",
+        "Admin.",
+    );
+    definition(root.path(), "agents/child.md", "agent: admin", "Child.");
+    definition(
+        root.path(),
+        "agents/boxed.md",
+        "agent: admin\nisolation: sandbox",
+        "Boxed.",
+    );
+    let loaded = clean(root.path());
+    for (name, expected) in [("admin", "host"), ("child", "host"), ("boxed", "sandbox")] {
+        let value = serde_json::to_value(&loaded.agent_profiles.0[name]).unwrap();
+        assert_eq!(value["isolation"], expected);
+    }
+    assert!(
+        serde_saphyr::from_str::<frontmatter::RoleFrontmatter>("agent: admin\nisolation: host")
+            .is_err()
+    );
+}
+
 fn team_fixture() -> tempfile::TempDir {
     let root = fixture();
     definition(

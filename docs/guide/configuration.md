@@ -475,7 +475,7 @@ A stock agent CLI uses the host's temporary directory and sees every skill insta
 rimz config set agents.isolation sandbox
 ```
 
-That probes bubblewrap and then writes `isolation = "sandbox"` under `[agents]` in `config.toml`. The default is `host`, and `rimz config set agents.isolation host` restores it without disturbing any profile `skills` list. The setting is machine-wide policy, not something a profile overrides. New launches follow it, restarted agents included; panes already open keep what they started with.
+That probes bubblewrap and then writes `isolation = "sandbox"` under `[agents]` in `config.toml`. The default is `host`, and `rimz config set agents.isolation host` restores it without disturbing any profile `skills` list. For a profile that needs host access, such as a system administrator using `sudo`, set `isolation: host` in its Markdown definition. A recorded `--isolation` flag wins over the profile default, which wins over machine policy. Restart re-reads the profile; panes already open keep what they started with.
 
 To try one launch the other way, pass `--isolation host` or `--isolation sandbox` to `rimz agents`, `rimz teams`, or `rimz subagents`. That agent keeps the choice through restart and resume, and its subagents inherit it. Inside the mount view a Codex agent runs with its own command sandbox off (`--sandbox danger-full-access`); host mode leaves it on.
 

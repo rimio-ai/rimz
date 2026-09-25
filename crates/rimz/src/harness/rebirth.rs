@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
-use crate::config::{Isolation, MachineConfig, ProfilesConfig, TeamsConfig};
+use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths, cache_home};
 use crate::harness::resume::{
     MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, ResumePlan, plan_resume_detailed,
@@ -313,13 +313,7 @@ fn inspect_at(
     } else {
         RecoveryPlan::default()
     };
-    let resumed = planned.resumed_keys();
-    let requires_sandbox = audit.as_ref().is_some_and(|(_, projection)| {
-        projection.agents.iter().any(|agent| {
-            resumed.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-                && agent.isolation.unwrap_or(machine.agents.isolation) == Isolation::Sandbox
-        })
-    });
+    let requires_sandbox = planned.requires_sandbox(machine.agents.isolation);
     let empty_tabs = empty_named_channel_tabs(&paths);
     Ok(RebirthPlan {
         paths,

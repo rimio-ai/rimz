@@ -442,6 +442,7 @@ impl Store {
         pane_id: &crate::ids::PaneId,
         runtime_owner: RuntimeOwner,
         isolation: Option<crate::config::Isolation>,
+        effective_isolation: Option<crate::config::Isolation>,
     ) -> Result<()> {
         self.commit(|txn| {
             txn.append(&EventEnvelope::agent_attached(
@@ -451,6 +452,7 @@ impl Store {
                 AgentAttachPayload {
                     agent_id: agent_id.clone(),
                     isolation,
+                    effective_isolation,
                     launch_id: launch_id.cloned(),
                     pane_id: pane_id.clone(),
                     pane_pid: Some(std::process::id()),

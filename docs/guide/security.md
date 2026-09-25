@@ -80,7 +80,7 @@ It also switches one off, deliberately. A provider's own command sandbox would s
 
 The `/tmp` the view mounts is one directory for the whole room, so what one agent writes there its siblings can read. It is the room's own directory rather than the host's, and closing the room removes it; `rimz paths` prints where it sits ([reference](../reference/cli/paths.md)).
 
-To stop using the view, run `rimz config set agents.isolation host` and restart the agents that follow machine policy. An agent launched with an explicit `--isolation sandbox` keeps its own view until you replace it: stop it, then [`rimz agents <spec> --resume --isolation host`](../reference/cli/agents.md#resume-a-cohort) keeps its conversation and drops the override for later relaunches and children. Profile `skills` lists can stay where they are, since host mode ignores them.
+To stop using the view, run `rimz config set agents.isolation host` and restart the agents that follow machine policy. A profile with `isolation: sandbox` still chooses the view; edit that default or override it for the launch. An agent launched with an explicit `--isolation sandbox` keeps its own view until you replace it: stop it, then [`rimz agents <spec> --resume --isolation host`](../reference/cli/agents.md#resume-a-cohort) keeps its conversation and records host isolation for later relaunches and children. Profile `skills` lists can stay where they are, since host mode ignores them.
 
 ## The Zellij presence plugin
 

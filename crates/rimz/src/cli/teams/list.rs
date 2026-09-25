@@ -593,7 +593,7 @@ fn live_instances(
         let isolation = unique_value(
             members
                 .iter()
-                .map(|agent| Some(agent.isolation.unwrap_or(catalog.isolation))),
+                .map(|agent| Some(agent.runs_in(catalog.isolation))),
         )
         .unwrap_or(catalog.isolation);
         let mut members = members

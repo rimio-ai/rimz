@@ -18,6 +18,7 @@ struct Resolved {
 pub(super) fn empty_profile(kind: &str) -> Profile {
     Profile {
         agent: kind.to_owned(),
+        isolation: None,
         skills: None,
         description: None,
         subagents: None,
@@ -283,6 +284,7 @@ impl Resolver<'_> {
             self.skills,
         )?;
         let defaults = agents::definition_defaults(kind, fm.model.as_deref());
+        profile.isolation = fm.isolation;
         profile.mode = fm.mode.or(defaults.mode);
         profile.model = fm
             .model

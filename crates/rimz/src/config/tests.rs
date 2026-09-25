@@ -1808,3 +1808,19 @@ fn lenient_definitions_collect_all_errors_and_post_load_validation_failure() {
     );
     assert_eq!(config.notices.definition_errors[2].path, dir.path());
 }
+#[test]
+fn isolation_resolution_precedence() {
+    use super::Isolation::{self, Host, Sandbox};
+    for (flag, profile, machine, expected) in [
+        (None, None, Host, Host),
+        (None, None, Sandbox, Sandbox),
+        (None, Some(Host), Sandbox, Host),
+        (None, Some(Sandbox), Host, Sandbox),
+        (Some(Host), Some(Sandbox), Sandbox, Host),
+        (Some(Sandbox), Some(Host), Host, Sandbox),
+        (Some(Host), None, Sandbox, Host),
+        (Some(Sandbox), None, Host, Sandbox),
+    ] {
+        assert_eq!(Isolation::resolve(flag, profile, machine), expected);
+    }
+}
