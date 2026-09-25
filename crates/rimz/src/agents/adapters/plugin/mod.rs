@@ -390,6 +390,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     plan: leak_strings(&launch.permission_args.plan),
                 },
                 max_turn_flag: None,
+                interrupt_key: None,
                 compact_command: launch.compact_command.as_ref().map(|command| {
                     super::CompactCommand {
                         command: leak_string(command.clone()),

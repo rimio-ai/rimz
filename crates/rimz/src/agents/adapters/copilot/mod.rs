@@ -111,6 +111,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--plan"],
         },
         max_turn_flag: None,
+        interrupt_key: None,
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,

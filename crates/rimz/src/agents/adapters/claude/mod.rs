@@ -157,6 +157,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--permission-mode", "plan"],
         },
         max_turn_flag: Some("--max-turns"),
+        interrupt_key: Some(crate::pane::keys::NamedKey::Escape),
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Trailing,

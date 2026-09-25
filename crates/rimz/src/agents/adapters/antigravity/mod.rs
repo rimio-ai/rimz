@@ -211,6 +211,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--mode", "plan"],
         },
         max_turn_flag: None,
+        interrupt_key: None,
         compact_command: None,
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
