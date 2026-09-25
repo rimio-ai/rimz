@@ -1,6 +1,6 @@
 # RimZ-owned worktrees
 
-> The life of a RimZ-owned Git worktree: the ownership marker, creation and seeding, the proof that a branch's work landed, and every path that removes a tree. The domain code is [`worktree.rs`](../../../crates/rimz/src/worktree.rs) and its four private submodules; [fleet.md](./fleet.md) maps the harness around it. Users read [cli/worktree.md](../../reference/cli/worktree.md) for the commands and the [worktrees guide](../../guide/worktrees.md) for the workflow.
+> The life of a RimZ-owned Git worktree: the ownership marker, creation and seeding, the proof that a branch's work landed, and every path that removes a tree. The domain code is [`worktree.rs`](../../../crates/rimz/src/worktree.rs) and its five private submodules; [fleet.md](./fleet.md) maps the harness around it. Users read [cli/worktree.md](../../reference/cli/worktree.md) for the commands and the [worktrees guide](../../guide/worktrees.md) for the workflow.
 
 A managed worktree is one Git checkout of the repository on its own branch whose whole life RimZ runs: it creates the tree for a line of work, seeds it with the untracked files an agent needs, and reclaims it once the work has landed. The tree's name is also a [channel](./messaging.md#channels), so `@coder#feat-a` addresses the agent working inside it.
 
@@ -35,6 +35,7 @@ Creation writes the marker once, and reusing a tree keeps the marker it finds, s
 | [`worktree/pr.rs`](../../../crates/rimz/src/worktree/pr.rs) | `--from-pr`: strategy selection, head resolution through the forge CLI, fork push wiring, PR ref fetching. |
 | [`worktree/include.rs`](../../../crates/rimz/src/worktree/include.rs) | `.worktreeinclude` copying and its containment rules. |
 | [`worktree/link.rs`](../../../crates/rimz/src/worktree/link.rs) | `.worktreelink` directory symlinks. |
+| [`worktree/hooks.rs`](../../../crates/rimz/src/worktree/hooks.rs) | Machine-local lifecycle command execution and bounded failure tails. |
 | [`worktree/exclude.rs`](../../../crates/rimz/src/worktree/exclude.rs) | `info/exclude` registration for linked directories and team scratch patterns. |
 | [`cli/worktree.rs`](../../../crates/rimz/src/cli/worktree.rs) | The `rimz worktree` commands and the hidden `cleanup` helper. |
 | [`cli/worktree_protection.rs`](../../../crates/rimz/src/cli/worktree_protection.rs) | Gathering pane and agent facts for each removal caller. |
@@ -47,15 +48,36 @@ The domain module runs Git through `crate::proc::git_command` with `LC_ALL=C` an
 
 ## Creating a worktree
 
-`create` and `create_from_pr` walk the same five steps.
+`create` and `create_from_pr` walk the same six steps.
 
 1. **Resolve the name.** A requested name is validated per `/`-separated segment (ASCII alphanumerics, `_`, `-`). A `/` names the branch directly while the directory and channel take the dashed spelling: `feat/login` gives branch `feat/login` in directory `feat-login`. `--branch` overrides the derived branch without changing the directory. An omitted name becomes an adjective-noun pair derived from a UUIDv7; each retry mixes the attempt number into that seed and adds it as a suffix, for up to 64 attempts until the directory is unused. A PR tree's omitted name is `pr-<N>`.
 2. **Resolve the base.** [`WorktreeConfig`](../../../crates/rimz/src/config/worktree.rs) carries the per-machine `dir` template (default `../{repo}-worktrees`, where `{repo}` is the repository basename and a relative template resolves from the repository root) and `base`. `head` (the default) branches from `HEAD`, `fresh` from `origin/HEAD`, and any other value is a literal ref. The base resolves to a commit for `base_ref`; `base_branch` records the current branch for `head`, the `origin/HEAD` target for `fresh`, and the branch a literal ref names. A PR tree ignores `base` and records the trunk ([from a pull request](#from-a-pull-request)).
 3. **Add the tree.** `git worktree add` runs in one of three shapes: `-b <branch> <path> <base>` for a new branch, `--track -b <branch> <path> origin/<branch>` for a same-repository PR head, and `add <path> <branch>` for an existing local branch already fast-forwarded to the PR head.
 4. **Write the marker.** A temp-file-plus-rename into the Git admin directory. Ownership begins here, so a failure at this step leaves an ordinary unmanaged Git worktree.
 5. **Seed the tree.** `.worktreeinclude` copies, then `.worktreelink` symlinks, both best-effort ([seeding](#seeding-worktreeinclude-and-worktreelink)).
+6. **Run the created hook.** `finish_worktree` waits for the configured command after seeding. Failure rolls back through `remove_marked_worktree(force = true)` and returns `WorktreeErr::CreatedHook` ([lifecycle hooks](#lifecycle-hooks)).
 
 A launch that names an existing marked tree reuses it; `rimz worktree new` refuses with `Exists`. A reused tree is never re-seeded, and `CreatedWorktree` reports zero included and linked counts so the CLI prints no seeding lines. `rimz worktree new` also refuses a name a named channel already holds (`channel::ensure_worktree_name_available`) and, after creation, archives any messages left in that channel with the reason `channel recreated`.
+
+### Lifecycle hooks
+
+[`WorktreeHooks`](../../../crates/rimz/src/config/worktree.rs) carries the optional commands from machine config. Validation refuses blank commands both on config load and at lifecycle entrypoints, since launch config loading is lenient. Project config neither overrides the machine hooks nor includes them in its executable-surface hash. Seed manifests remain non-executing. The [guide](../../guide/worktrees.md#prepare-the-tree-with-a-hook) owns the command and environment contract.
+
+There are exactly two fire sites: `finish_worktree` calls `hooks::run_hook` with `WorktreeHookEvent::Created` after marker, includes, and links; `remove_marked_worktree` calls it with `Removed` after successful Git removal and before branch deletion. Reuse never enters `finish_worktree`. Rollback uses the same removal funnel, so it also fires `removed` to undo partial setup. Skips, refused removals, and dry-run sweeps never reach the removal fire site.
+
+`hooks::run_hook` returns immediately when no command is configured, without spawning. Otherwise it uses `sh -c`, null stdin, and `proc::run_bounded_output`: captured stdout and stderr, a separate process group, and a ten-minute deadline that includes output draining after the direct child exits. Timeout kills the group. The runner overrides the five contract environment variables from the marker and leaves the rest inherited. A failure tail is bounded to the last 4096 bytes and 20 lines per stream; successful output is discarded.
+
+`WorktreeErr::CreatedHook` carries the hook failure and rollback outcome together: `tree removed`, or `rollback failed: <error>`, followed by the config key to fix. Ordinarily a fresh tree remains marked iff its configured `created` hook succeeded. A failed rollback is the exception: a locked tree can remain marked, and a later named launch reuses it without retrying the hook. `worktree/tests.rs::failed_created_hook_reports_rollback_failure` pins that case; no hook state is stored in the marker. Pre-existing trees are not retroactively initialized.
+
+`removed` failures only emit `tracing::warn!` and do not change the removal result. Detached wrapper cleanup has null stdio and garbage collection can run unattended, so this is best-effort teardown, not a promise that a person sees the warning. Domain code prints no report; `cli/worktree.rs::report_created` owns the success line for `new`.
+
+### Who triggers creation
+
+- `cli/worktree.rs::new_worktree` calls `create` or `create_from_pr` directly, without reuse or a launch.
+- `cli/agents_cmd/launch.rs::launch_layout` routes agent layouts and teams through `cli::resolve_launch_checkout`, then the domain resolver. Cohort reconciliation can remove a landed tree before this path recreates it.
+- `cli/supervised/run.rs` uses the same resolver for `-p` runs, including scheduled loop launches. Hook failure precedes agent launch-batch and run-record creation, so no pane or launch row is created. The loop caller routes that error through `cli/loop_cmd/run.rs::record_task_error` to `TaskFire::finish_error`, which records `LoopRunResult::Errored` with the error text.
+
+Both domain creation entrypoints converge on `add_worktree` and `finish_worktree`, including the same-repository and fetched PR strategies in `worktree/pr.rs`. A reused tree skips seeding and hooks regardless of the caller.
 
 ### Which repository a launch uses
 
@@ -201,9 +223,9 @@ Cohort relaunch assesses against an empty protection set, because it has already
 
 ### Branch deletion and retirement
 
-Removal is `git worktree remove` followed by branch deletion, both run from the repository root. `remove_marked_worktree` first moves the process out of the checkout when its cwd is inside it.
+Removal is `git worktree remove`, the optional [`removed` hook](#lifecycle-hooks), then branch deletion, all run from the repository root. `remove_marked_worktree` first moves the process out of the checkout when its cwd is inside it.
 
-Branch deletion re-runs the landed proof instead of trusting Git's merge check. It tries `git branch -d`; a branch already gone counts as deleted; a "not merged" refusal escalates to `-D` only when `content_landed` passes against the marker's comparison ref, and otherwise returns `BranchDeletion::KeptUnmerged` so the CLI can say the branch survived. A forced removal skips the proof and deletes with `-D` directly, so an unlanded branch goes with it and no `KeptUnmerged` notice appears. Two paths force: `worktree remove --force` and the `remove` answer to the wrapper's dirty prompt.
+Branch deletion re-runs the landed proof instead of trusting Git's merge check. It tries `git branch -d`; a branch already gone counts as deleted; a "not merged" refusal escalates to `-D` only when `content_landed` passes against the marker's comparison ref, and otherwise returns `BranchDeletion::KeptUnmerged` so the CLI can say the branch survived. A forced removal skips the proof and deletes with `-D` directly, so an unlanded branch goes with it and no `KeptUnmerged` notice appears. Three paths force: `worktree remove --force`, the `remove` answer to the wrapper's dirty prompt, and rollback after a failed `created` hook.
 
 After Git removal succeeds, `retire_removal` runs two durable effects: it ends the store sessions bound to that path or branch, and archives the worktree channel's messages. Both run even when the first fails, and both results return in a `#[must_use]` `RemovalRetirement`, because the Git removal is already irreversible and one failure must not hide the other. `worktree remove` and cohort reconciliation fail the command on either error; wrapper cleanup logs both at debug level; `sweep` and `gc` warn on session retirement and report archival failures per tree.
 
@@ -211,7 +233,7 @@ Attribution resolves lane lifetimes from the checkout at read time (`worktree::l
 
 ## Who triggers removal
 
-Four callers reach the removal path.
+Five callers reach the removal path, in addition to failed-creation rollback in `finish_worktree`.
 
 **`rimz worktree remove <name>`** is the explicit one: it resolves the marked tree under the configured directory, assesses it with explicit-removal facts, and removes it.
 
@@ -230,6 +252,8 @@ Cleanup runs `rimz worktree cleanup <path>` through `reload::current_reexec_targ
 
 **Cohort relaunch** handles a team or multi-agent layout launched with `-w <name>` into a tree that already exists, as described under [the assessment](#the-assessment).
 
+**Supervised retry cleanup** in `cli/supervised/run.rs` defers wrapper cleanup while retries remain and calls `cli/worktree.rs::cleanup_worktree` after the run settles. That helper loads machine config and reaches `remove_marked_worktree` through `remove_for_cleanup`, so retry teardown uses the same hooks as wrapper cleanup.
+
 ## Invariants worth preserving
 
 - Read the marker before acting. An unmarked checkout is the user's.
@@ -237,5 +261,6 @@ Cleanup runs `rimz worktree cleanup <path>` through `reload::current_reexec_targ
 - Prove a landing. Ancestry counts, branch names, and sidebar state are hints, and every uncertain answer keeps the tree.
 - Keep refusals in the domain. A command may name the holder; it may not decide removal safety itself.
 - Keep seeding best-effort and non-executing. A launch never fails because a glob missed, and neither seed file may gain the power to run a command without entering the trust hash.
+- For fresh trees with a configured `created` hook, a tree remains marked iff the hook succeeded, except when rollback itself fails and the error reports it. Hooks are machine config, never seed-file commands; reuse never retries them.
 - Add marker fields as `#[serde(default)]` options, so an older tree still cleans up after an upgrade.
 - Keep the sidebar's marker read on `read_marker_from_checkout_metadata`, off `git rev-parse`.

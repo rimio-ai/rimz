@@ -599,6 +599,15 @@ base = "head"
 
 `base` is the ref a new branch starts from. `head` (the default) branches from the main checkout's `HEAD`, `fresh` branches from `origin/HEAD`, and any other string is handed to Git as a ref. Both defaults read the main checkout, even when you run the command from one of its linked worktrees, so a tree created from inside another tree still branches off the main checkout's `HEAD` rather than that tree's.
 
+For machine-specific setup that needs a command rather than a file copy, two optional keys live under `[agents.worktree.hooks]`:
+
+| Key | Default | Value |
+| --- | --- | --- |
+| `created` | unset | A `sh -c` command to prepare each fresh tree after seeding. |
+| `removed` | unset | A `sh -c` command to clean up after each tree is removed. |
+
+Empty or whitespace-only commands are refused; remove a key to disable it. Both are settable and gettable with `rimz config set|get agents.worktree.hooks.created` or `agents.worktree.hooks.removed`. The [hook workflow](./worktrees.md#prepare-the-tree-with-a-hook) covers ordering, failures, and the script environment.
+
 Seeding files into a new worktree and sharing directories by symlink are repo-level concerns that ride on committed files; they are in the [worktrees guide](./worktrees.md).
 
 ### Team signal bindings
