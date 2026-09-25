@@ -8,11 +8,10 @@ use tracing::warn;
 
 use super::{MessageRecord, MessageStatus};
 use crate::disk::atomic;
+use crate::disk::retention::{HISTORY_KEEP_RECORDS, HISTORY_MAX_BYTES};
 
 const QUEUE_FILE: &str = "messages.jsonl";
 const HISTORY_FILE: &str = "history.jsonl";
-const HISTORY_MAX_BYTES: u64 = 512 * 1024;
-const HISTORY_KEEP_RECORDS: usize = 500;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MessageStoreErr {

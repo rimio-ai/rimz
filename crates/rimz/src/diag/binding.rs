@@ -8,9 +8,9 @@
 use std::path::PathBuf;
 
 use crate::disk::paths::RuntimePaths;
+use crate::disk::retention::ROTATING_LOG_MAX_BYTES as BINDING_LOG_MAX_BYTES;
 
 const BINDING_LOG_NAME: &str = "binding.log.jsonl";
-const BINDING_LOG_MAX_BYTES: u64 = 1_048_576;
 
 fn path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join(BINDING_LOG_NAME)

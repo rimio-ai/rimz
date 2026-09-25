@@ -12,6 +12,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::disk::retention::ROTATING_LOG_MAX_BYTES as NOTIFY_LOG_MAX_BYTES;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, WorkspaceId};
 
 const NOTIFY_TRACE_SCHEMA_VERSION: &str = "rimz.notify_trace.v1";
@@ -133,7 +134,6 @@ pub struct TraceAgent {
 }
 
 const NOTIFY_LOG_NAME: &str = "notify.log.jsonl";
-const NOTIFY_LOG_MAX_BYTES: u64 = 1_048_576;
 
 pub(super) fn append(state_root: &Path, record: &NotifyTraceEnvelope) {
     crate::disk::rotating::append(

@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::disk::retention::ROTATING_LOG_MAX_BYTES as PLUGIN_PRESENCE_LOG_MAX_BYTES;
+
 const PLUGIN_PRESENCE_LOG_NAME: &str = "plugin-presence.log.jsonl";
-const PLUGIN_PRESENCE_LOG_MAX_BYTES: u64 = 1_048_576;
 pub(crate) const WASM_PAGE_BYTES: u64 = 65_536;
 
 /// Why the plugin's most recent wake failed, as the host itself reported it on

@@ -7,6 +7,7 @@ pub mod atomic;
 pub mod lock;
 pub(crate) mod parse_cache;
 pub mod paths;
+pub mod retention;
 pub(crate) mod rotating;
 pub(crate) mod single_flight;
 pub mod summary;

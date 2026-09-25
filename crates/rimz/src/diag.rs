@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::diag::notify::{NotifyTraceEnvelope, NotifyTraceEvent};
 use crate::diag::record::{DiagEnvelope, DiagEvent};
+use crate::disk::retention::{DIAG_FRAME_RING, ROTATING_LOG_MAX_BYTES as DIAG_LOG_MAX_BYTES};
 use crate::ids::{SidebarInstanceId, WorkspaceId};
 
 pub mod binding;
@@ -23,9 +24,7 @@ pub mod plugin_presence;
 pub mod record;
 
 const DIAG_LOG_NAME: &str = "diag.log.jsonl";
-const DIAG_LOG_MAX_BYTES: u64 = 1_048_576;
 const DIAG_FRAMES_DIR: &str = "diag-frames";
-const DIAG_FRAME_RING: usize = 8;
 /// The one diagnostics rate-limit window, applied per [`DiagEvent::identity_key`]
 /// so per-tick repeats on one subject collapse into periodic records carrying
 /// their suppressed count while a fault on a different subject reports now.

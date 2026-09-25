@@ -237,7 +237,8 @@ allowed-dependencies = [
 # `holds_rimz_home` keeps the home out of project-marker and trust lookups.
 # The runtime pipeline cache path joins the sidebar cache paths.
 # Room entry asks for the legacy roots that can hold config, doctor for all of them.
-surface-budget = 160
+# Room writers and collectors share retention policy below store and diagnostics.
+surface-budget = 174
 
 [[module]]
 path = "crates/rimz/src/forge"

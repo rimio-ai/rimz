@@ -13,12 +13,12 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::disk::paths::{StatePaths, rimz_home, workspaces_dir_under};
+use crate::disk::retention::TRANSCRIPT_FILE_DAYS as FILE_DAYS;
 use crate::disk::{atomic, lock};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::ids::{AskId, compose_channel};
 use crate::workspace::{KnownWorkspace, known_workspaces_under};
 
-const FILE_DAYS: u32 = 7;
 const SECONDS_PER_DAY: i64 = 86_400;
 
 pub const HARNESS_FROM: &str = "rimz";
