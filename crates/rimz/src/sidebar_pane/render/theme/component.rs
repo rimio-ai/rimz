@@ -43,6 +43,8 @@ pub(crate) enum Component {
     /// A completed pipeline stage — the passed dots and the `Done` seal alike;
     /// stage completion in its own right, not a borrowed agent status.
     PipelinePassed,
+    /// A hollow future dot for a stage this run already entered: shape says not done, tone says been there.
+    PipelineRevisited,
     /// The `#N` linked-PR badge after a worktree name — steady cool link tone;
     /// state stays on the right marker.
     WorktreePrBadge,
@@ -125,6 +127,7 @@ impl Component {
         Component::WorktreeQualifier,
         Component::TeamLabel,
         Component::PipelinePassed,
+        Component::PipelineRevisited,
         Component::WorktreePrBadge,
         Component::BranchDelta,
         Component::WorktreePristine,
@@ -169,7 +172,9 @@ impl Component {
             ProcMem | CacheRead | RemoteControl | WorktreeCiPassing | PipelinePassed => {
                 palette.good
             }
-            WorktreeReconciling | Compaction | WorktreeCiPending => palette.warn,
+            WorktreeReconciling | Compaction | WorktreeCiPending | PipelineRevisited => {
+                palette.warn
+            }
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }

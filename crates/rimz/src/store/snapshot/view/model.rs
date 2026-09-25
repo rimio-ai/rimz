@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -160,7 +160,12 @@ pub struct SidebarPipeline {
     pub stage: String,
     pub owner: Option<String>,
     pub started_at: Option<jiff::Timestamp>,
+    /// Start of the open visit to the board stage; absent when the ledger's open stage differs.
     pub stage_started_at: Option<jiff::Timestamp>,
+    #[serde(default)]
+    pub stage_prior_secs: u64,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub visited: BTreeSet<String>,
     pub done_at: Option<jiff::Timestamp>,
 }
 
@@ -182,8 +187,7 @@ impl SidebarPipeline {
             .map_or(PipelinePosition::Undeclared, PipelinePosition::At)
     }
 
-    /// Time in the current stage; `None` at `Done`, where only the run total
-    /// has meaning.
+    /// Accumulated time in the current stage; `None` without an open visit or at `Done`.
     pub fn span_secs(&self, now: jiff::Timestamp) -> Option<u64> {
         if self.position() == PipelinePosition::Done {
             return None;
@@ -192,7 +196,7 @@ impl SidebarPipeline {
         if start > now {
             return None;
         }
-        u64::try_from(now.duration_since(start).as_secs()).ok()
+        Some(self.stage_prior_secs + u64::try_from(now.duration_since(start).as_secs()).ok()?)
     }
 
     pub fn total_secs(&self, now: jiff::Timestamp) -> Option<u64> {
@@ -567,6 +571,8 @@ mod tests {
             owner: Some("coder".to_owned()),
             started_at: Some(jiff::Timestamp::from_second(100).unwrap()),
             stage_started_at: Some(jiff::Timestamp::from_second(120).unwrap()),
+            stage_prior_secs: 0,
+            visited: BTreeSet::new(),
             done_at: None,
         }
     }
@@ -614,6 +620,36 @@ mod tests {
         assert_eq!(run.span_secs(now), Some(0));
         run.stage_started_at = None;
         assert_eq!(run.span_secs(now), None);
+    }
+
+    #[test]
+    fn pipeline_span_accumulates_closed_visits_only_with_an_open_visit() {
+        let now = jiff::Timestamp::from_second(200).unwrap();
+        let mut run = pipeline("Implement");
+        run.stage_prior_secs = 60;
+        assert_eq!(run.span_secs(now), Some(140));
+        run.stage_started_at = Some(jiff::Timestamp::from_second(201).unwrap());
+        assert_eq!(run.span_secs(now), None);
+        run.stage_started_at = None;
+        assert_eq!(run.span_secs(now), None);
+        run.stage_started_at = Some(now);
+        run.stage = "Done".to_owned();
+        assert_eq!(run.span_secs(now), None);
+    }
+
+    #[test]
+    fn pipeline_reads_older_cache_without_visit_fields() {
+        let mut value = serde_json::to_value(pipeline("Implement")).unwrap();
+        value.as_object_mut().unwrap().remove("stage_prior_secs");
+        value.as_object_mut().unwrap().remove("visited");
+        let decoded = serde_json::from_value::<SidebarPipeline>(value);
+        assert!(decoded.is_ok(), "{decoded:?}");
+        let decoded = decoded.unwrap();
+        assert_eq!(decoded.stage_prior_secs, 0);
+        assert!(decoded.visited.is_empty());
+        let encoded = serde_json::to_value(decoded).unwrap();
+        assert_eq!(encoded["stage_prior_secs"], 0);
+        assert!(encoded.get("visited").is_none());
     }
 
     #[test]

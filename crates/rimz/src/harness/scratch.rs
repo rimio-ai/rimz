@@ -1,5 +1,6 @@
 //! Shared team memory-file discovery and advisory blackboard stage parsing.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -103,7 +104,12 @@ pub struct BoardStage {
 pub(crate) struct BoardRun {
     pub stage: BoardStage,
     pub started_at: Option<Timestamp>,
+    /// Start of the open visit to the board stage; absent when the ledger's open stage differs.
     pub stage_started_at: Option<Timestamp>,
+    /// Whole seconds of earlier, closed visits to the board stage in this run.
+    pub stage_prior_secs: u64,
+    /// Every stage entered in this run, including Done.
+    pub visited: BTreeSet<String>,
     pub done_at: Option<Timestamp>,
 }
 
@@ -118,9 +124,12 @@ fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
         stage: parse_board_stage(board)?,
         started_at: None,
         stage_started_at: None,
+        stage_prior_secs: 0,
+        visited: BTreeSet::new(),
         done_at: None,
     };
     let progress = parse_board_sections(board, &["Progress", "Progress log"]);
+    let mut open_visit: Option<(&str, Timestamp)> = None;
     for line in progress.as_deref().unwrap_or_default().lines() {
         let Some(entry) = line.strip_prefix("- ") else {
             continue;
@@ -150,9 +159,6 @@ fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
         let Some(at) = parse_progress_stamp(stamp, zone) else {
             continue;
         };
-        if to == run.stage.name && from != Some(to) {
-            run.stage_started_at = Some(at);
-        }
         // A `Done -> Done` re-flip neither restarts the run nor moves its end.
         let leaves_done = from == Some(DONE_STAGE) && to != DONE_STAGE;
         let enters_done = from != Some(DONE_STAGE) && to == DONE_STAGE;
@@ -162,7 +168,25 @@ fn parse_board_run(board: &str, zone: &TimeZone) -> Option<BoardRun> {
         if enters_done && run.stage.name == DONE_STAGE {
             run.done_at = Some(at);
         }
+        if from == Some(to) {
+            continue;
+        }
+        if leaves_done {
+            run.visited.clear();
+            run.stage_prior_secs = 0;
+            open_visit = None;
+        }
+        if let Some((stage, start)) = open_visit
+            && stage == run.stage.name
+        {
+            run.stage_prior_secs += u64::try_from(at.duration_since(start).as_secs()).unwrap_or(0);
+        }
+        open_visit = Some((to, at));
+        run.visited.insert(to.to_owned());
     }
+    run.stage_started_at = open_visit
+        .filter(|(stage, _)| *stage == run.stage.name)
+        .map(|(_, at)| at);
     Some(run)
 }
 
@@ -271,10 +295,9 @@ mod tests {
                 let run = parse_board_run(&board, &zone).unwrap();
                 assert_eq!(run.started_at, Some(first));
                 assert_eq!(run.done_at, (stage == "Done").then_some(finish));
-                assert_eq!(
-                    run.stage_started_at,
-                    Some(if stage == "Done" { finish } else { first })
-                );
+                assert_eq!(run.stage_prior_secs, if stage == "Plan" { 128 } else { 0 });
+                assert_eq!(run.visited, ["Plan", "Done"].map(str::to_owned).into());
+                assert_eq!(run.stage_started_at, (stage == "Done").then_some(finish));
             }
         }
         let board = format!(
@@ -287,12 +310,119 @@ mod tests {
         );
         assert_eq!(run.done_at, Some("2026-09-12T08:37:10Z".parse().unwrap()));
         assert_eq!(run.stage_started_at, run.done_at);
+        assert_eq!(run.stage_prior_secs, 0);
+        assert_eq!(run.visited, ["Plan", "Done"].map(str::to_owned).into());
         let board = "Stage: Implement\n## Progress\n- 2026-09-12 14:02 @user: opened Plan\n- 2026-09-12 14:03 @planner: Plan -> Implement\n- 2026-09-12 14:04 @coder: Implement -> Review\n- 2026-09-12 14:05 @reviewer: Review -> Implement";
         let run = parse_board_run(board, &zone).unwrap();
         assert_eq!(
             run.stage_started_at,
             Some("2026-09-12T08:35:00Z".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn board_run_accumulates_visits_inside_the_run_window() {
+        for (transitions, prior, visited, open_minute, start_minute) in [
+            (vec!["opened Implement"], 0, vec!["Implement"], 0, 0),
+            (
+                vec![
+                    "opened Plan",
+                    "Plan -> Implement",
+                    "Implement -> Review",
+                    "Review -> Implement",
+                ],
+                60,
+                vec!["Plan", "Implement", "Review"],
+                3,
+                0,
+            ),
+            (
+                vec![
+                    "opened Plan",
+                    "Plan -> Implement",
+                    "Implement -> Review",
+                    "Review -> Submit",
+                    "Submit -> Implement",
+                ],
+                60,
+                vec!["Plan", "Implement", "Review", "Submit"],
+                4,
+                0,
+            ),
+            (
+                vec![
+                    "opened Plan",
+                    "Plan -> Implement",
+                    "Implement -> Plan",
+                    "Plan -> Implement",
+                ],
+                60,
+                vec!["Plan", "Implement"],
+                3,
+                0,
+            ),
+            (
+                vec![
+                    "opened Implement",
+                    "Implement -> Review",
+                    "Review -> Done",
+                    "Done -> Plan",
+                    "Plan -> Implement",
+                ],
+                0,
+                vec!["Plan", "Implement"],
+                4,
+                3,
+            ),
+            (
+                vec!["opened Implement", "Implement -> Implement"],
+                0,
+                vec!["Implement"],
+                0,
+                0,
+            ),
+        ] {
+            let ledger = transitions
+                .iter()
+                .enumerate()
+                .map(|(minute, transition)| {
+                    format!("- 2026-09-12 14:{minute:02}:00 @user: {transition}\n")
+                })
+                .collect::<String>();
+            let run = parse_board_run(
+                &format!("Stage: Implement\n## Progress\n{ledger}"),
+                &TimeZone::UTC,
+            )
+            .unwrap();
+            let stamp = |minute| {
+                format!("2026-09-12T14:{minute:02}:00Z")
+                    .parse::<Timestamp>()
+                    .unwrap()
+            };
+            assert_eq!(
+                run.visited,
+                visited.into_iter().map(str::to_owned).collect(),
+                "{ledger}"
+            );
+            assert_eq!(run.stage_prior_secs, prior, "{ledger}");
+            assert_eq!(run.stage_started_at, Some(stamp(open_minute)), "{ledger}");
+            assert_eq!(run.started_at, Some(stamp(start_minute)), "{ledger}");
+            let now = stamp(10);
+            assert!(
+                prior
+                    + u64::try_from(now.duration_since(run.stage_started_at.unwrap()).as_secs())
+                        .unwrap()
+                    <= u64::try_from(now.duration_since(run.started_at.unwrap()).as_secs())
+                        .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn board_run_negative_visit_contributes_zero() {
+        let run = parse_board_run("Stage: Plan\n## Progress\n- 2026-09-12 14:02 @user: opened Plan\n- 2026-09-12 14:01 @user: Plan -> Review\n- 2026-09-12 14:03 @user: Review -> Plan", &TimeZone::UTC).unwrap();
+        assert_eq!(run.visited, ["Plan", "Review"].map(str::to_owned).into());
+        assert_eq!(run.stage_prior_secs, 0);
     }
 
     #[test]

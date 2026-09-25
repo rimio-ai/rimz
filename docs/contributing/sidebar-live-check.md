@@ -147,6 +147,15 @@ This is the first `Review` frame read from the watched tmux consumer `tmux:%3`:
                                        ? for help
 ```
 
+**2c.** Keep the consumer watched and record the earlier Build duration from the board ledger. Run the card's Flip with `Build` in place of `Review`, then repeat Capture until the first Build frame. Record the adoption latency and stage / total clock. The Review dot must now be hollow and warm (`warn`), and the stage clock must resume Build's earlier duration plus the time since the return, not restart at zero. Add `--ansi` to Capture to retain the dot's color; a plain capture cannot prove tone. Flip back to `Review` before continuing checks 3 and 4.
+
+The 2026-09-25 flip-back check used `env -u NO_COLOR cargo xtask sandbox room --mux <backend> --for 15m` with the testkit build. Both ANSI captures retained a hollow Review dot with foreground `38;2;224;175;104` (the warm tone). Earlier Build time below is the ledger interval, also confirmed by the published `stage_prior_secs`; the clock and adoption latency were read from the watched consumer, not inferred from publication.
+
+| Backend | Watched consumer | Earlier Build time | Review -> Build adoption | First resumed stage / total |
+| --- | --- | --- | --- | --- |
+| tmux | `tmux:%3` | 58 s | 1409 ms | `59s / 1m` |
+| Zellij | `zellij:terminal_0` | 65 s | 2034 ms | `1m / 1m` |
+
 ### 3. Adoption on each tab
 
 For every Sidebar block, run its Look, then its Capture — repeating the Capture if the first frame is still the pre-Look one. Each tab must show `Review` within 5 s of Look. In the recorded runs the first capture already carried it: tmux at `22 ms`, `24 ms`, `24 ms` and `26 ms` after Look, Zellij at `38 ms` and `28 ms`. The third Zellij pane still showed `Build` at `22 ms` and carried `Review` on the next capture, which is what the repeat is for.
