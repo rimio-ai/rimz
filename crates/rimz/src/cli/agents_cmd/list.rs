@@ -111,9 +111,11 @@ pub(crate) fn render_agents_table(
     let identity = super::report::SelfIdentity::from_env();
     let me = identity.resolve(snapshot);
     let glyph = theme_glyphs(theme);
-    let mut table = render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"])
-        .right(&[3, 4, 5])
-        .max_width(max_width);
+    let mut table = render::Table::new([
+        "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE",
+    ])
+    .right(&[5, 6, 7])
+    .max_width(max_width);
     for group in groups {
         table.section_cells(group_header_cells(&group, snapshot, &glyph));
         let pr = group_pr(snapshot, &group.key).and_then(pr_info);
@@ -239,6 +241,8 @@ fn agent_row(agent: &AgentReportEntry, now: jiff::Timestamp) -> Vec<render::Cell
         .unwrap_or_else(|| "-".to_owned());
     vec![
         render::cell(agent.handle.as_str()).fg(render::palette::identity(agent.kind.as_str())),
+        render::cell(agent.profile.as_deref().unwrap_or("-")).dash(),
+        render::cell(agent.kind.as_str()),
         render::cell(agent.status.as_str()).fg(status_style(agent)),
         model,
         context_cell(agent.context.fill_pct),

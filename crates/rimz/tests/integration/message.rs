@@ -2179,9 +2179,6 @@ fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let delivered = "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\nping";
-    let trace_log = env.project_root.join(trace_name);
-    assert_text_then_enter(&trace_log, delivered);
     let sent = env
         .read_events()
         .into_iter()
@@ -2191,6 +2188,11 @@ fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
     let params = sent.params_value();
     assert_eq!(params["sender"]["origin"], "agent");
     assert_eq!(params["sender"]["kind"], "claude");
+    let sender_name = params["sender"]["name"].as_str().expect("sender petname");
+    let sender_handle = format!("@{sender_name}");
+    let delivered = format!("Type: AGENT_MESSAGE\nFrom: {sender_handle} (claude)\nContent:\nping");
+    let trace_log = env.project_root.join(trace_name);
+    assert_text_then_enter(&trace_log, &delivered);
 
     run_hook_for_owner(
         &env,
@@ -2212,7 +2214,7 @@ fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
                 && entry.entry == rimz::transcript::TranscriptKind::Message
         })
         .expect("receiver message entry");
-    assert_eq!(message.from.as_deref(), Some("@claude"));
+    assert_eq!(message.from.as_deref(), Some(sender_handle.as_str()));
     assert_eq!(message.text, "ping");
 
     let rendered = run_success(
@@ -2220,7 +2222,10 @@ fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
         "receiver transcript",
     );
     let rendered = String::from_utf8_lossy(&rendered.stdout);
-    assert!(rendered.contains("@claude → @codex"), "{rendered}");
+    assert!(
+        rendered.contains(&format!("{sender_handle} → @codex")),
+        "{rendered}"
+    );
 }
 
 #[test]
@@ -2408,7 +2413,7 @@ fn steer_sender_header_ignores_shadowed_co_resident_session() {
     );
     assert_text_then_enter(
         &trace_log,
-        "Type: AGENT_MESSAGE\nFrom: @coder\nContent:\nre-review",
+        "Type: AGENT_MESSAGE\nFrom: @coder (codex)\nContent:\nre-review",
     );
 }
 

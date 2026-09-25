@@ -249,7 +249,7 @@ fn pane_owner_shadows_co_resident_session_from_every_address() {
     };
     assert_eq!(
         message_header(&sender, &peers, Some("main")).as_deref(),
-        Some("Type: AGENT_MESSAGE\nFrom: @coder\nContent:\n")
+        Some("Type: AGENT_MESSAGE\nFrom: @coder (codex)\nContent:\n")
     );
 }
 

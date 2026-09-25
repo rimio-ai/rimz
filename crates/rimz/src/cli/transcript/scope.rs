@@ -169,10 +169,10 @@ pub(super) fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey,
     let mut identities = HashMap::new();
     for entry in entries {
         let candidate = Identity {
-            base_handle: rimz::store::message::identity_handle(
-                &entry.kind,
-                entry.profile.as_deref(),
+            base_handle: rimz::agents::petname::sender_handle(
                 entry.role.as_deref(),
+                entry.name.as_deref(),
+                &entry.kind,
             ),
             channel: entry.channel.clone(),
             name: entry.name.clone(),

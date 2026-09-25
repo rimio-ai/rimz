@@ -16,8 +16,7 @@
 //! `@<kind>-<n>`, `@<petname>`, or a session-id prefix. `@all` is the broadcast
 //! handle, and a pane id (`tmux:%1`, `zellij:terminal_3`) is a precise,
 //! sigil-free, channel-agnostic address. The renderer prefers a unique role,
-//! then an explicit name, then a non-kind profile, then the kind, then an
-//! ordinal, then the petname. Co-resident historical conversations remain
+//! then an explicit name, then a non-kind profile, then the kind, then the petname, then an ordinal. Co-resident historical conversations remain
 //! audit records, but a pane-bearing snapshot exposes one recipient: only the
 //! launch occupant claims live addresses.
 //!
@@ -33,8 +32,9 @@
 use std::collections::BTreeMap;
 
 use crate::agents::AgentState;
+use crate::agents::petname::{sender_handle, sender_label};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
-use crate::store::message::{MessageSender, identity_handle};
+use crate::store::message::MessageSender;
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -1126,14 +1126,7 @@ pub(crate) fn recipient_channel(
 
 /// The canonical rendered address of an agent — the inverse of `parse_target`.
 ///
-/// Returns the shortest mention that names exactly this agent among `peers`: a
-/// role first, then an explicit name, then `@<kind>` when it is the only one of
-/// its kind in scope, else a disambiguator. With `include_channel`, a channelled
-/// agent appends `#<channel>` for ungrouped output and disambiguates within that
-/// channel (an `@<kind>-<ordinal>`, with the petname as the fallback when no
-/// ordinal is set). A grouped handle
-/// (`include_channel = false`) reads under its channel's section header, so it
-/// scopes the same way.
+/// Returns the shortest mention that names exactly this agent among `peers`: role, explicit name, unique profile, unique kind, petname, scoped ordinal, then session ID. With `include_channel`, a channelled agent appends `#<channel>` and disambiguates within that channel. A grouped handle (`include_channel = false`) scopes the same way under its channel's section header.
 ///
 /// A channel-less agent in ungrouped output has no `#<channel>` suffix to scope
 /// it, so it must distinguish itself from *every* same-kind agent: the channel
@@ -1156,8 +1149,7 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
 
 /// The structured header for a human-, agent-, subagent-, or harness-authored message.
 ///
-/// Agent-authored text uses the shortest live handle when the sender is visible
-/// in the snapshot and falls back to the launch environment identity.
+/// Agent-authored text uses a stable reply handle and a profile or kind label, taking live identity when visible and launch identity otherwise.
 /// System-authored text stays verbatim.
 pub(crate) fn message_header(
     sender: &MessageSender,
@@ -1177,7 +1169,31 @@ pub(crate) fn message_header(
         ));
     }
     let handle = agent_sender_handle(sender, peers, target_channel)?;
-    Some(format!("Type: AGENT_MESSAGE\nFrom: {handle}\nContent:\n"))
+    let MessageSender::Agent { kind, profile, .. } = sender else {
+        return None;
+    };
+    let (kind, profile) = live_sender(sender, peers).map_or((kind, profile.as_deref()), |agent| {
+        (&agent.kind, agent.profile.as_deref())
+    });
+    let label = sender_label(&handle, profile, kind)
+        .map(|label| format!(" ({label})"))
+        .unwrap_or_default();
+    Some(format!(
+        "Type: AGENT_MESSAGE\nFrom: {handle}{label}\nContent:\n"
+    ))
+}
+
+fn live_sender<'a>(sender: &MessageSender, peers: &[&'a AgentState]) -> Option<&'a AgentState> {
+    let MessageSender::Agent {
+        name: Some(name), ..
+    } = sender
+    else {
+        return None;
+    };
+    peers
+        .iter()
+        .copied()
+        .find(|agent| agent.name.as_deref() == Some(name.as_str()))
 }
 
 /// The canonical handle used in an agent-authored message header.
@@ -1189,31 +1205,36 @@ pub fn agent_sender_handle(
     let MessageSender::Agent {
         kind,
         name,
-        profile,
         role,
         channel,
+        ..
     } = sender
     else {
         return None;
     };
-    if let Some(sender_name) = name.as_deref()
-        && let Some(agent) = peers
-            .iter()
-            .copied()
-            .find(|agent| agent.name.as_deref() == Some(sender_name))
-    {
-        let include_channel = agent.channel().as_deref() != target_channel;
-        return Some(agent_handle(agent, peers, include_channel));
-    }
-    let include_channel = channel.as_deref() != target_channel;
-    let mut handle = identity_handle(kind, profile.as_deref(), role.as_deref());
-    if include_channel && let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
+    let live = live_sender(sender, peers);
+    let live_channel = live.and_then(AgentState::channel);
+    let (kind, name, role, channel) = live.map_or(
+        (kind, name.as_deref(), role.as_deref(), channel.as_deref()),
+        |agent| {
+            (
+                &agent.kind,
+                agent.name.as_deref(),
+                agent.role.as_deref(),
+                live_channel.as_deref(),
+            )
+        },
+    );
+    let include_channel = channel != target_channel;
+    let mut handle = sender_handle(role, name, kind);
+    if include_channel && let Some(channel) = channel.filter(|value| !value.is_empty()) {
         handle.push('#');
         handle.push_str(channel);
     }
     Some(handle)
 }
 
+/// Prefer role, explicit name, unique profile, unique kind, petname, scoped ordinal, then session ID.
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
     let channel = agent.channel();
     let scoped_peers = peers
@@ -1274,8 +1295,8 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         .flatten();
     let candidates = [
         Some(agent.kind.as_str()),
-        ordinal.as_deref(),
         agent.name.as_deref(),
+        ordinal.as_deref(),
         Some(agent.agent_id.as_str()),
     ];
     for candidate in candidates.into_iter().flatten() {
@@ -1329,13 +1350,13 @@ fn absent_agent_handle_base(
     {
         return format!("@{}", agent.kind);
     }
+    if let Some(name) = agent.name.as_deref() {
+        return format!("@{name}");
+    }
     if scoped && let Some(ordinal) = agent.kind_ordinal {
         return format!("@{}-{ordinal}", agent.kind);
     }
-    match agent.name.as_deref() {
-        Some(name) => format!("@{name}"),
-        None => format!("@{}", agent.agent_id),
-    }
+    format!("@{}", agent.agent_id)
 }
 
 /// A deduplicated, quoted list of the channels a selector matches.
