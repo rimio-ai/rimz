@@ -636,6 +636,44 @@ fn team_scratch_files_parse_default_and_round_trip() {
 }
 
 #[test]
+fn worktree_hooks_parse_and_default_to_absent() {
+    let dir = tempdir().unwrap();
+    let config = load_no_fragments(&write(
+        &dir,
+        "[agents.worktree.hooks]\ncreated = 'echo created'\nremoved = 'echo removed'\n",
+    ))
+    .unwrap();
+    let value = serde_json::to_value(&config.agents.worktree).unwrap();
+    assert_eq!(value["hooks"]["created"], "echo created");
+    assert_eq!(value["hooks"]["removed"], "echo removed");
+    let defaults = load_no_fragments(&write(&dir, "")).unwrap();
+    assert_eq!(defaults.agents.worktree, WorktreeConfig::default());
+    assert_eq!(
+        serde_json::to_value(defaults.agents.worktree).unwrap()["hooks"],
+        serde_json::json!({})
+    );
+}
+
+#[test]
+fn worktree_hooks_refuse_blank_commands() {
+    let dir = tempdir().unwrap();
+    for event in ["created", "removed"] {
+        for command in ["", "  "] {
+            let err = load_no_fragments(&write(
+                &dir,
+                &format!("[agents.worktree.hooks]\n{event} = '{command}'\n"),
+            ))
+            .expect_err("blank hook must fail");
+            assert!(
+                err.to_string()
+                    .contains(&format!("agents.worktree.hooks.{event}")),
+                "{err}"
+            );
+        }
+    }
+}
+
+#[test]
 fn worktree_config_defaults_and_parses() {
     let dir = tempdir().expect("tempdir");
     let defaults_dir = tempdir().expect("tempdir");

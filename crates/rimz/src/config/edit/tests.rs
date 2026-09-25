@@ -96,6 +96,8 @@ fn set_classifies_a_duplicate_key_in_the_existing_file() {
 const LEGACY_SET_KEYS: &[&str] = &[
     "agents.worktree.dir",
     "agents.worktree.base",
+    "agents.worktree.hooks.created",
+    "agents.worktree.hooks.removed",
     "agents.placement",
     "harness.smart_compact",
     "harness.compact_instruction",
