@@ -16,7 +16,8 @@
 //! `@<kind>-<n>`, `@<petname>`, or a session-id prefix. `@all` is the broadcast
 //! handle, and a pane id (`tmux:%1`, `zellij:terminal_3`) is a precise,
 //! sigil-free, channel-agnostic address. The renderer prefers a unique role,
-//! then an explicit name, then a non-kind profile, then the kind, then the petname, then an ordinal. Co-resident historical conversations remain
+//! then an explicit name, then a non-kind profile, then the kind, then the
+//! petname, then an ordinal. Co-resident historical conversations remain
 //! audit records, but a pane-bearing snapshot exposes one recipient: only the
 //! launch occupant claims live addresses.
 //!
@@ -1126,7 +1127,12 @@ pub(crate) fn recipient_channel(
 
 /// The canonical rendered address of an agent — the inverse of `parse_target`.
 ///
-/// Returns the shortest mention that names exactly this agent among `peers`: role, explicit name, unique profile, unique kind, petname, scoped ordinal, then session ID. With `include_channel`, a channelled agent appends `#<channel>` and disambiguates within that channel. A grouped handle (`include_channel = false`) scopes the same way under its channel's section header.
+/// Returns the shortest mention that names exactly this agent among `peers`:
+/// role, explicit name, unique profile, unique kind, petname, scoped ordinal,
+/// then session ID. With `include_channel`, a channelled agent appends
+/// `#<channel>` and disambiguates within that channel. A grouped handle
+/// (`include_channel = false`) scopes the same way under its channel's section
+/// header.
 ///
 /// A channel-less agent in ungrouped output has no `#<channel>` suffix to scope
 /// it, so it must distinguish itself from *every* same-kind agent: the channel
@@ -1149,7 +1155,8 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
 
 /// The structured header for a human-, agent-, subagent-, or harness-authored message.
 ///
-/// Agent-authored text uses a stable reply handle and a profile or kind label, taking live identity when visible and launch identity otherwise.
+/// Agent-authored text uses a stable reply handle and a profile or kind label,
+/// taking live identity when visible and launch identity otherwise.
 /// System-authored text stays verbatim.
 pub(crate) fn message_header(
     sender: &MessageSender,
@@ -1234,7 +1241,8 @@ pub fn agent_sender_handle(
     Some(handle)
 }
 
-/// Prefer role, explicit name, unique profile, unique kind, petname, scoped ordinal, then session ID.
+/// Prefer role, explicit name, unique profile, unique kind, petname, scoped
+/// ordinal, then session ID.
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
     let channel = agent.channel();
     let scoped_peers = peers
