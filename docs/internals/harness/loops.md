@@ -481,7 +481,7 @@ The elder's tick also drives unattended recovery that is not a loop task. Each i
 | --- | --- | --- |
 | Auto-continue ([`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs)) | resumes an agent parked on a certified rate limit, an overload, or a RimZ budget park, once that park's clock is due | [providers.md § Auto-continue](../agents/providers.md#auto-continue) |
 | Auto-redeem ([`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs)) | spends a Codex reset credit when it buys capacity | [providers.md § Auto-redeem](../agents/providers.md#auto-redeem) |
-| Idle compaction ([`idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs)) | compacts an idle agent's context past the configured threshold | [messaging.md § Idle compaction](./messaging.md#idle-compaction) |
+| Idle compaction ([`idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs)) | compacts an idle team member before prompt-cache expiry, or at an explicit idle threshold, while its board is not `Done` | [messaging.md § Idle compaction](./messaging.md#idle-compaction) |
 | The budget park | interrupts an agent over a dollar cap and arms its day reset | [budget.md § The park](./budget.md#the-park) |
 | Auto-gc ([`auto_gc.rs`](../../../crates/rimz/src/harness/auto_gc.rs)) | runs `rimz gc --unattended` once per 24 hours per workspace, after 5 minutes of producer uptime, paced by the durable `auto-gc.json` stamp the helper writes and a 10-minute respawn throttle; `gc.auto = false` skips it | [maintenance.md § Automatic sweeps](../../reference/cli/maintenance.md#automatic-sweeps) |
 
@@ -498,7 +498,7 @@ The assist log is that invariant's record: `~/.rimz/logs/assists.log.jsonl`, acc
 | `auto_redeem` | the detached redeem helper | provider, decision reason, request id, available credits, soonest expiry, the natural reset it beat, consume outcome or error, whether a reset occurred, and refreshed window stamps |
 | `auto_continue` | the detached continue helper | typed provider and session ids, display handle, park class, original park timestamp, delivery verdict, and the durable message id |
 | `auto_compact` | the message delivery path, after a compact command lands | target session, display handle, threshold, occupied context when known, and the durable compact-command message id |
-| `idle_compact` | the detached idle-compaction helper | target provider and session, display handle, idle duration, occupied context, durable compact-command message id, delivery verdict, and error when present |
+| `idle_compact` | the detached idle-compaction helper | target provider and session, display handle, idle duration, resolved threshold (`idle_after_secs`, absent in old records), occupied context, durable compact-command message id, delivery verdict, and error when present |
 | `flip_compact` | `rimz teams flip` | flipper provider and session, role, previous and target stages, occupied context when known, effective threshold, the attempted compact-command message id (which may not resolve if a store error prevented publication), delivery verdict, and error when present |
 | `auto_resume` | rebirth recovery, after materialization restores at least one pane | workspace, session, death cause, recovered pane count, and planned tab labels |
 | `auto_gc` | `rimz gc --unattended`, after every attempt | workspace, cutoff, reclaimed bytes, removed worktrees, pruned workspaces, removed runtime and temp files, archived messages, problem count, and error when the sweep failed |

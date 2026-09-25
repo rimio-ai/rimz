@@ -39,7 +39,7 @@ The hash input is canonical JSON, and the wire format is `sha256:<hex>`. Struct 
 
 The empty `lsp_servers` projection is also omitted to preserve existing hashes. Room-birth trust offers name project servers and their commands. Memory policy is machine-only; project `[lsp]` policy keys are refused, while trusted server entries overlay whole by name ([language servers](../lsp.md#configuration)).
 
-Everything else in the file deserializes leniently and never touches the hash. That covers display keys such as `display_name` and `sidebar_width`, team `leader`, `owns`, `flip-compact`, `scratch-files`, and `stages`, and task `team`, `max-strikes`, `budget`, `budget-per-day`, `surplus`, and `surplus-after`.
+Everything else in the file deserializes leniently and never touches the hash. That covers display keys such as `display_name` and `sidebar_width`, team `leader`, `owns`, `flip-compact`, `idle-compact`, `scratch-files`, and `stages`, and task `team`, `max-strikes`, `budget`, `budget-per-day`, `surplus`, and `surplus-after`.
 
 Some tables are refused outright. [`check_project_config_removed_tables`](../../../crates/rimz/src/trust.rs) fails the read when the project config carries a `[layout]` table (which includes `[[layout.initial_panes]]` and `[layout.tmux]`), naming what replaced it rather than another file to move it to, since per-machine config has no `[layout]` either, or a retired key that [`retired_agents_key`](../../../crates/rimz/src/config/agents.rs) names with its replacement. Project task fields that describe machine state fail to load; [loops.md § Where tasks live](./loops.md#where-tasks-live) owns that list.
 

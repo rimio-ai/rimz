@@ -14,7 +14,7 @@ rimz config set theme.style modern             # truecolor plus Nerd Font glyphs
 rimz config set theme.pets.enabled true        # an animated companion on the provider dashboard
 rimz config set resume.auto_continue true      # resume rate-limit and API-error parks on their own
 rimz config set harness.smart_compact 200k     # compact before a message once context passes 200k tokens
-rimz config set harness.idle_compact auto      # compact warm idle contexts while work may return
+rimz config set harness.idle_compact off       # disable idle team compaction on this machine
 rimz config set notifications.triggers '["waiting", "failed"]'   # which cards raise a banner
 rimz config set sidebar.focus_key "Alt+p"      # the chord that jumps to the sidebar from any pane
 rimz config set sidebar.zoom_key "Alt+g"       # smart fullscreen zoom that skips sidebar chrome
@@ -200,7 +200,7 @@ Subagent children are never restored. A child's open run cut off by the crash re
 
 `auto_redeem_min_gain` is the threshold the main rule uses: RimZ redeems into a spent window when its natural reset is at least this far away, since that is how much blocked time the credit recovers. It takes `s`, `m`, `h`, or `d` and defaults to `12h`. Raise it to redeem only when a window would otherwise block most of a day.
 
-`rimz setup` offers `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` together as one consent question ([set up your machine](./setup.md)).
+`rimz setup` offers `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` together as one consent question; idle compaction starts on, and answering no sets it to `off` ([set up your machine](./setup.md)).
 
 ### Dollar budgets
 
@@ -236,11 +236,19 @@ compact_instruction = "preserve the open questions and exact decisions"
 
 ```toml
 [harness]
-idle_compact = "auto"
-idle_compact_after = "59m"
+idle_compact = "on"
 ```
 
-`idle_compact` is `off` by default, and `rimz setup` offers `auto` as one of its hands-off rows. `auto` compacts an eligible idle agent only while another agent in the same channel is running, on the theory that the work is coming back; an open worktree pull request does not count as that signal. `always` drops the requirement. `idle_compact_after` takes `s`, `m`, `h`, or `d` and defaults to `59m`. The reflex needs at least 50,000 occupied context tokens, sends the adapter's native compact command with the same `compact_instruction`, and fires at most once per idle stretch. The behavior model is [loops → idle compaction](./loops.md#idle-compaction).
+An idle team member may return for another stage after its provider's warm prompt cache has expired. Compaction first reduces the conversation that must be cached again. `idle_compact` defaults to `on`: compact three minutes before the provider's prompt-cache lifetime runs out. `off` disables it; a duration such as `"25m"` sets the idle threshold directly, without a cache-lifetime lookup. Durations take `s`, `m`, `h`, or `d`. A role's [`idle-compact`](../reference/definitions.md#idle-compaction) overrides this machine default.
+
+| Provider and account | Prompt-cache lifetime used | Idle threshold with `on` |
+| --- | --- | --- |
+| Claude subscription, any model | 60 minutes | 57 minutes |
+| Codex GPT-5.6 or newer (including `terra` and `luna`), any account | 30 minutes | 27 minutes |
+
+With `on`, Claude API-key or unknown accounts, older or unknown Codex models, and other providers are skipped. An explicit duration bypasses that lookup but still requires a native compact command.
+
+Only team members qualify, never solo agents, `rimz subagents` children, or provider subagents. A board at `Done` disables compaction; another stage or a missing board counts as live. The member needs at least 50,000 occupied context tokens and a bound pane, and must be idle rather than working, awaiting input, budget-parked, or already compacting. The reflex sends the native command with the [team brief](#smart-compaction) at a turn boundary and fires at most once per idle stretch. Neither another member working nor an open pull request is required. See [loops → idle compaction](./loops.md#idle-compaction) for the action and its record.
 
 ### Hand-off compaction
 

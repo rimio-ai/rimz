@@ -74,7 +74,7 @@ A `rimz start` that creates the session, run from a terminal, can ask up to four
 
 | Prompt | When | Default |
 | --- | --- | --- |
-| First-run questions: truecolor, Nerd Font icons, pet, hands-off automation (`[y/n/choose]` over auto-continue, Codex auto-redeem when `codex` is installed, and idle compaction) | This start wrote the machine config for the first time | The current settings |
+| First-run questions: truecolor, Nerd Font icons, pet, hands-off automation (`[y/n/choose]` over auto-continue, Codex auto-redeem when `codex` is installed, and idle team compaction) | This start wrote the machine config for the first time | The current settings; idle compaction defaults on, the other automation rows off ([setup](../../guide/setup.md)) |
 | Install or refresh hooks for the listed agents | A detected agent has no RimZ hooks, or a stale RimZ-owned integration | Enter installs all; `n` or end of input installs none |
 | Trust this project's config | The project ships `.rimz/config.toml` with an ungranted executable surface, and you have not declined this version | No |
 | Recover prior agents | The room is reborn with agents from its previous session | Yes |

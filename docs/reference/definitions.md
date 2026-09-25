@@ -138,6 +138,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `traits` | Additional traits for this seat's leaf craft. |
 | `signals` | Optional nonempty signal-binding list. |
 | `flip-compact` | Stage-handoff compaction threshold or `off`. |
+| `idle-compact` | Idle team compaction: `off`, `on`, or a duration; inherits the machine setting when omitted. |
 
 Role fields override inherited definition fields. Unlike standalone chains, a seat's recognized model may select a different runtime kind; an unrecognized model keeps the original kind. That kind needs its own base. Tools are rendered again for the selected kind. Traits combine leaf-definition → role → team, deduplicated; ancestor crafts remain unchanged. Added traits require `${traits}` in the leaf body. Nonleaders lose `AskUserQuestion`. Every nonempty seat skill list gains `reflect`, which must pass the same library checks. Empty and omitted skill lists stay unchanged.
 
@@ -169,6 +170,14 @@ signals:
 
 A selector is `family.event` or `family.*`: the family begins with a lowercase ASCII letter, and words contain only lowercase ASCII letters, digits, `_`, or `-`. No multi-dot or partial-wildcard selectors are accepted. Mapping entries accept only `signal`, `match`, and `prompt`. `match` maps payload field names to nonempty strings; all fields must match. An `agent.*` binding requires `handle` or `session`. A supplied prompt must be nonblank and is trimmed. An omitted signals field has no bindings; a supplied field must be a nonempty list, so null and `[]` are refused. Launch also validates event scope. See [team signal delivery](../guide/teams.md#send-events-to-the-responsible-role).
 
+### Idle compaction
+
+`idle-compact` accepts `off`, `on`, or a duration such as `25m` (units `s`, `m`, `h`, `d`). YAML booleans `false` and `true` mean `off` and `on`; integers without units are refused. Omission inherits `harness.idle_compact`, whose default is `on`. An explicit role value overrides it, including a machine opt-out.
+
+`on` uses the provider prompt-cache lifetime minus three minutes; a duration supplies the threshold directly. Unknown lifetimes skip the role under `on`, and an adapter without a native compact command always skips. See [idle compaction](../guide/configuration.md#idle-compaction) for the provider table and eligibility.
+
+This field is valid only on a team role. A standalone definition is rejected because a solo seat is never idle-compacted.
+
 ### Flip compaction
 
 `flip-compact` accepts nonnegative integer token counts, strings such as `120k` or `1m`, percentages from `0%` through `100%`, or case-insensitive `off`; decimals, repeated suffixes, and overflowing counts fail. By default, a seat owning `Plan` gets `120k`; other seats get `180k`. These role defaults override the machine handoff setting. A provider without a manual compact command requires `off`.
@@ -195,7 +204,7 @@ The loader collects independent errors rather than stopping at the first file, a
 | Failure class | What to fix |
 | --- | --- |
 | Files and YAML | Unreadable trees/files, missing or unclosed frontmatter, malformed or nonmapping YAML, unknown keys, or wrong types. Traits and skill metadata can also be unreadable or malformed. |
-| Retired or misplaced fields | Replace `soul` with body text and `meka` with `agent`; role `meka` is invalid because the model selects runtime. Move `signals` and `flip-compact` onto roles. Raw prompt-path/argv keys are not Markdown fields. |
+| Retired or misplaced fields | Replace `soul` with body text and `meka` with `agent`; role `meka` is invalid because the model selects runtime. Move `signals`, `flip-compact`, and `idle-compact` onto roles. Raw prompt-path/argv keys are not Markdown fields. |
 | Identity | Unsafe, duplicate, reserved, or address-shadowing names; cross-namespace duplicates; team/profile/command collisions. |
 | Required content | Missing or multiline definition/base description, empty kind base, missing team pipeline, roster, stages, or leader. Ordinary definition bodies may be empty. |
 | Resolution | Missing kind inference, unknown or failed parent, cross-namespace inheritance, cycles, excessive shared chain depth, model/kind mismatch, missing kind base, or an unknown/failed seat definition. |
