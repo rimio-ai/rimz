@@ -794,8 +794,8 @@ pub(super) fn acquire_watch_lock(
         .truncate(false)
         .read(true)
         .write(true)
-        .open(path)?;
-    match file.try_lock() {
+        .open(&path)?;
+    match crate::disk::lock::try_lock_file(&mut file, &path) {
         Ok(()) => {
             file.set_len(0)?;
             file.rewind()?;
@@ -817,12 +817,12 @@ pub(super) fn acquire_watch_lock(
 
 pub fn watcher_info(runtime: &RuntimePaths, name: &str) -> std::io::Result<Option<RunLockInfo>> {
     let path = watch_lock_path(runtime, name);
-    let mut file = match OpenOptions::new().read(true).write(true).open(path) {
+    let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err),
     };
-    match file.try_lock() {
+    match crate::disk::lock::try_lock_file(&mut file, &path) {
         Ok(()) => {
             file.unlock()?;
             Ok(None)

@@ -5,6 +5,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -52,10 +53,10 @@ impl WorkspaceLock {
         Self::acquire_with_deadline(path, timeout)
     }
 
-    /// Attempt one immediate acquisition without sleeping or retrying.
+    /// Attempt acquisition without waiting for another holder.
     pub fn try_acquire(path: &Path) -> Result<Option<Self>> {
-        let file = open_lock_file(path)?;
-        match file.try_lock() {
+        let mut file = open_lock_file(path)?;
+        match try_lock_file(&mut file, path) {
             Ok(()) => Ok(Some(Self {
                 file,
                 path: path.to_path_buf(),
@@ -69,12 +70,12 @@ impl WorkspaceLock {
     }
 
     fn acquire_with_deadline(path: &Path, timeout: Duration) -> Result<Self> {
-        let file = open_lock_file(path)?;
+        let mut file = open_lock_file(path)?;
 
         let started = Instant::now();
         let mut backoff = Duration::from_millis(1);
         loop {
-            match file.try_lock() {
+            match try_lock_file(&mut file, path) {
                 Ok(()) => break,
                 Err(std::fs::TryLockError::WouldBlock) => {
                     let elapsed = started.elapsed();
@@ -99,6 +100,51 @@ impl WorkspaceLock {
             file,
             path: path.to_path_buf(),
         })
+    }
+}
+
+/// Lock only the inode currently named by the path, reopening after GC unlinks it.
+pub(crate) fn try_lock_file(
+    file: &mut File,
+    path: &Path,
+) -> std::result::Result<(), std::fs::TryLockError> {
+    lock_current(file, path, File::try_lock)
+}
+
+pub(crate) fn lock_file(file: &mut File, path: &Path) -> io::Result<()> {
+    lock_current(file, path, |file| {
+        file.lock().map_err(std::fs::TryLockError::Error)
+    })
+    .map_err(io::Error::from)
+}
+
+fn lock_current(
+    file: &mut File,
+    path: &Path,
+    acquire: impl Fn(&File) -> std::result::Result<(), std::fs::TryLockError>,
+) -> std::result::Result<(), std::fs::TryLockError> {
+    loop {
+        acquire(file)?;
+        let current = (|| {
+            let locked = file.metadata()?;
+            match std::fs::metadata(path) {
+                Ok(named) => Ok(locked.dev() == named.dev() && locked.ino() == named.ino()),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+                Err(err) => Err(err),
+            }
+        })();
+        if matches!(current, Ok(true)) {
+            return Ok(());
+        }
+        file.unlock().map_err(std::fs::TryLockError::Error)?;
+        current.map_err(std::fs::TryLockError::Error)?;
+        *file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .map_err(std::fs::TryLockError::Error)?;
     }
 }
 
@@ -140,6 +186,90 @@ impl std::fmt::Debug for WorkspaceLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waiter_reopens_unlinked_inode_without_overlapping_new_holder() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.lock");
+        let sweep_guard = WorkspaceLock::acquire(&path).unwrap();
+        let mut waiting_file = open_lock_file(&path).unwrap();
+        let old_inode = waiting_file.metadata().unwrap().ino();
+        assert!(matches!(
+            try_lock_file(&mut waiting_file, &path),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        let active = Arc::new(AtomicUsize::new(0));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (retry_tx, retry_rx) = mpsc::channel();
+        let waiter_path = path.clone();
+        let waiter_active = active.clone();
+        let waiter = std::thread::spawn(move || {
+            let attempts = std::cell::Cell::new(0);
+            lock_current(&mut waiting_file, &waiter_path, |file| {
+                if attempts.get() == 0 {
+                    ready_tx.send(()).unwrap();
+                } else {
+                    retry_tx.send(()).unwrap();
+                }
+                attempts.set(attempts.get() + 1);
+                file.lock().map_err(std::fs::TryLockError::Error)
+            })
+            .unwrap();
+            assert_ne!(waiting_file.metadata().unwrap().ino(), old_inode);
+            assert_eq!(waiter_active.fetch_add(1, Ordering::SeqCst), 0);
+            assert_eq!(
+                waiting_file.metadata().unwrap().ino(),
+                std::fs::metadata(&waiter_path).unwrap().ino()
+            );
+            assert_eq!(waiter_active.fetch_sub(1, Ordering::SeqCst), 1);
+        });
+        ready_rx.recv().unwrap();
+        // The collector unlinks only while holding the old inode's lock.
+        std::fs::remove_file(&path).unwrap();
+        let second_path = path.clone();
+        let second_active = active.clone();
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let second = std::thread::spawn(move || {
+            let _guard = WorkspaceLock::acquire(&second_path).unwrap();
+            assert_eq!(second_active.fetch_add(1, Ordering::SeqCst), 0);
+            held_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            assert_eq!(second_active.fetch_sub(1, Ordering::SeqCst), 1);
+        });
+        held_rx.recv().unwrap();
+        drop(sweep_guard);
+        let retried = retry_rx.recv_timeout(Duration::from_secs(2));
+        release_tx.send(()).unwrap();
+        second.join().unwrap();
+        waiter.join().unwrap();
+        retried.expect("waiter must retry on the named inode while the second holder owns it");
+    }
+
+    #[test]
+    fn immediate_acquire_reopens_missing_or_replaced_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.lock");
+        let mut stale = open_lock_file(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        try_lock_file(&mut stale, &path).unwrap();
+        assert_eq!(
+            stale.metadata().unwrap().ino(),
+            std::fs::metadata(&path).unwrap().ino()
+        );
+        std::fs::remove_file(&path).unwrap();
+        let _held = WorkspaceLock::acquire(&path).unwrap();
+        assert!(matches!(
+            try_lock_file(&mut stale, &path),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+    }
 
     #[test]
     fn lock_can_be_reacquired_after_guard_drops() {

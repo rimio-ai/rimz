@@ -98,12 +98,12 @@ pub(crate) fn coordinate<T>(
     wait_steps: u32,
     fresh: impl Fn() -> Option<T>,
 ) -> Coordination<T> {
-    let Some(file) = open_lock(lock_path) else {
+    let Some(mut file) = open_lock(lock_path) else {
         // Nowhere to coordinate (e.g. the runtime dir is missing on a bare CLI
         // call): just produce, uncached.
         return Coordination::Unavailable;
     };
-    match file.try_lock() {
+    match super::lock::try_lock_file(&mut file, lock_path) {
         // We are the single producer. A peer may have published between our
         // miss and acquiring the lock, so re-check before doing the work.
         Ok(()) => match fresh() {
