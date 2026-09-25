@@ -8,10 +8,10 @@ use tracing::warn;
 
 use super::{MessageRecord, MessageStatus};
 use crate::disk::atomic;
-use crate::disk::retention::{HISTORY_KEEP_RECORDS, HISTORY_MAX_BYTES};
+use crate::disk::buckets::{bucket_file_name, bucket_files};
+use crate::disk::retention::TRANSCRIPT_FILE_DAYS;
 
 const QUEUE_FILE: &str = "messages.jsonl";
-const HISTORY_FILE: &str = "history.jsonl";
 
 #[derive(Debug, thiserror::Error)]
 pub enum MessageStoreErr {
@@ -37,40 +37,33 @@ pub(in crate::store) fn append_history_many(
     messages_dir: &Path,
     messages: &[MessageRecord],
 ) -> Result<()> {
-    if messages.is_empty() {
-        return Ok(());
-    }
-    let path = history_path(messages_dir);
-    let mut bytes = Vec::new();
+    let mut buckets = std::collections::BTreeMap::<PathBuf, Vec<u8>>::new();
     for message in messages {
-        serde_json::to_writer(&mut bytes, message).map_err(|source| MessageStoreErr::Json {
+        let path = messages_dir.join(bucket_file_name(message.updated_at, TRANSCRIPT_FILE_DAYS));
+        let bytes = buckets.entry(path.clone()).or_default();
+        serde_json::to_writer(&mut *bytes, message).map_err(|source| MessageStoreErr::Json {
             path: path.clone(),
             source,
         })?;
         bytes.push(b'\n');
     }
-    atomic::append_record_bytes(&path, &bytes)?;
+    for (path, bytes) in buckets {
+        atomic::append_record_bytes(&path, &bytes)?;
+    }
     Ok(())
 }
 
-pub(in crate::store) fn maintain_history(messages_dir: &Path) {
-    let path = history_path(messages_dir);
-    let metadata = match fs::metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            warn!(path = %path.display(), %error, "cannot inspect message history for retention");
-            return;
-        }
-    };
-    if metadata.len() > HISTORY_MAX_BYTES
-        && let Err(error) = prune_history(&path)
-    {
-        warn!(path = %path.display(), %error, "cannot prune message history");
-    }
-}
-
 pub(in crate::store) fn list_history(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
-    read_queue_file(&history_path(messages_dir))
+    let files = bucket_files(messages_dir).map_err(|source| MessageStoreErr::Io {
+        path: messages_dir.to_path_buf(),
+        source,
+    })?;
+    let mut messages = Vec::new();
+    for path in files {
+        messages.extend(read_queue_file(&path)?);
+    }
+    sort_messages(&mut messages);
+    Ok(messages)
 }
 
 pub(in crate::store) fn list_pending(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
@@ -151,23 +144,8 @@ fn write_messages_file(path: &Path, messages: &[MessageRecord]) -> Result<()> {
     Ok(())
 }
 
-fn prune_history(path: &Path) -> Result<()> {
-    let mut messages = read_queue_file(path)?;
-    if messages.len() <= HISTORY_KEEP_RECORDS {
-        return Ok(());
-    }
-    sort_messages(&mut messages);
-    let keep_from = messages.len() - HISTORY_KEEP_RECORDS;
-    write_messages_file(path, &messages[keep_from..])?;
-    Ok(())
-}
-
 fn queue_path(messages_dir: &Path) -> PathBuf {
     messages_dir.join(QUEUE_FILE)
-}
-
-fn history_path(messages_dir: &Path) -> PathBuf {
-    messages_dir.join(HISTORY_FILE)
 }
 
 fn sort_messages(messages: &mut [MessageRecord]) {
@@ -275,17 +253,18 @@ mod tests {
 
         append_history_many(&messages_dir, &[first.clone(), second.clone()]).unwrap();
 
+        let path = messages_dir.join(bucket_file_name(first.updated_at, TRANSCRIPT_FILE_DAYS));
         assert_eq!(list_history(&messages_dir).unwrap(), vec![second, first]);
-        let raw = std::fs::read_to_string(history_path(&messages_dir)).unwrap();
+        let raw = std::fs::read_to_string(path).unwrap();
         assert!(raw.find("first").unwrap() < raw.find("second").unwrap());
     }
 
     #[test]
-    fn history_prunes_to_newest_records() {
+    fn history_keeps_records_across_buckets_until_gc() {
         let dir = tempdir().unwrap();
         let messages_dir = dir.path().join("messages");
         let agent = agent();
-        for index in 0..=HISTORY_KEEP_RECORDS {
+        for index in 0..=500 {
             let mut message = MessageRecord::new(
                 WorkspaceId::from_project_root(dir.path()),
                 &agent,
@@ -294,25 +273,24 @@ mod tests {
             );
             message.message_id = fixed_message_id(index as u64);
             message.status = MessageStatus::Delivered;
+            message.updated_at =
+                jiff::Timestamp::from_second(if index == 0 { 0 } else { 604800 }).unwrap();
             append_history_many(&messages_dir, std::slice::from_ref(&message)).unwrap();
         }
 
-        maintain_history(&messages_dir);
-
         let history = list_history(&messages_dir).unwrap();
-
-        assert_eq!(history.len(), HISTORY_KEEP_RECORDS);
-        assert_eq!(history[0].message_id, fixed_message_id(1));
-        assert_eq!(
-            history[HISTORY_KEEP_RECORDS - 1].message_id,
-            fixed_message_id(HISTORY_KEEP_RECORDS as u64)
-        );
+        assert_eq!(history.len(), 501);
+        assert_eq!(history[0].message_id, fixed_message_id(0));
+        assert_eq!(history[500].message_id, fixed_message_id(500));
+        assert!(messages_dir.join("1970-01-01.jsonl").is_file());
+        assert!(messages_dir.join("1970-01-08.jsonl").is_file());
     }
 
     #[test]
     fn unknown_harness_notice_round_trips() {
         let dir = tempdir().unwrap();
         let messages_dir = dir.path().join("messages");
+        let history_dir = dir.path().join("history");
         let message = MessageRecord::new(
             WorkspaceId::from_project_root(dir.path()),
             &agent(),
@@ -330,15 +308,14 @@ mod tests {
             value
         );
 
-        for index in 0..=HISTORY_KEEP_RECORDS {
+        for index in 0..=500 {
             let mut terminal = message.clone();
             terminal.message_id = fixed_message_id(index as u64);
             terminal.status = MessageStatus::Delivered;
-            append_history_many(&messages_dir, &[terminal]).unwrap();
+            append_history_many(&history_dir, &[terminal]).unwrap();
         }
-        maintain_history(&messages_dir);
-        let history = list_history(&messages_dir).unwrap();
-        assert_eq!(history.len(), HISTORY_KEEP_RECORDS);
+        let history = list_history(&history_dir).unwrap();
+        assert_eq!(history.len(), 501);
         for record in history {
             assert_eq!(
                 serde_json::to_value(record).unwrap()["sender"]["notice"],

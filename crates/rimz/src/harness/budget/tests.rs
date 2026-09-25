@@ -462,17 +462,18 @@ fn fleet_park_projects_only_live_or_interrupted_agents() {
         toml::from_str("timezone = \"UTC\"\n[harness]\nbudget = \"5/day\"\n").expect("config");
     let now = Timestamp::from_second(200).expect("timestamp");
     DailyBudgetScope::Fleet
-        .write_ledger(
+        .merge_park(
             &runtime,
-            &DailyBudgetLedger {
-                parked: Some(BudgetParkStamp {
-                    at_cost: 6.0,
-                    at: now,
-                }),
-                ..Default::default()
-            },
+            Some(BudgetParkStamp {
+                at_cost: 6.0,
+                at: now,
+            }),
         )
         .expect("fleet ledger");
+    assert!(
+        !runtime.fleet_budget_record.exists(),
+        "producer park must not create standing choices"
+    );
 
     let state = |id: &str, status| {
         let mut state = agent(0.0, status, Some(now));
@@ -711,9 +712,13 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     let dir = tempfile::tempdir().expect("tempdir");
     let runtime = RuntimePaths::under(
         crate::ids::WorkspaceId::from_project_root(dir.path()),
-        dir.path(),
+        &dir.path().join("runtime"),
     )
     .expect("runtime");
+    let state =
+        crate::StatePaths::under(runtime.workspace_id.clone(), &dir.path().join("state")).unwrap();
+    let store = Store::open(state, runtime).unwrap();
+    let runtime = store.runtime_paths().clone();
     runtime.ensure_dirs().expect("dirs");
     let fleet = DailyBudgetLedger {
         override_spec: Some("20/day".parse().expect("spec")),
@@ -732,11 +737,23 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     let fleet_scope = DailyBudgetScope::Fleet;
     assert_eq!(
         fleet_scope.ledger_path(&runtime),
-        runtime.lane_path("budget.fleet.json")
+        store.paths().fleet_budget_record
     );
     fleet_scope
         .write_ledger(&runtime, &fleet)
         .expect("fleet write");
+    let record = std::fs::read(fleet_scope.ledger_path(&runtime)).unwrap();
+    let modified = std::fs::metadata(fleet_scope.ledger_path(&runtime))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert!(
+        fleet_scope.read_ledger(&runtime).parked.is_none(),
+        "CLI mutation clears the producer park"
+    );
+    fleet_scope
+        .merge_park(&runtime, fleet.parked.clone())
+        .unwrap();
     assert_eq!(fleet_scope.read_ledger(&runtime), fleet);
     fleet_scope
         .merge_park(&runtime, None)
@@ -748,6 +765,26 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
             ..fleet.clone()
         },
         "producer park writes preserve CLI cap overrides"
+    );
+    assert_eq!(
+        std::fs::read(fleet_scope.ledger_path(&runtime)).unwrap(),
+        record,
+        "producer never rewrites the choices record"
+    );
+    assert_eq!(
+        std::fs::metadata(fleet_scope.ledger_path(&runtime))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        modified
+    );
+    store.reset_records(false).unwrap();
+    assert_eq!(
+        fleet_scope.read_ledger(store.runtime_paths()),
+        DailyBudgetLedger {
+            parked: None,
+            ..fleet.clone()
+        }
     );
 
     let kind = AgentKind::new_unchecked("claude");
@@ -915,13 +952,7 @@ fn park_projection_uses_agent_then_turn_then_fleet_then_account_precedence() {
     agent_ledger.last_interrupt_at = Some(now);
     write_ledger(&runtime, &state.kind, &state.agent_id, &agent_ledger).expect("agent ledger");
     DailyBudgetScope::Fleet
-        .write_ledger(
-            &runtime,
-            &DailyBudgetLedger {
-                parked: Some(parked.clone()),
-                ..Default::default()
-            },
-        )
+        .merge_park(&runtime, Some(parked.clone()))
         .expect("fleet ledger");
     DailyBudgetScope::Account(LoginKey::default_for(state.kind.clone()))
         .write_ledger(

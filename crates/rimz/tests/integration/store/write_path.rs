@@ -20,7 +20,16 @@ fn lifecycle(h: &crate::common::Harness, event_name: &str, agent_id: &str) -> Ev
 fn cancel_survives_oversized_undecodable_history() {
     let h = crate::common::Harness::new();
     let message = queued_cancel_message(&h);
-    let history_path = h.store.paths().messages_dir.join("history.jsonl");
+    let start = jiff::Timestamp::from_second(
+        jiff::Timestamp::now().as_second().div_euclid(604800) * 604800,
+    )
+    .unwrap();
+    let history_path = h
+        .store
+        .paths()
+        .message_history_dir
+        .join(format!("{}.jsonl", start.strftime("%Y-%m-%d")));
+    std::fs::create_dir_all(&h.store.paths().message_history_dir).unwrap();
     let mut invalid = serde_json::to_value(&message).expect("message JSON");
     invalid["status"] = json!("future_status");
     invalid["text"] = json!("x".repeat(512 * 1024));
@@ -41,8 +50,8 @@ fn cancel_survives_oversized_undecodable_history() {
 fn cancel_survives_history_append_failure() {
     let h = crate::common::Harness::new();
     let message = queued_cancel_message(&h);
-    std::fs::create_dir(h.store.paths().messages_dir.join("history.jsonl"))
-        .expect("block history append");
+    std::fs::create_dir_all(h.store.paths().message_history_dir.parent().unwrap()).unwrap();
+    std::fs::write(&h.store.paths().message_history_dir, b"blocked").expect("block history append");
 
     assert_cancel_committed(&h, &message);
 }

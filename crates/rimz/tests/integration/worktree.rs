@@ -2517,11 +2517,9 @@ fn assert_messages_archived_without_history(env: &Env) {
 }
 
 fn block_message_history(env: &Env) {
-    let history = env
-        .state_path_for(&env.project_root)
-        .messages_dir
-        .join("history.jsonl");
-    std::fs::create_dir_all(history).expect("replace message history file with directory");
+    let history = env.state_path_for(&env.project_root).message_history_dir;
+    std::fs::create_dir_all(history.parent().unwrap()).unwrap();
+    std::fs::write(history, b"blocked").expect("replace message history directory with file");
 }
 
 fn publish_pr_ref(env: &Env, remote_ref: &str) -> (String, String) {

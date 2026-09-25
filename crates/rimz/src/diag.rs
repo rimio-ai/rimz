@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::diag::notify::{NotifyTraceEnvelope, NotifyTraceEvent};
 use crate::diag::record::{DiagEnvelope, DiagEvent};
-use crate::disk::retention::{DIAG_FRAME_RING, ROTATING_LOG_MAX_BYTES as DIAG_LOG_MAX_BYTES};
+use crate::disk::retention::ROTATING_LOG_MAX_BYTES as DIAG_LOG_MAX_BYTES;
 use crate::ids::{SidebarInstanceId, WorkspaceId};
 
 pub mod binding;
@@ -279,7 +279,6 @@ impl DiagSink {
             tracing::debug!(path = %path.display(), error = %err, "diagnostic frame capture failed");
             return None;
         }
-        prune_frame_ring(&dir);
         Some(file_name)
     }
 }
@@ -342,49 +341,6 @@ fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
         std::fs::set_permissions(path, perms)?;
     }
     Ok(())
-}
-
-fn prune_frame_ring(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut frames = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("frame.") && name.ends_with(".json"))
-        })
-        .collect::<Vec<_>>();
-    frames.sort_by_key(|frame| frame_capture_sort_key(frame));
-    let remove_count = frames.len().saturating_sub(DIAG_FRAME_RING);
-    for stale in frames.into_iter().take(remove_count) {
-        let _ = std::fs::remove_file(stale);
-    }
-}
-
-fn frame_capture_sort_key(path: &Path) -> (u64, u64, String) {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return (0, 0, String::new());
-    };
-    let Some(rest) = name
-        .strip_prefix("frame.")
-        .and_then(|value| value.strip_suffix(".json"))
-    else {
-        return (0, 0, name.to_owned());
-    };
-    let mut parts = rest.splitn(3, '.');
-    let at_ms = parts
-        .next()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
-    let (sequence, tail) = match (parts.next(), parts.next()) {
-        (Some(sequence), Some(tail)) => (sequence.parse().unwrap_or(0), tail.to_owned()),
-        (Some(tail), None) => (0, tail.to_owned()),
-        _ => (0, String::new()),
-    };
-    (at_ms, sequence, tail)
 }
 
 #[cfg(test)]
@@ -577,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_capture_writes_unique_private_ring() {
+    fn frame_capture_keeps_unique_private_frames_until_gc() {
         let dir = tempfile::tempdir().unwrap();
         let capture_sink = sink(dir.path());
         let first = capture_sink.capture_frame_pair("drop", &1, &2, 42).unwrap();
@@ -614,22 +570,17 @@ mod tests {
             .filter_map(Result::ok)
             .map(|entry| entry.path())
             .collect::<Vec<_>>();
-        assert_eq!(frames.len(), DIAG_FRAME_RING);
+        assert_eq!(frames.len(), 10);
 
-        let mut kept = frames
-            .iter()
-            .map(|path| frame_capture_sort_key(path).0)
-            .collect::<Vec<_>>();
-        kept.sort_unstable();
-
-        assert_eq!(kept, (2..10).collect::<Vec<_>>());
+        let mut kept = Vec::new();
         for path in frames {
-            let at_ms = frame_capture_sort_key(&path).0;
             let value: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-
-            assert_eq!(value["prior"], at_ms);
-            assert_eq!(value["offending"], at_ms + 1);
+            let prior = value["prior"].as_u64().unwrap();
+            kept.push(prior);
+            assert_eq!(value["offending"], prior + 1);
         }
+        kept.sort_unstable();
+        assert_eq!(kept, (0..10).collect::<Vec<_>>());
     }
 }

@@ -4,6 +4,7 @@
 //! `atomic.rs`. Rotating JSONL appends are best-effort and never fsynced.
 
 pub mod atomic;
+pub(crate) mod buckets;
 pub mod lock;
 pub(crate) mod parse_cache;
 pub mod paths;

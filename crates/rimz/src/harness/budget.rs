@@ -281,10 +281,15 @@ impl DailyBudgetScope {
         let mut ledger: DailyBudgetLedger = self.file(runtime).read();
         if matches!(self, Self::Account(_)) {
             ledger.override_spec = None;
+        } else {
+            ledger.parked =
+                crate::disk::atomic::read_json_cache(&runtime.lane_path("budget.fleet-park.json"));
         }
         ledger
     }
 
+    /// CLI mutation: persist standing choices and clear the producer's fleet park.
+    /// Enforcement writes only through `merge_park`.
     pub fn write_ledger(
         &self,
         runtime: &RuntimePaths,
@@ -292,7 +297,13 @@ impl DailyBudgetScope {
     ) -> Result<(), ScopeLedgerWriteError> {
         let file = self.file(runtime);
         match self {
-            Self::Fleet => file.write(ledger),
+            Self::Fleet => {
+                let mut choices = ledger.clone();
+                choices.parked = None;
+                let _guard = crate::disk::lock::WorkspaceLock::acquire(&file.lock_path)?;
+                crate::disk::atomic::write_temp_then_rename(&file.path, &choices)?;
+                self.merge_park(runtime, None)
+            }
             Self::Account(_) => {
                 let mut account = ledger.clone();
                 account.override_spec = None;
@@ -306,13 +317,17 @@ impl DailyBudgetScope {
         runtime: &RuntimePaths,
         parked: Option<BudgetParkStamp>,
     ) -> Result<(), ScopeLedgerWriteError> {
+        if matches!(self, Self::Fleet) {
+            write_temp_then_rename_cache(&runtime.lane_path("budget.fleet-park.json"), &parked)?;
+            return Ok(());
+        }
         self.file(runtime).merge_park(self, parked)
     }
 
     fn file(&self, runtime: &RuntimePaths) -> ScopeLedgerFile {
         match self {
             Self::Fleet => ScopeLedgerFile {
-                path: runtime.lane_path("budget.fleet.json"),
+                path: runtime.fleet_budget_record.clone(),
                 lock_path: runtime.lock_path("budget.fleet.lock"),
             },
             Self::Account(key) => {

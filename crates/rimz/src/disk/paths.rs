@@ -177,6 +177,8 @@ pub struct StatePaths {
     pub latest_snapshot: PathBuf,
     pub rollup_cache: PathBuf,
     pub messages_dir: PathBuf,
+    pub message_history_dir: PathBuf,
+    pub fleet_budget_record: PathBuf,
     pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
     pub waits_dir: PathBuf,
@@ -241,6 +243,7 @@ impl StatePaths {
         let transcript_dir = audit_dir.join("transcript");
         let runs_dir = owned_dir.join("runs");
         let tmp_dir = root.join(Class::Tmp.dir_name());
+        let fleet_budget_record = fleet_budget_record(home, &dir_name);
         let runtime =
             RuntimePaths::under_named(workspace_id.clone(), dir_name.clone(), &runtime_home());
         Self {
@@ -260,6 +263,8 @@ impl StatePaths {
             rollup_cache: snapshots_dir.join("rollup.json"),
             snapshots_dir,
             messages_dir,
+            message_history_dir: audit_dir.join("messages"),
+            fleet_budget_record,
             transcript_dir,
             runs_dir,
             workspace_lock: runtime.lock_path("workspace.lock"),
@@ -351,6 +356,8 @@ impl StatePaths {
             self.latest_snapshot.clone(),
             self.rollup_cache.clone(),
             self.messages_dir.clone(),
+            self.message_history_dir.clone(),
+            self.fleet_budget_record.clone(),
             self.transcript_dir.clone(),
             self.runs_dir.clone(),
             self.waits_dir.clone(),
@@ -512,8 +519,17 @@ pub(crate) fn builds_dir_under(home: &Path) -> PathBuf {
     home.join("builds")
 }
 
+fn fleet_budget_record(home: &Path, dir_name: &WorkspaceDirName) -> PathBuf {
+    Class::Records
+        .path_under(&workspaces_dir_under(home).join(dir_name.as_str()))
+        .join("budget.fleet.json")
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimePaths {
+    /// State record reference for budget readers holding only runtime paths.
+    /// Inventoried by StatePaths, never reclaimed as runtime state.
+    pub(crate) fleet_budget_record: PathBuf,
     pub workspace_id: WorkspaceId,
     pub dir_name: WorkspaceDirName,
     /// `$XDG_RUNTIME_DIR` or its fallback; hardened, never RimZ-owned.
@@ -583,11 +599,17 @@ impl RuntimePaths {
 
     /// Runtime paths paired with state paths already in hand.
     pub fn for_state(state: &StatePaths) -> Result<Self> {
-        Self::validated(
+        let mut paths = Self::validated(
             state.workspace_id.clone(),
             state.dir_name.clone(),
             &runtime_home(),
-        )
+        )?;
+        paths.bind_state_records(state);
+        Ok(paths)
+    }
+
+    pub(crate) fn bind_state_records(&mut self, state: &StatePaths) {
+        self.fleet_budget_record = state.fleet_budget_record.clone();
     }
 
     /// Account-global runtime paths with no bound room, for readers that run
@@ -640,6 +662,7 @@ impl RuntimePaths {
         let agent_activity_dir = live_dir.join("agent-activity");
         let active_time_dir = live_dir.join("active-time");
         Self {
+            fleet_budget_record: fleet_budget_record(runtime_root, &dir_name),
             workspace_id,
             dir_name,
             runtime_root: runtime_root.to_path_buf(),
@@ -669,6 +692,7 @@ impl RuntimePaths {
     ) -> Result<Self> {
         let mut paths = Self::budgeted(workspace_id, dir_name, runtime_root)?;
         paths.persistent_shared_root = providers_cache_dir();
+        paths.fleet_budget_record = fleet_budget_record(&rimz_home(), &paths.dir_name);
         Ok(paths)
     }
 
@@ -687,7 +711,7 @@ impl RuntimePaths {
     /// a typed workspace id instead of accepting caller-supplied output paths.
     pub(crate) fn for_sibling_workspace(&self, workspace_id: WorkspaceId) -> Result<Self> {
         let dir_name = workspace_dir_name(&workspaces_dir(), &workspace_id)?;
-        let mut paths = Self::budgeted(workspace_id, dir_name, &self.runtime_root)?;
+        let mut paths = Self::validated(workspace_id, dir_name, &self.runtime_root)?;
         paths.shared_root = self.shared_root.clone();
         paths.persistent_shared_root = self.persistent_shared_root.clone();
         Ok(paths)
