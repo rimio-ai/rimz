@@ -56,6 +56,7 @@ pub enum MessageSender {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessNotice {
+    Deadline,
     SubagentReport,
     Wait,
     Signal,
@@ -69,6 +70,7 @@ impl HarnessNotice {
     pub(crate) fn header_type(&self) -> String {
         match self {
             Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
+            Self::Deadline => "DEADLINE".to_owned(),
             Self::Wait => "WAIT".to_owned(),
             Self::Signal => "SIGNAL".to_owned(),
             Self::Stage => "STAGE".to_owned(),
@@ -913,6 +915,7 @@ pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool
 /// The sender class named by a structured message header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderKind {
+    Deadline,
     Agent,
     Subagent,
     Wait,
@@ -928,6 +931,7 @@ fn classify_header_line(line: &str) -> Option<HeaderKind> {
         "Type: WAIT" => Some(HeaderKind::Wait),
         "Type: SIGNAL" => Some(HeaderKind::Signal),
         "Type: STAGE" => Some(HeaderKind::Stage),
+        "Type: DEADLINE" => Some(HeaderKind::Deadline),
         "Type: USER_MESSAGE" => Some(HeaderKind::User),
         _ => None,
     }
