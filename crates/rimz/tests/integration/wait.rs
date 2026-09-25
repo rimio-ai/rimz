@@ -882,7 +882,7 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     )
     .unwrap();
     std::fs::write(
-        store.runtime_paths().root.join("loop-fire.json"),
+        store.runtime_paths().lane_path("loop-fire.json"),
         serde_json::to_vec(&std::collections::BTreeMap::from([(name, armed_at)])).unwrap(),
     )
     .unwrap();

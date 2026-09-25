@@ -276,6 +276,7 @@ pub struct TaskFire<'a> {
     signal: Option<TriggerSignal>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
+    run_lock_path: fn(&str, &TaskEntry) -> Result<PathBuf>,
     pending: Option<PendingEffect>,
     finished: bool,
 }
@@ -318,6 +319,7 @@ impl<'a> TaskFire<'a> {
             signal,
             started,
             run_lock: None,
+            run_lock_path,
             pending: None,
             finished: false,
         })
@@ -415,7 +417,8 @@ impl<'a> TaskFire<'a> {
     }
 
     fn prepare_run_lock(&mut self) -> Result<Option<TaskFireFinished>> {
-        match acquire_run_lock(&self.name, &self.entry)? {
+        let path = (self.run_lock_path)(&self.name, &self.entry)?;
+        match acquire_run_lock(&path)? {
             RunLockAttempt::Acquired(guard) => {
                 self.run_lock = Some(guard);
                 Ok(None)
@@ -1309,8 +1312,7 @@ pub enum RunLockState {
     Held(Option<RunLockInfo>),
 }
 
-fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt> {
-    let path = run_lock_path(name, entry)?;
+fn acquire_run_lock(path: &Path) -> Result<RunLockAttempt> {
     let parent = path
         .parent()
         .context("loop run lock path has no runtime parent")?;
@@ -1321,9 +1323,9 @@ fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt> {
         .read(true)
         .write(true)
         .truncate(false)
-        .open(&path)
+        .open(path)
         .with_context(|| format!("opening loop run lock `{}`", path.display()))?;
-    acquire_run_lock_file(file, &path)
+    acquire_run_lock_file(file, path)
 }
 
 pub fn probe_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockState> {
@@ -1352,7 +1354,7 @@ fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
     let state =
         StatePaths::for_project_root(&entry.resolved_root()).context("locating loop task state")?;
     let runtime = RuntimePaths::for_state(&state).context("locating loop task runtime")?;
-    Ok(runtime.root.join(format!("loop-run-{name}.lock")))
+    Ok(runtime.lock_path(format!("loop-run-{name}.lock")))
 }
 
 fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {

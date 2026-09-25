@@ -852,7 +852,7 @@ fn compaction_delivery_error_does_not_fail_a_completed_flip() {
         fixture.context_tokens("coder", 150_000);
         std::fs::write(fixture.board(), BOARD).unwrap();
         if broken_wait_stamp {
-            std::fs::create_dir(fixture.env.runtime_paths().root.join("message-wake.json"))
+            std::fs::create_dir(fixture.env.runtime_paths().lane_path("message-wake.json"))
                 .unwrap();
         }
         let output = success(

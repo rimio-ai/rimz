@@ -68,6 +68,56 @@ pub enum PathErr {
 
 type Result<T> = std::result::Result<T, PathErr>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Tier {
+    State,
+    Runtime,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Class {
+    Log,
+    Records,
+    Audit,
+    Cache,
+    Owned,
+    Tmp,
+    Sock,
+    Live,
+    Lanes,
+    Locks,
+}
+
+impl Class {
+    pub const fn dir_name(self) -> &'static str {
+        match self {
+            Self::Log => "log",
+            Self::Records => "records",
+            Self::Audit => "audit",
+            Self::Cache => "cache",
+            Self::Owned => "owned",
+            Self::Tmp => "tmp",
+            Self::Sock => "sock",
+            Self::Live => "live",
+            Self::Lanes => "lanes",
+            Self::Locks => "locks",
+        }
+    }
+
+    pub const fn tier(self) -> Tier {
+        match self {
+            Self::Log | Self::Records | Self::Audit | Self::Cache | Self::Owned | Self::Tmp => {
+                Tier::State
+            }
+            Self::Sock | Self::Live | Self::Lanes | Self::Locks => Tier::Runtime,
+        }
+    }
+
+    pub(crate) fn path_under(self, root: &Path) -> PathBuf {
+        root.join(self.dir_name())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct StatePaths {
     pub workspace_id: WorkspaceId,
@@ -90,6 +140,7 @@ pub struct StatePaths {
     pub runs_dir: PathBuf,
     pub waits_dir: PathBuf,
     pub locks_dir: PathBuf,
+    /// Runtime lock reference for writers whose durable API takes only state paths.
     pub workspace_lock: PathBuf,
     pub(crate) publish_lock: PathBuf,
     pub workspace_record: PathBuf,
@@ -121,14 +172,19 @@ impl StatePaths {
     /// Paths for a workspace known only by id: its existing dir, else the
     /// `ws-<24hex>` fallback name. Creates nothing.
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
-        Self::under(workspace_id, &rimz_home())
+        let dir_name = workspace_dir_name(&workspaces_dir(), &workspace_id)?;
+        Ok(Self::under_named(workspace_id, dir_name, &rimz_home()))
     }
 
     /// [`Self::for_workspace`] under an explicit home, for tests that should not
-    /// mutate process env.
+    /// mutate process env. Runtime lock references also use `home` as their
+    /// isolated runtime root; opening a Store pairs them with its runtime paths.
     pub fn under(workspace_id: WorkspaceId, home: &Path) -> Result<Self> {
         let dir_name = workspace_dir_name(&workspaces_dir_under(home), &workspace_id)?;
-        Ok(Self::under_named(workspace_id, dir_name, home))
+        let runtime = RuntimePaths::under_named(workspace_id.clone(), dir_name.clone(), home);
+        let mut paths = Self::under_named(workspace_id, dir_name, home);
+        paths.bind_runtime_locks(&runtime);
+        Ok(paths)
     }
 
     /// Paths for `workspace_id` in the dir `dir_name` under `home`.
@@ -138,8 +194,10 @@ impl StatePaths {
         let messages_dir = root.join("messages");
         let transcript_dir = root.join("transcript");
         let runs_dir = root.join("runs");
-        let locks_dir = root.join("locks");
-        let tmp_dir = root.join("tmp");
+        let locks_dir = root.join(Class::Locks.dir_name());
+        let tmp_dir = root.join(Class::Tmp.dir_name());
+        let runtime =
+            RuntimePaths::under_named(workspace_id.clone(), dir_name.clone(), &runtime_home());
         Self {
             workspace_id,
             dir_name,
@@ -159,8 +217,8 @@ impl StatePaths {
             messages_dir,
             transcript_dir,
             runs_dir,
-            workspace_lock: locks_dir.join("workspace.lock"),
-            publish_lock: locks_dir.join("publish.lock"),
+            workspace_lock: runtime.lock_path("workspace.lock"),
+            publish_lock: runtime.lock_path("publish.lock"),
             workspace_record: root.join("workspace.json"),
             room_bin: root.join("rimz"),
             channels_record: root.join("channels.json"),
@@ -173,6 +231,19 @@ impl StatePaths {
             locks_dir,
             root,
         }
+    }
+
+    pub(crate) fn bind_runtime_locks(&mut self, runtime: &RuntimePaths) {
+        self.workspace_lock = runtime.lock_path("workspace.lock");
+        self.publish_lock = runtime.lock_path("publish.lock");
+    }
+
+    pub(crate) fn lock_path(&self, name: &str) -> PathBuf {
+        // Every constructor builds workspace_lock inside the runtime lock directory.
+        self.workspace_lock
+            .parent()
+            .expect("workspace lock has a parent")
+            .join(name)
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
@@ -371,6 +442,9 @@ pub struct RuntimePaths {
     /// cross-workspace cache paths.
     pub persistent_shared_root: PathBuf,
     pub sock_dir: PathBuf,
+    pub live_dir: PathBuf,
+    pub lanes_dir: PathBuf,
+    pub locks_dir: PathBuf,
     pub heartbeat_dir: PathBuf,
     /// Per-renderer read receipts for unread sidebar rows. Disposable runtime
     /// sidecars merged by every renderer so focusing a pane in one tab clears it
@@ -467,14 +541,17 @@ impl RuntimePaths {
         let root = rimz_root.join("ws").join(dir_name.as_str());
         let shared_root = rimz_root.join("shared");
         let persistent_shared_root = shared_root.clone();
-        let sock_dir = root.join("sock");
-        let heartbeat_dir = root.join("heartbeat");
-        let read_marks_dir = root.join("read-marks");
-        let agent_context_dir = root.join("agent_context");
-        let subagent_context_dir = root.join("subagent_context");
-        let agent_telemetry_dir = root.join("agent-telemetry");
-        let agent_activity_dir = root.join("agent-activity");
-        let active_time_dir = root.join("active-time");
+        let sock_dir = root.join(Class::Sock.dir_name());
+        let live_dir = root.join(Class::Live.dir_name());
+        let lanes_dir = root.join(Class::Lanes.dir_name());
+        let locks_dir = root.join(Class::Locks.dir_name());
+        let heartbeat_dir = live_dir.join("heartbeat");
+        let read_marks_dir = live_dir.join("read-marks");
+        let agent_context_dir = live_dir.join("agent_context");
+        let subagent_context_dir = live_dir.join("subagent_context");
+        let agent_telemetry_dir = live_dir.join("agent-telemetry");
+        let agent_activity_dir = live_dir.join("agent-activity");
+        let active_time_dir = live_dir.join("active-time");
         Self {
             workspace_id,
             dir_name,
@@ -484,6 +561,9 @@ impl RuntimePaths {
             shared_root,
             persistent_shared_root,
             sock_dir,
+            live_dir,
+            lanes_dir,
+            locks_dir,
             heartbeat_dir,
             read_marks_dir,
             agent_context_dir,
@@ -528,7 +608,70 @@ impl RuntimePaths {
 
     /// Content-addressed launch and system prompt artifacts.
     pub fn prompt_dir(&self) -> PathBuf {
-        self.root.join("prompt")
+        self.live_path("prompt")
+    }
+
+    pub fn live_path(&self, name: impl AsRef<Path>) -> PathBuf {
+        self.live_dir.join(name)
+    }
+
+    pub fn lane_path(&self, name: impl AsRef<Path>) -> PathBuf {
+        self.lanes_dir.join(name)
+    }
+
+    pub fn lock_path(&self, name: impl AsRef<Path>) -> PathBuf {
+        self.locks_dir.join(name)
+    }
+
+    /// Room-local paths only; account-shared paths are outside the class model.
+    /// Keyed file families are represented by their containing directory.
+    pub fn all_paths(&self) -> Vec<PathBuf> {
+        vec![
+            self.sock_dir.clone(),
+            self.live_dir.clone(),
+            self.lanes_dir.clone(),
+            self.locks_dir.clone(),
+            self.heartbeat_dir.clone(),
+            self.read_marks_dir.clone(),
+            self.agent_context_dir.clone(),
+            self.subagent_context_dir.clone(),
+            self.agent_telemetry_dir.clone(),
+            self.agent_activity_dir.clone(),
+            self.active_time_dir.clone(),
+            self.prompt_dir(),
+            self.copilot_otel_path(),
+            self.sidebar_width_path(),
+            self.sidebar_filter_path(),
+            self.unread_path(),
+            self.pane_frame_path(),
+            self.agent_projection_path(),
+            self.topology_writer_lock(),
+            self.authoritative_pane_probe_path(),
+            self.authoritative_pane_probe_lock(),
+            self.diff_stats_path(),
+            self.cohort_spend_path(),
+            self.pipeline_path(),
+            self.pr_state_path(),
+            self.focus_anchor_path(),
+            self.focus_anchor_lock(),
+            self.codex_app_server_socket_path(),
+        ]
+    }
+
+    /// Detach disposable classes before removal so late writers cannot refill
+    /// the tree being removed. Lock inodes remain in place across a reset.
+    pub(crate) fn remove_disposable_dirs(&self) -> Result<bool> {
+        let mut removed = false;
+        for path in [&self.sock_dir, &self.live_dir, &self.lanes_dir] {
+            removed |= remove_runtime_dir_with(path, |detached| {
+                fs::remove_dir_all(detached).map_err(|source| PathErr::Io {
+                    path: detached.to_path_buf(),
+                    source,
+                })?;
+                Ok(true)
+            })?;
+        }
+        Ok(removed)
     }
 
     /// Room-scoped Copilot OpenTelemetry JSONL exporter cache.
@@ -562,57 +705,57 @@ impl RuntimePaths {
 
     /// Room-runtime sidebar width selected by the renderer.
     pub(crate) fn sidebar_width_path(&self) -> PathBuf {
-        self.root.join("sidebar-width.json")
+        self.lane_path("sidebar-width.json")
     }
 
     /// Shared cockpit body filter adopted by every renderer in the room.
     pub(crate) fn sidebar_filter_path(&self) -> PathBuf {
-        self.root.join("sidebar-filter.json")
+        self.lane_path("sidebar-filter.json")
     }
 
     /// The workspace-wide set of open unread episodes. The producer owns writes
     /// for status-derived opens and row-gone pruning; renderers and CLI commands
     /// write read receipts that derive this set back to read on the next fold.
     pub fn unread_path(&self) -> PathBuf {
-        self.root.join("unread.json")
+        self.lane_path("unread.json")
     }
 
     pub fn pane_frame_path(&self) -> PathBuf {
-        self.root.join("snapshot.json")
+        self.lane_path("snapshot.json")
     }
 
     /// Producer-published adapter wiring and provider-local sessions.
     pub fn agent_projection_path(&self) -> PathBuf {
-        self.root.join("agent-projection.json")
+        self.lane_path("agent-projection.json")
     }
 
     /// Serializes Zellij topology writer fencing and cache publication.
     pub(crate) fn topology_writer_lock(&self) -> PathBuf {
-        self.root.join("topology-writer.lock")
+        self.lock_path("topology-writer.lock")
     }
 
     pub(crate) fn authoritative_pane_probe_path(&self) -> PathBuf {
-        self.root.join("authoritative-pane-probe.json")
+        self.lane_path("authoritative-pane-probe.json")
     }
 
     pub(crate) fn authoritative_pane_probe_lock(&self) -> PathBuf {
-        self.root.join("authoritative-pane-probe.lock")
+        self.lock_path("authoritative-pane-probe.lock")
     }
 
     pub fn diff_stats_path(&self) -> PathBuf {
-        self.root.join("diff-stats.json")
+        self.lane_path("diff-stats.json")
     }
 
     pub(crate) fn cohort_spend_path(&self) -> PathBuf {
-        self.root.join("cohort-spend.json")
+        self.lane_path("cohort-spend.json")
     }
 
     pub(crate) fn pipeline_path(&self) -> PathBuf {
-        self.root.join("pipeline.json")
+        self.lane_path("pipeline.json")
     }
 
     pub(crate) fn pr_state_path(&self) -> PathBuf {
-        self.root.join("pr-state.json")
+        self.lane_path("pr-state.json")
     }
 
     /// The workspace's last jump scroll anchor: the pane a jump focused plus the
@@ -620,12 +763,12 @@ impl RuntimePaths {
     /// it on the fold that adopts the focus, so a cross-tab jump lands the card at
     /// the same on-screen row. Display-only runtime state, TTL-gated.
     pub(crate) fn focus_anchor_path(&self) -> PathBuf {
-        self.root.join("focus-anchor.json")
+        self.lane_path("focus-anchor.json")
     }
 
     /// Serializes nonce-gated focus action intent transitions.
     pub(crate) fn focus_anchor_lock(&self) -> PathBuf {
-        self.root.join("focus-anchor.lock")
+        self.lock_path("focus-anchor.lock")
     }
 
     /// Serializes complete pane writes, including their submit key.
@@ -739,11 +882,11 @@ impl RuntimePaths {
 
     pub fn workspace_spending_path(&self, scope_hash: &str) -> PathBuf {
         let prefix = scope_hash.get(..32).unwrap_or(scope_hash);
-        self.root.join(format!("workspace-spending.{prefix}.json"))
+        self.lane_path(format!("workspace-spending.{prefix}.json"))
     }
 
     pub(crate) fn workspace_spending_files(&self) -> Vec<PathBuf> {
-        fs::read_dir(&self.root)
+        fs::read_dir(&self.lanes_dir)
             .into_iter()
             .flatten()
             .filter_map(std::result::Result::ok)
@@ -774,6 +917,8 @@ impl RuntimePaths {
             self.rimz_root.as_path(),
             self.rimz_root.join("ws").as_path(),
             self.root.as_path(),
+            self.lanes_dir.as_path(),
+            self.locks_dir.as_path(),
         ] {
             ensure_private_runtime_dir(dir)?;
         }
@@ -793,6 +938,24 @@ impl RuntimePaths {
         mkdir_p(&self.agent_activity_dir)?;
         mkdir_p(&self.active_time_dir)?;
         Ok(())
+    }
+}
+
+fn remove_runtime_dir_with(
+    path: &Path,
+    remove: impl FnOnce(&Path) -> Result<bool>,
+) -> Result<bool> {
+    let detached = path.with_extension(format!("reset-{}", uuid::Uuid::now_v7().simple()));
+    match fs::rename(path, &detached) {
+        Ok(()) => {
+            remove(&detached)?;
+            Ok(true)
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(PathErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 

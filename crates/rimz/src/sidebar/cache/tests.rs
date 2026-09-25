@@ -72,7 +72,7 @@ fn presence_stamp_age_handles_clock_skew_and_bad_files() {
     let bad_dir = tempfile::tempdir().unwrap();
     let bad_workspace = WorkspaceId::from_project_root(bad_dir.path());
     let bad_runtime = RuntimePaths::under(bad_workspace, bad_dir.path()).unwrap();
-    std::fs::create_dir_all(&bad_runtime.root).unwrap();
+    std::fs::create_dir_all(&bad_runtime.live_dir).unwrap();
     std::fs::write(presence_stamp_path(&bad_runtime), b"{ not json").unwrap();
     assert_eq!(presence_stamp_age_ms(&bad_runtime), None);
     assert!(!presence_event_mode(presence_stamp_age_ms(&bad_runtime)));

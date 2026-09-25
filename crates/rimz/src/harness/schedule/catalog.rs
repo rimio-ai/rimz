@@ -256,7 +256,7 @@ impl TaskCatalog {
                     .display()
             );
         }
-        let instance_root = instance_root(&entry.resolved_root())?;
+        let instance_root = StatePaths::for_project_root(&entry.resolved_root())?;
         if entry.wait.is_some() || super::ephemeral_lifetime(entry) {
             instances::insert(&instance_root, name, entry)?;
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
@@ -310,7 +310,7 @@ impl TaskCatalog {
                 config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?
             }
             TaskSource::Instance => instances::rename(
-                &instance_root(&task.entry().resolved_root())?,
+                &StatePaths::for_project_root(&task.entry().resolved_root())?,
                 name,
                 new_name,
             )?,
@@ -482,7 +482,7 @@ fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
     match task.source() {
         TaskSource::Config => Ok(config_edit::remove(config_edit::TaskStore::Machine, name)?),
         TaskSource::Instance => Ok(instances::remove(
-            &instance_root(&task.entry().resolved_root())?,
+            &StatePaths::for_project_root(&task.entry().resolved_root())?,
             name,
             Some(task.entry()),
         )?),

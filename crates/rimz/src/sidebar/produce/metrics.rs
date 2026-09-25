@@ -137,7 +137,7 @@ fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
 pub(super) fn pane_root_bindings(
     runtime: &crate::RuntimePaths,
 ) -> HashMap<PaneId, PaneRootBinding> {
-    let prior = read_metrics_sample_cache(&runtime.root.join("metrics-sample.json"));
+    let prior = read_metrics_sample_cache(&runtime.lane_path("metrics-sample.json"));
     prior
         .entries
         .into_iter()
@@ -158,7 +158,7 @@ pub(super) fn pane_root_bindings(
 /// cache fast path so metrics can refresh from a topology-fresh frame without
 /// paying another mux roster read.
 pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths) -> bool {
-    let prior = read_metrics_sample_cache(&runtime.root.join("metrics-sample.json"));
+    let prior = read_metrics_sample_cache(&runtime.lane_path("metrics-sample.json"));
     let now_ms = unix_now_ms();
     let viewed: HashSet<&PaneId> = frame.viewed_panes.iter().collect();
     frame.pane_states().any(|pane| {
@@ -194,7 +194,7 @@ pub(super) fn enrich_pane_metrics(
     session_name: &str,
     runtime: &crate::RuntimePaths,
 ) -> bool {
-    let cache_path = runtime.root.join("metrics-sample.json");
+    let cache_path = runtime.lane_path("metrics-sample.json");
     let prior = read_metrics_sample_cache(&cache_path);
     let now_ms = unix_now_ms();
     let viewed: HashSet<PaneId> = frame.viewed_panes.iter().cloned().collect();

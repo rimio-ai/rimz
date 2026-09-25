@@ -75,7 +75,7 @@ fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'stati
         ("credits", runtime.shared_credits_path()),
         ("provider_spending", runtime.shared_provider_spending_path()),
         ("agent_projection", runtime.agent_projection_path()),
-        ("metrics_sample", runtime.root.join("metrics-sample.json")),
+        ("metrics_sample", runtime.lane_path("metrics-sample.json")),
         (
             "codex_daemon_reap",
             crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(runtime),
@@ -517,10 +517,10 @@ fn consumer_fold_inputs_stamp_ignores_unrelated_runtime_churn() {
     let fixture = StampFixture::new();
     let baseline = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
     let unrelated = [
-        fixture.runtime.root.join("snapshot.lock"),
-        fixture.runtime.root.join("presence.stamp"),
-        fixture.runtime.root.join("client-presence-probe.stamp"),
-        fixture.runtime.root.join("producer-cache.json"),
+        fixture.runtime.lock_path("snapshot.lock"),
+        fixture.runtime.live_path("presence.stamp"),
+        fixture.runtime.live_path("client-presence-probe.stamp"),
+        fixture.runtime.lane_path("producer-cache.json"),
     ];
     for path in unrelated {
         std::fs::write(&path, b"churn").unwrap();
@@ -533,8 +533,8 @@ fn consumer_fold_inputs_stamp_ignores_unrelated_runtime_churn() {
         std::fs::remove_file(path).unwrap();
     }
 
-    let temp = fixture.runtime.root.join(".snapshot.tmp-123");
-    let renamed = fixture.runtime.root.join("producer-only.cache");
+    let temp = fixture.runtime.lane_path(".snapshot.tmp-123");
+    let renamed = fixture.runtime.lane_path("producer-only.cache");
     std::fs::write(&temp, b"temp").unwrap();
     std::fs::rename(&temp, &renamed).unwrap();
     std::fs::remove_file(renamed).unwrap();
@@ -552,15 +552,13 @@ fn consumer_fold_inputs_stamp_tracks_filtered_dynamic_files() {
     for path in [
         fixture
             .runtime
-            .root
-            .join("workspace-spending.0123456789abcdef.json"),
-        fixture.runtime.root.join("budget.0123456789abcdef.json"),
-        fixture.runtime.root.join("budget.fleet.json"),
-        fixture.runtime.root.join("budget.scopes.json"),
+            .lane_path("workspace-spending.0123456789abcdef.json"),
+        fixture.runtime.lane_path("budget.0123456789abcdef.json"),
+        fixture.runtime.lane_path("budget.fleet.json"),
+        fixture.runtime.lane_path("budget.scopes.json"),
         fixture
             .runtime
-            .root
-            .join("auto-continue.0123456789abcdef.json"),
+            .lane_path("auto-continue.0123456789abcdef.json"),
         fixture
             .runtime
             .persistent_shared_root

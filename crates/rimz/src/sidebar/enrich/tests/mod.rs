@@ -351,7 +351,7 @@ fn codex_root(id: &str, worktree: &str, pane_id: &str) -> AgentState {
 }
 
 fn binding_log_lines(runtime: &RuntimePaths) -> usize {
-    let path = runtime.root.join("binding.log.jsonl");
+    let path = runtime.live_path("binding.log.jsonl");
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()

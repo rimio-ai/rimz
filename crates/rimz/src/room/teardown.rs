@@ -37,7 +37,9 @@ pub fn teardown_room(
     // the sweep below is the corpse — never a freshly-born replacement.
     let session_killed = backend.kill_session(session_name).is_ok();
     let cache_removed = backend.purge_resurrection_cache(session_name);
-    crate::sidebar::sweep_orphan_runtime(runtime);
+    if let Err(err) = runtime.remove_disposable_dirs() {
+        tracing::warn!(error = %err, "room runtime removal failed");
+    }
     // The session is already a corpse (killed above), so sweeping its lingering
     // mux server is cleanup, not destruction.
     let processes_swept =

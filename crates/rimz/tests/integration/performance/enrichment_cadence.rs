@@ -98,12 +98,7 @@ fn fixture_produce_never_touches_the_shared_pane_cache() {
         String::from_utf8_lossy(&cold.stderr),
     );
     assert!(
-        !fixture
-            .env
-            .runtime_paths()
-            .root
-            .join("snapshot.json")
-            .exists(),
+        !fixture.env.runtime_paths().pane_frame_path().exists(),
         "a fixture-driven produce must not write the shared pane cache"
     );
 }
@@ -334,12 +329,11 @@ fn idle_room_produce_runs_no_enrichment_io() {
     );
 
     let runtime = fixture.env.runtime_paths();
-    let runtime_root = runtime.root.clone();
     let now_ms = unix_now_ms();
 
     // Backdate the per-worktree git stamps into the tier gap: stale under
     // DIFF_STATS_TTL (5s), fresh under DIFF_STATS_IDLE_TTL (60s).
-    let diff_stats_path = runtime_root.join("diff-stats.json");
+    let diff_stats_path = runtime.diff_stats_path();
     let mut diff_stats =
         serde_json::from_slice::<DiffStatsCache>(&std::fs::read(&diff_stats_path).unwrap())
             .unwrap();

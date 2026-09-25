@@ -89,10 +89,12 @@ fn sidebar_self_closes_when_its_tab_empties() {
     wait_for_no_serve_processes(&name, Duration::from_secs(15));
     wait_for_nonplugin_panes(&room, 0, Duration::from_secs(20));
 
-    let heartbeat_dir = xdg
-        .join("rimz")
-        .join(SELF_CLOSE_WORKSPACE_ID)
-        .join("heartbeat");
+    let heartbeat_dir = rimz::RuntimePaths::under(
+        WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
+        xdg,
+    )
+    .expect("runtime paths")
+    .heartbeat_dir;
     wait_for_no_sidebar_heartbeat(&heartbeat_dir, Duration::from_secs(15));
 }
 
@@ -102,11 +104,12 @@ fn sidebar_self_closes_when_plugin_roster_omits_its_pane() {
         wait_for_no_serve_processes(name, Duration::from_secs(15));
         wait_for_nonplugin_panes(room, 0, Duration::from_secs(20));
         wait_for_no_sidebar_heartbeat(
-            &room
-                .path()
-                .join("rimz")
-                .join(SELF_CLOSE_WORKSPACE_ID)
-                .join("heartbeat"),
+            &rimz::RuntimePaths::under(
+                WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
+                room.path(),
+            )
+            .expect("runtime paths")
+            .heartbeat_dir,
             Duration::from_secs(15),
         );
     });

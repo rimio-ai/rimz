@@ -362,7 +362,7 @@ fn consumer_fold_inputs_stamp(
         runtime.unread_path(),
         crate::remote::link::stats_path(runtime),
         runtime.agent_projection_path(),
-        runtime.root.join("metrics-sample.json"),
+        runtime.lane_path("metrics-sample.json"),
         runtime.diff_stats_path(),
         runtime.cohort_spend_path(),
         runtime.pipeline_path(),
@@ -424,7 +424,7 @@ fn consumer_projection_inputs_stamp(
 }
 
 fn filtered_runtime_inputs(runtime: &RuntimePaths) -> Vec<StampedPath> {
-    let mut paths = filtered_paths(&runtime.root, |name| {
+    let mut paths = filtered_paths(&runtime.lanes_dir, |name| {
         (crate::disk::paths::is_workspace_spending_file(name)
             || name.starts_with("budget.")
             || name.starts_with("auto-continue."))

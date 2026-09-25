@@ -8,6 +8,7 @@ use super::{
     GcErr, GcReport, Result, SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL,
     read_dir_if_exists,
 };
+use crate::disk::paths::Class;
 use crate::ids::SidebarInstanceId;
 #[cfg(test)]
 use crate::ids::WorkspaceId;
@@ -47,16 +48,17 @@ fn collect_workspace_runtime(
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<()> {
-    let heartbeat_dir = workspace_root.join("heartbeat");
-    let sock_dir = workspace_root.join("sock");
-    let read_marks_dir = workspace_root.join("read-marks");
-    let activity_dir = workspace_root.join("agent-activity");
-    let active_time_dir = workspace_root.join("active-time");
-    let context_dir = workspace_root.join("agent_context");
-    let subagent_context_dir = workspace_root.join("subagent_context");
-    let telemetry_dir = workspace_root.join("agent-telemetry");
-    let idle_compact_dir = workspace_root.join("idle-compact");
-    let prompt_dir = workspace_root.join("prompt");
+    let live_dir = Class::Live.path_under(workspace_root);
+    let heartbeat_dir = live_dir.join("heartbeat");
+    let sock_dir = Class::Sock.path_under(workspace_root);
+    let read_marks_dir = live_dir.join("read-marks");
+    let activity_dir = live_dir.join("agent-activity");
+    let active_time_dir = live_dir.join("active-time");
+    let context_dir = live_dir.join("agent_context");
+    let subagent_context_dir = live_dir.join("subagent_context");
+    let telemetry_dir = live_dir.join("agent-telemetry");
+    let idle_compact_dir = live_dir.join("idle-compact");
+    let prompt_dir = live_dir.join("prompt");
     for dir in [
         &heartbeat_dir,
         &sock_dir,
@@ -68,6 +70,7 @@ fn collect_workspace_runtime(
         &telemetry_dir,
         &idle_compact_dir,
         &prompt_dir,
+        &live_dir,
         workspace_root,
     ] {
         sweep.remember_dir_size(dir);
@@ -100,6 +103,7 @@ fn collect_workspace_runtime(
     if !room_is_live {
         sweep.remove_dir_if_empty(&telemetry_dir, report)?;
     }
+    sweep.remove_dir_if_empty(&live_dir, report)?;
     sweep.remove_dir_if_empty(workspace_root, report)?;
     Ok(())
 }
@@ -529,7 +533,7 @@ mod tests {
         fs::write(&stale_subagent, b"{}").unwrap();
         let stale_telemetry = rt.copilot_otel_path();
         fs::write(&stale_telemetry, b"{}\n").unwrap();
-        let stale_idle_compact = rt.root.join("idle-compact").join("deadbeef.json");
+        let stale_idle_compact = rt.live_path("idle-compact").join("deadbeef.json");
         fs::create_dir_all(stale_idle_compact.parent().unwrap()).unwrap();
         fs::write(&stale_idle_compact, b"{}").unwrap();
         let stale_prompt = rt.prompt_dir().join("sys.deadbeef.md");
@@ -583,7 +587,7 @@ mod tests {
             "the emptied telemetry dir is removed"
         );
         assert!(
-            !rt.root.join("idle-compact").exists(),
+            !rt.live_path("idle-compact").exists(),
             "the emptied idle-compact dir is removed"
         );
         assert!(

@@ -149,6 +149,7 @@ fn update_record(
     update: impl FnOnce(&mut ActiveTimeRecord, bool) -> bool,
 ) -> Result<bool, atomic::AtomicErr> {
     sidecar::update(
+        runtime,
         &runtime.active_time_dir,
         kind,
         agent_id,
@@ -312,6 +313,9 @@ mod tests {
     fn concurrent_progress_updates_keep_the_full_monotonic_span() {
         let (_dir, runtime) = runtime();
         record_progress(&runtime, "claude", "sess-1", at(0), GRACE).unwrap();
+        let lock_name = format!("active.{}.lock", sidecar::digest("claude", "sess-1"));
+        assert!(runtime.lock_path(&lock_name).exists());
+        assert!(!runtime.active_time_dir.join(&lock_name).exists());
         let runtime = Arc::new(runtime);
         let barrier = Arc::new(Barrier::new(17));
         let threads = (1..=16)

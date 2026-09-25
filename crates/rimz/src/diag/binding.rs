@@ -13,7 +13,7 @@ use crate::disk::retention::ROTATING_LOG_MAX_BYTES as BINDING_LOG_MAX_BYTES;
 const BINDING_LOG_NAME: &str = "binding.log.jsonl";
 
 fn path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join(BINDING_LOG_NAME)
+    runtime.live_path(BINDING_LOG_NAME)
 }
 
 pub fn append(runtime: &RuntimePaths, record: &impl serde::Serialize) {

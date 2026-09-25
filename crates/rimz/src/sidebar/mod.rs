@@ -535,7 +535,7 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
     // A peer that finds a fresh heartbeat while polling skips; the winner holds
     // the lock until its daemon publishes one. No lock dir or a wedged producer
     // falls to a local launch, and the runtime election reaps the loser.
-    let lock_path = runtime.root.join("sidebar-launch.lock");
+    let lock_path = runtime.lock_path("sidebar-launch.lock");
     let _guard =
         match single_flight::coalesce(&lock_path, LAUNCH_WAIT_STEP, LAUNCH_WAIT_STEPS, || {
             fresh_sidebar_present(runtime).then_some(())

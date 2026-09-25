@@ -605,7 +605,7 @@ fn park_record_path(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> PathBuf {
-    runtime.root.join(format!(
+    runtime.lane_path(format!(
         "auto-continue.{}.json",
         crate::store::sidecar::digest(kind.as_str(), agent_id.as_str())
     ))

@@ -655,7 +655,7 @@ pub struct TopologyWriterConflict {
 }
 
 fn topology_writer_conflict_path(runtime: &RuntimePaths) -> std::path::PathBuf {
-    runtime.root.join("topology-writer-conflict.json")
+    runtime.lane_path("topology-writer-conflict.json")
 }
 
 pub fn read_topology_writer_conflict(runtime: &RuntimePaths) -> Option<TopologyWriterConflict> {

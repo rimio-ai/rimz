@@ -74,7 +74,7 @@ pub(super) fn produce_pr_states(
         return cache;
     }
 
-    let lock_path = runtime.root.join("pr-state.lock");
+    let lock_path = runtime.lock_path("pr-state.lock");
     let fresh = || {
         let cache = read_pr_state_cache(&path);
         let now_ms = unix_now_ms();
