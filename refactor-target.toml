@@ -95,7 +95,8 @@ upward-dependencies = ["address"]
 # Sender reply handles and labels are shared by address, store and CLI consumers.
 # AgentState::runs_in shares the durable effective-isolation decision with CLI observers.
 # Host skill discovery, provider switches and their compiled report cross config, harness and CLI seams.
-surface-budget = 882
+# Shared-server launches disable provider-native LSP through the launch capability.
+surface-budget = 883
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -655,7 +656,8 @@ allowed-dependencies = [
     "utils::path",
     "worktree",
 ]
-surface-budget = 48
+# Rebirth admission reads distinct checkout roots before materializing tabs.
+surface-budget = 49
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
@@ -696,6 +698,7 @@ allowed-dependencies = [
     "harness::subagent_policy",
     "harness::team_prompt",
     "ids",
+    "lsp::registry",
     "sandbox",
 ]
 # The exec wrapper and inspection share one read-only compiler and write boundary.

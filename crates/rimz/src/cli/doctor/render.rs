@@ -184,6 +184,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_accounts(w, &report.accounts, &mut tally)?;
     render_plugins(w, report, &mut tally)?;
     render_loop(w, &report.loop_tasks, &mut tally)?;
+    render_lsp(w, &report.lsp, &mut tally)?;
     render_remote_control(w, &report.remote_control, &mut tally)?;
     render_storage(w, &report.disk_usage, &mut tally)?;
 
@@ -199,6 +200,58 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_diagnostics(w, report, &mut tally)?;
     render_last_incident(w, report, &mut tally)?;
     render_tally(w, &tally)?;
+    Ok(())
+}
+
+fn render_lsp(
+    w: &mut impl Write,
+    lsp: &Probe<super::model::Lsp>,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    section(w, tally, "LSP")?;
+    let Probe::Ready(lsp) = lsp else {
+        if let Probe::Unavailable { error } = lsp {
+            note(tally, w, Health::Warn, &unavailable_text(error))?;
+        }
+        return Ok(());
+    };
+    if lsp.servers.is_empty() {
+        note(tally, w, Health::Neutral, "no shared language servers")?;
+    } else {
+        let mut table = Table::new(["CHECKOUT", "SERVER", "STATE", "RSS", "LEASES"]);
+        for server in &lsp.servers {
+            use rimz::lsp::registry::State;
+            let (health, state) = match &server.entry.state {
+                State::Starting => (Health::Info, "starting".to_owned()),
+                State::Indexing => (Health::Info, "indexing".to_owned()),
+                State::Ready => (Health::Ok, "ready".to_owned()),
+                State::Stopped { reason, .. } => (Health::Warn, format!("stopped: {reason}")),
+            };
+            table.row([
+                cell(server.entry.root.display().to_string()),
+                cell(&server.entry.server),
+                verdict(tally, health, state),
+                cell(fmt_bytes(server.rss_bytes)),
+                cell(server.entry.leases.len().to_string()),
+            ]);
+        }
+        table.render(w)?;
+    }
+    if let Some(record) = &lsp.last_refusal {
+        note(
+            tally,
+            w,
+            Health::Warn,
+            &format!(
+                "{}: {} {} {} ({})",
+                record.at,
+                record.root.display(),
+                record.server,
+                record.event,
+                record.details
+            ),
+        )?;
+    }
     Ok(())
 }
 

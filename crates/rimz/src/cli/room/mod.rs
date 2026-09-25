@@ -738,6 +738,11 @@ fn birth_managed_room(
                 if choice == RebirthChoice::Recover && preview.requires_sandbox() {
                     rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
                 }
+                if choice == RebirthChoice::Recover {
+                    for root in plan.checkout_roots() {
+                        crate::cli::lsp_admission::admit(root)?;
+                    }
+                }
                 NormalRebirth::Selected {
                     plan: Box::new(plan),
                     choice,
@@ -887,6 +892,7 @@ fn write_project_trust_offer_to(
     write_project_trust_list(&mut *out, "teams", &summary.teams)?;
     write_project_trust_list(&mut *out, "env for", &summary.env_agents)?;
     write_project_trust_list(&mut *out, "accounts", &summary.accounts)?;
+    write_project_trust_list(&mut *out, "language servers", &summary.lsp_servers)?;
     if summary.hooks > 0 {
         writeln!(out, "  hooks: {}", summary.hooks)?;
     }

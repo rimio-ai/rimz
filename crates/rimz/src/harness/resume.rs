@@ -647,6 +647,16 @@ impl RecoveryPlan {
             .collect()
     }
 
+    pub(super) fn checkout_roots(&self) -> BTreeSet<&Path> {
+        self.entries
+            .iter()
+            .map(|entry| match entry {
+                RecoveryEntry::Flat(planned) => planned.tab.cwd.as_path(),
+                RecoveryEntry::Team(planned) => planned.cwd.as_path(),
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(super) fn resumed_keys(&self) -> BTreeSet<(AgentKind, AgentSessionId)> {
         let mut keys = self.base_resumed.clone();

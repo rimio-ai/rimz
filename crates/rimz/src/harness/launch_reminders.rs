@@ -17,6 +17,8 @@ pub(super) struct LaunchReminders {
     /// The launch runs inside the RimZ sandbox view: adds the sandbox reminder
     /// and switches off the provider's native command sandbox.
     pub sandbox: bool,
+    pub lsp_configured: bool,
+    pub lsp_servers: Vec<String>,
     pub subagent_catalog: Option<SubagentCatalog>,
     pub team: Option<TeamReminder>,
 }
@@ -27,6 +29,8 @@ impl Default for LaunchReminders {
             git: None,
             model: true,
             sandbox: false,
+            lsp_configured: false,
+            lsp_servers: Vec::new(),
             subagent_catalog: None,
             team: None,
         }
@@ -100,6 +104,12 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     } else if let Some(catalog) = reminders.subagent_catalog.as_ref() {
         paragraphs.push(subagent_policy::reminder(catalog));
     }
+    if !reminders.lsp_servers.is_empty() {
+        paragraphs.push(format!(
+            "Language servers {} serve this checkout, shared read-only with every agent working in it. Navigate and explore code through Skill(rimz-lsp).",
+            reminders.lsp_servers.iter().map(|server| escape_reminder_text(server)).collect::<Vec<_>>().join(", ")
+        ));
+    }
     wrap(&paragraphs.join("\n\n"))
 }
 
@@ -152,6 +162,38 @@ fn model_line(params: &LaunchParams, fragment: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::{ProfilesConfig, Team};
+
+    #[test]
+    fn shared_lsp_reminder_follows_policy_for_peers_and_children() {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        let reminders = LaunchReminders {
+            lsp_configured: true,
+            lsp_servers: vec![
+                "rust (rust-analyzer)".to_owned(),
+                "python (pyright)".to_owned(),
+            ],
+            ..LaunchReminders::default()
+        };
+        for subagent in [false, true] {
+            request.subagent = subagent;
+            let text = render(&request, &reminders, Path::new("/checkout"));
+            assert!(text.contains("rust (rust-analyzer)"));
+            assert!(text.contains("python (pyright)"));
+            assert!(text.contains("Skill(rimz-lsp)"));
+            if subagent {
+                assert!(text.find(SUBAGENT_REMINDER_BODY) < text.find("Skill(rimz-lsp)"));
+            }
+            assert!(
+                !render(
+                    &request,
+                    &LaunchReminders::default(),
+                    Path::new("/checkout")
+                )
+                .contains("Skill(rimz-lsp)")
+            );
+        }
+    }
 
     fn team_reminder(team: Team) -> TeamReminder {
         TeamReminder::new(team, &ProfilesConfig::default())

@@ -90,6 +90,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         accounts: agents::collect_accounts(ws),
         plugins: agents::collect_plugins(),
         loop_tasks: collect_loop(),
+        lsp: collect_lsp(),
         remote_control: runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path())),
         disk_usage: runtime::collect_storage(),
         protocols: ws.map(protocol::collect_protocols),
@@ -99,6 +100,33 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         messages: ws.map(|ws| messages::collect_messages(ws, history_cleared_at)),
         diagnostics: ws.map(|ws| runtime::collect_diagnostics(ws, history_cleared_at)),
         last_incident: ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at)),
+    }
+}
+
+fn collect_lsp() -> model::Probe<model::Lsp> {
+    match rimz::lsp::registry::read_entries() {
+        Ok(entries) => model::Probe::Ready(model::Lsp {
+            servers: entries
+                .into_iter()
+                .map(|entry| {
+                    let rss_bytes = entry
+                        .server_pid
+                        .filter(|pid| {
+                            rimz::proc::process_is_live(*pid, entry.server_start_token.as_deref())
+                        })
+                        .and_then(rimz::proc::tree_totals)
+                        .map_or(0, |totals| totals.rss_kb.saturating_mul(1024));
+                    model::LspServer { entry, rss_bytes }
+                })
+                .collect(),
+            last_refusal: rimz::diag::lsp::recent()
+                .into_iter()
+                .rev()
+                .find(|record| matches!(record.event.as_str(), "refused" | "queue_timeout")),
+        }),
+        Err(error) => model::Probe::Unavailable {
+            error: error.to_string(),
+        },
     }
 }
 

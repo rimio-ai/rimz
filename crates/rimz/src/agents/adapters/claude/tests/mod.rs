@@ -295,3 +295,36 @@ fn subagent_lockdown_handles_claude_equals_and_empty_forms() {
     ClaudeAdapter.lockdown_subagent_args(&mut empty);
     assert_eq!(empty, vec!["--model", "opus", "--disallowedTools", "Agent"]);
 }
+
+#[test]
+fn shared_lsp_denial_composes_with_child_lockdown_in_either_order() {
+    for child_first in [false, true] {
+        let mut args = [
+            "--disallowedTools=Read",
+            "--disallowed-tools",
+            "Write",
+            "--tools",
+            "Bash,LSP",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        if child_first {
+            ClaudeAdapter.lockdown_subagent_args(&mut args);
+        }
+        ClaudeAdapter.disable_native_lsp_args(&mut args);
+        if !child_first {
+            assert!(!args.iter().any(|arg| arg == "Agent"));
+            ClaudeAdapter.lockdown_subagent_args(&mut args);
+        }
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "--disallowedTools")
+                .count(),
+            1
+        );
+        assert_eq!(args.iter().filter(|arg| *arg == "LSP").count(), 1);
+        assert!(args.iter().any(|arg| arg == "Agent"));
+        assert!(args.iter().any(|arg| arg == "Read"));
+        assert!(args.iter().any(|arg| arg == "Write"));
+    }
+}

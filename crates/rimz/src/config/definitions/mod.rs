@@ -28,6 +28,7 @@ pub enum SkillCheck<'a> {
 
 #[derive(Debug, Default)]
 pub struct LoadedDefinitions {
+    pub tools: BTreeMap<String, Vec<String>>,
     pub agent_profiles: ProfilesConfig,
     pub subagent_profiles: ProfilesConfig,
     pub teams: TeamsConfig,
@@ -234,6 +235,9 @@ pub fn load(
                 names.insert(name.clone(), path.clone());
                 let fm: AgentFrontmatter = frontmatter::parse(&path, yaml)?;
                 frontmatter::description(&path, fm.description.as_deref())?;
+                if let Some(tools) = &fm.tools {
+                    loaded.tools.insert(name.clone(), tools.clone());
+                }
                 tree.definitions.insert(
                     name.clone(),
                     Definition {

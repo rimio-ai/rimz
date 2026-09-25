@@ -29,7 +29,8 @@ pub(super) fn run(json: bool) -> Result<()> {
         )?;
     }
     let loaded = load(&home, check, &machine);
-    let warnings = warnings(&loaded, machine.agents.isolation);
+    let mut warnings = warnings(&loaded, machine.agents.isolation);
+    warnings.extend(lsp_warnings(&loaded, &machine));
     if json {
         render::json_pretty(&serde_json::json!({
             "rows": loaded.rows,
@@ -172,6 +173,29 @@ fn rows<'a>(
     Ok(())
 }
 
+fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfig) -> Vec<Warning> {
+    if machine.lsp.servers.is_empty() {
+        return Vec::new();
+    }
+    loaded
+        .rows
+        .iter()
+        .filter(|row| {
+            loaded
+                .tools
+                .get(&row.name)
+                .is_some_and(|tools| tools.iter().any(|tool| tool == "LSP"))
+        })
+        .map(|row| Warning {
+            path: row.source.clone(),
+            message: format!(
+                "profile {}: tools names LSP, which a room with a shared language server strips",
+                row.name
+            ),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +248,40 @@ mod tests {
     }
 
     #[test]
+    fn shared_lsp_warning_requires_machine_servers_and_named_tool() {
+        let mut loaded = LoadedDefinitions::default();
+        for (name, tools) in [
+            ("navigator", ["Bash", "LSP"]),
+            ("writer", ["Write", "Read"]),
+        ] {
+            loaded
+                .tools
+                .insert(name.into(), tools.map(str::to_owned).to_vec());
+            loaded.rows.push(definitions::DefinitionRow {
+                name: name.into(),
+                namespace: "agents".into(),
+                kind: "claude".into(),
+                model: None,
+                effort: None,
+                source: format!("agents/{name}.md").into(),
+                team: None,
+                role: None,
+                owns: Vec::new(),
+                signals: Vec::new(),
+            });
+        }
+        assert!(lsp_warnings(&loaded, &rimz::config::MachineConfig::default()).is_empty());
+        let machine = toml::from_str("[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
+        let warnings = lsp_warnings(&loaded, &machine);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].path.ends_with("navigator.md"));
+        assert_eq!(
+            warnings[0].message,
+            "profile navigator: tools names LSP, which a room with a shared language server strips"
+        );
+    }
+
+    #[test]
     fn validation_keeps_good_rows_and_collects_definition_errors() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("agents")).unwrap();
@@ -234,12 +292,13 @@ mod tests {
         .unwrap();
         std::fs::write(
             root.path().join("agents/good.md"),
-            "---\ndescription: Good\nmodel: opus\ntools: [Read]\n---\n",
+            "---\ndescription: Good\nmodel: opus\ntools: [Read, LSP]\n---\n",
         )
         .unwrap();
         std::fs::write(root.path().join("agents/bad.md"), "no frontmatter").unwrap();
         let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
         assert!(loaded.rows.iter().any(|row| row.name == "good"));
+        assert_eq!(loaded.tools["good"], ["Read", "LSP"]);
         assert!(
             loaded
                 .errors

@@ -40,6 +40,7 @@ pub(super) struct DoctorReport {
     pub(super) accounts: Probe<Accounts>,
     pub(super) plugins: Vec<PluginRow>,
     pub(super) loop_tasks: LoopTasks,
+    pub(super) lsp: Probe<Lsp>,
     pub(super) remote_control: RemoteControl,
     pub(super) disk_usage: Storage,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,6 +57,18 @@ pub(super) struct DoctorReport {
     pub(super) diagnostics: Option<Diagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_incident: Option<LastIncident>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct Lsp {
+    pub(super) servers: Vec<LspServer>,
+    pub(super) last_refusal: Option<rimz::diag::lsp::Record>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct LspServer {
+    pub(super) entry: rimz::lsp::registry::Entry,
+    pub(super) rss_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]

@@ -949,6 +949,9 @@ pub fn remove_marked_worktree(
     let path_arg = path.to_string_lossy();
     args.push(path_arg.as_ref());
     git_run(repo_root, args)?;
+    if let Err(error) = crate::lsp::registry::stop_checkout(path) {
+        tracing::debug!(%error, "language-server checkout removal notification failed");
+    }
     let branch_deletion = delete_branch(repo_root, marker, force)?;
     Ok(RemovalOutcome {
         worktree_name: marker.name.clone(),

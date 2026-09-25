@@ -116,6 +116,22 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
 }
 
 #[test]
+fn shared_lsp_configuration_reaches_child_reminders_without_a_live_server() {
+    let machine: crate::config::MachineConfig = toml::from_str("[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']").unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), config.path()).unwrap();
+    for subagent in [false, true] {
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+        request.subagent = subagent;
+        let (reminder, _) = reminders(&request, Some(&effective), &machine.agents.commands);
+        assert!(reminder.lsp_configured);
+        assert!(reminder.lsp_servers.is_empty());
+    }
+}
+
+#[test]
 fn broken_effective_config_skips_launch_reminder() {
     let project = tempfile::tempdir().expect("project");
     let config = tempfile::tempdir().expect("config");
