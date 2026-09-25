@@ -883,7 +883,9 @@ pub(crate) fn open_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result
 
 pub(crate) fn runtime_paths_for(workspace_id: WorkspaceId) -> Result<RuntimePaths> {
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
-    runtime.ensure_dirs().context("preparing runtime dirs")?;
+    runtime
+        .ensure_runtime_dirs()
+        .context("preparing runtime dirs")?;
     Ok(runtime)
 }
 

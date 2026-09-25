@@ -17,6 +17,28 @@ use serde_json::json;
 use crate::common::Env;
 
 #[test]
+fn gc_preserves_quiet_loop_and_message_wake_lanes() {
+    let env = Env::new();
+    let rt = env.runtime_paths();
+    rt.ensure_dirs().unwrap();
+    let lanes = [
+        rt.lane_path("loop-fire.json"),
+        rt.lane_path("message-wake.json"),
+    ];
+    for lane in &lanes {
+        std::fs::write(lane, b"{}").unwrap();
+        std::fs::File::open(lane)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(30 * 86_400))
+            .unwrap();
+    }
+    env.rimz().args(["gc", "--json"]).assert().success();
+    for lane in lanes {
+        assert!(lane.exists(), "quiet lane lost: {}", lane.display());
+    }
+}
+
+#[test]
 fn sidebar_snapshot_does_not_create_an_abandoned_state_scaffold() {
     let env = Env::new();
 

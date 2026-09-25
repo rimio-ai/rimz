@@ -252,7 +252,7 @@ The report goes to stderr before the rebuild:
 
 The report names the session deletion, process sweep, preserved temporary files, archive path, canceled runs, removed cache entries, and whether the prior-agent rollup was kept. Hard reset additionally removes audit, owned state, and tmp.
 
-Soft reset keeps transcripts, message history, run records, agent scratch and handled skill copies, room tmp, and standing fleet budget choices. Both resets clear handleless skill copies in `cache/skills/`. `--hard` deletes `audit/`, `owned/` except `owned/runs/`, `tmp/`, the active log and carryover; the rotated log archive remains. Run waiters can read Canceled after reset; terminal run records are reclaimed after the owned GC grace. Neither reset removes runtime `locks/`.
+Soft reset keeps transcripts, message history, run records, agent scratch and handled skill copies, room tmp, and standing fleet budget choices. Both resets clear handleless skill copies in `cache/skills/`. `--hard` deletes `audit/`, `owned/` except `owned/runs/`, `tmp/`, the active log and carryover; the rotated log archive remains. Run waiters can read Canceled after reset; terminal run records are reclaimed after the owned GC grace. Neither reset removes state `locks/`.
 
 What reset does to the store is in [store internals](../../internals/store.md#maintenance).
 
@@ -268,7 +268,7 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 | --- | --- | --- |
 | `worktrees` | Current repository | Removes RimZ-owned worktrees that are clean, landed, and unoccupied, the same sweep as [`rimz worktree sweep`](./worktree.md#sweep-landed-worktrees). |
 | `workspaces` | Machine | Deletes workspace stores that provably hold nothing: the project folder is gone, or a `rimz start` was abandoned before any history. A store whose record is unreadable but which holds history is kept and reported. |
-| `runtime` | Machine | Applies room lifetime-class rules and removes stale shared provider probe markers. Live/lanes use `--older-than`; sockets use a connect probe and locks a try-lock. |
+| `runtime` | Machine | Applies room lifetime-class rules and removes stale shared provider probe markers. Only live files use `--older-than`; sockets use a connect probe and locks a try-lock. |
 | `temp files` | Machine | Removes temp files (`*.tmp.<pid>.<nonce>`) older than `--older-than`, left by a process killed mid-write. |
 | `messages` | Current workspace | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. |
 | `event log` | Current workspace | Cuts a corrupt tail off the event log. |

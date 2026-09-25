@@ -70,9 +70,8 @@ fn collect_runtime_classes(
         let dir = class.path_under(workspace_root);
         match class {
             Class::Live => collect_live(workspace_root, Some(older_than), sweep, &mut removed)?,
-            Class::Lanes => collect_ttl(&dir, older_than, sweep, &mut removed)?,
+            Class::Lanes => {}
             Class::Sock => collect_sock(&dir, sweep, &mut removed)?,
-            Class::Locks => collect_locks(&dir, sweep, &mut removed)?,
             _ => unreachable!("only runtime classes are selected above"),
         }
         classes.push(super::ClassReport {
@@ -223,7 +222,7 @@ pub(super) fn collect_claims(runtime: &crate::RuntimePaths) -> Result<()> {
     collect_sock(&runtime.sock_dir, &mut sweep, &mut report)
 }
 
-fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<()> {
+pub(super) fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<()> {
     for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
         let entry = entry.map_err(|source| GcErr::ReadDir {
             path: dir.to_path_buf(),
@@ -234,7 +233,13 @@ fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result
             path: path.clone(),
             source,
         };
-        if !entry.file_type().map_err(io_err)?.is_file() {
+        let file_type = entry.file_type().map_err(io_err)?;
+        if file_type.is_dir() {
+            collect_locks(&path, sweep, report)?;
+            sweep.remove_dir_if_empty(&path, report)?;
+            continue;
+        }
+        if !file_type.is_file() {
             continue;
         }
         if sweep.dry_run {

@@ -951,11 +951,7 @@ pub(super) fn collect_socket_headroom(
 ) -> model::Probe<model::SockBudget> {
     // Unbudgeted on purpose: an over-budget root is the row this probe renders.
     let runtime = match rimz::StatePaths::for_project_root(&ws.project_root) {
-        Ok(state) => RuntimePaths::under_named(
-            state.workspace_id,
-            state.dir_name,
-            &rimz::disk::paths::runtime_home(),
-        ),
+        Ok(state) => RuntimePaths::for_state_under(&state, &rimz::disk::paths::runtime_home()),
         Err(err) => {
             return model::Probe::Unavailable {
                 error: err.to_string(),

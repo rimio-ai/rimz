@@ -627,11 +627,7 @@ impl Env {
     }
 
     fn runtime_paths_for(&self, state: &StatePaths) -> RuntimePaths {
-        let mut paths = RuntimePaths::under_named(
-            state.workspace_id.clone(),
-            state.dir_name.clone(),
-            &self.runtime_root,
-        );
+        let mut paths = RuntimePaths::for_state_under(state, &self.runtime_root);
         paths.persistent_shared_root = self.rimz_home().join("cache").join("providers");
         paths
     }

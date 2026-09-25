@@ -54,9 +54,20 @@ fn runtime_paths_follow_lifetime_classes() {
     );
     assert_eq!(
         paths.topology_writer_lock(),
-        paths.root.join("locks/topology-writer.lock")
+        paths.locks_dir.join("topology-writer.lock")
     );
     for path in paths.all_paths() {
+        if path.starts_with(&paths.locks_dir) {
+            assert!(
+                path.starts_with(
+                    dir.path()
+                        .join("ws")
+                        .join(paths.dir_name.as_str())
+                        .join("locks")
+                )
+            );
+            continue;
+        }
         let relative = path.strip_prefix(&paths.root).unwrap();
         assert!(
             Class::RUNTIME.iter().any(
@@ -69,18 +80,32 @@ fn runtime_paths_follow_lifetime_classes() {
 }
 
 #[test]
-fn state_only_writers_use_the_supplied_runtime_locks() {
+fn state_locks_do_not_depend_on_runtime_root() {
     let dir = tempfile::tempdir().unwrap();
     let id = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(id.clone(), &dir.path().join("runtime")).unwrap();
-    let paths = StatePaths::under_named(
-        id,
-        runtime.dir_name.clone(),
-        &dir.path().join("state"),
-        &runtime,
+    let paths = StatePaths::under_named(id, runtime.dir_name.clone(), &dir.path().join("state"));
+    assert_eq!(
+        paths.workspace_lock,
+        paths.root.join("locks/workspace.lock")
     );
-    assert_eq!(paths.workspace_lock, runtime.lock_path("workspace.lock"));
-    assert_eq!(paths.publish_lock, runtime.lock_path("publish.lock"));
+    assert_eq!(paths.publish_lock, paths.root.join("locks/publish.lock"));
+    let paired = RuntimePaths::for_state(&paths).unwrap();
+    assert_eq!(paired.lock_path("workspace.lock"), paths.workspace_lock);
+    let other = RuntimePaths::for_state_under(&paths, &dir.path().join("other-runtime"));
+    assert_ne!(paired.root, other.root);
+    assert_eq!(paired.locks_dir, other.locks_dir);
+    let store = crate::Store::open(paths.clone(), runtime).unwrap();
+    assert_eq!(store.runtime_paths().locks_dir, paired.locks_dir);
+    for path in paired.all_paths() {
+        if path.extension().is_some_and(|ext| ext == "lock") || path == paired.locks_dir {
+            assert!(
+                path.starts_with(paths.root.join("locks")),
+                "{}",
+                path.display()
+            );
+        }
+    }
     assert!(
         paths
             .fleet_budget_record
