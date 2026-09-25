@@ -4,11 +4,12 @@
 
 use std::path::PathBuf;
 
+use crate::disk::paths::PathErr;
 use crate::ids::WorkspaceId;
 use crate::mux::MuxBackend;
 use crate::{RuntimePaths, StatePaths};
 
-/// What [`teardown_room`] removed, for the user-facing `rimz reset` report.
+/// What the runtime teardown removed, for the user-facing `rimz reset` report.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TeardownReport {
     /// The session was deleted (or was already gone).
@@ -17,8 +18,6 @@ pub struct TeardownReport {
     pub cache_removed: Vec<PathBuf>,
     /// Orphaned server / leaked daemon pids signalled.
     pub processes_swept: Vec<u32>,
-    /// Room tmp and rewritten skill copies were removed (or were already gone).
-    pub tmp_removed: bool,
 }
 
 /// Tear the room down to a clean slate: delete the session, purge the backend's
@@ -26,18 +25,19 @@ pub struct TeardownReport {
 /// servers / leaked daemons scoped to this workspace. Every step is best-effort
 /// and independent — a failure in one never blocks the others — so a later
 /// rebirth always starts from the cleanest state reachable.
+///
+/// Beside the runtime report comes the outcome of removing room tmp and
+/// rewritten skill copies (already gone is `Ok`), which only this full
+/// teardown attempts.
 pub fn teardown_room(
     backend: &dyn MuxBackend,
     workspace_id: &WorkspaceId,
     session_name: &str,
     runtime: &RuntimePaths,
     state: &StatePaths,
-) -> TeardownReport {
-    let mut report = teardown_runtime(backend, workspace_id, session_name, runtime);
-    report.tmp_removed = state.remove_tmp_dir().inspect_err(|err| {
-        tracing::warn!(path = %state.tmp_dir.display(), error = %err, "room tmp removal failed");
-    }).is_ok();
-    report
+) -> (TeardownReport, Result<(), PathErr>) {
+    let report = teardown_runtime(backend, workspace_id, session_name, runtime);
+    (report, state.remove_tmp_dir())
 }
 
 pub(super) fn teardown_runtime(
@@ -61,6 +61,5 @@ pub(super) fn teardown_runtime(
         session_killed,
         cache_removed,
         processes_swept,
-        tmp_removed: false,
     }
 }
