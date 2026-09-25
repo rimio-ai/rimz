@@ -17,9 +17,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::fmt::{
-    activity_short, age_label, age_secs, dollars2, run_clock_label, tokens_int,
-};
+use crate::sidebar_pane::render::fmt::{activity_short, age_label, age_secs, dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::{
     TokenColumns, TokenDetail, branch_delta_spans, diff_spans, elapsed_glyph, status_glyph,
     status_rest_style, status_style_at, token_breakdown_spans, token_total_glyph,
@@ -207,6 +205,13 @@ fn pipeline_line(
 ) -> Line<'static> {
     let theme = ctx.theme;
     let position = pipeline.position();
+    let name_style = if position == PipelinePosition::Done {
+        theme.styled(Component::PipelinePassed, Modifier::empty())
+    } else {
+        owner.map_or(theme.muted(), |status| {
+            status_style_at(theme, status, ctx.animation_phase)
+        })
+    };
     let mut track = Vec::new();
     if position != PipelinePosition::Undeclared {
         for index in 0..pipeline.stages.len() {
@@ -218,12 +223,9 @@ fn pipeline_line(
                     GlyphRole::PipelineDone,
                     theme.styled(Component::PipelinePassed, Modifier::empty()),
                 ),
-                PipelinePosition::At(current) if index == current => (
-                    GlyphRole::PipelineCurrent,
-                    owner.map_or(theme.muted(), |status| {
-                        status_style_at(theme, status, ctx.animation_phase)
-                    }),
-                ),
+                PipelinePosition::At(current) if index == current => {
+                    (GlyphRole::PipelineCurrent, name_style)
+                }
                 PipelinePosition::At(current) if index > current => {
                     (GlyphRole::PipelineFuture, theme.muted())
                 }
@@ -233,47 +235,56 @@ fn pipeline_line(
                 ),
             };
             track.push(Span::styled(theme.glyph(role).to_owned(), style));
+            if position == PipelinePosition::At(index)
+                || (position == PipelinePosition::Done && index + 1 == pipeline.stages.len())
+            {
+                track.push(Span::raw(" "));
+                track.push(Span::styled(pipeline.stage.clone(), name_style));
+            }
         }
     }
     let width = content_width(ctx.width);
-    let clock = pipeline
-        .span_secs(ctx.now)
-        .map(|secs| format!(" ({})", run_clock_label(secs)))
-        // All or nothing, as the track is: a clock clipped mid-token would read
-        // as a plausible wrong time.
-        .filter(|clock| 2 + text_width(clock) < width)
-        .unwrap_or_default();
-    let budget = width.saturating_sub(2 + text_width(&clock));
+    let total = pipeline.total_secs(ctx.now);
+    // Timestamp differences fit i64 seconds, as used by age_label.
+    let clock = match (pipeline.span_secs(ctx.now), total) {
+        (Some(stage), Some(total)) => Some(format!(
+            "{} / {}",
+            age_label(stage as i64),
+            age_label(total as i64)
+        )),
+        (Some(secs), None) | (None, Some(secs)) => Some(age_label(secs as i64)),
+        (None, None) => None,
+    }
+    .filter(|clock| 3 + text_width(clock) + 2 <= width);
+    // Keep two cells of the name (`I…`, never a bare `…`), then reserve the
+    // whole right clock.
+    // The badge drops before the track; dropping the track never buys it back.
+    // Without a track of its own, a stage keeps the badge while it fits.
+    // Only the name ellipsizes: neither clocks nor tracks draw partial tokens.
+    let budget = width.saturating_sub(2 + clock.as_ref().map_or(0, |s| text_width(s) + 1));
     let mut left = vec![Span::raw("  ")];
     let has_track = !track.is_empty();
-    let track_width = spans_width(&track) + 2;
-    let draws_track = has_track && track_width + text_width(&pipeline.stage) <= budget;
-    let name_budget = if draws_track {
-        left.extend(track);
-        left.push(Span::raw("  "));
-        budget - track_width
+    let draws_track = has_track && spans_width(&track) <= budget;
+    let mut body = if draws_track {
+        track
     } else {
-        budget
+        vec![Span::styled(ellipsize(&pipeline.stage, budget), name_style)]
     };
-    left.push(Span::styled(
-        ellipsize(&pipeline.stage, name_budget),
-        theme.body(),
-    ));
-    if !clock.is_empty() {
-        left.push(Span::styled(clock, theme.muted()));
-    }
-    // The team drops before the track, so the room a dropped track frees never
-    // buys the badge back. A stage with no track of its own keeps it.
     if let Some(team) = team.filter(|_| draws_track || !has_track) {
-        let suffix = format!("{}{team}", value_seam(theme));
-        if spans_width(&left) + text_width(&suffix) <= width {
+        let badge = format!("{team}{}", value_seam(theme));
+        if spans_width(&body) + text_width(&badge) <= budget {
             left.push(Span::styled(
-                suffix,
+                badge,
                 theme.styled(Component::TeamLabel, Modifier::empty()),
             ));
         }
     }
-    pin_right(left, Vec::new(), width)
+    left.append(&mut body);
+    let right = clock
+        .into_iter()
+        .map(|s| Span::styled(s, theme.muted()))
+        .collect();
+    pin_right(left, right, width)
 }
 
 fn worktree_tail(

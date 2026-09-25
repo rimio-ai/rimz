@@ -48,6 +48,20 @@ fn unchanged_consumer_ticks_only_running_pipeline_clocks() {
         .pipeline
         .as_mut()
         .unwrap()
+        .stage_started_at = None;
+    rig.state.dirty = false;
+    assert!(!rig.state.apply_latest_snapshot(FetchUpdate::Unchanged {
+        role: FetchRole::Consumer
+    }));
+    assert!(
+        rig.state.dirty,
+        "the total clock alone still needs a repaint"
+    );
+
+    rig.state.current.worktree_groups[0]
+        .pipeline
+        .as_mut()
+        .unwrap()
         .stage = "Done".to_owned();
     rig.state.dirty = false;
     rig.state.current.now = jiff::Timestamp::UNIX_EPOCH;
