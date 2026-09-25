@@ -1307,6 +1307,16 @@ fn config_names_reject_grammar_clashes() {
         })
     );
     assert_eq!(
+        parse_layout_spec(
+            "term",
+            &profiles([("bad(name)", profile("claude"))]),
+            &no_commands()
+        ),
+        Err(LayoutErr::InvalidProfileName {
+            name: "bad(name)".to_owned(),
+        })
+    );
+    assert_eq!(
         parse_layout_spec("term", &no_profiles(), &commands([("bad name", "nvim")])),
         Err(LayoutErr::InvalidCommandName {
             name: "bad name".to_owned(),
