@@ -51,6 +51,15 @@ impl<'a> FleetRuns<'a> {
         self.0.iter().any(|(_, run)| !run.status.is_terminal())
     }
 
+    /// All terminal rows, including joined and reported members, in member order.
+    pub fn settled(&self) -> Vec<(&'a AgentState, &'a RunRecord)> {
+        self.0
+            .iter()
+            .copied()
+            .filter(|(_, run)| run.status.is_terminal())
+            .collect()
+    }
+
     /// Settled rows no digest carried and no caller joined, in member order.
     pub fn unreported(&self) -> Vec<(&'a AgentState, &'a RunRecord)> {
         self.0

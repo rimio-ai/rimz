@@ -77,7 +77,7 @@ pub(crate) fn write_background_receipt(
     };
     writeln!(
         err,
-        "{} {verb} in the background. When every {noun} you launched has settled, one SUBAGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and its captured final response at {response_path}. Keep working or end your turn; to block instead: {wait}",
+        "{} {verb} in the background. Each {noun}'s captured response lands at {response_path} when that {noun} settles. When every {noun} you launched has settled, one SUBAGENT_REPORT from @rimz reaches you at your next turn boundary with each one's status and response path. Keep working or end your turn; to block instead: {wait}",
         handles.join(", "),
     )?;
     Ok(())

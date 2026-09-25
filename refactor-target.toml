@@ -279,7 +279,8 @@ upward-dependencies = ["sidebar::refresh"]
 # The owed-wake predicate and the launched-fleet settlement rule serve the run fold, the hooks, the digest reporter and its sweep backstop.
 # Child isolation cap and its typed outcome cross the launch/resume CLI seam.
 # Rebirth checkout roots feed pre-pane language-server admission.
-surface-budget = 532
+# Response paths, publication errors and publication serve CLI receipts/reports; fleet exposes settled rows.
+surface-budget = 536
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -730,6 +731,8 @@ path = "crates/rimz/src/harness/run.rs"
 allowed-dependencies = [
     "agents",
     "config",
+    # Terminal transitions publish response files through the shared atomic writer.
+    "disk::atomic",
     "disk::lock",
     "disk::paths",
     "forge",
@@ -740,7 +743,8 @@ allowed-dependencies = [
     "store",
 ]
 # The lifecycle fold parks on an owed wake, and the stranded-park settle reads the same predicate.
-surface-budget = 32
+# Response paths, the publisher and its typed error cross the CLI/library boundary.
+surface-budget = 35
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

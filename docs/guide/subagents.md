@@ -16,7 +16,7 @@ A parent's `rimz subagents codex "map the auth call path"` is the same supervise
 2. It writes a durable run record under `~/.rimz/ws/<workspace-dir>/owned/runs/`.
 3. It opens a pane running the child's own CLI, in the parent's checkout and channel, whatever directory the parent's shell has moved to. The first child splits to the right of the parent's pane and later ones stack beside it; a team member's children open in a `<view> subagents` tab after its own, eight to a tab in two equal-width columns.
 4. It prints the child's petname, such as `calm-fox`, and returns. The parent keeps working.
-5. When the child's work ends, or its deadline passes, its pane closes. Once every child the parent launched has settled, RimZ writes each final message to `rimz-subagents/<petname>.output` in the room's tmp directory and parks one report for the parent's next turn boundary ([how results come back](#how-results-come-back)).
+5. When the child's work ends, or its deadline passes, its pane closes. RimZ writes its non-empty final message to `rimz-subagents/<petname>.output` in the room's tmp directory as that child settles, even while siblings still run. Once every child the parent launched has settled, RimZ parks one report for the parent's next turn boundary ([how results come back](#how-results-come-back)).
 
 Nothing else moves. The child's session file lands where its CLI always writes it, and `rimz agents show @calm-fox` and `rimz transcript @calm-fox` read the run back after the pane is gone.
 
@@ -91,7 +91,7 @@ A child runs one prompt and is not built to read messages mid-run. To change wha
 
 ## How results come back
 
-The parent does not poll. Once every child it launched has settled, RimZ parks one message for its next turn boundary:
+Each child's response file is available when that child settles, including when the parent joins it with `rimz subagents wait`. The parent does not need to poll for a report: once every child it launched has settled, RimZ parks one message for its next turn boundary:
 
 ```text
 Type: SUBAGENT_REPORT

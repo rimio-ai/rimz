@@ -131,10 +131,10 @@ The report lists status and where each answer is, and asks for nothing: reading 
 | `in` / `after` | `after` for a timed-out child, `in` for every other status; elapsed time is compact (`4m12s`) |
 | Reason | The last non-empty line of the run's failure tail, for a status other than completed |
 | Task | The launch `--description`, else a shortened first line of the prompt, omitted when empty |
-| Response | The child's final message in `rimz-subagents/<name>.output` under room tmp; `no response` when the message is empty, and no file is written |
+| Response | The child's final message in `rimz-subagents/<name>.output` under room tmp, available when that child settles; `no response` when the message is empty or absent, and no file remains |
 | Size | `{tokens} tokens, {lines}`: an estimated token count (`<1k`, `~1.2k`, `~22k`, `~1.2M`) from OpenAI's public `o200k_base` tokenizer, which only approximates Claude's, then the line count (`1 line`, `{N} lines`, blank lines included) |
 
-Rows follow launch order. Under sandbox isolation the path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. The files are removed when the room closes, and opening one does not count as reading the result.
+Rows follow launch order. Under sandbox isolation the path reads `/tmp/rimz-subagents/<name>.output`; under host isolation it is the host path of room tmp. A subagent's file is available before its wait returns, even while siblings run or if joining it omits it from the report. The files are removed when the room closes, and opening one does not count as reading the result.
 
 A fleet is every child launched before the report is composed. A child launched while its siblings still run joins that fleet; one launched after composition starts belongs to the next. No report is sent when the parent has ended.
 

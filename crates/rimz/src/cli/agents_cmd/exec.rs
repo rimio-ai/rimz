@@ -894,8 +894,7 @@ impl RunMonitor {
             return false;
         }
         self.next_receipt_check = now + PARENT_RECEIPT_POLL;
-        // Once per record revision: a fleet with a running sibling stamps nothing,
-        // and the last sibling to settle reports for the whole fleet.
+        // Files land per child; digest stamps wait for the fleet. Try once per record revision.
         if record.report_message_id.is_none()
             && record.joined_at.is_none()
             && self.reported_revision != Some(record.updated_at)

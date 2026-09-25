@@ -25,6 +25,65 @@ const STRANDED_PARK_REASON: &str =
 
 type Result<T> = std::result::Result<T, RunStoreErr>;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ResponsePublishErr {
+    #[error(transparent)]
+    Paths(#[from] crate::disk::paths::PathErr),
+    #[error(transparent)]
+    Atomic(#[from] crate::disk::atomic::AtomicErr),
+    #[error("accessing subagent response {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+/// Host path promised by the launch receipt for this run's response.
+pub fn response_path(paths: &StatePaths, agent_name: &str) -> PathBuf {
+    paths.subagents_dir.join(format!("{agent_name}.output"))
+}
+
+/// Ensure the captured response, leaving identical files untouched and removing stale empty answers.
+pub fn publish_response(
+    paths: &StatePaths,
+    record: &RunRecord,
+) -> std::result::Result<Option<PathBuf>, ResponsePublishErr> {
+    paths.ensure_tmp_dir()?;
+    let Some(name) = record.agent_name.as_deref() else {
+        return Ok(None);
+    };
+    let path = response_path(paths, name);
+    let io_error = |source| ResponsePublishErr::Io {
+        path: path.clone(),
+        source,
+    };
+    let Some(message) = record
+        .last_message
+        .as_deref()
+        .filter(|message| !message.is_empty())
+    else {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(io_error(err)),
+        }
+        return Ok(None);
+    };
+    let mut bytes = message.as_bytes().to_vec();
+    if !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+    }
+    match std::fs::read(&path) {
+        Ok(existing) if existing == bytes => return Ok(Some(path)),
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(io_error(err)),
+    }
+    crate::disk::atomic::write_bytes_atomically(&path, &bytes)?;
+    Ok(Some(path))
+}
+
 /// Typed cancellation signal shared between CLI signal handlers and the
 /// supervised-run waiter.
 #[derive(Clone, Debug, Default)]
@@ -263,12 +322,20 @@ fn update_record<T>(
 ) -> Result<(RunRecord, T)> {
     let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let mut record = load(paths, run_id)?;
+    let was_terminal = record.status.is_terminal();
     let now = Timestamp::now();
     match update(&mut record, now)? {
         RecordMutation::Keep(outcome) => Ok((record, outcome)),
         RecordMutation::Write(outcome) => {
             record.updated_at = now;
             crate::store::run::write(&paths.runs_dir, &record)?;
+            if !was_terminal
+                && record.status.is_terminal()
+                && record.subagent
+                && let Err(err) = publish_response(paths, &record)
+            {
+                tracing::warn!(run_id = %record.run_id, error = %err, "publishing subagent response failed");
+            }
             Ok((record, outcome))
         }
     }
