@@ -5,7 +5,7 @@ use std::ops::Range;
 /// The base name of the program a command runs, seeing past a `sudo` wrapper
 /// and through known wrappers to the real command: `npm` for `sudo npm install
 /// …`, `codex` for `node /usr/bin/codex`, `opencode` for `bun
-/// /usr/bin/opencode`, `codex` for `rimz agents exec codex`, and `cargo` for
+/// /usr/bin/opencode`, `codex` for `rimz agents exec codex`, `cargo` for
 /// `/usr/bin/cargo build`, and `systemctl` for `! systemctl is-active …`.
 pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program_info(command).program).to_owned()
