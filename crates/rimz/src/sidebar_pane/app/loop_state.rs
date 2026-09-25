@@ -884,6 +884,9 @@ impl LoopState {
             self.paint_hold.release();
         }
         self.last_self_close_check = Instant::now();
+        // The heartbeat carries this pane's size for `sidebar frame`: restamp
+        // it on this pass rather than a beat later.
+        self.last_heartbeat = None;
         // A resize is the mux telling us topology changed. Pull a fresh pane
         // list through the elected producer and require a cache produced after
         // this signal.

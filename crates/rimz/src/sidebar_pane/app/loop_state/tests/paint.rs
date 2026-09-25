@@ -214,11 +214,16 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
     let mut rig = Rig::new().width(57);
     rig.state.prev_width = Some(10);
     rig.state.self_close.seen_sibling = true;
+    rig.state.last_heartbeat = Some(Instant::now());
 
     rig.state
         .on_resize(&mut rig.fetch, &mut rig.terminal, Some(57))
         .expect("handle attach resize");
 
+    assert_eq!(
+        rig.state.last_heartbeat, None,
+        "a resize restamps the heartbeat's pane size on this pass"
+    );
     assert!(
         !rig.state.paint_hold.is_engaged(),
         "a grow within the legitimate cap paints immediately"
