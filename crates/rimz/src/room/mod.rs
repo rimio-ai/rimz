@@ -586,6 +586,7 @@ mod tests {
     fn record_to_workspace_preserves_identity_and_normalizes_missing_fields() {
         let project_root = PathBuf::from("/code/rimz");
         let record = WorkspaceRecord {
+            layout: 2,
             workspace_id: WorkspaceId::from_project_root(&project_root),
             project_root: project_root.clone(),
             worktree_root: None,

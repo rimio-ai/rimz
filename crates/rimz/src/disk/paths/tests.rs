@@ -128,9 +128,27 @@ fn write_record(home: &Path, name: &str, id: &WorkspaceId) {
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("workspace.json"),
-        format!(r#"{{"workspace_id":"{id}","project_root":"/x"}}"#),
+        format!(r#"{{"layout":2,"workspace_id":"{id}","project_root":"/x"}}"#),
     )
     .unwrap();
+}
+
+#[test]
+fn old_layout_is_refused_without_adopting_or_mutating_it() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("project");
+    let paths = StatePaths::for_project_root_under(&project, home.path()).unwrap();
+    fs::create_dir_all(&paths.root).unwrap();
+    let bytes = format!(r#"{{"workspace_id":"{}"}}"#, paths.workspace_id);
+    fs::write(&paths.workspace_record, &bytes).unwrap();
+    let err = StatePaths::for_project_root_under(&project, home.path()).unwrap_err();
+    assert!(matches!(err, PathErr::Layout { layout: 1, .. }));
+    assert!(
+        err.to_string()
+            .contains("docs/internals/store-layout-migration.md")
+    );
+    assert_eq!(fs::read_to_string(&paths.workspace_record).unwrap(), bytes);
+    assert!(!paths.cache_dir.exists());
 }
 
 /// Two project roots under `parent` whose ids share their first four hex.

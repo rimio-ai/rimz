@@ -440,6 +440,7 @@ fn tracker_stamp(root: &Path, generation: u64) -> DaemonViewInputsStamp {
 #[test]
 fn daemon_workspace_inputs_ignore_fields_that_do_not_shape_the_view() {
     let mut record = record::WorkspaceRecord {
+        layout: 2,
         workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
         project_root: PathBuf::from("/repo"),
         worktree_root: Some(PathBuf::from("/repo/worktree")),

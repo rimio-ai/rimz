@@ -1,5 +1,31 @@
 use super::*;
 
+#[test]
+fn known_workspaces_skips_legacy_rooms() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let workspace = WorkspaceResolver::resolve(&project, None).unwrap();
+    let paths =
+        crate::disk::paths::StatePaths::for_project_root_under(&project, home.path()).unwrap();
+    record::write(&paths, &WorkspaceRecord::from_resolved(&workspace)).unwrap();
+    assert_eq!(
+        known_workspaces_under(&home.path().join("ws"))
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&paths.workspace_record).unwrap()).unwrap();
+    value.as_object_mut().unwrap().remove("layout");
+    std::fs::write(&paths.workspace_record, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(
+        known_workspaces_under(&home.path().join("ws"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
 fn hash6(root: &Path) -> String {
     WorkspaceId::from_project_root(root).as_str()[3..9].to_owned()
 }
@@ -58,6 +84,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
         record::write(
             &paths,
             &WorkspaceRecord {
+                layout: 2,
                 workspace_id,
                 project_root: project_root.clone(),
                 worktree_root: None,
@@ -109,6 +136,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     record::write(
         &paths,
         &WorkspaceRecord {
+            layout: 2,
             workspace_id: workspace_id.clone(),
             project_root: noncanonical_root,
             worktree_root: None,
@@ -153,6 +181,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
     record::write(
         &canonical_paths,
         &WorkspaceRecord {
+            layout: 2,
             workspace_id: canonical_id.clone(),
             project_root: canonical_root.clone(),
             worktree_root: None,
@@ -174,6 +203,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
     record::write(
         &stale_paths,
         &WorkspaceRecord {
+            layout: 2,
             workspace_id: stale_id,
             project_root: noncanonical_root,
             worktree_root: None,

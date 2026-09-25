@@ -708,6 +708,7 @@ mod tests {
         let paths = StatePaths::under(workspace_id.clone(), state_root).unwrap();
         paths.ensure_dirs().unwrap();
         let record = WorkspaceRecord {
+            layout: 2,
             workspace_id,
             project_root: project_root.into(),
             worktree_root: None,

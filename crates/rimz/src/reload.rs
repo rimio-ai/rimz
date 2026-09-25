@@ -97,7 +97,10 @@ fn sweep_unreferenced_builds(state_root: &Path, builds_dir: &Path, keep: &str) {
     if let Ok(entries) = fs::read_dir(workspaces) {
         for entry in entries.flatten() {
             let record_path = entry.path().join("workspace.json");
-            if let Ok(record) = record::read(&record_path)
+            if let Err(err) = crate::disk::paths::check_workspace_layout(&entry.path()) {
+                tracing::warn!(error = %err, "retaining builds referenced by incompatible workspace");
+            }
+            if let Ok(record) = record::read_any_layout(&record_path)
                 && let Some(build) = record.rimz_build
             {
                 referenced.insert(build);
@@ -1125,6 +1128,35 @@ mod tests {
         let updated = record::read(&paths.workspace_record).unwrap();
         assert_eq!(updated.rimz_bin.as_deref(), Some(second.path.as_path()));
         assert_eq!(updated.rimz_build.as_deref(), Some(second.build.as_str()));
+    }
+
+    #[test]
+    fn staging_keeps_builds_owned_by_legacy_rooms() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let workspace = crate::workspace::WorkspaceResolver::resolve(&project, None).unwrap();
+        let paths = StatePaths::under(workspace.workspace_id.clone(), home.path()).unwrap();
+        let mut record = record::WorkspaceRecord::from_resolved(&workspace);
+        record.layout = 1;
+        record.rimz_build = Some("legacy".to_owned());
+        std::fs::create_dir_all(&paths.root).unwrap();
+        std::fs::write(
+            &paths.workspace_record,
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        let builds = crate::disk::paths::builds_dir_under(home.path());
+        let legacy = builds.join("legacy");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::File::open(&legacy)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::now() - STAGED_BUILD_GC_GRACE - Duration::from_secs(1),
+            )
+            .unwrap();
+        sweep_unreferenced_builds(home.path(), &builds, "new");
+        assert!(legacy.exists());
     }
 
     #[test]

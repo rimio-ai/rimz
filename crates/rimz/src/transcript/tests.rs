@@ -29,6 +29,7 @@ fn workspaces_with_channel_finds_transcript_evidence() {
         crate::workspace::record::write(
             &paths,
             &crate::workspace::record::WorkspaceRecord {
+                layout: 2,
                 workspace_id: id.clone(),
                 project_root: project.clone(),
                 worktree_root: None,
