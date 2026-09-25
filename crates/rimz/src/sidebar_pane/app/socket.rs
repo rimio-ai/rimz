@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::RuntimePaths;
 use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::terminal;
 use tracing::warn;
 
 use super::input::{encode_key, encode_mouse};
@@ -34,6 +35,9 @@ pub(super) fn write_heartbeat(
         &config.session_name,
         socket_path,
         config.own_pane.clone(),
+        terminal::size()
+            .ok()
+            .map(|(cols, rows)| crate::wakeup::heartbeat::SidebarSize { cols, rows }),
     )
     .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
 }

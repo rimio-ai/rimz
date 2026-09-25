@@ -283,6 +283,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
         "rimz-test",
         &socket_path,
         None,
+        None,
     )
     .unwrap();
     let cache_path = runtime.pane_frame_path();

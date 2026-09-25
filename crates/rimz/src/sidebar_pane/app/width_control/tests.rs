@@ -298,6 +298,7 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
         "rimz-test",
         &socket_path,
         None,
+        None,
     )
     .expect("write heartbeat");
 

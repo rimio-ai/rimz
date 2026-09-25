@@ -775,18 +775,28 @@ fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
         producer_snapshot(&context, command.mux, globals)?
     };
 
+    // The live sidebar's own pane size is the frame the user sees; the
+    // configured policy over this terminal is only a guess without one.
+    let live_size = context
+        .session_name
+        .as_deref()
+        .and_then(|session| rimz::sidebar::live_sidebar_size(&context.runtime, session));
     let sidebar_width = rimz::mux::SidebarWidth::from_config(&snapshot.theme);
     let terminal_size = rimz::mux::detect_terminal_size();
-    let width = command.width.unwrap_or_else(|| {
-        terminal_size.map_or_else(
-            || sidebar_width.max_cols.get(),
-            |(cols, _)| {
-                u16::try_from(sidebar_width.target_cols(u64::from(cols))).unwrap_or(u16::MAX)
-            },
-        )
-    });
+    let width = command
+        .width
+        .or(live_size.map(|size| size.cols))
+        .unwrap_or_else(|| {
+            terminal_size.map_or_else(
+                || sidebar_width.max_cols.get(),
+                |(cols, _)| {
+                    u16::try_from(sidebar_width.target_cols(u64::from(cols))).unwrap_or(u16::MAX)
+                },
+            )
+        });
     let height = command
         .height
+        .or(live_size.map(|size| size.rows))
         .unwrap_or_else(|| terminal_size.map_or(24, |(_, rows)| rows));
 
     let mut out = render::out();

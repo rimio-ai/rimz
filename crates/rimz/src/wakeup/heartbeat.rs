@@ -52,7 +52,19 @@ pub struct SidebarHeartbeat {
     /// notices. Missing means the renderer predates this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The renderer's own pane size in cells at this beat, so a frame drawn
+    /// outside the pane can match it. Missing means an older renderer or an
+    /// unreadable terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<SidebarSize>,
     pub last_seen: Timestamp,
+}
+
+/// A sidebar pane's size in terminal cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarSize {
+    pub cols: u16,
+    pub rows: u16,
 }
 
 impl SidebarHeartbeat {
@@ -74,6 +86,7 @@ impl SidebarHeartbeat {
             pane_id,
             build: None,
             version: None,
+            size: None,
             last_seen: Timestamp::now(),
         }
     }
@@ -157,6 +170,7 @@ pub struct HeartbeatWriteErr {
 /// read it are unchanged. The heartbeat carries this process's build id when
 /// the running image is readable. The renderer ensures the runtime dirs at
 /// startup, so this only does the write.
+#[allow(clippy::too_many_arguments)]
 pub fn write_heartbeat(
     runtime: &RuntimePaths,
     workspace_id: WorkspaceId,
@@ -165,6 +179,7 @@ pub fn write_heartbeat(
     session_name: &str,
     wakeup_socket: &Path,
     pane_id: Option<PaneId>,
+    size: Option<SidebarSize>,
 ) -> Result<(), HeartbeatWriteErr> {
     let mut heartbeat = SidebarHeartbeat::new(
         workspace_id,
@@ -176,6 +191,7 @@ pub fn write_heartbeat(
     );
     heartbeat.build = crate::build_id::current().map(str::to_owned);
     heartbeat.version = Some(crate::build_id::VERSION.to_owned());
+    heartbeat.size = size;
     let path = runtime.sidebar_heartbeat_path(instance_id);
     // Cache-class: a heartbeat is disposable liveness, rewritten every beat
     // and gc-swept when stale — surviving a power cut buys nothing.
@@ -237,6 +253,7 @@ mod tests {
             serde_json::from_value(json).expect("missing build identity defaults to None");
         assert_eq!(heartbeat.build, None);
         assert_eq!(heartbeat.version, None);
+        assert_eq!(heartbeat.size, None);
 
         let encoded = serde_json::to_string(&heartbeat).expect("serialize heartbeat");
         assert!(
@@ -246,6 +263,10 @@ mod tests {
         assert!(
             !encoded.contains("\"version\""),
             "None version stays absent from heartbeat JSON",
+        );
+        assert!(
+            !encoded.contains("\"size\""),
+            "None size stays absent from heartbeat JSON",
         );
     }
 }

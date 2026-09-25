@@ -256,7 +256,7 @@ Card-content questions (a wrong gauge, a missing cost, a card resting in the wro
 
 `rimz sidebar snapshot --json --no-produce` prints the fused `SidebarSnapshot` a node renders: the event-fresh rollup folded over the published pane frame plus the per-session sidecars ([state.md](./sidebar/state.md)). Run it inside the workspace, or pass `--workspace-id` from outside. `--no-produce` keeps the read passive, with no mux or git forks, so inspection never perturbs the room; without it the command may pay one producing refresh.
 
-`rimz sidebar frame` prints the rendered frame through the same passive read when a producer frame exists, and falls back to one producing refresh otherwise. ANSI color is stripped when stdout is piped. `--expand` expands every card and reveals every capped worktree row, so large fleets do not clip.
+`rimz sidebar frame` prints the rendered frame through the same passive read when a producer frame exists, and falls back to one producing refresh otherwise. It draws at the size of the room's live sidebar pane, which each renderer stamps into its heartbeat; `--width` and `--height` override it, and without a live sidebar the width falls back to the configured policy over the calling terminal. ANSI color is stripped when stdout is piped. `--expand` expands every card and reveals every capped worktree row, so large fleets do not clip.
 
 ```sh
 rimz sidebar snapshot --json --no-produce | jq '

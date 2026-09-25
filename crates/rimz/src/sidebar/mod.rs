@@ -48,8 +48,8 @@ use crate::ids::{MuxName, PaneId, SidebarInstanceId};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
 use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 use crate::wakeup::heartbeat::{
-    SIDEBAR_HEARTBEAT_TTL, SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, fresh_sidebar_heartbeats,
-    mtime_within_ttl, read_current_heartbeats,
+    SIDEBAR_HEARTBEAT_TTL, SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, SidebarSize,
+    fresh_sidebar_heartbeats, mtime_within_ttl, read_current_heartbeats,
 };
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
@@ -97,6 +97,20 @@ fn order_live_sidebars(mut heartbeats: Vec<SidebarHeartbeat>) -> Vec<LiveSidebar
             producer: index == 0,
         })
         .collect()
+}
+
+/// The pane size a live renderer in `session` reports, so a frame drawn outside
+/// the room matches the sidebar on screen. Every renderer converges on one
+/// room-wide width target, so the most recent beat speaks for the session.
+pub fn live_sidebar_size(runtime: &RuntimePaths, session: &str) -> Option<SidebarSize> {
+    fresh_sidebar_heartbeats(runtime)
+        .into_iter()
+        .filter(|heartbeat| {
+            heartbeat.workspace_id == runtime.workspace_id && heartbeat.session_name == session
+        })
+        .filter_map(|heartbeat| Some((heartbeat.last_seen, heartbeat.size?)))
+        .max_by_key(|(last_seen, _)| *last_seen)
+        .map(|(_, size)| size)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

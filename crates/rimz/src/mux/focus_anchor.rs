@@ -609,6 +609,7 @@ mod tests {
             "rimz-test",
             &socket_path,
             None,
+            None,
         )
         .expect("write heartbeat");
         let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
