@@ -144,25 +144,37 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
                 "process {pid} replaced"
             );
         }
-        let mut bands = std::collections::BTreeMap::<u64, usize>::new();
+        let mut bands = std::collections::BTreeMap::<u64, Vec<&PaneGeometry>>::new();
         for pane in &panes {
-            *bands.entry(pane.x).or_default() += 1;
+            bands.entry(pane.x).or_default().push(pane);
         }
         assert!(
-            bands.len() == count.min(2) && bands.values().all(|rows| *rows <= count.div_ceil(2)),
+            bands.len() == count.min(2)
+                && bands.values().all(|band| band.len() <= count.div_ceil(2)),
             "grid bounds at {count} panes: {panes:?}"
         );
-        let areas = panes
-            .iter()
-            .map(|pane| pane.columns * pane.rows)
+        let spread = |sizes: &[u64]| {
+            sizes.iter().max().expect("max size") - sizes.iter().min().expect("min size")
+        };
+        let widths = bands
+            .values()
+            .map(|band| band[0].columns)
             .collect::<Vec<_>>();
         assert!(
-            areas.iter().max().expect("maximum area") * 10
-                <= areas.iter().min().expect("minimum area") * 16,
-            "native resize steps should keep areas near-equal at {count} panes: {panes:?}",
+            spread(&widths) <= 1,
+            "equal column widths at {count} panes: {panes:?}"
         );
+        for band in bands.values() {
+            let rows = band.iter().map(|pane| pane.rows).collect::<Vec<_>>();
+            // Native resizes move 5% of the tab, so rows settle within one step.
+            let step = rows.iter().sum::<u64>().div_ceil(20);
+            assert!(
+                spread(&rows) <= step,
+                "equal heights within one native step at {count} panes: {panes:?}"
+            );
+        }
         if count == 8 {
-            assert_eq!(bands.values().copied().collect::<Vec<_>>(), vec![4; 2]);
+            assert!(bands.values().all(|band| band.len() == 4));
         }
         client.assert_input_reaches(&source, "source while appending companion");
     }

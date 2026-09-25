@@ -71,13 +71,18 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
         }
         assert_eq!(bands.len(), count.min(2));
         assert!(bands.values().all(|band| band.len() <= count.div_ceil(2)));
-        let areas = work
-            .iter()
-            .map(|pane| pane.width * pane.height)
-            .collect::<Vec<_>>();
+        let spread = |sizes: Vec<u64>| {
+            sizes.iter().max().expect("max size") - sizes.iter().min().expect("min size")
+        };
         assert!(
-            areas.iter().max().expect("max area") - areas.iter().min().expect("min area") <= 350,
-            "near-equal areas at {count} panes: {work:?}"
+            spread(bands.values().map(|band| band[0].width).collect()) <= 1,
+            "equal column widths at {count} panes: {work:?}"
+        );
+        assert!(
+            bands
+                .values()
+                .all(|band| spread(band.iter().map(|pane| pane.height).collect()) <= 1),
+            "equal heights within each column at {count} panes: {work:?}"
         );
         for pane in &panes {
             let pid = server.display(&pane.id, "#{pane_pid}");
