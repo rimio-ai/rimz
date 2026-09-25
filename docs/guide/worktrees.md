@@ -102,12 +102,14 @@ removed = "~/bin/rimz-drop-target"
 
 Both commands are optional; neither runs by default. The script paths above are yours to supply. For an artifact directory, have the setup script choose a destination unique to the repository and worktree, then create and link it. Ignore `target/` in Git so the hook does not leave every tree dirty. The removal script undoes that setup using the same destination.
 
+If the machine's `config.toml` cannot be read or parsed, `rimz worktree new` and launches using `-w` or `--from-pr` refuse rather than silently skipping setup. Correct the reported file before retrying; `rimz config get` shows the strict config error. Listing and removing trees remain available with defaults and a warning.
+
 The lifecycle runs in this order:
 
 1. RimZ creates and marks the tree, then finishes the copies and links from the seed files.
-2. It runs `created` as `sh -c <command>` with the new tree as its working directory, and waits before opening any launch panes. The command gets no stdin; stdout and stderr are captured, not streamed. A ten-minute timeout kills the hook's process group.
+2. It runs `created` as `sh -c <command>` with the new tree as its working directory, and waits before opening any launch panes. The command gets no stdin; stdout and stderr are captured, not streamed. A ten-minute timeout kills the hook's process group. A background process must detach stdout and stderr (for example, `command >/dev/null 2>&1 &`); otherwise the hook counts as running until those streams close, and reaching the timeout fails creation and rolls it back.
 3. A successful hook lets creation continue. `rimz worktree new` adds `  hook   : worktree.created ran` to its report; launches print nothing extra. Successful hook output is discarded.
-4. A nonzero exit, failure to start, or timeout fails creation and attempts to remove the tree and its branch. The error includes bounded tails of stdout and stderr and the config key to fix. If removal also fails, the error says `rollback failed: <error>` instead of `tree removed`; remove the leftover tree before retrying, since a named launch reuses it without rerunning the hook.
+4. A nonzero exit, failure to start, or timeout fails creation and attempts to remove the tree and its branch. The error includes bounded tails of stdout and stderr and the config key to fix. If removal also fails, the error says `rollback failed: <error>` instead of `tree removed`; remove the leftover tree before retrying, since a named launch reuses it without rerunning the hook. Interrupting RimZ with SIGINT or SIGTERM while `created` runs can also leave a marked tree; remove it before retrying for the same reason.
 5. Whenever RimZ successfully removes a tree, it runs `removed` from the repository root, after the directory is gone and before deleting the branch. That includes rollback after a failed `created`, explicit removal, sweep, garbage collection, and automatic cleanup. It uses the same shell, capture, and timeout rules. Failure only logs a warning and removal continues; detached cleanup may have no visible output. A dry-run sweep fires nothing.
 
 A successful setup command adds the hook line:
