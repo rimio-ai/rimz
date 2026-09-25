@@ -37,7 +37,7 @@ The pin is on the surface itself because agents in the room can write `.rimz/con
 
 The hash input is canonical JSON, and the wire format is `sha256:<hex>`. Struct field order is fixed, `BTreeMap` keys sort, and an unset `Option` serializes as `null`, so the same config always hashes to the same bytes. A few fields are omitted instead of written empty, so that grants made before the field existed keep their hash: empty `subagent_profiles`, empty `accounts`, empty role `signals`, unset `skills` and `auto_compact` on profiles and roles, and a team's unset `consensus_file` and empty `append_system_prompt_files`. `append-system-prompt-files` serializes under the key `append_system_prompt_file` for the same reason.
 
-The empty `lsp_servers` projection is also omitted to preserve existing hashes. Room-birth trust offers name project servers and their commands. Memory policy is machine-only; project `[lsp]` policy keys are refused, while trusted server entries overlay whole by name ([language servers](../lsp.md#configuration)).
+The empty `lsp_servers` projection is also omitted to preserve existing hashes. Room-birth trust offers name project servers and their commands. Memory policy is machine-only: project `[lsp]` keys `reserve-percent`, `reserve-min`, `kill-floor-percent`, and `idle-timeout` are refused, while trusted server entries overlay whole by name ([language servers](../lsp.md#configuration)).
 
 Everything else in the file deserializes leniently and never touches the hash. That covers display keys such as `display_name` and `sidebar_width`, team `leader`, `owns`, `flip-compact`, `idle-compact`, `scratch-files`, and `stages`, and task `team`, `max-strikes`, `budget`, `budget-per-day`, `surplus`, and `surplus-after`.
 

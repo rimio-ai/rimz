@@ -4,7 +4,7 @@ Your agents already navigate code semantically when they can. Claude's `LSP` too
 
 The problem is who owns the server. A harness starts one per agent session and holds it until the session ends. `rust-analyzer` on this repository reaches 4.4 GB after its first index and 6.3 GB once references have been searched, so a three-seat team plus its subagents holds three or more copies of the same index over the same checkout, whether or not anyone is querying. And nothing on your machine says no: the next launch starts another one, and the kernel decides which process dies.
 
-`rimz lsp` puts one server per checkout in front of every agent working in it, started at launch and only when memory allows. Agents query it read-only through the `rimz lsp` command; RimZ keeps its view of the disk current as files are saved, holds it alive while agents hold it, and stops it when the last one leaves or when memory runs short. The feature is off until you configure a server, and an agent without one works as agents work today.
+`rimz lsp` puts one server per checkout in front of every agent working in it, started on the first query and only when memory allows. Agents query it read-only through the `rimz lsp` command; RimZ keeps its view of the disk current as files are saved and frees its memory when it is idle or the team finishes. The next query can start it again without relaunching agents. The feature is off until you configure a server, and an agent without one works as agents work today.
 
 ## Configure a server
 
@@ -33,30 +33,24 @@ Every field and its default is in the [reference](../reference/cli/lsp.md#config
 Nothing runs until you launch agents. Every launch that opens panes, `rimz agents`, `rimz teams`, a `-p` run, a resume, and rebirth recovery, does the following for its checkout before the first pane opens:
 
 1. It resolves which configured servers apply, by root markers, and checks each executable exists. A missing binary or an untrusted project entry refuses the launch here, with the fix.
-2. If a server for this (checkout, name) is already running, the launch joins it and skips to step 5.
-3. It checks memory under one machine-wide lock, so two launches cannot both pass on the same free gigabytes. The server may start when free memory, less what running servers are still expected to grow by, less this server's estimate, leaves a reserve of the larger of 10% of RAM and 8 GB. The estimate is the peak this server reached on this project before, learned from `~/.rimz/lsp-history.jsonl`, or the configured `memory-estimate` (8 GB) the first time.
-4. It starts the server through a hidden broker process, one per server, which owns the server's stdin and stdout and answers queries over a Unix socket. The broker's socket and registry entry live under RimZ's runtime directory, so they do not survive a reboot.
-5. Each agent's wrapper takes a lease on the server, and the launch goes on to open panes.
+2. If a broker for this (checkout, name) already exists, dormant or running, the launch joins it. Otherwise it starts a small hidden broker, leaving the language server dormant by default. The broker's socket and registry entry live under RimZ's runtime directory, so they do not survive a reboot.
+3. Each agent's wrapper takes a lease on the broker, and the launch goes on to open panes. A [required server](#make-a-server-a-precondition) instead starts eagerly before panes open.
 
-When the memory check fails, the launcher's terminal says so on one line and the launch proceeds without that server; the agents use grep:
+The first query asks the broker to check memory under one machine-wide lock, so two starts cannot both pass on the same free gigabytes. The server may start when free memory, less what running servers are still expected to grow by, less this server's estimate, leaves a reserve of the larger of 10% of RAM and 8 GB. The estimate is learned from this project's recent peaks in `~/.rimz/lsp-history.jsonl`, or the configured `memory-estimate` (8 GB) before any history exists. If needed, RimZ frees other servers in least-recently-queried order, protecting ones still indexing, ready for less than five minutes, or queried within two minutes.
 
-```text
-rimz: language server rust not started: needs 8 GB, 5.2 GB free after the 9.6 GB reserve (held: /held rust 6.3 GB); agents use grep
-```
+If memory still does not fit, the query reports `not started: memory short` and the agent uses grep. The broker stays dormant; a later query retries. There is no optional-server memory refusal at launch, and no need to relaunch agents after freeing memory.
 
-That line names who holds the memory, so you can `rimz lsp stop` a server a finished team left behind and relaunch.
-
-A server never starts mid-session. Agents learn at launch whether one serves their checkout, and nothing about their tools changes afterward, so adding a server to the config reaches the next launch, never a running one. Subagents are the one launch that skips the check: a child works in its parent's checkout and joins its parent's server when there is one.
+Adding a server to the config still reaches the next launch, not an existing agent. Subagents skip broker creation: a child works in its parent's checkout and joins its parent's broker, including a dormant one that its queries can wake.
 
 Each worktree is its own checkout, so agents in `-w feat-x` get a separate server from agents on the main tree, each indexing the files it will actually read.
 
 ## What your agents see
 
-An agent launched with a server finds one paragraph in the system reminder RimZ appends, naming the servers and pointing at the `rimz-lsp` skill from your [skill library](./configuration.md#skills). The skill teaches the verbs below, the two exit codes that mean "use grep", and nothing else, so an agent spends no turn learning the tool. Without a server there is no paragraph.
+An agent launched with a shared server available finds one paragraph in the system reminder RimZ appends, naming dormant and running servers and pointing at the `rimz-lsp` skill from your [skill library](./configuration.md#skills). It explains that a first query may wait for startup. The skill teaches the verbs below and the two exit codes that mean "use grep", so an agent spends no turn learning the tool. Without a shared server available there is no paragraph.
 
-An agent's query gets one of three answers. Exit 0 is an answer, and `no results` is a real one. Exit 3 means there is no server for this checkout, with the reason on one line: never started, memory short at launch, stopped by hand, stopped under memory pressure, checkout removed, or crashed. Exit 4 means the server is still indexing after the query's 30-second wait, with the elapsed time. The skill tells the agent to grep on 3 and 4 and carry on, so a server that stops mid-task costs the agent one failed call, not a stalled turn. Agents are never messaged about a stop.
+An agent's query gets one of three availability outcomes. Exit 0 is an answer, and `no results` is a real one. Exit 3 means the server is unavailable, with the reason on one line, such as no server for this checkout or insufficient memory to start. Exit 4 means startup or indexing exceeded the query's 30-second wait, with elapsed time for that server start. A dormant server is not itself a failure: the query wakes it and answers normally if it becomes ready in time. Agents can use grep on 3 and 4 and try a later query; they are never messaged about a stop.
 
-Claude's native `LSP` tool is switched off whenever a server is configured, even for a launch whose server was refused for memory, so no private index starts outside the budget. `rimz agents validate` warns when a profile still lists `LSP` in its tools. OpenCode and Grok have no verified switch for their own servers, so with those two the shared server is an addition, not a replacement.
+Claude's native `LSP` tool is switched off whenever a server is configured, even while it is dormant or a query cannot start it for lack of memory, so no private index starts outside the budget. `rimz agents validate` warns when a profile still lists `LSP` in its tools. OpenCode and Grok have no verified switch for their own servers, so with those two the shared server is an addition, not a replacement.
 
 ## Ask the server yourself
 
@@ -79,25 +73,26 @@ The server answers from the disk, kept current by watching saved files, not from
 
 ## See what is running, and stop it
 
-`rimz lsp list` shows every shared server on the machine, whichever room started it: its checkout, name, state (`starting`, `indexing`, `ready`, or `stopped` with the reason), current and peak memory, how many queries it has answered and how long since the last, and how many agents hold a lease. `rimz doctor` carries the same table under `LSP`, plus the last memory refusal, so when an agent says it is on grep you can see why in one place.
+`rimz lsp list` shows every shared server on the machine, whichever room registered it: its checkout, name, state (`dormant`, `starting`, `indexing`, `ready`, or briefly `stopped` during shutdown), current and peak memory for running servers, query count and time since the last query, restarts, and leases. Dormant entries name the stop reason when there is one. `rimz doctor` shows shared-server status under `LSP`, plus the last memory refusal, so when an agent says it is on grep you can see why in one place.
 
-A server ends in one of five ways, and a stopped server is never restarted while the agents that leased it are still running:
+A server can free its memory while agents remain:
 
-- **Its last agent leaves.** Leases are held by the agents' wrapper processes and released when they exit; the broker also reaps a dead owner within five seconds. The last release starts a 60-second grace so a restart can rejoin, then the server exits. There is no idle timeout: a team that queries once a day keeps its server as long as it lives.
-- **You stop it.** `rimz lsp stop --server rust` from the checkout, or `rimz lsp stop --all` for the machine. The agents keep running; their next query exits 3 with `stopped by hand` and they fall back to grep.
-- **Memory runs short.** Every broker samples free memory every five seconds. When it drops below 5% of RAM, one broker is elected to stop servers until it recovers, taking first the servers no agent has queried, longest-running first, then the least recently queried. The victim's whole process group goes, including any `cargo` children, and a record of the kill lands in `~/.rimz/logs/lsp.log.jsonl`. Servers also carry a high `oom_score_adj`, so if the kernel acts first it takes a server before an agent.
-- **The checkout goes.** Removing a worktree, by `rimz worktree remove` or a sweep, stops its servers, and the broker checks that its root still exists every five seconds as a backstop.
-- **The server crashes.** The broker records it and answers queries with the reason.
+- **Nobody queries it.** After ten minutes without a query, a ready server becomes `dormant: idle`. Set machine `[lsp] idle-timeout` to change that duration. Startup, indexing, and queries in flight are protected; the check runs every five seconds.
+- **The team finishes.** Flipping a cohort to `Done` stops its checkout's servers to `dormant: team done`, without changing the flip's output or stopping agents.
+- **You stop it.** Run `rimz lsp stop --server rust` from the checkout, or `rimz lsp stop --all` for the machine. The server becomes `dormant: stopped by hand`; the next query can restart it.
+- **Another query needs the memory.** Admission can evict an older, idle server to make room, leaving it `dormant: evicted`.
+- **Memory runs short.** Every broker samples free memory every five seconds. Below 5% of RAM, one broker stops servers in least-recently-queried order until memory recovers, without the age protections used for admission. The victim's whole process group goes, including any `cargo` children, and a record lands in `~/.rimz/logs/lsp.log.jsonl`. Servers carry a high `oom_score_adj` so the kernel favors them over agents if it acts first.
+- **The server crashes.** The broker records the crash and becomes dormant, ready for a later query to retry.
 
-Whichever way it ended, the entry stays visible in `rimz lsp list` as `stopped: <reason>` until the last lease is released, and closing those agents and relaunching gets a fresh server. To turn sharing off, remove the `[lsp.servers.<name>]` table; the next launch starts nothing and Claude's native tool is no longer denied.
+Each restart checks memory again; `RESTARTS` counts starts after a stop, not the first lazy start. The entry remains available while agents hold leases. Once the last agent leaves, a 60-second grace lets a replacement rejoin before the broker exits, even if dormant. Removing the checkout ends its broker too. To turn sharing off for future launches, remove the `[lsp.servers.<name>]` table; Claude's native tool is then no longer denied. Existing agents keep their leases until they exit.
 
 ## Make a server a precondition
 
-By default a server is enrichment: `policy = "optional"` means a memory refusal costs the agents their navigation and nothing else. For a task where grep is not good enough, set `policy = "required"` on the entry. A required launch that fails the memory check waits before opening panes, first come first served among required launches, and the launcher's terminal prints its queue position and remaining time each time they change. At `wait-timeout` (10 minutes by default) the launch fails with the memory needed, the memory free, and who holds the rest. Optional launches never queue behind required ones.
+By default a server is enrichment: `policy = "optional"` defers startup and memory admission to the first query. For a task where you want memory secured before agents begin, set `policy = "required"` on the entry. When creating a new broker, required policy admits and starts the server eagerly, without waiting for its index. A required launch that fails the memory check waits before opening panes, first come first served among required launches, and the launcher's terminal prints its queue position and remaining time each time they change. At `wait-timeout` (10 minutes by default) the launch fails with the memory needed, the memory free, and who holds the rest. Optional launches never queue behind required ones.
 
-`required` gates the start only. A required server killed later for memory degrades exactly as an optional one does, because RimZ never stops agents to keep a server alive.
+`required` gates initial launch admission only. Joining an existing broker, including a dormant one, does not repeat that check. After a stop, both policies restart on a query and can refuse for memory, because RimZ never stops agents to keep a server alive.
 
-Two machine-only keys size the budget: `reserve-percent` and `reserve-min` set the memory a launch must leave untouched, and `kill-floor-percent` sets where the watchdog begins stopping servers. Their defaults are in the [reference](../reference/cli/lsp.md#configuration); lower the reserve only on a machine whose agents leave headroom you can see in `rimz lsp list`.
+Machine-only keys control memory: `reserve-percent` and `reserve-min` set the memory a start must leave untouched, `kill-floor-percent` sets where the watchdog begins stopping servers, and `idle-timeout` controls how long an unused ready server stays resident. Their defaults are in the [reference](../reference/cli/lsp.md#configuration); lower the reserve only on a machine whose agents leave headroom you can see in `rimz lsp list`.
 
 ## See also
 
