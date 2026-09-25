@@ -177,6 +177,99 @@ fn hidden_timeout_helper_settles_only_an_overdue_run() {
     );
 }
 
+#[test]
+fn hidden_deadline_helper_claims_pane_stop_once_without_timing_out() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut record = create_running_named_run(&env, &store, "deadline-child");
+    record.kind = AgentKind::new_unchecked("kimi");
+    record.subagent = true;
+    record.deadline_at = Some(Timestamp::now() - Duration::from_secs(1));
+    record.grace = Some(Duration::from_secs(180));
+    rimz::harness::run::create(store.paths(), &record).unwrap();
+    let request = rimz::harness::run_timeout::RunTimeoutRequest {
+        workspace_id: env.workspace_id.clone(),
+        run_id: record.run_id.clone(),
+    };
+    for _ in 0..2 {
+        let output = env
+            .rimz()
+            .current_dir(&env.project_root)
+            .args(rimz::child_process::agent_helper_argv(
+                "run-timeout",
+                &request,
+            ))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let loaded = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+        assert_eq!(loaded.status, RunStatus::Running);
+        assert_eq!(loaded.deadline_notice_at, record.deadline_at);
+    }
+    assert!(
+        store.list_messages().unwrap().is_empty(),
+        "no pane or recipient: no stop message can be queued"
+    );
+}
+
+#[test]
+fn hidden_timeout_helper_harvests_last_assistant_and_preserves_existing_response() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let transcript = env.project_root.join("partial.jsonl");
+    std::fs::write(&transcript, concat!(
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"last answer\"}]}}\n",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"  \"}]}}\n"
+    )).unwrap();
+    for existing in [None, Some("existing answer")] {
+        let mut record = create_running_named_run(&env, &store, "deadline-child");
+        record.kind = AgentKind::new_unchecked("claude");
+        record.subagent = true;
+        record.keep = true;
+        record.deadline_at = Some(Timestamp::now() - Duration::from_secs(181));
+        record.grace = Some(Duration::from_secs(180));
+        record.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        record.last_message = existing.map(str::to_owned);
+        rimz::harness::run::create(store.paths(), &record).unwrap();
+        let request = rimz::harness::run_timeout::RunTimeoutRequest {
+            workspace_id: env.workspace_id.clone(),
+            run_id: record.run_id.clone(),
+        };
+        for _ in 0..2 {
+            let output = env
+                .rimz()
+                .current_dir(&env.project_root)
+                .args(rimz::child_process::agent_helper_argv(
+                    "run-timeout",
+                    &request,
+                ))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let settled = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+            assert_eq!(settled.status, RunStatus::TimedOut);
+            let expected = existing.unwrap_or("last answer");
+            assert_eq!(settled.last_message.as_deref(), Some(expected));
+            assert_eq!(
+                std::fs::read_to_string(store.paths().subagents_dir.join("deadline-child.output"))
+                    .unwrap(),
+                format!("{expected}\n")
+            );
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn hidden_timeout_helper_signals_pre_hook_provider_without_killing_wrapper() {
