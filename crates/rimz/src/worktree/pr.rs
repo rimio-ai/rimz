@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::config::WorktreeConfig;
+use crate::config::{WorktreeConfig, WorktreeHooks};
 use crate::forge;
 
 use super::{
@@ -23,7 +23,8 @@ const PR_HEAD_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const PR_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 static TEMP_REF_NONCE: AtomicU64 = AtomicU64::new(0);
 
-struct PrContext {
+struct PrContext<'a> {
+    hooks: &'a WorktreeHooks,
     number: u64,
     remote: String,
     remote_repo: Option<forge::RemoteRepo>,
@@ -38,6 +39,7 @@ pub fn create_from_pr(
     branch: Option<&str>,
     reuse_existing: bool,
 ) -> Result<CreatedWorktree> {
+    config.hooks.validate()?;
     ensure_repo(repo_root)?;
     let default_name = format!("pr-{}", pr.number);
     let fresh = match resolve_fresh_worktree(
@@ -73,6 +75,7 @@ pub fn create_from_pr(
             .map_or(forge::Forge::GitHubStyle, forge::RemoteRepo::forge)
     });
     let context = PrContext {
+        hooks: &config.hooks,
         number: pr.number,
         refspec: remote_forge.pr_refspec(pr.number),
         remote,
@@ -160,7 +163,7 @@ fn validate_pr_origin(
 fn review_only_checkout(
     repo_root: &Path,
     fresh: FreshWorktree,
-    context: &PrContext,
+    context: &PrContext<'_>,
     branch: String,
     review_only_reason: Option<String>,
 ) -> Result<CreatedWorktree> {
@@ -172,6 +175,7 @@ fn review_only_checkout(
         pr_head.oid.clone(),
         pr_head.oid.as_str(),
         context.number,
+        context.hooks,
     )?;
     created.review_only_reason = review_only_reason;
     Ok(created)
@@ -180,7 +184,7 @@ fn review_only_checkout(
 fn same_repo_checkout(
     repo_root: &Path,
     fresh: FreshWorktree,
-    context: &PrContext,
+    context: &PrContext<'_>,
     branch: String,
 ) -> Result<CreatedWorktree> {
     validate_pr_branch(repo_root, context.number, &branch)?;
@@ -205,14 +209,20 @@ fn same_repo_checkout(
         LocalPrBranch::Existing => Checkout::Existing,
     };
     add_worktree(
-        repo_root, fresh.name, fresh.path, branch, provenance, checkout,
+        repo_root,
+        fresh.name,
+        fresh.path,
+        branch,
+        provenance,
+        checkout,
+        context.hooks,
     )
 }
 
 fn fork_checkout(
     repo_root: &Path,
     fresh: FreshWorktree,
-    context: &PrContext,
+    context: &PrContext<'_>,
     head: forge::PrHead,
 ) -> Result<CreatedWorktree> {
     validate_pr_branch(repo_root, context.number, &head.branch)?;
@@ -259,6 +269,7 @@ fn fork_checkout(
         pr_head.oid.clone(),
         pr_head.oid.as_str(),
         context.number,
+        context.hooks,
     )?;
     let remote_key = format!("branch.{branch}.remote");
     git_run(
@@ -338,6 +349,7 @@ fn add_pr_worktree(
     pr_head: String,
     checkout_ref: &str,
     pr_number: u64,
+    hooks: &WorktreeHooks,
 ) -> Result<CreatedWorktree> {
     add_worktree(
         repo_root,
@@ -346,6 +358,7 @@ fn add_pr_worktree(
         branch,
         pr_marker_provenance(repo_root, &pr_head, pr_number),
         Checkout::NewBranch(checkout_ref),
+        hooks,
     )
 }
 
@@ -497,6 +510,7 @@ mod tests {
             head.clone(),
             &head,
             69,
+            &WorktreeHooks::default(),
         )
         .expect("PR worktree");
 

@@ -360,6 +360,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
         &store,
         &workspace.session_name,
         dry_run,
+        &super::machine_config().agents.worktree.hooks,
     ) {
         Ok(sweep) => WorktreeSweepStatus::Swept(sweep),
         Err(err) => {
