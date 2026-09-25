@@ -8,11 +8,11 @@ mod watchdog;
 
 use super::{LspErr, Result, admission::ServeRequest, history, memory, registry};
 use lifecycle::{Lifecycle, Readiness};
-use notify::Watcher;
-use registry::{Entry, State};
+use registry::{Entry, State, StopReason};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -43,11 +43,11 @@ impl Shared {
         self.started.elapsed().as_millis() as u64
     }
 
-    fn stop(&self, reason: &str) {
+    fn stop(&self, reason: StopReason) {
         let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
         if !matches!(model.entry.state, State::Stopped { .. }) {
             model.entry.state = State::Stopped {
-                reason: reason.into(),
+                reason,
                 at_ms: crate::utils::time::unix_now_ms(),
             };
         }
@@ -59,7 +59,10 @@ struct Server(Child);
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.0.kill();
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(self.0.id() as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
         let _ = self.0.wait();
     }
 }
@@ -123,6 +126,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
+                .process_group(0)
                 .spawn()?,
         );
         memory::raise_oom_score(server.0.id())?;
@@ -160,9 +164,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             let _ = watch_tx.send(event);
         })
         .map_err(|error| LspErr::Protocol(error.to_string()))?;
-        watcher
-            .watch(&root, notify::RecursiveMode::Recursive)
-            .map_err(|error| LspErr::Protocol(error.to_string()))?;
+        watch::register(&mut watcher, &root)?;
         run(
             &shared,
             &request,
@@ -170,12 +172,12 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             &transport,
             initialized,
             progress,
-            events,
+            (&mut watcher, events),
         )
     })();
     if let Err(error) = result {
         tracing::warn!(%error, "language server stopped");
-        shared.stop("crashed");
+        shared.stop(StopReason::Crashed);
     }
     {
         // A fallback kill and its history record finish before the broker adopts their tombstone.
@@ -218,8 +220,12 @@ fn run(
     transport: &Arc<Transport>,
     initialized: mpsc::Receiver<Result<Value>>,
     progress: mpsc::Receiver<Value>,
-    events: mpsc::Receiver<notify::Result<notify::Event>>,
+    watch: (
+        &mut impl notify::Watcher,
+        mpsc::Receiver<notify::Result<notify::Event>>,
+    ),
 ) -> Result<()> {
+    let (watcher, events) = watch;
     let mut initialized = Some(initialized);
     let mut housekeeping = Instant::now();
     loop {
@@ -268,6 +274,7 @@ fn run(
                 .try_iter()
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|error| LspErr::Protocol(error.to_string()))?;
+            let batch = watch::register_created(watcher, &request.root, batch)?;
             let changes = watch::changes(&request.root, &request.config.extensions, batch);
             if changes["changes"]
                 .as_array()
@@ -277,7 +284,7 @@ fn run(
             }
         }
         if server.0.try_wait()?.is_some() {
-            shared.stop("crashed");
+            shared.stop(StopReason::Crashed);
             break;
         }
         if housekeeping.elapsed() >= Duration::from_secs(5) {
@@ -292,13 +299,13 @@ fn run(
                     .peak_rss_kb
                     .max(crate::proc::tree_totals(server.0.id()).map_or(0, |totals| totals.rss_kb));
                 let reason = if !request.root.exists() {
-                    Some("checkout removed")
+                    Some(StopReason::CheckoutRemoved)
                 } else {
                     model.lifecycle.expired(shared.elapsed())
                 };
                 if let Some(reason) = reason {
                     model.entry.state = State::Stopped {
-                        reason: reason.into(),
+                        reason,
                         at_ms: crate::utils::time::unix_now_ms(),
                     };
                     shared.changed.notify_all();
@@ -353,20 +360,49 @@ fn record_stop(entry: &Entry) {
         ready_ms: entry
             .ready_at_ms
             .map(|ready| ready.saturating_sub(entry.started_at_ms)),
-        reason: reason.clone(),
+        reason: *reason,
     });
-    if matches!(reason.as_str(), "memory pressure" | "crashed") {
+    if *reason == StopReason::Crashed {
         crate::diag::lsp::append(&crate::diag::lsp::Record {
             at: jiff::Timestamp::now(),
             root: entry.root.clone(),
             server: entry.server.clone(),
-            event: if reason == "crashed" {
-                "crashed"
-            } else {
-                "killed"
-            }
-            .into(),
+            event: "crashed".into(),
             details: json!({"reason": reason, "peak_rss_kb": entry.peak_rss_kb}),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+
+    #[test]
+    fn server_drop_kills_its_descendants() {
+        let mut server = Server(
+            Command::new("sh")
+                .args(["-c", "sleep 60 & echo $!; wait"])
+                .stdout(Stdio::piped())
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        );
+        let pid = server.0.id();
+        let mut line = String::new();
+        BufReader::new(server.0.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let child: u32 = line.trim().parse().unwrap();
+        let token = crate::proc::process_start_token(child).unwrap();
+        drop(server);
+        for _ in 0..100 {
+            if !crate::proc::process_is_live(child, Some(&token)) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!crate::proc::process_is_live(pid, None));
+        assert!(!crate::proc::process_is_live(child, Some(&token)));
     }
 }

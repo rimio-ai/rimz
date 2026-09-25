@@ -4,7 +4,7 @@ use super::{RequestPhase, Shared, registry};
 use crate::lsp::{
     LspErr, Result,
     protocol::QueryRequest,
-    registry::{LaunchId, Lease, State},
+    registry::{LaunchId, Lease, State, StopReason},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,7 +28,7 @@ enum Operation {
         pid: u32,
     },
     Stop {
-        reason: String,
+        reason: StopReason,
     },
     Query {
         method: String,
@@ -107,7 +107,7 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
         return query(shared, &method, params, wait_ms);
     }
     if let Operation::Stop { reason } = operation {
-        shared.stop(&reason);
+        shared.stop(reason);
         let model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
         if model.request_phase == RequestPhase::Serving {
             registry::publish(&model.entry)?;
@@ -185,14 +185,14 @@ fn query(shared: &Shared, method: &str, params: Value, wait_ms: u64) -> Result<V
         Ok(request) => request,
         Err(error) => {
             tracing::debug!(%error, "language-server transport closed");
-            shared.stop("crashed");
-            return Ok(json!({"error": {"code": -32003, "message": "crashed"}}));
+            shared.stop(StopReason::Crashed);
+            return Ok(json!({"error": {"code": -32003, "message": StopReason::Crashed}}));
         }
     };
     let response = receiver.recv_timeout(Duration::from_secs(60));
     transport.cancel(id);
     if matches!(&response, Ok(Err(error)) if !matches!(error, LspErr::Server { .. })) {
-        shared.stop("crashed");
+        shared.stop(StopReason::Crashed);
     }
     let model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
     if let State::Stopped { reason, .. } = &model.entry.state {
@@ -228,7 +228,7 @@ mod tests {
         let response = query(&shared, "workspace/symbol", json!({"query": "symbol"}), 1).unwrap();
         assert!(response.get("indexing").is_some());
         assert!(response.get("result").is_none());
-        shared.stop("memory pressure");
+        shared.stop(StopReason::MemoryPressure);
         assert_eq!(
             query(
                 &shared,

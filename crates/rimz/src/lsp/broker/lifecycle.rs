@@ -1,6 +1,6 @@
 //! Lease graces and progress-driven query readiness.
 
-use crate::lsp::registry::{Lease, State};
+use crate::lsp::registry::{Lease, State, StopReason};
 use serde_json::Value;
 
 #[derive(Default)]
@@ -23,13 +23,13 @@ impl Lifecycle {
             self.last_release = Some(now);
         }
     }
-    pub(super) fn expired(&self, now: u64) -> Option<&'static str> {
+    pub(super) fn expired(&self, now: u64) -> Option<StopReason> {
         if !self.leases.is_empty() {
             return None;
         }
         match self.last_release {
-            Some(released) if now.saturating_sub(released) >= 60_000 => Some("released"),
-            None if now >= 300_000 => Some("never leased"),
+            Some(released) if now.saturating_sub(released) >= 60_000 => Some(StopReason::Released),
+            None if now >= 300_000 => Some(StopReason::NeverLeased),
             _ => None,
         }
     }
@@ -87,7 +87,7 @@ mod tests {
     fn leases_reap_release_and_cancel_restart_grace() {
         let mut state = Lifecycle::default();
         assert_eq!(state.expired(299_999), None);
-        assert_eq!(state.expired(300_000), Some("never leased"));
+        assert_eq!(state.expired(300_000), Some(StopReason::NeverLeased));
         state.register(lease(1));
         state.register(lease(1));
         state.register(lease(2));
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(state.expired(560_000), None);
         state.retain(600_000, |_| false);
         state.retain(610_000, |_| false);
-        assert_eq!(state.expired(660_000), Some("released"));
+        assert_eq!(state.expired(660_000), Some(StopReason::Released));
     }
 
     #[test]

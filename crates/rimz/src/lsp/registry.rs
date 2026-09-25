@@ -32,7 +32,29 @@ pub enum State {
     Starting,
     Indexing,
     Ready,
-    Stopped { reason: String, at_ms: u64 },
+    Stopped { reason: StopReason, at_ms: u64 },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, thiserror::Error)]
+pub enum StopReason {
+    #[serde(rename = "released")]
+    #[error("released")]
+    Released,
+    #[serde(rename = "checkout removed")]
+    #[error("checkout removed")]
+    CheckoutRemoved,
+    #[serde(rename = "memory pressure")]
+    #[error("memory pressure")]
+    MemoryPressure,
+    #[serde(rename = "crashed")]
+    #[error("crashed")]
+    Crashed,
+    #[serde(rename = "stopped by hand")]
+    #[error("stopped by hand")]
+    StoppedByHand,
+    #[serde(rename = "never leased")]
+    #[error("never leased")]
+    NeverLeased,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -287,7 +309,7 @@ pub fn stop_checkout(root: &Path) -> Result<()> {
         read_entries()?
             .into_iter()
             .filter(|entry| entry.root == root),
-        &serde_json::json!({"op": "stop", "reason": "checkout removed"}),
+        &serde_json::json!({"op": "stop", "reason": StopReason::CheckoutRemoved}),
     )
 }
 
@@ -317,6 +339,25 @@ pub(super) fn acknowledge_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_reasons_preserve_wire_strings() {
+        for (reason, text) in [
+            (StopReason::Released, "released"),
+            (StopReason::CheckoutRemoved, "checkout removed"),
+            (StopReason::MemoryPressure, "memory pressure"),
+            (StopReason::Crashed, "crashed"),
+            (StopReason::StoppedByHand, "stopped by hand"),
+            (StopReason::NeverLeased, "never leased"),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), text);
+            assert_eq!(
+                serde_json::from_value::<StopReason>(serde_json::json!(text)).unwrap(),
+                reason
+            );
+            assert_eq!(reason.to_string(), text);
+        }
+    }
 
     #[test]
     fn registry_keys_are_stable_and_reject_path_components() {

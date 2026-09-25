@@ -168,7 +168,9 @@ fn server_response(
                 .collect(),
         ),
         "workspace/workspaceFolders" => folders.clone(),
-        "client/registerCapability" | "window/workDoneProgress/create" => Value::Null,
+        "client/registerCapability"
+        | "client/unregisterCapability"
+        | "window/workDoneProgress/create" => Value::Null,
         _ => return Err(()),
     })
 }
@@ -201,6 +203,7 @@ mod tests {
         );
         for method in [
             "client/registerCapability",
+            "client/unregisterCapability",
             "window/workDoneProgress/create",
         ] {
             assert_eq!(

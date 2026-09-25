@@ -5,6 +5,94 @@ use notify::{Event, EventKind};
 use serde_json::{Value, json};
 use std::path::Path;
 
+fn excluded(path: &Path) -> bool {
+    path.components().any(|part| {
+        matches!(
+            part.as_os_str().to_str(),
+            Some(".git" | "target" | "node_modules")
+        )
+    })
+}
+
+pub(super) fn register(
+    watcher: &mut impl notify::Watcher,
+    directory: &Path,
+) -> crate::lsp::Result<()> {
+    if let Err(error) = watcher.watch(directory, notify::RecursiveMode::NonRecursive) {
+        match &error.kind {
+            notify::ErrorKind::PathNotFound => return Ok(()),
+            notify::ErrorKind::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(());
+            }
+            _ => return Err(crate::lsp::LspErr::Protocol(error.to_string())),
+        }
+    }
+    for entry in directory_entries(directory)? {
+        let entry = entry?;
+        if !excluded(Path::new(&entry.file_name())) && entry.file_type()?.is_dir() {
+            register(watcher, &entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn directory_entries(
+    directory: &Path,
+) -> std::io::Result<impl Iterator<Item = std::io::Result<std::fs::DirEntry>>> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => Some(entries),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    Ok(entries.into_iter().flatten())
+}
+
+pub(super) fn register_created(
+    watcher: &mut impl notify::Watcher,
+    root: &Path,
+    mut events: Vec<Event>,
+) -> crate::lsp::Result<Vec<Event>> {
+    let mut directories = Vec::new();
+    for event in &events {
+        if !matches!(
+            event.kind,
+            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
+        ) {
+            continue;
+        }
+        for path in &event.paths {
+            if path
+                .strip_prefix(root)
+                .is_ok_and(|relative| !excluded(relative))
+                && path
+                    .symlink_metadata()
+                    .is_ok_and(|metadata| metadata.is_dir())
+            {
+                register(watcher, path)?;
+                directories.push(path.clone());
+            }
+        }
+    }
+    // Files can be saved before the new directory's watch is installed.
+    while let Some(directory) = directories.pop() {
+        for entry in directory_entries(&directory)? {
+            let entry = entry?;
+            if excluded(Path::new(&entry.file_name())) {
+                continue;
+            }
+            if entry.file_type()?.is_dir() {
+                directories.push(entry.path());
+            } else if entry.file_type()?.is_file() {
+                events.push(
+                    Event::new(EventKind::Create(notify::event::CreateKind::File))
+                        .add_path(entry.path()),
+                );
+            }
+        }
+    }
+    Ok(events)
+}
+
 pub(super) fn changes(
     root: &Path,
     extensions: &[String],
@@ -16,15 +104,11 @@ pub(super) fn changes(
             let Ok(relative) = path.strip_prefix(root) else {
                 continue;
             };
-            if relative.components().any(|part| {
-                matches!(
-                    part.as_os_str().to_str(),
-                    Some(".git" | "target" | "node_modules")
-                )
-            }) || !path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| extensions.iter().any(|configured| configured == ext))
+            if excluded(relative)
+                || !path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| extensions.iter().any(|configured| configured == ext))
             {
                 continue;
             }
@@ -54,6 +138,52 @@ pub(super) fn changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn excluded_directories_are_unwatched_and_new_directories_forward_saves() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["target", ".git", "node_modules"] {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+            if event
+                .as_ref()
+                .is_ok_and(|event| !matches!(event.kind, EventKind::Access(_)))
+            {
+                let _ = tx.send(event);
+            }
+        })
+        .unwrap();
+        register(&mut watcher, root.path()).unwrap();
+        for name in ["target", ".git", "node_modules"] {
+            std::fs::write(root.path().join(name).join("hidden.rs"), "").unwrap();
+        }
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err()
+        );
+        let directory = root.path().join("new");
+        std::fs::create_dir(&directory).unwrap();
+        let event = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        register_created(&mut watcher, root.path(), vec![event]).unwrap();
+        std::fs::write(directory.join("saved.rs"), "fn saved() {}").unwrap();
+        let event = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        let output = changes(root.path(), &["rs".into()], [event]);
+        assert!(
+            output["changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|change| change["uri"].as_str().unwrap().ends_with("/new/saved.rs"))
+        );
+    }
 
     #[test]
     fn watch_batch_filters_outputs_and_preserves_event_types() {

@@ -11,7 +11,7 @@ pub struct Record {
     pub settings_hash: String,
     pub peak_rss_kb: u64,
     pub ready_ms: Option<u64>,
-    pub reason: String,
+    pub reason: super::registry::StopReason,
 }
 
 fn estimate_records(
@@ -73,7 +73,7 @@ mod tests {
                 settings_hash: "a".into(),
                 peak_rss_kb,
                 ready_ms: None,
-                reason: "released".into(),
+                reason: crate::lsp::registry::StopReason::Released,
             })
             .collect();
         assert_eq!(estimate_records(&records, root, "rust", "a", 99), 5 * 1024);
