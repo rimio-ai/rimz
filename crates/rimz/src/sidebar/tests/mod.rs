@@ -456,7 +456,7 @@ fn sweep_removes_stale_heartbeat_keeps_fresh() {
     let dead_path = h.write_sidebar_for(&dead);
     make_stale(&dead_path);
 
-    sweep_orphan_runtime(&h.runtime);
+    crate::harness::auto_gc::sweep_runtime_claims(&h.runtime);
 
     assert!(h.runtime.sidebar_heartbeat_path(&live).exists());
     assert!(!dead_path.exists());
@@ -512,15 +512,11 @@ fn sweep_removes_orphan_socket_keeps_live_and_starting() {
         .join(format!("sidebar.{}.sock", live.short()));
     let orphan_sock = h.runtime.sock_dir.join("sidebar.ffffffffffff.sock");
     let starting_sock = h.runtime.sock_dir.join("sidebar.eeeeeeeeeeee.sock");
-    for sock in [&live_sock, &orphan_sock, &starting_sock] {
-        std::fs::write(sock, b"").expect("write socket file");
-    }
-    // The orphan's owner is long gone (no heartbeat, stale socket); the
-    // starting socket is bound before its first heartbeat, so its fresh
-    // mtime protects it.
-    make_stale(&orphan_sock);
+    let _live = std::os::unix::net::UnixDatagram::bind(&live_sock).unwrap();
+    let _starting = std::os::unix::net::UnixDatagram::bind(&starting_sock).unwrap();
+    drop(std::os::unix::net::UnixDatagram::bind(&orphan_sock).unwrap());
 
-    sweep_orphan_runtime(&h.runtime);
+    crate::harness::auto_gc::sweep_runtime_claims(&h.runtime);
 
     assert!(live_sock.exists(), "live owner's socket kept");
     assert!(starting_sock.exists(), "startup-window socket kept");
@@ -546,7 +542,7 @@ fn sweep_removes_orphan_read_marks_keeps_live_and_fresh() {
     make_stale(&dead_marks);
     make_stale(&manual_marks);
 
-    sweep_orphan_runtime(&h.runtime);
+    crate::harness::auto_gc::sweep_runtime_claims(&h.runtime);
 
     assert!(live_marks.exists(), "live owner's read marks kept");
     assert!(fresh_marks.exists(), "fresh startup-window read marks kept");

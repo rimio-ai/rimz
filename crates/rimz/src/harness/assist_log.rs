@@ -104,6 +104,8 @@ pub enum Assist {
         workspace_id: crate::ids::WorkspaceId,
         older_than_secs: u64,
         reclaimed_bytes: u64,
+        #[serde(default)]
+        class_bytes: std::collections::BTreeMap<String, u64>,
         worktrees_removed: usize,
         workspaces_pruned: usize,
         files_removed: usize,

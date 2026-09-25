@@ -102,17 +102,25 @@ fn auto_gc_assist(
             StoreMaintenance::SkippedDryRun | StoreMaintenance::SkippedNoStore => 0,
         },
     );
+    let mut class_bytes = std::collections::BTreeMap::new();
+    for room in &outcome.runtime.rooms {
+        for class in &room.classes {
+            *class_bytes.entry(class.class.clone()).or_default() += class.bytes_removed;
+        }
+    }
     Assist::AutoGc {
         workspace_id: workspace_id.clone(),
         older_than_secs: older_than.as_secs(),
         reclaimed_bytes: outcome.reclaimed_bytes(),
+        class_bytes,
         worktrees_removed,
         workspaces_pruned: outcome.prune.removed.len(),
         files_removed: outcome.runtime.heartbeat_files_removed
             + outcome.runtime.sidecar_files_removed
             + outcome.runtime.sidebar_sockets_removed
             + outcome.runtime.probe_markers_removed
-            + outcome.temps.files_removed,
+            + outcome.temps.files_removed
+            + outcome.runtime.state_files_removed,
         messages_archived,
         problems: problem_count(&outcome),
         error,
@@ -121,8 +129,12 @@ fn auto_gc_assist(
 
 fn sweep(older_than: Duration, dry_run: bool, globals: &GlobalFlags) -> Result<GcOutcome> {
     let spinner = Spinner::new("starting gc…");
-    spinner.set("sweeping runtime hints…");
-    let report = gc::collect_runtime(older_than, dry_run).context("collecting runtime garbage")?;
+    spinner.set("sweeping room state…");
+    let report = gc::collect_classes(older_than, dry_run, |runtime, name| {
+        rimz::harness::schedule::signal::watcher_info(runtime, name)
+            .map(|watcher| watcher.is_some())
+    })
+    .context("collecting room garbage")?;
     let store_maintenance = if dry_run {
         StoreMaintenance::SkippedDryRun
     } else {
@@ -172,7 +184,7 @@ fn sweep(older_than: Duration, dry_run: bool, globals: &GlobalFlags) -> Result<G
     };
     spinner.set("reaping dead schedules…");
     let (schedules_reaped, wait_logs_pruned) = if dry_run {
-        (0, 0)
+        (0, report.wait_outputs_removed)
     } else {
         let reaped = rimz::harness::schedule::catalog::TaskCatalog::reap_dead_deliveries()
             .context("reaping dead loop schedules")?;
@@ -182,9 +194,7 @@ fn sweep(older_than: Duration, dry_run: bool, globals: &GlobalFlags) -> Result<G
         rimz::harness::schedule::catalog::TaskCatalog::load(project_root.as_deref())?
             .prune_orphan_overlays()
             .context("pruning orphan loop arming state")?;
-        let wait_logs = rimz::harness::schedule::signal::prune_wait_outputs()
-            .context("pruning old wait output")?;
-        (reaped, wait_logs)
+        (reaped, report.wait_outputs_removed)
     };
     spinner.set("pruning dead workspaces…");
     let prune = gc::prune_dead_workspaces(dry_run).context("pruning dead workspaces")?;
@@ -221,6 +231,7 @@ impl GcOutcome {
     fn reclaimed_bytes(&self) -> u64 {
         self.runtime
             .bytes_removed
+            .saturating_add(self.runtime.state_bytes_removed)
             .saturating_add(self.temps.bytes_removed)
             .saturating_add(self.prune.bytes_removed())
             .saturating_add(self.worktrees.bytes())
@@ -425,6 +436,19 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     };
     writeln!(w, "  {}", paint(palette::muted(), &checked_text))?;
     writeln!(w)?;
+
+    for room in &out.runtime.rooms {
+        writeln!(w, "  {}", paint(palette::header(), &room.name))?;
+        for class in &room.classes {
+            writeln!(
+                w,
+                "    {} · {} · {}",
+                class.class,
+                plural(class.files_removed, "file", "files"),
+                fmt_bytes(class.bytes_removed)
+            )?;
+        }
+    }
 
     render_worktrees(out, w)?;
     render_workspaces(out, w)?;
@@ -901,6 +925,7 @@ struct JsonReport {
     workspaces: JsonWorkspaces,
     temps: JsonTemps,
     runtime: JsonRuntime,
+    rooms: Vec<gc::RoomReport>,
     messages: JsonMessages,
     carryover_pruned: usize,
     schedules_reaped: usize,
@@ -919,6 +944,7 @@ impl From<&GcOutcome> for JsonReport {
             workspaces: JsonWorkspaces::from(&out.prune),
             temps: JsonTemps::from(&out.temps),
             runtime: JsonRuntime::from(&out.runtime),
+            rooms: out.runtime.rooms.clone(),
             messages: JsonMessages {
                 archived: messages_archived(&out.store_maintenance),
                 reconciled: messages_reconciled(&out.store_maintenance),
@@ -1213,6 +1239,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gc_json_and_assist_report_classes() {
+        let mut outcome = GcOutcome::default();
+        outcome.runtime.rooms.push(gc::RoomReport {
+            name: "test-abcd".to_owned(),
+            classes: vec![gc::ClassReport {
+                class: "audit".to_owned(),
+                files_removed: 2,
+                bytes_removed: 12,
+            }],
+        });
+        let json = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
+        assert_eq!(json["rooms"][0]["classes"][0]["bytes_removed"], 12);
+        let id = rimz::WorkspaceId::from_project_root(std::path::Path::new("/test"));
+        let assist = auto_gc_assist(&id, Duration::ZERO, &Ok(outcome));
+        let json = serde_json::to_value(assist).unwrap();
+        assert_eq!(json["class_bytes"]["audit"], 12);
+    }
+
+    #[test]
     fn render_report_names_all_clean_checks() {
         let out = strip_report(&clean_outcome());
 
@@ -1431,6 +1476,7 @@ mod tests {
                 probe_markers_removed: 1,
                 dirs_removed: 1,
                 bytes_removed: 13_018,
+                ..gc::GcReport::default()
             },
             temps: gc::TempSweepReport {
                 files_removed: 2,

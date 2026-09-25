@@ -1,12 +1,6 @@
-//! Garbage collection — stale runtime hints, orphan write temps, and dead
-//! workspaces.
+//! Lifetime-class garbage collection for known rooms, plus orphan write temps and dead workspaces.
 //!
-//! [`collect_runtime`] removes or previews runtime liveness hints older than an
-//! operator-supplied threshold: sidebar heartbeat JSON, sidebar wakeup sockets
-//! named by stale heartbeats, and sidebar read-mark receipts whose owner
-//! heartbeat has expired. It also removes stale runtime provider probe
-//! markers. Run sockets are owned by their waiting process and cleaned up by
-//! the run-wake guard.
+//! [`collect_classes`] previews or applies state and runtime retention, reporting files and bytes per room and class. Runtime exporter protection and the renderer claim clock live beside the shared class sweeps. Watcher liveness is supplied by the harness caller; store owns the file removals.
 //!
 //! [`collect_orphan_temps`] removes or previews atomic-write temp siblings left
 //! behind by a process killed between create and rename.
@@ -34,15 +28,26 @@ pub const SESSION_PROBE_MARKER_TTL: Duration = Duration::from_secs(5 * 60);
 /// stamps.
 pub const SESSION_PROBE_MARKER_PREFIX: &str = "session-context-probe.";
 
+mod classes;
 mod collect;
 mod prune;
 mod temp_sweep;
+
+pub(crate) fn collect_runtime_claims(runtime: &paths::RuntimePaths) -> Result<()> {
+    collect::collect_claims(runtime)
+}
 
 pub use prune::{PruneReason, RemovedWorkspace, WorkspacePruneReport};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GcErr {
-    #[error("reading runtime dir {path}: {source}")]
+    #[error(transparent)]
+    Path(#[from] paths::PathErr),
+    #[error(transparent)]
+    Lock(#[from] crate::disk::lock::LockErr),
+    #[error(transparent)]
+    Run(#[from] crate::store::run::RunStoreErr),
+    #[error("reading dir {path}: {source}")]
     ReadDir {
         path: PathBuf,
         #[source]
@@ -78,6 +83,23 @@ pub struct GcReport {
     pub probe_markers_removed: usize,
     pub dirs_removed: usize,
     pub bytes_removed: u64,
+    pub state_bytes_removed: u64,
+    pub state_files_removed: usize,
+    pub wait_outputs_removed: usize,
+    pub rooms: Vec<RoomReport>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RoomReport {
+    pub name: String,
+    pub classes: Vec<ClassReport>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ClassReport {
+    pub class: String,
+    pub files_removed: usize,
+    pub bytes_removed: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -87,14 +109,85 @@ pub struct TempSweepReport {
 }
 
 #[must_use = "maintenance report; surface it to the caller"]
-pub fn collect_runtime(older_than: Duration, dry_run: bool) -> Result<GcReport> {
-    collect::collect_runtime_under(
+pub fn collect_classes(
+    older_than: Duration,
+    dry_run: bool,
+    watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
+) -> Result<GcReport> {
+    let mut report = collect::collect_runtime_under(
         &paths::workspaces_dir(),
         &paths::runtime_workspaces_dir(),
         &paths::RuntimePaths::shared().shared_root,
         older_than,
         dry_run,
-    )
+    )?;
+    let root = paths::workspaces_dir();
+    let rooms = crate::workspace::known_workspaces_under(&root)
+        .map_err(|source| GcErr::ReadDir { path: root, source })?;
+    for room in rooms {
+        let paths = paths::StatePaths::under_named(
+            room.workspace_id,
+            room.dir_name.clone(),
+            &paths::rimz_home(),
+        );
+        let runtime = paths::RuntimePaths::for_state(&paths)?;
+        let (classes, waits_removed) = match classes::collect_state(&paths, dry_run, &|name| {
+            watcher_is_live(&runtime, name)
+        }) {
+            Ok(report) => report,
+            Err(err) => {
+                tracing::warn!(workspace = %paths.dir_name, error = %err, "state gc skipped inaccessible workspace");
+                continue;
+            }
+        };
+        report.wait_outputs_removed += waits_removed;
+        report.state_bytes_removed += classes.iter().map(|class| class.bytes_removed).sum::<u64>();
+        report.state_files_removed += classes
+            .iter()
+            .map(|class| class.files_removed)
+            .sum::<usize>();
+        if let Some(existing) = report
+            .rooms
+            .iter_mut()
+            .find(|entry| entry.name == room.dir_name.as_str())
+        {
+            existing.classes.extend(classes);
+        } else {
+            report.rooms.push(RoomReport {
+                name: room.dir_name.to_string(),
+                classes,
+            });
+        }
+    }
+    for room in &mut report.rooms {
+        use paths::Class;
+        for class in [
+            Class::Log,
+            Class::Records,
+            Class::Audit,
+            Class::Cache,
+            Class::Owned,
+            Class::Tmp,
+            Class::Sock,
+            Class::Live,
+            Class::Lanes,
+            Class::Locks,
+        ] {
+            if !room
+                .classes
+                .iter()
+                .any(|entry| entry.class == class.dir_name())
+            {
+                room.classes.push(ClassReport {
+                    class: class.dir_name().to_owned(),
+                    ..ClassReport::default()
+                });
+            }
+        }
+        room.classes.sort_by(|a, b| a.class.cmp(&b.class));
+    }
+    report.rooms.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(report)
 }
 
 #[must_use = "maintenance report; surface it to the caller"]

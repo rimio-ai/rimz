@@ -391,7 +391,7 @@ fn live_targets(sweep_dead: bool) -> (Vec<LiveTarget>, usize) {
             if sweep_dead {
                 // A best-effort session probe can misread a live room, so sweep
                 // only respawnable daemons and runtime hints, never mux servers.
-                crate::sidebar::sweep_orphan_runtime(&runtime);
+                crate::harness::auto_gc::sweep_runtime_claims(&runtime);
                 dead_swept += recovery::sweep_orphan_processes(
                     ws.workspace_id.as_str(),
                     &ws.session_name,
@@ -514,7 +514,7 @@ fn upgrade_live(
     // sockets accumulate in a live session too (every SIGKILLed or reaped
     // renderer leaves a pair), and the sweep already spares anything fresh or
     // still starting.
-    crate::sidebar::sweep_orphan_runtime(runtime);
+    crate::harness::auto_gc::sweep_runtime_claims(runtime);
     outcome
 }
 
@@ -582,7 +582,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
         .is_none()
         {
             outcome.presence_dead += 1;
-            crate::sidebar::sweep_orphan_runtime(runtime);
+            crate::harness::auto_gc::sweep_runtime_claims(runtime);
             return outcome;
         }
         Some(presence_floor_ms)
@@ -633,7 +633,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
         }
     }
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), *mux, ws);
-    crate::sidebar::sweep_orphan_runtime(runtime);
+    crate::harness::auto_gc::sweep_runtime_claims(runtime);
     outcome
 }
 

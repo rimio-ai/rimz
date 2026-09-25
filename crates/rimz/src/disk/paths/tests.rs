@@ -385,7 +385,10 @@ fn state_paths_resolve_under_the_home() {
         "workspace.json"
     );
     assert_eq!(paths.room_bin.file_name().unwrap(), "rimz");
-    assert_eq!(paths.live_roster.file_name().unwrap(), "live-roster.json");
+    assert_eq!(
+        paths.live_roster,
+        paths.root.join("records/live-roster.json")
+    );
     assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
     assert_eq!(paths.events_log, paths.root.join("log/events.log.jsonl"));
     assert_eq!(paths.messages_dir, paths.root.join("records/messages"));

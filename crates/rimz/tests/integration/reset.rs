@@ -49,7 +49,7 @@ fn reset_purges_the_resurrection_cache() {
 }
 
 #[test]
-fn reset_archives_records_and_clears_room_state() {
+fn reset_archives_records_and_clears_disposable_classes() {
     let env = Env::new();
     let store = env.store();
     store
@@ -116,18 +116,24 @@ fn reset_archives_records_and_clears_room_state() {
 
     assert!(paths.workspace_record.exists(), "workspace identity stays");
     assert!(!paths.events_log.exists(), "active log was archived");
-    assert!(!diag_log.exists(), "diag log cleared");
-    assert!(
-        paths.audit_path("binding.log.jsonl").exists(),
-        "binding audit retained"
-    );
-    assert!(!diag_frames.exists(), "diag frame captures cleared");
+    for audit in [diag_log, diag_frames, paths.audit_path("binding.log.jsonl")] {
+        assert!(
+            audit.exists(),
+            "soft reset keeps the audit class: {audit:?}"
+        );
+    }
     for class_dir in [&runtime.sock_dir, &runtime.live_dir, &runtime.lanes_dir] {
         assert!(!class_dir.exists(), "disposable runtime class cleared");
     }
     assert!(runtime.locks_dir.exists(), "runtime locks survive reset");
-    assert!(!paths.tmp_dir.exists(), "room tmp cleared");
-    assert!(!paths.skills_dir.exists(), "room skill copies cleared");
+    assert!(
+        paths.tmp_dir.join("agent-work").exists(),
+        "soft reset keeps room tmp"
+    );
+    assert!(
+        paths.skills_dir.exists(),
+        "soft reset keeps room skill copies"
+    );
 
     let archives = archive_paths(&paths.events_archive_dir);
     assert_eq!(archives.len(), 1, "one reset archive written");

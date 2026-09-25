@@ -15,6 +15,12 @@ use serde::{Deserialize, Serialize};
 use crate::config::GcConfig;
 use crate::{RuntimePaths, StatePaths};
 
+pub(crate) fn sweep_runtime_claims(runtime: &RuntimePaths) {
+    if let Err(err) = crate::store::gc::collect_runtime_claims(runtime) {
+        tracing::debug!(error = %err, "runtime claim sweep failed");
+    }
+}
+
 /// How often a workspace sweeps.
 const AUTO_GC_INTERVAL: Duration = Duration::from_secs(24 * 3_600);
 /// Producer age before its first sweep, so a reborn room finishes
@@ -62,6 +68,7 @@ pub(crate) fn sweep_if_due(
     if !due(config.auto, last_swept, producer_since, last_spawn, now) {
         return;
     }
+    sweep_runtime_claims(runtime);
     let Some(project_root) = project_root else {
         return;
     };
