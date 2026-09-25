@@ -339,15 +339,12 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
             message::write_queue(&self.txn.paths.messages_dir, &self.live)?;
         }
         if let Err(error) =
-            message::append_history_many(&self.txn.paths.messages_dir, &self.history)
+            message::append_history_many(&self.txn.paths.message_history_dir, &self.history)
         {
             tracing::warn!(%error, "cannot append terminal message history");
         }
         for event in &self.events {
             self.txn.append(event)?;
-        }
-        if !self.history.is_empty() {
-            message::maintain_history(&self.txn.paths.messages_dir);
         }
         Ok(())
     }
@@ -475,7 +472,9 @@ impl Store {
     }
 
     pub fn list_message_history(&self) -> Result<Vec<MessageRecord>> {
-        Ok(message::list_history(&self.inner.paths.messages_dir)?)
+        Ok(message::list_history(
+            &self.inner.paths.message_history_dir,
+        )?)
     }
 
     pub fn list_pending_messages(&self) -> Result<Vec<MessageRecord>> {
@@ -529,7 +528,7 @@ impl Store {
             let mut message = match queue.get(message_id) {
                 Some(message) => message,
                 None => {
-                    return Ok(message::list_history(&queue.txn.paths.messages_dir)?
+                    return Ok(message::list_history(&queue.txn.paths.message_history_dir)?
                         .into_iter()
                         .find(|message| message.message_id == *message_id)
                         .map_or(EditOutcome::NotFound, |message| {

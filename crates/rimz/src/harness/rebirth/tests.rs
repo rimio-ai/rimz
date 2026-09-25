@@ -845,17 +845,21 @@ fn supervised_boundary_consumes_roster_without_inspecting_or_seeding_agents() {
 }
 
 #[test]
-fn crash_archive_retention_keeps_newest_five() {
+fn crash_archives_remain_until_gc() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let crashes = dir.path().join("crashes");
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    let crashes = &paths.crashes_dir;
     for index in 0..7 {
-        std::fs::create_dir_all(crashes.join(format!("2026010{index}T000000Z")))
-            .expect("archive dir");
+        archive_crash(
+            &paths,
+            &CrashCacheSnapshot::default(),
+            &[],
+            Timestamp::from_second(index * 86400).unwrap(),
+        )
+        .unwrap();
     }
 
-    prune_crash_archives(&crashes).expect("prune");
-
-    let mut kept = std::fs::read_dir(&crashes)
+    let mut kept = std::fs::read_dir(crashes)
         .expect("read")
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
@@ -863,11 +867,13 @@ fn crash_archive_retention_keeps_newest_five() {
     assert_eq!(
         kept,
         vec![
-            "20260102T000000Z",
-            "20260103T000000Z",
-            "20260104T000000Z",
-            "20260105T000000Z",
-            "20260106T000000Z",
+            "19700101T000000Z",
+            "19700102T000000Z",
+            "19700103T000000Z",
+            "19700104T000000Z",
+            "19700105T000000Z",
+            "19700106T000000Z",
+            "19700107T000000Z",
         ]
     );
 }

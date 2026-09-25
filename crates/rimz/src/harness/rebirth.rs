@@ -10,7 +10,6 @@ use jiff::Timestamp;
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths, cache_home};
-use crate::disk::retention::CRASH_ARCHIVE_RETENTION;
 use crate::harness::resume::{
     MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, ResumePlan, plan_resume_detailed,
     resume_session_present, split_team_and_flat,
@@ -641,7 +640,7 @@ fn archive_crash(
     write_cache_snapshot(cache, &mux_cache)?;
     crate::disk::atomic::write_temp_then_rename(&archive.join("roster.json"), &roster)
         .with_context(|| format!("writing crash roster {}", archive.display()))?;
-    prune_crash_archives(&paths.crashes_dir)
+    Ok(())
 }
 
 fn archive_name(at: Timestamp) -> String {
@@ -715,20 +714,6 @@ fn write_cache_snapshot(cache: &CrashCacheSnapshot, mux_cache: &Path) -> Result<
     }
     if let Some(error) = cache.error.as_deref() {
         anyhow::bail!("{error}");
-    }
-    Ok(())
-}
-
-fn prune_crash_archives(crashes_dir: &Path) -> Result<()> {
-    let mut archives = std::fs::read_dir(crashes_dir)
-        .with_context(|| format!("reading crash archives {}", crashes_dir.display()))?
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .collect::<Vec<_>>();
-    archives.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
-    for archive in archives.into_iter().skip(CRASH_ARCHIVE_RETENTION) {
-        std::fs::remove_dir_all(archive.path())
-            .with_context(|| format!("removing old crash archive {}", archive.path().display()))?;
     }
     Ok(())
 }

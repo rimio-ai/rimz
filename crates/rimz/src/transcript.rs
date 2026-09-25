@@ -12,14 +12,13 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::disk::buckets::{bucket_file_name, bucket_files};
 use crate::disk::paths::{StatePaths, rimz_home, workspaces_dir_under};
 use crate::disk::retention::TRANSCRIPT_FILE_DAYS as FILE_DAYS;
 use crate::disk::{atomic, lock};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::ids::{AskId, compose_channel};
 use crate::workspace::{KnownWorkspace, known_workspaces_under};
-
-const SECONDS_PER_DAY: i64 = 86_400;
 
 pub const HARNESS_FROM: &str = "rimz";
 
@@ -484,41 +483,14 @@ fn is_paste_tag(text: &str) -> bool {
 }
 
 fn transcript_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => {
-            return Err(TranscriptLogErr::Io {
-                path: dir.to_path_buf(),
-                source,
-            });
-        }
-    };
-    let mut files = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|source| TranscriptLogErr::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
-    }
-    Ok(files)
+    bucket_files(dir).map_err(|source| TranscriptLogErr::Io {
+        path: dir.to_path_buf(),
+        source,
+    })
 }
 
 fn bucket_path(paths: &StatePaths, at: Timestamp) -> PathBuf {
     paths.transcript_dir.join(bucket_file_name(at, FILE_DAYS))
-}
-
-fn bucket_file_name(at: Timestamp, file_days: u32) -> String {
-    let days = at.as_second().div_euclid(SECONDS_PER_DAY);
-    let window = i64::from(file_days.max(1));
-    let start_days = days.div_euclid(window) * window;
-    let start = Timestamp::from_second(start_days * SECONDS_PER_DAY)
-        .expect("day-aligned unix timestamp is valid");
-    format!("{}.jsonl", start.strftime("%Y-%m-%d"))
 }
 
 #[cfg(test)]

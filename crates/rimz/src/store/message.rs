@@ -14,7 +14,7 @@ mod codec;
 
 pub(super) use codec::MessageStoreErr;
 pub(in crate::store) use codec::{
-    append_history_many, list_history, list_pending, maintain_history, read_queue, write_queue,
+    append_history_many, list_history, list_pending, read_queue, write_queue,
 };
 
 pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
