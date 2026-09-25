@@ -791,6 +791,33 @@ fn resolve_launch_checkout(
     Ok(Some(launch))
 }
 
+fn check_launch_room(globals: &GlobalFlags) -> Result<()> {
+    let Some(root) = globals.root.as_ref() else {
+        return Ok(());
+    };
+    let Some(caller) = rimz::harness::ancestry::CallerIdentity::from_env() else {
+        return Ok(());
+    };
+    let pinned = std::env::var(rimz::workspace::ENV_WORKSPACE_ID)
+        .ok()
+        .zip(std::env::var_os(rimz::workspace::ENV_PROJECT_ROOT))
+        .and_then(|(id, root)| rimz::workspace::verify_pin(&id, std::path::Path::new(&root)));
+    let Some(pinned) = pinned else {
+        return Ok(());
+    };
+    let workspace = rimz::WorkspaceResolver::resolve_participant(".", Some(root.clone()))?;
+    let pinned =
+        rimz::StatePaths::for_workspace(rimz::ids::WorkspaceId::from_project_root(&pinned))?;
+    let target = rimz::StatePaths::for_project_root(&workspace.project_root)?;
+    rimz::harness::ancestry::check_launch_room(
+        Some(&caller),
+        Some((&pinned.workspace_id, &pinned.dir_name)),
+        (&target.workspace_id, &target.dir_name),
+        root,
+    )?;
+    Ok(())
+}
+
 fn resolve_launch_cwd(
     path: Option<&std::path::Path>,
     paths: &rimz::StatePaths,

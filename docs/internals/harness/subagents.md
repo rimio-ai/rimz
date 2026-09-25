@@ -107,6 +107,8 @@ The wrapper records its pane binding asynchronously, so a subagent launch polls 
 
 Ancestry resolves in the supervised runner before layout compilation, provider preflight, worktree creation, store append, or any mux action, so a refusal leaves nothing behind.
 
+Before opening the store, interactive and supervised launch entries check an explicit `--root` against the calling agent's verified environment pin. Different room ids refuse with `LaunchAncestryError::RoomMismatch`, naming both rooms and the caller and directing it to drop `--root` and use `--cwd` instead. The check creates no room directory. A matching room, an absent or invalid pin, or a human shell without agent identity leaves the existing resolution unchanged; non-launch commands retain cross-room `--root` access.
+
 The caller resolver ([`harness/ancestry.rs`](../../../crates/rimz/src/harness/ancestry.rs)) finds the calling agent's durable row in three tiers:
 
 | Tier | Evidence | Resolves to |
@@ -138,7 +140,7 @@ The stamp names the caller's launch, falling back to its session id only for a c
 
 `[agents] max-chain-length` ([`config/agents.rs`](../../../crates/rimz/src/config/agents.rs)) defaults to `3`. A human-started agent is generation 0; three successive peer launches produce generations 1, 2, and 3, and the generation-3 agent cannot launch another peer. Subagent launches skip the chain check because a subagent cannot extend the chain. Every fanout entry gets the same parent and generation.
 
-Ancestry failures are `LaunchAncestryError`, written for a reader that is itself an agent: each message states the refusal, explains the limit, and ends with *do not retry this command*. An agent that reads "launch refused" without a terminal instruction tends to retry with a variation, so the phrasing is load-bearing.
+Ancestry failures are `LaunchAncestryError`, written for a reader that is itself an agent: each message states the refusal, explains the limit, and ends with *do not retry this command*. The named exception is `RoomMismatch`, which ends with the corrected command's `--cwd` fix because that variation can succeed. An agent that reads "launch refused" without a terminal instruction tends to retry with a variation, so the phrasing is load-bearing.
 
 ## Children cannot delegate again
 

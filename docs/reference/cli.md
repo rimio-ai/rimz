@@ -51,6 +51,8 @@ Inside a room, panes carry the room's identity in `RIMZ_WORKSPACE_ID` and `RIMZ_
 
 `--root <PATH>` overrides both. Use it in a monorepo whose packages you run as separate rooms, or to reach a room from outside its directory.
 
+A launch from an agent's pane with `--root` naming another room is refused; drop `--root` and use `--cwd <PATH>` to launch in another directory within the caller's room.
+
 ### Which backend a command uses
 
 RimZ picks the multiplexer backend in this order and stops at the first step that decides:

@@ -427,6 +427,7 @@ fn prepare_supervised(
     presentation: &SupervisedPresentation,
     globals: &GlobalFlags,
 ) -> Result<Option<PreparedRun>> {
+    crate::cli::check_launch_room(globals)?;
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
     let worktree_launch = request.worktree.is_some() || request.from_pr.is_some();

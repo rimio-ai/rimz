@@ -575,6 +575,51 @@ fn subagent_missing_cwd_refuses_before_launch() {
     assert_subagent_checkout(false, false, Some("missing"));
 }
 
+#[test]
+fn agent_launch_root_mismatch_refuses_without_creating_room() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let other = env.home_root.join("other-room");
+    std::fs::create_dir(&other).unwrap();
+    let rooms = env.store().paths().root.parent().unwrap().to_path_buf();
+    let before = std::fs::read_dir(&rooms).unwrap().count();
+    for command in ["agents", "subagents"] {
+        let output = env
+            .rimz()
+            .arg("--root")
+            .arg(&other)
+            .args([command, "codex", "hello"])
+            .envs(rimz::workspace::pin_env(
+                &env.workspace_id,
+                &env.project_root,
+            ))
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_NAME, "parent")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
+            .bounded_output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("but the caller `@parent` lives in room"),
+            "{command}: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "pass `--cwd {}` to run it there.",
+                other.display()
+            )),
+            "{stderr}"
+        );
+        assert_eq!(std::fs::read_dir(&rooms).unwrap().count(), before);
+        assert!(
+            rimz::harness::run::list(env.store().paths())
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
 #[cfg(unix)]
 fn assert_subagent_checkout(fanout: bool, repo_subdir: bool, cwd: Option<&str>) {
     let env = Env::new();
