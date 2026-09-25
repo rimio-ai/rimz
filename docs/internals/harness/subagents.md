@@ -31,7 +31,7 @@ Launch, `fanout`, `wait`, and `stop` are agent-only ([`cli/subagents/mod.rs`](..
 
 `list`, `profiles`, and bare `rimz subagents` with no profile are read-only and open to any caller. `profiles` resolves optional caller context from existing room state without creating it. `list` selects the caller's children when the caller resolves to a durable agent row and the current channel's children otherwise ([who counts](#who-counts-as-a-launched-child)).
 
-The doorway is a usability boundary, not a security one. The same launch is expressible as `rimz agents <profile> <prompt> -p --bg --timeout 30m`; `subagents` exists so a delegating agent does not have to choose the supervision flags, and so every child launched through it is uniformly supervised, background, deadlined, and self-cleaning.
+The doorway is a usability boundary, not a security one. It uses the supervised background runner of `rimz agents <profile> <prompt> -p --bg`, adding the child-specific deadline ladder; `subagents` exists so a delegating agent does not have to choose the supervision flags, and so every child launched through it is uniformly supervised, background, deadlined, and self-cleaning.
 
 ## What a launch desugars to
 
@@ -43,7 +43,9 @@ The doorway is a usability boundary, not a security one. The same launch is expr
 | `bg` | always `true` | single launch and fanout share one background composition |
 | `subagent` | always `true` | selects the parent stamp, profile namespace, pane zone, and no-delegation rules below |
 | `self_cleanup_on_completion` | `true`, cleared by `--keep` | the wrapper stops the provider after the parent's receiving turn ends and closes the pane |
-| `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | bounds pending or running work, not terminal receipt waits |
+| `timeout` | `--timeout`, else `[agents.subagents] timeout`, default `30m` | soft work bound for pending or running work, not terminal receipt waits |
+| `warn` | `--warn`, else `[agents.subagents] warn`, default `["6m", "3m"]` | normalized offsets before the soft bound |
+| `grace` | `--grace`, else `[agents.subagents] grace`, default `3m` | reporting time before producer-enforced kill; zero is stored absent |
 | `keep` | `--keep`, default false | disables automatic completion cleanup and the parent watchdog; holds the pane past provider exit |
 | join | none unless `--wait[=DURATION]` | the parent normally keeps moving; the duration limits only the caller's join |
 
@@ -55,9 +57,9 @@ Launch resolution and the `profiles` catalog read `[subagents.profiles]`, while 
 
 ## Single launch and fanout share one composition
 
-`rimz subagents fanout` reads a JSON task array from a file or stdin and desugars every entry through the same `into_agent_launch`. A task's `timeout` wins over the fanout's `--timeout`, which wins over the configured default. Fanout-level `--keep` applies to every task; per-task isolation, wait, retention, and passthrough argv are not part of the task format, which rejects unknown fields.
+`rimz subagents fanout` reads a JSON task array from a file or stdin and desugars every entry through the same `into_agent_launch`. For each of `timeout`, `warn`, and `grace`, a task's value wins over the fanout flag, which wins over the configured default. Fanout-level `--keep` applies to every task; per-task isolation, wait, retention, and passthrough argv are not part of the task format, which rejects unknown fields.
 
-Parsing, required fields, and timeout syntax are validated across the whole array before the first side effect, so a validation failure launches nothing. Pane opens then run sequentially in the caller process, which avoids racing two backend splits against the same anchor pane; the child processes run in parallel as soon as each pane opens.
+Parsing, required fields, and all deadline durations are validated across the whole array before the first side effect, so a validation failure launches nothing. Pane opens then run sequentially in the caller process, which avoids racing two backend splits against the same anchor pane; the child processes run in parallel as soon as each pane opens.
 
 The supervised runner returns each child's minted petname and run id to the command, so fanout collects identities directly instead of diffing store snapshots, which another launch in the same family could confuse. Without `--wait`, fanout prints the names, or with `--json` a map of name to run id. With `--wait`, it passes the collected names to `wait_agent`: one child prints only its answer (or the JSON run record), and several print each answer as it settles beneath a child-name header, or a labeled JSON map.
 
@@ -198,7 +200,7 @@ A plain shell in the project directory cannot derive an in-place team's `<direct
 
 [`cli/agents_cmd/exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs), `RunMonitor`, keeps the record poll at 250 ms and checks terminal receipt and hold state at 1 s intervals. Cleanup requires a terminal run, no live waiter, receipt through `joined_at` or a `Delivered` digest in message history, no open child turn, no non-terminal queued message addressed to the child, and no open parent turn. `RunExecContext::parent_received_and_rested` reads the queue and history before `snapshot_cached`, whose rest certificates inform `holds_open_turn`. Pane send leaves a message `Sent`; the receiver's turn hook folds `TurnStarted` before acknowledging `Delivered`. An absent or ended parent counts as having no open turn.
 
-[`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), `fold_lifecycle`, reopens the same terminal subagent run on a matching `TurnStarted`: `Running`, with `completed_at`, `parked_at`, `joined_at`, and `report_message_id` cleared and an existing deadline re-armed to `now + (deadline_at - started_at)`. The next completion is newly terminal again and can produce another digest. Other terminal runs remain absorbing.
+[`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), `fold_lifecycle`, reopens the same terminal subagent run on a matching `TurnStarted`: `Running`, with `completed_at`, `parked_at`, `joined_at`, `report_message_id`, and `deadline_notice_at` cleared and the deadline re-armed to `now + timeout`. Old records without a stored timeout retain the `now + (deadline_at - started_at)` fallback. The next completion is newly terminal again and can produce another digest. Other terminal runs remain absorbing.
 
 `harness::fleet::FleetRuns` is the shared settlement rule for the reporter, its orphan-sweep backstop, and the owed-wake predicate. It selects each member's newest run with matching kind and either session id or a present matching name, deduplicated by run id. A supervised parent parks at a clean end while any selected run is live or terminal but neither joined nor reported; the queued digest then holds it until delivery opens its next turn ([parked runs](./scripting.md#parked-runs)).
 
@@ -242,7 +244,9 @@ Row stamps make repeated passes and races idempotent. Each diagnostic means the 
 
 Neither scan covers a `--keep` child: its wrapper runs no watchdog, and the orphan scan skips kept runs, so only `rimz subagents stop` or a manual pane close ends it. Stopping the parent through `rimz agents stop`, or `rimz teams stop` reaching that parent, stops its live launched children first, kept ones included.
 
-A terminal child awaiting receipt can linger while its parent lives. Its bounds are parent loss through the watchdog or orphan sweep, the parent stop cascade, and `rimz subagents stop`, not `run_timeout`: [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs), `is_overdue`, covers only `Pending` and `Running` records.
+A terminal child awaiting receipt can linger while its parent lives. Its bounds are parent loss through the watchdog or orphan sweep, the parent stop cascade, and `rimz subagents stop`, not `run_timeout`: [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) evaluates only `Pending` and `Running` records. `deadline_at` is the soft bound; `kill_due` uses `deadline_at + grace`. `due_rung` selects the latest crossed warning or stop above `deadline_notice_at`, and `run::claim_rung` claims it under the workspace lock. The hook feed skips provider-native children and asks a context-capable adapter to attach the rung only on an accepted event. `stop_channel` chooses hook context or pane steering, never both.
+
+The read-only producer in [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) spawns one hidden `agents run-timeout` helper for either a pane stop or a kill. The helper stamps a pane stop before dispatching a `HarnessNotice::Deadline` steer; this notice never counts as an owed wake. At the kill bound it reads the provider transcript outside the lock, then `timeout_if_due` atomically fills an absent `last_message` and settles `TimedOut`; the usual terminal publisher writes the partial response. Heavy-lane tick cadence bounds enforcement precision, and without an elected producer there is no enforcement. Old records without grace still kill at `deadline_at` and never deliver a stop rung.
 
 ### Follow-ups and resume
 

@@ -10,13 +10,13 @@ Your agents run `rimz subagents`; you mostly do not. Your part is deciding which
 
 ## What a launch does on your machine
 
-A parent's `rimz subagents codex "map the auth call path"` is the same supervised background run as `rimz agents codex -p --bg --timeout 30m "map the auth call path"` from the [scripting guide](./scripting.md#what-a-run-does-on-your-machine), with the flags chosen for the parent and the child tied to it. In order:
+A parent's `rimz subagents codex "map the auth call path"` uses the supervised background runner from the [scripting guide](./scripting.md#what-a-run-does-on-your-machine), with the flags chosen for the parent, the child tied to it, and time reserved for reporting at its deadline. In order:
 
 1. It checks that the caller is an agent RimZ launched and not itself a child, that the parent's profile allows this child, that the child's reporting hooks are installed and trusted, and, for a Codex child, that the checkout has a recorded Codex directory-trust decision. It also checks the room's and the provider account's daily caps ([budgets](./budget.md)). A failure stops here, before a record or a pane exists.
 2. It writes a durable run record under `~/.rimz/ws/<workspace-dir>/owned/runs/`.
 3. It opens a pane running the child's own CLI, by default in the parent's checkout and channel, whatever directory the parent's shell has moved to. The first child splits to the right of the parent's pane and later ones stack beside it; a team member's children open in a `<view> subagents` tab after its own, eight to a tab in two equal-width columns.
 4. It prints the child's petname, such as `calm-fox`, and returns. The parent keeps working.
-5. When the child's work ends, or its deadline passes, its pane closes. RimZ writes its non-empty final message to `rimz-subagents/<petname>.output` in the room's tmp directory as that child settles, even while siblings still run. Once every child the parent launched has settled, RimZ parks one report for the parent's next turn boundary ([how results come back](#how-results-come-back)).
+5. When the child's work ends, its pane closes. If it reaches its deadline, RimZ tells it to stop and report, allows three more minutes by default, then stops it and preserves its last available assistant message as a partial response. RimZ writes each non-empty response to `rimz-subagents/<petname>.output` in the room's tmp directory as that child settles, even while siblings still run. Once every child the parent launched has settled, RimZ parks one report for the parent's next turn boundary ([how results come back](#how-results-come-back)).
 
 Nothing else moves. The child's session file lands where its CLI always writes it, and `rimz agents show @calm-fox` and `rimz transcript @calm-fox` read the run back after the pane is gone.
 
@@ -100,7 +100,7 @@ Content:
 All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
 - @naming: completed in 4m12s, task: "map spec/profile surfaces", response: /tmp/rimz-subagents/naming.output (~4.2k tokens, 84 lines)
 - @runtime: completed in 5m3s, task: "inspect runtime behavior", no response
-- @slow-reviewer: timed out after 30m; provider did not stop, task: "review correctness", response: /tmp/rimz-subagents/slow-reviewer.output (<1k tokens, 12 lines)
+- @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /tmp/rimz-subagents/slow-reviewer.output (<1k tokens, 12 lines)
 ```
 
 The report carries status and a file path per child, never the answers themselves, so the parent decides how much of each to read into its window. A parent that needs an answer sooner joins with `rimz subagents wait <petname>`, and a child it has joined or stopped drops out of the report. The path above is the sandbox view; under host isolation the report names the host path of the room's tmp directory. Every field of the report is in the [reference](../reference/cli/subagents.md#the-fleet-report).
@@ -109,7 +109,7 @@ A parent that is itself a supervised run (`rimz agents -p`, or a scheduled task)
 
 ## Deadlines, stopping, and cleanup
 
-Every child has a deadline: 30 minutes unless the parent passes `--timeout`, and the default is yours to change ([subagent launches](./configuration.md#subagent-launches)). The room enforces it whether or not anyone is waiting, and a child that hits it reports as `timed out`.
+Every child has a work deadline: 30 minutes unless the parent passes `--timeout`, and the defaults are yours to change ([subagent launches](./configuration.md#subagent-launches)). Supported providers receive warnings six and three minutes before it, so they can finish what is in flight instead of starting another investigation. At the deadline RimZ asks the child to stop and report. Three minutes later, a child still running is stopped and reports as `timed out`, with its last available assistant text marked as a partial response. The room enforces that limit whether or not anyone is waiting. Warning and stop delivery depend on the provider's hooks; the [deadline reference](../reference/cli/subagents.md#configure-the-deadline-ladder) lists support and overrides.
 
 To stop a child yourself, stop it like any agent. The parent's report lists it as `canceled`:
 

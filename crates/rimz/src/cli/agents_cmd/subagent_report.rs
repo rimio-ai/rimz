@@ -326,7 +326,12 @@ fn compose_digest_row(
     }
     match response {
         Some(response) => row.push_str(&format!(
-            ", response: {} ({})",
+            ", {}response: {} ({})",
+            if run.status == RunStatus::TimedOut {
+                "partial "
+            } else {
+                ""
+            },
             response.path.display(),
             response.summary.label(),
         )),
@@ -501,7 +506,7 @@ mod tests {
             "All 3 subagents settled, responses total ~22k tokens, 3 lines:\n\
              - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (~1.2k tokens, 2 lines)\n\
              - @runtime: completed in 4m12s, task: \"map it\", no response\n\
-             - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", response: /tmp/rimz-subagents/slow-reviewer.output (~21k tokens, 1 line)"
+             - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", partial response: /tmp/rimz-subagents/slow-reviewer.output (~21k tokens, 1 line)"
         );
     }
 
