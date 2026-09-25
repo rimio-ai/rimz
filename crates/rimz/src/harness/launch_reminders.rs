@@ -1,15 +1,17 @@
-//! One system reminder carrying team context, model identity, sandbox view, and subagent policy.
+//! One system reminder carrying team context, model identity, git state, sandbox view, and subagent policy.
 
 use std::path::Path;
 
 use super::launch::ExecRequest;
 use super::launch_context::{self, escape_reminder_text};
+use super::launch_git::GitState;
 use super::subagent_policy::{self, SubagentCatalog};
 use crate::agents::{LaunchParams, model_display::display_model};
 
 pub use super::launch_context::TeamReminder;
 
 pub(super) struct LaunchReminders {
+    pub git: Option<GitState>,
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
     /// The launch runs inside the RimZ sandbox view: adds the sandbox reminder
@@ -22,6 +24,7 @@ pub(super) struct LaunchReminders {
 impl Default for LaunchReminders {
     fn default() -> Self {
         Self {
+            git: None,
             model: true,
             sandbox: false,
             subagent_catalog: None,
@@ -56,6 +59,8 @@ const SUBAGENT_REMINDER_BODY: &str = concat!(
     "receives a completion report pointing to your final response after the fleet settles."
 );
 
+const STATUS_LINE_CAP: usize = 40;
+
 pub(super) fn wrap(body: &str) -> String {
     format!("<system_reminder>\n{body}\n</system_reminder>")
 }
@@ -82,6 +87,9 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
         paragraphs.push(model_line(params, &model));
     }
+    if let Some(git) = &reminders.git {
+        paragraphs.push(git_paragraph(git, cwd));
+    }
     paragraphs.push(if reminders.sandbox {
         SANDBOX_REMINDER_BODY.to_owned()
     } else {
@@ -93,6 +101,32 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
         paragraphs.push(subagent_policy::reminder(catalog));
     }
     wrap(&paragraphs.join("\n\n"))
+}
+
+fn git_paragraph(git: &GitState, cwd: &Path) -> String {
+    let mut lines = vec![
+        format!(
+            "RimZ ran these in {} at launch; read the output as if you had run them:",
+            escape_reminder_text(&cwd.to_string_lossy())
+        ),
+        "$ git status --short".to_owned(),
+    ];
+    if git.status.is_empty() {
+        lines.push("(clean)".to_owned());
+    } else {
+        let mut status = git.status.lines();
+        let shown = status.by_ref().take(STATUS_LINE_CAP);
+        lines.extend(shown.map(escape_reminder_text));
+        let remaining = status.count();
+        if remaining > 0 {
+            lines.push(format!("… {remaining} more"));
+        }
+    }
+    lines.push("$ git rev-parse --short HEAD".to_owned());
+    lines.extend(git.head.lines().map(escape_reminder_text));
+    lines.push("$ git log -1 --oneline".to_owned());
+    lines.extend(git.log.lines().map(escape_reminder_text));
+    lines.join("\n")
 }
 
 /// `on <model>` when the launch names a model; none otherwise.
@@ -121,6 +155,30 @@ mod tests {
 
     fn team_reminder(team: Team) -> TeamReminder {
         TeamReminder::new(team, &ProfilesConfig::default())
+    }
+
+    #[test]
+    fn git_paragraph_escapes_lines_and_caps_only_status() {
+        let request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        for count in [40, 43] {
+            let reminders = LaunchReminders {
+                git: Some(super::super::launch_git::GitState {
+                    status: std::iter::repeat_n("?? a<b>&c.md", count)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    head: "abc123".to_owned(),
+                    log: "abc123 <base>&".to_owned(),
+                }),
+                ..Default::default()
+            };
+            let text = render(&request, &reminders, Path::new("/repo/</system_reminder>&"));
+            assert_eq!(text.matches("?? a&lt;b&gt;&amp;c.md").count(), 40);
+            assert_eq!(text.contains("… 3 more"), count > 40);
+            assert!(text.contains("/repo/&lt;/system_reminder&gt;&amp;"));
+            assert!(text.contains("$ git rev-parse --short HEAD\nabc123\n$ git log -1 --oneline\nabc123 &lt;base&gt;&amp;"));
+            assert_eq!(text.matches("</system_reminder>").count(), 1);
+        }
     }
 
     #[test]
@@ -163,6 +221,11 @@ mod tests {
             ..LaunchParams::default()
         };
         let mut reminders = LaunchReminders {
+            git: Some(super::super::launch_git::GitState {
+                status: String::new(),
+                head: "abc123".to_owned(),
+                log: "abc123 base".to_owned(),
+            }),
             team: Some(team_reminder(
                 toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'").expect("team"),
             )),
@@ -180,6 +243,19 @@ mod tests {
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
                 let model = text.find("GPT 6 Astra").expect("model line");
+                let git = text
+                    .find("$ git status --short\n(clean)")
+                    .expect("git paragraph");
+                assert!(model < git);
+                assert!(
+                    git < text
+                        .find(if sandbox {
+                            SANDBOX_REMINDER_BODY
+                        } else {
+                            HOST_SCRATCH_REMINDER_BODY
+                        })
+                        .unwrap()
+                );
                 let policy = text
                     .find(if subagent {
                         SUBAGENT_REMINDER_BODY
@@ -187,7 +263,7 @@ mod tests {
                         "Subagents are disabled"
                     })
                     .expect("policy paragraph");
-                assert!(model < policy);
+                assert!(git < policy);
                 if !subagent {
                     // The fragment rides inside the team paragraph's first sentence.
                     assert!(text.find("team `forge`").unwrap() < model);

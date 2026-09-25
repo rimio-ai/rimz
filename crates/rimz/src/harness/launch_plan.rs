@@ -103,6 +103,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
     reminders.sandbox = inputs.bwrap.is_some();
+    if inputs
+        .effective
+        .is_none_or(|effective| effective.git_reminder)
+    {
+        reminders.git = super::launch_git::read(inputs.cwd);
+    }
     let login = crate::agents::room_login(
         &inputs.state.workspace_record,
         inputs.accounts,
