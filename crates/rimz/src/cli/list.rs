@@ -109,8 +109,12 @@ fn collect_rows(all: bool) -> Result<Vec<WorkspaceRow>> {
 }
 
 fn death_for(workspace_dir: &std::path::Path) -> Option<String> {
-    let marker: LastDeathMarker =
-        serde_json::from_slice(&std::fs::read(workspace_dir.join("last-death.json")).ok()?).ok()?;
+    let path = rimz::StatePaths::class_path(
+        workspace_dir,
+        rimz::disk::paths::Class::Records,
+        "last-death.json",
+    );
+    let marker: LastDeathMarker = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     Some(death_summary(&marker))
 }
 
@@ -131,9 +135,10 @@ fn death_summary(marker: &LastDeathMarker) -> String {
 /// move when the workspace is in use. Used purely for the operator's reattach
 /// decision and the default recency filter; never gates correctness.
 fn activity_for(workspace_dir: &std::path::Path) -> Option<SystemTime> {
+    use rimz::disk::paths::{Class, StatePaths};
     let candidates = [
-        workspace_dir.join("events.log.jsonl"),
-        workspace_dir.join("snapshots").join("latest.json"),
+        StatePaths::class_path(workspace_dir, Class::Log, "events.log.jsonl"),
+        StatePaths::class_path(workspace_dir, Class::Cache, "snapshots/latest.json"),
         workspace_dir.join("workspace.json"),
     ];
     candidates

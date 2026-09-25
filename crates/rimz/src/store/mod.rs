@@ -240,7 +240,7 @@ mod tests {
 
         Store::open(paths.clone(), runtime.clone()).unwrap();
 
-        for path in [&paths.snapshots_dir, &paths.runs_dir, &paths.locks_dir] {
+        for path in [&paths.snapshots_dir, &paths.runs_dir, &paths.cache_dir] {
             assert!(path.is_dir(), "{} was not created", path.display());
         }
         for path in [

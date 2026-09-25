@@ -221,9 +221,9 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
 
     // An unreadable record that still holds history: kept and reported.
     let history = workspaces.join("history-abcd");
-    std::fs::create_dir_all(&history).expect("mkdir history");
+    std::fs::create_dir_all(history.join("log")).expect("mkdir history");
     std::fs::write(history.join("workspace.json"), b"{ not json").expect("garbled record");
-    std::fs::write(history.join("events.log.jsonl"), b"{}\n").expect("history");
+    std::fs::write(history.join("log/events.log.jsonl"), b"{}\n").expect("history");
 
     env.rimz()
         .args(["gc", "--older-than", "1h"])
@@ -335,7 +335,7 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
     let instances_path = env
         .state_path_for(&env.project_root)
         .root
-        .join("loop-instances.json");
+        .join("records/loop-instances.json");
     std::fs::create_dir_all(instances_path.parent().expect("instances dir")).expect("mkdir state");
     std::fs::write(&instances_path, instances.to_string()).expect("write instances");
     let config_dir = env.rimz_home();

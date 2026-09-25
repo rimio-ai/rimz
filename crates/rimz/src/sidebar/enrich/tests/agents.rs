@@ -142,7 +142,21 @@ fn project_lane_enrich_reads_stale_codex_daemon_reap_without_rewriting() {
 
 #[test]
 fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
-    let (_dir, runtime, snapshot) = runtime();
+    let (dir, runtime, snapshot) = runtime();
+    let state = crate::StatePaths::under(snapshot.workspace_id.clone(), dir.path()).unwrap();
+    std::fs::create_dir_all(&state.root).unwrap();
+    let store = Store::open_existing(state.clone(), runtime.clone()).unwrap();
+    let fold = |snapshot, frame| {
+        enrich(
+            snapshot,
+            Some(frame),
+            &runtime,
+            Some(&store),
+            None,
+            producing_opts(),
+            &crate::diag::DiagSink::disabled(),
+        )
+    };
     let worktree = "/repo/main";
     let mut agent = root_agent("codex", "lazy-session", None);
     agent.worktree_path = Some(worktree.to_owned());
@@ -160,10 +174,10 @@ fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
         "rimz-test",
     );
 
-    let _ = fold_producing(snapshot.clone(), Some(&frame), &runtime);
-    let _ = fold_producing(snapshot.clone(), Some(&frame), &runtime);
+    let _ = fold(snapshot.clone(), &frame);
+    let _ = fold(snapshot.clone(), &frame);
 
-    assert_eq!(binding_log_lines(&runtime), 1);
+    assert_eq!(binding_log_lines(&state), 1);
 
     let mut active_agent = agent.clone();
     active_agent.last_activity += SignedDuration::from_secs(1);
@@ -172,9 +186,9 @@ fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
         vec![active_agent],
         Timestamp::now(),
     );
-    let _ = fold_producing(active_snapshot, Some(&frame), &runtime);
+    let _ = fold(active_snapshot, &frame);
 
-    assert_eq!(binding_log_lines(&runtime), 1);
+    assert_eq!(binding_log_lines(&state), 1);
 
     let mut later_pane = pane("terminal_2", "codex", worktree);
     later_pane.pane_process_start =
@@ -184,7 +198,7 @@ fn producer_binding_log_dedups_unchanged_lazy_pairing_ambiguity() {
         1_000,
         "rimz-test",
     );
-    let _ = fold_producing(snapshot, Some(&changed_frame), &runtime);
+    let _ = fold(snapshot, &changed_frame);
 
-    assert_eq!(binding_log_lines(&runtime), 2);
+    assert_eq!(binding_log_lines(&state), 2);
 }

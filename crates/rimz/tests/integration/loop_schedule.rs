@@ -1189,7 +1189,10 @@ fn same_task_name_in_two_rooms_does_not_collide() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let other_path = env.state_path_for(&other).root.join("loop-instances.json");
+    let other_path = env
+        .state_path_for(&other)
+        .root
+        .join("records/loop-instances.json");
     let other_bytes = std::fs::read(&other_path).expect("other instances");
     let other_tasks: Tasks = serde_json::from_slice(&other_bytes).expect("tasks");
     assert_eq!(
@@ -4559,7 +4562,7 @@ fn loop_strikes_path(env: &Env) -> std::path::PathBuf {
 fn loop_instances_path(env: &Env) -> std::path::PathBuf {
     env.state_path_for(&env.project_root)
         .root
-        .join("loop-instances.json")
+        .join("records/loop-instances.json")
 }
 
 fn loop_runs_path(env: &Env) -> std::path::PathBuf {

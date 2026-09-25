@@ -62,7 +62,7 @@ fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'stati
         ("rollup_cache", state.rollup_cache.clone()),
         ("agents_carryover", state.agents_carryover.clone()),
         ("workspace_record", state.workspace_record.clone()),
-        ("message_queue", state.messages_dir.join("queue.json")),
+        ("message_queue", state.messages_dir.join("messages.jsonl")),
         ("pane_frame", runtime.pane_frame_path()),
         ("diff_stats", runtime.diff_stats_path()),
         ("cohort_spend", runtime.cohort_spend_path()),

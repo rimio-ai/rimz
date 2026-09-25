@@ -19,7 +19,7 @@ fn lifecycle(h: &Harness, agent_id: &str) -> EventEnvelope {
 }
 
 fn log_sync_stamp(h: &Harness) -> std::path::PathBuf {
-    h.store.paths().locks_dir.join("log-sync.stamp")
+    h.store.paths().cache_dir.join("log-sync.stamp")
 }
 
 #[test]

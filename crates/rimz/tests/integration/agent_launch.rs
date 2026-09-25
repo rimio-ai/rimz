@@ -260,7 +260,8 @@ fn user_shell_subagents_list_inspects_the_channel() {
             .expect("seed agent row");
     }
 
-    let instances_path = env.store().paths().root.join("loop-instances.json");
+    let instances_path = env.store().paths().root.join("records/loop-instances.json");
+    std::fs::create_dir_all(instances_path.parent().unwrap()).unwrap();
     let tasks = std::collections::BTreeMap::from([(
         "wait-child",
         rimz::config::TaskEntry {

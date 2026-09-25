@@ -231,7 +231,7 @@ allowed-dependencies = [
 # Stage flips share a canonical-worktree board lock across rooms.
 # Output-file summaries estimate tokens through `utils::tokens` and expose `is_empty` for the wait and digest renderers.
 # The skill library resolves from process env for uninstall and from a launch env map for sandbox and launch planning.
-# Launches derive and create each agent's private scratch dir under room tmp.
+# Launches derive and create each agent's private scratch and skill dirs in its owned unit.
 # One home: every root resolves through a named `disk::paths` dir function, and
 # workspace dirs through the `for_project_root`/`under_named` constructors;
 # `holds_rimz_home` keeps the home out of project-marker and trust lookups.
@@ -239,7 +239,8 @@ allowed-dependencies = [
 # Room entry asks for the legacy roots that can hold config, doctor for all of them.
 # Room writers and collectors share retention policy below store and diagnostics.
 # Lifetime classes expose room runtime paths and lock-preserving cleanup.
-surface-budget = 186
+# State classes expose their inventory and shared path routing for root-only readers.
+surface-budget = 190
 
 [[module]]
 path = "crates/rimz/src/forge"

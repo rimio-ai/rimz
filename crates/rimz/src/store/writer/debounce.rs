@@ -32,7 +32,7 @@ const LOG_SYNC_INTERVAL: Duration = Duration::from_secs(1);
 /// Stamp recording the last event-log group sync. Lives beside the workspace
 /// lock with the other write-path debounce stamps.
 fn log_sync_stamp(paths: &StatePaths) -> PathBuf {
-    paths.locks_dir.join("log-sync.stamp")
+    paths.cache_dir.join("log-sync.stamp")
 }
 
 /// Group-commit the relaxed event-log appends at most once per

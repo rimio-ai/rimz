@@ -58,6 +58,21 @@ fn paths_names_one_workspace_dir_in_both_trees() {
 
     let sandboxed = paths_json(env.rimz().env(rimz::config::Isolation::ENV, "sandbox"));
     assert_eq!(sandboxed["scratch_agent_view"], "/tmp/scratchpad");
+    assert_eq!(
+        path_of(&sandboxed, "scratch"),
+        state.root.join("tmp/scratchpad")
+    );
+    let named = paths_json(
+        env.rimz()
+            .env(rimz::config::Isolation::ENV, "sandbox")
+            .env(rimz::harness::launch::ENV_AGENT_NAME, "otter"),
+    );
+    assert_eq!(named["schema"], "rimz.paths.v1");
+    assert_eq!(
+        path_of(&named, "scratch"),
+        state.root.join("owned/agents/otter/scratch")
+    );
+    assert_eq!(named["scratch_agent_view"], "/tmp/scratchpad");
 
     env.rimz()
         .arg("paths")

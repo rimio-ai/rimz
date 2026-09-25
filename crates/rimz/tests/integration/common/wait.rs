@@ -23,7 +23,7 @@ pub fn wait_ok(env: &Env, args: &[&str]) -> String {
 pub fn loop_instances_path(env: &Env) -> std::path::PathBuf {
     env.state_path_for(&env.project_root)
         .root
-        .join("loop-instances.json")
+        .join("records/loop-instances.json")
 }
 
 pub fn wait_instances(env: &Env) -> Tasks {

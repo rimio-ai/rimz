@@ -209,7 +209,7 @@ pub(super) fn apply_recovered_pane_binding_with(
 }
 
 fn log_binding_recovery(store: &Store, record: BindingRecoveryLog) {
-    rimz::diag::binding::append(store.runtime_paths(), &record);
+    rimz::diag::binding::append(store.paths(), &record);
 }
 
 #[derive(Debug, Serialize)]

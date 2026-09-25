@@ -355,7 +355,7 @@ fn consumer_fold_inputs_stamp(
         state.rollup_cache.clone(),
         state.agents_carryover.clone(),
         state.workspace_record.clone(),
-        state.messages_dir.join("queue.json"),
+        state.messages_dir.join("messages.jsonl"),
     ];
     let runtime_files = [
         runtime.pane_frame_path(),

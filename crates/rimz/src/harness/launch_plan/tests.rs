@@ -468,7 +468,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
         .unwrap();
         assert!(!root.exists(), "{kind} compilation must not write");
         assert!(plan.sandbox.is_none());
-        let scratch = state.agents_dir.join("swift-otter");
+        let scratch = state.scratch_dir(Some("swift-otter"));
         assert_eq!(
             plan.process().env.get(ENV_SCRATCH).map(PathBuf::from),
             Some(scratch.clone())

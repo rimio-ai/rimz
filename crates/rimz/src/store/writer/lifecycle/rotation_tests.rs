@@ -30,7 +30,7 @@ fn rotation_due_touches_stamp_and_fresh_stamp_debounces() {
             .expect("rotation due")
             .rotation_due
     );
-    let stamp = store.paths().locks_dir.join(AUTO_ROTATE_STAMP);
+    let stamp = store.paths().cache_dir.join(AUTO_ROTATE_STAMP);
     assert!(stamp.exists());
     assert!(
         !store

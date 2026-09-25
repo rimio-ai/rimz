@@ -18,7 +18,7 @@ use super::debounce;
 const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
 fn dead_reap_stamp(paths: &StatePaths) -> std::path::PathBuf {
-    paths.locks_dir.join("dead-reap.stamp")
+    paths.cache_dir.join("dead-reap.stamp")
 }
 
 pub(super) fn reap_due(paths: &StatePaths) -> bool {

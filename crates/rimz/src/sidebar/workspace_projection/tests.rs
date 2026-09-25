@@ -48,6 +48,7 @@ fn current_source_requires_fresh_latest_and_section_stamps() {
             .is_matchable()
     );
 
+    std::fs::create_dir_all(state.events_log.parent().unwrap()).unwrap();
     std::fs::write(&state.events_log, b"moved").unwrap();
     let advanced = WorkspaceProjectionSource::current(&state, &frame).expect("advanced log");
     assert_eq!(advanced.rollup_generation, 2);

@@ -164,14 +164,14 @@ fn is_session_start(event: &EventEnvelope) -> bool {
 /// the test-side lever for asserting what a due publish reflects, the same
 /// way tests age `abandon-sweep.stamp` to force the sweep.
 fn force_next_publish(h: &crate::common::Harness) {
-    let _ = std::fs::remove_file(h.store.paths().locks_dir.join("publish.stamp"));
+    let _ = std::fs::remove_file(h.store.paths().cache_dir.join("publish.stamp"));
 }
 
 #[cfg(unix)]
 #[test]
 fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
     let h = crate::common::Harness::new();
-    let reap_stamp = h.store.paths().locks_dir.join("dead-reap.stamp");
+    let reap_stamp = h.store.paths().cache_dir.join("dead-reap.stamp");
     std::fs::write(&reap_stamp, b"").expect("defer initial reap");
 
     h.store
@@ -411,7 +411,7 @@ fn a_reader_recovers_a_commit_that_never_published() {
 #[test]
 fn rotation_bumps_the_generation_and_reseeds_the_fold() {
     let h = crate::common::Harness::new();
-    std::fs::write(h.store.paths().locks_dir.join("dead-reap.stamp"), b"")
+    std::fs::write(h.store.paths().cache_dir.join("dead-reap.stamp"), b"")
         .expect("defer dead-owner reap");
     h.store
         .append_event(&lifecycle(&h, "SessionStart", "before-rotation"))
@@ -464,7 +464,7 @@ fn rotation_bumps_the_generation_and_reseeds_the_fold() {
 #[test]
 fn soft_reset_keeps_closed_identity_and_hard_reset_forgets_it() {
     let h = crate::common::Harness::new();
-    std::fs::write(h.store.paths().locks_dir.join("dead-reap.stamp"), b"")
+    std::fs::write(h.store.paths().cache_dir.join("dead-reap.stamp"), b"")
         .expect("defer dead-owner reap");
     h.store
         .append_event(&dead_owner_lifecycle(
@@ -502,7 +502,7 @@ fn soft_reset_keeps_closed_identity_and_hard_reset_forgets_it() {
 fn reset_retracts_the_published_view_and_rebuilds_by_mode() {
     let h = crate::common::Harness::new();
     let paths = h.store.paths();
-    let stamp = paths.locks_dir.join("publish.stamp");
+    let stamp = paths.cache_dir.join("publish.stamp");
 
     let outcome = h.store.reset_records(false).expect("empty soft reset");
     assert!(!outcome.rotation.is_rotated());
@@ -777,7 +777,7 @@ fn checkpoint_publish_is_debounced_and_reads_stay_event_fresh() {
     // tail), and the skips cost readers nothing — the wakeup-then-fold path
     // is the freshness channel, the checkpoint a catch-up accelerator.
     let h = crate::common::Harness::new();
-    let stamp = h.store.paths().locks_dir.join("publish.stamp");
+    let stamp = h.store.paths().cache_dir.join("publish.stamp");
 
     // First mutation on a quiet workspace: no cadence stamp, so the tail
     // publishes and seeds it.
