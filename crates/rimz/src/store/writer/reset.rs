@@ -56,6 +56,42 @@ fn remove_dir_counting_entries(path: &Path) -> Result<usize> {
     Ok(count)
 }
 
+fn remove_owned_except_runs(paths: &super::super::StatePaths) -> Result<usize> {
+    let owned = crate::disk::paths::Class::Owned.path_under(&paths.root);
+    let entries = match fs::read_dir(&owned) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(source) => {
+            return Err(StoreErr::Io {
+                path: owned,
+                source,
+            });
+        }
+    };
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry.map_err(|source| StoreErr::Io {
+            path: owned.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        if path == paths.runs_dir {
+            continue;
+        }
+        let kind = entry.file_type().map_err(|source| StoreErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+        if kind.is_dir() {
+            removed += remove_dir_counting_entries(&path)?;
+        } else {
+            remove_file_if_exists(&path)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 fn cancel_active_runs_for_reset_locked(paths: &super::super::StatePaths) -> Result<Vec<RunRecord>> {
     let mut canceled = Vec::new();
     for mut record in run::list(&paths.runs_dir)? {
@@ -126,12 +162,12 @@ impl Store {
                 remove_file_if_exists(&paths.events_log)?;
                 for class in [
                     crate::disk::paths::Class::Audit,
-                    crate::disk::paths::Class::Owned,
                     crate::disk::paths::Class::Tmp,
                 ] {
                     state_entries_removed +=
                         remove_dir_counting_entries(&class.path_under(&paths.root))?;
                 }
+                state_entries_removed += remove_owned_except_runs(paths)?;
             }
             let rollup = if hard {
                 RollupInvalidation::Forget

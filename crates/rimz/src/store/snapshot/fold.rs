@@ -22,6 +22,7 @@ use crate::agents::AgentState;
 use crate::disk::atomic::{self, write_temp_then_rename};
 use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::disk::paths::StatePaths;
+use crate::disk::retention::RESUME_OUTCOME_RETENTION_SECS;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 #[cfg(test)]
 use crate::store::event::EventEnvelope;
@@ -29,8 +30,6 @@ use crate::store::event::EventKind;
 use crate::store::event_log::{self};
 use crate::store::message::{DeliveryGate, MessageBody, MessageStatus};
 use crate::store::runtime;
-
-const RESUME_OUTCOME_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 
 /// Carryover state preserved across event-log rotation. Today this is the
 /// agent rollup and terminal resume-message outcomes.

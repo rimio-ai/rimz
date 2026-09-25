@@ -131,8 +131,8 @@ fn reset_archives_records_and_clears_disposable_classes() {
         "soft reset keeps room tmp"
     );
     assert!(
-        paths.skills_dir.exists(),
-        "soft reset keeps room skill copies"
+        !paths.skills_dir.exists(),
+        "soft reset clears handleless cached skill copies"
     );
 
     let archives = archive_paths(&paths.events_archive_dir);
@@ -181,6 +181,15 @@ fn reset_archives_records_and_clears_disposable_classes() {
 
 #[test]
 fn reset_cancels_active_runs_and_wakes_waiters() {
+    reset_cancels_runs(false);
+}
+
+#[test]
+fn hard_reset_cancels_active_runs_and_wakes_waiters() {
+    reset_cancels_runs(true);
+}
+
+fn reset_cancels_runs(hard: bool) {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
@@ -207,8 +216,12 @@ fn reset_cancels_active_runs_and_wakes_waiters() {
     )
     .expect("bind run socket");
 
-    env.rimz()
-        .args(["--mux", "zellij", "reset", "--no-start", "--yes"])
+    let mut command = env.rimz();
+    command.args(["--mux", "zellij", "reset", "--no-start", "--yes"]);
+    if hard {
+        command.arg("--hard");
+    }
+    command
         .assert()
         .success()
         .stderr(contains("canceled 1 run"));

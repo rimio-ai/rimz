@@ -6,6 +6,36 @@ use std::time::{Duration, SystemTime};
 use crate::common::Env;
 
 #[test]
+fn legacy_rooms_are_reported_by_list_and_gc_without_mutation() {
+    let env = Env::new();
+    let room = env.rimz_home().join("ws/legacy-abcd");
+    std::fs::create_dir_all(&room).unwrap();
+    let record = br#"{"layout":1}"#;
+    std::fs::write(room.join("workspace.json"), record).unwrap();
+    for args in [
+        vec!["list"],
+        vec!["list", "--json"],
+        vec!["gc"],
+        vec!["gc", "--json"],
+    ] {
+        let output = env.rimz().args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("legacy-abcd"), "{stdout}");
+        assert!(stdout.contains("layout 1"), "{stdout}");
+        assert!(
+            stdout.contains("docs/internals/store-layout-migration.md"),
+            "{stdout}"
+        );
+        assert_eq!(std::fs::read(room.join("workspace.json")).unwrap(), record);
+    }
+}
+
+#[test]
 fn list_json_emits_canonical_fields() {
     let env = Env::new();
     env.record(&env.project_root.join("query-engine"));

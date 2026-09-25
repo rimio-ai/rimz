@@ -29,6 +29,9 @@ use sha2::{Digest, Sha256};
 use crate::ids::{PaneId, SidebarInstanceId, WORKSPACE_DIR_HEX_MIN, WorkspaceDirName, WorkspaceId};
 use crate::sock::SockBudget;
 
+const EVENTS_LOG_FILE: &str = "events.log.jsonl";
+const LATEST_SNAPSHOT_FILE: &str = "snapshots/latest.json";
+
 #[derive(Debug, thiserror::Error)]
 pub enum PathErr {
     #[error(
@@ -171,6 +174,14 @@ impl Class {
 }
 
 #[derive(Clone, Debug)]
+pub struct HistoryPaths {
+    pub events_log: PathBuf,
+    pub events_archive_dir: PathBuf,
+    pub latest_snapshot: PathBuf,
+    pub last_death_marker: PathBuf,
+}
+
+#[derive(Clone, Debug)]
 pub struct StatePaths {
     pub workspace_id: WorkspaceId,
     pub dir_name: WorkspaceDirName,
@@ -263,7 +274,7 @@ impl StatePaths {
         let cache_dir = Class::Cache.path_under(&root);
         let records_dir = Class::Records.path_under(&root);
         let audit_dir = Class::Audit.path_under(&root);
-        let log_dir = Class::Log.path_under(&root);
+        let history = Self::history_paths(&root);
         let owned_dir = Class::Owned.path_under(&root);
         let snapshots_dir = cache_dir.join("snapshots");
         let messages_dir = records_dir.join("messages");
@@ -278,12 +289,12 @@ impl StatePaths {
             shared_dir: tmp_dir.join("shared"),
             subagents_dir: tmp_dir.join("rimz-subagents"),
             waits_dir: tmp_dir.join("rimz-waits"),
-            skills_dir: tmp_dir.join("skills"),
+            skills_dir: cache_dir.join("skills"),
             tmp_dir,
-            events_log: log_dir.join("events.log.jsonl"),
-            events_archive_dir: log_dir.join("archive"),
+            events_log: history.events_log,
+            events_archive_dir: history.events_archive_dir,
             agents_carryover: records_dir.join("agents-carryover.json"),
-            latest_snapshot: snapshots_dir.join("latest.json"),
+            latest_snapshot: history.latest_snapshot,
             rollup_cache: snapshots_dir.join("rollup.json"),
             snapshots_dir,
             messages_dir,
@@ -298,7 +309,7 @@ impl StatePaths {
             channels_record: records_dir.join("channels.json"),
             boot_marker: records_dir.join("boot.json"),
             live_roster: records_dir.join("live-roster.json"),
-            last_death_marker: records_dir.join("last-death.json"),
+            last_death_marker: history.last_death_marker,
             doctor_watermark: cache_dir.join("doctor-cleared.json"),
             auto_gc_stamp: cache_dir.join("auto-gc.json"),
             crashes_dir: audit_dir.join("crashes"),
@@ -310,6 +321,23 @@ impl StatePaths {
     pub(crate) fn bind_runtime_locks(&mut self, runtime: &RuntimePaths) {
         self.workspace_lock = runtime.lock_path("workspace.lock");
         self.publish_lock = runtime.lock_path("publish.lock");
+    }
+
+    /// Read-only scanner paths, without adopting or creating a room.
+    pub fn history_paths(root: &Path) -> HistoryPaths {
+        HistoryPaths {
+            events_log: Class::Log.path_under(root).join(EVENTS_LOG_FILE),
+            events_archive_dir: Class::Log.path_under(root).join("archive"),
+            latest_snapshot: Class::Cache.path_under(root).join(LATEST_SNAPSHOT_FILE),
+            last_death_marker: Class::Records.path_under(root).join("last-death.json"),
+        }
+    }
+
+    /// Legacy history is evidence to retain a room, regardless of its record.
+    pub(crate) fn has_legacy_history(root: &Path) -> bool {
+        [EVENTS_LOG_FILE, "events.log.archive", LATEST_SNAPSHOT_FILE]
+            .iter()
+            .any(|name| root.join(name).exists())
     }
 
     pub(crate) fn lock_path(&self, name: &str) -> PathBuf {

@@ -234,7 +234,7 @@ jq 'select(.event.kind == "renderer_exit") | .event.cause' "$DIAG"              
 
 One pass over the log answers an episode's three questions in order: what the user saw, where truth went wrong, and why.
 
-1. **Build the timeline.** Run the timeline one-liner above, or `rimz doctor` for the recent incidents, and cluster records by `at_ms`. An episode reads as a burst across kinds. Copy the matching `audit/diag-frames/` pairs out now, before the ring turns over.
+1. **Build the timeline.** Run the timeline one-liner above, or `rimz doctor` for the recent incidents, and cluster records by `at_ms`. An episode reads as a burst across kinds. Copy the matching `audit/diag-frames/` pairs out before the audit sweep reclaims them.
 2. **Locate the fault in published truth or the local fold.** Every `frame_anomaly` carries the pulled snapshot's scalars beside the rendered ones. For `row_presence_flap`, read the missing-edge frame stamp and `gap_evidence.pulled_row_present` and `pulled_pane_present`: false membership puts the gap in pulled truth, true membership in the renderer's committed fold. The distinct `instance_id` count is a second signal.
 3. **Attribute the cause.** Producer records in the same window name it: the carry kinds as described above, `frame_rejected` for held implausible reads, `pane_count_drop` for published shrinks, `gate_hold` for renderer-side holds. The frame stamp (`produced_at_ms`) joins producer records, observer records, and capture filenames across the episode.
 4. **Diff the captures.** Each capture holds the last good frame beside the offending one; `jq '{prior: (.prior.tabs | length), offending: (.offending.tabs | length)}'` shows a whole-tab omission at a glance.

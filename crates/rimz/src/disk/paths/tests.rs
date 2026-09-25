@@ -1,6 +1,13 @@
 use super::*;
 use crate::ids::WorkspaceId;
 #[test]
+fn handleless_skills_are_outside_writable_tmp() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    assert!(!paths.agent_skills_dir(None).starts_with(&paths.tmp_dir));
+    assert!(paths.agent_skills_dir(None).starts_with(&paths.cache_dir));
+}
+#[test]
 fn runtime_cleanup_does_not_race_canonical_path_writers() {
     let dir = tempfile::tempdir().expect("tempdir");
     let runtime = dir.path().join("runtime");
@@ -416,7 +423,10 @@ fn state_paths_resolve_under_the_home() {
         paths.agent_skills_dir(Some("otter")),
         paths.root.join("owned/agents/otter/skills")
     );
-    assert_eq!(paths.agent_skills_dir(None), paths.root.join("tmp/skills"));
+    assert_eq!(
+        paths.agent_skills_dir(None),
+        paths.root.join("cache/skills")
+    );
     for path in paths.all_paths() {
         let relative = path.strip_prefix(&paths.root).unwrap();
         assert!(

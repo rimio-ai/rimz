@@ -53,6 +53,7 @@ pub(super) fn collect_state(
             class: class.dir_name().to_owned(),
             files_removed: report.sidecar_files_removed,
             bytes_removed: report.bytes_removed,
+            locks_would_check: report.locks_would_check,
         });
     }
     Ok((classes, waits_removed))
@@ -84,8 +85,11 @@ fn owned_expired(
     modified: SystemTime,
     now: SystemTime,
 ) -> bool {
+    if !expired(modified, now, retention::OWNED_GRACE) {
+        return false;
+    }
     let Some(agent) = agent else {
-        return expired(modified, now, retention::OWNED_GRACE);
+        return true;
     };
     if agent
         .runtime_owner
@@ -124,10 +128,24 @@ fn collect_owned(
             .iter()
             .filter(|agent| agent.name.as_deref().is_some_and(|handle| name == handle))
             .max_by_key(|agent| agent.last_seen);
-        let modified = metadata.modified().map_err(|source| GcErr::Io {
+        let mut modified = metadata.modified().map_err(|source| GcErr::Io {
             path: path.clone(),
             source,
         })?;
+        for child in read_dir_if_exists(&path)?.into_iter().flatten() {
+            let child = child.map_err(|source| GcErr::ReadDir {
+                path: path.clone(),
+                source,
+            })?;
+            let child_path = child.path();
+            let child_modified = fs::symlink_metadata(&child_path)
+                .and_then(|metadata| metadata.modified())
+                .map_err(|source| GcErr::Io {
+                    path: child_path,
+                    source,
+                })?;
+            modified = modified.max(child_modified);
+        }
         if owned_expired(agent, modified, now) {
             let files = sweep.files_under(&path)?.len();
             sweep.remove_tree(&path, files, report)?;
@@ -300,6 +318,10 @@ mod tests {
         let orphan = paths.agents_dir.join("orphan");
         fs::create_dir_all(orphan.join("scratch")).unwrap();
         fs::write(orphan.join("scratch/note"), b"keep together").unwrap();
+        fs::File::open(orphan.join("scratch"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         fs::File::open(&orphan).unwrap().set_modified(old).unwrap();
         let mut run = crate::store::run::RunRecord::new(
             paths.workspace_id.clone(),
@@ -336,7 +358,8 @@ mod tests {
         let old = now - Duration::from_secs(8 * 86_400);
         let mut agent = crate::testkit::agent_state("claude", "ended", jiff::Timestamp::now());
         agent.ended_at = Some(jiff::Timestamp::try_from(old).unwrap());
-        assert!(owned_expired(Some(&agent), now, now));
+        assert!(owned_expired(Some(&agent), old, now));
+        assert!(!owned_expired(Some(&agent), now, now));
         agent.ended_at =
             Some(jiff::Timestamp::try_from(now - Duration::from_secs(6 * 86_400)).unwrap());
         assert!(!owned_expired(Some(&agent), old, now));
@@ -351,6 +374,32 @@ mod tests {
         agent.runtime_owner = None;
         agent.ended_at = None;
         assert!(!owned_expired(Some(&agent), old, now));
+    }
+
+    #[test]
+    fn owned_sweep_keeps_a_relaunch_with_a_fresh_direct_child() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        paths.ensure_dirs().unwrap();
+        let unit = paths.agents_dir.join("resumed");
+        fs::create_dir_all(unit.join("scratch")).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
+        fs::File::open(&unit).unwrap().set_modified(old).unwrap();
+        let mut agent = crate::testkit::agent_state("claude", "ended", jiff::Timestamp::now());
+        agent.name = Some("resumed".to_owned());
+        agent.ended_at = Some(jiff::Timestamp::try_from(old).unwrap());
+        collect_owned(
+            &paths,
+            &[agent],
+            &mut Sweep::new(false),
+            &mut GcReport::default(),
+        )
+        .unwrap();
+        assert!(unit.join("scratch").exists());
     }
 
     #[test]

@@ -85,10 +85,17 @@ impl Harness {
 
 fn make_stale(path: &Path) {
     let old = SystemTime::now() - SIDEBAR_HEARTBEAT_TTL - Duration::from_secs(1);
-    std::fs::File::open(path)
-        .expect("open runtime file")
-        .set_modified(old)
-        .expect("set mtime");
+    let old = nix::sys::time::TimeSpec::from_duration(
+        old.duration_since(SystemTime::UNIX_EPOCH).unwrap(),
+    );
+    nix::sys::stat::utimensat(
+        nix::fcntl::AT_FDCWD,
+        path,
+        &old,
+        &old,
+        nix::sys::stat::UtimensatFlags::NoFollowSymlink,
+    )
+    .expect("set mtime");
 }
 
 fn instance(hex_tail: &str) -> SidebarInstanceId {
@@ -515,6 +522,7 @@ fn sweep_removes_orphan_socket_keeps_live_and_starting() {
     let _live = std::os::unix::net::UnixDatagram::bind(&live_sock).unwrap();
     let _starting = std::os::unix::net::UnixDatagram::bind(&starting_sock).unwrap();
     drop(std::os::unix::net::UnixDatagram::bind(&orphan_sock).unwrap());
+    make_stale(&orphan_sock);
 
     crate::harness::auto_gc::sweep_runtime_claims(&h.runtime);
 

@@ -69,12 +69,12 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `records/` | State | Standing records; no age sweep. |
 | `audit/` | State | Remove files older than 30 days by mtime, then oldest first until at most 64 MiB remains per room. |
 | `cache/` | State | Rebuildable; cleared on reset, no age sweep. |
-| `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live. Unknown handles use directory mtime. Runs: terminal and record mtime older than 7 days. Restorability does not extend the grace. |
+| `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live or its directory or a direct child is newer than 7 days. Unknown handles use the same mtime grace. Runs: terminal and record mtime older than 7 days. Restorability does not extend the grace. |
 | `tmp/` | State | Room lifetime; unclaimed wait and subagent outputs older than 7 days are also swept. |
-| `sock/` | Runtime | Remove sockets whose connect probe is refused. |
+| `sock/` | Runtime | Remove sockets whose connect probe is refused, after the sidebar heartbeat TTL startup grace. |
 | `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exception: keep agent telemetry while its room is live, because the external exporter holds its inode open. |
 | `lanes/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days). |
-| `locks/` | Runtime | Try-lock and unlink while held; keep busy files. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
+| `locks/` | Runtime | Try-lock and unlink while held; keep busy files. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
 
 ### The workspace store
 
@@ -103,10 +103,11 @@ cache/doctor-cleared.json                     cleared-incident watermark
 cache/auto-gc.json                            daily sweep stamp
 cache/{publish,log-sync,dead-reap}.stamp       off-lock tail debounce
 cache/auto-rotate.stamp                        rotation debounce
+cache/skills/<sha256>/                        handleless rewritten skills
 owned/agents/<handle>/scratch/                per-handle scratch
 owned/agents/<handle>/skills/<sha256>/         immutable rewritten skills
 owned/runs/<run_id>.json                      supervised-run records
-tmp/{scratchpad,shared,skills}/               handleless scratch/skills and shared files
+tmp/{scratchpad,shared}/                      handleless scratch and shared files
 tmp/rimz-subagents/<name>.output              child responses
 tmp/rimz-waits/<name>.output                  watched-command output
 workspace.json                               room record, layout: 2
@@ -362,15 +363,15 @@ The recovery flow from roster to repopulated panes is [fleet.md → Resume and r
 
 For layout-1 rooms, follow the [post-merge migration guide](./store-layout-migration.md); there is no in-product layout migrator.
 
-`rimz reset` cancels active runs, clears the room account selection, stages carryover on a soft reset, and rotates the log. It clears `cache/` and runtime `sock/`, `live/`, `lanes/`; each runtime directory is renamed before recursive deletion so late writers cannot refill the detached tree. It never removes `locks/`. Soft reset keeps audit, owned state, tmp, and records, including standing fleet budget choices. `--hard` additionally removes the active log, carryover, `audit/`, `owned/`, and `tmp/`; it keeps the log archive just written. Provider-owned sessions remain outside this boundary. Ordinary teardown removes tmp and disposable runtime classes but never owned state; the reset birth path uses runtime-only teardown so soft reset does not lose tmp.
+`rimz reset` cancels active runs, clears the room account selection, stages carryover on a soft reset, and rotates the log. It clears `cache/` (including handleless skill copies) and runtime `sock/`, `live/`, `lanes/`; each runtime directory is renamed before recursive deletion so late writers cannot refill the detached tree. It never removes `locks/`. Soft reset keeps audit, owned state, tmp, and records, including standing fleet budget choices. `--hard` additionally removes the active log, carryover, `audit/`, `owned/` except `owned/runs/`, and `tmp/`; it keeps the log archive just written. Canceled run records stay loadable for waiters until terminal-run GC reclaims them after its seven-day grace. Provider-owned sessions remain outside this boundary. Ordinary teardown removes tmp and disposable runtime classes but never owned state; the reset birth path uses runtime-only teardown so soft reset does not lose tmp.
 
-`rimz gc` applies the class table to every known layout-2 room, with per-room/per-class counts and bytes in text and additive JSON `rooms[].classes[]`. Layout-1 rooms are retained and reported. `--dry-run` plans the same class removals without deleting files. `--older-than` controls live/lanes and orphan atomic-write temp TTL, not owned or audit retention. The elected sidebar producer remains the sole automatic trigger, once daily after a five-minute settle; its assist record includes `class_bytes`.
+`rimz gc` applies the class table to every known layout-2 room, with per-room/per-class counts and bytes in text and additive JSON `rooms[].classes[]`. Layout-1 rooms are retained and reported with `retained_reason`, without class sweeping or adoption. `rimz list` also shows those rooms with the migration guide. `--dry-run` plans removals without deleting files; locks instead report `locks_would_check`, without acquiring them or claiming removal. `--older-than` controls live/lanes and orphan atomic-write temp TTL, not owned or audit retention. The elected sidebar producer remains the sole automatic trigger, once daily after a five-minute settle; its assist record includes `class_bytes`.
 
 GC also prunes provably dead workspaces and landed worktrees, shared stale provider probes, and orphan atomic-write temps. In the current workspace it repairs the event log, archives orphaned messages, reconciles stale sent messages, and prunes carryover past 14 days; these mutating maintenance operations are skipped for a dry run.
 
 ## What survives what
 
-Soft reset keeps `records/`, `audit/`, `owned/`, `tmp/` and archived logs; hard reset also drops audit, owned state, tmp, and carryover. Both keep runtime lock inodes. Reboot drops runtime, not state. Teardown drops tmp, not owned state. Age-based GC is independent of these boundaries.
+Soft reset keeps `records/`, `audit/`, `owned/`, `tmp/` and archived logs; hard reset also drops audit, owned state except `owned/runs/`, tmp, and carryover. Both keep runtime lock inodes. Reboot drops runtime, not state. Teardown drops tmp, not owned state. Age-based GC is independent of these boundaries.
 
 | Event | Store | Live sockets and heartbeats | Multiplexer session |
 | --- | --- | --- | --- |

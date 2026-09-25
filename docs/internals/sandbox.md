@@ -122,7 +122,7 @@ Every sandboxed agent and subagent in the room sees the same `shared/`, `rimz-wa
 
 ### Rewritten skill copies
 
-Rewritten skills live in `owned/agents/<handle>/skills/<sha256>/`; launches without a handle use `tmp/skills/<sha256>/`. Copies sit beside scratch, not inside its writable mount, and remain read-only in the agent view. `rewrite::digest` hashes the rewrite kind and, for each source entry, its relative path, mode, file-or-directory flag, and bytes, so any change to a source produces a new copy. `rewrite::apply` builds a copy in a temporary sibling and renames it into place; a target that already exists is kept, which deduplicates concurrent launches. The `skills/` directory is created only when a copy is needed.
+Rewritten skills live in `owned/agents/<handle>/skills/<sha256>/`; launches without a handle use `cache/skills/<sha256>/`, cleared by either reset and never age-swept. Copies sit outside writable tmp and scratch mounts and are bound read-only at the skill destinations. `rewrite::digest` hashes the rewrite kind and, for each source entry, its relative path, mode, file-or-directory flag, and bytes, so any change to a source produces a new copy. `rewrite::apply` builds a copy in a temporary sibling and renames it into place; a target that already exists is kept, which deduplicates concurrent launches. The `skills/` directory is created only when a copy is needed.
 
 Copies deduplicate within a handle. GC removes the owned unit seven days after its latest session ends, never while its process owner is live; teardown and soft reset keep it, hard reset drops it. Handleless copies share tmp's room lifetime. Storage reports count both under the workspace state root.
 

@@ -439,7 +439,19 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
 
     for room in &out.runtime.rooms {
         writeln!(w, "  {}", paint(palette::header(), &room.name))?;
+        if let Some(reason) = &room.retained_reason {
+            writeln!(w, "    retained: {reason}")?;
+        }
         for class in &room.classes {
+            if class.locks_would_check > 0 {
+                writeln!(
+                    w,
+                    "    {} · {} would check",
+                    class.class,
+                    plural(class.locks_would_check, "file", "files")
+                )?;
+                continue;
+            }
             writeln!(
                 w,
                 "    {} · {} · {}",
@@ -1243,10 +1255,12 @@ mod tests {
         let mut outcome = GcOutcome::default();
         outcome.runtime.rooms.push(gc::RoomReport {
             name: "test-abcd".to_owned(),
+            retained_reason: None,
             classes: vec![gc::ClassReport {
                 class: "audit".to_owned(),
                 files_removed: 2,
                 bytes_removed: 12,
+                locks_would_check: 0,
             }],
         });
         let json = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
