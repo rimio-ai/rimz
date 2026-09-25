@@ -211,7 +211,7 @@ fn number_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Stri
     }))
 }
 
-pub(super) fn split<'a>(path: &Path, text: &'a str) -> Result<(&'a str, &'a str), DefinitionErr> {
+pub(crate) fn split<'a>(path: &Path, text: &'a str) -> Result<(&'a str, &'a str), DefinitionErr> {
     let mut lines = text.split_inclusive('\n');
     let first = lines.next().unwrap_or("");
     if first.trim_end_matches(['\r', '\n']) != "---" {

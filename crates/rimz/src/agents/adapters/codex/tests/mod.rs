@@ -19,6 +19,72 @@ mod project_trust;
 mod transcript;
 
 #[test]
+fn host_skills_replace_cli_config_and_use_frontmatter_names() {
+    use crate::agents::skills::{HostSkills, SkillDir};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("SKILL.md"),
+        "---\nname: 'provider-name'\n---\n",
+    )
+    .unwrap();
+    let HostSkills::Switch { key, render, .. } = CODEX_DESCRIPTOR.host_skills else {
+        panic!("missing switch")
+    };
+    let key = key(&SkillDir {
+        name: "directory".into(),
+        source: root.path().to_owned(),
+    })
+    .unwrap();
+    assert_eq!(key.as_str(), "provider-name");
+    let broken = root.path().join("broken");
+    std::fs::create_dir(&broken).unwrap();
+    std::fs::write(broken.join("SKILL.md"), "---\nname: [unclosed\n---\n").unwrap();
+    let fallback = host_skill_key(&SkillDir {
+        name: "broken".into(),
+        source: broken,
+    })
+    .unwrap();
+    assert_eq!(fallback.as_str(), "broken");
+    let mut args = vec![
+        "--config=skills.config=[]".into(),
+        "-c".into(),
+        "skills.config=[]".into(),
+        "-c".into(),
+        "keep=true".into(),
+    ];
+    render(&[key], root.path(), root.path(), &mut args).unwrap();
+    insta::assert_json_snapshot!(args, @r#"
+    [
+      "-c",
+      "keep=true",
+      "-c",
+      "skills.config=[{name=\"provider-name\",enabled=false}]"
+    ]
+    "#);
+}
+
+#[test]
+fn host_skills_refuse_conflicting_provider_keys() {
+    let root = tempfile::tempdir().unwrap();
+    for directory in ["listed", "unlisted"] {
+        let path = root.path().join(directory);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("SKILL.md"), "---\nname: shared-name\n---\n").unwrap();
+    }
+    let result = CODEX_DESCRIPTOR.host_skills.apply(
+        &["listed".parse().unwrap()],
+        Some(root.path()),
+        None,
+        (root.path(), root.path()),
+        &mut Vec::new(),
+    );
+    assert!(
+        result.is_err(),
+        "conflicting provider keys must refuse: {result:?}"
+    );
+}
+
+#[test]
 fn hook_ingress_ignores_internal_servers_and_normalizes_daemon_owners() {
     assert_eq!(
         hook_ingress_decision(Some(42), true, false),

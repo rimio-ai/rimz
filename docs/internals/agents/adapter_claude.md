@@ -116,6 +116,7 @@ The spec's `LaunchSpec` and `LaunchCapability` render every Claude launch:
 | compaction command | `/compact <brief>` |
 | `rimz subagents` child | `--disallowedTools` gains `Agent`, merged with any tools the profile already denies, so a child cannot spawn Task-tool children |
 | skills home | `<config home>/skills` |
+| host skill list | One merged `--settings` value; `skillOverrides` makes unlisted directory names user-only. See [host mode](../sandbox.md#host-mode). |
 
 RimZ uses `--append-system-prompt` for its merged launch reminder (team context, model identity, and delegation guidance). The flag is not a typed preset, so a user who wants provider-specific append text puts it in raw profile `args`.
 

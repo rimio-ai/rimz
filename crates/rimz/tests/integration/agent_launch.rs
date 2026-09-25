@@ -543,7 +543,15 @@ fn explain_prints_the_plan_without_side_effects() {
       "shell": "<shell>",
       "skills": {
         "applied": false,
-        "callable": []
+        "callable": [],
+        "host": {
+          "Applied": {
+            "effect": "user-only",
+            "flag": "--settings skillOverrides",
+            "listed": [],
+            "unlisted": []
+          }
+        }
       },
       "target": "worker"
     }
@@ -647,6 +655,34 @@ fn explain_prints_the_plan_without_side_effects() {
         let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(report["kind"], kind);
         assert_eq!(report["profile"]["chain"], chain);
+    }
+    let settings_body = r#"{"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}}"#;
+    let settings = env.home_root.join("settings.json");
+    std::fs::write(&settings, settings_body).unwrap();
+    for value in [settings.to_str().unwrap(), settings_body] {
+        for json in [false, true] {
+            let mut command = env.rimz();
+            command.args(["agents", "explain", "worker"]);
+            if json {
+                command.arg("--json");
+            }
+            let output = command
+                .args(["--", "--settings", value])
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            assert!(!String::from_utf8_lossy(&output).contains("sk-secret-123"));
+            if json {
+                let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                let argv = report["provider_argv"].as_array().unwrap();
+                let index = argv.iter().position(|arg| arg == "--settings").unwrap();
+                let path = std::path::Path::new(argv[index + 1].as_str().unwrap());
+                assert_eq!(path.parent(), Some(runtime.prompt_dir().as_path()));
+                assert!(!path.exists());
+            }
+        }
     }
     assert!(
         !state.root.exists(),
@@ -1810,6 +1846,32 @@ fn seed_provisional_agent_launch(env: &Env, launch_id: &str, agent_name: &str) {
         },
     );
     env.store().append_event(&event).expect("append launch");
+}
+
+#[cfg(unix)]
+#[test]
+fn host_skill_errors_refuse_before_launch_without_writes() {
+    let env = Env::new();
+    let config = env.project_root.join(".rimz");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("config.toml"),
+        "[profiles.worker]\nagent = \"claude\"\nskills = [\"not-installed\"]\n",
+    )
+    .unwrap();
+    env.rimz().args(["trust", "grant"]).assert().success();
+    let before = env.store().read_events().unwrap();
+    let output = env
+        .rimz()
+        .current_dir(&env.project_root)
+        .args(["agents", "worker", "--isolation", "host"])
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("unknown skill 'not-installed'"), "{stderr}");
+    assert_eq!(env.store().read_events().unwrap().len(), before.len());
+    assert!(!env.runtime_paths().prompt_dir().exists());
 }
 
 #[cfg(unix)]

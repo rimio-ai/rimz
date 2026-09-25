@@ -289,6 +289,7 @@ struct ProfileReport<'a> {
 struct SkillsReport<'a> {
     callable: Option<&'a [SkillName]>,
     applied: bool,
+    host: Option<&'a rimz::agents::skills::HostSkillPlan>,
 }
 #[derive(Serialize)]
 struct PromptSource<'a> {
@@ -472,7 +473,7 @@ impl<'a> ExplainReport<'a> {
             launch_id: request.identity.launch_id.as_deref(),
             cwd: &plan.cwd,
             profile,
-            overrides: applied_overrides(args),
+            overrides: applied_overrides(args, &process.provider_argv),
             mode: params.mode,
             model: params.model.as_deref(),
             effort: params.effort.as_deref(),
@@ -480,6 +481,7 @@ impl<'a> ExplainReport<'a> {
             skills: SkillsReport {
                 callable: request.skills.as_deref(),
                 applied: bwrap.is_some(),
+                host: process.host_skills.as_ref(),
             },
             program: &process.provider_program,
             provider_argv: launch::redact_env_tokens(&process.provider_argv, |key| {
@@ -523,7 +525,7 @@ fn channel_label(matcher: PresetArgMatcher) -> String {
     }
 }
 
-fn applied_overrides(args: &ExplainArgs) -> Vec<String> {
+fn applied_overrides(args: &ExplainArgs, provider_argv: &[String]) -> Vec<String> {
     let mut flags = Vec::new();
     let overrides = &args.overrides;
     for (flag, value) in [
@@ -551,7 +553,15 @@ fn applied_overrides(args: &ExplainArgs) -> Vec<String> {
         flags.push(format!("--budget {budget}"));
     }
     if !overrides.passthrough.is_empty() {
-        flags.push(format!("-- {}", overrides.passthrough.join(" ")));
+        let unchanged = provider_argv
+            .windows(overrides.passthrough.len())
+            .any(|window| window == overrides.passthrough.as_slice());
+        let value = if unchanged {
+            overrides.passthrough.join(" ")
+        } else {
+            "(see provider argv)".to_owned()
+        };
+        flags.push(format!("-- {value}"));
     }
     flags
 }
@@ -676,15 +686,36 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
             }
         )
     )?;
-    writeln!(
-        output,
-        "  profile view: {}",
-        if report.skills.applied {
-            "applied"
-        } else {
-            "not applied (host isolation)"
+    use rimz::agents::skills::HostSkillPlan;
+    if report.skills.applied {
+        writeln!(output, "  profile view: sandbox view applied")?;
+    } else {
+        match report.skills.host {
+            Some(HostSkillPlan::Applied {
+                flag,
+                effect,
+                unlisted,
+                ..
+            }) => {
+                writeln!(
+                    output,
+                    "  profile view: host switch applied ({flag}, {} skills {effect})",
+                    unlisted.len()
+                )?;
+                writeln!(
+                    output,
+                    "  unlisted keys: {}",
+                    serde_json::to_string(unlisted)?
+                )?;
+            }
+            Some(HostSkillPlan::Unenforced) => writeln!(
+                output,
+                "  profile view: not enforced ({} has no per-launch skill switch)",
+                report.kind
+            )?,
+            None => writeln!(output, "  profile view: native discovery (no list)")?,
         }
-    )?;
+    }
     if let Some(links) = report.skill_links {
         writeln!(output, "\nSkill links")?;
         writeln!(output, "  root: {}", links.root().display())?;
@@ -811,7 +842,7 @@ mod tests {
         .explain;
         assert!(args.json);
         assert_eq!(
-            applied_overrides(&args),
+            applied_overrides(&args, &["--foo".to_owned()]),
             ["--model opus", "--yolo", "-- --foo"]
         );
         let error = ParserArgs::try_parse_from(["explain", "coder", "--json", "--prompt"])

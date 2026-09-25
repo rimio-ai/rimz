@@ -139,28 +139,28 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 Each built-in agent keeps its settings, sessions, and credentials in a config home. RimZ reads from it, installs hooks into it, and binds it into the [sandbox](../guide/configuration.md#agent-isolation).
 
-| Agent | Config home | Override | Skill root | Sandbox `skills` list |
-| --- | --- | --- | --- | --- |
-| Claude Code | `~/.claude` | first `CLAUDE_CONFIG_DIR` entry | `<home>/skills` | accepted |
-| Codex | `~/.codex` | `CODEX_HOME` | `~/.agents/skills` | accepted |
-| Pi | `~/.pi/agent` | `PI_CODING_AGENT_DIR` | `~/.agents/skills` | accepted |
-| OpenCode | `~/.config/opencode` | `XDG_CONFIG_HOME` + `/opencode` | `~/.agents/skills` | refused |
-| Antigravity | `~/.gemini/antigravity-cli` | none | `~/.agents/skills` | refused |
-| Copilot | `~/.copilot` | `COPILOT_HOME` | `~/.agents/skills` | accepted |
-| Droid | `~/.factory` | none | `~/.agents/skills` | accepted |
-| Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR`, else `XDG_CONFIG_HOME/cursor` | `~/.agents/skills` | accepted |
-| Amp | `~/.config/amp` | `XDG_CONFIG_HOME` + `/amp` | `~/.agents/skills` | refused |
-| Kiro | `~/.kiro` | `KIRO_HOME` | `<home>/skills` | refused |
-| Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted |
-| Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted |
-| Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused |
-| Process plugin | none | none | none | refused |
+| Agent | Config home | Override | Skill root | Sandbox `skills` list | Host switch |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | `~/.claude` | first `CLAUDE_CONFIG_DIR` entry | `<home>/skills` | accepted | `--settings skillOverrides` |
+| Codex | `~/.codex` | `CODEX_HOME` | `~/.agents/skills` | accepted | `-c skills.config` |
+| Pi | `~/.pi/agent` | `PI_CODING_AGENT_DIR` | `~/.agents/skills` | accepted | none |
+| OpenCode | `~/.config/opencode` | `XDG_CONFIG_HOME` + `/opencode` | `~/.agents/skills` | refused | none |
+| Antigravity | `~/.gemini/antigravity-cli` | none | `~/.agents/skills` | refused | none |
+| Copilot | `~/.copilot` | `COPILOT_HOME` | `~/.agents/skills` | accepted | none |
+| Droid | `~/.factory` | none | `~/.agents/skills` | accepted | none |
+| Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR`, else `XDG_CONFIG_HOME/cursor` | `~/.agents/skills` | accepted | none |
+| Amp | `~/.config/amp` | `XDG_CONFIG_HOME` + `/amp` | `~/.agents/skills` | refused | none |
+| Kiro | `~/.kiro` | `KIRO_HOME` | `<home>/skills` | refused | none |
+| Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted | none |
+| Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
+| Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |
+| Process plugin | none | none | none | refused | none |
 
 Host launches link [RimZ library skills](../guide/configuration.md#skills) into the resolved skill root, including each named Claude account home, without replacing user-owned entries.
 
 Claude Code and Codex also run under named accounts: RimZ sets the override variable to a separate config home per account when a room launches that provider. Other agents always use their default home. See [provider accounts](../guide/accounts.md).
 
-Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config home from the launch environment and merges the RimZ skill library into the agent's skill root. The sandbox does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. A profile `skills` list keeps the listed skills model-callable and makes the rest user-only; agents marked refused in the table fail the launch when a list is set. Host isolation ignores every `skills` list, including `[]`, and duplicate or invalid names are parse errors under both. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
+Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config home from the launch environment and merges the RimZ skill library into the agent's skill root. The sandbox does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. A profile `skills` list keeps the listed skills model-callable and makes the rest user-only; agents marked refused in the table fail the launch when a list is set. Host Claude makes unlisted skills user-only; host Codex hides them, including explicit invocation. Other host providers warn and run unrestricted. Duplicate or invalid names are parse errors under both. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 
 ## Launch flags
 

@@ -1,7 +1,7 @@
 //! Machine-tier Markdown definitions, resolved into the existing profile schema.
 
 mod agent;
-mod frontmatter;
+pub(crate) mod frontmatter;
 mod team;
 mod traits;
 
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
-/// Whether listed skills must resolve, and where: the kind's provider skill root under `env`, then `library`, the order the sandbox skill view merges them.
+/// Whether enforced skill lists must resolve, and where: the kind's provider skill root under `env`, then `library`, the order the sandbox skill view merges them. Enforcement uses the inherited definition isolation, then `machine_isolation`.
 /// The check reads the host's skill roots and is meaningless through a sandbox view; callers inside a view must skip it.
 #[derive(Clone, Copy, Debug)]
 pub enum SkillCheck<'a> {
@@ -22,6 +22,7 @@ pub enum SkillCheck<'a> {
     Check {
         env: &'a BTreeMap<String, String>,
         library: &'a Path,
+        machine_isolation: super::Isolation,
     },
 }
 

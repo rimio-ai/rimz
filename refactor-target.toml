@@ -90,7 +90,8 @@ upward-dependencies = ["address"]
 # The Markdown definition loader reads model catalog, defaults and tool rendering.
 # Sender reply handles and labels are shared by address, store and CLI consumers.
 # AgentState::runs_in shares the durable effective-isolation decision with CLI observers.
-surface-budget = 870
+# Host skill discovery, provider switches and their compiled report cross config, harness and CLI seams.
+surface-budget = 882
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -191,7 +192,8 @@ upward-dependencies = [
 # Doctor and start notices classify agents-home fragments and find a legacy root through config's fragment walk.
 # The Markdown definition loader, its rows and errors feed config load and `agents validate`;
 # per-name failures feed launch refusal through the effective-config failed-reference gate.
-surface-budget = 159
+# The existing frontmatter splitter supplies Codex's host skill key parser.
+surface-budget = 161
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -681,6 +683,7 @@ allowed-dependencies = [
     "agents::capabilities",
     "config",
     "config::effective",
+    "disk::atomic",
     "disk::paths",
     "harness::launch",
     "harness::launch_reminders",

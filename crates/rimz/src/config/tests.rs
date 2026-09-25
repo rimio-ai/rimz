@@ -1678,6 +1678,69 @@ fn machine_definition_tables_are_removed_and_agents_preferences_stay_toml() {
 }
 
 #[test]
+fn definition_skill_checks_follow_resolved_isolation_and_host_support() {
+    for (machine, kind, default, enforced) in [
+        ("host", "pi", "", false),
+        ("host", "claude", "", true),
+        ("host", "codex", "", true),
+        ("host", "pi", "isolation: sandbox", true),
+        ("sandbox", "pi", "isolation: host", false),
+        ("sandbox", "pi", "", true),
+    ] {
+        let dir = tempdir().unwrap();
+        let tools = if kind == "pi" { "" } else { "tools: [Skill]" };
+        write_definition(
+            dir.path(),
+            "agents/parent.md",
+            &format!("description: Parent\nagent: {kind}\n{tools}\n{default}"),
+            "",
+        );
+        write_definition(
+            dir.path(),
+            "agents/worker.md",
+            "description: Worker\nagent: parent\nskills: [not-installed]",
+            "",
+        );
+        let path = write(&dir, &format!("[agents]\nisolation = '{machine}'\n"));
+        let env = BTreeMap::from([("HOME".to_owned(), dir.path().display().to_string())]);
+        let (config, _) =
+            MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap();
+        if enforced {
+            assert!(
+                config
+                    .definition_failure_for("worker")
+                    .unwrap()
+                    .contains("lists skill 'not-installed', missing at")
+            );
+            assert!(!config.agents.profiles.0.contains_key("worker"));
+            continue;
+        }
+        assert!(
+            config.notices.definition_errors.is_empty(),
+            "{machine}/{kind}/{default} left definition errors"
+        );
+        assert_eq!(
+            config.agents.profiles.0["worker"].skills.as_ref().unwrap()[0].as_str(),
+            "not-installed"
+        );
+        let skill = dir.path().join("skills/not-installed");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\ndisable-model-invocation: true\n---\nSkill.",
+        )
+        .unwrap();
+        let (config, _) =
+            MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap();
+        assert!(
+            config.notices.definition_errors.is_empty(),
+            "unsupported host providers also skip marker checks"
+        );
+        assert!(config.agents.profiles.0.contains_key("worker"));
+    }
+}
+
+#[test]
 fn sandbox_config_enables_definition_skill_library_checks() {
     let dir = tempdir().unwrap();
     write_definition(

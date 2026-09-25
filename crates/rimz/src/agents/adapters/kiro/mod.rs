@@ -38,6 +38,7 @@ use crate::ids::AgentSessionId;
 use serde_json::Value;
 
 static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "kiro",
     aliases: &[],
     bin_names: &["kiro-cli"],

@@ -51,6 +51,7 @@ use crate::ids::AgentSessionId;
 use crate::transcript::AskAnswer;
 
 static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "opencode",
     aliases: &[],
     display_name: "Open Code",

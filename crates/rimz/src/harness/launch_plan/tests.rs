@@ -50,6 +50,72 @@ fn action_with_args(action: &str, args: Vec<String>) -> ExecAction {
 }
 
 #[test]
+fn host_settings_are_private_artifacts_written_only_on_apply() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let workspace_id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(workspace_id, project.path()).unwrap();
+    let settings = project.path().join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"env":{"ANTHROPIC_API_KEY":"sk-secret-123"}}"#,
+    )
+    .unwrap();
+    let mut request = ExecRequest::bare_launch(
+        AgentKind::new_unchecked("claude"),
+        vec!["--settings".into(), settings.display().to_string()],
+    );
+    request.skills = Some(Vec::new());
+    let plan = compile(LaunchPlanInputs {
+        request: &request,
+        cwd: project.path(),
+        project_root: project.path(),
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: None,
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        bwrap: None,
+        ambient_env: &BTreeMap::new(),
+    })
+    .unwrap();
+    let process = plan.process();
+    assert!(!process.provider_argv.join(" ").contains("sk-secret-123"));
+    assert!(!process.argv.join(" ").contains("sk-secret-123"));
+    assert!(!format!("{process:?}").contains("sk-secret-123"));
+    let values: Vec<_> = process
+        .provider_argv
+        .windows(2)
+        .filter(|pair| pair[0] == "--settings")
+        .collect();
+    assert_eq!(values.len(), 1);
+    let path = Path::new(&values[0][1]);
+    assert_eq!(path.parent(), Some(runtime.prompt_dir().as_path()));
+    assert!(!path.exists());
+    std::fs::create_dir_all(runtime.prompt_dir()).unwrap();
+    std::fs::set_permissions(runtime.prompt_dir(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    apply(&plan).unwrap();
+    let merged: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(merged["env"]["ANTHROPIC_API_KEY"], "sk-secret-123");
+    assert!(merged["skillOverrides"].is_object());
+    assert_eq!(
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(runtime.prompt_dir())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
+#[test]
 fn broken_effective_config_skips_launch_reminder() {
     let project = tempfile::tempdir().expect("project");
     let config = tempfile::tempdir().expect("config");

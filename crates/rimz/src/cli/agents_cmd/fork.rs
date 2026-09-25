@@ -116,6 +116,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             ..rimz::harness::launch::ExecRequest::bare_launch(seed.kind.clone(), Vec::new())
         },
         &seed.cwd,
+        (isolation == rimz::config::Isolation::Host).then_some(store.runtime_paths()),
     )?;
     let placement = resolve_fork_placement(
         args.new_tab,

@@ -31,6 +31,7 @@ use super::{
 use crate::ids::AgentSessionId;
 
 static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
+    host_skills: crate::agents::skills::HostSkills::Unsupported,
     kind: "grok",
     aliases: &[],
     display_name: "Grok",

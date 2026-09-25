@@ -104,6 +104,8 @@ pub enum ProgramLookupErr {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentProcessCompileErr {
+    #[error(transparent)]
+    HostSkills(#[from] crate::agents::skills::HostSkillArgErr),
     #[error("unknown agent kind `{kind}`")]
     UnknownAgent { kind: String },
     #[error("agent `{kind}` has no launch command")]
@@ -144,6 +146,8 @@ type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
+    pub host_skills: Option<crate::agents::skills::HostSkillPlan>,
+    pub(super) host_skill_artifact: Option<crate::agents::skills::HostSkillArtifact>,
     /// Provider command before shell startup wrapping.
     pub provider_argv: Vec<String>,
     /// Provider executable used by PATH preflight.
@@ -662,8 +666,10 @@ fn compile_agent_process(
     project_root: &Path,
     request: &ExecRequest,
     cwd: &Path,
+    host_runtime: Option<&RuntimePaths>,
 ) -> AgentProcessResult<CompiledAgentProcess> {
     compile_agent_process_with_extra_env(
+        host_runtime,
         project_root,
         request,
         cwd,
@@ -673,6 +679,7 @@ fn compile_agent_process(
 }
 
 fn compile_agent_process_with_extra_env(
+    host_runtime: Option<&RuntimePaths>,
     project_root: &Path,
     request: &ExecRequest,
     cwd: &Path,
@@ -697,6 +704,25 @@ fn compile_agent_process_with_extra_env(
     if let Some(channel) = &channel {
         merge_appended_system_text(action.extra_args_mut(), channel, &reminder);
     }
+    let trusted_env = trusted_agent_env(project_root, kind)?;
+    let secret_keys = trusted_env.keys().cloned().collect();
+    let mut env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
+    let (host_skills, host_skill_artifact) =
+        if let (Some(runtime), Some(listed)) = (host_runtime, &request.skills) {
+            let mut skill_env = crate::agents::ambient_env();
+            skill_env.extend(env.clone());
+            let artifact_dir = runtime.prompt_dir();
+            let (plan, artifact) = adapter.spec().host_skills.apply(
+                listed,
+                adapter.skills_home(&skill_env).as_deref(),
+                crate::disk::paths::skills_library_in(&skill_env).as_deref(),
+                (cwd, &artifact_dir),
+                action.extra_args_mut(),
+            )?;
+            (Some(plan), artifact)
+        } else {
+            (None, None)
+        };
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
         provider_argv
@@ -705,15 +731,14 @@ fn compile_agent_process_with_extra_env(
             .ok_or_else(|| AgentProcessCompileErr::EmptyCommand {
                 kind: kind.to_owned(),
             })?;
-    let trusted_env = trusted_agent_env(project_root, kind)?;
-    let secret_keys = trusted_env.keys().cloned().collect();
-    let mut env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
     if channel == Some(SystemTextChannel::ExtensionEnv) {
         env.insert(ENV_LAUNCH_REMINDERS.to_owned(), reminder.clone());
     }
     let unset = BTreeSet::new();
     let argv = login_shell_argv(&env, &unset, &provider_argv);
     Ok(CompiledAgentProcess {
+        host_skills,
+        host_skill_artifact,
         provider_argv,
         provider_program,
         argv,
@@ -799,13 +824,15 @@ fn parse_toml_string_or_raw(value: &str) -> String {
 }
 
 /// Compile one process and resolve managed-account applicability from its final inputs.
+/// Supply runtime paths for host isolation to preflight the provider skill switch.
 pub fn compile_managed_agent_process(
     project_root: &Path,
     request: &ExecRequest,
     cwd: &Path,
     requested: &crate::agents::ManagedLaunchState,
+    host_runtime: Option<&RuntimePaths>,
 ) -> AgentProcessResult<(CompiledAgentProcess, crate::agents::ManagedLaunchState)> {
-    let process = compile_agent_process(project_root, request, cwd)?;
+    let process = compile_agent_process(project_root, request, cwd, host_runtime)?;
     let state = if matches!(
         requested,
         crate::agents::ManagedLaunchState::PendingResolution
@@ -842,8 +869,15 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
         return Err(AgentProcessStageErr::InvalidProviderBinding);
     }
 
-    let process =
-        compile_agent_process_with_extra_env(project_root, request, cwd, extra_env, reminders)?;
+    let process = compile_agent_process_with_extra_env(
+        (crate::config::Isolation::ambient(extra_env) == Some(crate::config::Isolation::Host))
+            .then_some(runtime),
+        project_root,
+        request,
+        cwd,
+        extra_env,
+        reminders,
+    )?;
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
             AgentProcessCompileErr::UnknownAgent {
@@ -946,12 +980,14 @@ fn trusted_agent_env(
 
 /// Validate trust, provider capability, environment, and shell compilation
 /// before any launch allocation or mux mutation.
+/// Supply runtime paths for host isolation; settings artifacts are only planned.
 pub fn preflight_agent_process(
     project_root: &Path,
     request: &ExecRequest,
     cwd: &Path,
+    host_runtime: Option<&RuntimePaths>,
 ) -> AgentProcessResult<()> {
-    compile_agent_process(project_root, request, cwd).map(drop)
+    compile_agent_process(project_root, request, cwd, host_runtime).map(drop)
 }
 
 /// Preflight one fresh provider launch before detailed pane identity exists.
@@ -960,6 +996,7 @@ pub fn preflight_agent_kind(project_root: &Path, kind: &str, cwd: &Path) -> Agen
         project_root,
         &ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new()),
         cwd,
+        None,
     )
 }
 
