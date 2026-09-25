@@ -95,6 +95,8 @@ pub(super) struct RoleFrontmatter {
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "flip_compact")]
     pub flip_compact: Option<String>,
+    #[serde(default, deserialize_with = "idle_compact")]
+    pub idle_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
     pub model_reminder: Option<bool>,
@@ -158,6 +160,28 @@ fn list<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     Ok(Some(
         Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default(),
     ))
+}
+
+fn idle_compact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Setting {
+        Boolean(bool),
+        Text(String),
+        Integer(i64),
+    }
+    let raw = match Setting::deserialize(deserializer).map_err(|_| {
+        serde::de::Error::custom("idle-compact takes off, on, or a duration such as 25m")
+    })? {
+        Setting::Boolean(value) => if value { "on" } else { "off" }.to_owned(),
+        Setting::Text(value) => value,
+        Setting::Integer(value) => {
+            return Err(serde::de::Error::custom(format!(
+                "sets `idle-compact: {value}`; rimz takes off, on, or a duration such as 25m"
+            )));
+        }
+    };
+    Ok(Some(raw))
 }
 
 fn flip_compact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
@@ -256,6 +280,10 @@ pub(super) fn parse<T: serde::de::DeserializeOwned>(
         (
             "flip-compact",
             "sets `flip-compact:`, which rimz reads on a team role; a solo seat flips no stage",
+        ),
+        (
+            "idle-compact",
+            "sets `idle-compact:`, which rimz reads on a team role; a solo seat is never idle-compacted",
         ),
     ] {
         if keys.contains_key(key) {

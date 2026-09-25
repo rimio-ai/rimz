@@ -96,7 +96,8 @@ upward-dependencies = ["address"]
 # AgentState::runs_in shares the durable effective-isolation decision with CLI observers.
 # Host skill discovery, provider switches and their compiled report cross config, harness and CLI seams.
 # Shared-server launches disable provider-native LSP through the launch capability.
-surface-budget = 883
+# ContextCapability::prompt_cache_ttl supplies provider cache facts to idle-compaction policy.
+surface-budget = 884
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -199,7 +200,8 @@ upward-dependencies = [
 # per-name failures feed launch refusal through the effective-config failed-reference gate.
 # The existing frontmatter splitter supplies Codex's host skill key parser.
 # Worktree lifecycle hooks and their validation error cross the config/worktree seam.
-surface-budget = 166
+# IdleCompactMode parsing, Team::idle_compact and ConfigEditor::retire_idle_compact_keys share role policy and setup retirement with consumers, replacing the old idle-span accessor/parser.
+surface-budget = 167
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -281,7 +283,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Rebirth checkout roots feed pre-pane language-server admission.
 # Response paths, publication errors and publication serve CLI receipts/reports; fleet exposes settled rows.
 # `ancestry::check_launch_room` lets both CLI launch entries refuse before opening a store.
-surface-budget = 537
+# PROMPT_CACHE_MARGIN, fire_point, resolve_teams, resolve_mode and should_compact share one idle-compaction decision between producer and detached CLI helper.
+surface-budget = 542
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -386,7 +389,8 @@ surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 232
+# accounts::cached_account supplies published account facts to both idle-compaction consumers without probing.
+surface-budget = 233
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"

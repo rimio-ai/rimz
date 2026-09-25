@@ -139,6 +139,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         signals: Vec::new(),
         owns: Vec::new(),
         flip_compact: None,
+        idle_compact: None,
         role: role.to_owned(),
         profile: profile.to_owned(),
         mode: None,

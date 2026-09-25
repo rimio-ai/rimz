@@ -85,9 +85,9 @@ static AUTOMATION_ROWS: [AutomationRow; 3] = [
     AutomationRow {
         key: "harness.idle_compact",
         label: "idle compaction",
-        cost: "compacts a long-idle agent while others run; lossy",
-        on_value: IdleCompactMode::Auto.as_str(),
-        off_value: IdleCompactMode::Off.as_str(),
+        cost: "compacts an idle teammate before cache expiry; lossy",
+        on_value: "on",
+        off_value: "off",
         is_on: |config| config.harness.idle_compact != IdleCompactMode::Off,
         needs_codex: false,
     },
@@ -615,7 +615,7 @@ mod tests {
         config.theme.pets.enabled = true;
         config.resume.auto_continue = true;
         config.resume.auto_redeem = true;
-        config.harness.idle_compact = IdleCompactMode::Auto;
+        config.harness.idle_compact = IdleCompactMode::On;
         Defaults::from_config(&config, false, codex_detected)
     }
 
@@ -634,13 +634,13 @@ mod tests {
         assert!(answers.truecolor);
         assert!(answers.nerd_font);
         assert!(!answers.pet_enabled);
-        assert_eq!(answers.automation, vec![false, false]);
+        assert_eq!(answers.automation, vec![false, true]);
         assert!(rendered.contains("Use truecolor?"));
         assert!(rendered.contains("Use Nerd Font icons?"));
         assert!(rendered.contains("Want a pet?"));
-        assert!(rendered.contains("Enable hands-off automation? [y/N/choose]"));
+        assert!(rendered.contains("Enable hands-off automation? [y/n/Choose]"));
         assert!(rendered.contains("traced in `rimz stats`"));
-        assert_eq!(rendered.matches("[y/N] ").count(), 3);
+        assert_eq!(rendered.matches("[y/N] ").count(), 4);
         assert_eq!(rendered.matches("[Y/n] ").count(), 0);
     }
 
@@ -712,6 +712,7 @@ mod tests {
 
         let mut mixed = MachineConfig::default();
         mixed.resume.auto_continue = true;
+        mixed.harness.idle_compact = IdleCompactMode::Off;
         let mixed = Defaults::from_config(&mixed, false, true);
         let (answers, rendered) = drive(mixed.clone(), b"\n\n\n\n\n\n\n");
         assert!(rendered.contains("[y/n/Choose]"));
@@ -727,6 +728,7 @@ mod tests {
     fn codex_gate_hides_and_never_touches_auto_redeem() {
         let mut config = MachineConfig::default();
         config.resume.auto_redeem = true;
+        config.harness.idle_compact = IdleCompactMode::Off;
 
         let without = Defaults::from_config(&config, false, false);
         assert_eq!(
@@ -756,9 +758,10 @@ mod tests {
     }
 
     #[test]
-    fn hand_set_always_reads_on_and_survives_keeping_it_on() {
+    fn hand_set_duration_reads_on_and_survives_keeping_it_on() {
         let mut config = MachineConfig::default();
-        config.harness.idle_compact = IdleCompactMode::Always;
+        config.harness.idle_compact =
+            IdleCompactMode::After(std::time::Duration::from_secs(25 * 60));
         let defaults = Defaults::from_config(&config, false, false);
         assert_eq!(defaults.automation_states(), vec![false, true]);
 
@@ -851,12 +854,12 @@ mod tests {
         let explicit = Defaults::from_config(&explicit_truecolor, false, false);
         assert!(explicit.truecolor);
         assert!(explicit.nerd_font);
-        assert_eq!(explicit.automation_states(), vec![false, false]);
+        assert_eq!(explicit.automation_states(), vec![false, true]);
 
         explicit_truecolor.resume.auto_continue = true;
         assert_eq!(
             Defaults::from_config(&explicit_truecolor, false, false).automation_states(),
-            vec![true, false]
+            vec![true, true]
         );
     }
 

@@ -81,6 +81,8 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
         idle_secs: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        idle_after_secs: Option<u64>,
         occupied_tokens: u64,
         message_id: String,
         delivered: bool,
@@ -261,6 +263,7 @@ impl AssistEvent {
                 agent_id,
                 label,
                 idle_secs,
+                idle_after_secs,
                 occupied_tokens,
                 message_id,
                 delivered,
@@ -271,6 +274,7 @@ impl AssistEvent {
                 agent_id,
                 label,
                 idle_secs,
+                idle_after_secs,
                 occupied_tokens,
                 message_id,
                 delivered,
@@ -527,6 +531,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             kind,
             label,
             idle_secs,
+            idle_after_secs,
             occupied_tokens,
             delivered,
             error,
@@ -542,9 +547,24 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .as_deref()
                 .map(|error| format!(" ({})", first_line(error)))
                 .unwrap_or_default();
+            let (idle, threshold) = idle_after_secs.map_or_else(
+                || (format_hours(*idle_secs), String::new()),
+                |threshold| {
+                    (
+                        rimz::utils::time::format_duration_compact(std::time::Duration::from_secs(
+                            *idle_secs,
+                        )),
+                        format!(
+                            " (threshold {})",
+                            rimz::utils::time::format_duration_compact(
+                                std::time::Duration::from_secs(threshold)
+                            )
+                        ),
+                    )
+                },
+            );
             format!(
-                "{time} ⌁ {agent} idle {outcome} after {} — {} ctx{error}",
-                format_hours(*idle_secs),
+                "{time} ⌁ {agent} idle {outcome} after {idle}{threshold} — {} ctx{error}",
                 compact_token_count(*occupied_tokens),
             )
         }

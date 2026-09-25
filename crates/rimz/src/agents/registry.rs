@@ -247,6 +247,62 @@ mod tests {
     use crate::ids::AgentKind;
 
     #[test]
+    fn prompt_cache_lifetimes_follow_model_and_account() {
+        use crate::agents::AgentAccount;
+        use std::time::Duration;
+        let subscription = AgentAccount {
+            metered: Some(true),
+            ..Default::default()
+        };
+        let api_key = AgentAccount {
+            metered: Some(false),
+            ..Default::default()
+        };
+        let claude = find_definition("claude").unwrap();
+        assert_eq!(
+            claude.prompt_cache_ttl(None, Some(&subscription)),
+            Some(Duration::from_secs(3600))
+        );
+        assert_eq!(claude.prompt_cache_ttl(None, Some(&api_key)), None);
+        assert_eq!(claude.prompt_cache_ttl(None, None), None);
+        let codex = find_definition("codex").unwrap();
+        for model in [
+            "gpt-5.6-terra",
+            "gpt-6-luna",
+            "luna",
+            "terra",
+            "gpt-6",
+            "gpt-5.10",
+        ] {
+            assert_eq!(
+                codex.prompt_cache_ttl(Some(model), None),
+                Some(Duration::from_secs(1800)),
+                "{model}"
+            );
+        }
+        for model in [
+            "gpt-5-codex",
+            "gpt-5.4-mini",
+            "unknown",
+            "gpt-6x",
+            "gpt-6.",
+            "gpt-6.0.1",
+        ] {
+            assert_eq!(
+                codex.prompt_cache_ttl(Some(model), Some(&subscription)),
+                None,
+                "{model}"
+            );
+        }
+        assert_eq!(
+            find_definition("amp")
+                .unwrap()
+                .prompt_cache_ttl(None, Some(&subscription)),
+            None
+        );
+    }
+
+    #[test]
     fn compact_command_carries_the_brief_for_the_agent_seat() {
         let harness = HarnessConfig::default();
         let mut agent = AgentState::seed(

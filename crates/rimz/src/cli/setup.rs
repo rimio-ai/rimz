@@ -34,6 +34,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     if args.yes {
         print_report(&report)?;
         let editor = ConfigEditor::machine();
+        retire_idle_compact_keys(&editor)?;
         render_merge_report(&editor.merge_defaults()?)?;
         report_remote_template()?;
         report_consensus_copy()?;
@@ -50,6 +51,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
         .any(|file| file.path().exists());
     if exists {
         if super::confirm_with_default("Keep your current config?", true)? {
+            retire_idle_compact_keys(&ConfigEditor::machine())?;
             let merge = ConfigEditor::machine().merge_defaults()?;
             let left_unparseable = merge
                 .files
@@ -177,6 +179,19 @@ fn write_fresh_config() -> Result<()> {
     editor.write_defaults(true)?;
     for file in editor.files().ordered() {
         print_line(&format!("Wrote {}", file.path().display()))?;
+    }
+    Ok(())
+}
+
+fn retire_idle_compact_keys(editor: &ConfigEditor) -> Result<()> {
+    let removed = match editor.retire_idle_compact_keys() {
+        Ok(removed) => removed,
+        // The merge report owns the existing malformed-file diagnostic.
+        Err(rimz::config::ConfigEditErr::DocumentParse { .. }) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for key in removed {
+        print_line(&format!("✓ removed {key} (no longer read)"))?;
     }
     Ok(())
 }

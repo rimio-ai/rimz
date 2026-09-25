@@ -78,7 +78,7 @@ pub(crate) use display::{
     HighlightStepsConfig, ScrollbarMode,
 };
 pub use display::{ContextMeterConfig, PixelMode, ProviderTabsMode};
-pub use edit::{ConfigEditor, MergeAction, MergeReport};
+pub use edit::{ConfigEditErr, ConfigEditor, MergeAction, MergeReport};
 pub(crate) use gc::GcConfig;
 pub use gc::parse_older_than;
 pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
@@ -1046,7 +1046,7 @@ fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
 }
 
 fn parse_core_text_collecting(path: &Path, text: &str) -> Result<Parsed<CoreConfig>> {
-    check_removed_agents_tables(path, text)?;
+    check_removed_core_keys(path, text)?;
     parse_toml_collecting(path, text)
 }
 
@@ -1137,7 +1137,7 @@ fn parse_loop_text_collecting(path: &Path, text: &str) -> Result<Parsed<LoopConf
 /// forward-compatible unknown — silently dropping it would launch a surface the
 /// user never declared. Fail fast naming the rename instead. A genuine syntax
 /// error is left to the typed parse to report.
-fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
+fn check_removed_core_keys(path: &Path, text: &str) -> Result<()> {
     let Ok(doc) = toml::from_str::<toml::Table>(text) else {
         return Ok(());
     };
@@ -1146,6 +1146,17 @@ fn check_removed_agents_tables(path: &Path, text: &str) -> Result<()> {
         detail: detail.to_owned(),
     };
     let value = toml::Value::Table(doc.clone());
+    if let Some(harness) = doc.get("harness").and_then(toml::Value::as_table)
+        && (harness.contains_key("idle_compact_after")
+            || matches!(
+                harness.get("idle_compact").and_then(toml::Value::as_str),
+                Some("auto" | "always")
+            ))
+    {
+        return Err(removed(
+            "`harness.idle_compact = \"auto\"`/`\"always\"` and `harness.idle_compact_after` are no longer read; run `rimz setup`, or `rimz config set harness.idle_compact on|off|<duration>` and delete `idle_compact_after`",
+        ));
+    }
     for (table, tree) in [
         ("agents.profiles", "agents"),
         ("agents.teams", "teams"),

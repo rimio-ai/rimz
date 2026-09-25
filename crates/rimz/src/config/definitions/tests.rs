@@ -51,6 +51,66 @@ const TEAM_ROLES: &str = "  - agent: worker\n    role: lead\n    owns: [Plan, Im
 const TEAM_STAGES: &str = "leader: lead\nstages: [Plan, Implement, Review]";
 
 #[test]
+fn idle_compact_role_values_and_inheritance() {
+    for (value, expected) in [
+        ("25m", "25m"),
+        ("off", "off"),
+        ("false", "off"),
+        ("true", "on"),
+    ] {
+        let root = team_fixture();
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    idle-compact: {value}"),
+            "Pipeline.",
+        );
+        let loaded = clean(root.path());
+        let roles = serde_json::to_value(&loaded.teams.0["probe"].roles).unwrap();
+        assert!(roles[0]["idle-compact"].is_null());
+        assert_eq!(roles[1]["idle-compact"], expected);
+        let team = &loaded.teams.0["probe"];
+        for role in ["lead", "unknown"] {
+            assert_eq!(
+                team.idle_compact(role, crate::config::IdleCompactMode::Off),
+                crate::config::IdleCompactMode::Off
+            );
+            assert_eq!(
+                team.idle_compact(role, crate::config::IdleCompactMode::On),
+                crate::config::IdleCompactMode::On
+            );
+        }
+        assert_eq!(
+            team.idle_compact("judge", crate::config::IdleCompactMode::Off),
+            expected.parse().unwrap()
+        );
+    }
+}
+
+#[test]
+fn idle_compact_rejects_unitless_role_and_solo_field() {
+    let root = team_fixture();
+    team_definition(
+        root.path(),
+        TEAM_STAGES,
+        &format!("{TEAM_ROLES}\n    idle-compact: 25"),
+        "Pipeline.",
+    );
+    error(root.path(), "off, on, or a duration such as 25m");
+    let root = fixture();
+    definition(
+        root.path(),
+        "agents/worker.md",
+        "idle-compact: on",
+        "Worker.",
+    );
+    error(
+        root.path(),
+        "sets `idle-compact:`, which rimz reads on a team role; a solo seat is never idle-compacted",
+    );
+}
+
+#[test]
 fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
     let root = team_fixture();
     team_definition(

@@ -1220,6 +1220,7 @@ mod launch_options {
                     signals: Vec::new(),
                     owns: Vec::new(),
                     flip_compact: None,
+                    idle_compact: None,
                     mode: None,
                     model: None,
                     effort: None,

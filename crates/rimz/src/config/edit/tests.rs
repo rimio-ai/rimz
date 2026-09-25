@@ -102,7 +102,6 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "harness.smart_compact",
     "harness.compact_instruction",
     "harness.idle_compact",
-    "harness.idle_compact_after",
     "harness.budget",
     "timezone",
     "resume.on_rebirth",
@@ -289,7 +288,6 @@ fn validates_config_key_read_and_write_surfaces() {
         "harness.smart_compact",
         "harness.compact_instruction",
         "harness.idle_compact",
-        "harness.idle_compact_after",
         "harness.budget",
         "harness.turn_budget",
         "gc.auto",
@@ -1150,10 +1148,8 @@ fn harness_compact_instruction_values_are_parsed_as_strings() {
 #[test]
 fn harness_idle_compact_values_are_parsed_as_strings() {
     let mode = parse_key("harness.idle_compact").expect("mode key");
-    let after = parse_key("harness.idle_compact_after").expect("duration key");
-
-    assert_eq!(parse_set_value(&mode, "auto").as_str(), Some("auto"));
-    assert_eq!(parse_set_value(&after, "59m").as_str(), Some("59m"));
+    assert_eq!(parse_set_value(&mode, "on").as_str(), Some("on"));
+    assert_eq!(parse_set_value(&mode, "25m").as_str(), Some("25m"));
 }
 
 #[test]
@@ -1193,23 +1189,69 @@ fn harness_smart_compact_validation_rejects_bad_values() {
 #[test]
 fn harness_idle_compact_validation_accepts_modes_and_duration() {
     let mode = parse_key("harness.idle_compact").expect("mode key");
-    for value in ["off", "auto", "always"] {
+    for value in ["off", "on", "25m"] {
         validate_set_value(&mode, &Value::from(value)).expect("idle compact mode");
     }
-    let err = validate_set_value(&mode, &Value::from("sometimes"))
+    let err = validate_set_value(&mode, &Value::from("auto"))
         .expect_err("invalid idle compact mode")
         .to_string();
     assert_eq!(
         err,
-        "harness.idle_compact must be one of off, auto, or always"
+        "harness.idle_compact must be off, on, or a duration such as 25m"
     );
 
-    let after = parse_key("harness.idle_compact_after").expect("duration key");
-    validate_set_value(&after, &Value::from("59m")).expect("idle compact duration");
-    let err = validate_set_value(&after, &Value::from("soon"))
-        .expect_err("invalid idle compact duration")
-        .to_string();
-    assert!(err.contains("use a duration such as 59m or 2h"), "{err}");
+    let editor = ConfigEditor::new(test_files());
+    assert!(matches!(
+        editor.get(Some("harness.idle_compact_after")),
+        Err(ConfigEditErr::UnknownKey { .. })
+    ));
+}
+
+#[test]
+fn retired_idle_compaction_is_rejected_then_removed_preserving_other_settings() {
+    for (mode, has_after) in [("auto", true), ("always", false), ("off", true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let after = if has_after {
+            "idle_compact_after = \"59m\"\n"
+        } else {
+            ""
+        };
+        let text = format!(
+            "# keep this\n[harness]\nidle_compact = \"{mode}\"\n{after}compact_instruction = \"keep me\" # retained\n"
+        );
+        std::fs::write(&path, &text).unwrap();
+        let err = crate::config::parse_core_text_strict(&path, &text)
+            .err()
+            .expect("retired key rejected");
+        assert!(err.to_string().contains("run `rimz setup`"));
+        let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+            &path,
+            dir.path().join("agents-home"),
+        ));
+        let removed = editor.retire_idle_compact_keys().unwrap();
+        assert_eq!(
+            removed.contains(&"harness.idle_compact_after".to_owned()),
+            has_after
+        );
+        assert_eq!(
+            removed.len(),
+            usize::from(has_after) + usize::from(mode != "off")
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# keep this"));
+        assert!(text.contains("compact_instruction = \"keep me\" # retained"));
+        let config = crate::config::parse_core_text_strict(&path, &text).unwrap();
+        assert_eq!(
+            serde_json::to_value(config.harness).unwrap()["idle_compact"],
+            if mode == "off" { "off" } else { "on" }
+        );
+        assert!(editor.retire_idle_compact_keys().unwrap().is_empty());
+        assert!(matches!(
+            editor.set("harness.idle_compact_after", "59m"),
+            Err(ConfigEditErr::UnknownKey { .. })
+        ));
+    }
 }
 
 #[test]

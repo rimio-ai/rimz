@@ -329,6 +329,18 @@ pub const DONE_STAGE: &str = "Done";
 const DEFAULT_SCRATCH_FILES: [&str; 2] = ["/blackboard.md", "/*-notes.md"];
 
 impl Team {
+    pub fn idle_compact(
+        &self,
+        role: &str,
+        default: super::IdleCompactMode,
+    ) -> super::IdleCompactMode {
+        self.roles
+            .iter()
+            .find(|binding| binding.role == role)
+            .and_then(|binding| binding.idle_compact)
+            .unwrap_or(default)
+    }
+
     pub fn flip_compact(&self, role: &str, default: Option<AutoCompact>) -> Option<AutoCompact> {
         match self
             .roles
@@ -456,6 +468,13 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub flip_compact: Option<FlipCompact>,
+    /// Override the machine's idle-compaction policy for this team member.
+    #[serde(
+        default,
+        rename = "idle-compact",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub idle_compact: Option<super::IdleCompactMode>,
     /// A replacement system prompt. Relative paths use the declaring file's
     /// directory, so a role in `~/.agents/teams/<name>/team.toml` can name a
     /// prompt shipped beside that fragment.

@@ -4,10 +4,11 @@
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 
-use rimz::agents::AgentStatus;
-use rimz::config::{IdleCompactMode, MachineConfig};
+use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::harness::idle_compact::IdleCompactRequest;
+use rimz::harness::idle_compact::{
+    IdleCompactRequest, fire_point, resolve_mode, resolve_teams, should_compact,
+};
 use rimz::ids::MessageId;
 use rimz::message::compact::{
     CompactErr, CompactOutcome, CompactRequest, refuse_repeat, send_compact,
@@ -19,10 +20,6 @@ use super::Ctx;
 
 pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let config = MachineConfig::load_lenient();
-    if config.harness.idle_compact == IdleCompactMode::Off {
-        return Ok(());
-    }
-
     let ctx = Ctx::for_workspace(request.workspace_id.clone(), Some(request.pane_id.mux()))?;
     let snapshot = ctx
         .resolution_snapshot_with_context()
@@ -34,8 +31,18 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         .iter()
         .find(|agent| agent.kind == request.kind && agent.agent_id == request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
-    let expected_command = rimz::agents::compact_command(agent, &config.harness)
-        .context("idle-compaction target adapter has no compact command")?;
+    let teams = resolve_teams(&config, Some(&workspace.project_root));
+    let mode = resolve_mode(agent, &teams, config.harness.idle_compact);
+    let account =
+        rimz::sidebar::refresh::accounts::cached_account(ctx.runtime(), &agent.login_key());
+    let idle_after = fire_point(agent, mode, account.as_ref());
+    let command = rimz::agents::compact_command(agent, &config.harness);
+    let now = Timestamp::now();
+    if !should_compact(agent, command.as_deref(), idle_after, now) {
+        return Ok(());
+    }
+    let expected_command =
+        command.context("idle-compaction target adapter has no compact command")?;
     if request.command != expected_command {
         bail!(
             "idle-compaction command `{}` does not match {} adapter command `{expected_command}`",
@@ -53,24 +60,8 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         })
         .context("idle-compaction target pane is no longer bound to the agent")?;
 
-    let idle_after = config.harness.idle_compact_after();
-    let idle_secs = Timestamp::now().as_second() - agent.last_activity.as_second();
-    if agent.is_provider_subagent()
-        || agent.agent_id.is_empty()
-        || agent.budget_park.is_some()
-        || agent.is_awaiting_input()
-        || !matches!(
-            agent.effective_status(),
-            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
-        )
-        || idle_secs < idle_after.as_secs().min(i64::MAX as u64) as i64
-    {
-        return Ok(());
-    }
-    let Some(occupied_tokens) = agent
-        .occupied_context_tokens()
-        .filter(|tokens| *tokens >= rimz::harness::idle_compact::IDLE_COMPACT_MIN_TOKENS)
-    else {
+    let idle_secs = now.as_second() - agent.last_activity.as_second();
+    let Some(occupied_tokens) = agent.occupied_context_tokens() else {
         return Ok(());
     };
     if request.occupied_tokens != occupied_tokens {
@@ -113,6 +104,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         request.kind,
         request.agent_id,
         idle_secs,
+        idle_after.map(|duration| duration.as_secs()),
         occupied_tokens,
         &message_id,
         matches!(outcome, Ok(CompactOutcome::Sent)),
@@ -128,6 +120,7 @@ fn append_assist(
     kind: rimz::ids::AgentKind,
     agent_id: rimz::ids::AgentSessionId,
     idle_secs: i64,
+    idle_after_secs: Option<u64>,
     occupied_tokens: u64,
     message_id: &rimz::ids::MessageId,
     delivered: bool,
@@ -140,6 +133,7 @@ fn append_assist(
             agent_id,
             label: Some(label.to_owned()),
             idle_secs: idle_secs.max(0) as u64,
+            idle_after_secs,
             occupied_tokens,
             message_id: message_id.to_string(),
             delivered,

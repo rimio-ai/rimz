@@ -503,6 +503,15 @@ pub trait TranscriptCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait ContextCapability: CoreCapability {
+    /// Known provider prompt-cache lifetime for this model and account.
+    fn prompt_cache_ttl(
+        &self,
+        _model: Option<&str>,
+        _account: Option<&AgentAccount>,
+    ) -> Option<std::time::Duration> {
+        None
+    }
+
     /// Resolve a model's exact context capacity from the shared price book.
     /// Lifecycle ingestion calls this only when the provider payload did not
     /// already report a window, so native signals retain precedence.

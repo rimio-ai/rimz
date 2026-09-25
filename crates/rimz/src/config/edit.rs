@@ -229,6 +229,30 @@ impl ConfigEditor {
         Ok(wrote)
     }
 
+    pub fn retire_idle_compact_keys(&self) -> Result<Vec<String>> {
+        let file = self.files.file(MachineConfigFileKind::Core);
+        let Some(text) = read_existing(file.path())? else {
+            return Ok(Vec::new());
+        };
+        let mut doc = parse_document(file.path(), &text)?;
+        let Some(harness) = doc.get_mut("harness").and_then(Item::as_table_like_mut) else {
+            return Ok(Vec::new());
+        };
+        let mut removed = Vec::new();
+        if harness.remove("idle_compact_after").is_some() {
+            removed.push("harness.idle_compact_after".to_owned());
+        }
+        if let Some(mode @ ("auto" | "always")) = harness.get("idle_compact").and_then(Item::as_str)
+        {
+            removed.push(format!("harness.idle_compact = \"{mode}\""));
+            harness.remove("idle_compact");
+        }
+        if !removed.is_empty() {
+            write(file.path(), doc.to_string().as_bytes())?;
+        }
+        Ok(removed)
+    }
+
     pub fn merge_defaults(&self) -> Result<MergeReport> {
         let mut outcomes = Vec::new();
         for kind in MachineConfigFileKind::ALL {
@@ -930,7 +954,6 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_harness_smart_compact_edit(path)
         || is_harness_compact_instruction_edit(path)
         || is_harness_idle_compact_edit(path)
-        || is_harness_idle_compact_after_edit(path)
         || is_daily_budget_edit(path)
         || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
@@ -996,16 +1019,8 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         let Some(mode) = value.as_str() else {
             invalid_value!("harness.idle_compact must be a string");
         };
-        if !matches!(mode, "off" | "auto" | "always") {
-            invalid_value!("harness.idle_compact must be one of off, auto, or always");
-        }
-    }
-    if is_harness_idle_compact_after_edit(path) {
-        let Some(duration) = value.as_str() else {
-            invalid_value!("harness.idle_compact_after must be a duration string");
-        };
-        if let Err(err) = super::harness::parse_idle_compact_after(duration) {
-            invalid_value!("harness.idle_compact_after {err}; use a duration such as 59m or 2h");
+        if mode.parse::<super::IdleCompactMode>().is_err() {
+            invalid_value!("harness.idle_compact must be off, on, or a duration such as 25m");
         }
     }
     if matches!(
@@ -1061,10 +1076,6 @@ fn is_harness_compact_instruction_edit(path: &[String]) -> bool {
 
 fn is_harness_idle_compact_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "idle_compact")
-}
-
-fn is_harness_idle_compact_after_edit(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "harness" && child == "idle_compact_after")
 }
 
 fn is_daily_budget_edit(path: &[String]) -> bool {
