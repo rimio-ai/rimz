@@ -743,13 +743,7 @@ fn birth_managed_room(
                         if let Err(error) =
                             crate::cli::lsp_admission::admit(root, &machine_config())
                         {
-                            if error
-                                .downcast_ref::<rimz::config::effective::EffectiveConfigErr>()
-                                .is_none()
-                            {
-                                return Err(error);
-                            }
-                            tracing::warn!(%error, "language-server admission skipped: project config could not be loaded");
+                            tracing::warn!(%error, "language-server admission skipped; recovering without it");
                         }
                     }
                 }
