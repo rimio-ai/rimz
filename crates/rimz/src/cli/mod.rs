@@ -25,6 +25,7 @@ mod list_pets;
 mod list_themes;
 mod loop_cmd;
 mod loop_timer;
+mod lsp;
 mod message;
 mod pane;
 mod paths;
@@ -117,6 +118,7 @@ pub fn dispatch() -> Result<()> {
     match cli.subcommand {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
+        Some(Subcmd::Lsp(args)) => lsp::run(args, &globals),
         Some(Subcmd::Paths(args)) => paths::run(args, &globals),
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
         Some(Subcmd::Providers(args)) => providers::run(args, &globals),
@@ -506,6 +508,8 @@ impl ColorWhen {
 
 #[derive(Debug, Subcommand)]
 enum Subcmd {
+    /// Navigate code through shared language servers.
+    Lsp(lsp::LspArgs),
     /// Open or attach the room for a path (default action).
     Start(StartArgs),
     /// Attach to a room by session name.

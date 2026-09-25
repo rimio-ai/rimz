@@ -174,7 +174,8 @@ aggressive_resize = true
 ## command = ["rust-analyzer"]
 ## extensions = ["rs"]
 ## root-markers = ["Cargo.toml"]
-## init-options = { checkOnSave = false }
+# Include functions and raise rust-analyzer's 128-result fuzzy-search cap for symbol-name queries.
+## init-options = { checkOnSave = false, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
 ## policy = "optional"                # "required" waits for memory before opening panes
 ## wait-timeout = "10m"                # required-server queue deadline
 ## memory-estimate = "8G"              # used until this server's peak has been measured

@@ -109,8 +109,26 @@ pub fn lock() -> Result<crate::disk::lock::WorkspaceLock> {
 pub fn publish(entry: &Entry) -> Result<()> {
     ensure_runtime()?;
     let directory = directory(&entry.root, &entry.server)?;
-    crate::disk::paths::ensure_private_runtime_dir(&directory)?;
-    crate::disk::atomic::write_temp_then_rename_cache(&directory.join("entry.json"), entry)?;
+    publish_at(&directory, entry)
+}
+
+fn publish_at(directory: &Path, entry: &Entry) -> Result<()> {
+    crate::disk::paths::ensure_private_runtime_dir(directory)?;
+    let _lock = crate::disk::lock::WorkspaceLock::acquire(&directory.join("entry.lock"))?;
+    let path = directory.join("entry.json");
+    let mut entry = entry.clone();
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let previous: Entry = serde_json::from_slice(&bytes)?;
+            // The watchdog can stop a server while its broker still holds an older in-memory state.
+            if previous.nonce == entry.nonce && matches!(previous.state, State::Stopped { .. }) {
+                entry.state = previous.state;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    crate::disk::atomic::write_temp_then_rename_cache(&path, &entry)?;
     Ok(())
 }
 
@@ -233,6 +251,10 @@ fn sweep_at(base: &Path) -> Result<Vec<Entry>> {
 #[cfg(feature = "testkit")]
 pub mod testkit {
     use super::*;
+
+    pub fn publish(base: &Path, entry: &Entry) -> Result<()> {
+        publish_at(&directory_at(base, &entry.root, &entry.server)?, entry)
+    }
 
     pub fn sweep(base: &Path) -> Result<Vec<Entry>> {
         let _lock = crate::disk::lock::WorkspaceLock::acquire(&base.join("admission.lock"))?;
