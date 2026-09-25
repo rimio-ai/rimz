@@ -100,7 +100,7 @@ rimz message --schedule 07:30 @planner "draft today's plan from the open issues"
 
 ## What a send does to your machine
 
-Every delivery is the same short sequence against your own multiplexer. RimZ appends the record to `~/.rimz/ws/<workspace-dir>/messages/messages.jsonl`, resolves the handle to one live pane, and takes that pane's write lock so no other RimZ write interleaves. Then it pastes the text as one bracketed paste, marks the record `sent`, and presses Enter as a separate key. `rimz pane capture @coder` shows you the result in the agent's own composer. Nothing reaches the agent by any other route: no API call, no provider-side injection.
+Every delivery is the same short sequence against your own multiplexer. RimZ appends the record to `~/.rimz/ws/<workspace-dir>/records/messages/messages.jsonl`, resolves the handle to one live pane, and takes that pane's write lock so no other RimZ write interleaves. Then it pastes the text as one bracketed paste, marks the record `sent`, and presses Enter as a separate key. `rimz pane capture @coder` shows you the result in the agent's own composer. Nothing reaches the agent by any other route: no API call, no provider-side injection.
 
 A durable record is not a delivery guarantee, and the record is where a failure shows up. A delivery that fails repeatedly before anything reaches the pane ends `abandoned`. A prompt that reaches the pane but that the agent's reporting hooks never confirm is retyped up to three times and then marked `timed_out`; a compact command in the same state is never retyped at all, since repeating `/compact` can discard the context it was meant to save.
 

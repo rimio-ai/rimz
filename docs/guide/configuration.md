@@ -671,7 +671,7 @@ Four things are worth knowing before you edit the file by hand:
 
 Two more task fields exist that you never write here. A `wait` task delivers to one live agent session rather than launching a cell: `rimz loop add --wait @handle` writes it into the workspace's instance state, and bare `--wait` or `--wait @me` targets the caller. `deadline` is what `rimz loop add --until 30m` writes for a task that polls until a time. Both appear in `rimz loop show` and never in `loop.toml`.
 
-That instance state is one of two files outside `loop.toml`. Every session delivery, generated one-shot, and poll-until instance lives in `~/.rimz/ws/<workspace-dir>/loop-instances.json`; machine-local enablement and bounded pauses live in `~/.rimz/loops/loop-arming.json`.
+That instance state is one of two files outside `loop.toml`. Every session delivery, generated one-shot, and poll-until instance lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; machine-local enablement and bounded pauses live in `~/.rimz/loops/loop-arming.json`.
 
 ## theme.toml: appearance and pets
 

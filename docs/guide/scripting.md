@@ -18,7 +18,7 @@ Two things have to be true before the first run. RimZ's reporting hooks must be 
 `-p` adds no engine of its own. It sequences pieces RimZ already has, in this order:
 
 1. It checks the preconditions: the agent's hooks installed and trusted, Codex's directory trust, and the provider's command resolving on your `PATH` after your shell starts. A failure here stops the command before the multiplexer is touched.
-2. It checks your dollar caps and the provider account's quota window, then writes a durable run record, a JSON file under `~/.rimz/ws/<workspace-dir>/runs/`.
+2. It checks your dollar caps and the provider account's quota window, then writes a durable run record, a JSON file under `~/.rimz/ws/<workspace-dir>/owned/runs/`.
 3. It opens one pane in your Zellij or tmux running the agent's own CLI with your prompt: a split beside you when you run it inside the room, a new tab when the caller is outside it. This is the same launch as an interactive `rimz agents <kind>`.
 4. It blocks until the work ends, then prints the answer, exits with the run's code, and closes the pane.
 

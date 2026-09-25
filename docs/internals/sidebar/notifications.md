@@ -15,7 +15,7 @@ This page owns the push path: who decides a notification, who delivers it on eac
 | [`sidebar_pane/app/remind.rs`](../../../crates/rimz/src/sidebar_pane/app/remind.rs) | `RemindState`: renderer-local unread reminders |
 | [`osc.rs`](../../../crates/rimz/src/osc.rs) | OSC 777 and BEL bytes, the tmux DCS wrap, and the terminal-local variant for processes outside a sidebar pane |
 | [`config/notifications.rs`](../../../crates/rimz/src/config/notifications.rs) | `NotificationsPrefs`, `NotificationKind`, handler conditions, template rendering and validation |
-| [`diag/notify.rs`](../../../crates/rimz/src/diag/notify.rs) | The `notify.log.jsonl` record schema |
+| [`diag/notify.rs`](../../../crates/rimz/src/diag/notify.rs) | The `audit/notify.log.jsonl` record schema |
 
 ## Channels
 
@@ -169,7 +169,7 @@ RimZ writes no dock badge escape, because badge APIs differ per terminal and OS;
 
 ## The trace log
 
-Every notification decision appends to `notify.log.jsonl` in the workspace state directory (`~/.rimz/ws/<workspace-dir>/`), because a tab `[!]` with no matching unread card leaves nothing else behind. The log sits beside `diag.log.jsonl` and rotates at the same 1 MiB cap (`NOTIFY_LOG_MAX_BYTES`). Records go through `DiagSink::trace_notify`, which is never rate-limited, and no correctness path reads them. Each record is an envelope (`rimz.notify_trace.v1`, build id, workspace id, session name, renderer instance id when a renderer wrote it, `at_ms`) around one event.
+Every notification decision appends to `audit/notify.log.jsonl` in the workspace state directory (`~/.rimz/ws/<workspace-dir>/`), because a tab `[!]` with no matching unread card leaves nothing else behind. The log sits beside `audit/diag.log.jsonl` and rotates at the same 1 MiB cap (`disk::retention::ROTATING_LOG_MAX_BYTES`). Records go through `DiagSink::trace_notify`, which is never rate-limited, and no correctness path reads them. Each record is an envelope (`rimz.notify_trace.v1`, build id, workspace id, session name, renderer instance id when a renderer wrote it, `at_ms`) around one event.
 
 | `kind` | Writer | Fields |
 | --- | --- | --- |

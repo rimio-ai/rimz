@@ -198,7 +198,7 @@ Cancel removes each row, then sends SIGTERM to its watcher's process group, whic
 
 ## What a wait writes on your machine
 
-A wait is one row in `~/.rimz/ws/<workspace-dir>/loop-instances.json`; it never touches `loop.toml` or project config. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size, modification time, device, and inode; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `loop-watch-<name>.lock` in the workspace runtime directory.
+A wait is one row in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; it never touches `loop.toml` or project config. Its `watch` is a command string, `{pid}`, `{check, every, on}`, or `{file, grep?, mark?}`. The file mark records size, modification time, device, and inode; an absent mark means the file was absent at arm time. Every watcher runs in its own process group and holds `locks/loop-watch-<name>.lock` in the workspace runtime directory.
 
 The row retires when the timer fires, the watch reaches its final outcome, the wait is canceled, or the target session ends, is lost, or is stopped. A check-in does not retire it. If a watcher dies without reporting, the room's elder notices the missing lock after a 30-second grace and delivers the `watcher died` verdict. `rimz gc` removes rows left behind.
 

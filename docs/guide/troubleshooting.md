@@ -395,14 +395,14 @@ rimz --no-resume    # come up empty: skip recovering prior agents
 rimz reset              # rebuild this workspace's room from clean state
 rimz reset --yes        # skip the confirmation prompt (required off a TTY)
 rimz reset --no-start   # tear down only, then print the rerun hint
-rimz reset --hard       # also drop the prior-agent carryover, so rebirth seeds nothing
+rimz reset --hard       # also forget history, runs, and scratch
 ```
 
-The rebuilt room comes up with no agents in it, whichever flags you pass. A plain reset keeps the prior-agent carryover for history; `--hard` removes that too.
+The rebuilt room comes up with no agents in it, whichever flags you pass. A plain reset keeps prior-agent history, transcripts, messages, run records, scratch and skill copies. `--hard` also deletes those transcripts, message history, runs, scratch, room temporary files, and prior-agent carryover. Rotated event archives and provider-owned session files remain. Standing fleet budget choices survive either reset.
 
 ### Sweep stale state with `rimz gc`
 
-`rimz gc` sweeps runtime state that has outlived its use: orphaned atomic-write temp files, dead workspace stores, abandoned queued messages, and clean RimZ-marked worktrees whose work has already landed with no live pane inside. It keeps anything dirty, pending, or unproven, and it always prints a checklist of what it cleaned, what it kept, and why. Every open room also runs it once a day on its own ([automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps)). Run `--dry-run` first to see the plan:
+`rimz gc` sweeps state that has outlived its use: ended agents' scratch and skill copies and terminal runs after seven days, audit history after 30 days or above 64 MiB per room, orphaned atomic-write temp files, dead workspace stores, abandoned queued messages, and clean RimZ-marked worktrees whose work has already landed with no live pane inside. It keeps anything dirty, pending, or unproven, and it always prints a checklist of what it cleaned, what it kept, and why. Every open room also runs it once a day on its own ([automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps)). Run `--dry-run` first to see the plan:
 
 ```sh
 rimz gc --dry-run          # preview reclaimable state, remove nothing

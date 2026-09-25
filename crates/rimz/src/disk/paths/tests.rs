@@ -741,3 +741,25 @@ fn legacy_config_roots_excludes_the_cache_doctor_reports() {
     );
     assert!(existing_legacy_roots([dir.path().join("absent")]).is_empty());
 }
+
+#[test]
+fn store_catalog_documents_every_lifetime_class() {
+    let catalog = include_str!("../../../../../docs/internals/store.md");
+    for class in [
+        Class::Log,
+        Class::Records,
+        Class::Audit,
+        Class::Cache,
+        Class::Owned,
+        Class::Tmp,
+        Class::Sock,
+        Class::Live,
+        Class::Lanes,
+        Class::Locks,
+    ] {
+        assert!(
+            catalog.contains(&format!("| `{}/` |", class.dir_name())),
+            "missing catalog rule for {class:?}"
+        );
+    }
+}

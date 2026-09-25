@@ -8,7 +8,7 @@ Three properties follow, and the rest of RimZ relies on all three. Writers canno
 
 ## Truth and cache
 
-**`events.log.jsonl` and the durable record files beside it are the truth. Everything else RimZ writes is a cache, and any reader may rebuild it from the log.**
+**`log/events.log.jsonl` and the durable record files are the truth. Derived snapshots are caches that any reader may rebuild from the log; audit evidence and owned scratch are not rebuildable caches.**
 
 A reader that finds a cache stale, corrupt, or absent folds the log itself. A writer that dies before publishing therefore costs the next reader a bounded fold, never a wrong answer. The same rule lets the sidebar be read-only on the store: it never has to write to be correct, only to be fast. The `cargo xtask invariants` check `ensure_sidebar_library_boundaries` keeps store writers out of the sidebar's import graph.
 
@@ -38,7 +38,7 @@ Four boundaries decide where new code goes:
 | [`snapshot/`](../../crates/rimz/src/store/snapshot/mod.rs) | The canonical snapshot schema and read side: `fold.rs` resumable rollup and carryover, `project.rs` lifecycle reducer, `assemble.rs` read entry points, then pane binding and the view-model projection ([sidebar.md](./sidebar/sidebar.md#where-the-code-lives)). |
 | [`runtime.rs`](../../crates/rimz/src/store/runtime.rs) | The runtime-versus-audit read scope. |
 | [`session_death.rs`](../../crates/rimz/src/store/session_death.rs) | Supersession and pidless-ghost rules shared by the durable reap and the view reap, and `GHOST_SESSION_TTL_SECS`. |
-| [`live_roster.rs`](../../crates/rimz/src/store/live_roster.rs) | The `live-roster.json` codec for rebirth recovery. |
+| [`live_roster.rs`](../../crates/rimz/src/store/live_roster.rs) | The `records/live-roster.json` codec for rebirth recovery. |
 | [`message.rs`](../../crates/rimz/src/store/message.rs), [`message/codec.rs`](../../crates/rimz/src/store/message/codec.rs) | The durable message record, FIFO/claim/batch selection, and the live-queue and history codec. |
 | [`run.rs`](../../crates/rimz/src/store/run.rs) | `RunRecord` and `RunStatus`, the durable codec, and `wake_run`. |
 | [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The stat-gated latest-wins sidecar store behind [`agent_context.rs`](../../crates/rimz/src/store/agent_context.rs) and [`subagent_context.rs`](../../crates/rimz/src/store/subagent_context.rs). |
@@ -61,38 +61,56 @@ Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it co
 
 ## What is on disk
 
-The files fall into three tiers, distinguished by what survives a reboot and who may delete them.
+Room files have one lifetime class per directory, constructed by `disk/paths.rs`. State survives reboot; runtime does not. The root `workspace.json` and `rimz` executable are room identity, outside the classes. Retention figures live in `disk/retention.rs`.
+
+| Class directory | Tier | Reclamation rule |
+| --- | --- | --- |
+| `log/` | State | Rotate at 64 MiB; archives and carryover have 14-day retention. |
+| `records/` | State | Standing records; no age sweep. |
+| `audit/` | State | Remove files older than 30 days by mtime, then oldest first until at most 64 MiB remains per room. |
+| `cache/` | State | Rebuildable; cleared on reset, no age sweep. |
+| `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live. Unknown handles use directory mtime. Runs: terminal and record mtime older than 7 days. Restorability does not extend the grace. |
+| `tmp/` | State | Room lifetime; unclaimed wait and subagent outputs older than 7 days are also swept. |
+| `sock/` | Runtime | Remove sockets whose connect probe is refused. |
+| `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exception: keep agent telemetry while its room is live, because the external exporter holds its inode open. |
+| `lanes/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days). |
+| `locks/` | Runtime | Try-lock and unlink while held; keep busy files. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
 
 ### The workspace store
 
 The workspace store is `<home>/ws/<workspace-dir>/`, where `<home>` is `$RIMZ_HOME` or `~/.rimz`: durable truth plus the caches derived from it that should survive a reboot.
 
 ```text
-events.log.jsonl                              the framed event log
-events.log.archive/events.<uuidv7>.jsonl      rotated logs, chronologically sortable by name
-agents.carryover.json                         the agent rollup carried across rotation
-snapshots/latest.json                         published view-model checkpoint (cache)
-snapshots/rollup.json                         resumable fold base (cache)
-messages/messages.jsonl                       the live message queue
-messages/history.jsonl                        terminal message records, with their text
-transcript/<bucket-start>.jsonl               the append-only chat transcript, one file per 7-day bucket
-runs/<run_id>.json                            supervised-run records
-loop-instances.json, loop-instances.lock      RimZ-owned loop and wait rows
-workspace.json                                the workspace record
-channels.json                                 named channel lanes
-rimz                                          stable executable path for deferred pane spawns
-boot.json                                     the host boot id last seen, for reboot detection
-live-roster.json                              the producer's last pane-backed live agent set
-last-death.json                               the last incident, for `rimz list --all`
-doctor-cleared.json                           the watermark `rimz doctor` clears incidents against
-auto-gc.json                                  when `rimz gc --unattended` last swept, pacing the elder's daily sweep
-crashes/<utc-ts>/                             mux forensics from a crash birth, newest five kept
-diag.log.jsonl, diag-frames/                  typed anomaly records and captured frames
-tmp/                                          room tmp (agents/<handle>, scratchpad, shared, rimz-subagents, rimz-waits/<name>.output)
-skills/<sha256>/                              content-addressed rewritten skill copies
-locks/workspace.lock, locks/publish.lock      the write and publish flocks
-locks/{publish,log-sync,dead-reap}.stamp      debounce stamps for the off-lock tail
-locks/auto-rotate.stamp                       rotation debounce, taken under the write lock
+log/events.log.jsonl                          framed event log
+log/archive/events.<uuidv7>.jsonl              rotated logs
+records/agents-carryover.json                 agent rollup carried across rotation
+records/messages/messages.jsonl               live message queue
+records/channels.json                         named channels
+records/loop-instances.json                   loop and wait rows
+records/boot.json                             last host boot id
+records/live-roster.json                      producer's last pane-backed live root-agent set
+records/last-death.json                       last incident
+records/budget.fleet.json                     standing fleet override, raise, or disable
+audit/transcript/<bucket-start>.jsonl         chat transcript, 7-day buckets
+audit/messages/<bucket-start>.jsonl           terminal messages, same bucket rule
+audit/crashes/<utc-ts>/                       mux forensics
+audit/diag.log.jsonl, audit/diag-frames/       anomalies and captured frames
+audit/notify.log.jsonl                        notification diagnostics
+audit/plugin-presence.log.jsonl               presence diagnostics
+audit/binding.log.jsonl                       binding diagnostics
+cache/snapshots/{latest,rollup}.json           view-model checkpoint and fold base
+cache/doctor-cleared.json                     cleared-incident watermark
+cache/auto-gc.json                            daily sweep stamp
+cache/{publish,log-sync,dead-reap}.stamp       off-lock tail debounce
+cache/auto-rotate.stamp                        rotation debounce
+owned/agents/<handle>/scratch/                per-handle scratch
+owned/agents/<handle>/skills/<sha256>/         immutable rewritten skills
+owned/runs/<run_id>.json                      supervised-run records
+tmp/{scratchpad,shared,skills}/               handleless scratch/skills and shared files
+tmp/rimz-subagents/<name>.output              child responses
+tmp/rimz-waits/<name>.output                  watched-command output
+workspace.json                               room record, layout: 2
+rimz                                         stable room executable
 ```
 
 The workspace id is `ws_` plus the first 24 hex characters of the SHA-256 of the canonical project root (`WorkspaceId::from_project_root`). Every root class (repo, marker, bare directory) derives it the same way, so adding a class never re-keys an existing store.
@@ -105,15 +123,17 @@ This page owns the log, the caches derived from it, and the workspace record. Th
 
 | Files | Owner |
 | --- | --- |
-| `messages/`, `channels.json` | [messaging.md](./harness/messaging.md#storage-and-audit) |
-| `transcript/` | [transcript.md](./harness/transcript.md#the-log) |
-| `runs/` | [scripting.md](./harness/scripting.md#the-record) |
-| `loop-instances.json`, `tmp/rimz-waits/` | [loops.md](./harness/loops.md#where-tasks-live), [loops.md → Watched commands](./harness/loops.md#watched-commands) |
-| `tmp/`, `skills/` | [sandbox.md](./sandbox.md#room-tmp). Both are private room-owned directories that survive agent restart and are reclaimed with the room; neither holds durable records. |
-| `diag.log.jsonl`, `diag-frames/` | [diagnostics.md](./diagnostics.md) |
-| `boot.json`, `live-roster.json`, `last-death.json`, `crashes/` | [Session death](#session-death) below |
+| `records/messages/`, `audit/messages/`, `records/channels.json` | [messaging.md](./harness/messaging.md#storage-and-audit) |
+| `audit/transcript/` | [transcript.md](./harness/transcript.md#the-log) |
+| `owned/runs/` | [scripting.md](./harness/scripting.md#the-record) |
+| `records/loop-instances.json`, `tmp/rimz-waits/` | [loops.md](./harness/loops.md#where-tasks-live) |
+| `tmp/`, `owned/agents/` | [sandbox.md](./sandbox.md#room-tmp) |
+| Audit diagnostics | [diagnostics.md](./diagnostics.md) |
+| Rebirth records and crash archives | [Session death](#session-death) below |
 
 ### The workspace record
+
+Every writer stamps `layout: 2`; an absent stamp reads as layout 1. Opening an incompatible room refuses with the migration guide path. Cross-room scanners report and skip it rather than adopting or pruning it.
 
 `workspace.json` is the index maintenance commands read after a project root moves or vanishes ([`workspace/record.rs`](../../crates/rimz/src/workspace/record.rs)). It records the project root and its class, the active worktree root, the mux session name, the executable the room serves, and the room's provider accounts. Most commands re-record it freely, but two fields belong to owner flows and every other write preserves them.
 
@@ -125,33 +145,48 @@ Launch reads the record before overwriting it. When the derived session name dif
 
 ### The per-room runtime tier
 
-The runtime tier is `${XDG_RUNTIME_DIR}/rimz/<workspace_id>/`, or `/tmp/rimz-<uid>/rimz/<workspace_id>/` when `XDG_RUNTIME_DIR` is unset. Everything here is disposable: it speeds the next read and dies with the session. The store's own entries are:
+The runtime tier is `${XDG_RUNTIME_DIR}/rimz/ws/<workspace-dir>/`, or `/tmp/rimz-<uid>/rimz/ws/<workspace-dir>/` when `XDG_RUNTIME_DIR` is unset. Everything here is disposable: it speeds the next read and dies with the session. The store's own entries are:
 
 ```text
 sock/run.<short_run_id>.sock          per-run wakeup socket, bound by a supervised-run waiter
 sock/sidebar.<short_instance_id>.sock per-instance wakeup socket, bound by each live sidebar
 sock/codex-app-server.sock            the per-session Codex broker socket
-heartbeat/sidebar.*.json              renderer liveness timestamps
-read-marks/{sidebar.<id>,manual}.json read receipts that clear unread rows
-agent_context/, subagent_context/     latest-wins per-session enrichment sidecars
-agent-activity/                       per-agent activity hints
-active-time/                          per-root-session active-time accumulators
-prompt/task.<digest>.md               launch prompt handoff artifacts (cache)
-prompt/sys.<digest>.md                composed system-prompt artifacts (cache)
-agent-telemetry/copilot-otel.jsonl    room-scoped metadata-only Copilot export
+live/heartbeat/sidebar.*.json         renderer liveness
+live/read-marks/{sidebar.<id>,manual}.json read receipts
+live/{agent_context,subagent_context}/ enrichment
+live/agent-activity/                  activity hints
+live/active-time/                     active-time accumulators
+live/prompt/{task,sys}.<digest>.md     launch artifacts
+live/agent-telemetry/copilot-otel.jsonl metadata-only Copilot export
+live/idle-compact/<digest>.json       idle-compaction fire records
+live/{presence,client-presence-probe}.stamp probe freshness
+lanes/{snapshot,agent-projection,workspace-projection}.json projections
+lanes/{sidebar-width,sidebar-filter,unread}.json renderer state
+lanes/{pane-topology,presence-desired,topology-writer-conflict}.json topology
+lanes/{authoritative-pane-probe,focus-anchor}.json focus and pane truth
+lanes/{diff-stats,cohort-spend,pipeline,pr-state,metrics-sample}.json enrichment
+lanes/{loop-fire,message-wake,codex-daemon-reap,link-stats}.json coordination
+lanes/{budget.scopes,budget.fleet-park,budget.<digest>,auto-continue.<digest>}.json session state
+lanes/workspace-spending.<prefix>.json room spend projection
+locks/*.lock                         workspace, publish, subagent-zone, loop-instances,
+                                     loop-run-<name>, loop-watch-<name>, message-sweep,
+                                     sidebar-launch, snapshot, topology-writer,
+                                     authoritative-pane-probe, focus-anchor, pr-state,
+                                     diff-stats, budget.fleet, and sidecar locks
+locks/pane-write/<hex-pane-id>.lock   pane write serialization
 ```
 
 Other subsystems publish their own latency files into the same directory, and each catalog belongs to the module that writes it:
 
 | Files | Owner |
 | --- | --- |
-| `loop-fire.json`, `loop-run-<name>.lock`, `loop-watch-<name>.lock` | [loops.md](./harness/loops.md) |
-| `budget.fleet.json`, `budget.scopes.json`, `budget.<digest>.json` | [budget.md](./harness/budget.md#the-ledgers-on-disk) |
-| `auto-continue.<digest>.json` | [providers.md](./agents/providers.md#auto-continue) |
-| `idle-compact/`, `message-sweep.lock`, `message-wake.json` | [messaging.md](./harness/messaging.md) |
-| `pane-topology.json`, `presence-desired.json` | [multiplexers.md](./multiplexers.md) |
-| sidebar lanes (`snapshot.json`, `unread.json`, `pr-state.json`, and the rest) | [state.md → Published lanes](./sidebar/state.md#published-lanes) |
-| `agent-telemetry/` | [adapter_copilot.md](./agents/adapter_copilot.md) |
+| Loop fire lane and run/watch locks | [loops.md](./harness/loops.md) |
+| Budget records and lanes | [budget.md](./harness/budget.md#the-ledgers-on-disk) |
+| Auto-continue lanes | [providers.md](./agents/providers.md#auto-continue) |
+| Message wake lane and sweep lock | [messaging.md](./harness/messaging.md) |
+| Topology lanes | [multiplexers.md](./multiplexers.md) |
+| Sidebar lanes | [state.md](./sidebar/state.md#published-lanes) |
+| Agent telemetry | [adapter_copilot.md](./agents/adapter_copilot.md) |
 
 Liveness hints live apart from the store because `AF_UNIX` socket paths are short: `AF_UNIX_PATH_LIMIT` is 108 bytes on Linux and 104 on macOS, terminator included, and a path under the deep state tree would overrun it. The sockets set the location, and the heartbeats and receipts follow them. `RuntimePaths::for_workspace` validates the socket budget before any session side effect.
 
@@ -161,18 +196,20 @@ Freshness here gates behaviour, so these files are scoped to one mux session inc
 
 ### Account-global caches
 
-Account-global provider caches live under `~/.rimz/cache/providers/` (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`), and their election locks and the spending service socket under `$XDG_RUNTIME_DIR/rimz/shared/`. The caches persist so the provider dashboard opens warm after a reboot, and every one rebuilds from the providers' own files (a re-probe, or one full spending walk for the cursor); the locks are runtime because they mean nothing once their holder is gone. `RuntimePaths::ensure_dirs` removes stray copies of those data files from the runtime `shared/` directory so they stop pinning tmpfs. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes), [providers.md](./agents/providers.md), and [spending.md](./agents/spending.md).
+These machine-shared paths are outside room classes. Runtime `shared/` additionally holds `rate_limits_trace.jsonl`, provider probe markers, `board-write/` locks, account budget locks, and auto-redeem election locks. Persistent `cache/providers/` also holds `budget.account.<kind>@<account>.json` standing account choices and park state, and `auto_redeem.<key>.json` / `auto_redeem_rate.<key>.json` redemption state. These ledgers are not all rebuildable provider caches. Room-scoped spending projections are instead `lanes/workspace-spending.<prefix>.json`.
+
+Account-global provider caches live under `~/.rimz/cache/providers/` (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`), and their election locks and the spending service socket under `$XDG_RUNTIME_DIR/rimz/shared/`. The caches persist so the provider dashboard opens warm after a reboot, and those provider caches rebuild from the providers' own files (a re-probe, or one full spending walk for the cursor); the locks are runtime because they mean nothing once their holder is gone. `RuntimePaths::ensure_dirs` removes stray copies of those data files from the runtime `shared/` directory so they stop pinning tmpfs. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes), [providers.md](./agents/providers.md), and [spending.md](./agents/spending.md).
 
 ## The event log
 
-`events.log.jsonl` is the canonical history of everything that happened in the workspace.
+`log/events.log.jsonl` is the canonical history of everything that happened in the workspace.
 
 ### Framing
 
 Each record is one newline-terminated line: `<payload length> <crc32, 8 lowercase hex> <json payload>`. The CRC covers the payload alone, and the length is validated structurally on read. A bare JSON line without the length and CRC also decodes, because a payload always opens with `{` and cannot be mistaken for the hex token ([`event_log/frame.rs`](../../crates/rimz/src/store/event_log/frame.rs)). That prefix also means a bare `jq` over the file fails; strip it first to read frames by hand:
 
 ```sh
-sed -E 's/^[0-9]+ [0-9a-f]{8} //' events.log.jsonl | jq 'select(.method == "agent.lifecycle")'
+sed -E 's/^[0-9]+ [0-9a-f]{8} //' log/events.log.jsonl | jq 'select(.method == "agent.lifecycle")'
 ```
 
 The payload is an `EventEnvelope`: schema version, event id, workspace id, session name, mux name, source and source kind, method, timestamp, and a method-specific `params` blob kept as raw JSON, so a reducer parses only the events it folds.
@@ -194,11 +231,11 @@ The payload is an `EventEnvelope`: schema version, event id, workspace id, sessi
 
 The catch-all `Other` arm is what makes a downgrade safe. A record written by a newer RimZ decodes as `Other` and survives every fold, so an older binary reads an intact log instead of a corrupt one.
 
-Message records get the same tolerance outside the log. A record's `sender` can carry a `Harness` notice that a newer binary minted, and `HarnessNotice::Other` keeps that string verbatim, so an older binary's queue rewrites and history retention pass it through. Without it, one such record in `messages/history.jsonl` would fail every history-touching command of the older binary (`message cancel`, `message list`, retention), and one in `messages/messages.jsonl` every queue transaction. Worktrees of a project share one workspace store, so mixed binaries are the ordinary case. Nothing dispatches on an unknown notice: it takes generic harness delivery and renders its own name as the message `Type` ([messaging.md → The message header](./harness/messaging.md#the-message-header)).
+Message records get the same tolerance outside the log. A record's `sender` can carry a `Harness` notice that a newer binary minted, and `HarnessNotice::Other` keeps that string verbatim, so an older binary's queue rewrites and history retention pass it through. Without it, one such record in `audit/messages/<bucket-start>.jsonl` would fail every history-touching command of the older binary (`message cancel`, `message list`, retention), and one in `records/messages/messages.jsonl` every queue transaction. Worktrees of a project share one workspace store, so mixed binaries are the ordinary case. Nothing dispatches on an unknown notice: it takes generic harness delivery and renders its own name as the message `Type` ([messaging.md → The message header](./harness/messaging.md#the-message-header)).
 
 `session.rebirth` clears pane stamps and never ends a session. A reborn mux session renumbers panes from zero, so every stamp recorded before the boundary names a pane that no longer exists, and clearing them keeps a prior incarnation's session off a reused pane id. Each resumed wrapper then appends `agent.attached` to re-establish its launch identity, placement, and owning process. An attach event without a launch identity cannot create a row.
 
-Lifecycle records inherit from the rollup instead of repeating themselves. High-cadence progress events omit `transcript_path`, worktree, pane identity, role, team, channel, profile, and the smart-compact stamp, and the reducer carries them forward from the prior row. Missing optional keys decode as absent, and `runtime_owner` is reconstructed from the agent's process identity. That keeps the hot log compact under a busy fleet.
+Lifecycle records inherit from the rollup instead of repeating themselves. High-cadence progress events omit `transcript_path`, worktree, pane identity, role, team, channel, profile, and the smart-compact stamp, and the reducer carries them forward from the prior row. Missing optional keys decode as absent, and `runtime_owner` is serialized on lifecycle records when present; the reducer carries a prior owner forward when it is absent. That keeps the hot log compact under a busy fleet.
 
 ### Crash recovery
 
@@ -212,11 +249,11 @@ Lock-free `O_APPEND` would remove the lock cost but let writeback reorder and te
 
 ### Rotation and carryover
 
-Rotation syncs the active log, renames it to `events.log.archive/events.<uuidv7>.jsonl`, syncs the directory, and lets the next append start a fresh log. UUIDv7 names sort chronologically, so the archive needs no index ([`event_log/rotation.rs`](../../crates/rimz/src/store/event_log/rotation.rs)).
+Rotation syncs the active log, renames it to `log/archive/events.<uuidv7>.jsonl`, syncs the directory, and lets the next append start a fresh log. UUIDv7 names sort chronologically, so the archive needs no index ([`event_log/rotation.rs`](../../crates/rimz/src/store/event_log/rotation.rs)).
 
-Rotation starts two ways. A lifecycle append that leaves the log at or above `DEFAULT_EVENT_LOG_ROTATE_BYTES` (64 MiB) claims rotation inside the write lock, debounced by `locks/auto-rotate.stamp` (`AUTO_ROTATE_DEBOUNCE`, 60 seconds), and the lifecycle CLI then spawns a detached `rimz workspace rotate-events`. The same command is the manual entry point: `--max-bytes` overrides the threshold and `--archive-older-than` prunes archives past `DEFAULT_RETENTION` (14 days).
+Rotation starts two ways. A lifecycle append that leaves the log at or above `DEFAULT_EVENT_LOG_ROTATE_BYTES` (64 MiB) claims rotation inside the write lock, debounced by `cache/auto-rotate.stamp` (`AUTO_ROTATE_DEBOUNCE`, 60 seconds), and the lifecycle CLI then spawns a detached `rimz workspace rotate-events`. The same command is the manual entry point: `--max-bytes` overrides the threshold and `--archive-older-than` prunes archives past `DEFAULT_RETENTION` (14 days).
 
-Rotation never changes what the audit rollup remembers. Before the rename, `Store::rotate_event_log` merges every agent in the rotating log's audit rollup into `agents.carryover.json`, ended sessions and exited owners included. It then prunes carryover rows older than the retention window and reseeds the fold base. The first post-rotation event for a continuing agent reduces against its carryover row, so the event schema's lifetime-field policy keeps launch identity, parentage, and enrichment exactly as if the log had not rotated, and `last_seen` resolves across carried and live rows.
+Rotation never changes what the audit rollup remembers. Before the rename, `Store::rotate_event_log` merges every agent in the rotating log's audit rollup into `records/agents-carryover.json`, ended sessions and exited owners included. It then prunes carryover rows older than the retention window and reseeds the fold base. The first post-rotation event for a continuing agent reduces against its carryover row, so the event schema's lifetime-field policy keeps launch identity, parentage, and enrichment exactly as if the log had not rotated, and `last_seen` resolves across carried and live rows.
 
 ## The write path
 
@@ -239,7 +276,7 @@ Steps 5 through 7 are gated by stamp files beside the lock: `log-sync.stamp`, `p
 
 Wakeups go out before the publish on purpose. Consumers fold the log tail from their own cursor, so checkpoint cadence tunes cold-start latency and never gates freshness.
 
-Mutations that replace, cut, or forget the active log run `Store::commit_boundary` instead. It holds the workspace lock and then the publish lock, runs the mutation, and when the mutation reports a `RollupInvalidation`, deletes `snapshots/latest.json` and the publish stamp before touching the rollup cache. A crash in between leaves readers folding for themselves instead of trusting an offset that could alias into a regrown log.
+Mutations that replace, cut, or forget the active log run `Store::commit_boundary` instead. It holds the workspace lock and then the publish lock, runs the mutation, and when the mutation reports a `RollupInvalidation`, deletes `cache/snapshots/latest.json` and the publish stamp before touching the rollup cache. A crash in between leaves readers folding for themselves instead of trusting an offset that could alias into a regrown log.
 
 | Mutation | Policy | Rollup cache | Rebuild |
 | --- | --- | --- | --- |
@@ -256,10 +293,10 @@ Every disk write falls into one of four classes, and one line sorts them: **dura
 
 | Class | Files | Discipline | After a power cut |
 | --- | --- | --- | --- |
-| Event log | `events.log.jsonl` | One CRC-framed `write()` per record or ordered batch. The off-lock tail issues a group `fdatasync` at most once a second, and rotation syncs before the rename. | Intact through the last group sync. The trailing window can be lost, and the frame CRC turns a torn suffix into deterministic corruption that repair truncates. |
-| Audit appends | `messages/history.jsonl`, `transcript/*.jsonl`, `tmp/rimz-waits/<name>.output` | `O_APPEND`, no per-record fsync. History and transcript append under the workspace lock. A queue transaction commits `messages.jsonl` before it appends history and event frames, and runs history retention last, so a history append or retention failure warns and never undoes the queue transition ([messaging.md → Storage and audit](./harness/messaging.md#storage-and-audit)). A wait log takes no store lock: `rimz wait` creates it at arm time, and the one watcher holding that wait's `loop-watch-<name>.lock` is its only writer after that. A check watcher truncates and rewrites it for each run, keeping only the latest output ([loops.md → Watched commands](./harness/loops.md#watched-commands)). | Trailing records can be lost. The cost is history completeness, never queue correctness. For wait output, the run record keeps the last 4 KiB, and the delivered message carries the file path, estimated tokens, and line count; a file pattern match also includes a matched-line preview. |
-| Cache | `snapshots/*.json`, `live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. | Rebuilt from the log or refreshed from live producers on the next read. |
-| Durable records | `messages/messages.jsonl`, `runs/<run_id>.json`, `workspace.json`, `agents.carryover.json`, `channels.json`, `loop-instances.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. | Survives. |
+| Event log | `log/events.log.jsonl` | One CRC-framed `write()` per record or ordered batch. The off-lock tail issues a group `fdatasync` at most once a second, and rotation syncs before the rename. | Intact through the last group sync. The trailing window can be lost, and the frame CRC turns a torn suffix into deterministic corruption that repair truncates. |
+| Audit appends | `audit/messages/<bucket-start>.jsonl`, `audit/transcript/*.jsonl`, `tmp/rimz-waits/<name>.output` | `O_APPEND`, no per-record fsync. History and transcript append under the workspace lock. A queue transaction commits `messages.jsonl` before it appends history and event frames, so a history append failure warns and never undoes the queue transition ([messaging.md → Storage and audit](./harness/messaging.md#storage-and-audit)). A wait log takes no store lock: `rimz wait` creates it at arm time, and the one watcher holding that wait's `locks/loop-watch-<name>.lock` is its only writer after that. A check watcher truncates and rewrites it for each run, keeping only the latest output ([loops.md → Watched commands](./harness/loops.md#watched-commands)). | Trailing records can be lost. The cost is history completeness, never queue correctness. For wait output, the run record keeps the last 4 KiB, and the delivered message carries the file path, estimated tokens, and line count; a file pattern match also includes a matched-line preview. |
+| Cache write | `cache/snapshots/*.json`, `records/live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. The roster is the named best-effort records exception, not rebuildable history. | Caches rebuild or refresh; loss of the roster's latest write can narrow recovery. |
+| Durable records | `records/messages/messages.jsonl`, `owned/runs/<run_id>.json`, `workspace.json`, `records/agents-carryover.json`, `records/channels.json`, `records/loop-instances.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. | Survives. |
 
 Every fsync call funnels through [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs), and no module hand-rolls its own temp-file dance. The `cargo xtask invariants` check `ensure_store_durability` rejects a `sync_all` or `sync_data` method call anywhere else; it matches those two std methods only, so a raw `libc` or `nix` fsync would pass the grep and has to be caught in review.
 
@@ -275,7 +312,7 @@ Supervised-run waiters are woken separately. `wake_run` in [`run.rs`](../../crat
 
 Reads take no lock. `snapshot::rebuild` and the [`snapshot/assemble.rs`](../../crates/rimz/src/store/snapshot/assemble.rs) entry points fold the log into the agent rollup, then project that into the sidebar view-model ([sidebar.md](./sidebar/sidebar.md#from-store-to-screen) owns the projection).
 
-The fold is resumable. `snapshots/rollup.json` holds a fold base and the `LogExtent` it reflects; `snapshots/latest.json` holds the published view-model and the extent it was built from. A reader trusts either checkpoint exactly when its extent matches the live log, and otherwise folds the missing tail itself. A cold reader pays one full fold, a warm reader pays only the new bytes, and neither can be wrong ([`snapshot/fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs)). The rotation carryover beneath every fold is parsed once per file identity per thread: rotation and prune replace it by atomic rename, which changes that identity, while the maintenance writers themselves always read the raw file.
+The fold is resumable. `cache/snapshots/rollup.json` holds a fold base and the `LogExtent` it reflects; `cache/snapshots/latest.json` holds the published view-model and the extent it was built from. A reader trusts either checkpoint exactly when its extent matches the live log, and otherwise folds the missing tail itself. A cold reader pays one full fold, a warm reader pays only the new bytes, and neither can be wrong ([`snapshot/fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs)). The rotation carryover beneath every fold is parsed once per file identity per thread: rotation and prune replace it by atomic rename, which changes that identity, while the maintenance writers themselves always read the raw file.
 
 The publish gate in [`writer/publish.rs`](../../crates/rimz/src/store/writer/publish.rs) decides when the write tail refreshes those files. A checkpoint is due when the stamp is `PUBLISH_INTERVAL` (1 second) old, when the unpublished tail reaches `PUBLISH_BYTE_BUDGET` (64 KiB), or when the log is shorter than the stamp's offset. Concurrent publishers serialize on `locks/publish.lock`, so they group-commit.
 
@@ -307,37 +344,33 @@ The write tail's debounced reap (`writer/reap.rs`) scans the audit rollup and ap
 
 Before evaluating supersession, the reaper attaches the context sidecar of each running or waiting root, so a current provider error or a completed or interrupted settle can certify the owner rested. A missing sidecar leaves the raw lifecycle status authoritative.
 
-An agent named in `live-roster.json` is exempt from `ReapedDead` and `ReapedStale` until rebirth planning consumes the roster, so crash-recovery candidates survive the scan. Already-ended rows are skipped and cannot supersede an active replacement. Outside the reap, `Store::retire_worktree_sessions` appends the same `Ended` observation as `WorktreeRemoved` for non-live sessions of a removed worktree.
+An agent named in `records/live-roster.json` is exempt from `ReapedDead` and `ReapedStale` until rebirth planning consumes the roster, so crash-recovery candidates survive the scan. Already-ended rows are skipped and cannot supersede an active replacement. Outside the reap, `Store::retire_worktree_sessions` appends the same `Ended` observation as `WorktreeRemoved` for non-live sessions of a removed worktree.
 
 The reducer stamps `ended_at`, which hides the row from runtime views at once while the audit rollup keeps its resumable identity until rotation prunes it at the retention boundary. The stamp suppresses the row without making it terminal: any later lifecycle event under the same `(kind, session id)` clears it, so a session that reports in again returns to the runtime view under its own identity and every fence keyed on the end stamp releases with it. Runtime expel and the snapshot view reap apply the same predicates immediately, so the screen agrees with the log before the durable append lands.
 
 ### The session.death record
 
-When a room comes back after its mux session died, the rebirth path appends `session.death` for the lost incarnation, carrying `cause` and the agents that went with it. The cause is `reboot` when the host boot id in `boot.json` changed. A same-boot `crash` additionally requires `live-roster.json` to name agents worth recovering.
+When a room comes back after its mux session died, the rebirth path appends `session.death` for the lost incarnation, carrying `cause` and the agents that went with it. The cause is `reboot` when the host boot id in `records/boot.json` changed. A same-boot `crash` additionally requires `records/live-roster.json` to name agents worth recovering.
 
-`live-roster.json` is the sidebar producer's last pane-backed live root-agent set: the agents that mux session would lose if it died. It is written cache-class and intersected with the audit rollup at birth, so cleanly ended agents and paneless ghosts stay out of recovery. The rebirth boundary clears it after planning, so a fast second birth cannot reuse stale evidence.
+`records/live-roster.json` is the sidebar producer's last pane-backed live root-agent set: the agents that mux session would lose if it died. It is the one records-class file written best-effort by the producer (`store/live_roster.rs`): nothing rebuilds it, but a lost write only narrows one recovery. It is intersected with the audit rollup at birth, so cleanly ended agents and paneless ghosts stay out of recovery. The rebirth boundary clears it after planning, so a fast second birth cannot reuse stale evidence.
 
-`last-death.json` records the incident for cheap `rimz list --all` display, and the reborn room writes back how many lost agents it seeded. A lost session that recovery leaves behind gets a durable `Ended` trace: `rimz.recovery-declined` when the user chose a fresh start, `rimz.not-resumed` for a leftover recovery could not seed. Either trace drops the session from the next recovery set and keeps it resumable by hand. A crash birth also archives mux forensics under `crashes/<utc-ts>/`, best-effort and never blocking launch, keeping the newest five. `rimz doctor` shows the last incident with its cause, time, lost and recovered counts, and archive path.
+`records/last-death.json` records the incident for cheap `rimz list --all` display, and the reborn room writes back how many lost agents it seeded. A lost session that recovery leaves behind gets a durable `Ended` trace: `rimz.recovery-declined` when the user chose a fresh start, `rimz.not-resumed` for a leftover recovery could not seed. Either trace drops the session from the next recovery set and keeps it resumable by hand. A crash birth also archives mux forensics under `audit/crashes/<utc-ts>/`, best-effort and never blocking launch, bounded by the audit class sweep rather than a write-time ring. `rimz doctor` shows the last incident with its cause, time, lost and recovered counts, and archive path.
 
 The recovery flow from roster to repopulated panes is [fleet.md → Resume and rebirth](./harness/fleet.md#resume-and-rebirth) and [sidebar.md → Resume-on-rebirth](./sidebar/sidebar.md#resume-on-rebirth).
 
 ## Maintenance
 
-`rimz reset` is a room boundary ([`writer/reset.rs`](../../crates/rimz/src/store/writer/reset.rs)). After the mux teardown, `Store::reset_records` runs one log boundary that cancels active runs, clears `logins`, removes `diag.log*` and `diag-frames/`, and force-rotates the log; it then terminal-wakes the canceled runs' waiters and removes the runtime directory. Runtime cleanup first renames the old directory to a unique sibling: late writers may recreate the canonical runtime path, but cannot repopulate the old tree during recursive deletion. A soft reset stages carryover first, as rotation does, so agent identity, ended sessions included, survives within retention. `--hard` is the explicit forget boundary: it deletes the carryover and the snapshot caches and publishes nothing. Provider-owned session files live outside this store either way.
+For layout-1 rooms, follow the [post-merge migration guide](./store-layout-migration.md); there is no in-product layout migrator.
 
-`rimz gc` ([`cli/gc.rs`](../../crates/rimz/src/cli/gc.rs)) sweeps the whole machine, then maintains the workspace it runs in. `--older-than` (default `gc.older_than`, 7 days; units `s` through `d`) sets the age for runtime hints and orphan temps, and `--dry-run` reports without removing anything.
+`rimz reset` cancels active runs, clears the room account selection, stages carryover on a soft reset, and rotates the log. It clears `cache/` and runtime `sock/`, `live/`, `lanes/`; each runtime directory is renamed before recursive deletion so late writers cannot refill the detached tree. It never removes `locks/`. Soft reset keeps audit, owned state, tmp, and records, including standing fleet budget choices. `--hard` additionally removes the active log, carryover, `audit/`, `owned/`, and `tmp/`; it keeps the log archive just written. Provider-owned sessions remain outside this boundary. Ordinary teardown removes tmp and disposable runtime classes but never owned state; the reset birth path uses runtime-only teardown so soft reset does not lose tmp.
 
-Machine-wide, it:
+`rimz gc` applies the class table to every known layout-2 room, with per-room/per-class counts and bytes in text and additive JSON `rooms[].classes[]`. Layout-1 rooms are retained and reported. `--dry-run` plans the same class removals without deleting files. `--older-than` controls live/lanes and orphan atomic-write temp TTL, not owned or audit retention. The elected sidebar producer remains the sole automatic trigger, once daily after a five-minute settle; its assist record includes `class_bytes`.
 
-- removes, in every workspace runtime root, heartbeats older than the threshold with the sidebar sockets they named, read receipts whose owning sidebar has expired, and stale activity, active-time, context, `idle-compact/`, and `prompt/` files. Telemetry goes only when no sidebar heartbeat in that room is newer than the threshold, because a live Copilot exporter keeps writing the inode it opened. It leaves `run.*.sock` to the waiter that owns it and keeps `read-marks/manual.json`.
-- removes stale provider probe markers from the runtime `shared/` directory.
-- prunes `tmp/rimz-waits/<name>.output` files (`prune_wait_outputs`) that no catalog row or running watcher claims and that are older than the 14-day retention.
-- prunes workspaces it can prove are dead: a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. A directory whose record is unreadable but which holds history is kept and reported ([`gc/prune.rs`](../../crates/rimz/src/store/gc/prune.rs)).
-- recursively sweeps orphaned atomic-write temp files under the state and runtime roots ([`gc/temp_sweep.rs`](../../crates/rimz/src/store/gc/temp_sweep.rs)).
-
-In the workspace resolved from the current directory, and skipped under `--dry-run` or outside a workspace, it repairs the event log before anything folds it, archives orphaned message records, reconciles stale sent messages, and prunes carryover rows past the 14-day retention. Archive-log retention stays with rotation, and cache writers clean their own temp siblings through `disk/atomic.rs`.
+GC also prunes provably dead workspaces and landed worktrees, shared stale provider probes, and orphan atomic-write temps. In the current workspace it repairs the event log, archives orphaned messages, reconciles stale sent messages, and prunes carryover past 14 days; these mutating maintenance operations are skipped for a dry run.
 
 ## What survives what
+
+Soft reset keeps `records/`, `audit/`, `owned/`, `tmp/` and archived logs; hard reset also drops audit, owned state, tmp, and carryover. Both keep runtime lock inodes. Reboot drops runtime, not state. Teardown drops tmp, not owned state. Age-based GC is independent of these boundaries.
 
 | Event | Store | Live sockets and heartbeats | Multiplexer session |
 | --- | --- | --- | --- |
