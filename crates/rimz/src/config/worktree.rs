@@ -12,6 +12,7 @@ pub struct WorktreeConfig {
     /// Base ref for new worktrees: local `HEAD`, remote `origin/HEAD`, or an
     /// explicit ref string.
     pub base: WorktreeBase,
+    pub hooks: WorktreeHooks,
 }
 
 impl Default for WorktreeConfig {
@@ -19,7 +20,37 @@ impl Default for WorktreeConfig {
         Self {
             dir: "../{repo}-worktrees".to_owned(),
             base: WorktreeBase::Head,
+            hooks: WorktreeHooks::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WorktreeHooks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("agents.worktree.hooks.{event} cannot be empty; set a command or remove the key")]
+pub struct WorktreeHooksConfigErr {
+    event: &'static str,
+}
+
+impl WorktreeHooks {
+    pub(crate) fn validate(&self) -> Result<(), WorktreeHooksConfigErr> {
+        for (event, command) in [("created", &self.created), ("removed", &self.removed)] {
+            if command
+                .as_ref()
+                .is_some_and(|command| command.trim().is_empty())
+            {
+                return Err(WorktreeHooksConfigErr { event });
+            }
+        }
+        Ok(())
     }
 }
 

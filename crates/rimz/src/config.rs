@@ -123,7 +123,7 @@ pub(crate) use theme::InlinePalette;
 pub(crate) use theme::{InlineAnsiColors, InlinePrimaryColors};
 pub use theme::{ThemeConfig, ThemeProviderStyle, ThemeStyle};
 use web::WebPrefs;
-pub use worktree::{WorktreeBase, WorktreeConfig};
+pub use worktree::{WorktreeBase, WorktreeConfig, WorktreeHooks, WorktreeHooksConfigErr};
 
 /// Default render base grid: 100ms, or 10Hz.
 const DEFAULT_REFRESH_MS: u16 = 100;
@@ -260,6 +260,12 @@ struct LoadMemo {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigErr {
+    #[error("invalid per-machine worktree config at {path}: {source}")]
+    Worktree {
+        path: PathBuf,
+        #[source]
+        source: WorktreeHooksConfigErr,
+    },
     #[error("{path}: {message}")]
     Definition { path: PathBuf, message: String },
     #[error("cannot access {path}: {source}")]
@@ -321,6 +327,7 @@ impl ConfigErr {
             | Self::Definition { path, .. }
             | Self::Agents { path, .. }
             | Self::Notifications { path, .. }
+            | Self::Worktree { path, .. }
             | Self::Loop { path, .. }
             | Self::AccountBudget { path, .. }
             | Self::Account { path, .. }
@@ -337,6 +344,7 @@ impl ConfigErr {
             Self::Definition { message, .. } => message.clone(),
             Self::Agents { source, .. } => source.to_string(),
             Self::Notifications { source, .. } => source.to_string(),
+            Self::Worktree { source, .. } => source.to_string(),
             Self::Loop { source, .. } => source.to_string(),
             Self::AccountBudget { source, .. } => source.to_string(),
             Self::Account { source, .. } => source.to_string(),
@@ -532,6 +540,7 @@ impl MachineConfig {
         notices.add_unknown_keys(&loop_path, loop_.unknown_keys);
         let mut config = Self::assemble(core.value, theme.value, loop_.value);
         validate_notifications_config(&config.notifications, files.core_path())?;
+        validate_worktree_config(&config.agents.worktree, files.core_path())?;
         let sources = config.load_definitions(agents_home, config_path, env, &mut notices);
         config.notices = notices;
         Ok((config, sources))
@@ -608,6 +617,7 @@ impl MachineConfig {
             _ => {
                 let core = parse_core_text(path, text)?;
                 validate_notifications_config(&core.notifications, path)?;
+                validate_worktree_config(&core.agents.worktree, path)?;
                 validate_account_budgets(&core.accounts, path)?;
                 let mut config =
                     Self::assemble(core, ThemeConfig::default(), LoopConfig::default());
@@ -1228,6 +1238,16 @@ fn validate_notifications_config(notifications: &NotificationsPrefs, path: &Path
     notifications
         .validate()
         .map_err(|source| ConfigErr::Notifications {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+fn validate_worktree_config(config: &WorktreeConfig, path: &Path) -> Result<()> {
+    config
+        .hooks
+        .validate()
+        .map_err(|source| ConfigErr::Worktree {
             path: path.to_path_buf(),
             source,
         })

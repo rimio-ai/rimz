@@ -37,6 +37,23 @@ fn write_machine_file(path: &std::path::Path, text: &str) {
 }
 
 #[test]
+fn config_worktree_hooks_round_trip() {
+    let env = Env::new();
+    for event in ["created", "removed"] {
+        let key = format!("agents.worktree.hooks.{event}");
+        env.rimz()
+            .args(["config", "set", &key, "echo hook"])
+            .assert()
+            .success();
+        env.rimz()
+            .args(["config", "get", &key])
+            .assert()
+            .success()
+            .stdout(contains("echo hook"));
+    }
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn config_set_sandbox_probes_bwrap_before_writing() {
     let env = Env::new();

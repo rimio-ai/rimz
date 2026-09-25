@@ -195,6 +195,9 @@ aggressive_resize = true
 # dir = "../{repo}-worktrees"          # where RimZ-owned Git worktrees live; {repo} is the root basename
 # base = "head"                        # "head", "fresh", or any Git ref for new worktrees
 # Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
+## [agents.worktree.hooks]
+## created = "~/bin/rimz-init-target"  # after seeding; failure rolls back the tree
+## removed = "~/bin/rimz-drop-target"  # after removal; failure is best-effort
 
 # [agents.attention]
 # active_grace_secs = 180              # silence credited to active time before the estimate pauses
