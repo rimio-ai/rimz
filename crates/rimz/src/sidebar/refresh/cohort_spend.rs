@@ -1,6 +1,6 @@
 //! Producer-published lifetime effort for collapsed team cohorts.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -103,15 +103,14 @@ fn compute_cohort_effort(
         );
     }
     let slots = crate::agents::attribution::slot_groups(agents, &lifetimes);
-    let active = active_time::read_for_keys(
+    let active = active_time::display_secs_for_keys(
         runtime,
         agents
             .iter()
             .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
-    )
-    .into_iter()
-    .map(|record| ((record.kind.clone(), record.agent_id.clone()), record))
-    .collect::<HashMap<_, _>>();
+        now,
+        active_grace_secs,
+    );
     let mut computed = BTreeMap::new();
 
     for group in groups.iter().filter(|group| group.collapses()) {
@@ -148,14 +147,8 @@ fn compute_cohort_effort(
             {
                 cohort.seats.insert(record.agent_id.to_string(), seat);
             }
-            let slot_active = records
-                .iter()
-                .filter_map(|record| {
-                    active
-                        .get(&(record.kind.clone(), record.agent_id.clone()))
-                        .map(|active| active.display_secs(now, active_grace_secs))
-                })
-                .reduce(u64::saturating_add);
+            let slot_active =
+                crate::agents::attribution::seat_active_secs(records.iter().copied(), &active);
             cohort.active_secs = match (cohort.active_secs, slot_active) {
                 (Some(total), Some(value)) => Some(total.saturating_add(value)),
                 (Some(total), None) => Some(total),
@@ -372,6 +365,16 @@ mod tests {
             ("current", None, 100, 1.0, 10),
             ("current-child", Some("current"), 101, 3.0, 30),
         ] {
+            let start = jiff::Timestamp::from_second(registered_at).unwrap();
+            active_time::record_progress(&runtime, "opencode", session_id, start, 180).unwrap();
+            active_time::record_stop(
+                &runtime,
+                "opencode",
+                session_id,
+                start + jiff::SignedDuration::from_secs(input),
+                180,
+            )
+            .unwrap();
             let data = serde_json::json!({
                 "cost": cost,
                 "modelID": "gpt",
@@ -426,6 +429,7 @@ mod tests {
         let computed = compute(&mut memo);
         let effort = &computed[&group.key];
         assert_eq!(effort.cost_usd, Some(4.0));
+        assert_eq!(effort.active_secs, Some(40));
         assert_eq!(effort.tokens.input, 40);
         assert_eq!(effort.tokens.output, 4);
         assert_eq!(
