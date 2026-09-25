@@ -180,6 +180,22 @@ pub fn read_for_keys<'a>(
         .with(|cache| sidecar::read_for_keys(&runtime.active_time_dir, keys, cache))
 }
 
+/// Project retained session records to estimated seconds at one instant.
+pub fn display_secs_for_keys<'a>(
+    runtime: &RuntimePaths,
+    keys: impl IntoIterator<Item = (&'a str, &'a str)>,
+    now: Timestamp,
+    grace_secs: u32,
+) -> crate::agents::attribution::ActiveSecs {
+    read_for_keys(runtime, keys)
+        .into_iter()
+        .map(|record| {
+            let seconds = record.display_secs(now, grace_secs);
+            ((record.kind, record.agent_id), seconds)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Barrier};

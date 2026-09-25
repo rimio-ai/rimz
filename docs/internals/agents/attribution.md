@@ -31,7 +31,7 @@ Figures stay whole-identity, so an identity observed on several branches can rep
 
 One contributor can span several session records. Compaction continuations and `/clear` conversations mint fresh session ids while the contributor keeps its seat, so the fold groups records by provider kind plus the first stable slot available, in this order: team and role, launch group and ordinal, explicit name, pane id, then session id.
 
-Pane-backed children join the seat that launched them, with child continuations deduplicated, and merge with provider-native children into one subagent breakdown grouped by task. An orphan whose parent has left the audit rollup is omitted. A member's `cost_usd` and token split are all-in across its seat and every child; active time, asks, tool calls, compactions, and messages count the seat only.
+Pane-backed children join the seat that launched them, with child continuations deduplicated, and merge with provider-native children into one subagent breakdown grouped by task. An orphan whose parent has left the audit rollup is omitted. A member's `cost_usd`, token split, and active time are all-in across its seat and every child; asks, tool calls, compactions, and messages count the seat only.
 
 ## Where the figures come from
 
@@ -43,7 +43,7 @@ Each figure keeps its source boundary.
 | prompts, agent messages, asks | RimZ's append-only conversation transcript, per session |
 | sent messages | sender handles on received agent messages, matched by `agents::petname::sender_handle` (role, name, kind) and channel, not the displayed list handle; best-effort |
 | tokens and dollars, model rows | each session's provider transcript, parsed once by its adapter and priced through the shared price book |
-| estimated active seconds | per-session active-time sidecars, under the configured silence grace ([model.md](./model.md#activity-clocks)) |
+| estimated active seconds | per-session active-time sidecars, projected by `store::active_time::display_secs_for_keys` under the configured silence grace and summed across the seat and launched children by `agents::attribution::seat_active_secs` ([model.md](./model.md#activity-clocks)); provider-native children pulse their parent's record |
 
 Matched system nudges are sender-stamped and excluded from prompt counts. System nudges written before sender stamping existed cannot be told apart from user prompts.
 

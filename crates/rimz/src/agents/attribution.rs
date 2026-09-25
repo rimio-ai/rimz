@@ -25,6 +25,24 @@ pub use super::spending::EffortTokens as TokenSplit;
 const ATTRIBUTION_SCHEMA: u8 = 7;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
+/// Estimated active seconds by provider session.
+pub type ActiveSecs = BTreeMap<(AgentKind, AgentSessionId), u64>;
+
+/// Sum retained active-time credit for the supplied seat records.
+pub fn seat_active_secs<'a>(
+    records: impl IntoIterator<Item = &'a AgentState>,
+    active_secs: &ActiveSecs,
+) -> Option<u64> {
+    records
+        .into_iter()
+        .filter_map(|agent| {
+            active_secs
+                .get(&(agent.kind.clone(), agent.agent_id.clone()))
+                .copied()
+        })
+        .reduce(u64::saturating_add)
+}
+
 /// Current lane lifetimes, resolved once from a report's full record set.
 pub struct LaneLifetimes {
     by_path: HashMap<PathBuf, LaneLifetime>,
@@ -204,7 +222,7 @@ pub struct AttributionRequest<'a> {
     pub subagents: &'a [&'a AgentState],
     pub transcript: &'a [TranscriptEntry],
     pub me: Option<&'a AgentSessionId>,
-    pub active_secs: &'a BTreeMap<(AgentKind, AgentSessionId), u64>,
+    pub active_secs: &'a ActiveSecs,
     pub pricing_cache_path: &'a Path,
     pub require_contribution: bool,
     pub scope: AttributionScope,
@@ -539,16 +557,10 @@ fn member(
             effort.cost_usd = spending::sum_optional_cost(effort.cost_usd, child_model.cost_usd);
         }
     }
-    let active_secs = seat
-        .identity
-        .iter()
-        .filter_map(|agent| {
-            request
-                .active_secs
-                .get(&(agent.kind.clone(), agent.agent_id.clone()))
-                .copied()
-        })
-        .reduce(u64::saturating_add);
+    let active_secs = seat_active_secs(
+        seat.identity.iter().chain(&seat.children).copied(),
+        request.active_secs,
+    );
     AttributionMember {
         handle: crate::address::agent_handle(latest, peers, false),
         role: latest.role.clone(),

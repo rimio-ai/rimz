@@ -749,7 +749,10 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     let agents = [parent, child];
     let refs = agents.iter().collect::<Vec<_>>();
     let lifetimes = unbounded_lifetimes(agents.iter());
-    let active_secs = BTreeMap::from([((agents[0].kind.clone(), agents[0].agent_id.clone()), 10)]);
+    let active_secs = BTreeMap::from([
+        ((agents[0].kind.clone(), agents[0].agent_id.clone()), 10),
+        ((agents[1].kind.clone(), agents[1].agent_id.clone()), 20),
+    ]);
     let pricing_cache_path = dir.path().join("prices.json");
     let report = build(AttributionRequest {
         agents: &refs,
@@ -775,7 +778,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     assert_eq!(member.tool_calls, 1);
     assert_eq!(member.compactions, 0);
     assert_eq!(member.last_activity, parent_last_activity);
-    assert_eq!(member.active_secs, Some(10));
+    assert_eq!(member.active_secs, Some(30));
     assert_eq!(member.asks, 0);
     assert_eq!(member.messages, MessageCounts::default());
     assert_eq!(
@@ -790,7 +793,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     assert_eq!(report.totals.tokens.input, 30);
     assert_eq!(report.totals.tokens.output, 3);
     assert_eq!(report.groups[0].totals.tool_calls, 1);
-    assert_eq!(report.totals.active_secs, Some(10));
+    assert_eq!(report.totals.active_secs, Some(30));
     assert_eq!(report.totals.asks, 0);
     assert_eq!(report.totals.messages, MessageCounts::default());
     assert_eq!(
@@ -817,6 +820,27 @@ fn launched_child_effort_folds_into_the_parent_seat() {
         ]
     );
     assert_eq!(report.models, member.models);
+}
+
+#[test]
+fn seat_active_secs_sums_retained_identity_and_child_records() {
+    let parent = agent(Path::new("/repo"), "parent", "claude", 10);
+    let mut child = agent(Path::new("/repo"), "child", "claude", 20);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    let missing = agent(Path::new("/repo"), "missing", "claude", 30);
+    let active = ActiveSecs::from([
+        ((parent.kind.clone(), parent.agent_id.clone()), 10),
+        ((child.kind.clone(), child.agent_id.clone()), 20),
+    ]);
+    assert_eq!(seat_active_secs([&parent, &child], &active), Some(30));
+    assert_eq!(
+        seat_active_secs([&parent, &child, &missing], &active),
+        Some(30)
+    );
+    assert_eq!(seat_active_secs([&missing], &active), None);
+    assert_eq!(seat_active_secs([&parent], &ActiveSecs::new()), None);
 }
 
 #[test]
