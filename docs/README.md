@@ -44,6 +44,8 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 
 ## Reference
 
+- [Shared language servers](./reference/cli/lsp.md): semantic code navigation, server inspection, and configuration.
+
 - [Reference index](./reference/README.md): every reference page by topic.
 - [CLI](./reference/cli.md): the command map and conventions, with a page per scene: [getting started](./reference/cli/getting-started.md), [remote](./reference/cli/remote.md), [web](./reference/cli/web.md), [agents](./reference/cli/agents.md), [subagents](./reference/cli/subagents.md), [teams](./reference/cli/teams.md), [asks](./reference/cli/asks.md), [message](./reference/cli/message.md), [wait](./reference/cli/wait.md), [transcript](./reference/cli/transcript.md), [pane](./reference/cli/pane.md), [events](./reference/cli/events.md), [accounts](./reference/cli/accounts.md), [stats](./reference/cli/stats.md), [budget](./reference/cli/budget.md), [providers](./reference/cli/providers.md), [channels](./reference/cli/channel.md), [worktrees](./reference/cli/worktree.md), [loop](./reference/cli/loop.md), [hooks and trust](./reference/cli/hooks-trust.md), [config](./reference/cli/config.md), and [maintenance](./reference/cli/maintenance.md).
 - [Agent support](./reference/agent-support.md): per-agent status, integration surface, and permission-mode mapping for every built-in adapter, including Kimi Code and Grok Build.

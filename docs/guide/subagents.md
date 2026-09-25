@@ -67,6 +67,20 @@ Omit the field and delegation is unrestricted; `subagents: [explorer]` allows on
 
 Every agent RimZ launches on Claude, Codex, Qwen, or Droid learns its list at launch, in the system prompt RimZ appends: the children its profile allows, with their descriptions. When the list is `[]`, it is told to do the work itself; when nothing is configured, it is told that you enable children by adding `subagents/<name>.md` files. The paragraph points the agent at a skill named `rimz-subagents` for how to launch and collect. Other providers get no paragraph and learn their list from `rimz subagents profiles`, which applies the same filter when an agent runs it.
 
+## Share code navigation
+
+A native language-server tool can start a full index for every agent and child, multiplying memory use even when they work on the same checkout. Configure a [shared language server](../reference/cli/lsp.md#configuration) to give them one saved-file index instead. Put the server entry in your per-machine config, or review and trust the project's entry, then launch the team as usual. RimZ starts it before panes open if memory permits; children join it rather than starting another.
+
+Agents with a server receive its name and a pointer to `rimz-lsp` in their launch reminder. You can inspect or stop it from your shell:
+
+```sh
+rimz lsp list
+rimz lsp refs GcReport
+rimz lsp stop --server rust
+```
+
+Stopping leaves agents running; their next query says to use grep. Servers also stop after their last agent's release grace or under memory pressure. Remove the config entry to disable sharing on future launches. Claude's native LSP tool is denied when sharing is configured; OpenCode and Grok do not yet have verified native-server suppression. The [reference](../reference/cli/lsp.md) lists supported queries and required-server waiting policy.
+
 ## Watch and answer children
 
 A child is an agent in your room, so the [sidebar](./sidebar.md#the-agent-card) treats it as one, nested one level under its parent. The parent's card gains a `⧉ subagents (N)` line with what the children cost; click it to list each child with its state, the task it was given, and, while it runs, its model, tokens, and elapsed time. The parent's dollar figure already includes its children's spend.

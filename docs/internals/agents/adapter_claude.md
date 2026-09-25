@@ -100,6 +100,8 @@ Install writes one block per event in `CLAUDE_HOOKS`, each marked `_rimz_managed
 
 ## Launch
 
+Any effective shared-language-server configuration invokes `disable_native_lsp_args`, merging `LSP` into one `--disallowedTools` flag before subagent lockdown adds `Agent`. The denial is config-driven even when optional admission is refused; profiles' `--tools` allowlists remain unchanged. The [pinned precedence probe](../../externals/agent-adapter/claude-reference.md#native-lsp-denial) verifies why this prevents private servers. Lifecycle and reminders belong to [shared language servers](../lsp.md).
+
 The spec's `LaunchSpec` and `LaunchCapability` render every Claude launch:
 
 | Launch concern | Claude argv or behaviour |

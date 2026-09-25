@@ -23,7 +23,9 @@ Detail lives in four places, narrowing as you go:
 
 ## Runtime shape
 
-There is no general RimZ daemon. Every durable write is a short-lived CLI or hook subprocess, and the sidebar is a native pane that reads store state in process.
+There is no general RimZ daemon. Store writes belong to CLI or hook subprocesses, and the sidebar is a native pane that reads store state in process.
+
+Optional [shared language servers](./docs/internals/lsp.md) each have a hidden `rimz lsp serve` broker: one stdio server and a nonce-checked Unix query socket per checkout/server key. Agent wrappers hold process leases; the broker exits after their release grace, retaining stopped tombstones while leases live. Admission and the memory watchdog coordinate across rooms with a machine lock. Brokers write their own runtime entries, learned cost history, and diagnostics, never agent store state.
 
 The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar elder. Its fires run in transient user scopes under systemd and in their own process groups, so they and any room they birth outlive the tick. Spawn and scheduled check-only fires open their root's room if needed, leaving its elder to own later occurrences. Signals follow the same shape: whichever process observes the event (`rimz events emit`, the sidebar producer's forge diff, a lifecycle write) fires the tasks listening for it in place, and a `rimz wait -- <command>` watcher is a detached subprocess holding a runtime lock for its command's lifetime ([loops.md](./docs/internals/harness/loops.md#the-signal-vocabulary)).
 
@@ -63,13 +65,14 @@ With machine `agents.isolation = "sandbox"`, the agent exec wrapper launches its
 | Sidebar | rendering, focus affordances, human actions through the CLI | durable state files |
 | ttyd browser daemons | authenticated writable transport; no-auth input-blocked transport | workspace identity, session validation, broadcast allowlist, durable state |
 | Agents | native UI, prompts, sandboxing, bypass behaviour | RimZ store state |
+| Language-server broker | server stdio, saved-file watcher, query socket, process leases, memory accounting | agent state, panes, room lifecycle |
 | Host | process resurrection, OS sandboxing | workspace state |
 
 ### State on disk
 
 Everything durable lives under one home, `~/.rimz` (`RIMZ_HOME` relocates it), and `rimz paths` prints each location for the current project. Machine preferences are `config.toml`, `theme.toml`, `loop.toml`, and `remote.toml` at its top. The same root holds `agents/`, `subagents/`, `teams/`, and `traits/`: Markdown definitions resolved on config load, plus the shared `skills/` library. `RIMZ_AGENTS_HOME` relocates those trees and the library alone, overriding `RIMZ_HOME` for them. The home is never a project marker: a `.rimz/` that is the home is not read as project config. [Definitions](./docs/reference/definitions.md) documents the source format; project `.rimz/config.toml` remains TOML and trust-tracked.
 
-State is five tiers of plain files, scoped by what each one outlives. [`disk/paths.rs`](./crates/rimz/src/disk/paths.rs) (`StatePaths`, `RuntimePaths`) owns the path constants, and [store.md → What is on disk](./docs/internals/store.md#what-is-on-disk) is the file-by-file catalog; this is the map.
+State is tiers of plain files, scoped by what each one outlives. [`disk/paths.rs`](./crates/rimz/src/disk/paths.rs) (`StatePaths`, `RuntimePaths`) owns the path constants, and [store.md → What is on disk](./docs/internals/store.md#what-is-on-disk) is the file-by-file catalog; this is the map.
 
 ```text
 workspace store         ~/.rimz/ws/<basename>-<hex>/
@@ -85,12 +88,16 @@ per-workspace runtime   $XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/  (or /tmp/rim
 shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
   the account-global election locks and the spending service's versioned socket
 
+language-server runtime $XDG_RUNTIME_DIR/rimz/lsp/
+  machine admission lock and queue; per-key entries, sockets, publication locks
+
 machine-wide persistent ~/.rimz/{accounts,builds,loops,logs,web,cache}/
   accounts/<kind>/<name>/ provider homes RimZ placed, builds/<build_id>/rimz
   immutable executable generations, the loop registry, append-only logs, the
   browser daemon pid/port records and credential, the broadcast room allowlist,
   and cache/ for everything RimZ can rebuild: downloaded assets, the presence
   plugin, and cache/providers/ (accounts, rate limits, credits, spend, pricing)
+  ~/.rimz/lsp-history.jsonl holds learned peaks; logs/lsp.log.jsonl holds evidence
 ```
 
 One rule sorts a new file into a tier: **persistent tiers hold what must survive a reboot, runtime tiers hold what is meaningless without the process that wrote it.** A lock, a socket, or a cache that only speeds the next read is runtime and dies with the session; a durable record, or a cache the dashboard needs to open warm, is persistent. Two persistent dirs sit at the ends of that scale: `cache/` is safe to delete, at the cost of a cold provider dashboard and one full spending walk, and `accounts/` holds provider logins (credentials, settings, transcripts) that nothing can regenerate and no RimZ command removes. The store tier's durability contract (temp-file-plus-rename, the framed log, and the write classes) is [store.md](./docs/internals/store.md); the provider files are [providers.md](./docs/internals/agents/providers.md) and [spending.md](./docs/internals/agents/spending.md); the loop registry is [loops.md](./docs/internals/harness/loops.md); executable staging is [sidebar.md → Build promotion](./docs/internals/sidebar/sidebar.md#build-promotion).

@@ -12,6 +12,7 @@ This page indexes every command and states the rules that hold across all of the
 | Reach a room from elsewhere | `remote`, `web` | [Remote](./cli/remote.md) · [Web](./cli/web.md) |
 | Run and steer agents | `agents`, `subagents`, `teams`, `asks`, `answer`, `message` (alias `msg`), `wait`, `transcript`, `pane`, `events` | [Agents](./cli/agents.md) · [Subagents](./cli/subagents.md) · [Teams](./cli/teams.md) · [Asks](./cli/asks.md) · [Message](./cli/message.md) · [Wait](./cli/wait.md) · [Transcript](./cli/transcript.md) · [Pane](./cli/pane.md) · [Events](./cli/events.md) |
 | Provider accounts | `accounts` | [Accounts](./cli/accounts.md) |
+| Shared code navigation | `lsp` | [Language servers](./cli/lsp.md) |
 | Cost, usage, and budgets | `stats`, `providers`, `budget` | [Stats](./cli/stats.md) · [Providers](./cli/providers.md) · [Budget](./cli/budget.md) |
 | Lanes, worktrees, and schedules | `channel`, `worktree`, `loop` | [Channels](./cli/channel.md) · [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
 | Hooks and trust | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
@@ -82,6 +83,7 @@ Commands that report an outcome add their own codes, so a script branches withou
 | `agents -p`, `agents wait`, `subagents wait`, `teams wait`, `message --wait` | The run's status: `0` completed, `1` failed, `123` verify failed, `124` timed out, `125` budget exceeded, `130` canceled | [Supervised runs](./cli/agents.md#supervised-runs--p) |
 | `subagents <PROFILE>`, `subagents fanout` | `125` a room or account cap, or a Qwen quota window, refused the launch; with `--wait`, the run's status | [Launch one child](./cli/subagents.md#launch-one-child) |
 | `loop fire` | An `--agent` action's run status as above; `130` when Ctrl-C interrupts the check; `0` when a gate or check skips the action | [Fire and stop a run](./cli/loop.md#fire-and-stop-a-run) |
+| `lsp` queries | `3` no server or stopped; `4` still indexing after the readiness wait | [Shared language servers](./cli/lsp.md#exit-codes) |
 | `answer` | `2` the target is not asking, its ask is no longer current, or its pane cannot be reached; `3` the answer is invalid for the ask or the agent does not support structured answers; `4` the agent did not confirm before the deadline | [Answer an ask](./cli/asks.md#answer-an-ask) |
 
 ### Durations

@@ -50,6 +50,7 @@ Loop engineering composes those primitives into a routine. `rimz loop` drives su
 
 Each line is a decision a reader might challenge, with the reason on the same line.
 
+- **Shared language servers are launch-time enrichment.** Off until configured, one server serves each checkout/server key read-only, bounded by agent leases and memory pressure rather than idleness. Required policy gates admission, not agent survival after a server stops ([language servers](./docs/internals/lsp.md)).
 - **One root, one room.** A workspace root (a git repo whose worktrees group inside the room, a project-marker directory, or any directory, `$HOME` and `/` included) maps to one workspace, one mux session, one store, one sidebar, and one live backend, and a rival mux over the same path is refused while the first lives. Ten agents across five branches stay scannable as one room, and a headless box with no source control gets the same room.
 - **A pane's workspace is the session it lives in.** Session birth pins the workspace identity into the mux environment, and commands honor the verified pin before re-deriving from cwd, so an agent in a nested repo still writes to the room's store. Overlapping rooms are legal, and a deliberate per-repo room stays one `rimz start` away.
 - **The store owns durability.** Agent state and event history outlive detach, sidebar reload, sidebar crash, and no-client mode; the sidebar renders the store, and correctness lives one layer down.

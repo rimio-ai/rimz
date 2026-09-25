@@ -6,6 +6,10 @@ This doc is the single home for everything OpenCode-specific. OpenCode's integra
 
 Only the registry reaches the concrete adapter. Account probes, database access, payloads, transcript paging, and spend stay private to the OpenCode adapter; other modules consume the provider-neutral capabilities.
 
+## Shared language servers
+
+Shared-server gap: `permission.lsp` controls a tool permission, with no verified effect here on OpenCode's own server processes. `disable_native_lsp_args` remains the capability's no-op default; configuring [shared servers](../lsp.md) does not suppress OpenCode's native language servers.
+
 ## Hooks and lifecycle
 
 Native surface → internal mapping; the upstream hooks, bus payloads, SQLite schema, and auth shape are in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).
