@@ -215,6 +215,7 @@ fn in_process_write_heartbeat_is_fresh_and_round_trips() {
         "rimz-test",
         &socket,
         None,
+        None,
     )
     .expect("write heartbeat");
 
@@ -226,6 +227,54 @@ fn in_process_write_heartbeat_is_fresh_and_round_trips() {
     assert_eq!(hb.mux, MuxName::Zellij);
     assert_eq!(hb.wakeup_socket, socket);
     assert!(hb.build.is_some(), "heartbeat carries the running build id");
+}
+
+#[test]
+fn live_sidebar_size_reads_a_fresh_renderer_in_the_session() {
+    use crate::wakeup::heartbeat::SidebarSize;
+
+    let h = Harness::new();
+    h.ensure_runtime();
+    let write = |instance: &SidebarInstanceId, session: &str, size: Option<SidebarSize>| {
+        write_heartbeat(
+            &h.runtime,
+            h.workspace_id.clone(),
+            instance,
+            MuxName::Tmux,
+            session,
+            &h.runtime
+                .sock_dir
+                .join(format!("{}.sock", instance.short())),
+            None,
+            size,
+        )
+        .expect("write heartbeat");
+        h.runtime.sidebar_heartbeat_path(instance)
+    };
+    let size = SidebarSize { cols: 57, rows: 41 };
+    assert_eq!(live_sidebar_size(&h.runtime, "rimz-test"), None);
+
+    write(&instance("01"), "rimz-test", None);
+    write(
+        &instance("02"),
+        "other",
+        Some(SidebarSize { cols: 90, rows: 20 }),
+    );
+    assert_eq!(
+        live_sidebar_size(&h.runtime, "rimz-test"),
+        None,
+        "an unsized renderer or another session's renderer does not speak for this session",
+    );
+
+    let sized = write(&instance("03"), "rimz-test", Some(size));
+    assert_eq!(live_sidebar_size(&h.runtime, "rimz-test"), Some(size));
+
+    make_stale(&sized);
+    assert_eq!(
+        live_sidebar_size(&h.runtime, "rimz-test"),
+        None,
+        "a stale renderer is gone"
+    );
 }
 
 #[test]

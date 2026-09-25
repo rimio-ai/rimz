@@ -369,7 +369,7 @@ surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 231
+surface-budget = 232
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -441,7 +441,7 @@ surface-budget = 25
 
 [[module]]
 path = "crates/rimz/src/wakeup"
-surface-budget = 26
+surface-budget = 27
 
 [[module]]
 path = "crates/rimz/src/worktree"

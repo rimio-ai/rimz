@@ -263,7 +263,7 @@ Unless marked, these live in the workspace runtime directory.
 
 | File | Purpose |
 | --- | --- |
-| `heartbeat/sidebar.<instance>.json` | Liveness for election, launch gating, and wakeup fanout, named by the full instance id. The eldest fresh heartbeat is the producer. |
+| `heartbeat/sidebar.<instance>.json` | Liveness for election, launch gating, and wakeup fanout, named by the full instance id, plus the renderer's pane size that `rimz sidebar frame` draws at. The eldest fresh heartbeat is the producer. |
 | `sock/sidebar.<short-id>.sock` | The renderer's wakeup datagram socket, named by the short instance id to fit the AF_UNIX path limit. |
 | `focus-anchor.json` | The durable jump intent, viewport offset, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
 | `unread.json`, `read-marks/sidebar.<instance>.json` | Open unread episodes and the per-renderer read receipts every fold merges. |

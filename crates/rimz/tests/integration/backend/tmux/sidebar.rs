@@ -652,6 +652,7 @@ fn fresh_foreign_producer_still_repairs_tmux_session_view() {
         "prior-zellij",
         &runtime.sock_dir.join("foreign.sock"),
         Some(PaneId::from_parts(MuxName::Zellij, "terminal_7")),
+        None,
     )
     .expect("foreign heartbeat");
     assert!(rimz::sidebar::fresh_sidebar_present(&runtime));

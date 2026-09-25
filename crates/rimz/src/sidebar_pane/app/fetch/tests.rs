@@ -560,6 +560,7 @@ impl ConsumerFixture {
             "rimz-test",
             &runtime.sock_dir.join("elder.sock"),
             None,
+            None,
         )
         .unwrap();
         Self {
