@@ -1,4 +1,4 @@
-//! One system reminder carrying team context, model identity, git state, sandbox view, and subagent policy.
+//! One system reminder carrying team context, model identity, git state, sandbox view, subagent policy, and shared language servers.
 
 use std::path::Path;
 
