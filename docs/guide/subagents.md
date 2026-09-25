@@ -69,7 +69,7 @@ Every agent RimZ launches on Claude, Codex, Qwen, or Droid learns its list at la
 
 ## Share code navigation
 
-A native language-server tool starts a full index for every agent and child, so a parent with three children can hold four copies of the same index over one checkout. A [shared language server](./lsp.md) gives them one instead: configure it once, launch as usual, and RimZ starts it before panes open if memory permits. A child never starts a server of its own; it joins its parent's when one runs, and its launch reminder names it the same way.
+A native language-server tool starts a full index for every agent and child, so a parent with three children can hold four copies of the same index over one checkout. A [shared language server](./lsp.md) gives them one instead: configure it once, launch as usual, and the first query starts it if memory permits. A child joins its parent's shared server, including while dormant, and its launch reminder names it the same way. Its queries can wake that server rather than starting a private index.
 
 ## Watch and answer children
 

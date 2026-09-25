@@ -14,11 +14,11 @@ RimZ resolves every launch's checkout before any pane opens ([fleet.md § One la
 
 **Enrichment, never a precondition by default.** Memory refusal of an optional server, or a server that dies later, leaves agents on grep. The fail-fast invariant still governs configuration: a configured server whose binary is missing or whose command is untrusted refuses at the launch entry point with the fix. Memory refusal is visible to the human ([Visibility](#visibility)).
 
-**Decided before the agent exists.** A server starts only at a fleet launch entry point, before panes open. RimZ never starts one mid-session. So every agent learns at launch whether a server serves its checkout, through its launch reminder, and nothing about its skills or tools changes afterward.
+**Registered at launch, started on demand.** Optional launches create a dormant broker, not a server process. The first query requests memory admission and startup; required launches admit and start eagerly. Launch reminders name dormant and running servers alike, so no tool change is needed when a server restarts.
 
 **One server per key, shared read-only.** The key is (canonical checkout root, server name). Agents only query; none sends document edits. The disk is the one truth, and the broker keeps the server's view of it current ([Freshness](#freshness)).
 
-**Agents own the lifetime.** Leases keep a server alive without an idle timeout. Memory pressure, a hand stop, checkout removal, or a crash can end it early; queries do not restart it.
+**Agents own the broker lifetime.** Leases keep the broker alive. Idle timeout, memory pressure, eviction, a hand stop, a crash, or a team's Done flip stops its server back to dormant; the next query can restart it. Checkout removal and lease expiry end the broker.
 
 **Memory is the only admission budget.** No concurrency cap. A server starts only when its estimate fits under free memory with the reserve intact.
 
@@ -26,13 +26,13 @@ RimZ resolves every launch's checkout before any pane opens ([fleet.md § One la
 
 ### Which launches start a server
 
-Every fleet launch entry point except a subagent launch runs admission for its checkout before opening panes: `rimz agents`, `rimz teams`, cohort and lane resume, rebirth recovery, and supervised `-p` runs. It runs after the worktree exists (step 5 of the launch) and before the exec wrappers compile (step 7), once per launch rather than once per cell. A subagent works in its parent's checkout ([subagents.md § The child works where its parent works](./harness/subagents.md#the-child-works-where-its-parent-works)), so it joins its parent's server when one runs and never starts one.
+Every fleet launch entry point except a subagent launch registers brokers for its checkout before opening panes: `rimz agents`, `rimz teams`, cohort and lane resume, rebirth recovery, and supervised `-p` runs. It runs after the worktree exists (step 5 of the launch) and before the exec wrappers compile (step 7), once per launch rather than once per cell. A subagent works in its parent's checkout ([subagents.md § The child works where its parent works](./harness/subagents.md#the-child-works-where-its-parent-works)), so it joins its parent's broker, dormant or running; its queries can wake that server too.
 
 Admission for a live key joins it without starting another server. The wrapper registers its lease separately after launch-plan application. `cli/lsp_admission.rs::admit` is the one helper at the five admission sites; rebirth obtains distinct roots through `RebirthPlan::checkout_roots`.
 
 ### Admission
 
-Admission reads free memory and the machine-wide registry under one lock (`disk::lock`, at a machine-level path under `disk::paths::runtime_rimz_root`), so two teams launching at once cannot both pass on the same free gigabytes.
+Admission reads free memory and the machine-wide registry under one lock (`disk::lock`, at a machine-level path under `disk::paths::runtime_rimz_root`), so simultaneous starts cannot both pass on the same free gigabytes. Optional launch skips memory admission; the broker's main thread runs it on the first query and every restart. Required launch admits its first lifetime before spawning the eager broker.
 
 ```text
 available  = MemAvailable, capped by the cgroup's memory.max headroom when RimZ runs under one
@@ -41,16 +41,18 @@ reserve    = max(reserve-percent × MemTotal / 100, reserve-min)
 admit when available − committed − estimate ≥ reserve
 ```
 
-`committed` is what makes the check honest: a server at 4.4 GB that has reached 6.3 GB before will grow again, and that growth is already spoken for. `estimate` is the learned peak for this (project, server, settings) triple, or the configured `memory-estimate` before any history exists ([Learned cost](#learned-cost)).
+`committed` is what makes the check honest: a server at 4.4 GB that has reached 6.3 GB before will grow again, and that growth is already spoken for. Dormant entries reserve nothing. `estimate` is re-read for each lifetime: the learned peak for this (project, server, settings) triple, or the configured `memory-estimate` before any history exists ([Learned cost](#learned-cost)).
 
 What happens on a refusal depends on the server's `policy`:
 
 | Policy | Refused admission |
 | --- | --- |
-| `optional` (default) | The launch proceeds without that server. The launch reminder omits its name, and a diagnostic record names the shortfall. |
+| `optional` (default) | Launch does not check memory. A query-time refusal leaves the broker dormant, returns exit 3, and records the shortfall diagnostically. A later query retries admission. |
 | `required` | The launch waits in first-come order among required waiters before panes open. Admission polls every five seconds; the launcher's terminal prints the wait when the queue position changes. There is no pre-launch sidebar row. At `wait-timeout` the launch fails with the fix, naming memory needed, memory free, and the holders. Optional launches do not queue behind required ones. |
 
-`required` gates admission only. A required server killed later for memory degrades like an optional one; RimZ never stops agents to honour it. Joining a stopped entry prints its reason for either policy, without waiting or restarting. Close its remaining agents and relaunch to get a new server after the tombstone exits.
+`required` gates initial launch admission only. Joining a live broker, including a dormant one, does not repeat eager admission. After a stop, either policy restarts lazily and a memory refusal returns exit 3; RimZ never stops agents to honour required policy.
+
+`admission::admit_query` can evict other servers to make room. Candidates must be ready, have a live broker, have been ready for at least five minutes, and have no request in the last 120 seconds (measured from the later of readiness and last request). Starting servers and the requesting broker are protected. Candidates follow `registry::kill_order`; admission stops one at a time with reason `evicted`, waits up to three seconds for token-guarded server death without a kill fallback, then re-samples and stops as soon as the request fits. Required launch admission does not evict.
 
 Admission reuses the launcher's lenient machine config and skips effective config loading when neither machine nor project declares servers. Recovery warns and skips admission on any admission error, so a config, registry, or memory-sampling failure never blocks Recover; other launch paths retain their strict effective-config checks. Supervised launches finish provider preflights before admission starts a server.
 
@@ -58,11 +60,13 @@ Admission reuses the launcher's lenient machine config and skips effective confi
 
 `cli/agents_cmd/exec.rs::run_exec` registers leases after `launch_plan::apply`; `settle_after_exit` explicitly releases them on resident-wrapper paths. Each lease carries an optional launch id, wrapper pid, and process start token. Recovery of older sessions without launch ids still takes a lease; absent and null ids are accepted on the wire. The broker reaps dead owners every five seconds, rejecting pid reuse; direct `exec` preserves the wrapper pid. It does not read store or pane state. Worktree removal calls `registry::stop_checkout` best-effort, and the broker checks root existence every five seconds as a backstop.
 
-The last release arms a 60-second grace, canceled by a new lease, to cover restart's gap. A fork takes its own lease. A broker never leased exits after five minutes. There is no idle timeout. Queue tickets likewise carry an owner pid/start token; abandoned tickets are removed, and dropping the launcher's `WaitQueue` removes its ticket.
+The last release arms a 60-second grace, canceled by a new lease, to cover restart's gap, including while dormant. A fork takes its own lease. A broker never leased exits after five minutes. Queue tickets likewise carry an owner pid/start token; abandoned tickets are removed, and dropping the launcher's `WaitQueue` removes its ticket.
+
+Housekeeping runs every five seconds whether dormant or running. A ready server with no query in flight stops with reason `idle` once `idle-timeout` has elapsed since the later of readiness and last request. Starting and indexing servers are protected. `team_stage::open_stage` best-effort stops the board's checkout with reason `team done` at the terminal return, under the board lock; errors only log at debug level and never fail the flip. Worktree removal uses `checkout removed`. That reason, `released`, and `never leased` are terminal: the broker publishes `Stopped`, closes requests, removes its directory, and exits.
 
 ### Readiness
 
-Admission waits up to five seconds under the admission lock for the broker's entry, not its index. After `initialize`/`initialized`, open progress tokens mean `indexing`. The server becomes `ready` when all tokens close and at least one has ended, or after ten seconds without progress. Later progress can return it to `indexing`. A query waits at most 30 seconds for readiness, then reports elapsed indexing time rather than an empty result for an unfinished index.
+Launch admission waits up to five seconds under the admission lock for the broker's entry, not its index. After `initialize`/`initialized`, open progress tokens mean `indexing`. The server becomes `ready` when all tokens close, at least one has ended, and two seconds have passed since the last progress event; without any progress, the fallback is ten seconds after initialization. The settle window prevents a short initial token from claiming readiness before indexing begins. Later progress can return it to `indexing`. Each lifetime resets readiness and start/ready timestamps. A query waits at most 30 seconds for startup and readiness, then reports elapsed time for this server lifetime rather than an empty result for an unfinished index.
 
 ## Memory pressure
 
@@ -72,22 +76,17 @@ Every live broker samples free memory on its five-second housekeeping cadence. B
 
 ### Who is killed first
 
-The order preserves the servers agents actually use:
-
-1. Servers with zero requests, longest-running first. A team that has not queried its server in a long time probably has a task that does not need one, and the newest zero-request server is the one most likely still to be used.
-2. Servers with requests, longest since the last request first, breaking ties by start time.
-
-A killed server is not restarted. Its registry entry becomes a tombstone carrying the reason, and it stays until the key's last lease is released.
+`registry::kill_order` is plain least-recently-used order: last request, falling back to start time, then start time, checkout root, and server name. The watchdog considers starting, indexing, and ready servers, never dormant ones. Unlike admission eviction, real memory pressure ignores age and idle floors. Both paths share `watchdog::stop_victim`; neither publishes the victim's entry or writes its history. The owning broker records the lifetime's end and becomes dormant.
 
 ### The agent's view of a kill
 
-Agents are not messaged. The next `rimz lsp` query against a tombstoned key exits with a distinct exit code and one line: the server stopped, why, and to use grep. An agent that never queried again never pays for the notice; one that had been using the server adapts on its next call.
+Agents are not messaged. The next query against a dormant key requests a restart. It answers normally if ready within the wait, exits 4 if still indexing, or exits 3 if memory admission refuses. A query interrupted by shutdown can fail; the next call can retry without relaunching the agent.
 
 ## Learned cost
 
-`peak_rss_kb` is the monotonic maximum of summed kernel `VmHWM` over the process tree (`proc::tree_peak_rss_kb`), floored by sampled tree RSS through `lsp::memory::tree_peak_kb`. Housekeeping and watchdog stops refresh it. This catches spikes shorter than the five-second sampling interval. Summed high-water marks can overcount processes that peaked at different times and omit children that have exited; the sampled floor preserves previously observed usage. Off Linux, only the sampled floor is available.
+`peak_rss_kb` is the monotonic maximum of summed kernel `VmHWM` over the process tree (`proc::tree_peak_rss_kb`), floored by sampled tree RSS through `lsp::memory::tree_peak_kb`. Broker housekeeping refreshes it; the watchdog also samples the victim's peak for its diagnostic without publishing the entry. This catches spikes shorter than the five-second sampling interval. Summed high-water marks can overcount processes that peaked at different times and omit children that have exited; the sampled floor preserves previously observed usage. Off Linux, only the sampled floor is available.
 
-`lsp/history.rs` appends project, checkout, server, peak tree RSS, time to first ready, settings hash, and stop reason to rotating `lsp-history.jsonl` under the RimZ home. Admission takes the maximum of the last five records for the same (project, server, settings) triple, falling back to `memory-estimate` without history. The project is the workspace's `launch_repo_root()`, resolved by `cli/lsp_admission.rs::admit`, so checkouts of one project share learned costs. It travels through admission and the serve request into the registry entry, allowing both the broker and watchdog to record it; the registry key remains checkout/server. Records without a project are skipped when estimating, without migration. The settings hash covers command argv and canonical initialization options. This is an admission input, not a diagnostic log.
+The owning broker appends one `lsp/history.rs::Record` per server lifetime to rotating `lsp-history.jsonl` under the RimZ home: project, checkout, server, lifetime peak tree RSS, spawn-to-first-ready time, settings hash, stop reason, and `dormant_ms` (the preceding stop-to-start gap, absent for a first start and defaulted for old records). Entry peak RSS remains monotonic across lifetimes, but history uses each lifetime's peak. Admission takes the maximum of the last five records for the same (project, server, settings) triple, falling back to `memory-estimate` without history. Several short lifetimes can therefore age out an older high peak; the watchdog remains the backstop. The project is the workspace's `launch_repo_root()`, resolved by `cli/lsp_admission.rs::admit`, so checkouts of one project share learned costs. The registry key remains checkout/server. Records without a project are skipped when estimating, without migration. The settings hash covers command argv and canonical initialization options. This is an admission input, not a diagnostic log.
 
 ## Freshness
 
@@ -97,11 +96,11 @@ Agents are not messaged. The next `rimz lsp` query against a tombstoned key exit
 
 A language server speaks to exactly one client over stdio. Each server therefore gets one broker: a hidden `rimz lsp serve` process that owns the server's stdio, listens on a per-key Unix socket, serializes nothing it does not have to, and speaks the `rimz lsp` query protocol to callers.
 
-It is spawned through `child_process::spawn_detached_rimz` and calls `setsid`. The broker remains after server shutdown to answer from a tombstone while leases live. It is a per-server process bounded by leases, not a room-wide service ([fleet.md](./harness/fleet.md#the-rules-that-shape-it)). Standard threads own socket handling and Content-Length transport; request IDs match concurrent replies. The reader answers configuration, workspace-folder, progress-creation, and capability-registration requests.
+It is spawned through `child_process::spawn_detached_rimz` and calls `setsid`. `broker::serve` loops over server lifetimes, remaining dormant between them while leases live. Each lifetime recreates the child, transport, and saved-file watcher. It is a per-key process bounded by leases, not a room-wide service ([fleet.md](./harness/fleet.md#the-rules-that-shape-it)). Standard threads own socket handling and Content-Length transport; request IDs match concurrent replies. The reader answers configuration, workspace-folder, progress-creation, and capability-registration requests.
 
-The 0600 newline-JSON socket accepts `hello`, `lease`, `release`, `query`, `stop`, and `status`; responses carry the nonce. Queries carry `method`, `params`, and `wait_ms`, returning raw LSP `result`, elapsed `indexing`, or `error`. Only queries increment counters. The CLI owns verb semantics, not the broker.
+The 0600 newline-JSON socket accepts `hello`, `lease`, `release`, `query`, `stop`, and `status`; responses carry the broker's nonce across lifetimes. Queries carry `method`, `params`, and `wait_ms`, returning raw LSP `result`, elapsed `indexing`, `refused` with a `Shortfall`, or `error`. A dormant query signals a start request and waits for readiness, terminal stop, a new refusal, or its deadline. An RAII in-flight counter covers the whole query, including that wait, protecting it from idle stop. Only queries increment counters. The CLI owns verb semantics, not the broker.
 
-The broker answers `hello` before publishing its first entry, without taking `admission.lock`: admission holds that lock while waiting for publication. Server pid/token remain nullable until spawn. Per-key publication locking prevents a racing refresh from overwriting a stop.
+The broker answers `hello` before publishing its first entry, without taking `admission.lock`: launch admission holds that lock while waiting for publication. Server pid/token are absent while dormant or stopped. Only the owning broker publishes its entry. The main thread owns admission and server lifetimes and never holds the model mutex while waiting on the machine lock, a socket, or process death. The socket thread only signals starts and stops; it never spawns or kills processes.
 
 If the initial entry is not published within five seconds, optional admission returns a refusal and records it diagnostically while the launch proceeds. Required admission fails with the server name and a command/configuration fix. Stop reasons use `registry::StopReason`, serialized as the existing human-readable strings in registry, socket, and history records. The broker acknowledges both capability registration and unregistration with `null`.
 
@@ -114,13 +113,13 @@ Two traps follow from spawning:
 
 | Record | Where | Lifetime | Truth |
 | --- | --- | --- | --- |
-| Registry entry per key: root/server, broker and server pids/tokens, nonce, state (`starting`, `indexing`, `ready`, or a `stopped` tombstone), start/ready times, estimate/settings hash, request count, last request time, peak RSS, leases | machine-level, under `disk::paths::runtime_rimz_root`, atomic writes | through lease lifetime and shutdown grace; runtime files do not survive reboot | matching broker process start token retains ownership; a nonce-checked socket serves requests |
+| Registry entry per key: root/server, broker and server pids/tokens, nonce, state (`dormant`, `starting`, `indexing`, `ready`, or terminal `stopped`), lifetime start/ready times, estimate/settings hash, request count, last request time, peak RSS, restarts, leases | machine-level, under `disk::paths::runtime_rimz_root`, atomic writes | through lease lifetime and shutdown grace; runtime files do not survive reboot | matching broker process start token retains ownership; a nonce-checked socket serves requests |
 | Cost history | machine-level under the RimZ home, rotating JSONL | durable | append-only |
-| Kills, refusals, and queue timeouts | `diag/` diagnostic records | durable | append-only |
+| Kills, evictions, refusals, and queue timeouts | `diag/` diagnostic records | durable | append-only |
 
 The registry is machine-level rather than per-room because admission budgets one machine's memory across every room on it.
 
-`disk::paths::lsp_runtime_dir()` holds `admission.lock`, owner-tagged `queue/` tickets, and one directory per key: the first 16 hex characters of the canonical checkout SHA-256 plus server name. Each directory has `entry.json`, `sock`, and a publication lock. There is no shared registry JSON file. `registry::sweep_locked`, used by admission, `list`, and `stop`, retains entries while the broker process token is live even when hello fails; an unavailable socket must not orphan a live server. Live tombstones remain. Socket paths are validated against the Unix path budget.
+`disk::paths::lsp_runtime_dir()` holds `admission.lock`, owner-tagged `queue/` tickets, and one directory per key: the first 16 hex characters of the canonical checkout SHA-256 plus server name. Each directory has `entry.json`, `sock`, and a publication lock. There is no shared registry JSON file. `registry::sweep_locked`, used by admission, `list`, and `stop`, retains entries while the broker process token is live even when hello fails; an unavailable socket must not orphan a live server. Socket paths are validated against the Unix path budget.
 
 ## Configuration
 
@@ -131,6 +130,7 @@ A room with no `[lsp.servers.*]` table has the feature off. Server definitions m
 reserve-percent = 10
 reserve-min = "8G"
 kill-floor-percent = 5
+idle-timeout = "10m"
 
 [lsp.servers.rust]
 command = ["rust-analyzer"]            # trust-hashed in project config
@@ -148,7 +148,7 @@ Trusted project entries replace machine entries whole by name. The empty trust p
 
 ## What agents see
 
-**The launch reminder.** `launch_plan::compile` reads `registry::live_server_names` without writing. [`launch_reminders.rs`](../../crates/rimz/src/harness/launch_reminders.rs) names the servers after the subagent paragraph and points to `Skill(rimz-lsp)`, including for children. Without a server there is no paragraph.
+**The launch reminder.** `launch_plan::compile` reads `registry::live_server_names` without writing. [`launch_reminders.rs`](../../crates/rimz/src/harness/launch_reminders.rs) names dormant and running servers after the subagent paragraph and points to `Skill(rimz-lsp)`, including for children. It explains first-query startup and the possible wait. Without a broker there is no paragraph.
 
 **The skill.** `rimz-lsp` lives in the user's skill library beside `rimz-subagents`, not in this repository. It teaches the query verbs, the exit codes, and the grep fallback. Under host isolation the skill stays visible even when no server runs, because profile skill lists apply only under sandbox isolation ([sandbox.md § Profile skill views](./sandbox.md#profile-skill-views)); the CLI's no-server exit covers that case.
 
@@ -177,18 +177,17 @@ An ambiguous symbol name lists its candidates with positions instead of guessing
 | Exit | Meaning |
 | --- | --- |
 | 0 | Answered; `no results` is a real answer. |
-| 3 | No server for this checkout, or a tombstone; the one line names the reason. |
+| 3 | No server for this checkout, memory admission refused, or terminal shutdown; the one line names the reason. |
 | 4 | Still indexing after the readiness bound; the line gives the elapsed time. |
 
-`rimz lsp list` shows every machine key with state, tree RSS, the maximum of recorded and live tree peak for live entries, requests, last request, and leases; stopped entries retain the recorded peak. `rimz lsp stop` stops one by hand. The [reference](../reference/cli/lsp.md) owns flags.
+`rimz lsp list` shows every machine key with state, tree RSS, the maximum of recorded and live tree peak for running servers, requests, last request, restarts, and leases; dormant and stopped entries show no live RSS or PEAK. A first lazy start is not a restart. `rimz lsp stop` makes a server dormant until the next query. The [reference](../reference/cli/lsp.md) owns flags.
 
 The external skill's model-invocation switches are ready for a separate release action. This implementation does not change them.
 
 ## Visibility
 
-Automation here is an internal repair, not a user assist, so it keeps diagnostic records rather than assist records: every refused admission, queue timeout, and kill appends one with the numbers behind it. `rimz lsp list` and `rimz doctor` surface current servers, tombstones, and the last refusal, so a human can see why an agent was on grep.
+Automation here is an internal repair, not a user assist, so it keeps diagnostic records rather than assist records: every refused admission, queue timeout, kill, and eviction appends one with the numbers behind it. `evicted` carries the watchdog's kill details plus `for: {root, server}` identifying the requester. Idle stops and restarts need no diagnostic; history carries them. `rimz lsp list` and `rimz doctor` surface running and dormant servers and the last refusal; doctor treats dormant as neutral. Query memory-short errors come from the broker's refusal, never an inference from diagnostics.
 
 ## Open questions
 
-- **Admission eviction.** Admission never kills today. A `required` launch queued behind zero-request servers that have run for a long time may deserve the right to evict them.
 - **A hard cap.** On Linux with systemd, a per-server cgroup with `MemoryMax` near 1.3 × the learned peak would give exact accounting and a kill that can only land on the server. The watchdog and `oom_score_adj` are the first version; the cgroup is a later refinement.

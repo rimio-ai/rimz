@@ -166,7 +166,7 @@ aggressive_resize = true
 # older_than = "7d"                   # age cutoff for `rimz gc` (s/m/h/d)
 
 [lsp]
-# Shared language servers are off until a server is declared. Memory policy is machine-only; trusted projects may override server entries by name.
+# Shared language servers are off until declared, then start on the first query. Memory and idle policy are machine-only; trusted projects may override server entries by name.
 # reserve-percent = 10                # keep at least this percentage of total memory free
 # reserve-min = "8G"                   # minimum reserve; G is decimal, GiB is binary
 # kill-floor-percent = 5              # stop shared servers below this free-memory percentage
@@ -177,7 +177,7 @@ aggressive_resize = true
 ## root-markers = ["Cargo.toml"]
 # Include functions and raise rust-analyzer's 128-result fuzzy-search cap for symbol-name queries.
 ## init-options = { checkOnSave = false, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
-## policy = "optional"                # "required" waits for memory before opening panes
+## policy = "optional"                # lazy start; "required" admits and starts before panes open
 ## wait-timeout = "10m"                # required-server queue deadline
 ## memory-estimate = "8G"              # used until this server's peak has been measured
 
