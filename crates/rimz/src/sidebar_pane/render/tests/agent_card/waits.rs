@@ -427,6 +427,13 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
             armed_at: None,
         },
         PendingWait {
+            name: "negated".to_owned(),
+            trigger: PendingWaitTrigger::Check {
+                command: "! systemctl is-active --quiet abyssal-verify-boros".to_owned(),
+            },
+            armed_at: None,
+        },
+        PendingWait {
             name: "file".to_owned(),
             trigger: PendingWaitTrigger::File {
                 path: "app.log".into(),
@@ -451,9 +458,11 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
         .position(|line| line.contains("check · test"))
         .unwrap();
     assert!(rows[start + 1].contains("      test -f ready"));
-    assert!(rows[start + 2].contains("file · app.log changes"));
-    assert!(rows[start + 3].contains("file · app.log matches `ready`"));
-    assert_eq!(rows.len(), start + 4);
+    assert!(rows[start + 2].contains("check · systemctl"));
+    assert!(rows[start + 3].contains("      ! systemctl is-active --quiet abyssal"));
+    assert!(rows[start + 4].contains("file · app.log changes"));
+    assert!(rows[start + 5].contains("file · app.log matches `ready`"));
+    assert_eq!(rows.len(), start + 6);
 }
 
 #[test]

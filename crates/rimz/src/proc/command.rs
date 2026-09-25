@@ -6,7 +6,7 @@ use std::ops::Range;
 /// and through known wrappers to the real command: `npm` for `sudo npm install
 /// …`, `codex` for `node /usr/bin/codex`, `opencode` for `bun
 /// /usr/bin/opencode`, `codex` for `rimz agents exec codex`, and `cargo` for
-/// `/usr/bin/cargo build`.
+/// `/usr/bin/cargo build`, and `systemctl` for `! systemctl is-active …`.
 pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program_info(command).program).to_owned()
 }
@@ -97,6 +97,13 @@ enum Wrapper {
 }
 
 const WRAPPERS: &[(&str, Wrapper)] = &[
+    (
+        "!",
+        Wrapper::Prefix {
+            value_flags: &[],
+            skip_operand: false,
+        },
+    ),
     (
         "sudo",
         Wrapper::Prefix {
@@ -568,6 +575,19 @@ mod tests {
             assert_eq!(program_label(command), "codex", "{command}");
         }
         assert_eq!(program_label("env ./a=b arg"), "a=b");
+        for (command, label) in [
+            ("! cargo build", "cargo"),
+            ("! ! cargo build", "cargo"),
+            ("! /usr/bin/cargo build", "cargo"),
+            (
+                "! systemctl is-active --quiet abyssal-verify-boros",
+                "systemctl",
+            ),
+            ("!cargo build", "!cargo"),
+            ("a && ! b", "a"),
+        ] {
+            assert_eq!(program_label(command), label, "{command}");
+        }
     }
 
     #[test]
@@ -594,7 +614,7 @@ mod tests {
             ("sh -c '(cd /repo && cargo build)'", "sh"),
             ("sh -c '{ cargo build; }'", "sh"),
             ("sh -c 'exec > /tmp/log; cargo build'", "sh"),
-            ("sh -c '! cargo build'", "sh"),
+            ("sh -c '! cargo build'", "cargo"),
             ("sh -c 'while true; do sleep 1; done'", "sh"),
             ("sh -c 'if [ -f x ]; then cargo build; fi'", "sh"),
             ("sh -c '\"while\" arg'", "while"),
@@ -790,6 +810,11 @@ mod tests {
             command_program_basename("sudo -E -u root /usr/bin/npm i -g @openai/codex"),
             "sudo -E -u root npm i -g @openai/codex"
         );
+        assert_eq!(
+            command_program_basename("! /usr/bin/systemctl x"),
+            "! systemctl x"
+        );
+        assert_eq!(command_program_basename("! systemctl x"), "! systemctl x");
         assert_eq!(
             command_program_basename("cargo run --manifest-path /a/b/Cargo.toml"),
             "cargo run --manifest-path /a/b/Cargo.toml"

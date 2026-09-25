@@ -248,6 +248,15 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             "wakes after nc -z localhost 3000",
         ),
         (
+            PendingWaitTrigger::Check {
+                command: "! systemctl is-active --quiet abyssal-verify-boros".into(),
+            },
+            "check",
+            "systemctl",
+            Some("! systemctl is-active --quiet abyssal-verify-boros"),
+            "wakes after ! systemctl is-active --quiet abyssal-verify-boros",
+        ),
+        (
             PendingWaitTrigger::Command {
                 command: String::new(),
             },
@@ -332,10 +341,10 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
                 serde_json::json!({"kind": "file", "path": "/repo/logs/app.log", "grep": "listening on"})
             );
         }
-        if matches!(trigger, PendingWaitTrigger::Check { .. }) {
+        if let PendingWaitTrigger::Check { command } = &trigger {
             assert_eq!(
                 serde_json::to_value(&trigger).unwrap(),
-                serde_json::json!({"kind": "check", "command": "/usr/bin/nc -z localhost 3000"})
+                serde_json::json!({"kind": "check", "command": command})
             );
         }
         let wait = PendingWait {
