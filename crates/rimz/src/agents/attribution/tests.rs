@@ -1550,3 +1550,21 @@ fn sent_messages_alone_are_a_contribution() {
     assert_eq!(report.totals.agents, 1);
     assert_eq!(report.groups[0].members[0].messages.to_teammates, 1);
 }
+
+#[test]
+fn petname_sent_messages_are_credited_despite_short_list_handle() {
+    let mut idle = agent(Path::new("/repo/lane"), "idle", "claude", 10);
+    idle.name = Some("calm-fox".to_owned());
+    let mut sent = TranscriptEntry::new(
+        at(50),
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("receiver"),
+        TranscriptKind::Message,
+        "hello".to_owned(),
+    );
+    sent.channel = Some("lane".to_owned());
+    sent.from = Some("@calm-fox#lane".to_owned());
+    let report = build_with(&[idle], &[], &[sent]);
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(report.groups[0].members[0].messages.to_teammates, 1);
+}

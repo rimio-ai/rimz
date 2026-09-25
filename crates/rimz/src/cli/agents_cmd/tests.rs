@@ -1752,6 +1752,57 @@ mod render {
     use super::*;
 
     #[test]
+    fn agents_table_shows_petnames_profiles_and_kinds() {
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut first =
+            agent_with_status("first", AgentStatus::Running, TurnPhase::Reasoning, 1_000);
+        first.name = Some("calm-fox".to_owned());
+        first.profile = Some("planner".to_owned());
+        first.kind_ordinal = Some(1);
+        let mut second = first.clone();
+        second.agent_id = "second".into();
+        second.name = Some("bright-lark".to_owned());
+        second.kind_ordinal = Some(2);
+        let mut bare = first.clone();
+        bare.agent_id = "bare".into();
+        bare.name = Some("swift-otter".to_owned());
+        bare.profile = None;
+        bare.kind_ordinal = Some(3);
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
+            vec![first, second, bare],
+            now,
+        );
+        let text = render_agents_text(&snapshot, now, 180);
+        assert_eq!(
+            text.lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            [
+                "HANDLE", "PROFILE", "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"
+            ],
+            "{text}"
+        );
+        for (handle, profile) in [
+            ("@calm-fox", "planner"),
+            ("@bright-lark", "planner"),
+            ("@swift-otter", "-"),
+        ] {
+            let row = text
+                .lines()
+                .find(|line| line.contains(handle))
+                .expect("petname row");
+            assert_eq!(
+                row.split_whitespace().take(3).collect::<Vec<_>>(),
+                [handle, profile, "claude"],
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
     fn agents_table_projects_public_row_contract() {
         let now = Timestamp::from_second(2_000).unwrap();
         let mut failed = agent_with_turn_error(

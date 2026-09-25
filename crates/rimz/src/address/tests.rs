@@ -514,18 +514,26 @@ fn handle_is_shortest_unambiguous_and_round_trips() {
     solo.kind_ordinal = Some(1);
     let mut a = agent("claude", "session-a", Some("main"), "terminal_2");
     a.kind_ordinal = Some(1);
+    a.name = Some("calm-fox".to_owned());
     let mut b = agent("claude", "session-b", Some("main"), "terminal_3");
     b.kind_ordinal = Some(2);
+    b.name = Some("bright-lark".to_owned());
     snapshot.agents = vec![solo, a, b];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
     // The only claude in `docs` reads as the bare kind; two claudes sharing
-    // `main` each grow the disambiguating ordinal.
+    // `main` each show their pet name.
     assert_eq!(agent_handle(peers[0], &peers, true), "@claude#docs");
-    assert_eq!(agent_handle(peers[1], &peers, true), "@claude-1#main");
-    assert_eq!(agent_handle(peers[2], &peers, true), "@claude-2#main");
+    assert_eq!(agent_handle(peers[1], &peers, true), "@calm-fox#main");
+    assert_eq!(agent_handle(peers[2], &peers, true), "@bright-lark#main");
     // The grouped form drops the channel — it is the section header.
-    assert_eq!(agent_handle(peers[1], &peers, false), "@claude-1");
+    assert_eq!(agent_handle(peers[1], &peers, false), "@calm-fox");
+    assert_eq!(
+        resolve_one(&snapshot, "@claude-2#main", None, None)
+            .unwrap()
+            .agent_id,
+        peers[2].agent_id
+    );
 
     // Every rendered handle resolves back to exactly its own agent.
     for &agent in &peers {
@@ -555,6 +563,18 @@ fn absent_durable_agent_keeps_its_best_effort_handle() {
 }
 
 #[test]
+fn absent_agent_prefers_petname_to_ordinal() {
+    let mut offline = agent("claude", "offline", Some("auth"), "terminal_1");
+    offline.name = Some("calm-fox".to_owned());
+    offline.kind_ordinal = Some(2);
+    let peer = agent("claude", "peer", Some("auth"), "terminal_2");
+    let other = agent("claude", "other", Some("auth"), "terminal_3");
+    let peers = [&peer, &other];
+    assert_eq!(agent_handle(&offline, &peers, false), "@calm-fox");
+    assert_eq!(agent_handle(&offline, &peers, true), "@calm-fox#auth");
+}
+
+#[test]
 fn handle_falls_back_to_petname_without_an_ordinal() {
     let mut snapshot = empty_snapshot();
     // Two codex sessions share a channel but carry no ordinal — the stable
@@ -573,6 +593,45 @@ fn handle_falls_back_to_petname_without_an_ordinal() {
 #[test]
 fn message_header_parser_round_trips_attributed_senders() {
     let body = "ship it";
+    for (role, name, profile, expected) in [
+        (Some("coder"), Some("calm-fox"), Some("coder"), "@coder"),
+        (None, Some("writer"), None, "@writer (claude)"),
+        (None, None, None, "@claude"),
+        (None, None, Some("brainstormer"), "@claude (brainstormer)"),
+        (
+            None,
+            Some("calm-fox"),
+            Some("planner"),
+            "@calm-fox (planner)",
+        ),
+        (
+            Some("writer"),
+            Some("calm-fox"),
+            Some("planner"),
+            "@writer (planner)",
+        ),
+    ] {
+        let sender = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("claude"),
+            name: name.map(str::to_owned),
+            profile: profile.map(str::to_owned),
+            role: role.map(str::to_owned),
+            channel: None,
+        };
+        let prompt = message_header(&sender, &[], None).unwrap() + body;
+        assert_eq!(
+            prompt,
+            format!("Type: AGENT_MESSAGE\nFrom: {expected}\nContent:\n{body}")
+        );
+        assert_eq!(
+            parse_message_header(&prompt),
+            Some((
+                HeaderKind::Agent,
+                expected.split(' ').next().unwrap().to_owned(),
+                body.to_owned()
+            ))
+        );
+    }
     let sender = MessageSender::Agent {
         kind: AgentKind::new_unchecked("codex"),
         name: None,
@@ -948,11 +1007,11 @@ fn message_header_uses_live_handle_and_channel_only_when_crossing_channels() {
 
     assert_eq!(
         message_header(&sender, &peers, Some("docs")).unwrap(),
-        "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\n"
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (claude)\nContent:\n"
     );
     assert_eq!(
         message_header(&sender, &peers, Some("main")).unwrap(),
-        "Type: AGENT_MESSAGE\nFrom: @claude#docs\nContent:\n"
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#docs (claude)\nContent:\n"
     );
 }
 
@@ -975,7 +1034,7 @@ fn message_header_uses_explicit_live_handle() {
 
     assert_eq!(
         message_header(&sender, &peers, Some("docs")).unwrap(),
-        "Type: AGENT_MESSAGE\nFrom: @writer\nContent:\n"
+        "Type: AGENT_MESSAGE\nFrom: @writer (claude)\nContent:\n"
     );
 }
 
@@ -1054,7 +1113,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
 
     assert_eq!(
         message_header(&sender, &peers, Some("main")).unwrap(),
-        "Type: AGENT_MESSAGE\nFrom: @claude-2\nContent:\n"
+        "Type: AGENT_MESSAGE\nFrom: @bright-lark (claude)\nContent:\n"
     );
 }
 
@@ -1071,33 +1130,36 @@ fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
 
     assert_eq!(
         message_header(&sender, &peers, Some("main")).unwrap(),
-        "Type: AGENT_MESSAGE\nFrom: @reviewer#docs\nContent:\n"
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas#docs (reviewer)\nContent:\n"
     );
     assert_eq!(
         message_header(&sender, &peers, Some("docs")).unwrap(),
-        "Type: AGENT_MESSAGE\nFrom: @reviewer\nContent:\n"
+        "Type: AGENT_MESSAGE\nFrom: @lucid-atlas (reviewer)\nContent:\n"
     );
 }
 
 #[test]
-fn message_header_fallback_uses_profile_before_petname() {
+fn message_header_uses_live_petname_and_profile_label() {
     let mut snapshot = empty_snapshot();
     let mut other_planner = agent("claude", "session-other", Some("auth"), "terminal_2");
     other_planner.name = Some("bright-lark".to_owned());
     other_planner.profile = Some("planner".to_owned());
-    snapshot.agents = vec![other_planner];
+    let mut live = agent("claude", "session-sender", Some("auth"), "terminal_1");
+    live.name = Some("calm-fox".to_owned());
+    live.profile = Some("planner".to_owned());
+    snapshot.agents = vec![other_planner, live];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::store::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("calm-fox".to_owned()),
-        profile: Some("planner".to_owned()),
+        profile: Some("stale-profile".to_owned()),
         role: None,
         channel: Some("auth".to_owned()),
     };
 
     assert_eq!(
         message_header(&sender, &peers, Some("auth")).unwrap(),
-        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\n"
+        "Type: AGENT_MESSAGE\nFrom: @calm-fox (planner)\nContent:\n"
     );
 }
 
@@ -1850,7 +1912,7 @@ fn role_handle_survives_an_unclaimed_launch_card_in_the_lane() {
         handles,
         [
             "@reviewer#attribution-counts",
-            "@claude-76#attribution-counts"
+            "@expert-meter#attribution-counts"
         ]
     );
     for (agent, handle) in peers.iter().zip(&handles) {

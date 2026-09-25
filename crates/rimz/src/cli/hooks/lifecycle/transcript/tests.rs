@@ -205,7 +205,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.prompt = Some(
-        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst\n\nType: AGENT_MESSAGE\nFrom: @reviewer\nContent:\nsecond"
+        "Type: AGENT_MESSAGE\nFrom: @calm-fox (planner)\nContent:\nfirst\n\nType: AGENT_MESSAGE\nFrom: @reviewer\nContent:\nsecond"
             .to_owned(),
     );
 
@@ -220,6 +220,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
 
     let entries = rimz::transcript::read_all(store.paths()).unwrap();
     assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].from.as_deref(), Some("@calm-fox"));
     assert_eq!(entries[0].message_id.as_ref(), Some(&first.message_id));
     assert_eq!(entries[0].enqueued_at, Some(first.enqueued_at));
     assert!(entries[0].at > entries[0].enqueued_at.unwrap());

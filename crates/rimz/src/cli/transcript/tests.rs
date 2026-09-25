@@ -1568,6 +1568,34 @@ fn focus_keeps_messages_sent_by_the_focal_agent() {
 }
 
 #[test]
+fn focus_and_speaker_use_petname_sender_address() {
+    let mut focal = log_entry("claude", "sender", TranscriptKind::Assistant, None, "start");
+    focal.name = Some("calm-fox".to_owned());
+    focal.profile = Some("planner".to_owned());
+    let sent = log_entry(
+        "codex",
+        "receiver",
+        TranscriptKind::Message,
+        Some("@calm-fox"),
+        "ack",
+    );
+    let identities = build_identities(&[focal.clone(), sent.clone()]);
+    let scope = Scope {
+        channel: Some("chat".to_owned()),
+        channel_filter: Some("chat".to_owned()),
+        focus: Some("@calm-fox".to_owned()),
+        focus_keys: Some(BTreeSet::from([entry_key(&focal)])),
+        include_channel: false,
+    };
+    let sent_chat = chat_entry_for_log_entry(&sent, &identities, false);
+    assert!(entry_matches_focus(&sent, &sent_chat, &scope, &identities));
+    assert_eq!(
+        chat_entry_for_log_entry(&focal, &identities, false).from,
+        "@calm-fox"
+    );
+}
+
+#[test]
 fn chat_renders_configured_zone_and_day_boundaries() {
     let today = jiff::civil::date(2026, 6, 28);
     let out = render(
