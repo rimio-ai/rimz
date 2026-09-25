@@ -21,6 +21,7 @@ The rule that resolves this: **the durable run record is the run; the pane, the 
 | [`harness/run/report.rs`](../../../crates/rimz/src/harness/run/report.rs) | The `joined_at` and `report_message_id` stamps that joins and subagent digests share. |
 | [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | The receiving half of the blocking wait: the per-run datagram socket, frame validation, the poll loop, and the timeout and cancellation transitions it drives. |
 | [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | Producer-side deadline detection and spawning the detached timeout helper. |
+| [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) | Pure warning, stop-channel, and grace-bound kill policy. |
 | [`harness/prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | `retry_prompt` and `verify_reprompt`, beside the system-prompt composition [fleet.md](./fleet.md#system-prompt-composition) owns. |
 | [`cli/supervised.rs`](../../../crates/rimz/src/cli/supervised.rs) | Command-neutral effects: agent and program preflight, the pane's exec argv, stop and cancel, the SIGINT cancellation flag, `--timeout` parsing, and the stream-json prompt reader. |
 | [`cli/supervised/run.rs`](../../../crates/rimz/src/cli/supervised/run.rs) | The driver `run_supervised` that both `agents -p` and loop fires call: preparation, placement, the attempt loop, the verify loop, and the retry loop. |
@@ -45,7 +46,7 @@ The rule that resolves this: **the durable run record is the run; the pane, the 
 | Outcome | `status`, `last_message`, `verify`, `failure_tail`, `transcript_path` |
 | Accounting | `cost_usd`, `input_tokens`, `output_tokens` |
 | Reporting | `joined_at`, `report_message_id` ([subagents.md](./subagents.md#the-lifecycle-end-to-end)) |
-| Timing | `started_at`, `deadline_at`, `updated_at`, `completed_at`, `parked_at` |
+| Timing | `started_at`, `deadline_at`, `updated_at`, `completed_at`, `parked_at`; subagent ladder: `timeout`, `warn`, `grace`, `deadline_notice_at` ([subagents.md](./subagents.md#the-lifecycle-end-to-end)) |
 
 `agent_id` starts empty. The first lifecycle observation that matches the run fills it, which is how the record binds to a session whose id did not exist when the record was written. `transcript_path` points at the provider's own session file, which streaming reads directly; the RimZ transcript log that `rimz transcript` renders is a different file. The wrapper stamps `provider_pid` and its process-start token when it spawns the provider, so a later signal cannot reach a reused PID.
 
@@ -64,7 +65,7 @@ Live agent state stays out of the record. `rimz agents show <run-id>` reads the 
 | `Completed` | `0` | a root `TurnEnded` that did not error |
 | `Failed` | `1` | a root `TurnEnded` that errored, a session `Ended` before any turn result, the wrapper's process-death backstop, or a pane that failed to open |
 | `VerifyFailed` | `123` | the verify command stayed red through `--max-attempts` total turns |
-| `TimedOut` | `124` | the blocking waiter's `--timeout` elapsed, or the timeout helper found `deadline_at` overdue |
+| `TimedOut` | `124` | the blocking waiter's `--timeout` elapsed, or the timeout helper found `deadline_at + grace` overdue (absent grace is zero) |
 | `BudgetExceeded` | `125` | the budget-park helper stopped the run's agent mid-turn for crossing a dollar cap: its launch `--budget`, the turn cap, or the room or account cap ([budget.md § The park](./budget.md#the-park)) |
 | `Canceled` | `130` | `rimz agents stop`, Ctrl+C on a blocking caller, a `TurnInterrupted` signal, a subagent's parent ending, or store reset |
 
@@ -138,7 +139,7 @@ The record on disk stays the truth. `wait_terminal` reloads it every `RUN_WAIT_P
 
 The waiter also writes two transitions itself. When the SIGINT flag from `install_run_interrupt_flag` is set, it calls `run::cancel_and_wake`, which wakes only on a newly written cancellation. When the caller's `--timeout` elapses, it writes `TimedOut`.
 
-A second path enforces `deadline_at` without any waiter. On its heavy-lane refresh, the elected sidebar producer calls `run_timeout::enforce`, which lists run records and spawns the hidden `agents run-timeout` helper for each `Pending` or `Running` record past its deadline. This covers background runs, which have no waiter, and blocking runs whose caller died. The helper rechecks the deadline under the workspace lock (`timeout_if_due`), writes `TimedOut`, wakes any waiter, sends `SIGTERM` to a subagent's recorded provider process when the PID and start token still match, and reclaims the pane unless the run is a kept subagent. Detection stays read-only in the sidebar process; the short-lived helper owns every mutation.
+A second path enforces deadlines without any waiter. On its heavy-lane refresh, the elected sidebar producer calls `run_timeout::enforce`, which lists run records and spawns the hidden `agents run-timeout` helper when `deadline::kill_due` or `deadline::stop_due_by_pane` is true. This covers background runs, which have no waiter, and blocking runs whose caller died. Subagents have a [warning and reporting ladder](./subagents.md#the-lifecycle-end-to-end); other supervised runs have no grace. At the kill bound the helper rechecks under the workspace lock (`timeout_if_due`), writes `TimedOut`, wakes any waiter, sends `SIGTERM` to a subagent's recorded provider process when the PID and start token still match, and reclaims the pane unless the run is a kept subagent. Detection stays read-only in the sidebar process; the short-lived helper owns every mutation.
 
 `deadline_at` is fixed when the attempt starts, and a verify re-prompt does not move it, so the helper can time out a run in the middle of its verify rounds even though each blocking wait gets the full `--timeout`.
 

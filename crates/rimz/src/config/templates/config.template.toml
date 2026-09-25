@@ -208,7 +208,9 @@ aggressive_resize = true
 # archive_after_secs = 86400           # a card idle this many seconds parks below hot and warm work
 
 # [agents.subagents]
-# timeout = "30m"                      # wall-clock deadline for supervised child runs
+# timeout = "30m"                      # tell supervised children to stop at this work deadline
+# warn = ["6m", "3m"]                  # warning offsets before the deadline; [] disables warnings
+# grace = "3m"                         # reporting time after the deadline; "0s" kills at it
 
 # [agents.commands]
 # Commands are shell-split raw command panes. They are not addressable agents.

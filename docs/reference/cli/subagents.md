@@ -1,6 +1,6 @@
 # Subagents
 
-`rimz subagents` lets an agent hand one bounded prompt to a supervised child agent and collect the result. The child is a full RimZ agent: its own pane, provider process, durable run record, petname address, and a card nested under its parent in the sidebar. A launch is the same supervised background run as `rimz agents <PROFILE> <PROMPT> -p --bg --timeout 30m`, with the supervision flags chosen for the caller. The [subagents guide](../../guide/subagents.md) teaches the workflow, and [subagents.md](../../internals/harness/subagents.md) describes the mechanics.
+`rimz subagents` lets an agent hand one bounded prompt to a supervised child agent and collect the result. The child is a full RimZ agent: its own pane, provider process, durable run record, petname address, and a card nested under its parent in the sidebar. A launch uses the supervised background runner of `rimz agents <PROFILE> <PROMPT> -p --bg`, with a child-specific deadline ladder. The [subagents guide](../../guide/subagents.md) teaches the workflow, and [subagents.md](../../internals/harness/subagents.md) describes the mechanics.
 
 Launching, joining, and stopping need a calling agent that RimZ can identify, through its launch environment or its live process ancestry. The read-only verbs work from any shell:
 
@@ -41,7 +41,9 @@ rimz subagents wait "$first" "$second"
 | `--cwd <DIR>` | parent's checkout | Working directory for the child; the room stays the caller's. Uses the same [path resolution as agent launches](./agents.md#channel-worktree-and-placement). |
 | `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
 | `--json` | off | With `--wait`, print the full run record instead of the petname and answer. Refused without `--wait`. |
-| `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Bound pending or running work, not a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
+| `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Tell pending or running children to stop at this deadline; kill them `grace` later. Does not bound a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
+| `--warn <OFFSETS>` | `[agents.subagents] warn`, `6m,3m` | Comma-separated warning offsets before the deadline; `none` disables warnings. |
+| `--grace <DURATION>` | `[agents.subagents] grace`, `3m` | Time to finish reporting after the deadline; `0s` kills at the deadline. |
 | `--keep` | off | Disable automatic completion cleanup and cleanup on parent exit; hold the pane after provider exit. Explicit stop and the run timeout still apply. |
 | `--isolation host\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | A sandboxed parent refuses a host override; host defaults clamp to sandbox with a note. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
@@ -91,12 +93,14 @@ JSON
 | `prompt_file` | one of the two | File whose contents become the assignment; a relative path resolves from the current directory |
 | `description` | no | Child card description and fleet report task label |
 | `timeout` | no | This child's deadline, as a duration string (`"45m"`) |
+| `warn` | no | Warning offsets as duration strings (`["6m", "3m"]`); `[]` disables warnings |
+| `grace` | no | Reporting time after the deadline, as a duration string (`"3m"`); `"0s"` kills at the deadline |
 | `model` | no | Model override |
 | `agent` | no | Re-base onto another profile or kind |
 | `effort` | no | Reasoning effort |
 | `max_turns` | no | Maximum agentic turns |
 
-A task's `timeout` wins over the fanout's `--timeout`, which wins over `[agents.subagents] timeout`. `--keep` applies to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's recorded override, otherwise follows its own definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
+For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout flag, which wins over `[agents.subagents]`. `--keep` applies to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's recorded override, otherwise follows its own definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
 
 | Mode | stdout |
 | --- | --- |
@@ -120,7 +124,7 @@ Content:
 All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
 - @naming: completed in 4m12s, task: "map spec/profile surfaces", response: /tmp/rimz-subagents/naming.output (~4.2k tokens, 84 lines)
 - @runtime: completed in 5m3s, task: "inspect runtime behavior", no response
-- @slow-reviewer: timed out after 30m; provider did not stop, task: "review correctness", response: /tmp/rimz-subagents/slow-reviewer.output (<1k tokens, 12 lines)
+- @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /tmp/rimz-subagents/slow-reviewer.output (<1k tokens, 12 lines)
 ```
 
 The report lists status and where each answer is, and asks for nothing: reading the response files is the parent's call. It never carries a child's answer text; `rimz subagents wait <names>` prints the answers, and `--json` gives structured results.
@@ -128,7 +132,7 @@ The report lists status and where each answer is, and asks for nothing: reading 
 | Part | Format |
 | --- | --- |
 | Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; `background agent` replaces `subagent` when any row is a `-p --bg` run |
-| Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({size})`, or ending `, no response` |
+| Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({size})`; `partial response:` for a timed-out child with text, or ending `, no response` |
 | Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled` |
 | `in` / `after` | `after` for a timed-out child, `in` for every other status; elapsed time is compact (`4m12s`) |
 | Reason | The last non-empty line of the run's failure tail, for a status other than completed |
@@ -262,11 +266,17 @@ In the sidebar a child appears only under its direct parent's card, never as a d
 
 `rimz transcript @<petname>` reads a child's conversation; channel and `@all` transcript views leave children out ([transcript](./transcript.md)).
 
-## Configure the default timeout
+## Configure the deadline ladder
 
 ```toml
 [agents.subagents]
-timeout = "45m"
+timeout = "30m"
+warn = ["6m", "3m"]
+grace = "3m"
 ```
 
-`[agents.subagents]` in `config.toml` holds one key, `timeout`: the deadline for every child that sets no `--timeout` or task `timeout`, in the duration syntax `s`, `m`, `h`, `d`. It defaults to `30m`. The room enforces the deadline even when no one waits on the child.
+`[agents.subagents]` in `config.toml` sets the three defaults above. Durations use `s`, `m`, `h`, or `d`; bare `0` is invalid. Warning offsets are sorted largest first and deduplicated; zero offsets and offsets at or beyond the timeout are dropped. Use `warn = []` or `--warn none` for no warnings, and `grace = "0s"` or `--grace 0s` to kill at the deadline as before. The room enforces the kill bound even when no one waits on the child. These settings and flags do not change `rimz agents -p --timeout`.
+
+Claude, Codex, Copilot, Cursor, Droid, Grok, and Qwen receive warning and stop context through post-tool hooks. Qwen's async hook delivers context on the next turn. Other providers receive only the stop instruction through pane steering. A hook-channel child making no tool calls receives no stop context before the kill bound. A late hook gets only the latest crossed warning, with actual remaining time, rounded down to minutes or to seconds below a minute. The last warning asks the child to wrap up; the deadline asks it to stop and report.
+
+At `timeout + grace`, a still-running child becomes `timed_out`. RimZ preserves an existing response or harvests the last non-empty assistant text from its provider transcript. The fleet report labels a harvested result `partial response:`. `subagents wait` prints that text with `rimz: run timed out (exit 124)` on stderr; JSON retains `status: "timed_out"` and `last_message`.
