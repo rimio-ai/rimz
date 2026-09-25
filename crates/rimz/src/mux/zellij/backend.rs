@@ -251,6 +251,76 @@ impl ZellijBackend {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut previous_error = None;
         let mut confirmed_targets = None;
+        let mut last_move: Option<(PaneId, &str, bool)> = None;
+        // Returns false once the grid changed under us or the deadline passed.
+        let resize =
+            |panes: &[GridPane], pane: &PaneId, direction: &str, increase: bool| -> Result<bool> {
+                let Some(moved) = panes.iter().find(|candidate| candidate.pane_id == *pane) else {
+                    return Ok(false);
+                };
+                let edge = moved.x + moved.cols;
+                // A column boundary can span several independently resizable rows.
+                // Move every still-unmoved segment before evaluating the grid again:
+                // after only one segment the intermediate shape is not a column.
+                // Native resizing sometimes moves the entire aligned boundary, so
+                // re-read before each following segment instead of applying twice.
+                let boundary = if direction == "right" {
+                    panes
+                        .iter()
+                        .filter(|pane| pane.x + pane.cols == edge)
+                        .map(|pane| pane.pane_id.clone())
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![pane.clone()]
+                };
+                for (index, pane) in boundary.into_iter().enumerate() {
+                    let Some(remaining) = deadline
+                        .checked_duration_since(Instant::now())
+                        .filter(|time| !time.is_zero())
+                    else {
+                        return Ok(false);
+                    };
+                    if index > 0 {
+                        let Some((current, current_chrome)) =
+                            self.companion_geometry(session, anchor, remaining)?
+                        else {
+                            return Ok(false);
+                        };
+                        if current_chrome != chrome
+                            || current.len() != panes.len()
+                            || !panes
+                                .iter()
+                                .all(|old| current.iter().any(|pane| pane.pane_id == old.pane_id))
+                        {
+                            return Ok(false);
+                        }
+                        let Some(current_pane) =
+                            current.iter().find(|candidate| candidate.pane_id == pane)
+                        else {
+                            return Ok(false);
+                        };
+                        if current_pane.x + current_pane.cols != edge {
+                            continue;
+                        }
+                    }
+                    let Some(remaining) = deadline
+                        .checked_duration_since(Instant::now())
+                        .filter(|time| !time.is_zero())
+                    else {
+                        return Ok(false);
+                    };
+                    self.zellij_action(session)
+                        .args([
+                            "resize",
+                            if increase { "increase" } else { "decrease" },
+                            direction,
+                            "--pane-id",
+                            pane.raw(),
+                        ])
+                        .run_with_timeout(remaining)?;
+                }
+                Ok(true)
+            };
         let bounds = |panes: &[GridPane]| {
             (
                 panes.iter().map(|pane| pane.x).min(),
@@ -313,84 +383,33 @@ impl ZellijBackend {
                             direction,
                             edge < desired,
                             &pane.pane_id,
-                            edge,
                         ));
                     }
                 }
             }
             let error: u64 = steps.iter().map(|step| step.0).sum();
-            if previous_error.is_some_and(|previous| error >= previous) {
+            if let Some(previous) = previous_error
+                && error >= previous
+            {
+                // A native step coarser than the remaining distance overshot:
+                // undo it so the grid keeps its closer shape.
+                if error > previous
+                    && let Some((pane, direction, increase)) = last_move
+                {
+                    resize(&panes, &pane, direction, !increase)?;
+                }
                 break;
             }
             previous_error = Some(error);
-            let Some((distance, direction, increase, pane, edge)) =
+            let Some((distance, direction, increase, pane)) =
                 steps.into_iter().max_by_key(|step| step.0)
             else {
                 break;
             };
-            if distance == 0 {
+            if distance == 0 || !resize(&panes, pane, direction, increase)? {
                 break;
             }
-            // A column boundary can span several independently resizable rows.
-            // Move every still-unmoved segment before evaluating the grid again:
-            // after only one segment the intermediate shape is not a column.
-            // Native resizing sometimes moves the entire aligned boundary, so
-            // re-read before each following segment instead of applying twice.
-            let boundary = if direction == "right" {
-                panes
-                    .iter()
-                    .filter(|pane| pane.x + pane.cols == edge)
-                    .map(|pane| pane.pane_id.clone())
-                    .collect::<Vec<_>>()
-            } else {
-                vec![pane.clone()]
-            };
-            for (index, pane) in boundary.into_iter().enumerate() {
-                let Some(remaining) = deadline
-                    .checked_duration_since(Instant::now())
-                    .filter(|time| !time.is_zero())
-                else {
-                    return Ok(());
-                };
-                if index > 0 {
-                    let Some((current, current_chrome)) =
-                        self.companion_geometry(session, anchor, remaining)?
-                    else {
-                        return Ok(());
-                    };
-                    if current_chrome != chrome
-                        || current.len() != panes.len()
-                        || !panes
-                            .iter()
-                            .all(|old| current.iter().any(|pane| pane.pane_id == old.pane_id))
-                    {
-                        return Ok(());
-                    }
-                    let Some(current_pane) =
-                        current.iter().find(|candidate| candidate.pane_id == pane)
-                    else {
-                        return Ok(());
-                    };
-                    if current_pane.x + current_pane.cols != edge {
-                        continue;
-                    }
-                }
-                let Some(remaining) = deadline
-                    .checked_duration_since(Instant::now())
-                    .filter(|time| !time.is_zero())
-                else {
-                    return Ok(());
-                };
-                self.zellij_action(session)
-                    .args([
-                        "resize",
-                        if increase { "increase" } else { "decrease" },
-                        direction,
-                        "--pane-id",
-                        pane.raw(),
-                    ])
-                    .run_with_timeout(remaining)?;
-            }
+            last_move = Some((pane.clone(), direction, increase));
         }
         Ok(())
     }
