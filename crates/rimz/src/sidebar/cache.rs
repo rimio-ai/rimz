@@ -125,11 +125,11 @@ struct PresenceProbeStamp {
 
 /// Path of the presence stamp, beside the pane cache it gates.
 pub fn presence_stamp_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("presence.stamp")
+    runtime.live_path("presence.stamp")
 }
 
 fn presence_probe_stamp_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("client-presence-probe.stamp")
+    runtime.live_path("client-presence-probe.stamp")
 }
 
 pub(super) fn write_presence_probe_stamp(

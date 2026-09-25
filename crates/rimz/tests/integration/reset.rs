@@ -104,9 +104,8 @@ fn reset_archives_records_and_clears_room_state() {
     fs::write(diag_frames.join("frame.1.0.test.json"), b"{}").expect("write frame");
 
     let runtime = env.runtime_paths();
-    fs::create_dir_all(&runtime.root).expect("mkdir runtime");
-    fs::write(runtime.root.join("binding.log.jsonl"), b"binding\n").expect("write binding");
-    let runtime_root = runtime.root.clone();
+    runtime.ensure_dirs().expect("mkdir runtime");
+    fs::write(runtime.live_path("binding.log.jsonl"), b"binding\n").expect("write binding");
 
     env.rimz()
         .args(["--mux", "zellij", "reset", "--no-start", "--yes"])
@@ -119,7 +118,10 @@ fn reset_archives_records_and_clears_room_state() {
     assert!(!paths.events_log.exists(), "active log was archived");
     assert!(!diag_log.exists(), "diag log cleared");
     assert!(!diag_frames.exists(), "diag frame captures cleared");
-    assert!(!runtime_root.exists(), "workspace runtime dir cleared");
+    for class_dir in [&runtime.sock_dir, &runtime.live_dir, &runtime.lanes_dir] {
+        assert!(!class_dir.exists(), "disposable runtime class cleared");
+    }
+    assert!(runtime.locks_dir.exists(), "runtime locks survive reset");
     assert!(!paths.tmp_dir.exists(), "room tmp cleared");
     assert!(!paths.skills_dir.exists(), "room skill copies cleared");
 

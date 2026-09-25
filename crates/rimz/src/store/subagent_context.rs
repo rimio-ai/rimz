@@ -58,6 +58,7 @@ pub fn update(
     apply: impl FnOnce(Option<&SubagentContextRecord>) -> (SubagentContext, Option<SubagentUsageCursor>),
 ) -> Result<(), atomic::AtomicErr> {
     sidecar::update(
+        runtime,
         &runtime.subagent_context_dir,
         kind,
         agent_id,

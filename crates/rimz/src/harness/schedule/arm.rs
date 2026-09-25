@@ -147,7 +147,7 @@ pub fn arm_delivery(
         .filter(|(_, task)| task.source() != super::catalog::TaskSource::Instance)
         .map(|(name, _)| name.clone())
         .collect();
-    let (name, duplicate) = super::instances::insert_delivery(&paths.root, name, entry, &taken)
+    let (name, duplicate) = super::instances::insert_delivery(&paths, name, entry, &taken)
         .map_err(|err| ArmFailure::State(Box::new(err)))?;
     if duplicate {
         return Ok(ArmOutcome::AlreadySubscribed { name });
@@ -179,7 +179,7 @@ pub fn arm_delivery(
             Ok(())
         };
         if let Err(error) = spawn() {
-            super::instances::remove(&paths.root, &name, Some(entry))
+            super::instances::remove(&paths, &name, Some(entry))
                 .map_err(|err| ArmFailure::State(Box::new(err)))?;
             return Err(ArmFailure::Watcher(error));
         }
@@ -225,7 +225,7 @@ pub fn retire_session(
         .map_err(|err| RetireFailure(err.to_string()))?;
     let runtime = crate::disk::paths::RuntimePaths::for_project_root(project_root)
         .map_err(|err| RetireFailure(err.to_string()))?;
-    let retired = super::instances::retire_session(&paths.root, kind, session, scope)
+    let retired = super::instances::retire_session(&paths, kind, session, scope)
         .map_err(|err| RetireFailure(err.to_string()))?;
     let mut dropped = 0;
     for (name, entry) in &retired {

@@ -846,7 +846,7 @@ fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
         "a metrics-only publish must not masquerade as a fresh pane listing"
     );
     assert!(
-        runtime.root.join("metrics-sample.json").exists(),
+        runtime.lane_path("metrics-sample.json").exists(),
         "metrics refresh samples /proc and writes its own cache"
     );
 }
@@ -904,7 +904,7 @@ fn wedged_snapshot_producer_serves_prior_without_local_mux_fork() {
 
     let prior = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &prior).unwrap();
-    let lock_path = runtime.root.join("snapshot.lock");
+    let lock_path = runtime.lock_path("snapshot.lock");
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .read(true)

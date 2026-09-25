@@ -110,7 +110,8 @@ pub enum StoreErr {
 pub(crate) type Result<T> = std::result::Result<T, StoreErr>;
 
 impl Store {
-    pub fn open(paths: StatePaths, runtime: RuntimePaths) -> Result<Self> {
+    pub fn open(mut paths: StatePaths, runtime: RuntimePaths) -> Result<Self> {
+        paths.bind_runtime_locks(&runtime);
         paths.ensure_dirs()?;
         runtime.ensure_dirs()?;
         Ok(Self {
@@ -120,7 +121,8 @@ impl Store {
 
     /// Open an existing store for read paths without creating directories.
     #[must_use]
-    pub fn open_existing(paths: StatePaths, runtime: RuntimePaths) -> Option<Self> {
+    pub fn open_existing(mut paths: StatePaths, runtime: RuntimePaths) -> Option<Self> {
+        paths.bind_runtime_locks(&runtime);
         if !paths.root.is_dir() {
             return None;
         }

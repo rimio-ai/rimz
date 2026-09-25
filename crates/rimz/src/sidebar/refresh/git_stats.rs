@@ -373,7 +373,7 @@ fn refresh_diff_stats(
         return cache;
     }
 
-    let lock_path = runtime.root.join("diff-stats.lock");
+    let lock_path = runtime.lock_path("diff-stats.lock");
     let fresh = || {
         let cache: DiffStatsCache = atomic::read_json_cache(cache_path);
         stale(&cache).is_empty().then_some(cache)

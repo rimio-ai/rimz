@@ -312,8 +312,8 @@ impl DailyBudgetScope {
     fn file(&self, runtime: &RuntimePaths) -> ScopeLedgerFile {
         match self {
             Self::Fleet => ScopeLedgerFile {
-                path: runtime.root.join("budget.fleet.json"),
-                lock_path: runtime.root.join("budget.fleet.lock"),
+                path: runtime.lane_path("budget.fleet.json"),
+                lock_path: runtime.lock_path("budget.fleet.lock"),
             },
             Self::Account(key) => {
                 let component = account_ledger_component(key);
@@ -1422,7 +1422,7 @@ fn budget_ledger_path(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> PathBuf {
-    runtime.root.join(format!(
+    runtime.lane_path(format!(
         "budget.{}.json",
         crate::store::sidecar::digest(kind.as_str(), agent_id.as_str())
     ))
@@ -1506,7 +1506,7 @@ impl ScopeLedgerFile {
 }
 
 fn scope_state_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("budget.scopes.json")
+    runtime.lane_path("budget.scopes.json")
 }
 
 pub fn read_scope_state(runtime: &RuntimePaths) -> BudgetScopeState {

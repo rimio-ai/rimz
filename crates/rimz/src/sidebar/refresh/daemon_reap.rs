@@ -23,7 +23,7 @@ pub(in crate::sidebar) struct CodexDaemonReap {
 }
 
 pub(in crate::sidebar) fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("codex-daemon-reap.json")
+    runtime.lane_path("codex-daemon-reap.json")
 }
 
 fn write_codex_daemon_reap(

@@ -354,7 +354,7 @@ fn axis_badge_heat(value: u32, calm: u32, alarm: u32) -> f32 {
 
 /// Runtime sidecar path for the workspace's latest link stats.
 pub fn stats_path(runtime: &crate::RuntimePaths) -> PathBuf {
-    runtime.root.join(LINK_STATS_FILE)
+    runtime.lane_path(LINK_STATS_FILE)
 }
 
 pub fn validated_control_path() -> std::result::Result<PathBuf, sock::SocketPathTooLong> {

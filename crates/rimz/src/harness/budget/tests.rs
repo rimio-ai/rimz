@@ -732,7 +732,7 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     let fleet_scope = DailyBudgetScope::Fleet;
     assert_eq!(
         fleet_scope.ledger_path(&runtime),
-        runtime.root.join("budget.fleet.json")
+        runtime.lane_path("budget.fleet.json")
     );
     fleet_scope
         .write_ledger(&runtime, &fleet)

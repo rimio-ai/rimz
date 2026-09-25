@@ -367,10 +367,8 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     };
     let state =
         StatePaths::for_workspace(WorkspaceId::from_project_root(dir.path())).expect("state paths");
-    crate::harness::schedule::instances::insert(&state.root, poll_name, &poll)
-        .expect("insert poll");
-    crate::harness::schedule::instances::insert(&state.root, watch_name, &watch)
-        .expect("insert watch");
+    crate::harness::schedule::instances::insert(&state, poll_name, &poll).expect("insert poll");
+    crate::harness::schedule::instances::insert(&state, watch_name, &watch).expect("insert watch");
     let catalog = TaskCatalog::load(Some(dir.path())).expect("load task catalog");
 
     let mut poll_fire = skipped_fire(poll_name, &catalog, None);
@@ -434,7 +432,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let instances = crate::harness::schedule::instances::load_from(&state.root);
     assert!(instances.0.contains_key(poll_name));
     assert!(!instances.0.contains_key(watch_name));
-    crate::harness::schedule::instances::remove(&state.root, poll_name, None)
+    crate::harness::schedule::instances::remove(&state, poll_name, None)
         .expect("remove poll fixture");
 }
 
@@ -531,7 +529,7 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
         ..TaskEntry::default()
     };
     let make_fire = |entry: TaskEntry| {
-        TaskFire::new(
+        let mut fire = TaskFire::new(
             "room-gates",
             LoadedTask::new("room-gates", entry, catalog::TaskSource::Config),
             &catalog,
@@ -543,7 +541,13 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
             CheckEcho::Capture,
             Instant::now(),
         )
-        .unwrap()
+        .unwrap();
+        fire.run_lock_path = |name, entry| {
+            let runtime =
+                RuntimePaths::under(WorkspaceId::from_project_root(&entry.root), &entry.root)?;
+            Ok(runtime.lock_path(format!("loop-run-{name}.lock")))
+        };
+        fire
     };
     let mut fire = make_fire(entry.clone());
     let error = fire

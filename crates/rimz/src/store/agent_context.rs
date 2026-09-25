@@ -93,6 +93,7 @@ pub fn update_record(
     update: impl FnOnce(&mut AgentContextRecord, bool) -> bool,
 ) -> Result<bool, atomic::AtomicErr> {
     sidecar::update(
+        runtime,
         &runtime.agent_context_dir,
         kind,
         agent_id,
@@ -233,11 +234,16 @@ pub(super) fn read_for_keys<'a>(
 /// Remove a session's sidecar on `SessionEnd` or reap. Best-effort:
 /// a missing file is success.
 pub fn remove(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> std::io::Result<()> {
-    sidecar::remove_locked::<AgentContextRecord>(&runtime.agent_context_dir, kind, agent_id)
-        .map_err(|error| match error {
-            atomic::AtomicErr::Io { source, .. } => source,
-            atomic::AtomicErr::Json(source) => std::io::Error::other(source),
-        })
+    sidecar::remove_locked::<AgentContextRecord>(
+        runtime,
+        &runtime.agent_context_dir,
+        kind,
+        agent_id,
+    )
+    .map_err(|error| match error {
+        atomic::AtomicErr::Io { source, .. } => source,
+        atomic::AtomicErr::Json(source) => std::io::Error::other(source),
+    })
 }
 
 #[cfg(test)]

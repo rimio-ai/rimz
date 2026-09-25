@@ -745,7 +745,10 @@ fn presented_blocking_attempt_is_joined_only_once_terminal() {
 #[test]
 fn subagent_zone_lock_serializes_workspace_launches() {
     let fixture = RunFixture::new(RunStatus::Running);
-    let lock_path = fixture.paths.locks_dir.join("subagent-zone.lock");
+    let lock_path = fixture
+        .store
+        .runtime_paths()
+        .lock_path("subagent-zone.lock");
 
     let held = super::pane::lock_subagent_zone(&fixture.store).unwrap();
     assert!(

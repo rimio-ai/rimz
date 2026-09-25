@@ -781,7 +781,7 @@ impl Drop for WatchLockGuard {
 }
 
 fn watch_lock_path(runtime: &RuntimePaths, name: &str) -> std::path::PathBuf {
-    runtime.root.join(format!("loop-watch-{name}.lock"))
+    runtime.lock_path(format!("loop-watch-{name}.lock"))
 }
 
 pub(super) fn acquire_watch_lock(
@@ -1078,7 +1078,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let id = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(id, dir.path()).unwrap();
-        std::fs::create_dir_all(&runtime.root).unwrap();
+        runtime.ensure_dirs().unwrap();
         let logs = dir.path().join("waits");
         std::fs::create_dir(&logs).unwrap();
         let now = std::time::SystemTime::now();

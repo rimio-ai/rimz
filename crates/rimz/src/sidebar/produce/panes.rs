@@ -66,7 +66,7 @@ impl<'a> PaneFrameCache<'a> {
     ) -> Self {
         Self {
             cache_path: runtime.pane_frame_path(),
-            lock_path: runtime.root.join("snapshot.lock"),
+            lock_path: runtime.lock_path("snapshot.lock"),
             ttl: effective_pane_ttl(
                 presence_stamp_age_ms(runtime),
                 published_frame_unwatched(runtime, session),

@@ -9,7 +9,7 @@ fn metrics_runtime(name: &str) -> (tempfile::TempDir, crate::RuntimePaths) {
         dir.path(),
     )
     .unwrap();
-    std::fs::create_dir_all(&runtime.root).unwrap();
+    std::fs::create_dir_all(&runtime.lanes_dir).unwrap();
     (dir, runtime)
 }
 
@@ -113,7 +113,7 @@ fn unbound_idle_panes_back_off_on_the_idle_ttl() {
          table walk every produce"
     );
 
-    let cache_path = runtime.root.join("metrics-sample.json");
+    let cache_path = runtime.lane_path("metrics-sample.json");
     let cache: MetricsSampleCache =
         serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
     let entry = cache
@@ -153,7 +153,7 @@ fn metrics_within_ttl_carries_matching_display_values_and_binding() {
         panes[1].pane_id.to_string(),
         fresh_entry(44, 702, "zsh", now_ms),
     );
-    let cache_path = runtime.root.join("metrics-sample.json");
+    let cache_path = runtime.lane_path("metrics-sample.json");
     std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
     let mut frame = frame_from_panes(panes);
 
@@ -207,7 +207,7 @@ fn metrics_within_ttl_warms_changed_or_uncached_panes() {
             ..fresh_entry(43, 701, "zsh", now_ms)
         },
     );
-    let cache_path = runtime.root.join("metrics-sample.json");
+    let cache_path = runtime.lane_path("metrics-sample.json");
     std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
     let mut frame = frame_from_panes(panes);
 
@@ -250,7 +250,7 @@ fn metrics_due_path_resamples_and_restamps() {
         sampled_at_ms: stale_ms,
         entries: HashMap::new(),
     };
-    let cache_path = runtime.root.join("metrics-sample.json");
+    let cache_path = runtime.lane_path("metrics-sample.json");
     std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
 
     let mut pidded = pane("terminal_1", Some("zsh"), Some("/repo"));

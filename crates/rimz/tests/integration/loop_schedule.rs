@@ -1414,7 +1414,7 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     loop_ok(&env, &["loop", "tick"]);
 
     let stamps: BTreeMap<String, Timestamp> = serde_json::from_slice(
-        &std::fs::read(runtime.root.join("loop-fire.json")).expect("fire state"),
+        &std::fs::read(runtime.lane_path("loop-fire.json")).expect("fire state"),
     )
     .expect("fire state json");
     assert_eq!(stamps.get("open-root"), Some(&prior));
@@ -1472,7 +1472,7 @@ fn external_tick_refuses_when_the_systemd_user_manager_is_unreachable() {
     assert!(stderr.contains("rimz loop timer install"), "{stderr}");
     assert!(!marker.exists());
     let stamps: BTreeMap<String, Timestamp> = serde_json::from_slice(
-        &std::fs::read(env.runtime_paths().root.join("loop-fire.json")).expect("fire state"),
+        &std::fs::read(env.runtime_paths().lane_path("loop-fire.json")).expect("fire state"),
     )
     .expect("fire state json");
     assert_eq!(stamps.get("unreachable-bus"), Some(&prior));
@@ -1515,7 +1515,7 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     assert!(logs.contains("start failed"), "{logs}");
     let show = loop_ok(&env, &["loop", "show", "missing-runner"]);
     assert!(show.contains("start failed"), "{show}");
-    let fire_path = env.runtime_paths().root.join("loop-fire.json");
+    let fire_path = env.runtime_paths().lane_path("loop-fire.json");
     let stamps: BTreeMap<String, Timestamp> =
         serde_json::from_slice(&std::fs::read(&fire_path).expect("fire state"))
             .expect("fire state json");
@@ -1623,7 +1623,7 @@ fn external_tick_records_a_failed_scope_handoff() {
     let logs = loop_ok(&env, &["loop", "logs", "failed-handoff"]);
     assert!(logs.contains("start failed"), "{logs}");
     let stamps: BTreeMap<String, Timestamp> = serde_json::from_slice(
-        &std::fs::read(env.runtime_paths().root.join("loop-fire.json")).expect("fire state"),
+        &std::fs::read(env.runtime_paths().lane_path("loop-fire.json")).expect("fire state"),
     )
     .expect("fire state json");
     assert!(stamps["failed-handoff"] > prior);
@@ -3903,7 +3903,7 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
             "add",
             "stuck",
             "--check",
-            "parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done",
+            "touch check-ready; parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done",
             "--every",
             "15m",
         ],
@@ -3917,6 +3917,7 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
         .expect("spawn stuck loop runner");
     let info = wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "stuck"));
     assert_eq!(info.pid, runner.id());
+    wait_for_path(&env.project_root.join("check-ready"));
     let stopped = loop_ok(&env, &["loop", "stop", "stuck"]);
     assert!(
         stopped.contains("stopped") && stopped.contains("SIGTERM"),
@@ -4646,8 +4647,7 @@ fn write_loop_fire_state_for_root(env: &Env, root: &Path, stamps: BTreeMap<Strin
     let state = env.state_path_for(root);
     let path =
         rimz::RuntimePaths::under_named(state.workspace_id, state.dir_name, &env.runtime_root)
-            .root
-            .join("loop-fire.json");
+            .lane_path("loop-fire.json");
     std::fs::create_dir_all(path.parent().expect("loop fire parent")).expect("mkdir runtime");
     std::fs::write(path, serde_json::to_vec_pretty(&stamps).expect("json"))
         .expect("write loop fire state");
@@ -4663,8 +4663,7 @@ fn wait_for_path(path: &Path) {
 
 fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
     env.runtime_paths()
-        .root
-        .join(format!("loop-run-{name}.lock"))
+        .lock_path(format!("loop-run-{name}.lock"))
 }
 
 #[cfg(unix)]

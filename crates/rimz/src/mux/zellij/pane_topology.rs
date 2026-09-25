@@ -340,7 +340,7 @@ pub struct PresenceDesired {
 }
 
 fn presence_desired_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("presence-desired.json")
+    runtime.lane_path("presence-desired.json")
 }
 
 pub fn read_presence_desired(runtime: &RuntimePaths) -> Option<PresenceDesired> {
@@ -359,7 +359,7 @@ pub(crate) fn write_presence_desired(
 /// `snapshot.json` pane frame. The topology cache is Zellij's pane roster; the
 /// normal producer frame still carries the rendered view-model.
 pub(crate) fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("pane-topology.json")
+    runtime.lane_path("pane-topology.json")
 }
 
 /// Publish the plugin-provided pane topology. Cache-class: rename atomic, no

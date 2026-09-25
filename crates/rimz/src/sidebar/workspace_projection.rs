@@ -144,7 +144,7 @@ fn content_hash(bytes: &[u8]) -> u64 {
 }
 
 pub(super) fn workspace_projection_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("workspace-projection.json")
+    runtime.lane_path("workspace-projection.json")
 }
 
 pub(crate) fn read_workspace_projection(

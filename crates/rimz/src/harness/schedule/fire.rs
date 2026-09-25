@@ -312,7 +312,7 @@ pub fn last_stamps(runtime: &RuntimePaths) -> BTreeMap<String, Timestamp> {
 }
 
 fn state_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("loop-fire.json")
+    runtime.lane_path("loop-fire.json")
 }
 
 pub(super) fn spawn_loop_run(
@@ -803,7 +803,7 @@ mod tests {
         let stale = seconds_before(now.timestamp(), WATCH_LOST_GRACE_SECS + 1);
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let runtime = RuntimePaths::for_state(&paths).expect("watch runtime");
-        std::fs::create_dir_all(&runtime.root).expect("runtime root");
+        std::fs::create_dir_all(&runtime.locks_dir).expect("runtime root");
         let guard = super::super::signal::acquire_watch_lock(&runtime, NAME)
             .unwrap()
             .expect("watch lock");
@@ -844,7 +844,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let paths = StatePaths::for_project_root(root.path()).unwrap();
         let runtime = RuntimePaths::for_state(&paths).expect("watch runtime");
-        std::fs::create_dir_all(&runtime.root).expect("runtime root");
+        std::fs::create_dir_all(&runtime.locks_dir).expect("runtime root");
         let now = zdt(2026, 6, 24, 8, 5, 0);
         let stale = seconds_before(now.timestamp(), WATCH_LOST_GRACE_SECS + 1);
         write_temp_then_rename_cache(

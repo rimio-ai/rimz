@@ -365,7 +365,7 @@ fn write_topology_cache(session: &str, workspace_id: &str) {
     let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace_id) else {
         return;
     };
-    let path = runtime.root.join("pane-topology.json");
+    let path = runtime.lane_path("pane-topology.json");
     let panes = match env::var("RIMZ_TEST_ZELLIJ_TOPOLOGY_PANES")
         .or_else(|_| env::var("RIMZ_TEST_ZELLIJ_LIST_PANES"))
     {

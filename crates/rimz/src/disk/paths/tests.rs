@@ -1,5 +1,67 @@
 use super::*;
 use crate::ids::WorkspaceId;
+#[test]
+fn runtime_cleanup_does_not_race_canonical_path_writers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path().join("runtime");
+    fs::create_dir(&runtime).expect("runtime directory");
+    fs::write(runtime.join("old-hint"), b"old").expect("old runtime hint");
+
+    let removed = remove_runtime_dir_with(&runtime, |detached| {
+        // Force the late writer into the recursive-cleanup window.
+        fs::create_dir_all(&runtime).expect("late writer recreates runtime");
+        fs::write(runtime.join("late-hint"), b"late").expect("late runtime hint");
+        assert!(detached.join("old-hint").exists());
+        fs::remove_dir_all(detached).unwrap();
+        assert!(!detached.exists());
+        Ok(true)
+    })
+    .expect("runtime cleanup succeeds despite late writer");
+
+    assert!(removed);
+    assert!(!runtime.join("old-hint").exists());
+    assert_eq!(fs::read(runtime.join("late-hint")).unwrap(), b"late");
+}
+
+#[test]
+fn runtime_cleanup_accepts_an_absent_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    assert!(
+        !remove_runtime_dir_with(&dir.path().join("absent"), |_| {
+            panic!("an absent runtime must not need recursive cleanup")
+        })
+        .expect("absent runtime is already clean")
+    );
+}
+
+#[test]
+fn runtime_paths_follow_lifetime_classes() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let paths = RuntimePaths::under(id, dir.path()).unwrap();
+    assert_eq!(paths.heartbeat_dir, paths.root.join("live/heartbeat"));
+    assert_eq!(paths.prompt_dir(), paths.root.join("live/prompt"));
+    assert_eq!(
+        paths.pane_frame_path(),
+        paths.root.join("lanes/snapshot.json")
+    );
+    assert_eq!(
+        paths.topology_writer_lock(),
+        paths.root.join("locks/topology-writer.lock")
+    );
+    for path in paths.all_paths() {
+        let relative = path.strip_prefix(&paths.root).unwrap();
+        assert!(
+            [Class::Sock, Class::Live, Class::Lanes, Class::Locks]
+                .iter()
+                .any(
+                    |class| class.tier() == Tier::Runtime && relative.starts_with(class.dir_name())
+                ),
+            "unclassified runtime path: {}",
+            path.display()
+        );
+    }
+}
 
 #[test]
 fn agents_home_environment_precedence() {
@@ -192,10 +254,41 @@ fn id_only_paths_fall_back_to_the_full_hex_in_both_trees() {
     let runtime = RuntimePaths::under(id, dir.path()).unwrap();
     assert_eq!(state.dir_name.as_str(), "ws-abcdef0123456789abcdef01");
     assert_eq!(runtime.dir_name, state.dir_name);
+    assert_eq!(state.workspace_lock, runtime.lock_path("workspace.lock"));
+    assert_eq!(state.publish_lock, runtime.lock_path("publish.lock"));
     assert_eq!(
         runtime.root,
         dir.path().join("rimz/ws/ws-abcdef0123456789abcdef01")
     );
+}
+
+#[test]
+fn disposable_cleanup_preserves_held_lock_inodes() {
+    use crate::disk::lock::WorkspaceLock;
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let lock_path = runtime.lock_path("loop-watch-test.lock");
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let thread_path = lock_path.clone();
+    let holder = std::thread::spawn(move || {
+        let _guard = WorkspaceLock::acquire(&thread_path).unwrap();
+        held_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    held_rx.recv().unwrap();
+    assert!(runtime.remove_disposable_dirs().unwrap());
+    assert!(lock_path.exists());
+    assert!(WorkspaceLock::try_acquire(&lock_path).unwrap().is_none());
+    for path in [&runtime.sock_dir, &runtime.live_dir, &runtime.lanes_dir] {
+        assert!(!path.exists());
+    }
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    assert!(WorkspaceLock::try_acquire(&lock_path).unwrap().is_some());
 }
 
 #[test]
@@ -291,6 +384,7 @@ fn runtime_paths_share_user_scoped_cache_files() {
         first_paths.copilot_otel_path(),
         first_paths
             .root
+            .join("live")
             .join("agent-telemetry")
             .join("copilot-otel.jsonl")
     );

@@ -572,7 +572,7 @@ impl Drop for SweepRunGuard {
 }
 
 fn try_start_sweep(runtime: &RuntimePaths) -> Result<Option<SweepRunGuard>> {
-    let path = runtime.root.join("message-sweep.lock");
+    let path = runtime.lock_path("message-sweep.lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
@@ -1052,7 +1052,7 @@ fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp) -> 
 }
 
 pub(super) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join(crate::message::MESSAGE_WAKE_FILE)
+    runtime.lane_path(crate::message::MESSAGE_WAKE_FILE)
 }
 
 #[cfg(test)]

@@ -209,7 +209,7 @@ pub(in crate::cli) fn subagent_companion_title(store: &rimz::Store) -> String {
 pub(in crate::cli) fn lock_subagent_zone(
     store: &rimz::Store,
 ) -> rimz::disk::lock::Result<rimz::disk::lock::WorkspaceLock> {
-    rimz::disk::lock::WorkspaceLock::acquire(&store.paths().locks_dir.join("subagent-zone.lock"))
+    rimz::disk::lock::WorkspaceLock::acquire(&store.runtime_paths().lock_path("subagent-zone.lock"))
 }
 
 /// Open a supervised child in the caller's durable subagent zone, or select

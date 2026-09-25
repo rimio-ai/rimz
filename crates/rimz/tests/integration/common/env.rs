@@ -215,15 +215,11 @@ impl Env {
     }
 
     pub fn heartbeat_dir(&self) -> PathBuf {
-        self.workspace_runtime().join("heartbeat")
+        self.runtime_paths().heartbeat_dir
     }
 
     pub fn sock_dir(&self) -> PathBuf {
-        self.workspace_runtime().join("sock")
-    }
-
-    fn workspace_runtime(&self) -> PathBuf {
-        self.runtime_paths().root
+        self.runtime_paths().sock_dir
     }
 
     /// Absolute path to the built `rimz` binary, for helper scripts that shell out.

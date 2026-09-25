@@ -1194,7 +1194,7 @@ case " $* " in
 esac
 exit 0
 "#,
-        cache = room.runtime.root.join("pane-topology.json").display(),
+        cache = room.runtime.lane_path("pane-topology.json").display(),
     );
     let (temp, shim) = zellij_shim(&script);
     let backend = room.backend(&shim);
@@ -1303,7 +1303,7 @@ case " $* " in
 esac
 exit 0
 "#,
-        cache = room.runtime.root.join("pane-topology.json").display(),
+        cache = room.runtime.lane_path("pane-topology.json").display(),
     );
     let (temp, shim) = zellij_shim(&script);
     let backend = room.backend(&shim);
@@ -1399,7 +1399,7 @@ case " $* " in
 esac
 exit 0
 "#,
-        cache = room.runtime.root.join("pane-topology.json").display(),
+        cache = room.runtime.lane_path("pane-topology.json").display(),
     );
     let (temp, shim) = zellij_shim(&script);
     let backend = room.backend(&shim);
@@ -1590,7 +1590,7 @@ case " $* " in
 esac
 exit 0
 "#,
-        cache = room.runtime.root.join("pane-topology.json").display(),
+        cache = room.runtime.lane_path("pane-topology.json").display(),
     );
     let (temp, shim) = zellij_shim(&script);
     if let Err(err) = room

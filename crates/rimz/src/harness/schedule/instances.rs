@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{TaskEntry, Tasks};
 use crate::disk::atomic::{AtomicErr, write_temp_then_rename};
 use crate::disk::lock::{LockErr, WorkspaceLock};
+use crate::disk::paths::StatePaths;
 use jiff::Timestamp;
 
 #[derive(Debug, thiserror::Error)]
@@ -42,10 +43,6 @@ pub(super) fn path(state_root: &Path) -> PathBuf {
     state_root.join("loop-instances.json")
 }
 
-fn lock_path(state_root: &Path) -> PathBuf {
-    state_root.join("loop-instances.lock")
-}
-
 pub(super) fn load_from(state_root: &Path) -> Tasks {
     load_strict_from(state_root).unwrap_or_default()
 }
@@ -61,15 +58,15 @@ pub(super) fn load_strict_from(state_root: &Path) -> Result<Tasks> {
     }
 }
 
-pub(super) fn insert(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
-    mutate(state_root, |tasks| {
+pub(super) fn insert(paths: &StatePaths, name: &str, entry: &TaskEntry) -> Result<()> {
+    mutate(paths, |tasks| {
         tasks.insert(name.to_owned(), entry.clone());
         Ok(((), true))
     })
 }
 
-pub(super) fn remove(state_root: &Path, name: &str, expected: Option<&TaskEntry>) -> Result<bool> {
-    mutate(state_root, |tasks| {
+pub(super) fn remove(paths: &StatePaths, name: &str, expected: Option<&TaskEntry>) -> Result<bool> {
+    mutate(paths, |tasks| {
         if expected.is_some_and(|entry| tasks.get(name) != Some(entry)) {
             return Ok((false, false));
         }
@@ -78,8 +75,8 @@ pub(super) fn remove(state_root: &Path, name: &str, expected: Option<&TaskEntry>
     })
 }
 
-pub(super) fn rename(state_root: &Path, old: &str, new: &str) -> Result<bool> {
-    mutate(state_root, |tasks| {
+pub(super) fn rename(paths: &StatePaths, old: &str, new: &str) -> Result<bool> {
+    mutate(paths, |tasks| {
         let Some(entry) = tasks.remove(old) else {
             return Ok((false, false));
         };
@@ -89,26 +86,26 @@ pub(super) fn rename(state_root: &Path, old: &str, new: &str) -> Result<bool> {
 }
 
 fn mutate<T>(
-    state_root: &Path,
+    paths: &StatePaths,
     edit: impl FnOnce(&mut BTreeMap<String, TaskEntry>) -> Result<(T, bool)>,
 ) -> Result<T> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut entries = load_strict_from(state_root)?.0;
+    let _guard = WorkspaceLock::acquire(&paths.lock_path("loop-instances.lock"))?;
+    let mut entries = load_strict_from(&paths.root)?.0;
     let (result, changed) = edit(&mut entries)?;
     if changed {
-        write_temp_then_rename(&path(state_root), &entries)?;
+        write_temp_then_rename(&path(&paths.root), &entries)?;
     }
     Ok(result)
 }
 
 pub(super) fn insert_delivery(
-    state_root: &Path,
+    paths: &StatePaths,
     name: Option<&str>,
     entry: &TaskEntry,
     taken: &BTreeSet<String>,
 ) -> Result<(String, bool)> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut tasks = load_strict_from(state_root)?.0;
+    let _guard = WorkspaceLock::acquire(&paths.lock_path("loop-instances.lock"))?;
+    let mut tasks = load_strict_from(&paths.root)?.0;
     let arming = super::arming::load();
     let now = Timestamp::now();
     if entry.signal.is_some()
@@ -159,19 +156,19 @@ pub(super) fn insert_delivery(
         &entry.resolved_root(),
     );
     tasks.insert(name.clone(), entry.clone());
-    write_temp_then_rename(&path(state_root), &tasks)?;
+    write_temp_then_rename(&path(&paths.root), &tasks)?;
     super::arming::remove(&key)?;
     super::strikes::clear(&key)?;
     Ok((name, false))
 }
 
 pub(super) fn retire_session(
-    state_root: &Path,
+    paths: &StatePaths,
     kind: &crate::ids::AgentKind,
     session: &crate::ids::AgentSessionId,
     scope: super::arm::RetireScope,
 ) -> Result<Vec<(String, TaskEntry)>> {
-    mutate(state_root, |tasks| {
+    mutate(paths, |tasks| {
         let names = tasks
             .iter()
             .filter(|(_, entry)| entry.team.is_none() || scope == super::arm::RetireScope::Session)
@@ -230,43 +227,53 @@ mod tests {
     #[test]
     fn insert_and_remove_round_trips() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let paths = StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
         let entry = task();
 
-        insert(dir.path(), "wait", &entry).expect("insert");
-        let encoded = std::fs::read_to_string(path(dir.path())).expect("serialized instances");
+        insert(&paths, "wait", &entry).expect("insert");
+        let encoded = std::fs::read_to_string(path(&paths.root)).expect("serialized instances");
         let value: serde_json::Value = serde_json::from_str(&encoded).expect("instances json");
         assert_eq!(value["wait"]["agent"], "claude");
         assert_eq!(value["wait"]["prompt"], "wait");
         assert_eq!(value["wait"]["root"], "/repo");
         assert_eq!(value["wait"]["at"], "07:00");
         assert_eq!(
-            load_from(dir.path())
+            load_from(&paths.root)
                 .0
                 .get("wait")
                 .map(|entry| entry.prompt.as_deref()),
             Some(Some("wait"))
         );
 
-        assert!(remove(dir.path(), "wait", None).expect("remove"));
-        assert!(load_from(dir.path()).0.is_empty());
-        assert!(!remove(dir.path(), "wait", None).expect("remove absent"));
+        assert!(remove(&paths, "wait", None).expect("remove"));
+        assert!(load_from(&paths.root).0.is_empty());
+        assert!(!remove(&paths, "wait", None).expect("remove absent"));
     }
 
     #[test]
     fn rename_moves_existing_entry() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let paths = StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
         let entry = task();
 
-        insert(dir.path(), "wait", &entry).expect("insert");
+        insert(&paths, "wait", &entry).expect("insert");
 
-        assert!(rename(dir.path(), "wait", "nudge").expect("rename"));
-        let tasks = load_from(dir.path());
+        assert!(rename(&paths, "wait", "nudge").expect("rename"));
+        let tasks = load_from(&paths.root);
         assert!(!tasks.0.contains_key("wait"));
         assert_eq!(
             tasks.0.get("nudge").map(|entry| entry.prompt.as_deref()),
             Some(Some("wait"))
         );
-        assert!(!rename(dir.path(), "wait", "later").expect("rename absent"));
+        assert!(!rename(&paths, "wait", "later").expect("rename absent"));
     }
 
     /// A same-session `agents restart` is a continuation, so its retirement
@@ -276,6 +283,11 @@ mod tests {
     #[test]
     fn unrestorable_scope_keeps_the_declared_rows_of_the_same_session() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let paths = StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
         let kind = crate::ids::AgentKind::new_unchecked("claude");
         let session = crate::ids::AgentSessionId::from("resumed");
         let pinned = |session_id: &str, team: Option<&str>| TaskEntry {
@@ -293,11 +305,11 @@ mod tests {
             ("other-session", pinned("elsewhere", None)),
             ("unpinned", task()),
         ] {
-            insert(dir.path(), name, &entry).expect("insert");
+            insert(&paths, name, &entry).expect("insert");
         }
 
-        let retired = retire_session(dir.path(), &kind, &session, RetireScope::UnrestorableOnly)
-            .expect("retire");
+        let retired =
+            retire_session(&paths, &kind, &session, RetireScope::UnrestorableOnly).expect("retire");
 
         assert_eq!(
             retired
@@ -315,7 +327,7 @@ mod tests {
             "the count the restart line reports"
         );
         assert_eq!(
-            load_from(dir.path())
+            load_from(&paths.root)
                 .0
                 .keys()
                 .map(String::as_str)
@@ -324,7 +336,7 @@ mod tests {
         );
 
         let retired =
-            retire_session(dir.path(), &kind, &session, RetireScope::Session).expect("retire");
+            retire_session(&paths, &kind, &session, RetireScope::Session).expect("retire");
 
         assert_eq!(
             retired
@@ -339,7 +351,12 @@ mod tests {
     #[test]
     fn concurrent_inserts_preserve_both_instances() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().to_path_buf();
+        let paths = StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        let root = paths;
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
         let writers = ["first", "second"].map(|name| {
             let root = root.clone();
@@ -354,7 +371,7 @@ mod tests {
             writer.join().expect("writer thread");
         }
 
-        let tasks = load_from(&root);
+        let tasks = load_from(&root.root);
         assert!(tasks.0.contains_key("first"));
         assert!(tasks.0.contains_key("second"));
     }

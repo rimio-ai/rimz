@@ -161,7 +161,7 @@ fn fire_record_path(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> PathBuf {
-    runtime.root.join("idle-compact").join(format!(
+    runtime.live_path("idle-compact").join(format!(
         "{}.json",
         crate::store::sidecar::digest(kind.as_str(), agent_id.as_str())
     ))

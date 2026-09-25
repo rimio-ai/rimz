@@ -6077,7 +6077,7 @@ fn deliver_direct_channel_message(env: &Env, channel: &str, text: &str) -> Strin
 }
 
 fn wake_stamp_path(env: &Env) -> PathBuf {
-    env.runtime_paths().root.join("message-wake.json")
+    env.runtime_paths().lane_path("message-wake.json")
 }
 
 fn wait_for_message_event(env: &Env, method: &str, timeout: Duration) {

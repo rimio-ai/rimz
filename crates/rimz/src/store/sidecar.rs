@@ -18,6 +18,7 @@ use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
 use crate::disk::atomic;
+use crate::disk::paths::RuntimePaths;
 
 #[cfg(test)]
 pub(crate) mod testkit {
@@ -74,10 +75,6 @@ pub(super) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> Path
     dir.join(format!("{prefix}.{}.json", digest(kind, agent_id)))
 }
 
-fn lock_path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
-    path(dir, prefix, kind, agent_id).with_extension("lock")
-}
-
 /// Per-record advisory lock shared by sidecar writers that need an atomic
 /// read-modify-write across independent CLI processes.
 struct RecordLock {
@@ -86,16 +83,16 @@ struct RecordLock {
 
 impl RecordLock {
     fn acquire(
-        dir: &Path,
+        runtime: &RuntimePaths,
         prefix: &str,
         kind: &str,
         agent_id: &str,
     ) -> Result<Self, atomic::AtomicErr> {
-        std::fs::create_dir_all(dir).map_err(|source| atomic::AtomicErr::Io {
-            path: dir.to_path_buf(),
+        std::fs::create_dir_all(&runtime.locks_dir).map_err(|source| atomic::AtomicErr::Io {
+            path: runtime.locks_dir.clone(),
             source,
         })?;
-        let path = lock_path(dir, prefix, kind, agent_id);
+        let path = runtime.lock_path(format!("{prefix}.{}.lock", digest(kind, agent_id)));
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -138,13 +135,14 @@ pub(super) fn read_one<R: SidecarRecord>(dir: &Path, kind: &str, agent_id: &str)
 /// per-record lock. Missing, malformed, or key-mismatched bytes use `default`;
 /// returning `false` leaves the file untouched.
 pub(super) fn update<R: SidecarRecord>(
+    runtime: &RuntimePaths,
     dir: &Path,
     kind: &str,
     agent_id: &str,
     default: impl FnOnce() -> R,
     apply: impl FnOnce(&mut R, bool) -> bool,
 ) -> Result<bool, atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(dir, R::FILE_PREFIX, kind, agent_id)?;
+    let _lock = RecordLock::acquire(runtime, R::FILE_PREFIX, kind, agent_id)?;
     let prior = read_one(dir, kind, agent_id);
     let existed = prior.is_some();
     let mut record = prior.unwrap_or_else(default);
@@ -156,11 +154,12 @@ pub(super) fn update<R: SidecarRecord>(
 }
 
 pub(super) fn remove_locked<R: SidecarRecord>(
+    runtime: &RuntimePaths,
     dir: &Path,
     kind: &str,
     agent_id: &str,
 ) -> Result<(), atomic::AtomicErr> {
-    let _lock = RecordLock::acquire(dir, R::FILE_PREFIX, kind, agent_id)?;
+    let _lock = RecordLock::acquire(runtime, R::FILE_PREFIX, kind, agent_id)?;
     let record_path = path(dir, R::FILE_PREFIX, kind, agent_id);
     match fs::remove_file(&record_path) {
         Ok(()) => Ok(()),
@@ -390,17 +389,22 @@ mod tests {
     #[test]
     fn remove_targets_one_key() {
         let dir = tempdir().unwrap();
+        let runtime = RuntimePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
         write_record(dir.path(), &record("sess-1", 1_700_000_000)).unwrap();
         write_record(dir.path(), &record("sess-2", 1_700_000_000)).unwrap();
 
-        remove_locked::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
+        remove_locked::<TestRecord>(&runtime, dir.path(), "codex", "sess-1").unwrap();
 
         let ids: Vec<_> = read_all_test(dir.path())
             .into_iter()
             .map(|record| record.agent_id)
             .collect();
         assert_eq!(ids, vec!["sess-2".to_owned()]);
-        remove_locked::<TestRecord>(dir.path(), "codex", "sess-1").unwrap();
+        remove_locked::<TestRecord>(&runtime, dir.path(), "codex", "sess-1").unwrap();
     }
 
     #[test]
@@ -437,8 +441,14 @@ mod tests {
     #[test]
     fn locked_update_creates_defaults_skips_no_ops_and_reads_latest_bytes() {
         let dir = tempdir().unwrap();
+        let runtime = RuntimePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
         assert!(
             !update(
+                &runtime,
                 dir.path(),
                 "codex",
                 "sess-1",
@@ -454,6 +464,7 @@ mod tests {
 
         assert!(
             update(
+                &runtime,
                 dir.path(),
                 "codex",
                 "sess-1",
@@ -480,6 +491,7 @@ mod tests {
         std::fs::write(&record_path, serde_json::to_vec(&latest).unwrap()).unwrap();
         assert!(
             update(
+                &runtime,
                 dir.path(),
                 "codex",
                 "sess-1",
