@@ -1124,6 +1124,7 @@ fn align_submitted_prompt_consumes_harness_report_header() {
         (HarnessNotice::Wait, "WAIT"),
         (HarnessNotice::Signal, "SIGNAL"),
         (HarnessNotice::Stage, "STAGE"),
+        (HarnessNotice::Deadline, "DEADLINE"),
     ] {
         let record = MessageRecord::new(
             WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
@@ -1133,6 +1134,12 @@ fn align_submitted_prompt_consumes_harness_report_header() {
         )
         .with_sender(MessageSender::Harness { notice });
         let prompt = format!("Type: {header_type}\nFrom: @rimz\nContent:\nship it");
+        if header_type == "DEADLINE" {
+            assert_eq!(
+                parse_message_header(&prompt),
+                Some((HeaderKind::Deadline, "@rimz".into(), "ship it".into()))
+            );
+        }
 
         let (leading, segments, trailing) =
             align_submitted_prompt(&prompt, &[&record]).expect("aligned prompt");

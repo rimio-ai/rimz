@@ -279,7 +279,8 @@ pub(super) fn record_conversation(
                                 | rimz::store::message::HeaderKind::Subagent
                                 | rimz::store::message::HeaderKind::Wait
                                 | rimz::store::message::HeaderKind::Signal
-                                | rimz::store::message::HeaderKind::Stage),
+                                | rimz::store::message::HeaderKind::Stage
+                                | rimz::store::message::HeaderKind::Deadline),
                                 sender,
                                 body,
                             )) => {
@@ -293,7 +294,8 @@ pub(super) fn record_conversation(
                                     }
                                     rimz::store::message::HeaderKind::Wait
                                     | rimz::store::message::HeaderKind::Signal
-                                    | rimz::store::message::HeaderKind::Stage => {
+                                    | rimz::store::message::HeaderKind::Stage
+                                    | rimz::store::message::HeaderKind::Deadline => {
                                         rimz::transcript::TranscriptKind::Wait
                                     }
                                     rimz::store::message::HeaderKind::User => {

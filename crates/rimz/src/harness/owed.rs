@@ -134,6 +134,7 @@ mod tests {
             HarnessNotice::Signal,
             HarnessNotice::SubagentReport,
             HarnessNotice::Stage,
+            HarnessNotice::Deadline,
         ] {
             for status in [
                 MessageStatus::Queued,
@@ -163,8 +164,9 @@ mod tests {
                 });
                 message.status = status;
                 store.queue_message(&message, "owed-test").unwrap();
-                let expected = (!status.is_terminal() && notice != HarnessNotice::Stage)
-                    .then_some(OwedWake::WakeInFlight);
+                let expected = (!status.is_terminal()
+                    && !matches!(notice, HarnessNotice::Stage | HarnessNotice::Deadline))
+                .then_some(OwedWake::WakeInFlight);
                 assert_eq!(
                     owed_wake(&store, &agent.kind, &agent.agent_id).unwrap(),
                     expected,
