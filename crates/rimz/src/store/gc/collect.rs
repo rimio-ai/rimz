@@ -234,9 +234,10 @@ pub(super) fn collect_locks(dir: &Path, sweep: &mut Sweep, report: &mut GcReport
             source,
         };
         let file_type = entry.file_type().map_err(io_err)?;
+        // Lock subdirectories stay like class roots: a waiter reopening an
+        // unlinked lock recreates only the file, never its parent.
         if file_type.is_dir() {
             collect_locks(&path, sweep, report)?;
-            sweep.remove_dir_if_empty(&path, report)?;
             continue;
         }
         if !file_type.is_file() {
@@ -520,7 +521,14 @@ impl Sweep {
                 });
                 Ok(())
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
+                ) =>
+            {
+                Ok(())
+            }
             Err(source) => Err(GcErr::Io {
                 path: path.to_path_buf(),
                 source,
