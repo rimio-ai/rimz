@@ -91,12 +91,13 @@ impl MessageSender {
             Self::Subagent { name, .. } => format!("@{name}"),
             Self::Agent {
                 kind,
-                profile,
+                name,
                 role,
                 channel,
                 ..
             } => {
-                let mut rendered = identity_handle(kind, profile.as_deref(), role.as_deref());
+                let mut rendered =
+                    crate::agents::petname::sender_handle(role.as_deref(), name.as_deref(), kind);
                 if let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
                     rendered.push('#');
                     rendered.push_str(channel);
@@ -105,14 +106,6 @@ impl MessageSender {
             }
         }
     }
-}
-
-pub fn identity_handle(kind: &AgentKind, profile: Option<&str>, role: Option<&str>) -> String {
-    let base = role
-        .filter(|value| !value.is_empty())
-        .or_else(|| profile.filter(|value| !value.is_empty()))
-        .unwrap_or_else(|| kind.as_str());
-    format!("@{base}")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -947,12 +940,26 @@ pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> 
     let (kind, rest) = text.split_once('\n')?;
     let kind = classify_header_line(kind)?;
     let (from, rest) = rest.split_once('\n')?;
-    let handle = from.strip_prefix("From: @")?;
-    if handle.is_empty() || handle.chars().any(char::is_whitespace) {
-        return None;
-    }
+    let handle = parse_sender_handle(from.strip_prefix("From: @")?)?;
     let body = rest.strip_prefix("Content:\n")?;
     Some((kind, format!("@{handle}"), body.to_owned()))
+}
+
+fn parse_sender_handle(from: &str) -> Option<&str> {
+    let handle = if let Some((handle, label)) = from.split_once(" (") {
+        let label = label.strip_suffix(')')?;
+        if label.is_empty()
+            || label
+                .chars()
+                .any(|ch| ch.is_whitespace() || matches!(ch, '(' | ')'))
+        {
+            return None;
+        }
+        handle
+    } else {
+        from
+    };
+    (!handle.is_empty() && !handle.chars().any(char::is_whitespace)).then_some(handle)
 }
 
 /// Split a batched pane paste into prompt sections. A blank-line boundary starts a new section only when the following first line names a message type.
@@ -1049,17 +1056,13 @@ fn align_submitted_prompt_from<'a>(
             MessageSender::Agent { .. } => {
                 let attributed = body.strip_prefix("Type: AGENT_MESSAGE\nFrom: @")?;
                 let (handle, text) = attributed.split_once("\nContent:\n")?;
-                if handle.is_empty() || handle.chars().any(char::is_whitespace) {
-                    return None;
-                }
+                parse_sender_handle(handle)?;
                 body = text;
             }
             MessageSender::Subagent { .. } => {
                 let attributed = body.strip_prefix("Type: SUBAGENT_REPORT\nFrom: @")?;
                 let (handle, text) = attributed.split_once("\nContent:\n")?;
-                if handle.is_empty() || handle.chars().any(char::is_whitespace) {
-                    return None;
-                }
+                parse_sender_handle(handle)?;
                 body = text;
             }
             MessageSender::Harness { notice } => {

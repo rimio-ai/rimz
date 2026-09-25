@@ -680,7 +680,12 @@ fn credit_sent_messages(members: &mut [FoldedMember], transcript: &[TranscriptEn
             .map_or((from, None), |(base, channel)| (base, Some(channel)));
         let sender_channel = explicit_channel.or(entry.channel.as_deref());
         if let Some(member) = members.iter_mut().find(|member| {
-            member.attribution.handle == base && member.channel.as_deref() == sender_channel
+            super::petname::sender_handle(
+                member.attribution.role.as_deref(),
+                member.attribution.name.as_deref(),
+                &member.attribution.kind,
+            ) == base
+                && member.channel.as_deref() == sender_channel
         }) {
             member.attribution.messages.to_teammates =
                 member.attribution.messages.to_teammates.saturating_add(1);

@@ -10,7 +10,30 @@ use std::collections::BTreeSet;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::ids::AgentSessionId;
+use crate::ids::{AgentKind, AgentSessionId};
+
+/// The stable reply address: role, else explicit or pet name, else kind.
+pub fn sender_handle(role: Option<&str>, name: Option<&str>, kind: &AgentKind) -> String {
+    let base = role
+        .filter(|value| !value.is_empty())
+        .or_else(|| name.filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| kind.as_str());
+    format!("@{base}")
+}
+
+/// Profile or kind, omitted when it repeats the handle base.
+pub fn sender_label<'a>(
+    handle: &str,
+    profile: Option<&'a str>,
+    kind: &'a AgentKind,
+) -> Option<&'a str> {
+    let label = profile
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| kind.as_str());
+    let base = handle.strip_prefix('@').unwrap_or(handle);
+    let base = base.split_once('#').map_or(base, |(base, _)| base);
+    (label != base).then_some(label)
+}
 
 const ADJECTIVES: &[&str] = &[
     "able", "acute", "amber", "ample", "apt", "bold", "brave", "bright", "candid", "chief",
@@ -118,6 +141,32 @@ fn hash_u64(seed: &str, attempt: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sender_address_precedence() {
+        let kind = AgentKind::new_unchecked("claude");
+        for (role, name, expected) in [
+            (Some("writer"), Some("calm-fox"), "@writer"),
+            (None, Some("calm-fox"), "@calm-fox"),
+            (Some(""), Some(""), "@claude"),
+            (None, None, "@claude"),
+        ] {
+            assert_eq!(sender_handle(role, name, &kind), expected);
+        }
+    }
+
+    #[test]
+    fn sender_label_precedence_and_redundancy() {
+        let kind = AgentKind::new_unchecked("claude");
+        for (handle, profile, expected) in [
+            ("@writer", Some("planner"), Some("planner")),
+            ("@planner#docs", Some("planner"), None),
+            ("@calm-fox", None, Some("claude")),
+            ("@claude#docs", Some(""), None),
+        ] {
+            assert_eq!(sender_label(handle, profile, &kind), expected);
+        }
+    }
 
     #[test]
     fn deterministic_fallback_avoids_taken_names() {
