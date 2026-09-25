@@ -138,9 +138,13 @@ pub enum SymbolResolution {
 }
 
 pub fn resolve_symbol(name: &str, result: Value) -> Result<SymbolResolution> {
+    // Servers report only the innermost container, so `module::Type::method` matches container `Type`.
+    let last_segment = |path: &str| path.rsplit("::").next().unwrap_or(path).to_owned();
     let (container, name) = name
         .rsplit_once("::")
-        .map_or((None, name), |(container, name)| (Some(container), name));
+        .map_or((None, name), |(container, name)| {
+            (Some(last_segment(container)), name)
+        });
     let symbols: Vec<SymbolInformation> = if result.is_null() {
         Vec::new()
     } else {
@@ -150,8 +154,9 @@ pub fn resolve_symbol(name: &str, result: Value) -> Result<SymbolResolution> {
         .into_iter()
         .filter(|symbol| {
             symbol.name == name
-                && container
-                    .is_none_or(|container| symbol.container_name.as_deref() == Some(container))
+                && container.as_ref().is_none_or(|container| {
+                    symbol.container_name.as_deref().map(last_segment).as_ref() == Some(container)
+                })
         })
         .collect();
     Ok(match matches.len() {
@@ -480,6 +485,14 @@ mod tests {
         let symbol = |container| json!({"name": "method", "containerName": container, "kind": 12, "location": {"uri": "file:///checkout/lib.rs", "range": range()}});
         assert!(matches!(
             resolve_symbol("Type::method", json!([symbol("Type"), symbol("Other")])).unwrap(),
+            SymbolResolution::Unique(_)
+        ));
+        assert!(matches!(
+            resolve_symbol(
+                "module::Type::method",
+                json!([symbol("Type"), symbol("Other")])
+            )
+            .unwrap(),
             SymbolResolution::Unique(_)
         ));
     }
