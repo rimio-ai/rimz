@@ -300,6 +300,10 @@ pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<Strin
             message_id,
             reason,
         } => Some(match reason {
+            Some(ParkReason::InterruptUnproven { wait }) => format!(
+                "queued for {label} ({message_id}): turn still running after {}s; retry: rimz message interrupt {message_id}",
+                wait.as_secs_f64()
+            ),
             Some(ParkReason::Status(status)) => format!(
                 "queued for {label} ({message_id}) — {label} is {}; send now: rimz message steer {message_id}",
                 status.as_str()
@@ -325,8 +329,38 @@ pub(crate) fn report_dispatch(
 ) -> Result<()> {
     match mode {
         ReportMode::Boundary => report_boundary(outcomes, compacted),
-        ReportMode::Steer | ReportMode::Interrupt => report_steer(target, outcomes, compacted),
+        ReportMode::Steer => report_steer(target, outcomes, compacted),
+        ReportMode::Interrupt => report_interrupt(outcomes, compacted),
     }
+}
+
+fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {
+    for outcome in outcomes {
+        let line = match outcome {
+            DispatchOutcome::Queued {
+                label,
+                message_id,
+                reason: None,
+            } => Some(format!(
+                "queued for {label} ({message_id}): delivery deferred; send now: rimz message interrupt {message_id}"
+            )),
+            DispatchOutcome::SkippedWaiting { label, .. } => {
+                bail!("{label} is waiting on your input in its pane; answer it or pass --force")
+            }
+            DispatchOutcome::Sent { label, .. } => {
+                print_compacted_if_needed(label, compacted);
+                render_dispatch_outcome(outcome)
+            }
+            _ => render_dispatch_outcome(outcome),
+        };
+        if let Some(line) = line {
+            #[expect(clippy::print_stdout, reason = "message confirmation")]
+            {
+                println!("{line}");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn report_boundary(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {

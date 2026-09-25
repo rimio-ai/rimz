@@ -20,6 +20,26 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
     assert_eq!(
         step(
             WaitPhase::Delivery,
+            DeliveryKind::Interrupt,
+            MessageStatus::Sent,
+            card(AgentStatus::Running, 1)
+        ),
+        Step::Wait(WaitPhase::Delivery)
+    );
+    assert_eq!(
+        step(
+            WaitPhase::Delivery,
+            DeliveryKind::Interrupt,
+            MessageStatus::Delivered,
+            card(AgentStatus::Running, 2)
+        ),
+        Step::Wait(WaitPhase::Reply {
+            turn_started_at: Some(Timestamp::from_second(2).unwrap())
+        })
+    );
+    assert_eq!(
+        step(
+            WaitPhase::Delivery,
             DeliveryKind::Boundary,
             MessageStatus::Queued,
             card(AgentStatus::Idle, 1),

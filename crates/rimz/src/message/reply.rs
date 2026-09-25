@@ -583,7 +583,7 @@ fn step(
     match phase {
         WaitPhase::Delivery => {
             let delivered = message_status == MessageStatus::Delivered
-                || (kind != DeliveryKind::Boundary
+                || (kind == DeliveryKind::Steer
                     && message_status == MessageStatus::Sent
                     && card.status == AgentStatus::Running);
             if !delivered {

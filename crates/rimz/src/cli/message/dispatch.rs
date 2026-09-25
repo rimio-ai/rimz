@@ -15,7 +15,6 @@ use rimz::message::reply::{ReplyJoin, ReplyPrepareErr};
 
 pub(super) enum SendKind {
     Steer,
-    #[expect(dead_code, reason = "interrupt CLI is wired in the next task")]
     Interrupt,
     Boundary {
         gate: DeliveryGate,
@@ -155,6 +154,9 @@ fn dispatch_mode(
     let machine_config = crate::cli::machine_config();
     let (gate, schedule, after, when) = match mode {
         SendKind::Interrupt => {
+            if create {
+                bail!("--interrupt needs an existing recipient; remove --create");
+            }
             return Ok(DispatchMode::Interrupt {
                 enter,
                 force,

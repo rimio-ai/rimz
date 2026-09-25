@@ -1073,6 +1073,8 @@ rimz help message deliver [hidden]
 
 rimz help message edit
 
+rimz help message interrupt
+
 rimz help message list
 
 rimz help message requeue
@@ -1796,6 +1798,7 @@ rimz message (aliases: msg)
     --file <PATH>  [action=set takes=1..=1]
     --force  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
+    --interrupt  [action=set-true takes=0..=0]
     --json  [action=set-true takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --no-enter  [action=set-true takes=0..=0]
@@ -1873,6 +1876,8 @@ rimz message help edit
 
 rimz message help help
 
+rimz message help interrupt
+
 rimz message help list
 
 rimz message help requeue
@@ -1882,6 +1887,16 @@ rimz message help show
 rimz message help steer
 
 rimz message help sweep [hidden]
+
+rimz message interrupt
+    <message_id>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --force  [action=set-true takes=0..=0]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
 
 rimz message list
     <target>  [action=set takes=1..=1]

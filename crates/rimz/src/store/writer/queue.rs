@@ -648,6 +648,30 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub(crate) fn release_message_retry_lease(
+        &self,
+        attempted: &MessageRecord,
+        note: &str,
+        session_name: &str,
+    ) -> Result<()> {
+        self.commit_queue(|queue| {
+            queue.apply_all(session_name, Timestamp::now(), |message| {
+                if message.message_id != attempted.message_id
+                    || message.status != MessageStatus::Claimed
+                    || message.last_attempt_at != attempted.last_attempt_at
+                {
+                    return MessageUpdate::Keep;
+                }
+                message.attempts = message.attempts.saturating_sub(1);
+                message.last_attempt_at = None;
+                message.requeue(Timestamp::now(), note);
+                MessageUpdate::SilentRewrite
+            });
+            Ok(())
+        })
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn release_message_claims(
         &self,
         message_ids: &[MessageId],

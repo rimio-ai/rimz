@@ -242,6 +242,12 @@ pub fn settle_duration_from_env() -> Duration {
     env_ms(SETTLE_ENV).unwrap_or(DEFAULT_SETTLE)
 }
 
+fn interrupt_wait_from_env() -> Duration {
+    env_ms("RIMZ_MESSAGE_INTERRUPT_WAIT_MS")
+        .unwrap_or(Duration::from_secs(5))
+        .min(crate::store::message::CLAIM_TTL - Duration::from_secs(1))
+}
+
 /// Spacing between discrete message pane writes.
 fn message_interval_from_env() -> Duration {
     env_ms(MESSAGE_INTERVAL_ENV).unwrap_or(DEFAULT_MESSAGE_INTERVAL)
