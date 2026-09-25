@@ -261,6 +261,10 @@ pub(crate) struct AgentLaunchArgs {
     /// Wait cap for `--print` or `wait`.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout, requires = "print")]
     pub(crate) timeout: Option<Duration>,
+    #[arg(skip)]
+    pub(crate) warn: Vec<Duration>,
+    #[arg(skip)]
+    pub(crate) grace: Option<Duration>,
     /// Leave the supervised agent pane open after completion.
     #[arg(long, requires = "print")]
     pub(crate) keep: bool,
@@ -923,6 +927,8 @@ fn into_supervised_request(
     request.budget = args.launch.cohort.budget;
     request.max_turns = args.launch.max_turns;
     request.timeout = args.launch.timeout;
+    request.warn = args.launch.warn;
+    request.grace = args.launch.grace;
     request.keep = args.launch.keep;
     request.retries = args.launch.retries.unwrap_or(0);
     request.verify = args.launch.verify;

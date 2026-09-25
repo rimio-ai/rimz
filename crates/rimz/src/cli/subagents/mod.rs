@@ -101,9 +101,15 @@ struct FanoutArgs {
         value_parser = crate::cli::supervised::parse_timeout
     )]
     wait: Option<Option<Duration>>,
-    /// Stop each child after this duration.
+    /// Tell each child to stop after this duration, then allow its reporting grace.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
+    /// Warning offsets before the deadline, comma-separated; `none` disables warnings.
+    #[arg(long, value_name = "OFFSETS", value_parser = parse_warn)]
+    warn: Option<WarnOffsets>,
+    /// Time to report after the deadline; `0s` kills at the deadline.
+    #[arg(long, value_name = "DURATION", value_parser = crate::cli::supervised::parse_timeout)]
+    grace: Option<Duration>,
     /// Disable automatic completion and parent-exit cleanup; hold the panes until explicitly stopped (run timeouts still apply).
     #[arg(long)]
     keep: bool,
@@ -123,6 +129,8 @@ struct FanoutTask {
     agent: Option<String>,
     effort: Option<String>,
     timeout: Option<String>,
+    warn: Option<Vec<String>>,
+    grace: Option<String>,
     max_turns: Option<u32>,
     description: Option<String>,
 }
@@ -159,9 +167,15 @@ struct SubagentLaunchArgs {
     /// Run the child under this isolation instead of inheriting the parent's.
     #[arg(long, value_name = "host|sandbox")]
     isolation: Option<rimz::config::Isolation>,
-    /// Stop the child after this duration.
+    /// Tell the child to stop after this duration, then allow its reporting grace.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
+    /// Warning offsets before the deadline, comma-separated; `none` disables warnings.
+    #[arg(long, value_name = "OFFSETS", value_parser = parse_warn)]
+    warn: Option<WarnOffsets>,
+    /// Time to report after the deadline; `0s` kills at the deadline.
+    #[arg(long, value_name = "DURATION", value_parser = crate::cli::supervised::parse_timeout)]
+    grace: Option<Duration>,
     /// Wait for the child and print its result; use `--wait=5m` for a deadline.
     #[arg(
         long,
@@ -408,6 +422,27 @@ impl FanoutTask {
             .map_err(anyhow::Error::msg)
             .context("parsing timeout")?
             .or(fanout.timeout);
+        let warn = self
+            .warn
+            .map(|offsets| {
+                offsets
+                    .iter()
+                    .map(|offset| crate::cli::supervised::parse_timeout(offset))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map(WarnOffsets)
+            })
+            .transpose()
+            .map_err(anyhow::Error::msg)
+            .context("parsing warn")?
+            .or_else(|| fanout.warn.clone());
+        let grace = self
+            .grace
+            .as_deref()
+            .map(crate::cli::supervised::parse_timeout)
+            .transpose()
+            .map_err(anyhow::Error::msg)
+            .context("parsing grace")?
+            .or(fanout.grace);
         let launch = SubagentLaunchArgs {
             cwd: self.cwd,
             profile: self.profile,
@@ -418,6 +453,8 @@ impl FanoutTask {
             effort: self.effort,
             isolation: None,
             timeout,
+            warn,
+            grace,
             wait: None,
             keep: fanout.keep,
             description: self.description,
@@ -461,6 +498,31 @@ impl SubagentLaunchArgs {
             .unwrap_or_else(|| crate::cli::supervised::parse_timeout(&defaults.timeout))
             .map_err(anyhow::Error::msg)
             .context("parsing agents.subagents.timeout")?;
+        let mut warn = self
+            .warn
+            .map(|offsets| Ok(offsets.0))
+            .unwrap_or_else(|| {
+                defaults
+                    .warn
+                    .iter()
+                    .map(|offset| crate::cli::supervised::parse_timeout(offset))
+                    .collect()
+            })
+            .map_err(anyhow::Error::msg)
+            .context("parsing agents.subagents.warn")?;
+        warn.retain(|offset| !offset.is_zero() && *offset < timeout);
+        warn.sort_unstable_by(|a, b| b.cmp(a));
+        warn.dedup();
+        let grace = self
+            .grace
+            .map(Ok)
+            .unwrap_or_else(|| crate::cli::supervised::parse_timeout(&defaults.grace))
+            .map_err(anyhow::Error::msg)
+            .context("parsing agents.subagents.grace")?;
+        jiff::Timestamp::now()
+            .checked_add(timeout)
+            .and_then(|deadline| deadline.checked_add(grace))
+            .context("computing subagent kill deadline")?;
         Ok(agents_cmd::AgentLaunchArgs {
             cwd: self.cwd,
             spec: Some(profile),
@@ -482,11 +544,26 @@ impl SubagentLaunchArgs {
             self_cleanup_on_completion: true,
             subagent: true,
             timeout: Some(timeout),
+            warn,
+            grace: (!grace.is_zero()).then_some(grace),
             keep: self.keep,
             max_turns: self.max_turns,
             ..Default::default()
         })
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct WarnOffsets(Vec<Duration>);
+
+fn parse_warn(raw: &str) -> std::result::Result<WarnOffsets, String> {
+    if raw == "none" {
+        return Ok(WarnOffsets(Vec::new()));
+    }
+    raw.split(',')
+        .map(crate::cli::supervised::parse_timeout)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map(WarnOffsets)
 }
 
 fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
@@ -498,6 +575,8 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
         || args.effort.is_some()
         || args.isolation.is_some()
         || args.timeout.is_some()
+        || args.warn.is_some()
+        || args.grace.is_some()
         || args.wait.is_some()
         || args.keep
         || args.description.is_some()

@@ -425,13 +425,17 @@ fn git_reminder_defaults_on_and_parses_override() {
 fn subagent_launch_defaults_parse_and_round_trip() {
     let defaulted: AgentsConfig = toml::from_str("").expect("parse defaults");
     assert_eq!(defaulted.subagents.timeout, "30m");
+    assert_eq!(defaulted.subagents.warn, ["6m", "3m"]);
+    assert_eq!(defaulted.subagents.grace, "3m");
 
     let parsed: AgentsConfig = toml::from_str(
         "[subagents]\n\
-         timeout = \"45m\"\n",
+         timeout = \"45m\"\nwarn = [\"9m\", \"2m\"]\ngrace = \"1m\"\n",
     )
     .expect("parse subagent defaults");
     assert_eq!(parsed.subagents.timeout, "45m");
+    assert_eq!(parsed.subagents.warn, ["9m", "2m"]);
+    assert_eq!(parsed.subagents.grace, "1m");
 
     let encoded = toml::to_string(&parsed).expect("serialize agents");
     assert_eq!(

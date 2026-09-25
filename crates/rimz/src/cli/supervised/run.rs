@@ -698,6 +698,11 @@ fn execute_attempt(
         .map(|timeout| record.started_at.checked_add(timeout))
         .transpose()
         .context("computing supervised run deadline")?;
+    if request.subagent {
+        record.timeout = request.timeout;
+        record.warn.clone_from(&request.warn);
+        record.grace = request.grace.filter(|grace| !grace.is_zero());
+    }
     record.retry_of = retry_of.cloned();
     record.loop_task.clone_from(&request.loop_task);
     let run_id = record.run_id.clone();

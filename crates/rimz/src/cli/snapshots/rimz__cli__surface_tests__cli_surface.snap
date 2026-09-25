@@ -2575,6 +2575,7 @@ rimz subagents
     --cwd <DIR>  [action=set takes=1..=1]
     --description <TEXT>  [action=set takes=1..=1]
     --effort <LEVEL>  [action=set takes=1..=1]
+    --grace <DURATION>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --isolation <host|sandbox>  [action=set takes=1..=1]
     --json  [action=set-true takes=0..=0]
@@ -2587,11 +2588,13 @@ rimz subagents
     --timeout <TIMEOUT>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --wait <DURATION>  [action=set takes=0..=1]
+    --warn <OFFSETS>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz subagents fanout
     <file>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --grace <DURATION>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
     --keep  [action=set-true takes=0..=0]
@@ -2600,6 +2603,7 @@ rimz subagents fanout
     --timeout <TIMEOUT>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --wait <DURATION>  [action=set takes=0..=1]
+    --warn <OFFSETS>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz subagents help
@@ -2627,6 +2631,7 @@ rimz subagents launch
     --cwd <DIR>  [action=set takes=1..=1]
     --description <TEXT>  [action=set takes=1..=1]
     --effort <LEVEL>  [action=set takes=1..=1]
+    --grace <DURATION>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --isolation <host|sandbox>  [action=set takes=1..=1]
     --json  [action=set-true takes=0..=0]
@@ -2639,6 +2644,7 @@ rimz subagents launch
     --timeout <TIMEOUT>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --wait <DURATION>  [action=set takes=0..=1]
+    --warn <OFFSETS>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz subagents list (aliases: ls)
