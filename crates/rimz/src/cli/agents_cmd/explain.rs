@@ -129,19 +129,28 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .agent_cells()
             .next()
             .expect("one agent cell was required");
-        let ancestry = store
+        let projection = store
             .as_ref()
-            .map(|store| {
-                let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-                rimz::harness::ancestry::resolve_launch_ancestry_here(
-                    &projection.agents,
-                    false,
-                    machine.agents.max_chain_length,
-                )
-                .map_err(anyhow::Error::from)
-            })
-            .transpose()?
-            .flatten();
+            .map(|store| store.runtime_projection(rimz::RuntimeScope::Audit))
+            .transpose()?;
+        // Explain launches nothing, so a refusal the real launch would raise
+        // is reported and the plan renders without ancestry.
+        let ancestry = match projection.map(|projection| {
+            rimz::harness::ancestry::resolve_launch_ancestry_here(
+                &projection.agents,
+                false,
+                machine.agents.max_chain_length,
+            )
+        }) {
+            Some(Ok(ancestry)) => ancestry,
+            Some(Err(refusal)) => {
+                warnings.push(format!(
+                    "a real launch from here would be refused ({refusal}); the plan below assumes no launch ancestry"
+                ));
+                None
+            }
+            None => None,
+        };
         let identities = rimz::harness::plan::launch_identity_requests(
             &resolved.layout,
             None,

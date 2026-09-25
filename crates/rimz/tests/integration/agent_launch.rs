@@ -139,10 +139,9 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
-    let env = Env::new();
+/// Seeds a bound `rimz subagents` child and returns the launch id its
+/// process environment carries.
+fn seed_subagent_caller(env: &Env) -> AgentSessionId {
     let workspace =
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
     let launch_id = AgentSessionId::from("launch_subagent");
@@ -173,6 +172,14 @@ fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
             },
         ))
         .expect("seed subagent caller");
+    launch_id
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_caller_refuses_subagent_launch_before_creating_runtime_state() {
+    let env = Env::new();
+    let launch_id = seed_subagent_caller(&env);
 
     let output = env
         .rimz()
@@ -839,6 +846,45 @@ fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
         before
     );
     assert!(!env.runtime_paths().prompt_dir().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn explain_from_a_subagent_reports_the_refusal_and_prints_the_plan() {
+    let env = Env::new();
+    let config_dir = env.rimz_home();
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[agents]\nisolation = \"host\"\n",
+    )
+    .expect("write host isolation");
+    let launch_id = seed_subagent_caller(&env);
+
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "claude", "--prompt"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::launch::ENV_AGENT_ID, launch_id.as_str())
+        .output()
+        .expect("run explain from subagent");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "explain failed: {stderr}");
+    assert!(
+        stderr.contains("a real launch from here would be refused")
+            && stderr.contains("subagents cannot launch"),
+        "{stderr}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("<system_reminder>"),
+        "explain printed no reminder"
+    );
+    assert_eq!(
+        env.store().read_events().expect("read events").len(),
+        1,
+        "explain must not append events"
+    );
 }
 
 #[cfg(unix)]
