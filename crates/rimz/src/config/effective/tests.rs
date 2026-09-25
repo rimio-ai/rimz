@@ -35,6 +35,22 @@ fn git_reminder_overlay_requires_trust_and_wins_in_both_directions() {
 }
 
 #[test]
+fn project_lsp_policy_is_machine_only() {
+    for field in [
+        "reserve-percent = 20",
+        "reserve-min = '2G'",
+        "kill-floor-percent = 5",
+    ] {
+        let value = toml::from_str(&format!("[lsp]\n{field}")).unwrap();
+        let error = repo_config_from_value(&value)
+            .err()
+            .expect("reject project policy");
+        assert!(error.to_string().contains("project config cannot set lsp."));
+        assert!(error.to_string().contains("move it to ~/.rimz/config.toml"));
+    }
+}
+
+#[test]
 fn project_prompt_fields_reject_inline_text() {
     for declaration in [
         "[profiles.planner]\nagent = 'claude'\nsystem-prompt-file = { origin = 'x', text = 'y' }",

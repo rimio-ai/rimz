@@ -165,6 +165,20 @@ aggressive_resize = true
 # auto = true                         # sweep stale state once a day from every open room
 # older_than = "7d"                   # age cutoff for `rimz gc` (s/m/h/d)
 
+[lsp]
+# Shared language servers are off until a server is declared. Memory policy is machine-only; trusted projects may override server entries by name.
+# reserve-percent = 10                # keep at least this percentage of total memory free
+# reserve-min = "8G"                   # minimum reserve; G is decimal, GiB is binary
+# kill-floor-percent = 5              # stop shared servers below this free-memory percentage
+## [lsp.servers.rust]
+## command = ["rust-analyzer"]
+## extensions = ["rs"]
+## root-markers = ["Cargo.toml"]
+## init-options = { checkOnSave = false }
+## policy = "optional"                # "required" waits for memory before opening panes
+## wait-timeout = "10m"                # required-server queue deadline
+## memory-estimate = "8G"              # used until this server's peak has been measured
+
 # [agents]
 # isolation = "host"                  # "sandbox": Linux bubblewrap mount view, per-room /tmp, and skill views
 # Definitions live in <agents_home>/{agents,subagents,teams,traits}/*.md.

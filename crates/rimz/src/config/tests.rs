@@ -1901,3 +1901,14 @@ fn isolation_resolution_precedence() {
         assert_eq!(Isolation::resolve(flag, profile, machine), expected);
     }
 }
+#[test]
+fn lsp_configuration_has_documented_defaults() {
+    let config: MachineConfig = toml::from_str("[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\ninit-options = { checkOnSave = false }").unwrap();
+    let value = serde_json::to_value(config).unwrap();
+    assert_eq!(value["lsp"]["reserve-percent"], 10);
+    assert_eq!(value["lsp"]["reserve-min"], "8G");
+    assert_eq!(value["lsp"]["kill-floor-percent"], 5);
+    assert_eq!(value["lsp"]["servers"]["rust"]["policy"], "optional");
+    assert_eq!(value["lsp"]["servers"]["rust"]["wait-timeout"], "10m");
+    assert_eq!(value["lsp"]["servers"]["rust"]["memory-estimate"], "8G");
+}

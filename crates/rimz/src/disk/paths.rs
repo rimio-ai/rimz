@@ -1001,6 +1001,14 @@ pub fn runtime_rimz_root() -> PathBuf {
     runtime_rimz_root_under(&runtime_home())
 }
 
+pub fn lsp_runtime_dir() -> PathBuf {
+    runtime_rimz_root().join("lsp")
+}
+
+pub fn lsp_history_path() -> PathBuf {
+    rimz_home().join("lsp-history.jsonl")
+}
+
 /// [`runtime_rimz_root`] for an explicit runtime root.
 pub(crate) fn runtime_rimz_root_under(runtime_root: &Path) -> PathBuf {
     runtime_root.join("rimz")
