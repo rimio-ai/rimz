@@ -131,6 +131,30 @@ fn lock_sweep_keeps_held_files_and_previews_unheld_files() {
 }
 
 #[test]
+fn lock_sweep_keeps_subdirs_so_a_queued_waiter_can_reopen() {
+    let temp = tempdir().unwrap();
+    let pane_dir = temp.path().join("pane-write");
+    let lock_path = pane_dir.join("pane.lock");
+    let held = crate::disk::lock::WorkspaceLock::acquire(&lock_path).unwrap();
+    let mut waiter = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    assert!(matches!(
+        crate::disk::lock::try_lock_file(&mut waiter, &lock_path),
+        Err(fs::TryLockError::WouldBlock)
+    ));
+    drop(held);
+    let mut report = GcReport::default();
+    collect_locks(temp.path(), &mut Sweep::new(false), &mut report).unwrap();
+    assert_eq!(report.sidecar_files_removed, 1);
+    assert!(pane_dir.is_dir(), "the sweep keeps the emptied lock subdir");
+    crate::disk::lock::try_lock_file(&mut waiter, &lock_path).unwrap();
+    assert!(lock_path.exists());
+}
+
+#[test]
 fn a_file_vanished_before_its_age_check_is_not_a_candidate() {
     let temp = tempdir().unwrap();
 

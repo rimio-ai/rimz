@@ -71,7 +71,7 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `cache/` | State | Rebuildable; cleared on reset, no age sweep. |
 | `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live or its directory or a direct child is newer than 7 days. Unknown handles use the same mtime grace. Runs: terminal and record mtime older than 7 days. Restorability does not extend the grace. |
 | `tmp/` | State | Room lifetime; unclaimed wait and subagent outputs older than 7 days are also swept. |
-| `locks/` | State | Try-lock and unlink while held; keep busy files. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
+| `locks/` | State | Try-lock and unlink while held; keep busy files and every subdirectory, since a reopening waiter recreates only the file. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
 | `sock/` | Runtime | Remove sockets whose connect probe is refused, after the sidebar heartbeat TTL startup grace. |
 | `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exception: keep agent telemetry while its room is live, because the external exporter holds its inode open. |
 | `lanes/` | Runtime | No age sweep; reset, teardown, room death and reboot reclaim coordination state, including quiet schedules and user choices. |
