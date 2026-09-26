@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, ArrayOfTables, Decor, DocumentMut, InlineTable, Item, Table, Value};
 
 use crate::disk::atomic::write_bytes_atomically;
 
@@ -140,14 +140,7 @@ impl ConfigEditor {
         {
             doc = uncommented;
         }
-        apply_logical_key(
-            &mut doc,
-            file.path(),
-            &key,
-            value,
-            self.files.agents_home(),
-            self.files.core_path(),
-        )?;
+        apply_logical_key(&mut doc, file.path(), &key, value, self.files.agents_home())?;
         write(file.path(), doc.to_string().as_bytes())
     }
 
@@ -173,19 +166,14 @@ impl ConfigEditor {
                     &key,
                     Value::from(home.to_string_lossy().as_ref()),
                     self.files.agents_home(),
-                    self.files.core_path(),
                 )?;
+            }
+            None if !declared => {
+                set_document_value(&mut doc, &key, Value::InlineTable(InlineTable::new()))?;
             }
             None => {
                 table_at_mut(&mut doc, &key)?;
             }
-        }
-        if !declared {
-            // A new table otherwise renders inside the `[accounts]` group, above
-            // the comments that head the next table, and reads as their owner.
-            let last = last_table_position(doc.as_table());
-            table_at_mut(&mut doc, &key[..2])?.set_implicit(true);
-            table_at_mut(&mut doc, &key[..3])?.set_position(Some(last + 1));
         }
         write(file.path(), doc.to_string().as_bytes())
     }
@@ -300,7 +288,6 @@ impl ConfigEditor {
             pending,
             &mut skipped,
             self.files.agents_home(),
-            self.files.core_path(),
         );
         let rendered = new_doc.to_string();
         validate_merged_text(path, &rendered, self.files.agents_home())?;
@@ -353,13 +340,12 @@ fn apply_logical_key(
     logical: &[String],
     value: Value,
     agents_home: &Path,
-    core_path: &Path,
 ) -> Result<()> {
     validate_set_value(logical, &value)?;
     let value_display = value.to_string().trim().to_owned();
     let pre_image = doc.to_string();
     set_document_value(doc, &document_key_for_set(logical), value)?;
-    reject_unknown_set_key(path, logical, doc, core_path)?;
+    reject_if_ignored(path, logical, &document_key_for_set(logical), doc)?;
     match MachineConfig::parse_text_for_edit(path, &doc.to_string(), agents_home) {
         Ok(_) => Ok(()),
         Err(source) => match MachineConfig::parse_text_for_edit(path, &pre_image, agents_home) {
@@ -403,6 +389,8 @@ struct PendingKey {
 fn collect_explicit_keys(kind: MachineConfigFileKind, doc: &DocumentMut) -> Vec<PendingKey> {
     let mut found = Vec::new();
     walk_table(kind, &[], doc.as_table(), &mut found);
+    // Template headers change traversal order after the first merge; append blocks in stable key order.
+    found.sort_by(|left, right| left.logical.cmp(&right.logical));
     found
 }
 
@@ -412,7 +400,6 @@ fn apply_merge_keys(
     keys: Vec<PendingKey>,
     skipped: &mut Vec<SkippedKey>,
     agents_home: &Path,
-    core_path: &Path,
 ) -> usize {
     let mut kept = 0;
     let mut pending = keys;
@@ -428,14 +415,7 @@ fn apply_merge_keys(
             } else {
                 doc.clone()
             };
-            match apply_logical_key(
-                &mut trial,
-                path,
-                &logical,
-                value.clone(),
-                agents_home,
-                core_path,
-            ) {
+            match apply_logical_key(&mut trial, path, &logical, value.clone(), agents_home) {
                 Ok(()) => {
                     *doc = trial;
                     kept += 1;
@@ -531,7 +511,7 @@ fn walk_table(
         let mut doc_path = doc_prefix.to_vec();
         doc_path.push(key.to_string());
         let logical = to_logical(kind, &doc_path);
-        if is_context_meter_band(&logical) {
+        if is_whole_struct_table(&logical) {
             if let Some(value) = item_to_value(item) {
                 out.push(PendingKey { logical, value });
             }
@@ -557,7 +537,7 @@ fn walk_inline_table(
         let mut doc_path = doc_prefix.to_vec();
         doc_path.push(key.to_string());
         let logical = to_logical(kind, &doc_path);
-        if is_context_meter_band(&logical) {
+        if is_whole_struct_table(&logical) {
             out.push(PendingKey {
                 logical,
                 value: value.clone(),
@@ -589,7 +569,8 @@ fn to_logical(kind: MachineConfigFileKind, doc_path: &[String]) -> Vec<String> {
     }
 }
 
-fn is_context_meter_band(path: &[String]) -> bool {
+/// Context-meter bands and LSP servers have several required fields, so no individual leaf validates alone.
+fn is_whole_struct_table(path: &[String]) -> bool {
     matches!(
         path,
         [root, display, meter, band]
@@ -597,7 +578,7 @@ fn is_context_meter_band(path: &[String]) -> bool {
                 && display == "display"
                 && meter == "context_meter"
                 && CONTEXT_METER_BANDS.contains(&band.as_str())
-    )
+    ) || matches!(path, [root, servers, _] if root == "lsp" && servers == "servers")
 }
 
 fn item_to_value(item: &Item) -> Option<Value> {
@@ -645,13 +626,15 @@ fn parse_document(path: &Path, text: &str) -> Result<DocumentMut> {
 
 /// The table at `path`, created as an empty table where the document has none.
 fn table_at_mut<'a>(doc: &'a mut DocumentMut, path: &[String]) -> Result<&'a mut Table> {
+    let position = last_table_position(doc.as_table()) + 1;
     let mut table = doc.as_table_mut();
     for segment in path {
-        let item = table
-            .entry(segment)
-            .or_insert_with(|| Item::Table(Table::new()));
+        let item = table.entry(segment).or_insert(Item::None);
         if item.is_none() {
-            *item = Item::Table(Table::new());
+            let mut parent = Table::new();
+            parent.set_implicit(true);
+            parent.set_position(Some(position));
+            *item = Item::Table(parent);
         }
         table = item
             .as_table_mut()
@@ -665,7 +648,11 @@ fn table_at_mut<'a>(doc: &'a mut DocumentMut, path: &[String]) -> Result<&'a mut
 fn last_table_position(table: &Table) -> isize {
     table
         .iter()
-        .filter_map(|(_, item)| item.as_table())
+        .flat_map(|(_, item)| {
+            item.as_table()
+                .into_iter()
+                .chain(item.as_array_of_tables().into_iter().flatten())
+        })
         .map(|child| {
             child
                 .position()
@@ -770,16 +757,6 @@ fn validate_set_key(files: &MachineConfigFiles, path: &[String]) -> Result<()> {
         .map_err(|source| ConfigEditErr::TemplateParse { source })?;
     set_document_value(&mut doc, &doc_key, Value::from("__rimz_probe__"))?;
     reject_if_ignored(file.path(), path, &doc_key, &doc)
-}
-
-fn reject_unknown_set_key(
-    path: &Path,
-    logical: &[String],
-    doc: &DocumentMut,
-    core_path: &Path,
-) -> Result<()> {
-    reject_reserved_set_key(logical, core_path)?;
-    reject_if_ignored(path, logical, &document_key_for_set(logical), doc)
 }
 
 fn reject_reserved_set_key(path: &[String], core_path: &Path) -> Result<()> {
@@ -1142,22 +1119,52 @@ fn normalize_set_key(path: &[String], value: &Value) -> Result<Vec<String>> {
 }
 
 fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> Result<()> {
-    let mut table = doc.as_table_mut();
-    for segment in &path[..path.len() - 1] {
-        let item = table
-            .entry(segment)
-            .or_insert_with(|| Item::Table(Table::new()));
-        if item.is_none() {
-            *item = Item::Table(Table::new());
-        }
-        table = item
-            .as_table_mut()
-            .ok_or_else(|| ConfigEditErr::DocumentShape {
-                segment: segment.clone(),
-            })?;
-    }
-    let leaf = path.last().expect("validated key has a leaf");
+    let (leaf, parents) = path.split_last().expect("validated key has a leaf");
     let mut item = value_to_item(value);
+    let old = item_at(doc, path);
+    let position = old
+        .and_then(Item::as_table)
+        .and_then(Table::position)
+        .unwrap_or_else(|| last_table_position(doc.as_table()) + 1);
+    let new_parent = !parents.is_empty() && item_at(doc, parents).is_none();
+    let appended = new_parent || (old.is_none() && !item.is_value());
+    // A replaced block keeps the comments above its header; an appended one takes the
+    // template's trailing comments, so they stay with its last section, then a blank line.
+    let mut decor = match old {
+        Some(Item::Table(block)) => Some(block.decor().clone()),
+        Some(Item::ArrayOfTables(blocks)) => blocks.get(0).map(|block| block.decor().clone()),
+        _ => None,
+    };
+    if appended {
+        let mut appended_decor = Decor::default();
+        appended_decor.set_prefix(format!("{}\n", doc.trailing().as_str().unwrap_or_default()));
+        decor = Some(appended_decor);
+        doc.set_trailing("");
+    }
+    let table = table_at_mut(doc, parents)?;
+    match &mut item {
+        Item::Table(block) => {
+            block.set_position(Some(position));
+            if let Some(decor) = decor {
+                *block.decor_mut() = decor;
+            }
+        }
+        Item::ArrayOfTables(blocks) => {
+            for (index, block) in blocks.iter_mut().enumerate() {
+                block.set_position(Some(position));
+                if index == 0
+                    && let Some(decor) = &decor
+                {
+                    *block.decor_mut() = decor.clone();
+                }
+            }
+        }
+        _ => {
+            if let Some(decor) = decor.filter(|_| new_parent) {
+                *table.decor_mut() = decor;
+            }
+        }
+    }
     if let Some(old) = table.get(leaf).and_then(Item::as_value)
         && let Item::Value(new) = &mut item
     {
