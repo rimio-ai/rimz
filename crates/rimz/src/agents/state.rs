@@ -811,6 +811,9 @@ pub struct AgentState {
     /// First registration leaves it `None` until a turn opens. Stop, automatic mid-turn compaction, and a prompt waking a parked running row carry the stamp forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
+    /// When the last provider request completed: a turn end, interruption, or successful compaction close. Carried across registration so resume does not move the idle-compaction clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_ended_at: Option<Timestamp>,
     /// The user-task boundary used to retire older finished children. Follows `turn_started_at` except that agent and harness prompt headers carry it forward; context resets advance both stamps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_turn_started_at: Option<Timestamp>,
@@ -961,6 +964,8 @@ struct AgentStateWire {
     subagent_started_at: Option<Timestamp>,
     turn_started_at: Option<Timestamp>,
     #[serde(default)]
+    turn_ended_at: Option<Timestamp>,
+    #[serde(default)]
     user_turn_started_at: Option<Timestamp>,
     #[serde(default)]
     waiting_since: Option<Timestamp>,
@@ -1049,6 +1054,7 @@ impl From<AgentStateWire> for AgentState {
             subagent_cost_usd: wire.subagent_cost_usd,
             subagent_started_at: wire.subagent_started_at,
             turn_started_at: wire.turn_started_at,
+            turn_ended_at: wire.turn_ended_at,
             user_turn_started_at: wire.user_turn_started_at,
             waiting_since: wire.waiting_since,
             open_ask: wire.open_ask,
@@ -1159,6 +1165,7 @@ impl AgentState {
             subagent_cost_usd: None,
             subagent_started_at: None,
             turn_started_at: None,
+            turn_ended_at: None,
             user_turn_started_at: None,
             waiting_since: None,
             open_ask: None,

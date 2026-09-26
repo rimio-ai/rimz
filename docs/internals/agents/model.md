@@ -52,7 +52,7 @@ The phase ([`TurnPhase`](../../../crates/rimz/src/agents/lifecycle.rs)) is `reas
 
 The reducer folds `agent.lifecycle` events, in log order, into one `AgentState` keyed by `(kind, agent_id)`. Because `agent_id` is the session id, two concurrent agents of the same kind never share a row. Production replay runs through `reduce_agent_states_seeded_with_identity` in [`project.rs`](../../../crates/rimz/src/store/snapshot/project.rs), which also assigns card names and applies [launch identity inheritance](./instances.md#launch-identity-across-conversations) after each event.
 
-Each event is a partial update. `carried_base` clones the prior row, `assemble_agent_state` overlays what the event carries, and the rule for a field the event omits is that field's lifetime. The types do not state these rules, so the table does. [`AgentState`](../../../crates/rimz/src/agents/state.rs) is the full field catalog.
+Each event is a partial update. `carried_base` clones the prior row, `assemble_agent_state` overlays what the event carries, and the rule for a field the event omits is that field's lifetime. The types do not state these rules, so the table does. [`AgentState`](../../../crates/rimz/src/agents/state.rs) is the full field catalog. Adding a field bumps `SNAPSHOT_VERSION` in [`store/snapshot/view.rs`](../../../crates/rimz/src/store/snapshot/view.rs).
 
 | Lifetime | Fields | Rule |
 | --- | --- | --- |
@@ -67,7 +67,7 @@ Each event is a partial update. `carried_base` clones the prior row, `assemble_a
 | carry-forward | `model`, `effort`, `usage` (`context_pct`, `context_window`, `total_tokens`), `prompt`, `description`, `recent_prompts`, `origin`, `compacted_from`, `budget` | Replaced when an event carries a value; a missing value never resets it. `recent_prompts` keeps the newest 16. |
 | background shells | `background_shells` | Carried forward, then extended, replaced, or trimmed by the event's `BackgroundShellReport`; a shell already listed keeps its first `started_at`. `ended` and `registered` clear it before the report applies. See [parked turns](#turn-endings-and-parked-turns). |
 | counters | `tool_calls`, `compaction_count` | Incremented from durable events, so replay reproduces them. |
-| turn boundaries | `turn_started_at`, `user_turn_started_at` | Advanced by the signals in [the edge table](#edges); otherwise carried. |
+| turn boundaries | `turn_started_at`, `user_turn_started_at`, `turn_ended_at` | Advanced by the signals in [the edge table](#edges); otherwise carried. Registration carries `turn_ended_at` unchanged. |
 | open ask | `waiting_since`, `open_ask`, `interrupted_turn_id` | `waiting_since` and `open_ask` live only while the row is `waiting`. `interrupted_turn_id` is recorded by `turn_interrupted` and cleared by `registered` or a newly opened turn. |
 | turn identity | `started_turn_id`, `superseded_turn_id` | A `turn_started` whose id differs from `started_turn_id` replaces it (an id-less start clears it) and moves the replaced id, when there is one, into `superseded_turn_id`. A repeated start for the same id and every other signal carry both. |
 | compaction | `compacting_since`, `compacted_awaiting_prompt` | `compacting_since` marks an open [compaction bracket](#the-compaction-bracket). `compacted_awaiting_prompt` is set by a sent compact command or a successful manual close, cleared only by `turn_started`, and consulted only for adapters with a native turn-start hook. |
@@ -106,18 +106,18 @@ ended                 running or waiting ──► failed (a reaped end rests at
 
 | Signal | Status | Also |
 | --- | --- | --- |
-| `registered` | any → `idle` | Establishes a row. On a row that has opened a turn, advances both turn boundaries, which retires the prior turn's subagents (a `/clear`). |
+| `registered` | any → `idle` | Establishes a row. On a row that has opened a turn, advances both turn-start boundaries, which retires the prior turn's subagents (a `/clear`). Carries `turn_ended_at`. |
 | `turn_started` | any → `running` | Records the provider turn id when known. Opens the `reasoning` phase and stamps `turn_started_at`. `user_turn_started_at` advances only for a user-authored prompt, not a harness-delivered one. On a `parked` row it resumes the same turn and keeps both boundaries. |
-| `turn_ended` clean | → `success` | Rests the phase. A [late report](#late-turn-reports) is ignored. |
-| `turn_ended` errored | → `failed` | The error bit wins over the parked bit. |
-| `turn_ended` clean, `parked_on_background` | → `running` | Moves the phase to `parked` ([turn endings](#turn-endings-and-parked-turns)). |
-| `turn_interrupted` | any → `idle` | The provider or user canceled the turn, which closes it with no result. Records the provider turn id when known. A [late report](#late-turn-reports) is ignored. |
+| `turn_ended` clean | → `success` | Rests the phase and stamps `turn_ended_at`. A [late report](#late-turn-reports) is ignored and stamps nothing. |
+| `turn_ended` errored | → `failed` | The error bit wins over the parked bit. Stamps `turn_ended_at` unless ignored. |
+| `turn_ended` clean, `parked_on_background` | → `running` | Moves the phase to `parked` ([turn endings](#turn-endings-and-parked-turns)) and stamps `turn_ended_at` unless ignored. |
+| `turn_interrupted` | any → `idle` | The provider or user canceled the turn, which closes it with no result and stamps `turn_ended_at`. Records the provider turn id when known. A [late report](#late-turn-reports) is ignored and stamps nothing. |
 | `awaiting_input` | any → `waiting` | Rests the phase, stamps `waiting_since`, and opens the ask ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question). A repeat restamps it. |
 | `subagent_started` | → `running` | Establishes the child row under the child's own id and opens `reasoning`. A child already at `success` or `failed` holds its verdict, so a late reordered start is ignored. |
 | `subagent_stopped` | any → `success` or `failed` | The child's verdict, by its error bit. |
 | `tool_used` | `idle`, `success`, or no row → `running` (reconciled); `running` and `waiting` → `running`; `failed` holds | Ignored when it carries the id of the turn just interrupted (trailing output). On a `waiting` row with a keyed ask, a tool carrying a different native key is a parallel sibling and is ignored. Moves the phase ([turn phase](#turn-phase)). |
 | `compacting` | held; `waiting` → `running` (reconciled) | Opens the [compaction bracket](#the-compaction-bracket). |
-| `compaction_ended` | by trigger ([the bracket](#the-compaction-bracket)) | Closes the bracket. |
+| `compaction_ended` | by trigger ([the bracket](#the-compaction-bracket)) | Closes the bracket. A successful, non-ignored close stamps `turn_ended_at`; a failed close carries it. |
 | `ended` | `running` or `waiting` → `failed`; other statuses hold | Rests the phase and stamps `ended_at`. A [reaped end](#observed-ends-and-reaped-ends) rests an active row at `idle` instead. |
 | `lost` | held | A legacy `rimz.agent-lost` marker kept parseable for log replay; `step` ignores it. |
 
@@ -278,6 +278,8 @@ A pending wait needs a parsed trigger. A self-wait timer's due time anchors at `
 `sleeping` is neither attention nor actionable, so `needs_a_look` is false: the unread episode and any configured success notification open when the wait cycle finishes at `success`, not on the intermediate rest, and an existing unread episode persists across sleep. The cockpit tally orders `waiting → failed → paused → success → running → sleeping → idle`. The `Done` and `Any` delivery gates open for a sleeping agent, so a message can start a turn without consuming the armed wait; `Resume` does not open. Reply waits treat it as completed, and idle compaction stays eligible under its usual guards. `--when` still reads the raw lifecycle status and does not accept `sleeping`, and `agent.idle` remains a turn-boundary event.
 
 ## Activity clocks
+
+`turn_ended_at` records the last completed provider request for idle compaction: a turn end, interruption, or successful compaction close. Registration and runtime heartbeats never advance it, so resuming a session does not restart its cache clock. Rows without a completed request have no anchor.
 
 `last_activity` is the session's own latest event, never inherited from another instance. The durable log is turn-grained, so on its own `last_activity` would advance only at turn boundaries. Hook ingestion therefore touches a per-session runtime heartbeat ([`agent_activity`](../../../crates/rimz/src/agent_activity.rs)) on every progress-proving event (each completed tool call, the turn boundaries, subagent start and stop), and the snapshot folds the freshest touch into `last_activity`. A pre-tool event or a blocked wait touches nothing. The heartbeat is keyed by the event's own session, so a background subagent's progress touches the child's heartbeat, and a parent blocked on an ask keeps its clock frozen until it acts.
 

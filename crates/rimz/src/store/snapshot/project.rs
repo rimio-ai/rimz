@@ -835,6 +835,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     }
     state.usage = usage;
     state.turn_started_at = lifecycle.turn_started_at;
+    state.turn_ended_at = lifecycle.turn_ended_at;
     state.user_turn_started_at = lifecycle.user_turn_started_at;
     state.waiting_since = lifecycle.waiting_since;
     state.open_ask = lifecycle.open_ask;
@@ -1005,6 +1006,7 @@ struct LifecycleProjection {
     compacted_awaiting_prompt: Option<Timestamp>,
     tool_calls: BTreeMap<String, u32>,
     turn_started_at: Option<Timestamp>,
+    turn_ended_at: Option<Timestamp>,
     user_turn_started_at: Option<Timestamp>,
     waiting_since: Option<Timestamp>,
     open_ask: Option<crate::agents::OpenAsk>,
@@ -1027,6 +1029,7 @@ fn lifecycle_projection(
     };
     let Transition {
         next,
+        kind,
         compaction_closed,
         opened_turn,
         ..
@@ -1093,6 +1096,17 @@ fn lifecycle_projection(
     } else {
         prior.and_then(|p| p.turn_started_at)
     };
+    let turn_ended_at = if !matches!(kind, lifecycle::TransitionKind::Ignored { .. })
+        && matches!(
+            signal,
+            lifecycle::LifecycleSignal::TurnEnded { .. }
+                | lifecycle::LifecycleSignal::TurnInterrupted { .. }
+                | lifecycle::LifecycleSignal::CompactionEnded { failed: false, .. }
+        ) {
+        Some(timestamp)
+    } else {
+        prior.and_then(|p| p.turn_ended_at)
+    };
     // A delivered prompt opens a provider turn but continues the user's task.
     let harness_prompt = matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. })
         && prompt.is_some_and(crate::store::message::prompt_is_harness_delivered);
@@ -1140,6 +1154,7 @@ fn lifecycle_projection(
         compacted_awaiting_prompt,
         tool_calls,
         turn_started_at,
+        turn_ended_at,
         user_turn_started_at,
         waiting_since,
         open_ask,
