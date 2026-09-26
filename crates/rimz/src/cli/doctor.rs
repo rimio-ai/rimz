@@ -151,7 +151,7 @@ fn collect_machine_config() -> model::MachineConfigHealth {
     let broken_files = rimz::config::broken_machine_files()
         .into_iter()
         .map(|err| {
-            let kind = if matches!(err, rimz::config::ConfigErr::Definition { .. }) {
+            let kind = if matches!(err, rimz::config::ConfigErr::Definition(_)) {
                 model::MachineConfigProblemKind::Definition
             } else if err.diagnosis().is_some() {
                 model::MachineConfigProblemKind::Parse
@@ -160,7 +160,10 @@ fn collect_machine_config() -> model::MachineConfigHealth {
             };
             model::MachineConfigProblem {
                 path: err.path().display().to_string(),
-                error: config_file_error_detail(&err, err.diagnosis()),
+                error: match &err {
+                    rimz::config::ConfigErr::Definition(error) => error.message.clone(),
+                    _ => config_file_error_detail(&err, err.diagnosis()),
+                },
                 kind,
             }
         })

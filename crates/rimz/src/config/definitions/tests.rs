@@ -578,7 +578,7 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
         assert_eq!(loaded.failed[name], BTreeSet::from([path.clone()]));
     }
     for handle in ["lead", "judge"] {
-        assert!(loaded.errors.iter().any(|error| error.path == path && error.message == format!("team 'renamed' role '{handle}' selects unknown or failed agent 'missing'; team roles can select definitions from agents only")));
+        assert!(loaded.errors.iter().any(|error| error.path == path && error.cause == DefinitionCause::Invalid && error.message == format!("team 'renamed' role '{handle}' selects unknown agent 'missing'; team roles can select definitions from agents only")));
     }
     write(
         root.path(),
@@ -587,6 +587,29 @@ fn failed_teams_record_names_and_roles_and_name_each_bad_seat() {
     );
     let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
     assert_eq!(loaded.failed["probe"], BTreeSet::from([path]));
+}
+
+#[test]
+fn team_roles_distinguish_failed_agents_from_unknown_agents() {
+    let root = team_fixture();
+    definition(root.path(), "agents/worker.md", "agent: missing", "Worker.");
+    team_definition(root.path(), TEAM_STAGES, TEAM_ROLES, "Pipeline.");
+    let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
+    let errors: Vec<_> = loaded
+        .errors
+        .iter()
+        .filter(|error| error.path.ends_with("teams/probe.md"))
+        .collect();
+    assert_eq!(errors.len(), 2);
+    for error in errors {
+        assert_eq!(
+            error.cause,
+            DefinitionCause::DependsOnFailed {
+                name: "worker".to_owned()
+            }
+        );
+        assert!(error.message.contains("selects failed agent 'worker'"));
+    }
 }
 
 #[test]
@@ -903,12 +926,12 @@ fn failed_parents_exclude_dependents_and_keep_independent_profiles() {
     definition(root.path(), "agents/independent.md", "agent: pi", "");
     let loaded = load(root.path(), SkillCheck::Skip, &CommandsConfig::default());
     assert_eq!(loaded.errors.len(), 2);
-    assert!(
-        loaded
-            .errors
-            .iter()
-            .any(|error| error.message == "follows `parent`, which failed to load")
-    );
+    assert!(loaded.errors.iter().any(|error| error.message
+        == "follows `parent`, which failed to load"
+        && error.cause
+            == DefinitionCause::DependsOnFailed {
+                name: "parent".to_owned()
+            }));
     assert!(!loaded.agent_profiles.0.contains_key("child"));
     assert!(!loaded.agent_profiles.0.contains_key("parent"));
     assert!(loaded.agent_profiles.0.contains_key("independent"));
@@ -1118,6 +1141,10 @@ fn an_agent_allowing_a_failed_subagent_fails_on_its_own_file() {
     assert!(loaded.errors.iter().any(|error| {
         error.path.ends_with("agents/planner.md")
             && error.message == "allows subagent 'helper', which failed to load"
+            && error.cause
+                == DefinitionCause::DependsOnFailed {
+                    name: "helper".to_owned(),
+                }
     }));
 }
 
@@ -1303,6 +1330,29 @@ fn skill_library_checks_existence_and_runtime_specific_markers() {
     }
     let loaded = load_checked(root.path());
     assert_eq!(loaded.errors.len(), 3);
+    for error in &loaded.errors {
+        let kind = error
+            .path
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .trim_end_matches("-seat");
+        let env = BTreeMap::from([("HOME".to_owned(), root.path().display().to_string())]);
+        let roots: Vec<_> = crate::agents::find_definition(kind)
+            .unwrap()
+            .skills_home(&env)
+            .into_iter()
+            .chain([root.path().join("skills")])
+            .collect();
+        assert_eq!(
+            error.cause,
+            DefinitionCause::MissingSkill {
+                skill: "one".parse().unwrap(),
+                roots
+            }
+        );
+    }
     assert!(
         loaded
             .errors

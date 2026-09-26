@@ -3627,11 +3627,6 @@ reason = "Pass 24a: named by the binary crate's test modules through the config 
 
 [[verdict]]
 kind = "item"
-key = "config::DefinitionError"
-reason = "Pass 24a: named by the binary crate's test modules, so it stays `pub`."
-
-[[verdict]]
-kind = "item"
 key = "config::effective::project_tasks_from_value"
 reason = "Pass 24a: cannot leave `effective`'s public surface — harness/schedule/config_edit.rs:58 reads it in production."
 

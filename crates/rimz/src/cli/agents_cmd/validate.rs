@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use rimz::config::Isolation;
-use rimz::config::definitions::{self, DefinitionErr, LoadedDefinitions, SkillCheck};
+use rimz::config::definitions::{self, LoadedDefinitions, SkillCheck};
 
 use crate::cli::render;
 
@@ -106,10 +106,7 @@ fn load(
             .iter()
             .any(|seen| seen.path == error.path && seen.message == error.message)
         {
-            loaded.errors.push(DefinitionErr {
-                path: error.path.clone(),
-                message: error.message.clone(),
-            });
+            loaded.errors.push(error.clone());
         }
     }
     loaded

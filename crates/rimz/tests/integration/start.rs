@@ -184,12 +184,19 @@ fn start_names_a_broken_definition_and_still_opens_the_room() {
     let output = start_with_accounts(&env, "", &[]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
-    assert!(stderr.contains(&broken.display().to_string()), "{stderr}");
-    assert!(stderr.contains("missing-parent"), "{stderr}");
     assert!(
-        stderr.contains("`rimz agents`, `rimz subagents`, and `rimz teams` refuse to launch it"),
+        stderr.contains("rimz: 1 definition with another error: agents/broken"),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("launches that select them are refused"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("`rimz agents validate` lists every error"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(&broken.display().to_string()), "{stderr}");
 }
 
 #[test]

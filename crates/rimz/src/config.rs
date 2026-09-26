@@ -266,8 +266,8 @@ pub enum ConfigErr {
         #[source]
         source: WorktreeHooksConfigErr,
     },
-    #[error("{path}: {message}")]
-    Definition { path: PathBuf, message: String },
+    #[error("{0}")]
+    Definition(definitions::DefinitionErr),
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,
@@ -322,9 +322,9 @@ impl ConfigErr {
     /// The per-machine file that failed to load.
     pub fn path(&self) -> &Path {
         match self {
+            Self::Definition(error) => &error.path,
             Self::Io { path, .. }
             | Self::Parse { path, .. }
-            | Self::Definition { path, .. }
             | Self::Agents { path, .. }
             | Self::Notifications { path, .. }
             | Self::Worktree { path, .. }
@@ -341,7 +341,7 @@ impl ConfigErr {
     fn validation_message(&self) -> String {
         match self {
             Self::Parse { diagnosis, .. } => diagnosis.raw_message().to_owned(),
-            Self::Definition { message, .. } => message.clone(),
+            Self::Definition(error) => error.message.clone(),
             Self::Agents { source, .. } => source.to_string(),
             Self::Notifications { source, .. } => source.to_string(),
             Self::Worktree { source, .. } => source.to_string(),
@@ -371,7 +371,7 @@ pub struct ConfigNotices {
     /// Load errors, including TOML diagnoses, retained when a file falls back to defaults.
     pub unreadable_files: BTreeMap<PathBuf, String>,
     pub unknown_keys: Vec<UnknownConfigKey>,
-    pub definition_errors: Vec<DefinitionError>,
+    pub definition_errors: Vec<definitions::DefinitionErr>,
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
 }
 
@@ -380,13 +380,6 @@ pub struct ConfigNotices {
 pub struct UnknownConfigKey {
     pub path: PathBuf,
     pub key: String,
-}
-
-/// A Markdown definition that the lenient loader could not use.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DefinitionError {
-    pub path: PathBuf,
-    pub message: String,
 }
 
 /// Definition files for the effective configured agent-spec catalog.
@@ -698,16 +691,12 @@ impl MachineConfig {
         self.subagents.profiles = loaded.subagent_profiles;
         self.agents.teams.0.extend(loaded.teams.0);
         notices.failed_definitions = loaded.failed;
-        notices
-            .definition_errors
-            .extend(loaded.errors.into_iter().map(|error| DefinitionError {
-                path: error.path,
-                message: error.message,
-            }));
+        notices.definition_errors.extend(loaded.errors);
         if let Err(error) = validate_agents_file(&self.agents, &self.subagents, agents_home) {
-            notices.definition_errors.push(DefinitionError {
+            notices.definition_errors.push(definitions::DefinitionErr {
                 path: agents_home.to_path_buf(),
                 message: error.validation_message(),
+                cause: definitions::DefinitionCause::Invalid,
             });
         }
         let mut sources = loaded.sources;
@@ -855,12 +844,13 @@ fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
         files.agents_home(),
         &crate::agents::ambient_env(),
     );
-    errors.extend(config.notices.definition_errors.into_iter().map(|error| {
-        ConfigErr::Definition {
-            path: error.path,
-            message: error.message,
-        }
-    }));
+    errors.extend(
+        config
+            .notices
+            .definition_errors
+            .into_iter()
+            .map(ConfigErr::Definition),
+    );
     errors
 }
 

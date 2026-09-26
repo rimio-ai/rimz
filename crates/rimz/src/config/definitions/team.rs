@@ -12,7 +12,8 @@ use crate::store::message::AutoCompact;
 
 use super::frontmatter::{RoleFrontmatter, SignalFrontmatter, TeamFrontmatter};
 use super::{
-    Definition, DefinitionErr, LoadedDefinitions, Namespace, SkillCheck, agent, files, frontmatter,
+    Definition, DefinitionCause, DefinitionErr, LoadedDefinitions, Namespace, SkillCheck, agent,
+    files, frontmatter,
 };
 
 struct SeatLoader<'a> {
@@ -273,7 +274,11 @@ impl SeatLoader<'_> {
             .filter(|_| loaded.agent_profiles.0.contains_key(&role.agent))
             .ok_or_else(|| {
                 let handle = role.role.as_deref().unwrap_or(&role.agent);
-                DefinitionErr::new(path, format!("team '{name}' role '{handle}' selects unknown or failed agent '{}'; team roles can select definitions from agents only", role.agent))
+                if self.agents.definitions.contains_key(&role.agent) || self.agents.failed.contains(&role.agent) {
+                    return DefinitionErr::new(path, format!("team '{name}' role '{handle}' selects failed agent '{}'", role.agent))
+                        .with_cause(DefinitionCause::DependsOnFailed { name: role.agent.clone() });
+                }
+                DefinitionErr::new(path, format!("team '{name}' role '{handle}' selects unknown agent '{}'; team roles can select definitions from agents only", role.agent))
             })?;
         let original = &loaded.agent_profiles.0[&role.agent];
         let mut fm = role.overlay();

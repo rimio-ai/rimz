@@ -38,11 +38,26 @@ pub struct LoadedDefinitions {
     pub rows: Vec<DefinitionRow>,
 }
 
-#[derive(Clone, Debug, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{path}: {message}")]
 pub struct DefinitionErr {
     pub path: PathBuf,
     pub message: String,
+    pub cause: DefinitionCause,
+}
+
+/// Why a definition could not load, for surfaces that group failures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DefinitionCause {
+    /// A listed skill is absent from the provider root and the shared library.
+    MissingSkill {
+        skill: super::SkillName,
+        roots: Vec<PathBuf>,
+    },
+    /// A parent, allowed subagent, or team role's agent failed to load.
+    DependsOnFailed { name: String },
+    /// The message describes a failure that has no more specific grouping.
+    Invalid,
 }
 
 /// The tail of every refusal for a definition whose kind base is absent.
@@ -61,12 +76,18 @@ impl DefinitionErr {
     fn new(path: &Path, message: impl AsRef<str>) -> Self {
         Self {
             path: path.to_owned(),
+            cause: DefinitionCause::Invalid,
             message: message
                 .as_ref()
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" "),
         }
+    }
+
+    fn with_cause(mut self, cause: DefinitionCause) -> Self {
+        self.cause = cause;
+        self
     }
 }
 
