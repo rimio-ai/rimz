@@ -405,7 +405,6 @@ fn set_top_level_timezone_keeps_core_config_valid() {
         &key,
         parse_set_value(&key, "America/New_York"),
         agents_home,
-        std::path::Path::new("config.toml"),
     )
     .expect("set timezone");
 
@@ -435,7 +434,6 @@ fn set_context_meter_log_scale_round_trips_through_scalar_path() {
         &key,
         parse_set_value(&key, "false"),
         agents_home,
-        std::path::Path::new("config.toml"),
     )
     .expect("set log scale");
 
@@ -461,7 +459,6 @@ fn round_trip_validation_reports_the_logical_key_value_and_message() {
         &key,
         parse_set_value(&key, "flase"),
         std::path::Path::new("missing-agents-home"),
-        std::path::Path::new("config.toml"),
     )
     .expect_err("string toggle must fail validation");
 
@@ -541,7 +538,6 @@ fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
         ],
         &mut skipped,
         agents_home,
-        std::path::Path::new("config.toml"),
     );
 
     assert_eq!(kept, 1);
@@ -572,7 +568,6 @@ fn merge_uncomments_section_key_on_its_template_line() {
         }],
         &mut skipped,
         std::path::Path::new("missing-agents-home"),
-        std::path::Path::new("config.toml"),
     );
 
     assert_eq!(kept, 1);
@@ -609,7 +604,6 @@ fn merge_uncomments_root_scalar_at_its_template_position() {
         }],
         &mut skipped,
         std::path::Path::new("missing-agents-home"),
-        std::path::Path::new("config.toml"),
     );
 
     assert_eq!(kept, 1);
@@ -652,7 +646,6 @@ fn merge_uncomments_optional_example_under_its_section() {
         }],
         &mut skipped,
         std::path::Path::new("missing-agents-home"),
-        std::path::Path::new("config.toml"),
     );
 
     assert_eq!(kept, 1);
@@ -775,7 +768,6 @@ fn failed_merge_keeps_template_default_commented() {
         }],
         &mut skipped,
         std::path::Path::new("missing-agents-home"),
-        std::path::Path::new("config.toml"),
     );
 
     assert_eq!(kept, 0);
@@ -804,7 +796,6 @@ fn merge_preserves_trailing_comment_on_existing_scalar() {
         }],
         &mut skipped,
         std::path::Path::new("missing-agents-home"),
-        std::path::Path::new("config.toml"),
     );
 
     assert_eq!(kept, 1);
@@ -874,6 +865,167 @@ fn set_agents_isolation_keeps_gc_template_comments_under_gc() {
 }
 
 #[test]
+fn merge_keeps_lsp_server_entry_whole() {
+    for seed in [
+        format!("[lsp.servers.rust]\n{LSP_SERVER_FIELDS}"),
+        format!(
+            "lsp = {{ servers = {{ rust = {{ {} }} }} }}",
+            LSP_SERVER_FIELDS.lines().collect::<Vec<_>>().join(", ")
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, seed).unwrap();
+        let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+            &path,
+            dir.path().join("agents-home"),
+        ));
+        let expected = MachineConfig::load_from(&path, editor.files.agents_home())
+            .unwrap()
+            .lsp
+            .servers["rust"]
+            .clone();
+        let report = editor.merge_defaults().unwrap();
+        assert!(report.files[0].skipped.is_empty(), "{report:?}");
+        assert!(matches!(
+            report.files[0].action,
+            MergeAction::Merged { kept: 1 }
+        ));
+        let actual = MachineConfig::load_from(&path, editor.files.agents_home()).unwrap();
+        assert_eq!(actual.lsp.servers["rust"], expected);
+        assert_eq!(
+            actual.lsp.servers["rust"].init_options,
+            Some(
+                serde_json::json!({"checkOnSave": false, "workspace": {"symbol": {"search": {"kind": "all_symbols", "limit": 10000}}}})
+            )
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\n[lsp.servers.rust]\n"));
+        assert!(text.find("[harness]") < text.find("\n[lsp.servers.rust]\n"));
+        assert!(text.contains("## [lsp.servers.rust]"));
+        assert!(!text.contains("\n[lsp.servers]\n"));
+    }
+}
+
+const LSP_SERVER_FIELDS: &str = r#"command = ["rust-analyzer"]
+extensions = ["rs"]
+root-markers = ["Cargo.toml"]
+init-options = { checkOnSave = false, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
+"#;
+
+#[test]
+fn merge_skips_incomplete_lsp_server_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[lsp.servers.rust]\n{}",
+            LSP_SERVER_FIELDS.replace("extensions = [\"rs\"]\n", "")
+        ),
+    )
+    .unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    let report = editor.merge_defaults().unwrap();
+    assert_eq!(report.files[0].skipped.len(), 1);
+    assert_eq!(report.files[0].skipped[0].key, "lsp.servers.rust");
+    assert!(
+        report.files[0].skipped[0]
+            .reason
+            .contains("missing field `extensions`")
+    );
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .any(|line| line.starts_with("[lsp.servers.rust]"))
+    );
+}
+
+#[test]
+fn merge_keeps_notification_handlers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[[notifications.handler]]\nname = \"ntfy\"\ncommand = \"ntfy publish rimz\"\n",
+    )
+    .unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    let report = editor.merge_defaults().unwrap();
+    assert!(report.files[0].skipped.is_empty(), "{report:?}");
+    let config = MachineConfig::load_from(&path, editor.files.agents_home()).unwrap();
+    assert_eq!(config.notifications.handler.len(), 1);
+    assert_eq!(
+        config.notifications.handler[0].name.as_deref(),
+        Some("ntfy")
+    );
+    assert_eq!(config.notifications.handler[0].command, "ntfy publish rimz");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\n[[notifications.handler]]\n"));
+    assert!(text.find("[harness]") < text.find("\n[[notifications.handler]]\n"));
+}
+
+#[test]
+fn set_lsp_server_entry_renders_one_block_at_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    let value = format!(
+        "{{ {} }}",
+        LSP_SERVER_FIELDS.lines().collect::<Vec<_>>().join(", ")
+    );
+    editor.set("lsp.servers.rust", &value).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("\n[lsp.servers]\n"));
+    assert!(text.find("[harness]") < text.find("\n[lsp.servers.rust]\n"));
+    assert!(text.contains("## flip_compact"));
+    assert!(text.contains("\n\n[lsp.servers.rust]\n"));
+    editor.set("lsp.servers.rust", &value).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(
+        editor.get(Some("lsp.servers.rust")).unwrap()["extensions"]
+            .as_array()
+            .unwrap()[0]
+            .as_str(),
+        Some("rs")
+    );
+}
+
+#[test]
+fn merge_defaults_is_byte_idempotent_with_appended_blocks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        format!("[lsp.servers.rust]\n{LSP_SERVER_FIELDS}\n[[notifications.handler]]\nname = \"ntfy\"\ncommand = \"ntfy publish rimz\"\n"),
+    )
+    .unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    let first = editor.merge_defaults().unwrap();
+    assert!(first.files[0].skipped.is_empty());
+    assert!(matches!(
+        first.files[0].action,
+        MergeAction::Merged { kept: 2 }
+    ));
+    let first_bytes = std::fs::read(&path).unwrap();
+    editor.merge_defaults().unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), first_bytes);
+}
+
+#[test]
 fn merge_defaults_is_byte_idempotent_with_kept_overrides() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("config.toml");
@@ -886,6 +1038,11 @@ desktop = "osc"
 
 [tmux]
 set_clipboard = "external"
+[lsp.servers.rust]
+command = ["rust-analyzer"]
+extensions = ["rs"]
+root-markers = ["Cargo.toml"]
+init-options = { checkOnSave = false, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
 "#,
     )
     .expect("seed config");
@@ -907,7 +1064,7 @@ set_clipboard = "external"
         ref action => panic!("expected merged core file, got {action:?}"),
     };
 
-    assert_eq!(first_kept, 3);
+    assert_eq!(first_kept, 4);
     assert_eq!(second_kept, first_kept);
     assert_eq!(second_bytes, first_bytes);
 }
