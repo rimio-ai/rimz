@@ -398,10 +398,13 @@ fn corrupt_pin_falls_back_to_the_repo_workspace() {
 /// A fake in-pane `codex` carrying the room's pin: a sleeper script whose
 /// kernel `comm` is the script name `codex`, parked at `cwd` with the pin in
 /// its environment — the sibling process a daemon-routed hook recovers from.
-/// Killed on drop so a failing assertion never leaks the sleeper.
+/// Killed on drop so a failing assertion never leaks the sleeper. Each
+/// sibling owns its script directory: a shared path would let the next
+/// spawn's write truncate a script `sh` has exec'd but not yet read.
 #[cfg(target_os = "linux")]
 struct SiblingAgent {
     child: std::process::Child,
+    _script_dir: tempfile::TempDir,
 }
 
 #[cfg(target_os = "linux")]
@@ -414,13 +417,10 @@ impl Drop for SiblingAgent {
 
 #[cfg(target_os = "linux")]
 fn spawn_sibling_codex(env: &Env, cwd: &std::path::Path, args: &[&str]) -> SiblingAgent {
-    use std::os::unix::fs::PermissionsExt;
-
-    let script = env.home_root.join("codex");
+    let script_dir = tempfile::tempdir_in(&env.home_root).expect("sibling script dir");
     // Plain `sleep` (no `exec`) keeps the interpreter — and so the `codex`
     // comm — alive for the scan.
-    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("write sibling script");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let script = crate::common::write_path_shim(script_dir.path(), "codex", "sleep 30");
     let child = std::process::Command::new(&script)
         .args(args)
         .current_dir(cwd)
@@ -434,7 +434,10 @@ fn spawn_sibling_codex(env: &Env, cwd: &std::path::Path, args: &[&str]) -> Sibli
 
     // `spawn` returns at fork; wait for the exec so the kernel comm reads
     // `codex` before the hook scans /proc.
-    let sibling = SiblingAgent { child };
+    let sibling = SiblingAgent {
+        child,
+        _script_dir: script_dir,
+    };
     let comm_path = format!("/proc/{}/comm", sibling.child.id());
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -447,6 +450,28 @@ fn spawn_sibling_codex(env: &Env, cwd: &std::path::Path, args: &[&str]) -> Sibli
         }
     }
     sibling
+}
+
+/// The room store's events log, or a panic naming which of the other
+/// candidate stores the hook's event reached instead.
+#[cfg(target_os = "linux")]
+fn read_pinned_events(
+    pinned: &std::path::Path,
+    others: &[(&str, &std::path::Path)],
+    hook: &std::process::Output,
+) -> String {
+    std::fs::read_to_string(pinned).unwrap_or_else(|err| {
+        let reached: Vec<&str> = others
+            .iter()
+            .filter(|(_, log)| log.exists())
+            .map(|(store, _)| *store)
+            .collect();
+        panic!(
+            "the sibling pin routes the hook into the room's store: {err}; \
+             other stores holding an events log: {reached:?}; hook stderr:\n{}",
+            String::from_utf8_lossy(&hook.stderr),
+        )
+    })
 }
 
 #[test]
@@ -485,8 +510,8 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
 
         let pinned = env.state_path_for(&env.project_root);
         let stray = env.state_path_for(&elsewhere);
-        let events = std::fs::read_to_string(&pinned.events_log)
-            .expect("the recovered pin routes the hook into the room's store");
+        let events =
+            read_pinned_events(&pinned.events_log, &[("stray", &stray.events_log)], &output);
         assert!(
             events.contains("\"source\":\"codex\""),
             "the room's store holds the codex hook event:\n{events}",
@@ -535,8 +560,11 @@ fn codex_daemon_hook_ignores_valid_inherited_pin_from_another_room() {
         let pinned = env.state_path_for(&env.project_root);
         let wrong = env.state_path_for(&wrong_room);
         let stray = env.state_path_for(&elsewhere);
-        let events = std::fs::read_to_string(&pinned.events_log)
-            .expect("the sibling pin routes the daemon hook into the room's store");
+        let events = read_pinned_events(
+            &pinned.events_log,
+            &[("wrong", &wrong.events_log), ("stray", &stray.events_log)],
+            &output,
+        );
         assert!(
             events.contains("\"source\":\"codex\""),
             "the room's store holds the codex hook event:\n{events}",
