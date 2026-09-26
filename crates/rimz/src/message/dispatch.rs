@@ -159,7 +159,6 @@ pub enum DispatchOutcome {
 pub enum ParkReason {
     Status(AgentStatus),
     WaitingOnPrompt,
-    InterruptUnproven { wait: std::time::Duration },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1009,22 +1008,8 @@ fn dispatch_one(
         return Err(DispatchErr::NoDurableSession { label: handle });
     };
     let bound = target.bound(state.snapshot);
-    let mut message = state.enqueue(target, Some(pane), text, mode, &handle)?;
+    let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
     let message_id = message.message_id.clone();
-    if mode.kind == DeliveryKind::Interrupt {
-        // The stop hook must not deliver this record while its sender waits for proof.
-        let Some(claimed) = state
-            .store
-            .claim_message_for_steer(&message_id, Timestamp::now())?
-        else {
-            return Ok(DispatchOutcome::Queued {
-                label: handle,
-                message_id,
-                reason: None,
-            });
-        };
-        message = claimed;
-    }
     let policy = match mode.kind {
         DeliveryKind::Steer => deliver::DeliveryPolicy::Steer {
             force: mode.draft.force,
@@ -1070,14 +1055,6 @@ fn dispatch_one(
                 label: handle,
                 message_id,
                 reason: None,
-            })
-        }
-        deliver::AttemptOutcome::InterruptUnproven { wait } => {
-            push_pending(state, message);
-            Ok(DispatchOutcome::Queued {
-                label: handle,
-                message_id,
-                reason: Some(ParkReason::InterruptUnproven { wait }),
             })
         }
         deliver::AttemptOutcome::CompactionPending => {

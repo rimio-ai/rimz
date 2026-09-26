@@ -300,10 +300,6 @@ pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<Strin
             message_id,
             reason,
         } => Some(match reason {
-            Some(ParkReason::InterruptUnproven { wait }) => format!(
-                "queued for {label} ({message_id}): turn still running after {}s; retry: rimz message interrupt {message_id}",
-                wait.as_secs_f64()
-            ),
             Some(ParkReason::Status(status)) => format!(
                 "queued for {label} ({message_id}) — {label} is {}; send now: rimz message steer {message_id}",
                 status.as_str()

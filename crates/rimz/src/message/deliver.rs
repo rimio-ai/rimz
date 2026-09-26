@@ -102,7 +102,6 @@ pub(super) enum AttemptOutcome {
     Queued,
     CompactionPending,
     SkippedWaiting,
-    InterruptUnproven { wait: Duration },
 }
 
 pub(super) struct Attempt<'a> {
@@ -439,20 +438,6 @@ pub(super) fn execute_attempt(
         workspace, store, snapshot, target, bound, records, live_send,
     ) {
         Ok(send::Receipt::Sent { compacted }) => Ok(AttemptOutcome::Sent { compacted }),
-        Ok(send::Receipt::ClaimSuperseded) => Ok(AttemptOutcome::Queued),
-        Ok(send::Receipt::InterruptUnproven { wait, key }) => {
-            let note = format!(
-                "turn still running {}ms after {}",
-                wait.as_millis(),
-                format!("{key:?}").to_ascii_lowercase()
-            );
-            // No prompt was written; a stop checkpoint may retry immediately.
-            // Compare the attempted lease so a newer claim is never released.
-            for record in records {
-                store.release_message_retry_lease(record, &note, &workspace.session_name)?;
-            }
-            Ok(AttemptOutcome::InterruptUnproven { wait })
-        }
         Ok(send::Receipt::SkippedWaiting) => {
             const WAITING: &str = "agent is waiting on input in its pane";
             if matches!(source, AttemptSource::Fresh { .. })
@@ -482,21 +467,6 @@ pub(super) fn execute_attempt(
             Ok(AttemptOutcome::CompactionPending)
         }
         Err(err) => {
-            if matches!(policy, DeliveryPolicy::Interrupt { .. })
-                && matches!(
-                    err,
-                    send::SendErr::NoDurableSession { .. } | send::SendErr::TurnRestarted
-                )
-            {
-                for record in records {
-                    store.release_message_retry_lease(
-                        record,
-                        &err.to_string(),
-                        &workspace.session_name,
-                    )?;
-                }
-                return Ok(AttemptOutcome::Queued);
-            }
             let durable_receiver = matches!(
                 source,
                 AttemptSource::Claimed

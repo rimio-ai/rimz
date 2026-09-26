@@ -1,7 +1,7 @@
 //! Live-pane payload construction, exclusive paced writes, and the durable Sent-before-submit barrier.
 
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::Store;
 use crate::agents::{AgentState, AgentStatus};
@@ -11,9 +11,7 @@ use crate::message::{
 };
 use crate::mux::PaneWriter;
 use crate::pane::keys::NamedKey;
-use crate::store::message::{
-    AutoCompact, MessageBody, MessageRecord, MessageSender, MessageStatus,
-};
+use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSender};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
 
@@ -32,10 +30,6 @@ pub enum SendErr {
         label: String,
         kind: crate::ids::AgentKind,
     },
-    #[error("`{label}` cannot receive now and has no durable session to park")]
-    NoDurableSession { label: String },
-    #[error("agent started another turn before delivery")]
-    TurnRestarted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,8 +37,6 @@ pub(super) enum Receipt {
     Sent { compacted: bool },
     SkippedWaiting,
     CompactionPending,
-    ClaimSuperseded,
-    InterruptUnproven { wait: Duration, key: NamedKey },
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
@@ -93,41 +85,59 @@ pub(super) fn send_batch_to_live_pane(
     let head = batch
         .first()
         .expect("send_batch_to_live_pane requires at least one message");
-    if send.kind == DeliveryKind::Interrupt
-        && let Some(receipt) = interrupt_before_send(store, target, head, send.force)?
-    {
-        return Ok(receipt);
-    }
     let writer = PaneWriter::open(store.runtime_paths(), &target.pane_id)?;
-    if send.kind == DeliveryKind::Interrupt
-        && !store.list_messages()?.iter().any(|message| {
-            message.message_id == head.message_id
-                && message.status == MessageStatus::Claimed
-                && message.last_attempt_at == head.last_attempt_at
-        })
-    {
-        return Ok(Receipt::ClaimSuperseded);
-    }
-    let current = (send.kind == DeliveryKind::Interrupt)
-        .then(|| store.snapshot_cached())
-        .transpose()?;
-    let (snapshot, bound) = if let Some(current) = current.as_ref() {
-        let agent = interrupt_agent(current, head, &target.label())?;
-        // Another writer may have opened a turn while we waited for this lock.
-        if matches!(
-            agent.effective_status(),
-            AgentStatus::Running | AgentStatus::Waiting
-        ) {
-            return Err(SendErr::TurnRestarted);
-        }
-        (current, Some(agent))
+    // Decide under the pane lock: a resting agent gets a plain send, since the
+    // key would cancel the very turn this paste starts.
+    let interrupt = if send.kind == DeliveryKind::Interrupt {
+        let key = interrupt_key(&head.kind, &format!("@{}", target.label()))?;
+        let current = store.snapshot_cached()?;
+        let mid_turn = current
+            .agents
+            .iter()
+            .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none())
+            .is_some_and(|agent| {
+                matches!(
+                    agent.effective_status(),
+                    AgentStatus::Running | AgentStatus::Waiting
+                )
+            });
+        mid_turn.then_some(key)
     } else {
-        (snapshot, bound)
+        None
     };
+    let receipt = write_live(
+        workspace, store, snapshot, target, bound, batch, send, &writer,
+    )?;
+    if let (Some(key), Receipt::Sent { .. }) = (interrupt, receipt) {
+        // The provider holds the pasted prompt in its queue; the key stops the
+        // live turn and submits the queue as a fresh turn.
+        sleep(super::interrupt_delay_from_env());
+        writer.press(key)?;
+    }
+    Ok(receipt)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one live write under the caller's pane lock"
+)]
+fn write_live(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    snapshot: &SidebarSnapshot,
+    target: &PaneAgent,
+    bound: Option<&AgentState>,
+    batch: &[MessageRecord],
+    send: &mut LiveSend,
+    writer: &PaneWriter,
+) -> Result<Receipt> {
+    let head = batch
+        .first()
+        .expect("send_batch_to_live_pane requires at least one message");
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
         return Ok(
-            match write_batch(workspace, store, snapshot, &writer, bound, batch, send)? {
+            match write_batch(workspace, store, snapshot, writer, bound, batch, send)? {
                 PaneWrite::Sent => Receipt::Sent { compacted: false },
                 PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
             },
@@ -148,7 +158,7 @@ pub(super) fn send_batch_to_live_pane(
             workspace,
             store,
             snapshot,
-            &writer,
+            writer,
             bound,
             std::slice::from_ref(&command),
             send,
@@ -179,7 +189,7 @@ pub(super) fn send_batch_to_live_pane(
         }
     }
     Ok(
-        match write_batch(workspace, store, snapshot, &writer, bound, batch, send)? {
+        match write_batch(workspace, store, snapshot, writer, bound, batch, send)? {
             PaneWrite::Sent => Receipt::Sent { compacted },
             PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
         },
@@ -193,61 +203,6 @@ pub(super) fn interrupt_key(kind: &crate::ids::AgentKind, label: &str) -> Result
             label: label.to_owned(),
             kind: kind.clone(),
         })
-}
-
-fn interrupt_agent<'a>(
-    snapshot: &'a SidebarSnapshot,
-    message: &MessageRecord,
-    label: &str,
-) -> Result<&'a AgentState> {
-    snapshot
-        .agents
-        .iter()
-        .find(|agent| message.same_agent_card(agent) && agent.ended_at.is_none())
-        .ok_or_else(|| SendErr::NoDurableSession {
-            label: format!("@{label}"),
-        })
-}
-
-fn interrupt_before_send(
-    store: &Store,
-    target: &PaneAgent,
-    head: &MessageRecord,
-    force: bool,
-) -> Result<Option<Receipt>> {
-    let key = interrupt_key(&head.kind, &format!("@{}", target.label()))?;
-    {
-        let writer = PaneWriter::open(store.runtime_paths(), &target.pane_id)?;
-        let snapshot = store.snapshot_cached()?;
-        let agent = interrupt_agent(&snapshot, head, &target.label())?;
-        if !force && agent.effective_status() == AgentStatus::Waiting {
-            return Ok(Some(Receipt::SkippedWaiting));
-        }
-        if !matches!(
-            agent.effective_status(),
-            AgentStatus::Running | AgentStatus::Waiting
-        ) {
-            return Ok(None);
-        }
-        writer.press(key)?;
-    }
-    let wait = super::interrupt_wait_from_env();
-    let started = Instant::now();
-    loop {
-        let snapshot = store.snapshot_cached()?;
-        let agent = interrupt_agent(&snapshot, head, &target.label())?;
-        if !matches!(
-            agent.effective_status(),
-            AgentStatus::Running | AgentStatus::Waiting
-        ) {
-            return Ok(None);
-        }
-        let remaining = wait.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return Ok(Some(Receipt::InterruptUnproven { wait, key }));
-        }
-        sleep(remaining.min(Duration::from_millis(250)));
-    }
 }
 
 pub struct Pacer {

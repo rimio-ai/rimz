@@ -242,10 +242,9 @@ pub fn settle_duration_from_env() -> Duration {
     env_ms(SETTLE_ENV).unwrap_or(DEFAULT_SETTLE)
 }
 
-fn interrupt_wait_from_env() -> Duration {
-    env_ms("RIMZ_MESSAGE_INTERRUPT_WAIT_MS")
-        .unwrap_or(Duration::from_secs(5))
-        .min(crate::store::message::CLAIM_TTL - Duration::from_secs(1))
+/// Gap between an interrupt's paste and its interrupt key.
+fn interrupt_delay_from_env() -> Duration {
+    env_ms("RIMZ_MESSAGE_INTERRUPT_DELAY_MS").unwrap_or(Duration::from_secs(3))
 }
 
 /// Spacing between discrete message pane writes.
