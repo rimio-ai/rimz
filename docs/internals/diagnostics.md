@@ -74,7 +74,7 @@ The emitter is the triage pointer. Producer kinds describe pane-source truth, re
 | `work_pane_boundary_moved` | `sidebar::presence` (Zellij), `sidebar::presence::tmux` | Before and after horizontal geometry for a stable work-pane set whose view and sidebar widths did not change |
 | `topology_writer_changed`, `topology_write_rejected` | `sidebar::presence` | Zellij topology writer generation flips and rejected stale writers, with plugin id, loaded-at generation, accepted writer, and reject count |
 | `tick_budget_breach` | `sidebar::meter` | Sustained over-budget producer ticks: last and worst wall time, mux wait, fold bytes, spawns, declared budgets, streak length, episode `since_ms`, and recovery ([performance.md](./performance.md#the-tick-budget)) |
-| `frame_anomaly` | `sidebar::observe` writer thread | Detector verdicts on the rendered stream, each with its detector key, evidence, frame stamp, and the writer's role |
+| `frame_anomaly` | Elected elder's `sidebar::observe` writer thread | Detector verdicts on the rendered stream, each with its detector key, evidence, and frame stamp |
 | `row_conflict`, `newborn_quarantined`, `local_session_bind_rejected`, `ghost_session_bind` | `store::snapshot::view` | Duplicate agent identity suppression, a newborn known-command pane held until its cwd resolves, a contained evidence-free or stale local-session bind, and an old exact session stamp contradicted by a newer durable launch |
 | `pane_cache_divergence`, `sidebar_orphan_reaped` | `reload` (`rimz reload`, `rimz sidebar repair`) | A fresh pane cache omitted a sidebar process that authoritative mux truth proved alive; a sidebar reaped after two authoritative omissions |
 | `subagent_digest_backstopped`, `subagent_orphan_reaped`, `subagent_orphan_repair_failed` | hidden subagent helpers started by `harness::orphan_sweep` | A fleet digest the normal wrapper path missed, queued from durable run records; a child closed after its parent launch stayed ended or absent past `ORPHAN_GRACE`, or the repair error when that failed ([subagents.md](./harness/subagents.md#backstops)) |
@@ -108,7 +108,7 @@ Filter on the kind as well as the severity: `mixed_build_writers` and `newborn_q
 
 ## The frame-stream observer
 
-Every sidebar renderer carries an observer that watches its own committed frame stream, the fused and gated `SidebarSnapshot` sequence the renderer paints, and records an evidence-rich `frame_anomaly` when the stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone.
+Every sidebar renderer carries an observer that watches its own committed frame stream, the fused and gated `SidebarSnapshot` sequence the renderer paints. Only the elected elder's writer records an evidence-rich `frame_anomaly` when the stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone.
 
 The observer reads the stream and emits records; it never changes what the renderer commits or paints. It exists because this class of bug heals itself within seconds and leaves nothing behind. A caught anomaly becomes a detector test ([below](#from-anomaly-to-regression-test)), and a detection that proves reliable becomes a prevention guard, either renderer-side in the [commit gate](../../crates/rimz/src/sidebar_pane/app/gate.rs) or at the source in producer frame validation.
 
@@ -121,7 +121,7 @@ Every mutation of the rendered snapshot passes through one chokepoint, `observe_
 After each commit it reduces the snapshot to a compact `FrameSig` and runs every pure detector inline, in microseconds, before the loop moves on. The signature holds row identities sorted by row id, card kinds, pane ids and pids, group keys and rendered order, watched values, own-view and active-event context, and the gate and health streaks.
 
 - The row signature leaves out renderer-local presentation state (unread stamp, selection, scroll), so presentation churn reads as unchanged content.
-- The signature also carries scalars from the un-fused pulled snapshot: `pulled_rows`, pulled row and pane membership, the pulled frame stamp, and pulled dashboard aggregates. Every record therefore shows whether the producer's published truth already held the anomaly or this instance's fusion and gating introduced it.
+- The signature also carries scalars from the un-fused pulled snapshot: `pulled_rows`, pulled row and pane membership, the pulled frame stamp, and pulled dashboard aggregates. Every record therefore separates the elder's pulled truth from its committed fold; these scalars do not attribute faults across renderers.
 - Detectors send drafts over a bounded 64-slot channel to the writer thread. A full channel drops the draft and stamps the drop count as `dropped_msgs` on the next draft that gets through, so the render thread never waits on the observer.
 
 The windowed detectors stay off during `OBSERVE_WARMUP` (10s) after the first frame-backed commit, because startup and reload transients are expected, and they stay off while the committed fold has no pane frame. The per-frame checks run from the first commit.
@@ -141,7 +141,7 @@ The windowed family recognizes the back-and-forth motion a user would describe: 
 
 Under heavy mux enumeration churn a published pane frame can briefly drop and re-list one pane. Carry-and-verify covers most of that gap while letting genuine closes through, so a residual row-presence flap stays a diagnostic record.
 
-A windowed record stamps the frame that **caused** the anomaly, not the frame that revealed it. `row_presence_flap` fires when the row returns but carries the frame the row went missing on, because every renderer observing the fault shares that frame while each returns on its own pull cadence. The `produced_at_ms` join therefore reaches the producer records for the same episode, and Doctor folds the renderers' copies of one fault into one incident.
+A windowed record stamps the frame that **caused** the anomaly, not the frame that revealed it. `row_presence_flap` fires when the row returns but carries the frame the row went missing on. The `produced_at_ms` join therefore reaches the producer records for the same episode. Doctor still folds copies from retained multi-renderer logs or an elder handoff into one incident.
 
 `aggregate_reset` fires on the edge, without a window, when a spend tally drops from a non-zero figure straight to zero, and carries the prior figure and the pulled value. It covers only the monetary tallies, whose trailing-year figure never legitimately drops to zero in place; a provider mana window rolling to zero is normal. A transient zero that returns inside the window also records `aggregate_oscillation`.
 
@@ -168,7 +168,7 @@ The writer thread re-verifies the latest roster against the world every `OBSERVE
 
 ### Roles and cost
 
-Every renderer runs the inline detectors on its own stream, because each node fuses its own events and gates its own frames, so a flap can exist only in the renderer that painted it. Only the elected elder's writer runs the cross-checks, so the room pays for the process and cache reads once. `crosscheck_enabled` on the writer thread makes that split, and every record carries the writer's `role` (`elder` or `consumer`).
+Every renderer runs the inline detectors on its own stream and sends drafts and rosters, keeping a successor's windows warm at handoff. Only the elected elder's writer appends observer records and runs cross-checks, so the room pays for the process and cache reads once. `Writer::is_elder` gates both paths using the producer election at emit time; consumer drafts are silently dropped. New records omit `role`; readers accept retained records that still carry it, and the envelope's `instance_id` identifies the writer. Consumer-local faults retain their per-renderer evidence in `gate_hold`, `gate_release`, `fetch_failure`, and `health_alert` records, outside the observer.
 
 The cost (one O(rows) signature pass per committed fold, a bounded channel, one throttled cross-check pass) is budgeted in [performance.md](./performance.md#everything-else).
 
@@ -185,8 +185,8 @@ One condition can write several records, and one record can stand for many occur
 - **Identity rate limit.** The sink admits one record per identity per 30-second window, where the identity is the kind plus its salient evidence fields ([`identity_key`](../../crates/rimz/src/diag/record.rs)). Suppressed repeats are counted onto the next record of that identity as `suppressed_since_last`, so a per-tick repeat collapses to one periodic line carrying the tally.
 - **Kind ceiling.** Each kind admits at most 120 records per window. Drops past the ceiling are added to the next admitted record's `suppressed_since_last`.
 - **Kinds that skip the identity limit.** `health_alert`, `renderer_panic`, `renderer_exit`, `producer_elected`, `producer_demoted`, `client_reaped`, `topology_write_rejected`, and the three width traces go through `emit_unlimited`: only the kind ceiling applies, so each occurrence is its own line.
-- **The observer adds no limit of its own.** Its writer thread emits every draft it receives through the sink; `dropped_msgs` separately counts drafts the full channel shed.
-- **One fault, many instances.** Every renderer records its own stream, so a published-frame problem records once per renderer while a node-local fusion or gating problem records on one. The count of distinct `instance_id` values inside an episode separates the two.
+- **The observer adds no rate limit of its own.** The elder's writer emits drafts through the sink; `dropped_msgs` separately counts drafts the full channel shed. Consumer drafts are discarded without a counter.
+- **One observer writer per room.** Only the elected elder appends `frame_anomaly` records. An elder handoff can leave more than one `instance_id` in an episode; `gate_hold`, `gate_release`, `fetch_failure`, and `health_alert` remain per renderer.
 - **Audit retention.** The room's 30-day/64-MiB audit sweep can remove captures, so copy `audit/diag-frames/` pairs out at the start of an investigation.
 
 ## Frame captures
@@ -235,7 +235,7 @@ jq 'select(.event.kind == "renderer_exit") | .event.cause' "$DIAG"              
 One pass over the log answers an episode's three questions in order: what the user saw, where truth went wrong, and why.
 
 1. **Build the timeline.** Run the timeline one-liner above, or `rimz doctor` for the recent incidents, and cluster records by `at_ms`. An episode reads as a burst across kinds. Copy the matching `audit/diag-frames/` pairs out before the audit sweep reclaims them.
-2. **Locate the fault in published truth or the local fold.** Every `frame_anomaly` carries the pulled snapshot's scalars beside the rendered ones. For `row_presence_flap`, read the missing-edge frame stamp and `gap_evidence.pulled_row_present` and `pulled_pane_present`: false membership puts the gap in pulled truth, true membership in the renderer's committed fold. The distinct `instance_id` count is a second signal.
+2. **Locate the fault in published truth or the local fold.** Every `frame_anomaly` carries the pulled snapshot's scalars beside the rendered ones. For `row_presence_flap`, read the missing-edge frame stamp and `gap_evidence.pulled_row_present` and `pulled_pane_present`: false membership puts the gap in pulled truth, true membership in the renderer's committed fold. The `instance_id` identifies the elder that wrote it, not evidence of a consumer-only fault; inspect per-renderer gate, fetch, and health records for those faults.
 3. **Attribute the cause.** Producer records in the same window name it: the carry kinds as described above, `frame_rejected` for held implausible reads, `pane_count_drop` for published shrinks, `gate_hold` for renderer-side holds. The frame stamp (`produced_at_ms`) joins producer records, observer records, and capture filenames across the episode.
 4. **Diff the captures.** Each capture holds the last good frame beside the offending one; `jq '{prior: (.prior.tabs | length), offending: (.offending.tabs | length)}'` shows a whole-tab omission at a glance.
 5. **Encode the episode** as a detector test ([above](#from-anomaly-to-regression-test)).

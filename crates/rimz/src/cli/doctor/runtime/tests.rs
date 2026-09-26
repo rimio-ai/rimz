@@ -1,7 +1,7 @@
 use super::*;
 use rimz::diag::record::{
     AnomalyKind, DiagEnvelope, DiagEvent, EventsSig, FetchFoldCause, FetchFoldCauseStats,
-    FrameStamp, HostedCarryDropReason, LocalSessionBindRejectReason, ObserveRole, PaneDropEvidence,
+    FrameStamp, HostedCarryDropReason, LocalSessionBindRejectReason, PaneDropEvidence,
     PaneDropViewEvidence, TickLoop, WorkPaneBoundaryMove,
 };
 use rimz::ids::LinkTier;
@@ -126,7 +126,6 @@ fn tick_breach(since_ms: u64, recovered_after_ms: Option<u64>, over_ticks: u32) 
 
 fn frame_anomaly(produced_at_ms: u64) -> DiagEvent {
     DiagEvent::FrameAnomaly {
-        role: ObserveRole::Consumer,
         anomaly: AnomalyKind::RosterFlap {
             rows_before: 2,
             empty_at_ms: 10,
@@ -153,7 +152,6 @@ fn frame_anomaly(produced_at_ms: u64) -> DiagEvent {
 /// `back_at_ms` — the field that varies across renderers observing one fault.
 fn presence_flap(onset_produced_at_ms: u64, back_at_ms: u64) -> DiagEvent {
     DiagEvent::FrameAnomaly {
-        role: ObserveRole::Consumer,
         anomaly: AnomalyKind::RowPresenceFlap {
             row_id: "zellij:terminal_6".to_owned(),
             pane_id: Some("zellij:terminal_6".to_owned()),

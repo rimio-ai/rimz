@@ -136,7 +136,7 @@ The choreography and write classes are [store.md → The write path](./store.md#
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Sidebar observer | One O(rows) signature pass per committed fold, microseconds | Pure detection at the fold's commit point; the elder adds one cross-check pass per `OBSERVE_CROSSCHECK_TTL` (5 s) ([diagnostics.md](./diagnostics.md#the-frame-stream-observer)) |
+| Sidebar observer | One O(rows) signature pass per committed fold, microseconds | Pure detection at every renderer's fold commit point; only the elder writes observer records and adds one cross-check pass per `OBSERVE_CROSSCHECK_TTL` (5 s) ([diagnostics.md](./diagnostics.md#the-frame-stream-observer)) |
 | Tick meter | Six relaxed counter loads and two clock reads per metered tick | Healthy ticks do no file IO and spawn nothing |
 | Sidebar heartbeat | Temp file plus atomic rename | Every `HEARTBEAT_WRITE_INTERVAL`, inside the liveness TTL |
 | Merged read receipts | Unchanged generation: two metadata stamps and one shared in-memory merge | Keyed on the `generation.json` inode plus the directory stamp |

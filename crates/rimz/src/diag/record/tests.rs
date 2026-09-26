@@ -231,7 +231,6 @@ fn agent_card_without_process_has_stable_diagnostic_identity() {
     assert_eq!(anomaly.subject().as_deref(), Some("agent:a"));
 
     let event = DiagEvent::FrameAnomaly {
-        role: ObserveRole::Elder,
         anomaly,
         window_ms: None,
         frame: frame_stamp(1),
@@ -245,6 +244,14 @@ fn agent_card_without_process_has_stable_diagnostic_identity() {
         event.summary(),
         "observed agent_card_without_process on agent:a"
     );
+
+    let mut retained = serde_json::to_value(&event).expect("encode anomaly");
+    assert!(retained.get("role").is_none());
+    let decoded: DiagEvent = serde_json::from_value(retained.clone()).expect("decode anomaly");
+    assert_eq!(decoded, event);
+    retained["role"] = serde_json::json!("consumer");
+    let decoded: DiagEvent = serde_json::from_value(retained).expect("decode retained anomaly");
+    assert_eq!(decoded, event);
 }
 
 #[test]
@@ -598,9 +605,8 @@ fn representative_events_keep_json_wire_shape() {
             },
         ),
         (
-            r#"{"kind":"frame_anomaly","role":"consumer","anomaly":{"detector":"aggregate_oscillation","aggregate":{"aggregate":"provider_spend","kind":"claude"},"from":"1234","via":"0","back":"1234","span_ms":7000,"pulled_via":"0"},"frame":{"produced_at_ms":13000,"rows":2,"agents":2,"processes":0,"pulled_rows":2,"pulled_panes_produced_at_ms":13000},"events_recent":{"pane_closed":[],"pane_opened":[]},"gate_reject_streak":0,"health_failure_streak":0,"dropped_msgs":0}"#,
+            r#"{"kind":"frame_anomaly","anomaly":{"detector":"aggregate_oscillation","aggregate":{"aggregate":"provider_spend","kind":"claude"},"from":"1234","via":"0","back":"1234","span_ms":7000,"pulled_via":"0"},"frame":{"produced_at_ms":13000,"rows":2,"agents":2,"processes":0,"pulled_rows":2,"pulled_panes_produced_at_ms":13000},"events_recent":{"pane_closed":[],"pane_opened":[]},"gate_reject_streak":0,"health_failure_streak":0,"dropped_msgs":0}"#,
             DiagEvent::FrameAnomaly {
-                role: ObserveRole::Consumer,
                 anomaly: AnomalyKind::AggregateOscillation {
                     aggregate: AggregateKey::ProviderSpend {
                         kind: "claude".to_owned(),
@@ -741,7 +747,6 @@ fn summary_describes_renderer_exit_without_cleanly_label() {
 #[test]
 fn summary_attributes_row_presence_gap_at_missing_edge() {
     let row_flap = |gap_evidence| DiagEvent::FrameAnomaly {
-        role: ObserveRole::Consumer,
         anomaly: AnomalyKind::RowPresenceFlap {
             row_id: "agent:a".to_owned(),
             pane_id: Some("zellij:terminal_1".to_owned()),
