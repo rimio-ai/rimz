@@ -59,6 +59,10 @@ pub fn write_path_shim(dir: &Path, program: &str, body: &str) -> PathBuf {
     shim
 }
 
+/// Write a stub `codex` or `claude` that fires a scripted session's hooks.
+/// Account probes (`codex login status`, `claude auth status`) exit before any
+/// session work, so a sidebar probe never registers an agent or reads as a
+/// launch to a test tracing invocations.
 #[cfg(unix)]
 pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
     assert!(matches!(agent, "codex" | "claude"));
@@ -78,6 +82,10 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
          rimz={rimz}\n\
          agent={agent}\n\
          if [ \"$agent\" = codex ] && [ \"${{1:-}}\" = login ] && [ \"${{2:-}}\" = status ]; then\n\
+           printf 'Not logged in\\n' >&2\n\
+           exit 1\n\
+         fi\n\
+         if [ \"$agent\" = claude ] && [ \"${{1:-}}\" = auth ]; then\n\
            printf 'Not logged in\\n' >&2\n\
            exit 1\n\
          fi\n\
@@ -119,15 +127,26 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
 #[cfg(unix)]
 #[test]
 fn codex_account_probe_does_not_emit_session_hooks() {
+    assert_account_probe_is_inert("codex", &["login", "status"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_account_probe_does_not_emit_session_hooks() {
+    assert_account_probe_is_inert("claude", &["auth", "status"]);
+}
+
+#[cfg(unix)]
+fn assert_account_probe_is_inert(agent: &str, probe: &[&str]) {
     use super::CommandTimeoutExt;
 
     let env = Env::new();
-    let bin = write_hook_firing_agent(&env, "codex").join("codex");
+    let bin = write_hook_firing_agent(&env, agent).join(agent);
     let output = env
         .rimz_at(&bin)
-        .args(["login", "status"])
+        .args(probe)
         .bounded_output()
-        .expect("probe fake Codex account");
+        .expect("probe fake agent account");
     let snapshot = env
         .store()
         .runtime_projection(rimz::RuntimeScope::Audit)
