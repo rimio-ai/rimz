@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::RepoGroup;
+use super::{RepoGroup, Target};
 use crate::forge::RemoteRepo;
 use crate::forge::pr_state::{PrLink, PrStateCache, TargetStamp};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
@@ -22,7 +22,7 @@ pub(super) fn transitions(
         let Some(repo) = successful_repo(next, path) else {
             continue;
         };
-        let remote = target_remote(groups, repo, path);
+        let remote = target_for_path(groups, repo, path).map(|target| &target.remote);
         if !stamp.owns_link(next_link) {
             continue;
         }
@@ -79,23 +79,26 @@ pub(super) fn transitions(
         if prior.branch_ci.get(path) == Some(next_ci) {
             continue;
         }
-        let remote = target_remote(groups, repo, path);
+        let target = target_for_path(groups, repo, path);
+        if target.is_some_and(|target| !target.trunk && target.inherited_head) {
+            continue;
+        }
+        let remote = target.map(|target| &target.remote);
         signals.push((name, payload(next, path, stamp, repo, None, None, remote)));
     }
     signals
 }
 
-fn target_remote<'a>(
+fn target_for_path<'a>(
     groups: &'a BTreeMap<String, RepoGroup>,
     repo: &str,
     path: &str,
-) -> Option<&'a RemoteRepo> {
+) -> Option<&'a Target> {
     groups
         .get(repo)?
         .targets
         .iter()
         .find(|target| target.path == path)
-        .map(|target| &target.remote)
 }
 
 fn continuous_target<'a>(

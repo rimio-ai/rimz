@@ -175,6 +175,40 @@ fn tracked_none_to_final_ci_emits_but_identical_final_ci_does_not() {
 }
 
 #[test]
+fn inherited_head_suppresses_only_non_trunk_branch_ci() {
+    let prior = base_cache();
+    let mut next = base_cache();
+    next.branch_ci.insert(PATH.to_owned(), WorktreeCi::Failing);
+    let mut target = super::target(PATH, "feature");
+    let signals = |target| {
+        super::super::transitions::transitions(&prior, &next, &group_targets(vec![target]))
+    };
+    assert_eq!(signal_names(&signals(target.clone())), vec!["ci.failed"]);
+    target.inherited_head = true;
+    target.trunk = true;
+    assert_eq!(signal_names(&signals(target.clone())), vec!["ci.failed"]);
+    target.trunk = false;
+    for ci in [WorktreeCi::Passing, WorktreeCi::Failing] {
+        let prior = pr_cache(WorktreePrState::Open, Some(WorktreeCi::Pending));
+        let next = pr_cache(WorktreePrState::Open, Some(ci));
+        assert_eq!(
+            super::super::transitions::transitions(
+                &prior,
+                &next,
+                &group_targets(vec![target.clone()])
+            )
+            .len(),
+            1,
+        );
+    }
+    assert!(
+        signals(target).is_empty(),
+        "inherited branch verdict must not wake tasks"
+    );
+    assert_eq!(next.branch_ci[PATH], WorktreeCi::Failing);
+}
+
+#[test]
 fn checks_urls_use_remote_slug_and_observed_head() {
     for (remote, expected) in [
         (

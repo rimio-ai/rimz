@@ -691,7 +691,7 @@ fn build_targets_marks_main_and_the_resolved_trunk() {
         branch: "feature".to_owned(),
         base_branch: Some("main".to_owned()),
         from_pr: Some(91),
-        base_ref: "main".to_owned(),
+        base_ref: git_line(repo.path(), &["rev-parse", "HEAD"]).unwrap(),
         repo_root: repo.path().to_path_buf(),
         worktree_path: repo.path().to_path_buf(),
         created_at: marker_created_at,
@@ -715,9 +715,27 @@ fn build_targets_marks_main_and_the_resolved_trunk() {
             ..DiffStatsCacheEntry::default()
         },
     );
-    let targets = build_targets(&[path], &diff_cache);
+    let targets = build_targets(std::slice::from_ref(&path), &diff_cache);
     assert_eq!(targets.len(), 1);
     assert!(targets[0].trunk);
+
+    assert!(!targets[0].inherited_head);
+    diff_cache.entries.get_mut(&path).unwrap().head_sha = Some(marker.base_ref.clone());
+    let targets = build_targets(std::slice::from_ref(&path), &diff_cache);
+    assert!(targets[0].inherited_head, "creation commit is inherited");
+
+    std::fs::remove_file(repo.path().join(".git/rimz-worktree.json")).unwrap();
+    diff_cache.entries.get_mut(&path).unwrap().merge_base = Some(marker.base_ref.clone());
+    let targets = build_targets(std::slice::from_ref(&path), &diff_cache);
+    assert!(
+        targets[0].inherited_head,
+        "trunk ancestor without marker is inherited"
+    );
+
+    diff_cache.entries.get_mut(&path).unwrap().head_sha = None;
+    assert!(!build_targets(std::slice::from_ref(&path), &diff_cache)[0].inherited_head);
+    diff_cache.entries.get_mut(&path).unwrap().head_sha = Some("own-commit".to_owned());
+    assert!(!build_targets(&[path], &diff_cache)[0].inherited_head);
 }
 
 #[test]
@@ -1178,6 +1196,7 @@ fn target(path: &str, branch: &str) -> Target {
         remote: forge::RemoteRepo::parse("git@github.com:org/repo.git").unwrap(),
         worktree: PathBuf::from("/repo"),
         head_sha: Some("sha".to_owned()),
+        inherited_head: false,
         marker_created_at: None,
         from_pr: None,
     }

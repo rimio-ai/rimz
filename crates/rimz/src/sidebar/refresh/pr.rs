@@ -264,6 +264,7 @@ struct Target {
     remote: forge::RemoteRepo,
     worktree: PathBuf,
     head_sha: Option<String>,
+    inherited_head: bool,
     marker_created_at: Option<jiff::Timestamp>,
     from_pr: Option<u64>,
 }
@@ -355,6 +356,17 @@ fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> 
         let marker = crate::worktree::read_marker_from_checkout_metadata(worktree)
             .ok()
             .flatten();
+        let head_sha = target_head_sha(diff_cache, path);
+        let inherited_head = head_sha.is_some_and(|head| {
+            marker
+                .as_ref()
+                .is_some_and(|marker| marker.base_ref == head)
+                || diff_cache
+                    .entries
+                    .get(path)
+                    .and_then(|entry| entry.merge_base.as_deref())
+                    == Some(head)
+        });
         let repo_slug = remote.repo_slug().map(str::to_owned);
         targets.push(Target {
             path: path.clone(),
@@ -365,7 +377,8 @@ fn build_targets(needed: &[String], diff_cache: &DiffStatsCache) -> Vec<Target> 
             repo_slug,
             remote,
             worktree: worktree.to_path_buf(),
-            head_sha: target_head_sha(diff_cache, path).map(str::to_owned),
+            head_sha: head_sha.map(str::to_owned),
+            inherited_head,
             marker_created_at: marker.as_ref().map(|marker| marker.created_at),
             from_pr: marker.and_then(|marker| marker.from_pr),
         });
