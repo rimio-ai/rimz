@@ -54,6 +54,16 @@ pub(crate) fn print_automatic_reset(
     print_reset_report(report)
 }
 
+pub(crate) fn print_replaced_room(report: &rimz::room::teardown::ReplacedRoom) -> Result<()> {
+    writeln!(
+        std::io::stderr().lock(),
+        "rimz: room {} was written by an older RimZ (layout {}); it was torn down and this project starts with a fresh room. Its history was not carried over.",
+        report.dir_name,
+        report.layout,
+    )?;
+    Ok(())
+}
+
 pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result<()> {
     let teardown = &report.teardown;
     let records = &report.records;

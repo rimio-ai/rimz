@@ -94,8 +94,6 @@ pub struct GcReport {
 pub struct RoomReport {
     pub name: String,
     pub classes: Vec<ClassReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub retained_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -139,16 +137,11 @@ fn collect_room_under(
     dry_run: bool,
     watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
 ) -> Result<GcReport> {
-    let mut report = GcReport::default();
-    if let Err(err) = paths::check_workspace_layout(&paths.root) {
-        report.rooms.push(RoomReport {
-            name: paths.dir_name.to_string(),
-            retained_reason: Some(err.to_string()),
-            ..RoomReport::default()
-        });
-        return Ok(report);
-    }
-    report.runtime_roots_scanned = 1;
+    paths::check_workspace_layout(&paths.root)?;
+    let mut report = GcReport {
+        runtime_roots_scanned: 1,
+        ..GcReport::default()
+    };
     collect::collect_runtime_classes(
         &runtime.root,
         older_than,
@@ -184,7 +177,7 @@ fn collect_room_temps_under(
     paths::check_workspace_layout(&paths.root)?;
     let mut report = TempSweepReport::default();
     for root in [&paths.root, &runtime.root] {
-        let (files, bytes) = temp_sweep::sweep_orphan_temps_under(root, None, older_than, dry_run);
+        let (files, bytes) = temp_sweep::sweep_orphan_temps_under(root, older_than, dry_run);
         report.files_removed += files;
         report.bytes_removed = report.bytes_removed.saturating_add(bytes);
     }
@@ -205,16 +198,9 @@ pub fn collect_classes(
         dry_run,
     )?;
     let root = paths::workspaces_dir();
-    let scan = crate::workspace::scan_workspaces_under(&root)
+    let rooms = crate::workspace::known_workspaces_under(&root)
         .map_err(|source| GcErr::ReadDir { path: root, source })?;
-    report
-        .rooms
-        .extend(scan.retained.into_iter().map(|(name, reason)| RoomReport {
-            name,
-            retained_reason: Some(reason),
-            ..RoomReport::default()
-        }));
-    for room in scan.workspaces {
+    for room in rooms {
         let paths = paths::StatePaths::under_named(
             room.workspace_id,
             room.dir_name.clone(),
@@ -262,7 +248,6 @@ fn collect_room_state(
         report.rooms.push(RoomReport {
             name: paths.dir_name.to_string(),
             classes,
-            retained_reason: None,
         });
     }
     Ok(())
@@ -270,9 +255,6 @@ fn collect_room_state(
 
 fn complete_room_reports(report: &mut GcReport) {
     for room in &mut report.rooms {
-        if room.retained_reason.is_some() {
-            continue;
-        }
         use paths::Class;
         for class in Class::STATE.into_iter().chain(Class::RUNTIME) {
             if !room
@@ -295,12 +277,7 @@ fn complete_room_reports(report: &mut GcReport) {
 pub fn collect_orphan_temps(older_than: Duration, dry_run: bool) -> TempSweepReport {
     let mut report = TempSweepReport::default();
     for root in [paths::rimz_home(), paths::runtime_rimz_root()] {
-        let (files, bytes) = temp_sweep::sweep_orphan_temps_under(
-            &root,
-            Some(&paths::workspaces_dir()),
-            older_than,
-            dry_run,
-        );
+        let (files, bytes) = temp_sweep::sweep_orphan_temps_under(&root, older_than, dry_run);
         report.files_removed += files;
         report.bytes_removed = report.bytes_removed.saturating_add(bytes);
     }
@@ -386,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn incompatible_room_collection_retains_both_tiers() {
+    fn incompatible_room_collection_refuses_and_leaves_both_tiers() {
         let home = tempfile::tempdir().unwrap();
         let state = paths::StatePaths::under(
             crate::WorkspaceId::from_project_root(home.path()),
@@ -399,10 +376,9 @@ mod tests {
         runtime.ensure_dirs().unwrap();
         let live = runtime.live_dir.join("stale.json");
         fs::write(&live, b"keep").unwrap();
-        let report =
-            collect_room_under(&state, &runtime, Duration::ZERO, false, |_, _| Ok(false)).unwrap();
-        assert_eq!(report.rooms.len(), 1);
-        assert!(report.rooms[0].retained_reason.is_some());
+        assert!(
+            collect_room_under(&state, &runtime, Duration::ZERO, false, |_, _| Ok(false)).is_err()
+        );
         assert!(live.exists());
         assert!(!state.workspace_lock.exists());
     }

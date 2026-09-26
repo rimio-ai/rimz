@@ -16,6 +16,8 @@ pub enum PruneReason {
     /// No usable `workspace.json` and no durable history — an abandoned
     /// `rimz start` scaffold (empty `snapshots`/`runs`/`locks`).
     AbandonedScaffold,
+    /// The room was written under an incompatible layout.
+    IncompatibleLayout,
 }
 
 /// A workspace store removed by [`super::prune_dead_workspaces`].
@@ -47,9 +49,10 @@ impl WorkspacePruneReport {
 }
 
 /// A workspace is removed when it is *provably dead*:
-/// 1. its `workspace.json` reads and the recorded `project_root` no longer
+/// 1. its record uses an incompatible layout, or
+/// 2. its `workspace.json` reads and the recorded `project_root` no longer
 ///    exists, or
-/// 2. it has no usable record (missing or unparseable `workspace.json`) **and**
+/// 3. it has no usable record (missing or unparseable `workspace.json`) **and**
 ///    no durable history — an abandoned start scaffold.
 ///
 /// A dir with an unreadable record that still holds history is kept and
@@ -108,15 +111,10 @@ enum Verdict {
 }
 
 fn classify_workspace(path: &Path) -> Verdict {
-    if crate::StatePaths::has_legacy_history(path) {
-        return Verdict::Retain(
-            "legacy history: see docs/internals/store-layout-migration.md".to_owned(),
-        );
-    }
-    if let Err(err @ crate::disk::paths::PathErr::Layout { .. }) =
+    if let Err(crate::disk::paths::PathErr::Layout { .. }) =
         crate::disk::paths::check_workspace_layout(path)
     {
-        return Verdict::Retain(err.to_string());
+        return Verdict::Remove(PruneReason::IncompatibleLayout, None, None);
     }
     match record::read(&path.join("workspace.json")) {
         Ok(record) if record.project_root.exists() => Verdict::Keep,
@@ -125,7 +123,9 @@ fn classify_workspace(path: &Path) -> Verdict {
             Some(record.project_root),
             Some(record.workspace_id),
         ),
-        Err(err @ record::WorkspaceRecordErr::Layout(_)) => Verdict::Retain(err.to_string()),
+        Err(record::WorkspaceRecordErr::Layout(_)) => {
+            Verdict::Remove(PruneReason::IncompatibleLayout, None, None)
+        }
         Err(err) if workspace_has_history(path) => Verdict::Retain(err.to_string()),
         Err(_) => Verdict::Remove(PruneReason::AbandonedScaffold, None, None),
     }
@@ -160,41 +160,44 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn legacy_history_survives_without_a_readable_record() {
+    fn flat_history_does_not_retain_an_unreadable_room() {
         let home = tempdir().unwrap();
         let room = home.path().join("legacy");
-        fs::create_dir_all(&room).unwrap();
-        fs::write(room.join("events.log.jsonl"), b"history").unwrap();
         for record in [None, Some("broken"), Some(r#"{"layout":2}"#)] {
+            fs::create_dir_all(&room).unwrap();
+            fs::write(room.join("events.log.jsonl"), b"history").unwrap();
             if let Some(record) = record {
                 fs::write(room.join("workspace.json"), record).unwrap();
             }
             let report =
                 prune_dead_workspaces_under(home.path(), &home.path().join("runtime"), false)
                     .unwrap();
-            assert!(report.removed.is_empty());
-            assert_eq!(report.retained_unreadable.len(), 1);
-            assert!(room.join("events.log.jsonl").exists());
+            assert_eq!(report.removed.len(), 1);
+            assert_eq!(report.removed[0].reason, PruneReason::AbandonedScaffold);
+            assert!(report.retained_unreadable.is_empty());
+            assert!(!room.exists());
         }
-        let gone = home.path().join("gone-project");
-        write_record(&room, &WorkspaceId::from_project_root(&gone), &gone);
-        assert!(matches!(classify_workspace(&room), Verdict::Retain(_)));
     }
 
     #[test]
-    fn legacy_room_is_retained_even_without_new_layout_history() {
+    fn legacy_room_is_pruned_with_its_runtime_tree() {
         let home = tempdir().unwrap();
+        let runtime = tempdir().unwrap();
         let room = home.path().join("old-abcd");
+        let runtime_room = runtime.path().join("old-abcd");
+        fs::create_dir_all(&runtime_room).unwrap();
         fs::create_dir_all(&room).unwrap();
         fs::write(room.join("workspace.json"), br#"{"workspace_id":"old"}"#).unwrap();
-        assert!(
-            matches!(classify_workspace(&room), Verdict::Retain(reason) if reason.contains("layout 1"))
-        );
-        let report =
-            prune_dead_workspaces_under(home.path(), &home.path().join("runtime"), false).unwrap();
-        assert!(report.removed.is_empty());
-        assert_eq!(report.retained_unreadable.len(), 1);
-        assert!(room.join("workspace.json").exists());
+        assert!(matches!(
+            classify_workspace(&room),
+            Verdict::Remove(PruneReason::IncompatibleLayout, _, _)
+        ));
+        let report = prune_dead_workspaces_under(home.path(), runtime.path(), false).unwrap();
+        assert_eq!(report.removed.len(), 1);
+        assert_eq!(report.removed[0].reason, PruneReason::IncompatibleLayout);
+        assert!(report.retained_unreadable.is_empty());
+        assert!(!room.exists());
+        assert!(!runtime_room.exists());
     }
 
     #[test]

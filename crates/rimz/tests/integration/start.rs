@@ -488,6 +488,62 @@ fn room_logins(env: &Env) -> Option<serde_json::Value> {
     record.get("logins").cloned()
 }
 
+#[test]
+fn start_replaces_an_old_layout_room_before_birth() {
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let paths = env.state_path_for(&env.project_root);
+    let runtime = env.runtime_paths();
+    std::fs::create_dir_all(&runtime.root).unwrap();
+    let old_runtime = runtime.root.join("old-runtime");
+    std::fs::write(&old_runtime, b"old").unwrap();
+    std::fs::create_dir_all(paths.root.join("messages")).unwrap();
+    std::fs::write(
+        &paths.workspace_record,
+        serde_json::to_vec(&serde_json::json!({
+            "workspace_id": workspace.workspace_id,
+            "project_root": workspace.project_root,
+            "session_name": "rimz-old-name",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(paths.root.join("events.log.jsonl"), b"old history").unwrap();
+    std::fs::write(paths.root.join("messages/messages.jsonl"), b"old messages").unwrap();
+
+    let output = start_with_accounts(&env, "", &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let notice = format!(
+        "rimz: room {} was written by an older RimZ (layout 1); it was torn down and this project starts with a fresh room. Its history was not carried over.",
+        paths.dir_name
+    );
+    assert_eq!(stderr.matches(&notice).count(), 1, "{stderr}");
+    let paths = env.state_path_for(&env.project_root);
+    assert_eq!(
+        rimz::workspace::record::read(&paths.workspace_record)
+            .unwrap()
+            .layout,
+        2
+    );
+    assert!(!paths.root.join("events.log.jsonl").exists());
+    assert!(!paths.root.join("messages/messages.jsonl").exists());
+    assert!(!old_runtime.exists());
+    let trace = std::fs::read_to_string(env.project_root.join("zellij-accounts.log")).unwrap();
+    for session in [&workspace.session_name, &"rimz-old-name".to_owned()] {
+        let killed = trace
+            .lines()
+            .position(|line| line.contains("delete-session") && line.contains(session))
+            .expect("old session deleted");
+        let born = trace
+            .lines()
+            .position(|line| line.contains("--create-background"))
+            .expect("fresh room born");
+        assert!(killed < born, "{trace}");
+    }
+}
+
 fn start_with_accounts(env: &Env, sessions: &str, accounts: &[&str]) -> std::process::Output {
     let bin_dir = seed_actionable_agent(env);
     let trace = env.project_root.join("zellij-accounts.log");

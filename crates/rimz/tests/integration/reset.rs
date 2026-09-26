@@ -17,6 +17,41 @@ use rimz::workspace::WorkspaceResolver;
 
 use crate::common::Env;
 
+#[test]
+fn reset_replaces_an_old_layout_room_without_starting() {
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let paths = env.state_path_for(&env.project_root);
+    let runtime = env.runtime_paths();
+    fs::create_dir_all(&runtime.root).unwrap();
+    fs::create_dir_all(paths.root.join("messages")).unwrap();
+    fs::write(
+        &paths.workspace_record,
+        serde_json::to_vec(&serde_json::json!({
+            "workspace_id": workspace.workspace_id,
+            "project_root": workspace.project_root,
+            "session_name": workspace.session_name,
+            "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(paths.root.join("events.log.jsonl"), b"old history").unwrap();
+    fs::write(paths.root.join("messages/messages.jsonl"), b"old messages").unwrap();
+    let notice = format!(
+        "rimz: room {} was written by an older RimZ (layout 1); it was torn down and this project starts with a fresh room. Its history was not carried over.",
+        paths.dir_name
+    );
+    env.rimz()
+        .args(["--mux", "zellij", "reset", "--no-start", "--yes"])
+        .assert()
+        .success()
+        .stderr(contains(notice))
+        .stderr(contains("Room torn down"));
+    assert!(!paths.root.exists());
+    assert!(!runtime.root.exists());
+}
+
 /// `rimz reset --no-start --yes` deletes the room's serialized-session cache and
 /// reports what it removed, without trying to rebirth or attach. `--mux zellij`
 /// forces the Zellij backend so the cache purge runs regardless of which mux the

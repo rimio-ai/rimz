@@ -35,14 +35,8 @@ pub(crate) fn collect_runtime_under(
         if !root.is_dir() {
             continue;
         }
-        let known =
-            match crate::disk::paths::check_workspace_layout(&state_root.join(entry.file_name())) {
-                Ok(known) => known,
-                Err(err) => {
-                    tracing::warn!(error = %err, "skipping workspace runtime sweep");
-                    continue;
-                }
-            };
+        let known = crate::disk::paths::check_workspace_layout(&state_root.join(entry.file_name()))
+            .unwrap_or(false);
         report.runtime_roots_scanned += 1;
         collect_runtime_classes(&root, older_than, &mut sweep, &mut report)?;
         if !known {
@@ -89,7 +83,6 @@ pub(super) fn collect_runtime_classes(
         report.bytes_removed += removed.bytes_removed;
     }
     report.rooms.push(super::RoomReport {
-        retained_reason: None,
         name: workspace_root
             .file_name()
             .unwrap_or_default()

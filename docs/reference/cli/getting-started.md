@@ -28,7 +28,7 @@ rimz start [PATH] [launch options] [--account <KIND=NAME>]...
 rimz attach [SESSION] [launch options]
 ```
 
-Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` (default `.`), creates its session if none is running, launches the sidebar, and attaches. A running session is reattached as it is, on the backend it runs under; start never replaces or restarts it, and a `--mux` naming the other backend fails and prints both fixes (attach to the running room, or reset it). [`rimz reset`](./maintenance.md#reset-a-wedged-room) is the command that rebuilds a room.
+Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` (default `.`), creates its session if none is running, launches the sidebar, and attaches. A room written by an older RimZ is torn down and replaced by a fresh room; its history is not carried over. Otherwise, a running session is reattached as it is, on the backend it runs under; a `--mux` naming the other backend fails and prints both fixes (attach to the running room, or reset it). [`rimz reset`](./maintenance.md#reset-a-wedged-room) is the command that rebuilds a room.
 
 | Launch option | Effect |
 | --- | --- |

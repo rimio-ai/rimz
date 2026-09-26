@@ -34,13 +34,6 @@ pub fn workspace_instance_roots() -> BTreeSet<PathBuf> {
     };
     workspaces
         .flatten()
-        .filter(|workspace| {
-            if let Err(err) = crate::disk::paths::check_workspace_layout(&workspace.path()) {
-                tracing::warn!(error = %err, "skipping workspace loop catalog");
-                return false;
-            }
-            true
-        })
         .flat_map(|workspace| instances::load_from(&workspace.path()).0.into_values())
         .map(|entry| entry.resolved_root())
         .collect()

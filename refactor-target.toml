@@ -252,7 +252,8 @@ allowed-dependencies = [
 # Root-only readers share history probes and the remaining room retention policy.
 # Explicit state pairing and runtime-only preparation keep lock identity independent of runtime roots.
 # Daily machine GC shares its stamp and election-lock paths with the harness.
-surface-budget = 203
+# StatePaths::remove_root and RuntimePaths::remove_root let room replacement remove both whole trees.
+surface-budget = 204
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -398,7 +399,8 @@ upward-dependencies = [
     "sidebar",
     "sidebar::body_filter",
 ]
-surface-budget = 50
+# ReplacedRoom and replace_incompatible_room share replacement between start and reset.
+surface-budget = 52
 
 [[module]]
 path = "crates/rimz/src/sidebar"
@@ -477,8 +479,8 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
-# Maintenance reports incompatible rooms without changing compatible-only scanner callers.
-surface-budget = 27
+# Record scanners expose only rooms using the current layout.
+surface-budget = 24
 
 [[module]]
 path = "crates/rimz/src/wakeup"

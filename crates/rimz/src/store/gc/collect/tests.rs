@@ -571,7 +571,7 @@ fn write_json<T: serde::Serialize>(path: &Path, value: &T) {
 }
 
 #[test]
-fn runtime_sweep_preserves_legacy_rooms() {
+fn runtime_sweep_reaps_empty_legacy_room_trees() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");
     let runtime = temp.path().join("runtime");
@@ -586,6 +586,6 @@ fn runtime_sweep_preserves_legacy_rooms() {
         false,
     )
     .unwrap();
-    assert_eq!(report.runtime_roots_scanned, 0);
-    assert!(runtime.join("old-abcd").exists());
+    assert_eq!(report.runtime_roots_scanned, 1);
+    assert!(!runtime.join("old-abcd").exists());
 }

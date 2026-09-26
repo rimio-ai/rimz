@@ -55,7 +55,6 @@ Each of these subsystems is one page at the top of `docs/internals/`.
 | --- | --- |
 | [theme.md](./theme.md) | The theme core: the four-layer color pipeline, palette resolution and color depth, glyphs, provider identity, the interface language, shared value formats, and the theme boundaries. |
 | [store.md](./store.md) | The durable state engine: the on-disk tiers and the workspace record, the event log, the write path and write classes, the read path, session death, maintenance, and what survives what. |
-| [store-layout-migration.md](./store-layout-migration.md) | Post-merge reset or offline move of this machine's layout-1 rooms to lifetime classes. |
 | [sandbox.md](./sandbox.md) | Linux agent mount views: choosing the isolation, bubblewrap preflight, mount order, reachable host paths, environment pins, room tmp, and profile skill views. |
 | [multiplexers.md](./multiplexers.md) | The Zellij and tmux seam: backend selection, the `MuxBackend` trait, pane and view identity, reading the room, focus, one sidebar per view, session lifecycle with the `room/` birth, health gate, and reset, both backends, and the Zellij presence plugin. |
 | [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes and how they are specified and identified, the content supervisor, reconciliation and repair, and the loop zone. |

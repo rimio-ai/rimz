@@ -68,14 +68,21 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
 
-    let context = RoomContext::from_resolved(
-        &workspace,
-        super::machine_config(),
-        mux,
-        RoomSizing::OrdinaryTab,
-    )?;
-    let report = context.reset(args.hard)?;
-    super::render::room::print_reset_report(&report)?;
+    let backend = rimz::mux::backend_for(mux);
+    if let Some(report) =
+        rimz::room::teardown::replace_incompatible_room(backend.as_ref(), &workspace)?
+    {
+        super::render::room::print_replaced_room(&report)?;
+    } else {
+        let context = RoomContext::from_resolved(
+            &workspace,
+            super::machine_config(),
+            mux,
+            RoomSizing::OrdinaryTab,
+        )?;
+        let report = context.reset(args.hard)?;
+        super::render::room::print_reset_report(&report)?;
+    }
 
     if args.no_start {
         writeln!(
