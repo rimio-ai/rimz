@@ -35,10 +35,10 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let mode = resolve_mode(agent, &teams, config.harness.idle_compact);
     let account =
         rimz::sidebar::refresh::accounts::cached_account(ctx.runtime(), &agent.login_key());
-    let idle_after = fire_point(agent, mode, account.as_ref());
+    let window = fire_point(agent, mode, account.as_ref());
     let command = rimz::agents::compact_command(agent, &config.harness);
     let now = Timestamp::now();
-    if !should_compact(agent, command.as_deref(), idle_after, now) {
+    if !should_compact(agent, command.as_deref(), window, now) {
         return Ok(());
     }
     let expected_command =
@@ -60,10 +60,12 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         })
         .context("idle-compaction target pane is no longer bound to the agent")?;
 
-    let idle_secs = now.as_second() - agent.last_activity.as_second();
-    let Some(occupied_tokens) = agent.occupied_context_tokens() else {
+    let (Some(occupied_tokens), Some(turn_ended_at)) =
+        (agent.occupied_context_tokens(), agent.turn_ended_at)
+    else {
         return Ok(());
     };
+    let idle_secs = now.as_second() - turn_ended_at.as_second();
     if request.occupied_tokens != occupied_tokens {
         tracing::debug!(
             producer_occupied = request.occupied_tokens,
@@ -104,7 +106,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         request.kind,
         request.agent_id,
         idle_secs,
-        idle_after.map(|duration| duration.as_secs()),
+        window.map(|window| window.fire_after.as_secs()),
         occupied_tokens,
         &message_id,
         matches!(outcome, Ok(CompactOutcome::Sent)),

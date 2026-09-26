@@ -286,8 +286,9 @@ upward-dependencies = ["sidebar::refresh"]
 # Response paths, publication errors and publication serve CLI receipts/reports; fleet exposes settled rows.
 # `ancestry::check_launch_room` lets both CLI launch entries refuse before opening a store.
 # PROMPT_CACHE_MARGIN, fire_point, resolve_teams, resolve_mode and should_compact share one idle-compaction decision between producer and detached CLI helper.
+# IdleWindow carries the cache-expiry bound through that shared decision.
 # Deadline rungs, channel policy and locked claims serve the CLI and producer.
-surface-budget = 553
+surface-budget = 554
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
