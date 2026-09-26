@@ -613,6 +613,25 @@ The file holds a root `claudeAiOauth` object; the docs publish no schema, and th
 | `extra_usage.used_credits`, `monthly_limit` | extra usage spent and its cap |
 | `limits[]` | limit entries with `kind`, `group`, `percent`, `resets_at` (an ISO 8601 string), and `scope`. The client treats a `kind: "weekly_scoped"` entry with a string `scope.model.display_name` as a per-model weekly cap |
 
+With `cedar_ember=1`, live probes on 2026-09-26 returned banked limit resets in the same body, without changing windows or `extra_usage`. The 2.1.283 binary's User-Agent format is `claude-cli/<version> (external, cli)`. Probes with a different product prefix or without the suffix returned `ineligible_reason: "surface"`; `unknown`, 2.1.173, and 2.1.270 with the suffix returned `"cli_version"`, while 2.1.283 returned `eligible: true`. The exact minimum version was not established. An abridged eligible response:
+
+```json
+{
+  "cedar_ember": {
+    "eligible": true,
+    "grants": [{
+      "resets_left": 1,
+      "ends_at": "2026-10-22T16:00:00+00:00",
+      "paused": false,
+      "usable_now": true,
+      "clears": ["five_hour", "seven_day", "seven_day_overage_included"]
+    }]
+  }
+}
+```
+
+Anthropic's [limit-reset help article](https://support.claude.com/en/articles/17007452), read 2026-09-26, describes redemption under Settings > Usage on web and desktop, not Claude Code. A reset refills the chosen allowance without moving its usual weekly reset time. The article does not define the wire's `paused` or cooldown semantics.
+
 ## Transcript JSONL
 
 Anthropic publishes no schema for the transcript at `transcript_path`, so this section describes observed lines whose field names also appear in the 2.1.270 binary. How RimZ reads them is [adapter_claude.md → Context and transcript](../../internals/agents/adapter_claude.md#context-and-transcript).

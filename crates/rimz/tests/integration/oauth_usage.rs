@@ -286,6 +286,7 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
     let (origin, server) = serve_after_failures(
         0,
         r#"{
+            "cedar_ember": {"eligible": true, "grants": [{"resets_left": 1, "ends_at": "2026-10-22T16:00:00Z"}]},
             "five_hour": {
                 "utilization": 12.5,
                 "resets_at": "2026-09-21T14:13:20Z"
@@ -331,22 +332,27 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
     );
     let requests = server.join().expect("server request");
     let request = &requests[0];
-    assert!(request.starts_with("GET /api/oauth/usage "));
+    assert!(request.starts_with("GET /api/oauth/usage?cedar_ember=1 "));
     assert!(
         request
             .to_ascii_lowercase()
             .contains("authorization: bearer claude-token")
     );
-    // The Claude version rides the user-agent; it now resolves from the local
-    // binary rather than a passed flag, so assert the product prefix only.
+    // The version resolves from the local binary or the adapter's fallback.
     assert!(
         request
             .to_ascii_lowercase()
-            .contains("user-agent: claude-code/")
+            .lines()
+            .any(|line| line.starts_with("user-agent: claude-cli/")
+                && line.ends_with(" (external, cli)"))
     );
 
     let runtime = env.runtime_paths();
     let credits = read_json(runtime.shared_credits_path());
+    assert_eq!(
+        credits["logins"]["claude@default"]["reset_credits"]["count"],
+        1
+    );
     assert_eq!(
         credits["logins"]["claude@default"]["extra_credits"]["known"]["used_usd"],
         7.25
@@ -531,7 +537,7 @@ fn claude_refresh_usage_retries_transient_http_failures() {
     assert!(
         requests
             .iter()
-            .all(|request| request.starts_with("GET /api/oauth/usage "))
+            .all(|request| request.starts_with("GET /api/oauth/usage?cedar_ember=1 "))
     );
 
     let limits = read_json(env.runtime_paths().shared_rate_limits_path());

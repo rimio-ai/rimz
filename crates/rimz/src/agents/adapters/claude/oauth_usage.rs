@@ -29,7 +29,7 @@ use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 const DEFAULT_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OFFICIAL_HOST: &str = "api.anthropic.com";
 const URL_ENV: &str = "RIMZ_CLAUDE_OAUTH_USAGE_URL";
-const USER_AGENT_FALLBACK_VERSION: &str = "unknown";
+const USER_AGENT_FALLBACK_VERSION: &str = "2.1.283";
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/claude-oauth-account-key/v1";
 #[cfg(target_os = "macos")]
 const KEYCHAIN_TIMEOUT: Duration = Duration::from_millis(1_500);
@@ -101,6 +101,21 @@ struct UsageWire {
     seven_day: Option<WindowWire>,
     extra_usage: Option<ExtraUsageWire>,
     limits: Vec<LimitWire>,
+    cedar_ember: Option<LimitResetsWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LimitResetsWire {
+    eligible: bool,
+    grants: Vec<ResetGrantWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ResetGrantWire {
+    resets_left: u32,
+    ends_at: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -304,16 +319,20 @@ fn usage_url() -> Result<String> {
 }
 
 fn resolve_usage_url(override_url: Option<&str>) -> Result<String> {
-    let Some(candidate) = override_url.filter(|value| !value.trim().is_empty()) else {
-        return Ok(DEFAULT_USAGE_URL.to_owned());
-    };
-    if trusted_usage_url(candidate, OFFICIAL_HOST) {
-        Ok(candidate.to_owned())
-    } else {
-        Err(ClaudeOauthUsageErr::UntrustedUsageUrl {
+    let candidate = override_url
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_USAGE_URL);
+    if !trusted_usage_url(candidate, OFFICIAL_HOST) {
+        return Err(ClaudeOauthUsageErr::UntrustedUsageUrl {
             host: url_host(candidate).to_owned(),
-        })
+        });
     }
+    let mut url =
+        url::Url::parse(candidate).map_err(|_| ClaudeOauthUsageErr::UntrustedUsageUrl {
+            host: url_host(candidate).to_owned(),
+        })?;
+    url.query_pairs_mut().append_pair("cedar_ember", "1");
+    Ok(url.into())
 }
 
 fn http_get(url: &str, token: &str, cli_version: Option<&str>) -> Result<String> {
@@ -332,7 +351,7 @@ fn claude_code_user_agent(cli_version: Option<&str>) -> String {
         .and_then(normalized_version)
         .or_else(|| crate::agents::version::probe_cli_version("claude"))
         .unwrap_or_else(|| USER_AGENT_FALLBACK_VERSION.to_owned());
-    format!("claude-code/{version}")
+    format!("claude-cli/{version} (external, cli)")
 }
 
 fn normalized_version(version: &str) -> Option<String> {
@@ -346,9 +365,20 @@ fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
 
 impl UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
+        let mut count: u32 = 0;
+        let mut expiries = Vec::new();
+        if let Some(resets) = self.cedar_ember.filter(|resets| resets.eligible) {
+            for grant in resets.grants {
+                count = count.saturating_add(grant.resets_left);
+                if let Some(expiry) = parse_reset(grant.ends_at.as_deref()) {
+                    expiries.extend(std::iter::repeat_n(expiry, grant.resets_left as usize));
+                }
+            }
+        }
         AccountUsageSnapshot {
             rate_limits: collect_rate_limits(self.five_hour, self.seven_day, self.limits),
             extra_credits: collect_extra_usage(self.extra_usage),
+            reset_credits: Some(crate::agents::ResetCredits::normalized(count, expiries)),
             ..Default::default()
         }
     }
