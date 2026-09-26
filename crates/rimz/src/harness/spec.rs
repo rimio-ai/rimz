@@ -392,7 +392,7 @@ pub enum LayoutErr {
         stage: String,
     },
     #[error(
-        "role `{role}` in team `{team}` enables flip-compact but agent kind `{kind}` has no compact command; set flip-compact = \"off\" on role {role} or choose a supporting agent"
+        "role `{role}` in team `{team}` enables flip-compact but agent kind `{kind}` has no compact command; set flip-compact = \"off\" on role {role}, set [harness] flip_compact = \"off\", or choose a supporting agent"
     )]
     FlipCompactUnsupported {
         team: String,
@@ -1864,7 +1864,7 @@ fn prepare_team<'a>(
 fn validate_flip_compact(
     name: &str,
     prepared: &PreparedTeam<'_>,
-    default: Option<crate::store::message::AutoCompact>,
+    default: Option<crate::config::FlipCompact>,
 ) -> Result<()> {
     for role in &prepared.roles {
         if prepared.team.flip_compact(&role.role, default).is_some()

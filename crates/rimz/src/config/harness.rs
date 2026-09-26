@@ -181,6 +181,7 @@ pub enum TurnCapParseError {
     TooLarge(String),
 }
 
+use super::FlipCompact;
 use crate::store::message::AutoCompact;
 
 const IDLE_COMPACT_DURATION_UNITS: &[DurationUnit] = &[
@@ -272,13 +273,9 @@ pub struct HarnessConfig {
     /// Compact an idle team member before its provider prompt cache expires.
     #[serde(default)]
     pub idle_compact: IdleCompactMode,
-    /// Compact a team member at the flip that hands its own stage to another role, once its context is at least this full. Unset keeps flips uncompacted; a role's `flip-compact` overrides it.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "smart_compact_serde"
-    )]
-    pub flip_compact: Option<AutoCompact>,
+    /// Compact a team member on hand-off: the role's `flip-compact` overrides this setting, then unset falls back to 120k for a Plan owner or 180k otherwise; `off` disables compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_compact: Option<FlipCompact>,
 }
 
 impl HarnessConfig {
@@ -386,6 +383,23 @@ mod tests {
         let back: HarnessConfig = toml::from_str(&toml).expect("parse harness config");
 
         assert_eq!(back, config);
+    }
+
+    #[test]
+    fn flip_compact_round_trips() {
+        for (raw, expected) in [
+            ("off", FlipCompact::Off),
+            ("180k", FlipCompact::Threshold(AutoCompact::Tokens(180_000))),
+            ("70%", FlipCompact::Threshold(AutoCompact::Percent(70))),
+        ] {
+            let config: HarnessConfig = toml::from_str(&format!("flip_compact = {raw:?}"))
+                .expect("valid flip compaction policy");
+            assert_eq!(config.flip_compact, Some(expected));
+            let encoded = toml::to_string(&config).unwrap();
+            assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
+        }
+        assert!(toml::from_str::<HarnessConfig>("smart_compact = \"off\"").is_err());
+        assert!(toml::from_str::<HarnessConfig>("flip_compact = \"OFF\"").is_err());
     }
 
     #[test]

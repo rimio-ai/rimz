@@ -190,7 +190,11 @@ fn roster(
         roles.push(RoleBinding {
             role: handle.to_owned(),
             profile: format!("{name}.{handle}"),
-            flip_compact: Some(flip_compact(path, role.flip_compact.as_deref(), &owns)?),
+            flip_compact: role
+                .flip_compact
+                .as_deref()
+                .map(|value| flip_compact(path, value))
+                .transpose()?,
             idle_compact: role
                 .idle_compact
                 .as_deref()
@@ -375,20 +379,8 @@ fn idle_compact(path: &Path, value: &str) -> Result<IdleCompactMode, DefinitionE
     })
 }
 
-fn flip_compact(
-    path: &Path,
-    value: Option<&str>,
-    owns: &[String],
-) -> Result<FlipCompact, DefinitionErr> {
-    let value = value
-        .unwrap_or_else(|| {
-            if owns.iter().any(|stage| stage == "Plan") {
-                "120k"
-            } else {
-                "180k"
-            }
-        })
-        .trim();
+fn flip_compact(path: &Path, value: &str) -> Result<FlipCompact, DefinitionErr> {
+    let value = value.trim();
     if value.eq_ignore_ascii_case("off") {
         return Ok(FlipCompact::Off);
     }

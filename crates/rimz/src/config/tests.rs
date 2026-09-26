@@ -480,7 +480,6 @@ fn team_owns_and_flip_compact_parse_default_and_round_trip() {
 
     let harness: HarnessConfig =
         toml::from_str("flip_compact = \"180k\"").expect("parse harness threshold");
-    assert_eq!(harness.flip_compact, Some(AutoCompact::Tokens(180_000)));
     let encoded = toml::to_string(&harness).expect("serialize harness threshold");
     assert_eq!(
         toml::from_str::<HarnessConfig>(&encoded).expect("round trip"),
@@ -501,6 +500,10 @@ fn team_owns_and_flip_compact_parse_default_and_round_trip() {
         role = "reviewer"
         profile = "claude"
         flip-compact = "off"
+        [[roles]]
+        role = "plan-default"
+        profile = "claude"
+        owns = ["Plan"]
         "#,
     )
     .expect("parse ownership");
@@ -511,22 +514,33 @@ fn team_owns_and_flip_compact_parse_default_and_round_trip() {
     assert!(team.roles[1].owns.is_empty());
     assert_eq!(team.roles[1].flip_compact, None);
     assert_eq!(team.roles[2].flip_compact, Some(agents::FlipCompact::Off));
-    assert_eq!(
-        team.flip_compact("planner", harness.flip_compact),
-        Some(AutoCompact::Tokens(220_000))
-    );
-    assert_eq!(
-        team.flip_compact("coder", harness.flip_compact),
-        harness.flip_compact
-    );
-    assert_eq!(team.flip_compact("coder", None), None);
-    assert_eq!(team.flip_compact("reviewer", harness.flip_compact), None);
+    for (raw, coder, planner) in [
+        ("", Some(180_000), Some(120_000)),
+        ("flip_compact = \"100k\"", Some(100_000), Some(100_000)),
+        ("flip_compact = \"off\"", None, None),
+    ] {
+        let machine: HarnessConfig = toml::from_str(raw).expect("machine policy");
+        assert_eq!(
+            team.flip_compact("coder", machine.flip_compact),
+            coder.map(AutoCompact::Tokens)
+        );
+        assert_eq!(
+            team.flip_compact("plan-default", machine.flip_compact),
+            planner.map(AutoCompact::Tokens)
+        );
+        assert_eq!(
+            team.flip_compact("planner", machine.flip_compact),
+            Some(AutoCompact::Tokens(220_000))
+        );
+        assert_eq!(team.flip_compact("reviewer", machine.flip_compact), None);
+        assert_eq!(team.flip_compact("missing", machine.flip_compact), None);
+    }
     assert_eq!(team.owner_of("Plan"), Some("planner"));
     assert_eq!(team.owner_of("plan"), None);
     assert_eq!(team.owner_of(DONE_STAGE), None);
     assert_eq!(
         team.owned_stages().collect::<Vec<_>>(),
-        ["Explore", "Plan", "Reflect"]
+        ["Explore", "Plan", "Reflect", "Plan"]
     );
     let encoded = toml::to_string(&team).expect("serialize ownership");
     assert_eq!(toml::from_str::<Team>(&encoded).expect("round trip"), team);

@@ -126,18 +126,8 @@ fn team_seats_materialize_launch_settings_and_route_questions_to_leader() {
     assert!(team.consensus_file.is_none());
     assert_eq!(team.leader.as_deref(), Some("lead"));
     assert_eq!(team.owner_of("Review"), Some("judge"));
-    assert_eq!(
-        team.roles[0].flip_compact,
-        Some(crate::config::FlipCompact::Threshold(
-            crate::store::message::AutoCompact::Tokens(120_000)
-        ))
-    );
-    assert_eq!(
-        team.roles[1].flip_compact,
-        Some(crate::config::FlipCompact::Threshold(
-            crate::store::message::AutoCompact::Tokens(180_000)
-        ))
-    );
+    assert_eq!(team.roles[0].flip_compact, None);
+    assert_eq!(team.roles[1].flip_compact, None);
     for role in &team.roles {
         let profile = &loaded.agent_profiles.0[&role.profile];
         assert_eq!(profile.agent, "claude");

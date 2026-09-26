@@ -782,12 +782,13 @@ fn flip_compaction_threshold_is_checked_before_queuing() {
 }
 
 #[test]
-fn flip_compaction_uses_definition_default_unless_role_overrides_it() {
+fn flip_compaction_uses_machine_default_unless_role_overrides_it() {
     for (role_policy, default, expected_threshold) in [
-        (None, "100k", Some(180_000)),
+        (None, "100k", Some(100_000)),
+        (None, "off", None),
         (Some("off"), "100k", None),
         (Some("100k"), "200k", Some(100_000)),
-        (None, "70%", Some(180_000)),
+        (None, "70%", Some(140_000)),
         (Some("70%"), "200k", Some(140_000)),
     ] {
         let fixture = Fixture::new();

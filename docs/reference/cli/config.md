@@ -103,6 +103,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `theme.scheme`, and the shorthand `theme` | a bundled theme name or a path to an Alacritty TOML file |
 | `theme.glyphs.set` and the shorthand `theme.glyphs`; `theme.glyphs.<set>.<namespace>.<role>` | a glyph set name or glyph string |
 | `harness.smart_compact` | a token count (`200k`) or a percentage (`70%`) |
+| `harness.flip_compact` | `off`, a token count (`180k`), or a percentage (`70%`); see [hand-off compaction](../../guide/configuration.md#hand-off-compaction) |
 | `harness.compact_instruction` | any string, including `""` |
 | `harness.idle_compact` | `off`, `on` (default), or a duration such as `25m`; see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.budget`, `accounts.budget.<kind>` | an amount ending in `/day` |

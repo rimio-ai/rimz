@@ -1817,12 +1817,18 @@ fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
     preflight(&candidate, Some(&ResolvedProfile::bare("claude")), None)
         .expect("override supports compact");
     candidate.roles[0].flip_compact = Some(FlipCompact::Off);
-    preflight(&candidate, None, Some(AutoCompact::Tokens(180_000)))
-        .expect("disabled on unsupported adapter");
+    let machine: crate::config::HarnessConfig = toml::from_str("flip_compact = \"180k\"").unwrap();
+    preflight(&candidate, None, machine.flip_compact).expect("disabled on unsupported adapter");
     candidate.roles[0].flip_compact = None;
-    preflight(&candidate, None, None).expect("unconfigured compaction allows unsupported adapter");
     assert!(matches!(
-        preflight(&candidate, None, Some(AutoCompact::Tokens(180_000))),
+        preflight(&candidate, None, None),
+        Err(LayoutErr::FlipCompactUnsupported { .. })
+    ));
+    let disabled: crate::config::HarnessConfig =
+        toml::from_str("flip_compact = \"off\"").expect("machine off");
+    preflight(&candidate, None, disabled.flip_compact).expect("machine disables compaction");
+    assert!(matches!(
+        preflight(&candidate, None, machine.flip_compact),
         Err(LayoutErr::FlipCompactUnsupported { .. })
     ));
 }
