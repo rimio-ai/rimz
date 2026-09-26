@@ -655,6 +655,7 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
     fill_root_launch_identity(
         &mut observed,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+        (true, true),
         |agent_pid, var| {
             assert_eq!(agent_pid, Some(123));
             launch_identity_env(agent_pid, var)
@@ -682,6 +683,7 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
     fill_root_launch_identity(
         &mut payload,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+        (true, true),
         launch_identity_env,
     );
     assert_eq!(payload.launch.role.as_deref(), Some("payload-role"));
@@ -699,6 +701,7 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
     fill_root_launch_identity(
         &mut configured,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+        (true, true),
         |_agent_pid, var| match var {
             rimz::harness::launch::ENV_AGENT_ROLE => Some("coder".to_owned()),
             rimz::harness::launch::ENV_TEAM => Some("forge".to_owned()),
@@ -713,6 +716,35 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
 }
 
 #[test]
+fn root_launch_identity_seeds_model_and_effort_independently() {
+    for seed in [(false, false), (true, false), (false, true)] {
+        let mut observed = root_observation();
+        fill_root_launch_identity(
+            &mut observed,
+            (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+            seed,
+            launch_identity_env,
+        );
+        assert_eq!(
+            observed.launch.model.as_deref(),
+            seed.0.then_some("env-model")
+        );
+        assert_eq!(
+            observed.launch.effort.as_deref(),
+            seed.1.then_some("env-effort")
+        );
+        assert_eq!(observed.launch.role.as_deref(), Some("coder"));
+        assert_eq!(observed.launch.team.as_deref(), Some("forge"));
+        assert_eq!(
+            observed.launch.launch_group.as_deref(),
+            Some("launch_group_1")
+        );
+        assert_eq!(observed.launch.launch_ordinal, Some(2));
+        assert_eq!(observed.launch.profile.as_deref(), Some("codex-coder"));
+    }
+}
+
+#[test]
 fn subagent_launch_identity_is_not_inherited_from_parent_env() {
     let mut observed = root_observation();
     observed.parent_agent_id = Some(AgentSessionId::from("parent-1"));
@@ -720,6 +752,7 @@ fn subagent_launch_identity_is_not_inherited_from_parent_env() {
     fill_root_launch_identity(
         &mut observed,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+        (true, true),
         |_, _| panic!("child identity must not read parent env"),
     );
 

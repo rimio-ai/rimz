@@ -157,15 +157,34 @@ fn record_mapped_lifecycle_observation(
             || observation.launch.model.is_none()
             || observation.launch.effort.is_none())
     {
-        let configured_identity =
-            if observation.launch.model.is_none() || observation.launch.effort.is_none() {
-                agent.configured_identity()
-            } else {
-                (None, None)
-            };
-        fill_root_launch_identity(&mut observation, configured_identity, |agent_pid, var| {
-            agent_identity_env(agent_pid, var, validate_non_empty_identity_env)
-        });
+        let seed = observation
+            .agent_id
+            .as_ref()
+            .and_then(|agent_id| {
+                store.snapshot_cached().ok().map(|snapshot| {
+                    let state = snapshot.agents.iter().find(|state| {
+                        state.kind == agent.spec().kind && state.agent_id == *agent_id
+                    });
+                    (
+                        observation.launch.model.is_none()
+                            && state.is_none_or(|state| state.model.is_none()),
+                        observation.launch.effort.is_none()
+                            && state.is_none_or(|state| state.effort.is_none()),
+                    )
+                })
+            })
+            .unwrap_or((false, false));
+        let configured_identity = if seed.0 || seed.1 {
+            agent.configured_identity()
+        } else {
+            (None, None)
+        };
+        fill_root_launch_identity(
+            &mut observation,
+            configured_identity,
+            seed,
+            |agent_pid, var| agent_identity_env(agent_pid, var, validate_non_empty_identity_env),
+        );
     }
     if observation.worktree_path.is_none() {
         observation.worktree_path = Some(workspace.worktree_root.display().to_string());

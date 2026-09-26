@@ -37,9 +37,14 @@ pub(super) fn agent_identity_env(
     validate(raw, "process", var)
 }
 
+/// Fills a root observation's launch identity from the pane env. Model and
+/// effort are seeded (env, else `configured_identity`) only where the flag
+/// says the session's rollup still lacks them, so a provider-observed value
+/// is never replaced by a seed.
 pub(in crate::cli::hooks) fn fill_root_launch_identity(
     observation: &mut AgentLifecycleObservation,
     configured_identity: (Option<String>, Option<String>),
+    (seed_model, seed_effort): (bool, bool),
     mut identity_env: impl FnMut(Option<u32>, &'static str) -> Option<String>,
 ) {
     if observation.parent_agent_id.is_some() {
@@ -47,10 +52,19 @@ pub(in crate::cli::hooks) fn fill_root_launch_identity(
     }
     let agent_pid = observation.agent_pid;
     rimz::harness::launch::fill_launch_identity_env(&mut observation.launch, |var| {
+        if (var == rimz::harness::launch::ENV_AGENT_MODEL && !seed_model)
+            || (var == rimz::harness::launch::ENV_AGENT_EFFORT && !seed_effort)
+        {
+            return None;
+        }
         identity_env(agent_pid, var)
     });
-    observation.launch.model = observation.launch.model.take().or(configured_identity.0);
-    observation.launch.effort = observation.launch.effort.take().or(configured_identity.1);
+    if seed_model {
+        observation.launch.model = observation.launch.model.take().or(configured_identity.0);
+    }
+    if seed_effort {
+        observation.launch.effort = observation.launch.effort.take().or(configured_identity.1);
+    }
 }
 
 pub(super) fn validate_agent_name_env(raw: String, source: &str, _var: &str) -> Option<String> {
