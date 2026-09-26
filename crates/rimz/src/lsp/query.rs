@@ -7,7 +7,7 @@ use super::protocol::{CallHierarchyItem, Location, Position, Range, SymbolInform
 use super::{LspErr, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -532,14 +532,23 @@ pub fn render(
     document_uri: Option<&str>,
     result: Value,
     scope: Scope,
+    dirty: &BTreeSet<String>,
 ) -> Result<String> {
-    render_with_source(verb, root, document_uri, result, scope, |uri, line| {
-        let text = std::fs::read_to_string(file_path(uri)?)?;
-        text.lines()
-            .nth(line as usize)
-            .map(str::to_owned)
-            .ok_or_else(|| LspErr::Protocol("location is past the end of the file".into()))
-    })
+    render_with_source(
+        verb,
+        root,
+        document_uri,
+        result,
+        scope,
+        dirty,
+        |uri, line| {
+            let text = std::fs::read_to_string(file_path(uri)?)?;
+            text.lines()
+                .nth(line as usize)
+                .map(str::to_owned)
+                .ok_or_else(|| LspErr::Protocol("location is past the end of the file".into()))
+        },
+    )
 }
 
 fn render_with_source(
@@ -548,6 +557,7 @@ fn render_with_source(
     document_uri: Option<&str>,
     result: Value,
     scope: Scope,
+    dirty: &BTreeSet<String>,
     mut source: impl FnMut(&str, u32) -> Result<String>,
 ) -> Result<String> {
     if result.is_null() {
@@ -563,7 +573,9 @@ fn render_with_source(
             let mut lines = Vec::new();
             for location in sorted.into_values() {
                 let mut line = position_text(root, &location.uri, location.range.start)?;
-                if let Ok(text) = source(&location.uri, location.range.start.line) {
+                if dirty.contains(&location.uri) {
+                    line.push_str("  (unsaved in editor)");
+                } else if let Ok(text) = source(&location.uri, location.range.start.line) {
                     line.push_str("  ");
                     line.push_str(text.trim());
                 }

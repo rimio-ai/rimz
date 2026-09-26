@@ -1,6 +1,6 @@
 //! Bounded local requests; no query reaches stdio before readiness.
 
-use super::{RequestPhase, Shared, registry};
+use super::{RequestPhase, Shared, clients::Event, registry, router::RouterEvent};
 use crate::lsp::{
     LspErr, Result,
     protocol::QueryRequest,
@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Operation {
+    Attach {
+        pid: u32,
+        start_token: String,
+    },
     Hello,
     Status,
     Lease {
@@ -70,19 +74,43 @@ pub(super) fn listen(listener: UnixListener, shared: Arc<Shared>) {
     });
 }
 
-fn handle(mut stream: UnixStream, shared: &Shared) -> Result<()> {
+fn handle(stream: UnixStream, shared: &Shared) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut line = String::new();
-    BufReader::new(&stream)
-        .take(1024 * 1024)
-        .read_line(&mut line)?;
+    let mut reader = BufReader::new(&stream);
+    reader.by_ref().take(1024 * 1024).read_line(&mut line)?;
+    let mut attached = None;
     let response = if !line.ends_with('\n') {
         Err(LspErr::Protocol("incomplete request".into()))
     } else {
         serde_json::from_str::<Operation>(&line)
             .map_err(LspErr::from)
-            .and_then(|operation| respond(operation, shared))
+            .and_then(|operation| {
+                if let Operation::Attach { pid, start_token } = operation {
+                    let (reply, response) = std::sync::mpsc::channel();
+                    shared
+                        .router
+                        .send(RouterEvent::Attach {
+                            stream: stream.try_clone()?,
+                            pid,
+                            start_token,
+                            reply,
+                        })
+                        .map_err(|_| LspErr::Server {
+                            code: -32003,
+                            message: "broker is shutting down".into(),
+                        })?;
+                    let id = response.recv().map_err(|_| LspErr::Server {
+                        code: -32003,
+                        message: "broker is shutting down".into(),
+                    })??;
+                    attached = Some(id);
+                    Ok(json!({"ok":true,"client_id":id.0}))
+                } else {
+                    respond(operation, shared)
+                }
+            })
     };
     let mut response = response.unwrap_or_else(|error| match error {
         LspErr::Server { code, message } => json!({"error": {"code": code, "message": message}}),
@@ -96,9 +124,28 @@ fn handle(mut stream: UnixStream, shared: &Shared) -> Result<()> {
             .entry
             .nonce
     );
-    serde_json::to_writer(&mut stream, &response)?;
-    stream.write_all(b"\n")?;
-    Ok(())
+    let result = (|| {
+        serde_json::to_writer(&stream, &response)?;
+        (&stream).write_all(b"\n")?;
+        if let Some(id) = attached {
+            stream.set_read_timeout(None)?;
+            stream.set_write_timeout(None)?;
+            while let Ok(frame) = crate::lsp::protocol::read_frame(&mut reader) {
+                if shared
+                    .router
+                    .send(RouterEvent::Client(Event::ClientFrame(id, frame)))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    })();
+    if let Some(id) = attached {
+        let _ = shared.router.send(RouterEvent::Client(Event::Detach(id)));
+    }
+    result
 }
 
 fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
@@ -157,7 +204,7 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
                 lease.launch_id != launch_id || lease.pid != pid
             })
         }
-        Operation::Stop { .. } | Operation::Query { .. } => {
+        Operation::Attach { .. } | Operation::Stop { .. } | Operation::Query { .. } => {
             unreachable!("handled before acquiring model")
         }
     }
@@ -273,6 +320,7 @@ mod tests {
     fn query_at_consumer_never_returns_empty_results_while_indexing() {
         let entry: Entry = serde_json::from_value(json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "indexing", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
         let shared = Shared {
+            router: std::sync::mpsc::channel().0,
             model: Mutex::new(Model {
                 entry,
                 lifecycle: Lifecycle::default(),
@@ -304,6 +352,21 @@ mod tests {
             .unwrap()["error"]["code"],
             -32003
         );
+        // An accepted socket can outlive the router during terminal shutdown.
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| handle(server, &shared).unwrap());
+            writeln!(client, "{}", json!({"op":"attach","pid":std::process::id(),"start_token":"unused after shutdown"})).unwrap();
+            let mut line = String::new();
+            BufReader::new(&client).read_line(&mut line).unwrap();
+            let response: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(response["error"]["code"], -32003, "{response}");
+            assert_eq!(response["error"]["message"], "broker is shutting down");
+            assert_eq!(response["nonce"], "n");
+        });
         shared.model.lock().unwrap().entry.state = State::Dormant {
             since_ms: 0,
             reason: None,

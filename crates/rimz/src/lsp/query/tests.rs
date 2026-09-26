@@ -30,9 +30,36 @@ fn missing_source_does_not_discard_locations() {
         None,
         json!([{"uri": "file:///checkout/gone.rs", "range": range()}]),
         Scope::Checkout,
+        &BTreeSet::new(),
         |_, _| Err(LspErr::Protocol("missing line".into())),
     );
     assert_eq!(result.unwrap(), "gone.rs:2:3\n");
+}
+
+#[test]
+fn dirty_locations_never_read_disk_source() {
+    let dirty = BTreeSet::from(["file:///checkout/gone.rs".to_owned()]);
+    for verb in [Verb::Def, Verb::Refs, Verb::Impl] {
+        let mut consulted = Vec::new();
+        let rendered = render_with_source(
+            verb,
+            Path::new("/checkout"),
+            None,
+            json!([{"uri": "file:///checkout/clean.rs", "range": range()}, {"uri": "file:///checkout/gone.rs", "range": range()}]),
+            Scope::Checkout,
+            &dirty,
+            |uri, _| {
+                consulted.push(uri.to_owned());
+                Ok("disk source".into())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            rendered,
+            "clean.rs:2:3  disk source\ngone.rs:2:3  (unsaved in editor)\n"
+        );
+        assert_eq!(consulted, ["file:///checkout/clean.rs"]);
+    }
 }
 
 #[test]
@@ -215,7 +242,15 @@ fn find_ranks_exact_prefix_contains_then_other() {
         ["work", "worker", "rework", "unrelated"]
     );
     assert_eq!(
-        render(Verb::Find, root, None, result, Scope::Checkout).unwrap(),
+        render(
+            Verb::Find,
+            root,
+            None,
+            result,
+            Scope::Checkout,
+            &BTreeSet::new()
+        )
+        .unwrap(),
         "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\nfunction unrelated  lib.rs:2:3\n"
     );
 }
@@ -350,9 +385,15 @@ fn verb_text_renderers() {
     let uri = "file:///checkout/src/lib.rs";
     let location = json!({"uri": uri, "range": range()});
     let show = |verb, result| {
-        render_with_source(verb, root, Some(uri), result, Scope::Checkout, |_, _| {
-            Ok("  fn work() {}  ".into())
-        })
+        render_with_source(
+            verb,
+            root,
+            Some(uri),
+            result,
+            Scope::Checkout,
+            &BTreeSet::new(),
+            |_, _| Ok("  fn work() {}  ".into()),
+        )
         .unwrap()
     };
     insta::assert_snapshot!(show(Verb::Def, location.clone()), @"src/lib.rs:2:3  fn work() {}");
@@ -405,13 +446,22 @@ fn call_hierarchy_hides_distinct_external_items() {
                 Path::new("/checkout"),
                 None,
                 calls.clone(),
-                Scope::Checkout
+                Scope::Checkout,
+                &BTreeSet::new()
             )
             .unwrap(),
             "work  lib.rs:2:3\n2 outside the checkout hidden; add --external to show them\n"
         );
         assert_eq!(
-            render(verb, Path::new("/checkout"), None, calls, Scope::External).unwrap(),
+            render(
+                verb,
+                Path::new("/checkout"),
+                None,
+                calls,
+                Scope::External,
+                &BTreeSet::new()
+            )
+            .unwrap(),
             "work  /other/lib.rs:2:3\nwork  /sdk/lib.rs:2:3\nwork  lib.rs:2:3\n"
         );
         assert_eq!(
@@ -420,7 +470,8 @@ fn call_hierarchy_hides_distinct_external_items() {
                 Path::new("/checkout"),
                 None,
                 json!([{key: outside}]),
-                Scope::Checkout
+                Scope::Checkout,
+                &BTreeSet::new()
             )
             .unwrap(),
             "no results\n1 outside the checkout hidden; add --external to show them\n"
