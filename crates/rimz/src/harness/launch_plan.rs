@@ -120,9 +120,9 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     reminders.sandbox = inputs.bwrap.is_some();
     if inputs
         .effective
-        .is_none_or(|effective| effective.git_reminder)
+        .is_none_or(|effective| effective.env_reminder)
     {
-        reminders.git = super::launch_git::read(inputs.cwd);
+        reminders.env = Some(super::launch_env::read(inputs.cwd));
     }
     let login = crate::agents::room_login(
         &inputs.state.workspace_record,

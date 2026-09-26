@@ -70,9 +70,9 @@ pub struct AgentsConfig {
     /// Maximum successive agent-to-agent launches from a human-started root.
     #[serde(default = "default_max_chain_length", rename = "max-chain-length")]
     pub max_chain_length: u8,
-    /// Carry the launch cwd's git state in the launch reminder.
-    #[serde(rename = "git-reminder")]
-    pub git_reminder: bool,
+    /// Carry the launch cwd, shell, and git state in the launch reminder.
+    #[serde(rename = "env-reminder")]
+    pub env_reminder: bool,
     pub worktree: WorktreeConfig,
     pub attention: AttentionConfig,
     #[serde(default)]
@@ -91,7 +91,7 @@ impl Default for AgentsConfig {
             placement: LaunchPlacement::default(),
             isolation: Isolation::default(),
             max_chain_length: default_max_chain_length(),
-            git_reminder: true,
+            env_reminder: true,
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
             subagents: SubagentsConfig::default(),
@@ -510,6 +510,12 @@ pub struct RoleBinding {
 /// Locate retired agent keys in machine or project config.
 pub(crate) fn retired_agents_key(doc: &toml::Table) -> Option<String> {
     let agents = doc.get("agents").and_then(toml::Value::as_table);
+    if agents.is_some_and(|agents| agents.contains_key("git-reminder")) {
+        return Some(
+            "`git-reminder` was renamed to `env-reminder`; it now also names the launch cwd and the pane shell"
+                .to_owned(),
+        );
+    }
     if agents.is_some_and(|agents| agents.contains_key("max-launch-depth")) {
         return Some(
             "`max-launch-depth` was renamed to `max-chain-length`; the default also changed from 1 to 3"

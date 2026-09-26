@@ -480,6 +480,7 @@ fn explain_prints_the_plan_without_side_effects() {
             .any(|pair| pair[0] == "--model" && pair[1] == "fable")
     );
     let reminder = report["prompt"]["reminder"].as_str().unwrap();
+    assert!(reminder.contains("shell /bin/sh"));
     assert!(reminder.contains("$ git status --short"));
     assert!(reminder.contains("$ git rev-parse --short HEAD"));
     let head = std::process::Command::new("git")

@@ -408,17 +408,30 @@ fn agent_chain_length_defaults_parses_override_and_rejects_retired_key() {
 }
 
 #[test]
-fn git_reminder_defaults_on_and_parses_override() {
+fn env_reminder_defaults_on_and_parses_override() {
     let dir = tempdir().expect("tempdir");
     let defaulted = load_no_fragments(&write_named(&dir, "config.toml", "")).unwrap();
-    assert!(defaulted.agents.git_reminder);
+    assert!(defaulted.agents.env_reminder);
     let tuned = load_no_fragments(&write_named(
         &dir,
         "config.toml",
-        "[agents]\ngit-reminder = false\n",
+        "[agents]\nenv-reminder = false\n",
     ))
     .unwrap();
-    assert!(!tuned.agents.git_reminder);
+    assert!(!tuned.agents.env_reminder);
+}
+
+#[test]
+fn retired_git_reminder_names_env_reminder() {
+    let dir = tempdir().unwrap();
+    match load_no_fragments(&write_named(
+        &dir,
+        "config.toml",
+        "[agents]\ngit-reminder = false\n",
+    )) {
+        Err(ConfigErr::RemovedKey { detail, .. }) => assert!(detail.contains("env-reminder")),
+        other => panic!("expected RemovedKey, got {other:?}"),
+    }
 }
 
 #[test]

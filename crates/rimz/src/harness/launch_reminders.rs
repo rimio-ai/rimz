@@ -1,17 +1,17 @@
-//! One system reminder carrying team context, model identity, git state, sandbox view, subagent policy, and shared language servers.
+//! One system reminder carrying team context, model identity, launch environment, sandbox view, subagent policy, and shared language servers.
 
 use std::path::Path;
 
 use super::launch::ExecRequest;
 use super::launch_context::{self, escape_reminder_text};
-use super::launch_git::GitState;
+use super::launch_env::LaunchEnv;
 use super::subagent_policy::{self, SubagentCatalog};
 use crate::agents::{LaunchParams, model_display::display_model};
 
 pub use super::launch_context::TeamReminder;
 
 pub(super) struct LaunchReminders {
-    pub git: Option<GitState>,
+    pub env: Option<LaunchEnv>,
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
     /// The launch runs inside the RimZ sandbox view: adds the sandbox reminder
@@ -26,7 +26,7 @@ pub(super) struct LaunchReminders {
 impl Default for LaunchReminders {
     fn default() -> Self {
         Self {
-            git: None,
+            env: None,
             model: true,
             sandbox: false,
             lsp_configured: false,
@@ -91,8 +91,8 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
         paragraphs.push(model_line(params, &model));
     }
-    if let Some(git) = &reminders.git {
-        paragraphs.push(git_paragraph(git, cwd));
+    if let Some(env) = &reminders.env {
+        paragraphs.push(env_paragraph(env, cwd));
     }
     paragraphs.push(if reminders.sandbox {
         SANDBOX_REMINDER_BODY.to_owned()
@@ -113,12 +113,21 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     wrap(&paragraphs.join("\n\n"))
 }
 
-fn git_paragraph(git: &GitState, cwd: &Path) -> String {
-    let mut lines = vec![
-        format!(
-            "RimZ ran these in {} at launch; read the output as if you had run them:",
-            escape_reminder_text(&cwd.to_string_lossy())
+fn env_paragraph(env: &LaunchEnv, cwd: &Path) -> String {
+    let cwd = escape_reminder_text(&cwd.to_string_lossy());
+    let environment = match &env.shell {
+        Some(shell) => format!(
+            "Launch environment: cwd {cwd}; shell {} (your user shell, resolved from $SHELL or else the passwd entry).",
+            escape_reminder_text(&shell.to_string_lossy())
         ),
+        None => format!("Launch environment: cwd {cwd}."),
+    };
+    let Some(git) = &env.git else {
+        return environment;
+    };
+    let mut lines = vec![
+        environment,
+        "RimZ ran these in the cwd at launch; read the output as if you had run them:".to_owned(),
         "$ git status --short".to_owned(),
     ];
     if git.status.is_empty() {
@@ -200,17 +209,20 @@ mod tests {
     }
 
     #[test]
-    fn git_paragraph_escapes_lines_and_caps_only_status() {
+    fn env_paragraph_escapes_lines_and_caps_only_status() {
         let request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
         for count in [40, 43] {
             let reminders = LaunchReminders {
-                git: Some(super::super::launch_git::GitState {
-                    status: std::iter::repeat_n("?? a<b>&c.md", count)
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    head: "abc123".to_owned(),
-                    log: "abc123 <base>&".to_owned(),
+                env: Some(LaunchEnv {
+                    shell: Some("/shell/<>&".into()),
+                    git: Some(super::super::launch_env::GitState {
+                        status: std::iter::repeat_n("?? a<b>&c.md", count)
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        head: "abc123<>&".to_owned(),
+                        log: "abc123 <base>&".to_owned(),
+                    }),
                 }),
                 ..Default::default()
             };
@@ -218,9 +230,33 @@ mod tests {
             assert_eq!(text.matches("?? a&lt;b&gt;&amp;c.md").count(), 40);
             assert_eq!(text.contains("… 3 more"), count > 40);
             assert!(text.contains("/repo/&lt;/system_reminder&gt;&amp;"));
-            assert!(text.contains("$ git rev-parse --short HEAD\nabc123\n$ git log -1 --oneline\nabc123 &lt;base&gt;&amp;"));
+            assert!(text.contains("shell /shell/&lt;&gt;&amp;"));
+            assert!(text.contains("$ git rev-parse --short HEAD\nabc123&lt;&gt;&amp;\n$ git log -1 --oneline\nabc123 &lt;base&gt;&amp;"));
             assert_eq!(text.matches("</system_reminder>").count(), 1);
         }
+    }
+
+    #[test]
+    fn env_paragraph_survives_unavailable_git() {
+        let env = LaunchEnv {
+            shell: Some("/usr/bin/zsh".into()),
+            git: None,
+        };
+        assert_eq!(
+            env_paragraph(&env, Path::new("/checkout")),
+            "Launch environment: cwd /checkout; shell /usr/bin/zsh (your user shell, resolved from $SHELL or else the passwd entry)."
+        );
+    }
+
+    #[test]
+    fn env_paragraph_omits_unknown_shell() {
+        let env = LaunchEnv {
+            shell: None,
+            git: None,
+        };
+        let text = env_paragraph(&env, Path::new("/checkout"));
+        assert_eq!(text, "Launch environment: cwd /checkout.");
+        assert!(!text.contains("shell"));
     }
 
     #[test]
@@ -263,10 +299,13 @@ mod tests {
             ..LaunchParams::default()
         };
         let mut reminders = LaunchReminders {
-            git: Some(super::super::launch_git::GitState {
-                status: String::new(),
-                head: "abc123".to_owned(),
-                log: "abc123 base".to_owned(),
+            env: Some(LaunchEnv {
+                shell: Some("/bin/sh".into()),
+                git: Some(super::super::launch_env::GitState {
+                    status: String::new(),
+                    head: "abc123".to_owned(),
+                    log: "abc123 base".to_owned(),
+                }),
             }),
             team: Some(team_reminder(
                 toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'").expect("team"),
@@ -288,7 +327,10 @@ mod tests {
                 let git = text
                     .find("$ git status --short\n(clean)")
                     .expect("git paragraph");
-                assert!(model < git);
+                let env = text
+                    .find("Launch environment:")
+                    .expect("environment paragraph");
+                assert!(model < env && env < git);
                 assert!(
                     git < text
                         .find(if sandbox {

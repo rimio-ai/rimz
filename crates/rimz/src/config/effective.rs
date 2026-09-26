@@ -87,7 +87,7 @@ pub enum ProjectTasksErr {
 
 #[derive(Default)]
 struct RepoConfig {
-    git_reminder: Option<bool>,
+    env_reminder: Option<bool>,
     lsp_servers: BTreeMap<String, super::LspServerConfig>,
     profiles: ProfilesConfig,
     subagent_profiles: ProfilesConfig,
@@ -106,7 +106,7 @@ pub struct ProjectTasks {
 /// profile may inherit only repo profiles or built-in kinds so the hashed
 /// executable surface stays closed.
 pub struct LaunchAgents {
-    pub git_reminder: bool,
+    pub env_reminder: bool,
     pub lsp_servers: BTreeMap<String, super::LspServerConfig>,
     pub untrusted_lsp_servers: Vec<String>,
     pub profiles: ProfilesConfig,
@@ -178,7 +178,7 @@ pub fn load_with_roots(
             })
             .unwrap_or_default();
         return Ok(LaunchAgents {
-            git_reminder: machine.git_reminder,
+            env_reminder: machine.env_reminder,
             lsp_servers,
             untrusted_lsp_servers,
             profiles: machine.profiles.clone(),
@@ -194,7 +194,7 @@ pub fn load_with_roots(
 
     let Some(repo_value) = repo_value else {
         return Ok(LaunchAgents {
-            git_reminder: machine.git_reminder,
+            env_reminder: machine.env_reminder,
             lsp_servers,
             untrusted_lsp_servers: Vec::new(),
             profiles: machine.profiles.clone(),
@@ -316,7 +316,7 @@ pub fn load_with_roots(
             source,
         })?;
     Ok(LaunchAgents {
-        git_reminder: repo.git_reminder.unwrap_or(machine.git_reminder),
+        env_reminder: repo.env_reminder.unwrap_or(machine.env_reminder),
         lsp_servers,
         untrusted_lsp_servers: Vec::new(),
         profiles,
@@ -614,10 +614,10 @@ fn project_lsp_policy_key(value: &toml::Value) -> Option<&'static str> {
 }
 
 fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig, toml::de::Error> {
-    let git_reminder = value
+    let env_reminder = value
         .get("agents")
         .and_then(toml::Value::as_table)
-        .and_then(|agents| agents.get("git-reminder"))
+        .and_then(|agents| agents.get("env-reminder"))
         .cloned()
         .map(toml::Value::try_into)
         .transpose()?;
@@ -656,7 +656,7 @@ fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig
         .transpose()?
         .unwrap_or_default();
     Ok(RepoConfig {
-        git_reminder,
+        env_reminder,
         lsp_servers,
         profiles,
         subagent_profiles,

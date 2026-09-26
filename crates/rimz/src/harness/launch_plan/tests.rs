@@ -525,7 +525,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
 }
 
 #[test]
-fn git_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() {
+fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() {
     let project = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
     for args in [
@@ -561,7 +561,7 @@ fn git_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
     let state = StatePaths::under(workspace_id, project.path()).unwrap();
     for subagent in [false, true] {
         for enabled in [false, true] {
-            effective.git_reminder = enabled;
+            effective.env_reminder = enabled;
             for cwd in [project.path(), repo.path()] {
                 let mut request =
                     ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
@@ -580,6 +580,12 @@ fn git_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                     ambient_env: &BTreeMap::new(),
                 })
                 .unwrap();
+                assert_eq!(
+                    plan.process()
+                        .reminder
+                        .contains(&format!("Launch environment: cwd {}", cwd.display())),
+                    enabled
+                );
                 assert_eq!(
                     plan.process().reminder.contains("$ git status --short"),
                     enabled && cwd == repo.path()
