@@ -244,6 +244,25 @@ fn missing_qualifiers_preserve_exact_candidates_without_guessing() {
 }
 
 #[test]
+fn not_found_candidates_collapse_re_exports_to_their_definition() {
+    let symbols: Vec<SymbolInformation> = serde_json::from_value(json!([
+        {"name": "Store", "kind": 23, "location": {"uri": "file:///checkout/src/lib.rs", "range": range()}},
+        {"name": "Store", "kind": 23, "location": {"uri": "file:///checkout/src/store/mod.rs", "range": range()}}
+    ]))
+    .unwrap();
+    let definition = symbols[1].location.clone();
+    let symbols = collapse_candidates(symbols, |_| Ok(vec![definition.clone()])).unwrap();
+    let missing = Output::NotFound {
+        name: "wrong::Store".into(),
+        symbols,
+    };
+    insta::assert_snapshot!(render_outcome(Path::new("/checkout"), &missing, false).unwrap(), @"
+    not found: wrong::Store; 1 symbol named Store:
+    struct store::Store  src/store/mod.rs:2:3
+    ");
+}
+
+#[test]
 fn aliases_collapse_to_definitions_without_guessing() {
     let location = |file: &str| {
         serde_json::from_value::<Location>(
