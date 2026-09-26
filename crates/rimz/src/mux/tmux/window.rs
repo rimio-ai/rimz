@@ -10,6 +10,7 @@ use crate::mux::{CommandSpec, HostPane, MuxErr, Result, SidebarPaneOptions, ensu
 use super::TmuxBackend;
 use super::options::{
     RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION, RIMZ_TITLE_OPTION, sidebar_serve_command,
+    spawn_command_is_sidebar_serve,
 };
 use super::parse::parse_new_window_ids;
 
@@ -160,19 +161,10 @@ impl TmuxBackend {
                 cols: cell.width,
                 rows: cell.height,
             };
-            // tmux quotes a single shell-command argument as a whole. Decode
-            // that layer before inspecting argv, so a hook-born sidebar is
-            // chrome even before its process publishes the pane title.
-            let sidebar_spawn = shlex::split(spawn)
-                .and_then(|argv| match argv.as_slice() {
-                    [command] => shlex::split(command),
-                    _ => Some(argv),
-                })
-                .is_some_and(|argv| {
-                    argv.get(1).is_some_and(|arg| arg == "sidebar")
-                        && argv.get(2).is_some_and(|arg| arg == "serve")
-                });
-            if *sidebar == "1" || crate::pane::command_is_sidebar_chrome(command) || sidebar_spawn {
+            if *sidebar == "1"
+                || crate::pane::command_is_sidebar_chrome(command)
+                || spawn_command_is_sidebar_serve(spawn)
+            {
                 chrome.push(pane);
             } else {
                 work.push(pane);

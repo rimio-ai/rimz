@@ -12,6 +12,20 @@ pub(super) const SIDEBAR_WIDTH_OPTION: &str = "@rimz_sidebar_cols";
 pub(super) const RIMZ_TITLE_OPTION: &str = "@rimz_title";
 pub(super) const RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION: &str = "@rimz_restore_automatic_rename";
 
+pub(super) fn spawn_command_is_sidebar_serve(spawn: &str) -> bool {
+    // tmux quotes a single shell-command argument as a whole. Decode that
+    // layer so a hook-born sidebar is chrome before it publishes its title.
+    shlex::split(spawn)
+        .and_then(|argv| match argv.as_slice() {
+            [command] => shlex::split(command),
+            _ => Some(argv),
+        })
+        .is_some_and(|argv| {
+            argv.get(1).is_some_and(|arg| arg == "sidebar")
+                && argv.get(2).is_some_and(|arg| arg == "serve")
+        })
+}
+
 /// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
 /// launch and in-place recovery so the two cannot drift.
 pub(super) fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
@@ -272,6 +286,29 @@ mod tests {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
     use crate::mux::SidebarPaneOptions;
+
+    #[test]
+    fn spawn_command_recognizes_sidebar_serve_before_title() {
+        let commands = [
+            "\"/home/u/.rimz/ws/room/rimz sidebar serve --mux tmux\"",
+            "/home/u/.rimz/ws/room/rimz sidebar serve --mux tmux",
+            "rimz-stub sidebar serve",
+            "",
+            "rimz",
+            "rimz sidebar",
+            "rimz sidebar snapshot",
+            "rimz loop watch --hold",
+            "rimz codex app-server serve",
+            "'rimz sidebar serve",
+            "\"'rimz sidebar serve\"",
+        ];
+        assert_eq!(
+            commands.map(spawn_command_is_sidebar_serve),
+            [
+                true, true, true, false, false, false, false, false, false, false, false
+            ],
+        );
+    }
 
     fn sidebar_opts(refresh_ms: Option<u16>) -> SidebarPaneOptions {
         SidebarPaneOptions {

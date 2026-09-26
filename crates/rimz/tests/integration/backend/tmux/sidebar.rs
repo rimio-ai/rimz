@@ -505,6 +505,33 @@ fn sidebar_birth_and_first_attach_preserve_work_shell_contract() {
 }
 
 #[test]
+fn new_window_hook_sidebar_is_chrome_before_title() {
+    require_tmux!();
+    let session = "rimz-hook-before-title";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((100, 30)));
+    let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
+    let opts = sidebar_opts(session, stub, Some(100));
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    server.tmux(&["new-window", "-d", "-t", session, "-n", "plain"]);
+    let target = format!("{session}:plain");
+    let window = server.display(&target, "#{window_id}");
+    let panes = wait_for_hook_docked_window_panes(&server, session, &window);
+    let sidebar = panes
+        .iter()
+        .find(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+        .expect("hook-born sidebar is chrome");
+    assert_ne!(
+        server.display(sidebar.pane_id.raw(), "#{pane_title}"),
+        "rimz-sidebar"
+    );
+    assert_ne!(sidebar.title.as_deref(), Some("rimz-sidebar"));
+}
+
+#[test]
 fn new_window_hook_respawns_plain_shell_at_final_width_only() {
     require_tmux!();
     let session = "rimz-hook-plain-shell";
