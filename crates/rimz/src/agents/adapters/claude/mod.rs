@@ -1355,7 +1355,11 @@ fn build_claude_observation(
     observation.launch.model = model;
     observation.launch.effort = claude_effort(payload, parts);
     observation.usage.context_window = context_window;
-    observation.usage.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+    // A child's transcript total covers its last request only, not its run, so
+    // a child carries the request split and no total.
+    if observation.parent_agent_id.is_none() {
+        observation.usage.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+    }
     observation.usage.fresh_input_tokens = usage.fresh_input_tokens;
     observation.usage.cache_read_input_tokens = usage.cache_read_input_tokens;
     observation.usage.cache_write_input_tokens = usage.cache_write_input_tokens;
