@@ -7,11 +7,14 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
     let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
     child.model = None;
+    child.usage.fresh_input_tokens = Some(1);
+    child.usage.output_tokens = Some(9);
     let mut fork = child_state("sess-root", "fork-1", AgentStatus::Running, 5);
     fork.task = None;
     let mut typed = child_state("sess-root", "typed-1", AgentStatus::Running, 5);
     typed.task = Some("review".to_owned());
     typed.model = Some("lifecycle-model".to_owned());
+    typed.usage.fresh_input_tokens = Some(42);
     let started = ago(100);
 
     let snapshot = room(vec![parent, child, fork, typed]);
@@ -19,11 +22,14 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         record(
             "child-1",
             SubagentContext {
+                usage: Some(crate::agents::AgentUsageSummary {
+                    fresh_input_tokens: Some(12_400),
+                    ..Default::default()
+                }),
                 agent_type: None,
                 model: Some("child-model".to_owned()),
                 effort: Some("high".to_owned()),
                 description: Some("locate the render path".to_owned()),
-                token_count: Some(12_400),
                 cost_usd: Some(0.42),
                 started_at: Some(started),
                 observed_at: epoch(),
@@ -32,11 +38,11 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         record(
             "fork-1",
             SubagentContext {
+                usage: None,
                 agent_type: Some("Explore".to_owned()),
                 model: None,
                 effort: None,
                 description: Some("search the store".to_owned()),
-                token_count: Some(5_000),
                 cost_usd: None,
                 started_at: None,
                 observed_at: epoch(),
@@ -45,11 +51,11 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         record(
             "typed-1",
             SubagentContext {
+                usage: None,
                 agent_type: Some("SomethingElse".to_owned()),
                 model: Some("sidecar-model".to_owned()),
                 effort: Some("low".to_owned()),
                 description: None,
-                token_count: None,
                 cost_usd: None,
                 started_at: None,
                 observed_at: epoch(),
@@ -58,11 +64,11 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         record(
             "ghost",
             SubagentContext {
+                usage: None,
                 agent_type: None,
                 model: None,
                 effort: None,
                 description: Some("nowhere".to_owned()),
-                token_count: None,
                 cost_usd: None,
                 started_at: None,
                 observed_at: epoch(),
@@ -75,7 +81,8 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         child.subagent_description.as_deref(),
         Some("locate the render path")
     );
-    assert_eq!(child.usage.total_tokens, Some(12_400));
+    assert_eq!(child.context_used_tokens(), Some(12_400));
+    assert_eq!(child.usage.output_tokens, Some(9));
     assert_eq!(child.subagent_cost_usd, Some(0.42));
     assert_eq!(child.subagent_started_at, Some(started));
     assert_eq!(child.model.as_deref(), Some("child-model"));
@@ -90,6 +97,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     );
 
     let typed = rollup_agent(&folded, "typed-1");
+    assert_eq!(typed.context_used_tokens(), Some(42));
     assert_eq!(
         typed.task.as_deref(),
         Some("review"),
