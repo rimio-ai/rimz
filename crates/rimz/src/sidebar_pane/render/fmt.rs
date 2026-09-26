@@ -4,7 +4,7 @@ use jiff::Timestamp;
 
 use crate::agents::RateLimitWindow;
 use crate::sidebar_pane::render::layout::clip;
-pub(super) use crate::theme::fmt::{dollars_cap, dollars2, reset_countdown};
+pub(super) use crate::theme::fmt::{dollars_cap, dollars2, expiry_label, reset_countdown};
 
 /// Seconds since `at`, clamped at zero — the shared input for [`age_short`] and
 /// the staleness color ramp, so a row reads the frame clock once and styles and

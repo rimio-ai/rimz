@@ -82,6 +82,8 @@ glyph_roles! {
         MeterManaTrack => "mana_track",
         MeterManaTick => "mana_tick",
         MeterReset => "reset",
+        MeterRedeemArmed => "redeem_armed",
+        MeterRedeemHold => "redeem_hold",
         MeterUnlimited => "unlimited",
         MeterScrollThumb => "scroll_thumb",
         MeterScrollTrack => "scroll_track",

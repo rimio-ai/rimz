@@ -18,6 +18,18 @@ pub struct DailyBudgetView {
     pub parked: bool,
 }
 
+/// What auto-redeem would do if the longest Codex window ran dry right now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RedeemForecast {
+    /// Auto-redeem is off: only the last-30-minute expiry rescue would fire.
+    Manual,
+    /// A credit would be spent, or no natural reset is known to wait for.
+    Armed,
+    /// Nothing would fire: the fleet would park until the natural reset.
+    Holding,
+}
+
 /// Remote-control badge for this provider: hidden, or shown green/red by
 /// managed-server health (the `⇅ rc` flag).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +99,11 @@ pub struct SidebarProviderPanel {
     /// Codex rate-limit reset credits, shown as a compact header marker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset_credits: Option<ResetCredits>,
+    /// Auto-redeem forecast for the reset-credit marker: manual (auto-redeem
+    /// off), armed (a dry window would spend a credit), or holding (the fleet
+    /// would park until the natural reset). `None` without reset credits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redeem_forecast: Option<RedeemForecast>,
     /// Descriptor-declared budget-window labels, painted as placeholder tracks
     /// while a metered account has no window readings yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

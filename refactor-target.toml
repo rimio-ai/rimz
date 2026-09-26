@@ -278,6 +278,7 @@ upward-dependencies = ["sidebar::refresh"]
 # The team prompt layer (built-in consensus, its replacement, team files) rides every launch carrier into composition and `agents explain`.
 # Setup publishes the read-only built-in consensus copy, and `agents explain` names its path.
 # First-run consent offers the auto-redeem row only where its provider is installed.
+# The auto-redeem forecast projects onto provider panels at both sidebar enrich folds.
 # Launch finalize distinguishes typed from default permission modes; cohort resume computes a seed's isolation.
 # The board run (stage plus ledger times) feeds the sidebar pipeline lane.
 # The ended-session reconcile and its retired-row split are pulled by the hook, the exec wrapper and restart.
@@ -289,7 +290,7 @@ upward-dependencies = ["sidebar::refresh"]
 # PROMPT_CACHE_MARGIN, fire_point, resolve_mode and should_compact share one idle-compaction decision between producer and detached CLI helper.
 # IdleWindow carries the cache-expiry bound through that shared decision.
 # Deadline rungs, channel policy and locked claims serve the CLI and producer.
-surface-budget = 553
+surface-budget = 554
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -423,13 +424,15 @@ path = "crates/rimz/src/store"
 # The sidebar group record carries a team pipeline and its derived position.
 # A deferred delivery instructs the queue what to do with the recorded blocker, whose words stay with the sweep.
 # The lifetime-class GC reports per-room, per-class removals to the CLI and the auto-GC assist.
-surface-budget = 316
+# Provider panels carry the auto-redeem forecast the header marker renders.
+surface-budget = 317
 
 [[module]]
 path = "crates/rimz/src/theme"
 upward-dependencies = ["agents"]
 # Wait prompts and CLI reports share the byte-size formatter.
-surface-budget = 30
+# The reset-credit expiry label sits beside the reset countdown.
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"

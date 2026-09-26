@@ -429,7 +429,6 @@ fn dashboard_chrome(
         width: inner,
         zones: &snapshot.theme.display.budget_bar,
         now: snapshot.now,
-        animation_phase: ui.animation_phase,
     });
     panel.map_lines(pad_chrome);
     panel.translate_columns(1);

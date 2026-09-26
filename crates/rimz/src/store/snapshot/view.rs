@@ -37,8 +37,8 @@ pub(crate) use providers::{format_plan_label, sort_windows};
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 use model::cohort_team;
 pub use model::{
-    DailyBudgetView, PipelinePosition, PresenceSample, RemoteControlBadge, SidebarCohortEffort,
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
+    DailyBudgetView, PipelinePosition, PresenceSample, RedeemForecast, RemoteControlBadge,
+    SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth, SidebarPipeline, SidebarPresence,
     SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount, SidebarWorktreeGroup,
     SidebarWorktreeKind, WorktreeCi, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };

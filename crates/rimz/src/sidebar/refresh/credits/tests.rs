@@ -218,6 +218,7 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
         day_budget: None,
         extra_credits: None,
         reset_credits: None,
+        redeem_forecast: None,
         window_placeholders: Vec::new(),
         windows: Vec::new(),
     }

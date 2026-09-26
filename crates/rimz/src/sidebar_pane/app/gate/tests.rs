@@ -58,6 +58,7 @@ fn provider(
         day_budget: None,
         extra_credits: None,
         reset_credits: None,
+        redeem_forecast: None,
         window_placeholders: Vec::new(),
         windows: vec![crate::agents::RateLimitWindow {
             used_percentage: Some(used_percentage),
