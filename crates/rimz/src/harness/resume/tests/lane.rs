@@ -214,10 +214,9 @@ fn fresh_lane_materializes_new_team_launches() {
         })
         .run()
         .unwrap();
-    let LaneResumeAction::RestoreClosed { plan, channel, .. } = action else {
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
         panic!("expected fresh restore");
     };
-    assert_eq!(channel.as_deref(), Some("saved-channel"));
     let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
     let paths = crate::disk::paths::StatePaths::under(workspace.clone(), &dir.path().join("state"))
         .unwrap();
@@ -228,6 +227,17 @@ fn fresh_lane_materializes_new_team_launches() {
     assert_eq!(tabs.len(), 1);
     assert_eq!(tabs[0].pane_count(), 2);
     assert_eq!(tabs[0].cwd, Path::new(lane));
+    assert_eq!(
+        tabs[0].env.get(crate::workspace::ENV_WORKTREE_PATH),
+        Some(&lane.to_owned())
+    );
+    assert_eq!(
+        tabs[0]
+            .env
+            .get(crate::workspace::ENV_CHANNEL)
+            .map(String::as_str),
+        Some("saved-channel")
+    );
     for (pane, role) in tabs[0]
         .layout
         .columns

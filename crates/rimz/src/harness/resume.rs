@@ -28,7 +28,7 @@ use crate::harness::plan::{
     ResumeLaunchPosture, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::spec::LayoutSpec;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RoomLogins};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RoomLogins, WorkspaceId};
 use crate::mux::ResumeTab;
 use crate::store::runtime::AgentLiveness;
 use crate::store::writer::AgentLaunchScope;
@@ -84,6 +84,7 @@ pub struct LaneResumeRequest<'a> {
     pub worktrees: &'a [LaneWorktree],
     pub current_root: &'a Path,
     pub project_root: &'a Path,
+    pub workspace_id: &'a WorkspaceId,
     pub max: usize,
     pub rimz_bin: &'a Path,
     pub runtime: &'a RuntimePaths,
@@ -98,6 +99,7 @@ impl<'a> LaneResumeRequest<'a> {
     fn context(&self, profiles: &'a ProfilesConfig) -> ResumeContext<'a> {
         ResumeContext {
             project_root: Some(self.project_root),
+            workspace_id: self.workspace_id,
             rimz_bin: self.rimz_bin,
             runtime: self.runtime,
             profiles,
@@ -206,7 +208,6 @@ pub enum LaneResumeAction {
     RestoreClosed {
         lane_label: String,
         cwd: PathBuf,
-        channel: Option<String>,
         plan: LaneRestorePlan,
     },
 }
@@ -433,6 +434,9 @@ pub struct ResumePlan {
     /// The tabs to seed, ordered by their freshest pane activity (the lead is
     /// the focus target). Panes inside each tab are freshest-first.
     pub tabs: Vec<ResumeTab>,
+    /// Empty named channels restored as one shell pane each, seeded after
+    /// `tabs`; they carry no agent, so recovery counts leave them out.
+    pub channel_tabs: Vec<ResumeTab>,
     /// Prior sessions whose resume commands were seeded into those tabs.
     pub resumed: BTreeSet<(AgentKind, AgentSessionId)>,
     /// Candidates not resumed, each with its reason — the start report names them.
@@ -459,6 +463,7 @@ pub(super) struct PlannedTeamTab {
     pub label: String,
     pub cwd: PathBuf,
     pub channel: Option<String>,
+    pub env: BTreeMap<String, String>,
     pub team: String,
     pub layout: LayoutSpec,
     pub cohort: CohortResumePlan,
@@ -510,6 +515,7 @@ impl DetailedResumePlan {
     fn lower(self) -> ResumePlan {
         ResumePlan {
             tabs: self.tabs.into_iter().map(|planned| planned.tab).collect(),
+            channel_tabs: Vec::new(),
             resumed: self.resumed,
             skipped: self.skipped,
             agents_to_end: self.agents_to_end,
@@ -673,6 +679,7 @@ impl RecoveryPlan {
         let mut complete_resumed = self.base_resumed.clone();
         let mut resume = ResumePlan {
             tabs: Vec::with_capacity(self.entries.len()),
+            channel_tabs: Vec::new(),
             resumed: self.base_resumed,
             skipped: self.skipped,
             agents_to_end: self.agents_to_end,
@@ -1231,7 +1238,6 @@ fn plan_discovered_lane(
     Ok(LaneResumeAction::RestoreClosed {
         lane_label: lane.display.clone(),
         cwd: lane.path.clone(),
-        channel: lane.channel.clone(),
         plan: LaneRestorePlan {
             recovery: RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat),
             discovery_skipped,
@@ -1319,6 +1325,7 @@ fn plan_closed_lane(
         &restore.profiles,
         &restore.commands,
         Some(request.project_root),
+        request.workspace_id,
         &path_exists,
         &session_backed,
         request.fresh,
@@ -1400,14 +1407,9 @@ fn plan_closed_lane(
             .filter(|agent| !request.fresh && supports_agent_resume(agent) && session_backed(agent))
             .map(|agent| agent.kind.clone()),
     );
-    let channel = lane
-        .channel
-        .clone()
-        .or_else(|| closed.first().and_then(AgentState::channel));
     Ok(LaneResumeAction::RestoreClosed {
         lane_label: lane.display,
         cwd: lane.path,
-        channel,
         plan: LaneRestorePlan {
             recovery: RecoveryPlan::new(restore.teams, team, flat),
             discovery_skipped: Vec::new(),
@@ -1564,6 +1566,7 @@ fn materialize_team_restore_tab(
     Ok(ResumeTab {
         label: planned.label.clone(),
         cwd: planned.cwd.clone(),
+        env: planned.env.clone(),
         layout,
     })
 }
@@ -1580,6 +1583,7 @@ fn plan_team_restore_tabs(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     project_root: Option<&Path>,
+    workspace_id: &WorkspaceId,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
     fresh: bool,
@@ -1654,10 +1658,12 @@ fn plan_team_restore_tabs(
             .or_else(|| cohort.channel.clone());
         cohort.channel = channel.clone();
         let label = channel_label(channel.as_deref(), &cwd);
+        let env = tab_pin_env(workspace_id, project_root, &cwd, channel.as_deref());
         tabs.push(PlannedTeamTab {
             label,
             cwd,
             channel,
+            env,
             team,
             layout,
             cohort,
@@ -1680,6 +1686,7 @@ pub(super) fn split_team_and_flat(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     project_root: Option<&Path>,
+    workspace_id: &WorkspaceId,
     worktree_exists: impl Fn(&Path) -> bool,
     session_backed: impl Fn(&AgentState) -> bool,
     fresh: bool,
@@ -1691,6 +1698,7 @@ pub(super) fn split_team_and_flat(
         profiles,
         commands,
         project_root,
+        workspace_id,
         worktree_exists,
         session_backed,
         fresh,
@@ -1764,6 +1772,7 @@ fn newest_cmp(
 #[derive(Clone, Copy)]
 pub struct ResumeContext<'a> {
     pub project_root: Option<&'a Path>,
+    pub workspace_id: &'a WorkspaceId,
     pub rimz_bin: &'a Path,
     pub runtime: &'a RuntimePaths,
     pub profiles: &'a ProfilesConfig,
@@ -1929,12 +1938,19 @@ fn plan_resume_candidates_detailed(
             }
         } else {
             let resumed = BTreeSet::from([resumed_key.clone()]);
+            let env = tab_pin_env(
+                ctx.workspace_id,
+                ctx.project_root,
+                &candidate.cwd,
+                channel.as_deref(),
+            );
             tabs.push(PlannedResumeTab {
                 identity,
                 isolations: vec![isolation],
                 tab: ResumeTab {
                     label: tab_label,
                     cwd: candidate.cwd,
+                    env,
                     layout: crate::mux::LayoutPanes {
                         columns: vec![crate::mux::LayoutColumn {
                             panes: vec![crate::mux::PaneCmd {
@@ -1955,6 +1971,19 @@ fn plan_resume_candidates_detailed(
     disambiguate_resume_tab_labels(&mut tabs);
     plan.tabs = tabs;
     plan
+}
+
+/// The pane identity pin a resume tab starts its panes with. Only planner
+/// tests plan without a project root; they get no pin.
+fn tab_pin_env(
+    workspace_id: &WorkspaceId,
+    project_root: Option<&Path>,
+    cwd: &Path,
+    channel: Option<&str>,
+) -> BTreeMap<String, String> {
+    project_root.map_or_else(BTreeMap::new, |project_root| {
+        crate::workspace::pane_pin_env(workspace_id, project_root, cwd, channel)
+    })
 }
 
 fn candidate_room_channel(

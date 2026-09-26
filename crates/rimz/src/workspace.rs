@@ -7,7 +7,7 @@
 //! a marker directory (`PROJECT_MARKERS`) for a non-git project, and the
 //! directory itself as the last tier — a first-class directory workspace.
 //!
-//! The pane-scope worktree/channel pin extends the session pin and is rendered as argv for empty channel shells.
+//! The pane-scope worktree/channel pin extends the session pin.
 //!
 //! Identity is then *pinned per session*: session birth stamps
 //! [`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`] into the mux environment, and
@@ -70,35 +70,24 @@ pub fn pin_env(workspace_id: &WorkspaceId, project_root: &Path) -> BTreeMap<Stri
     ])
 }
 
-/// Shell pane argv for an empty named channel, pinned to the room identity.
-pub fn channel_shell_argv(
+/// The pane-scope identity pin: the session pin plus `RIMZ=1`, the pane's
+/// worktree path, and its channel when it has one.
+pub(crate) fn pane_pin_env(
     workspace_id: &WorkspaceId,
     project_root: &Path,
     worktree_path: &Path,
-    channel: &str,
-) -> Vec<String> {
-    vec![
-        "env".to_owned(),
-        "RIMZ=1".to_owned(),
-        format!("{}={workspace_id}", ENV_WORKSPACE_ID),
-        format!("{}={}", ENV_PROJECT_ROOT, project_root.display()),
-        format!("{}={}", ENV_WORKTREE_PATH, worktree_path.display()),
-        format!("{}={channel}", ENV_CHANNEL),
-        crate::proc::user_shell_program(),
-    ]
-}
-
-/// Shell pane argv for a resume tab label, falling back to a plain shell.
-pub(crate) fn channel_label_shell_argv(
-    workspace_id: &WorkspaceId,
-    project_root: &Path,
-    worktree_path: &Path,
-    label: &str,
-) -> Vec<String> {
-    let Some(channel) = label.strip_prefix('#').filter(|value| !value.is_empty()) else {
-        return vec![crate::proc::user_shell_program()];
-    };
-    channel_shell_argv(workspace_id, project_root, worktree_path, channel)
+    channel: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut env = pin_env(workspace_id, project_root);
+    env.insert("RIMZ".to_owned(), "1".to_owned());
+    env.insert(
+        ENV_WORKTREE_PATH.to_owned(),
+        worktree_path.display().to_string(),
+    );
+    if let Some(channel) = channel.filter(|value| !value.is_empty()) {
+        env.insert(ENV_CHANNEL.to_owned(), channel.to_owned());
+    }
+    env
 }
 
 /// Which ladder tier produced a workspace root. The class describes the root

@@ -201,17 +201,17 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
     }
     let sidebar = room.sidebar_options(&workspace.worktree_root, Vec::new(), None);
     let _ = backend.open_tab(&TabOptions {
-        env: Default::default(),
+        env: rimz::room::pane_identity_env(
+            workspace,
+            &workspace.worktree_root,
+            Some(channel),
+            false,
+        ),
         title: format!("#{channel}"),
         panes: LayoutPanes {
             columns: vec![LayoutColumn {
                 panes: vec![PaneCmd {
-                    argv: rimz::workspace::channel_shell_argv(
-                        &workspace.workspace_id,
-                        &workspace.project_root,
-                        &workspace.worktree_root,
-                        channel,
-                    ),
+                    argv: vec![rimz::proc::user_shell_program()],
                     name: Some(format!("#{channel}")),
                 }],
                 stacked: false,

@@ -694,9 +694,11 @@ allowed-dependencies = [
     "store::runtime",
     "store::writer",
     "utils::path",
+    "workspace",
     "worktree",
 ]
 # Rebirth admission reads distinct checkout roots before materializing tabs.
+# Resume tabs carry the pane identity pin from `workspace::pane_pin_env`.
 surface-budget = 49
 
 [[module]]

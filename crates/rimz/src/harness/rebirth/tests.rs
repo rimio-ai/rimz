@@ -497,9 +497,58 @@ fn disabled_recovery_restores_empty_channels_without_seeding_agents() {
 
     assert_eq!(plan.preview().pane_count(), 0);
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
-    assert_eq!(outcome.tabs.len(), 1);
-    assert_eq!(outcome.tabs[0].label, "#auth");
-    assert_eq!(outcome.tabs[0].pane_count(), 0);
+    assert!(outcome.tabs.is_empty());
+    assert_eq!(outcome.channel_tabs.len(), 1);
+    assert_eq!(outcome.channel_tabs[0].label, "#auth");
+    let marker: LastDeathMarker =
+        serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).unwrap())
+            .expect("marker");
+    assert_eq!(
+        marker.recovered,
+        Some(0),
+        "a restored channel shell is not a recovered agent"
+    );
+}
+
+#[test]
+fn empty_named_channel_tabs_restore_one_pinned_shell_per_channel() {
+    let fixture = Fixture::new(&[]);
+    fixture.seed_named_channel("auth");
+    fixture.seed_named_channel("docs");
+    let record = crate::workspace::record::read(&fixture.paths.workspace_record).expect("record");
+
+    let tabs = empty_named_channel_tabs(&fixture.paths);
+
+    assert_eq!(tabs.len(), 2);
+    for (tab, name) in tabs.iter().zip(["auth", "docs"]) {
+        let label = format!("#{name}");
+        assert_eq!(tab.label, label);
+        assert_eq!(tab.cwd, record.project_root);
+        assert_eq!(
+            tab.layout.columns,
+            [LayoutColumn {
+                panes: vec![PaneCmd {
+                    argv: vec![crate::proc::user_shell_program()],
+                    name: Some(label),
+                }],
+                stacked: false,
+            }]
+        );
+        assert_eq!(
+            tab.env
+                .get(crate::workspace::ENV_CHANNEL)
+                .map(String::as_str),
+            Some(name)
+        );
+        assert_eq!(
+            tab.env.get(crate::workspace::ENV_WORKTREE_PATH),
+            Some(&record.project_root.display().to_string())
+        );
+        assert_eq!(
+            tab.env.get(crate::workspace::ENV_WORKSPACE_ID),
+            Some(&fixture.paths.workspace_id.to_string())
+        );
+    }
 }
 
 #[test]

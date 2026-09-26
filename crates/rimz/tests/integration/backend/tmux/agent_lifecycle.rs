@@ -580,6 +580,7 @@ fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
         &projection.ended,
         rimz::harness::resume::ResumeContext {
             project_root: Some(&env.project_root),
+            workspace_id: &env.workspace_id,
             rimz_bin: &env.rimz_bin(),
             runtime: &env.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
