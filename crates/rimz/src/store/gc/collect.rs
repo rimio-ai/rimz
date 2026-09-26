@@ -171,6 +171,7 @@ pub(super) fn collect_ttl(
 }
 
 fn collect_sock(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<()> {
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::FileTypeExt;
@@ -192,12 +193,16 @@ fn collect_sock(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<
             source: source.into(),
         })?;
         for kind in [SockType::Datagram, SockType::Stream] {
-            let probe = socket(AddressFamily::Unix, kind, SockFlag::SOCK_NONBLOCK, None).map_err(
-                |source| GcErr::Io {
+            // nix has no non-blocking `SockFlag` on Darwin, so `fcntl` sets it portably.
+            let probe = socket(AddressFamily::Unix, kind, SockFlag::empty(), None)
+                .and_then(|probe| {
+                    fcntl(&probe, FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
+                    Ok(probe)
+                })
+                .map_err(|source| GcErr::Io {
                     path: path.clone(),
                     source: source.into(),
-                },
-            )?;
+                })?;
             match connect(probe.as_raw_fd(), &address) {
                 Err(nix::errno::Errno::EPROTOTYPE) => continue,
                 Err(nix::errno::Errno::ECONNREFUSED) => {
