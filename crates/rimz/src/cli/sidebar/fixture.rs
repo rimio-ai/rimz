@@ -2,10 +2,10 @@ use super::*;
 use rimz::agents::spending::sum_optional_cost;
 use rimz::ids::LinkTier;
 use rimz::store::snapshot::{
-    AgentCard, ProcessCard, ProcessState, RemoteControlBadge, RowCard, SNAPSHOT_VERSION,
-    SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
-    SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreeCi,
-    WorktreePrState, WorktreeTrunkSync,
+    AgentCard, ProcessCard, ProcessState, RedeemForecast, RemoteControlBadge, RowCard,
+    SNAPSHOT_VERSION, SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarRow,
+    SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
+    SidebarWorktreeKind, WorktreeCi, WorktreePrState, WorktreeTrunkSync,
 };
 use std::path::PathBuf;
 
@@ -628,9 +628,10 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     );
     codex_panel.reset_credits = Some(rimz::ResetCredits {
         count: 2,
-        soonest_expiry: None,
+        soonest_expiry: Some(now + std::time::Duration::from_secs(3 * 3_600)),
         expiries: Vec::new(),
     });
+    codex_panel.redeem_forecast = Some(RedeemForecast::Armed);
     snapshot.providers = vec![
         provider_panel(
             "claude",
@@ -1038,9 +1039,10 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     );
     codex_panel.reset_credits = Some(rimz::ResetCredits {
         count: 2,
-        soonest_expiry: None,
+        soonest_expiry: Some(now + std::time::Duration::from_secs(3 * 3_600)),
         expiries: Vec::new(),
     });
+    codex_panel.redeem_forecast = Some(RedeemForecast::Armed);
     snapshot.providers = vec![
         provider_panel(
             "claude",
@@ -2248,6 +2250,7 @@ fn provider_panel(
         day_budget: None,
         extra_credits: matches!(kind, "pi" | "opencode").then_some(rimz::ExtraCredits::Disabled),
         reset_credits: None,
+        redeem_forecast: None,
         window_placeholders: Vec::new(),
         windows,
     }

@@ -62,6 +62,8 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(MeterManaTrack, "▱", None),
     glyph!(MeterManaTick, "╱", None),
     glyph!(MeterReset, "↻", Some("\u{f0450}")),
+    glyph!(MeterRedeemArmed, "⟳", Some("\u{f006a}")),
+    glyph!(MeterRedeemHold, "‖", Some("\u{f03e4}")),
     glyph!(MeterUnlimited, "∞", None),
     glyph!(MeterScrollThumb, "▐", None),
     glyph!(MeterScrollTrack, "▕", None),
@@ -337,6 +339,16 @@ mod tests {
         assert_eq!(
             nerd_font_glyph(GlyphRole::CardWaitSignal),
             Some("\u{f1720}")
+        );
+        assert_eq!(unicode_glyph(GlyphRole::MeterRedeemArmed), "⟳");
+        assert_eq!(
+            nerd_font_glyph(GlyphRole::MeterRedeemArmed),
+            Some("\u{f006a}")
+        );
+        assert_eq!(unicode_glyph(GlyphRole::MeterRedeemHold), "‖");
+        assert_eq!(
+            nerd_font_glyph(GlyphRole::MeterRedeemHold),
+            Some("\u{f03e4}")
         );
         assert_eq!(
             agent_status_glyph_role(AgentStatus::Sleeping),

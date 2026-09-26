@@ -66,17 +66,8 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     reset_attention.providers = vec![codex];
     assert_eq!(
         animation_cadence_for_test(&reset_attention),
-        AnimationCadence::Breath,
-        "a useful reset credit keeps its blink grid alive in a quiet room"
-    );
-    reset_attention.providers[0]
-        .reset_credits
-        .as_mut()
-        .unwrap()
-        .count = 0;
-    assert_eq!(
-        animation_cadence_for_test(&reset_attention),
-        AnimationCadence::None
+        AnimationCadence::None,
+        "a reset credit beside a spent window is a still marker in a quiet room"
     );
 
     let mut calm = snapshot_with(vec![agent(

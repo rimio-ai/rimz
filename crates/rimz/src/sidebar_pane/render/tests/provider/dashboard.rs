@@ -324,10 +324,14 @@ fn codex_reset_credit_header_shows_only_when_actionable() {
     zero.reset_credits = credits(0);
     let absent = provider_panel("codex", "Codex", 33, false, false, None);
 
-    assert!(
-        Dashboard::stacked(&theme, &[codex]).text().contains("↻ 3"),
-        "a Codex account with credits shows the header"
-    );
+    let mut manual = codex.clone();
+    manual.redeem_forecast = Some(crate::store::snapshot::RedeemForecast::Manual);
+    for panel in [codex, manual] {
+        assert!(
+            Dashboard::stacked(&theme, &[panel]).text().contains("↻ 3"),
+            "a Codex account with credits shows the manual header"
+        );
+    }
     for (panel, why) in [
         (non_codex, "a non-Codex account"),
         (zero, "a zero credit count"),
@@ -341,50 +345,93 @@ fn codex_reset_credit_header_shows_only_when_actionable() {
     }
 }
 
-#[test]
-fn codex_reset_marker_blinks_only_while_a_window_is_spent() {
-    let theme = Theme::fixed(false);
-    let marker_style = |panel: &crate::store::snapshot::SidebarProviderPanel, phase| {
-        Dashboard::stacked(&theme, std::slice::from_ref(panel))
-            .phase(phase)
-            .lines()
-            .into_iter()
-            .flat_map(|line| line.spans)
-            .find(|span| span.content.as_ref() == "↻")
-            .map(|span| span.style)
-            .expect("reset marker")
-    };
-    let styles = |panel: &crate::store::snapshot::SidebarProviderPanel| {
-        (0..32)
-            .map(|phase| marker_style(panel, phase))
-            .collect::<Vec<_>>()
-    };
-
-    let mut spent = provider_panel("codex", "Codex", 33, true, false, Some((100, 20)));
-    spent.reset_credits = Some(crate::ResetCredits {
+fn codex_credit_panel(
+    forecast: Option<crate::store::snapshot::RedeemForecast>,
+    expiry_hours: u64,
+) -> crate::store::snapshot::SidebarProviderPanel {
+    let mut panel = provider_panel("codex", "Codex", 33, true, false, Some((100, 20)));
+    panel.reset_credits = Some(crate::ResetCredits {
         count: 2,
-        soonest_expiry: Some(fixed_now() + Duration::from_secs(36 * 3_600)),
+        soonest_expiry: Some(fixed_now() + Duration::from_secs(expiry_hours * 3_600)),
         expiries: Vec::new(),
     });
-    assert!(
-        styles(&spent).windows(2).any(|pair| pair[0] != pair[1]),
-        "spent-window marker changes style across animation phases"
-    );
+    panel.redeem_forecast = forecast;
+    panel
+}
 
-    let mut unspent = spent.clone();
-    unspent.windows[0].used_percentage = Some(99);
-    let mut undated = spent;
-    undated.windows[0].resets_at = None;
-    for (panel, why) in [
-        (unspent, "an unspent window"),
-        (undated, "an undated window"),
+fn header_span_style(
+    theme: &Theme,
+    panel: &crate::store::snapshot::SidebarProviderPanel,
+    content: &str,
+) -> Option<Style> {
+    Dashboard::stacked(theme, std::slice::from_ref(panel))
+        .lines()
+        .into_iter()
+        .flat_map(|line| line.spans)
+        .find(|span| span.content.as_ref() == content)
+        .map(|span| span.style)
+}
+
+/// The marker says what auto-redeem would do and never moves: the dashboard
+/// takes no animation phase, and each forecast keeps one glyph and one tone,
+/// even beside a spent window.
+#[test]
+fn codex_reset_marker_reads_the_forecast_without_motion() {
+    use crate::store::snapshot::RedeemForecast;
+    let theme = Theme::fixed(false);
+    for (forecast, glyph, tone) in [
+        (None, "↻", theme.body()),
+        (Some(RedeemForecast::Manual), "↻", theme.body()),
+        (
+            Some(RedeemForecast::Armed),
+            "⟳",
+            theme.good(Modifier::empty()),
+        ),
+        (Some(RedeemForecast::Holding), "‖", theme.muted()),
     ] {
-        let steady = styles(&panel);
-        assert!(
-            steady.iter().all(|style| *style == steady[0]),
-            "{why} holds the marker steady"
+        let panel = codex_credit_panel(forecast, 36);
+        assert_eq!(
+            header_span_style(&theme, &panel, glyph),
+            Some(tone),
+            "{forecast:?} shows a steady {glyph}"
         );
     }
+}
+
+/// The expiry rides the marker within a week, floored to one unit, on a heat
+/// ramp while the user must act and a calm ramp while auto-redeem handles it.
+#[test]
+fn codex_reset_marker_shows_expiry_within_a_week() {
+    use crate::store::snapshot::RedeemForecast;
+    let theme = Theme::fixed(false);
+    for (hours, text) in [
+        (3, Some("↻ 2 · 3h")),
+        (6 * 24, Some("↻ 2 · 6d")),
+        (7 * 24, None),
+    ] {
+        let rendered = Dashboard::stacked(&theme, &[codex_credit_panel(None, hours)]).text();
+        match text {
+            Some(text) => assert!(rendered.contains(text), "{hours}h:\n{rendered}"),
+            None => assert!(
+                rendered.contains("↻ 2") && !rendered.contains("↻ 2 ·"),
+                "a week out hides the expiry:\n{rendered}"
+            ),
+        }
+    }
+
+    let amount = reset_expiry_heat_amount(3.0).expect("heat amount");
+    let manual = codex_credit_panel(Some(RedeemForecast::Manual), 3);
+    let armed = codex_credit_panel(Some(RedeemForecast::Armed), 3);
+    assert_eq!(
+        header_span_style(&theme, &manual, "3h"),
+        Some(theme.style(theme.heat_tone(amount), Modifier::empty())),
+        "manual expiry heats"
+    );
+    assert_eq!(
+        header_span_style(&theme, &armed, "3h"),
+        Some(theme.style(theme.calm_tone(amount), Modifier::empty())),
+        "armed expiry stays calm"
+    );
 }
 
 #[test]

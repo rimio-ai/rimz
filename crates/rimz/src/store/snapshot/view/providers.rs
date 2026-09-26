@@ -198,6 +198,7 @@ impl SidebarSnapshot {
                     day_budget: None,
                     extra_credits: None,
                     reset_credits: None,
+                    redeem_forecast: None,
                     window_placeholders,
                     windows,
                 },

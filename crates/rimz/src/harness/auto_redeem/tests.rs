@@ -733,3 +733,212 @@ fn failed_reservation_never_consumes_a_credit() {
     assert!(!consumed.get());
     assert_eq!(error.attempted_report(), Some(&report));
 }
+
+fn open_capacity(now: Timestamp, week_reset: Duration) -> ProviderCapacity {
+    ProviderCapacity::from_windows(vec![
+        RateLimitWindow {
+            used_percentage: Some(40),
+            resets_at: Some(now + Duration::from_secs(2 * 3_600)),
+            duration_mins: Some(300),
+            observed_at: Some(now),
+            ..Default::default()
+        },
+        RateLimitWindow {
+            used_percentage: Some(40),
+            resets_at: Some(now + week_reset),
+            duration_mins: Some(10_080),
+            observed_at: Some(now),
+            ..Default::default()
+        },
+    ])
+}
+
+fn chain(expiry: Timestamp) -> ResetCredits {
+    ResetCredits {
+        count: 2,
+        soonest_expiry: Some(expiry),
+        expiries: vec![expiry, expiry + Duration::from_secs(86_400)],
+    }
+}
+
+fn forecast(
+    capacity: Option<&ProviderCapacity>,
+    credits: &ResetCredits,
+    rate_pct_per_day: Option<f64>,
+    auto_redeem: bool,
+    now: Timestamp,
+) -> Option<RedeemForecast> {
+    redeem_forecast(
+        capacity,
+        credits,
+        rate_pct_per_day,
+        Duration::from_secs(12 * 3_600),
+        auto_redeem,
+        now,
+    )
+}
+
+#[test]
+fn forecast_reads_manual_armed_and_holding_from_a_dry_longest_window() {
+    let now = ts(1_700_000_000);
+    let day = Duration::from_secs(86_400);
+    let hour = Duration::from_secs(3_600);
+
+    let far = open_capacity(now, 3 * day);
+    let blocked = chain(now + 5 * day);
+    assert_eq!(
+        forecast(Some(&far), &blocked, None, false, now),
+        Some(RedeemForecast::Manual),
+        "auto-redeem off stays manual even when a dry week would block the gain"
+    );
+    assert_eq!(
+        forecast(Some(&far), &blocked, None, true, now),
+        Some(RedeemForecast::Armed),
+        "a dry week three days from reset redeems for the blocked gain"
+    );
+
+    let near = open_capacity(now, 7 * hour);
+    assert_eq!(
+        forecast(Some(&near), &chain(now + 19 * hour), None, true, now),
+        Some(RedeemForecast::Armed),
+        "a credit expiring 12h after the reset is doomed, so it is spent"
+    );
+    let survivor = chain(now + 7 * hour + 3 * day);
+    for rate in [None, Some(20.0)] {
+        assert_eq!(
+            forecast(Some(&near), &survivor, rate, true, now),
+            Some(RedeemForecast::Holding),
+            "a near reset and a surviving credit hold at rate {rate:?}"
+        );
+    }
+    assert_eq!(
+        forecast(
+            Some(&near),
+            &chain(now + Duration::from_secs(20 * 60)),
+            None,
+            true,
+            now
+        ),
+        Some(RedeemForecast::Armed),
+        "the expiry rescue fires under auto-redeem too"
+    );
+}
+
+#[test]
+fn forecast_without_a_known_reset_is_armed_and_without_credits_is_none() {
+    let now = ts(1_700_000_000);
+    let credit = chain(now + Duration::from_secs(3 * 86_400));
+    assert_eq!(
+        forecast(None, &credit, None, true, now),
+        Some(RedeemForecast::Armed)
+    );
+    let unstarted = ProviderCapacity::from_windows(vec![RateLimitWindow {
+        used_percentage: Some(0),
+        resets_at: None,
+        duration_mins: Some(10_080),
+        ..Default::default()
+    }]);
+    assert_eq!(
+        forecast(Some(&unstarted), &credit, None, true, now),
+        Some(RedeemForecast::Armed)
+    );
+    let empty = ResetCredits {
+        count: 0,
+        ..credit.clone()
+    };
+    assert_eq!(forecast(None, &empty, None, true, now), None);
+    assert_eq!(forecast(None, &empty, None, false, now), None);
+}
+
+#[test]
+fn holding_forecast_stays_firm_until_the_longest_reset() {
+    let start = ts(1_700_000_000);
+    let hour = Duration::from_secs(3_600);
+    let day = Duration::from_secs(86_400);
+    let open = (open_capacity(start, 7 * hour), start + 7 * hour);
+    let spent_five_hour = (
+        ProviderCapacity::from_windows(vec![
+            RateLimitWindow {
+                used_percentage: Some(100),
+                resets_at: Some(start + 4 * hour),
+                duration_mins: Some(300),
+                observed_at: Some(start),
+                ..Default::default()
+            },
+            RateLimitWindow {
+                used_percentage: Some(40),
+                resets_at: Some(start + 3 * hour),
+                duration_mins: Some(10_080),
+                observed_at: Some(start),
+                ..Default::default()
+            },
+        ]),
+        start + 3 * hour,
+    );
+
+    for (capacity, week_reset) in [open, spent_five_hour] {
+        let credits = chain(week_reset + 3 * day);
+        for rate in [None, Some(20.0)] {
+            let mut now = start;
+            while now < week_reset {
+                assert_eq!(
+                    forecast(Some(&capacity), &credits, rate, true, now),
+                    Some(RedeemForecast::Holding),
+                    "hold flipped at {now} (rate {rate:?})"
+                );
+                assert_eq!(
+                    redeem_verdict(
+                        Some(&capacity),
+                        &credits,
+                        rate,
+                        Duration::from_secs(12 * 3_600),
+                        true,
+                        now,
+                    ),
+                    None,
+                    "the producer fired during a hold at {now} (rate {rate:?})"
+                );
+                now += Duration::from_secs(10 * 60);
+            }
+        }
+    }
+}
+
+#[test]
+fn projection_forecasts_only_the_codex_panel_with_credits() {
+    let now = ts(1_700_000_000);
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut snapshot =
+        SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), Vec::new(), now);
+    let mut codex = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
+    codex.reset_credits = Some(chain(now + Duration::from_secs(3 * 86_400)));
+    let mut other = crate::sidebar::test_support::provider_panel("claude", Vec::new());
+    other.reset_credits = codex.reset_credits.clone();
+    snapshot.providers = vec![codex, other];
+    let logins = crate::agents::RoomLoginSet::native();
+    let forecasts = |snapshot: &SidebarSnapshot| {
+        snapshot
+            .providers
+            .iter()
+            .map(|panel| panel.redeem_forecast)
+            .collect::<Vec<_>>()
+    };
+
+    let mut config = ResumeConfig {
+        auto_redeem: true,
+        ..Default::default()
+    };
+    project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
+    assert_eq!(forecasts(&snapshot), [Some(RedeemForecast::Armed), None]);
+
+    config.auto_redeem = false;
+    project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
+    assert_eq!(forecasts(&snapshot), [Some(RedeemForecast::Manual), None]);
+
+    snapshot.providers[0].reset_credits = None;
+    project_redeem_forecasts(&mut snapshot, &runtime, &config, &logins);
+    assert_eq!(forecasts(&snapshot), [None, None]);
+}

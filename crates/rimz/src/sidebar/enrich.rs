@@ -735,6 +735,12 @@ fn enrich_core(
         &spending_caches.provider,
         &logins,
     );
+    crate::harness::auto_redeem::project_redeem_forecasts(
+        &mut snapshot,
+        runtime,
+        &machine_config.resume,
+        &logins,
+    );
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
     // Git facts and late unread bits land after the pane fold's initial sort,
     // so publish the spine once both ranking inputs are present.
@@ -925,6 +931,12 @@ pub fn provider_panels_from_caches(
         None,
         &config,
         provider_spending,
+        logins,
+    );
+    crate::harness::auto_redeem::project_redeem_forecasts(
+        &mut snapshot,
+        runtime,
+        &config.resume,
         logins,
     );
     snapshot.providers

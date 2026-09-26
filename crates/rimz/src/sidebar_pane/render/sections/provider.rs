@@ -1,22 +1,22 @@
 //! The pinned provider dashboard — per-provider header, brand emblem, stats and
 //! budget bars — and the W/M fleet store rows.
 
-use crate::agents::{AgentStatus, ExtraCredits, RateLimitWindow};
+use crate::agents::{ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::render::labels::value_seam;
-use crate::store::snapshot::{RemoteControlBadge, SidebarProviderPanel};
+use crate::store::snapshot::{RedeemForecast, RemoteControlBadge, SidebarProviderPanel};
 use crate::{SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::{
-    dollars_cap, dollars2, reset_countdown, tokens_int, tokens_short, window_label,
+    dollars_cap, dollars2, expiry_label, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    ManaTick, TokenColumns, TokenDetail, attention_cell_style, mana_bar_spans, mana_style,
-    pace_reading, pace_style, token_breakdown_spans, unknown_mana_bar_spans, unread_anim,
+    ManaTick, TokenColumns, TokenDetail, mana_bar_spans, mana_style, pace_reading, pace_style,
+    token_breakdown_spans, unknown_mana_bar_spans,
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -454,7 +454,6 @@ pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
     pub(in crate::sidebar_pane::render) width: usize,
     pub(in crate::sidebar_pane::render) zones: &'a BudgetBarConfig,
     pub(in crate::sidebar_pane::render) now: Timestamp,
-    pub(in crate::sidebar_pane::render) animation_phase: u64,
 }
 
 pub(in crate::sidebar_pane::render) fn dashboard_block(
@@ -557,7 +556,6 @@ fn provider_block_lines(
         context.mode.tabbed(),
         layout.inline_art(),
         context.now,
-        context.animation_phase,
     )];
     if context.mode == DashboardMode::Stacked && layout == ProviderLayout::Wide {
         // Wide stacked blocks keep the historical identity/body breathing room.
@@ -780,9 +778,8 @@ fn provider_header_line(
     tabbed: bool,
     inline_art: bool,
     now: Timestamp,
-    animation_phase: u64,
 ) -> Line<'static> {
-    let mut right = reset_header_spans(theme, panel, now, animation_phase);
+    let mut right = reset_header_spans(theme, panel, now);
     let remote_control = match panel.remote_control {
         RemoteControlBadge::Hidden => None,
         RemoteControlBadge::Healthy => Some(Component::RemoteControl),
@@ -807,7 +804,7 @@ fn provider_header_line(
 }
 
 /// Heat amount (0.0 green … 1.0 red) for the reset marker at `hours` until the
-/// soonest credit expires, or `None` at/after 7d for the default grey.
+/// soonest credit expires, or `None` at/after 7d, where the expiry text is hidden.
 pub(in crate::sidebar_pane::render) fn reset_expiry_heat_amount(hours: f64) -> Option<f32> {
     let lerp = |h: f64, a: f64, b: f64, amt_a: f32, amt_b: f32| -> f32 {
         let t = ((a - h) / (a - b)).clamp(0.0, 1.0) as f32;
@@ -832,11 +829,13 @@ pub(in crate::sidebar_pane::render) fn reset_expiry_heat_amount(hours: f64) -> O
     }
 }
 
+/// The Codex reset-credit marker: the glyph and its tone say what auto-redeem
+/// would do if the longest window ran dry now, and the soonest expiry rides
+/// along within a week, heating only while the user has to act.
 fn reset_header_spans(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     now: Timestamp,
-    animation_phase: u64,
 ) -> Vec<Span<'static>> {
     if panel.kind != "codex" {
         return Vec::new();
@@ -847,29 +846,34 @@ fn reset_header_spans(
     if reset_credits.count == 0 {
         return Vec::new();
     }
-    let heat_tone = reset_credits
-        .soonest_expiry
-        .map(|at| at.duration_since(now).as_secs() as f64 / 3600.0)
-        .and_then(reset_expiry_heat_amount)
-        .map(|amount| theme.heat_tone(amount));
-    let steady = heat_tone
-        .map(|color| theme.style(color, Modifier::empty()))
-        .unwrap_or_else(|| theme.body());
-    let style = if panel
-        .windows
-        .iter()
-        .any(|window| window.spent_with_future_reset(now))
-    {
-        unread_anim(theme, AgentStatus::Paused, 0, animation_phase, true)
-            .map(|anim| attention_cell_style(theme, heat_tone.or(steady.fg), anim, 0, 1))
-            .unwrap_or_else(|| steady.add_modifier(Modifier::BOLD))
-    } else {
-        steady
+    let (glyph, glyph_style) = match panel.redeem_forecast {
+        Some(RedeemForecast::Armed) => (GlyphRole::MeterRedeemArmed, theme.good(Modifier::empty())),
+        Some(RedeemForecast::Holding) => (GlyphRole::MeterRedeemHold, theme.muted()),
+        Some(RedeemForecast::Manual) | None => (GlyphRole::MeterReset, theme.body()),
     };
-    vec![
-        Span::styled(theme.glyph(GlyphRole::MeterReset).to_owned(), style),
+    let mut spans = vec![
+        Span::styled(theme.glyph(glyph).to_owned(), glyph_style),
         Span::styled(format!(" {}", reset_credits.count), theme.body()),
-    ]
+    ];
+    let Some(remaining) = reset_credits
+        .soonest_expiry
+        .map(|at| at.duration_since(now))
+    else {
+        return spans;
+    };
+    let Some(amount) = reset_expiry_heat_amount(remaining.as_secs() as f64 / 3600.0) else {
+        return spans;
+    };
+    let tone = match panel.redeem_forecast {
+        Some(RedeemForecast::Armed | RedeemForecast::Holding) => theme.calm_tone(amount),
+        Some(RedeemForecast::Manual) | None => theme.heat_tone(amount),
+    };
+    spans.push(Span::styled(value_seam(theme), theme.faint()));
+    spans.push(Span::styled(
+        expiry_label(remaining),
+        theme.style(tone, Modifier::empty()),
+    ));
+    spans
 }
 
 fn provider_header_left(

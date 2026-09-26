@@ -63,7 +63,6 @@ struct Dashboard<'a> {
     fleet: Option<&'a crate::SpendTally>,
     pet: Option<&'a crate::sidebar_pane::pets::PetView>,
     width: usize,
-    phase: u64,
 }
 
 impl<'a> Dashboard<'a> {
@@ -76,7 +75,6 @@ impl<'a> Dashboard<'a> {
             fleet: None,
             pet: None,
             width: 54,
-            phase: 0,
         }
     }
 
@@ -112,11 +110,6 @@ impl<'a> Dashboard<'a> {
         self
     }
 
-    fn phase(mut self, phase: u64) -> Self {
-        self.phase = phase;
-        self
-    }
-
     fn block(&self) -> RenderedBlock {
         dashboard_block(DashboardContext {
             theme: self.theme,
@@ -129,7 +122,6 @@ impl<'a> Dashboard<'a> {
             width: self.width,
             zones: &crate::config::BudgetBarConfig::default(),
             now: fixed_now(),
-            animation_phase: self.phase,
         })
     }
 
@@ -704,6 +696,7 @@ fn provider_panel(
         day_budget: None,
         extra_credits: None,
         reset_credits: None,
+        redeem_forecast: None,
         window_placeholders: Vec::new(),
         windows: windows
             .map(|(five, seven)| {

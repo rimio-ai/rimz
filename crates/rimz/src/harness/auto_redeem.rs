@@ -23,7 +23,7 @@ use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
 use crate::ids::{LoginKey, WorkspaceId};
-use crate::store::snapshot::SidebarProviderPanel;
+use crate::store::snapshot::{RedeemForecast, SidebarProviderPanel, SidebarSnapshot};
 
 const CODEX_KIND: &str = "codex";
 const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
@@ -176,6 +176,49 @@ fn redeem_verdict(
         return None;
     }
     Some(RedeemReason::ScheduledRedeem)
+}
+
+/// Forecast what the verdict would do if the longest duration window ran dry
+/// now. Holding is a `None` verdict on that hypothetical; without a known
+/// natural reset there is no hold to prove, so auto mode reads armed.
+fn redeem_forecast(
+    capacity: Option<&ProviderCapacity>,
+    credits: &ResetCredits,
+    rate_pct_per_day: Option<f64>,
+    min_gain: Duration,
+    auto_redeem: bool,
+    now: Timestamp,
+) -> Option<RedeemForecast> {
+    if credits.count == 0 {
+        return None;
+    }
+    if !auto_redeem {
+        return Some(RedeemForecast::Manual);
+    }
+    let Some((capacity, longest)) = capacity.and_then(|capacity| {
+        let longest = capacity
+            .longest_window_observation(now)
+            .filter(|window| window.resets_at.is_some())?;
+        Some((capacity, longest))
+    }) else {
+        return Some(RedeemForecast::Armed);
+    };
+    let mut dry = capacity.clone();
+    dry.windows = capacity
+        .projected_windows(now)
+        .map(|mut window| {
+            if window.scope.is_none() && window.duration_mins == longest.duration_mins {
+                window.used_percentage = Some(100);
+            }
+            window
+        })
+        .collect();
+    Some(
+        match redeem_verdict(Some(&dry), credits, rate_pct_per_day, min_gain, true, now) {
+            Some(_) => RedeemForecast::Armed,
+            None => RedeemForecast::Holding,
+        },
+    )
 }
 
 fn paced_chain_deadline(
@@ -429,6 +472,39 @@ pub(crate) fn redeem_credits(
     }
     if !spawn_auto_redeem(runtime, &key, reason, request_id) {
         cancel_attempt_reservation(runtime, &key, &request_id.to_string());
+    }
+}
+
+/// Project the auto-redeem forecast onto the Codex panel, reading the same
+/// capacity and burn-rate caches `redeem_credits` evaluates without writing
+/// either. Only a panel that carries reset credits gets a forecast.
+pub(crate) fn project_redeem_forecasts(
+    snapshot: &mut SidebarSnapshot,
+    runtime: &RuntimePaths,
+    config: &ResumeConfig,
+    logins: &crate::agents::RoomLoginSet,
+) {
+    let now = snapshot.now;
+    for panel in &mut snapshot.providers {
+        panel.redeem_forecast = None;
+        if panel.kind != CODEX_KIND {
+            continue;
+        }
+        let (Some(credits), Some(key)) = (panel.reset_credits.as_ref(), logins.key(CODEX_KIND))
+        else {
+            continue;
+        };
+        let capacity = ProviderCapacity::read(runtime, &key);
+        let rate_pct_per_day =
+            cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(&key)).as_ref());
+        panel.redeem_forecast = redeem_forecast(
+            capacity.as_ref(),
+            credits,
+            rate_pct_per_day,
+            config.auto_redeem_min_gain(),
+            config.auto_redeem,
+            now,
+        );
     }
 }
 

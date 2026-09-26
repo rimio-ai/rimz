@@ -35,6 +35,19 @@ pub fn command_preview(command: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(format!("{start}…{end}"))
 }
 
+/// A reset-credit expiry floored to one unit: days from a day out, hours from
+/// an hour out, minutes below.
+pub fn expiry_label(remaining: jiff::SignedDuration) -> String {
+    let seconds = remaining.as_secs().max(0);
+    if seconds >= 86_400 {
+        format!("{}d", seconds / 86_400)
+    } else if seconds >= 3_600 {
+        format!("{}h", seconds / 3_600)
+    } else {
+        format!("{}m", seconds / 60)
+    }
+}
+
 /// A budget reset countdown in two units.
 pub fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
     reset_secs(deadline.duration_since(now).as_secs())
@@ -140,6 +153,15 @@ mod tests {
     fn money_groups_and_rounds() {
         assert_eq!(dollars2(1_240.567), "$1,240.57");
         assert_eq!(dollars_cap(1_240.0), "$1,240");
+    }
+
+    #[test]
+    fn expiry_label_floors_to_one_unit() {
+        let label = |seconds| expiry_label(jiff::SignedDuration::from_secs(seconds));
+        assert_eq!(label(6 * 86_400 + 23 * 3_600), "6d");
+        assert_eq!(label(23 * 3_600 + 59 * 60), "23h");
+        assert_eq!(label(59 * 60), "59m");
+        assert_eq!(label(-60), "0m");
     }
 
     #[test]
