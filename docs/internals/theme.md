@@ -95,8 +95,8 @@ Beside the flat slots, `Palette` carries two ramps and one derived tone:
 
 | derived | stops | read by |
 | --- | --- | --- |
-| heat ramp | `good → warn → caution → alarm` | `Theme::heat_tone`: the context meter, the remote link badge, the provider budget bar and its window label, the Codex reset-credit marker; `Theme::warm_heat_tone`: the card age clock and the over-pace budget tail |
-| calm ramp | `body → good` | `Theme::calm_tone`: the under-pace budget tail |
+| heat ramp | `good → warn → caution → alarm` | `Theme::heat_tone`: the context meter, the remote link badge, the provider budget bar and its window label, the Codex reset-credit expiry while auto-redeem is off; `Theme::warm_heat_tone`: the card age clock and the over-pace budget tail |
+| calm ramp | `body → good` | `Theme::calm_tone`: the under-pace budget tail, the Codex reset-credit expiry while auto-redeem is armed or holding |
 | `expense` | `alarm` with chroma scaled by `INPUT_EXPENSE_CHROMA` (1.30), then lightness lowered by `INPUT_EXPENSE_DEEPEN` (0.09) | `Component::Input`, the `↘` fresh-input marker and the reddest tone on screen |
 
 `ramp_tone(ramp, amount)` interpolates piecewise across any number of stops in OKLab, so a ramp can gain or lose stops without touching the math. `warm_heat_tone` maps its amount into `[HEAT_RAMP_WARM_START, 1.0]`, the tail from `warn` onward, for readers whose low end should rest warm instead of healthy green: an idle agent is stale, not optimal.
