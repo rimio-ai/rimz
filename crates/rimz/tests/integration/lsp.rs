@@ -3,6 +3,412 @@
 use crate::common::Env;
 use assert_cmd::assert::OutputAssertExt;
 use rimz::config::{MachineConfig, effective};
+use serde_json::{Value, json};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+fn editor_broker(env: &Env, idle: &str) -> (std::process::Child, std::path::PathBuf) {
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    let config = serde_json::from_value(json!({"command":[stub],"extensions":["rs"],"root-markers":["Cargo.toml"],"memory-estimate":"1M"})).unwrap();
+    let mut machine = MachineConfig::default();
+    machine.lsp.servers.insert("rust".into(), config);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        toml::to_string(&std::collections::BTreeMap::from([("lsp", &machine.lsp)])).unwrap(),
+    )
+    .unwrap();
+    let request = rimz::lsp::admission::ServeRequest {
+        root: env.project_root.canonicalize().unwrap(),
+        project: env.project_root.clone(),
+        server: "rust".into(),
+        settings_hash: "editor-test".into(),
+        config: machine.lsp.servers.remove("rust").unwrap(),
+        policy: rimz::config::LspConfig {
+            idle_timeout: idle.into(),
+            kill_floor_percent: 0,
+            reserve_percent: 0,
+            reserve_min: "0".into(),
+            ..Default::default()
+        },
+        eager: false,
+    };
+    spawn_test_broker(env, &request)
+}
+
+fn editor_rpc(directory: &Path, value: Value) -> Value {
+    let mut stream = UnixStream::connect(directory.join("sock")).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    writeln!(stream, "{value}").unwrap();
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+fn editor_query(directory: &Path, name: &str) -> Value {
+    editor_rpc(
+        directory,
+        json!({"op":"query","method":"workspace/symbol","params":{"query":name},"wait_ms":4000}),
+    )["result"]
+        .clone()
+}
+
+struct Editor(BufReader<UnixStream>);
+
+impl Editor {
+    fn attach(directory: &Path, name: &str) -> Self {
+        Self::attach_pid(directory, name, std::process::id())
+    }
+
+    fn attach_pid(directory: &Path, name: &str, pid: u32) -> Self {
+        let mut stream = UnixStream::connect(directory.join("sock")).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        // Pipeline the first frame to prove the handshake preserves buffered bytes.
+        let mut bytes = format!("{}\n", json!({"op":"attach","pid":pid,"start_token":rimz::proc::process_start_token(pid).unwrap()})).into_bytes();
+        rimz::lsp::protocol::write_frame(&mut bytes, &json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":name}}})).unwrap();
+        stream.write_all(&bytes).unwrap();
+        let mut editor = Self(BufReader::new(stream));
+        let mut line = String::new();
+        editor.0.read_line(&mut line).unwrap();
+        let response: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(response["ok"], true, "attach refused: {response}");
+        assert!(response["client_id"].is_u64());
+        let initialized = rimz::lsp::protocol::read_frame(&mut editor.0).unwrap();
+        assert_eq!(
+            initialized["id"], 0,
+            "nothing is broadcast before initialized: {initialized}"
+        );
+        assert_eq!(
+            initialized["result"]["capabilities"]["textDocumentSync"]["change"],
+            1
+        );
+        editor
+    }
+
+    fn send(&mut self, frame: Value) {
+        rimz::lsp::protocol::write_frame(self.0.get_mut(), &frame).unwrap();
+    }
+
+    fn notify(&mut self, method: &str, params: Value) {
+        self.send(json!({"jsonrpc":"2.0","method":method,"params":params}));
+    }
+
+    fn until(&mut self, key: &str, value: Value) -> Value {
+        loop {
+            let frame = rimz::lsp::protocol::read_frame(&mut self.0).unwrap();
+            if frame[key] == value {
+                return frame;
+            }
+        }
+    }
+
+    fn ready(&mut self) {
+        self.notify("initialized", json!({}));
+        assert_eq!(
+            self.until("method", json!("experimental/serverStatus"))["params"]["health"],
+            "ok"
+        );
+    }
+
+    fn open(&mut self, uri: &str, version: i64, text: &str) {
+        self.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"rust","version":version,"text":text}}),
+        );
+    }
+
+    fn diagnostic(&mut self, version: i64) {
+        let frame = loop {
+            let frame = self.until("method", json!("textDocument/publishDiagnostics"));
+            if frame["params"]["diagnostics"] != json!([]) {
+                break frame;
+            }
+        };
+        assert_eq!(frame["params"]["version"], version, "{frame}");
+        assert_eq!(frame["params"]["diagnostics"].as_array().unwrap().len(), 1);
+    }
+
+    fn quiet(&mut self) {
+        self.0
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .unwrap();
+        assert!(rimz::lsp::protocol::read_frame(&mut self.0).is_err());
+        self.0
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+    }
+}
+
+#[test]
+fn lsp_attached_editors_share_buffers_and_survive_editor_shutdown() {
+    let env = Env::new();
+    let (mut broker, directory) = editor_broker(&env, "10m");
+    let uri = url::Url::from_file_path(env.project_root.join("lib.rs"))
+        .unwrap()
+        .to_string();
+    std::fs::write(env.project_root.join("lib.rs"), "fn disk() {}\n").unwrap();
+    let mut a = Editor::attach(&directory, "A");
+    a.ready();
+    let mut owner = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    let extra = Editor::attach_pid(&directory, "distinct lease", owner.id());
+    let mut extras = vec![extra];
+    for _ in 0..6 {
+        extras.push(Editor::attach(&directory, "limit"));
+    }
+    let refusal = editor_rpc(
+        &directory,
+        json!({"op":"attach","pid":std::process::id(),"start_token":rimz::proc::process_start_token(std::process::id()).unwrap()}),
+    );
+    assert_eq!(refusal["error"]["code"], -32003);
+    assert_eq!(refusal["error"]["message"], "editor limit reached");
+    let leases = editor_rpc(&directory, json!({"op":"status"}))["leases"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(leases.len(), 2);
+    drop(extras);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let status = editor_rpc(&directory, json!({"op":"status"}));
+        if status["attached"].as_array().unwrap().len() == 1 {
+            let expected: Vec<_> = leases
+                .iter()
+                .filter(|lease| lease["pid"] != owner.id())
+                .cloned()
+                .collect();
+            assert_eq!(status["leases"], json!(expected));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "distinct editor lease not released: {status}"
+        );
+    }
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    a.send(json!({"jsonrpc":"2.0","id":777,"method":"textDocument/hover","params":{"hold":true}}));
+    a.notify("$/cancelRequest", json!({"id":777}));
+    // The reply on this connection proves the preceding cancel reached the server.
+    a.send(
+        json!({"jsonrpc":"2.0","id":778,"method":"workspace/symbol","params":{"query":"requests"}}),
+    );
+    let trace = a.until("id", json!(778))["result"].clone();
+    let held = trace["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["params"]["hold"] == true)
+        .unwrap();
+    assert_ne!(held["id"], 777);
+    assert_eq!(trace["cancellations"], json!([held["id"]]));
+    // Editor readiness precedes broker indexing readiness; agent queries wait for both.
+    editor_query(&directory, "requests");
+    std::fs::remove_file(directory.join("entry.json")).unwrap();
+    std::fs::create_dir(directory.join("entry.json")).unwrap();
+    let attached = Editor::attach(&directory, "publication failure");
+    let status = editor_rpc(&directory, json!({"op":"status"}));
+    assert_eq!(status["state"], "ready");
+    assert_eq!(status["attached"].as_array().unwrap().len(), 2);
+    std::fs::remove_dir(directory.join("entry.json")).unwrap();
+    drop(attached);
+    a.open(&uri, 1, "fn opened() {}\n");
+    a.diagnostic(1);
+    let output = env
+        .rimz()
+        .args(["lsp", "find", "open", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()[0]["text"],
+        "fn opened() {}\n"
+    );
+    let status = || -> Value {
+        let output = env
+            .rimz()
+            .args(["lsp", "status", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let before = status();
+    assert_eq!(before["attached"][0]["pid"], std::process::id());
+    assert_eq!(before["attached"][0]["open"][0]["uri"], uri);
+    assert_eq!(before["attached"][0]["open"][0]["owner"], true);
+    let mut c = Editor::attach(&directory, "C");
+    c.ready();
+    c.open(&uri, 20, "fn opened() {}\n");
+    c.diagnostic(20);
+    c.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+    drop(c);
+    a.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"fn changed() {}\n"}]}));
+    a.diagnostic(2);
+    assert_eq!(status()["attached"][0]["open"][0]["dirty"], true);
+    env.rimz()
+        .args(["lsp", "def", "opened"])
+        .assert()
+        .success()
+        .stdout("lib.rs:1:1  (unsaved in editor)\n");
+    let mut b = Editor::attach(&directory, "B");
+    b.open(&uri, 5, "fn second() {}\n");
+    b.quiet();
+    b.ready();
+    b.quiet();
+    assert_eq!(
+        editor_query(&directory, "open")[0]["text"],
+        "fn changed() {}\n"
+    );
+    let holders = status()["attached"].as_array().unwrap().clone();
+    assert_eq!(holders.len(), 2);
+    assert!(holders.iter().all(|editor| editor["open"][0]["uri"] == uri));
+    assert_eq!(holders[1]["open"][0]["owner"], false);
+    editor_query(&directory, "hold-diagnostics on");
+    a.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+    // A reply on A's stream is an ordering barrier for the ownership transfer.
+    a.send(json!({"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{}}));
+    a.until("id", json!(9));
+    let mut c = Editor::attach(&directory, "C2");
+    c.ready();
+    c.open(&uri, 30, "fn second() {}\n");
+    c.send(json!({"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{}}));
+    loop {
+        let frame = rimz::lsp::protocol::read_frame(&mut c.0).unwrap();
+        assert_ne!(
+            frame["method"], "textDocument/publishDiagnostics",
+            "the transferred snapshot must not replay: {frame}"
+        );
+        if frame["id"] == 9 {
+            break;
+        }
+    }
+    c.quiet();
+    editor_query(&directory, "hold-diagnostics off");
+    c.diagnostic(30);
+    c.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+    drop(c);
+    for (editor, marker) in [(&mut a, "A reply"), (&mut b, "B reply")] {
+        editor.send(json!({"jsonrpc":"2.0","id":1,"method":"textDocument/hover","params":{"marker":marker}}));
+    }
+    for (editor, marker) in [(&mut a, "A reply"), (&mut b, "B reply")] {
+        assert_eq!(editor.until("id", json!(1))["result"]["contents"], marker);
+    }
+    a.send(json!({"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}));
+    assert!(a.until("id", json!(2))["result"].is_null());
+    a.notify("exit", Value::Null);
+    assert_eq!(
+        editor_query(&directory, "open")[0]["text"],
+        "fn second() {}\n"
+    );
+    assert_eq!(editor_query(&directory, "duplicates"), 0);
+    assert_eq!(status()["server_pid"], before["server_pid"]);
+    assert_eq!(status()["nonce"], before["nonce"]);
+    drop(b);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let status = status();
+        if status["attached"] == json!([]) {
+            assert_eq!(
+                status["leases"].as_array().unwrap().len() + 1,
+                before["leases"].as_array().unwrap().len()
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "editors not detached: {status}");
+    }
+    editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}));
+    assert!(broker.wait().unwrap().success());
+}
+
+#[test]
+fn lsp_attach_survives_dormancy_and_terminal_stop_unblocks_readers() {
+    let env = Env::new();
+    let (mut broker, directory) = editor_broker(&env, "2s");
+    let uri = url::Url::from_file_path(env.project_root.join("lib.rs"))
+        .unwrap()
+        .to_string();
+    let mut editor = Editor::attach(&directory, "idle editor");
+    let mut closing = Editor::attach(&directory, "closing editor");
+    editor.ready();
+    editor.open(&uri, 7, "fn unsaved() {}\n");
+    editor.diagnostic(7);
+    let before = editor_rpc(&directory, json!({"op":"status"}));
+    let status = editor.until("method", json!("experimental/serverStatus"));
+    assert_eq!(status["params"]["health"], "warning");
+    let idle = editor_rpc(&directory, json!({"op":"status"}));
+    closing.send(json!({"id":1,"method":"shutdown"}));
+    assert!(closing.until("id", json!(1))["result"].is_null());
+    closing.send(json!({"id":2,"method":"textDocument/hover"}));
+    assert_eq!(closing.until("id", json!(2))["error"]["code"], -32600);
+    let after = editor_rpc(&directory, json!({"op":"status"}));
+    assert_eq!(after["request_count"], idle["request_count"]);
+    assert_eq!(after["last_request_at_ms"], idle["last_request_at_ms"]);
+    assert_eq!(after["state"], idle["state"]);
+    closing.notify("exit", Value::Null);
+    editor.send(json!({"jsonrpc":"2.0","id":1,"method":"textDocument/hover","params":{}}));
+    assert_eq!(
+        editor.until("id", json!(1))["result"]["contents"],
+        "fixture hover"
+    );
+    assert_eq!(
+        editor_query(&directory, "open")[0]["text"],
+        "fn unsaved() {}\n"
+    );
+    assert_ne!(
+        editor_rpc(&directory, json!({"op":"status"}))["server_pid"],
+        before["server_pid"]
+    );
+    editor.send(json!({"id":90,"method":"textDocument/hover","params":{"hold":true}}));
+    editor.send(json!({"id":91,"method":"textDocument/hover","params":{}}));
+    editor.until("id", json!(91));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut frames = Vec::new();
+        while let Ok(frame) = rimz::lsp::protocol::read_frame(&mut editor.0) {
+            frames.push(frame);
+        }
+        tx.send(frames).unwrap();
+    });
+    editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}));
+    let frames = rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("terminal stop must unblock reader");
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame["method"] == "experimental/serverStatus"
+                && frame["params"]["message"] == "language server rust stopped: checkout removed"),
+        "stop status lost before EOF: {frames:?}"
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame["id"] == 90 && frame["error"]["code"] == -32802),
+        "pending reply lost: {frames:?}"
+    );
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| frame["method"] == "window/showMessage")
+            .count(),
+        1
+    );
+    assert!(broker.wait().unwrap().success());
+}
 
 #[test]
 fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
@@ -432,6 +838,7 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_broker() {
         peak_rss_kb: 5,
         restarts: 0,
         leases: Vec::new(),
+        attached: Vec::new(),
     };
     let live_dir = runtime
         .path()

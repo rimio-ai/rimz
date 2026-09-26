@@ -119,6 +119,8 @@ pub struct Entry {
     #[serde(default)]
     pub restarts: u64,
     pub leases: Vec<Lease>,
+    #[serde(default)]
+    pub attached: Vec<AttachedEditor>,
 }
 
 pub fn key(root: &Path, server: &str) -> Result<String> {
@@ -133,6 +135,14 @@ pub fn key(root: &Path, server: &str) -> Result<String> {
     }
     let digest = Sha256::digest(root.as_os_str().as_encoded_bytes());
     Ok(format!("{}-{server}", hex::encode(&digest[..8])))
+}
+
+pub fn enclosing_checkout<'a>(cwd: &Path, entries: &'a [Entry]) -> Option<&'a Path> {
+    entries
+        .iter()
+        .filter(|entry| cwd.starts_with(&entry.root))
+        .max_by_key(|entry| entry.root.components().count())
+        .map(|entry| entry.root.as_path())
 }
 
 pub fn kill_order(entries: &mut [Entry]) {
@@ -457,6 +467,7 @@ mod tests {
             last_request_at_ms: None,
             peak_rss_kb: 6,
             restarts: 0,
+            attached: Vec::new(),
             leases: vec![Lease {
                 launch_id: Some("launch-1".to_owned().into()),
                 pid: 3,
@@ -468,6 +479,14 @@ mod tests {
             serde_json::from_value::<Entry>(serde_json::to_value(&entry).unwrap()).unwrap(),
             entry
         );
+        let mut legacy = serde_json::to_value(&entry).unwrap();
+        legacy.as_object_mut().unwrap().remove("attached");
+        let parsed = serde_json::from_value::<Entry>(legacy);
+        assert!(
+            parsed.is_ok(),
+            "legacy entries must remain readable: {parsed:?}"
+        );
+        assert!(parsed.unwrap().attached.is_empty());
         let mut entries = vec![entry.clone(); 4];
         entries[0].server = "used-new".into();
         entries[0].request_count = 2;
