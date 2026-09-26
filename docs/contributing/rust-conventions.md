@@ -311,7 +311,7 @@ The same holds for a new `use` of one module from another: `conform` fails until
 
 CI lives in two workflow trees: `.github/workflows/` for the GitHub origin and `.gitea/workflows/` for the Gitea mirror. Both run the same gates inside the `rimz-ci` image; GitHub pulls `ghcr.io/<owner>/rimz-ci:latest` with the built-in `GITHUB_TOKEN`, while Gitea pulls the configured `RIMZ_CI_IMAGE` with its registry token. Both pipelines run three job groups in parallel:
 
-- `checks` — `cargo xtask checks`.
+- `checks` — `cargo xtask checks`, then `cargo-zigbuild check -p rimz --target aarch64-apple-darwin --locked`, which type-checks the macOS target on every PR since the Release cross-build is the only other Darwin compile.
 - `externals` — the `deny` and `vet` gates as separate steps (locally: `cargo xtask externals`). They sit apart from `checks` because deny reads the baked advisory DB offline while vet fetches crates.io directly, bypassing the runners' nexus mirror, so transient egress retries stay out of the main jobs.
 - `tests` — compile the suite once, then run the `gate`, `live`, and `journey` nextest profiles from that one build so each tier's timing reflects test execution, not the shared compile.
 
