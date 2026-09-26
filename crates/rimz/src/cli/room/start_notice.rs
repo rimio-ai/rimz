@@ -12,7 +12,11 @@ use rimz::sidebar::SessionBuildDrift;
 
 use crate::cli::render;
 
-fn definition_summary(errors: &[&DefinitionErr], agents_home: &Path) -> Vec<String> {
+fn definition_summary(
+    errors: &[&DefinitionErr],
+    agents_home: &Path,
+    home: Option<&str>,
+) -> Vec<String> {
     let mut missing = BTreeMap::<_, (BTreeSet<_>, BTreeSet<_>)>::new();
     let mut dependent = BTreeSet::new();
     let mut invalid = BTreeSet::new();
@@ -35,12 +39,13 @@ fn definition_summary(errors: &[&DefinitionErr], agents_home: &Path) -> Vec<Stri
     for (skill, (paths, roots)) in missing {
         let roots = roots
             .into_iter()
-            .map(render::home_relative_path)
+            .map(|root| render::home_relative_path_to(home, root))
             .collect::<Vec<_>>()
             .join(" or ");
         lines.push(definition_group(
             &paths,
             agents_home,
+            home,
             &format!("missing skill '{skill}' (not installed in {roots})"),
         ));
     }
@@ -49,7 +54,7 @@ fn definition_summary(errors: &[&DefinitionErr], agents_home: &Path) -> Vec<Stri
         (invalid, "with another error"),
     ] {
         if !paths.is_empty() {
-            lines.push(definition_group(&paths, agents_home, reason));
+            lines.push(definition_group(&paths, agents_home, home, reason));
         }
     }
     if !lines.is_empty() {
@@ -58,7 +63,12 @@ fn definition_summary(errors: &[&DefinitionErr], agents_home: &Path) -> Vec<Stri
     lines
 }
 
-fn definition_group(paths: &BTreeSet<&Path>, agents_home: &Path, reason: &str) -> String {
+fn definition_group(
+    paths: &BTreeSet<&Path>,
+    agents_home: &Path,
+    home: Option<&str>,
+    reason: &str,
+) -> String {
     let mut names: Vec<_> = paths
         .iter()
         .map(|path| {
@@ -66,7 +76,7 @@ fn definition_group(paths: &BTreeSet<&Path>, agents_home: &Path, reason: &str) -
                 .ok()
                 .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
                 .map_or_else(
-                    || render::home_relative_path(path),
+                    || render::home_relative_path_to(home, path),
                     |path| path.with_extension("").display().to_string(),
                 )
         })
@@ -124,7 +134,12 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
             _ => None,
         })
         .collect();
-    let mut notices = definition_summary(&definitions, &rimz::disk::paths::agents_home());
+    let home = std::env::var_os("HOME");
+    let mut notices = definition_summary(
+        &definitions,
+        &rimz::disk::paths::agents_home(),
+        home.as_ref().and_then(|home| home.to_str()),
+    );
     notices.extend(
         errors
             .iter()
@@ -306,7 +321,7 @@ mod tests {
 
     #[test]
     fn definition_summary_groups_causes_and_deduplicates_team_roles() {
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let home = PathBuf::from("/home/tester");
         let agents_home = home.join(".rimz");
         let missing = DefinitionCause::MissingSkill {
             skill: "rimz-lsp".parse().unwrap(),
@@ -337,7 +352,11 @@ mod tests {
                 cause: failed.clone(),
             });
         }
-        let lines = definition_summary(&errors.iter().collect::<Vec<_>>(), &agents_home);
+        let lines = definition_summary(
+            &errors.iter().collect::<Vec<_>>(),
+            &agents_home,
+            Some("/home/tester"),
+        );
         assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(lines[0].starts_with("5 definitions"));
         assert!(lines[0].contains("'rimz-lsp'"));
@@ -375,7 +394,7 @@ mod tests {
             message: "detail".to_owned(),
             cause: DefinitionCause::Invalid,
         });
-        let lines = definition_summary(&errors.iter().collect::<Vec<_>>(), &home);
+        let lines = definition_summary(&errors.iter().collect::<Vec<_>>(), &home, None);
         assert_eq!(lines.len(), 3);
         assert!(lines[0].starts_with("9 definitions"));
         assert!(lines[0].ends_with(
@@ -383,7 +402,7 @@ mod tests {
         ));
         assert!(lines[1].starts_with("1 definition"));
         assert!(lines[1].ends_with("/outside/bad.md"));
-        assert!(definition_summary(&[], &home).is_empty());
+        assert!(definition_summary(&[], &home, None).is_empty());
     }
 
     #[test]
@@ -400,7 +419,7 @@ mod tests {
                 },
             })
             .collect();
-        let lines = definition_summary(&errors.iter().collect::<Vec<_>>(), &home);
+        let lines = definition_summary(&errors.iter().collect::<Vec<_>>(), &home, None);
         assert_eq!(lines.len(), 3);
         assert!(lines[0].starts_with("1 definition"));
         assert!(lines[0].contains("'one'") && lines[0].contains("/a or /b"));

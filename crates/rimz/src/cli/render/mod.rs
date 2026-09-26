@@ -270,7 +270,16 @@ pub(crate) fn home_relative(path: &str) -> String {
 /// exit hint, come through here to agree with `rimz worktree list`. The sweep
 /// and cleanup rows print git-resolved paths and do not.
 pub(crate) fn home_relative_path(path: &std::path::Path) -> String {
-    home_relative(&rimz::utils::path::normalize_path_lexical(path).to_string_lossy())
+    let home = std::env::var_os("HOME");
+    home_relative_path_to(home.as_ref().and_then(|home| home.to_str()), path)
+}
+
+/// [`home_relative_path`] against a home the caller supplies.
+pub(crate) fn home_relative_path_to(home: Option<&str>, path: &std::path::Path) -> String {
+    home_relative_to(
+        home,
+        &rimz::utils::path::normalize_path_lexical(path).to_string_lossy(),
+    )
 }
 
 pub(crate) fn agent_activity_line(
