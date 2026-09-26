@@ -173,17 +173,83 @@ function installXtermDragModel(harness, sent) {
       sgrMouse(32, Math.max(Math.round(event.clientX), 1), Math.max(Math.round(event.clientY), 1)),
     );
   };
+  const up = (event) => {
+    harness.sendWithMouseFlow(
+      (data) => sent.push(data),
+      sgrMouse(0, Math.max(Math.round(event.clientX), 1), Math.max(Math.round(event.clientY), 1), "m"),
+    );
+    if (event.buttons) return;
+    harness.ownerDocument.removeEventListener("mouseup", up);
+    harness.ownerDocument.removeEventListener("mousemove", drag);
+  };
   const down = (event) => {
     harness.sendWithMouseFlow(
       (data) => sent.push(data),
       sgrMouse(0, Math.max(Math.round(event.clientX), 1), Math.max(Math.round(event.clientY), 1)),
     );
+    harness.ownerDocument.addEventListener("mouseup", up);
     harness.ownerDocument.addEventListener("mousemove", drag);
   };
   harness.element.addEventListener("mousedown", down);
   harness.coreMouseService.onProtocolChange((events) => {
+    if (!(events & 2)) harness.ownerDocument.removeEventListener("mouseup", up);
     if (!(events & 4)) harness.ownerDocument.removeEventListener("mousemove", drag);
   });
+}
+
+function heldDragRelease(protocolsBeforeRelease, protocolsAfterRelease) {
+  const harness = createHarness();
+  const sent = [];
+  installXtermDragModel(harness, sent);
+  harness.installMouseDragRearm(harness.term);
+  harness.element.dispatchEvent(new window.MouseEvent("mousedown", {
+    bubbles: true,
+    button: 0,
+    buttons: 1,
+    clientX: 3,
+    clientY: 4,
+  }));
+  for (const events of protocolsBeforeRelease) harness.emitProtocol(events);
+  harness.ownerDocument.dispatchEvent(new window.MouseEvent("mouseup", {
+    buttons: 0,
+    clientX: 7,
+    clientY: 8,
+  }));
+  for (const events of protocolsAfterRelease) harness.emitProtocol(events);
+  harness.advance(0);
+  return messages(sent);
+}
+
+function releaseWhileReportingOffIsDeliveredOnReenable() {
+  assert.deepEqual(
+    heldDragRelease([0], [6]),
+    ["0\x1b[<0;3;4M", "0\x1b[<0;7;8m"],
+    "a release while tmux has reporting off must reach tmux once reporting returns",
+  );
+}
+
+function releaseBeforeRearmRunsIsDelivered() {
+  assert.deepEqual(
+    heldDragRelease([0, 6], []),
+    ["0\x1b[<0;3;4M", "0\x1b[<0;7;8m"],
+    "a release between re-enable and the re-arm must still reach tmux",
+  );
+}
+
+function releaseXtermReportedIsNotRepeated() {
+  assert.deepEqual(
+    heldDragRelease([2], [6]),
+    ["0\x1b[<0;3;4M", "0\x1b[<0;7;8m"],
+    "a release xterm reported itself must not be sent again",
+  );
+}
+
+function releaseWhileReportingStaysOffIsHeld() {
+  assert.deepEqual(
+    heldDragRelease([0], []),
+    ["0\x1b[<0;3;4M"],
+    "a lost release waits for reporting to return",
+  );
 }
 
 function churnWhileHeldRearmsOnceAndSwallowsPress() {
@@ -542,6 +608,10 @@ const scenarios = [
   enableWithoutDisableDoesNotRearm,
   burstEndingDisabledDoesNotRearm,
   rearmPreservesModifiersAndIgnoresOutsidePresses,
+  releaseWhileReportingOffIsDeliveredOnReenable,
+  releaseBeforeRearmRunsIsDelivered,
+  releaseXtermReportedIsNotRepeated,
+  releaseWhileReportingStaysOffIsHeld,
   swallowedRearmPressPreservesPacingCadence,
   idleMotionSendsImmediately,
   slowDragPassesThroughUnchanged,

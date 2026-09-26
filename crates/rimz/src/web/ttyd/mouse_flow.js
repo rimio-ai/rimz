@@ -3,6 +3,7 @@ const MOTION_INTERVAL_MS=50;
 const MOUSE_NONE=0;
 const MOUSE_BOUNDARY=1;
 const MOUSE_MOTION=2;
+const XTERM_UP_EVENTS=2;
 const XTERM_HELD_DRAG_EVENTS=6;
 const DEBUG_MOUSE_FLOW=(()=>{
   try{
@@ -134,6 +135,8 @@ const installMouseDragRearm=term=>{
     x:0,
     y:0,
     disabled:false,
+    upDetached:false,
+    releaseLost:false,
     events:0,
     timer:0,
     shiftKey:false,
@@ -148,47 +151,58 @@ const installMouseDragRearm=term=>{
       if(event.button!==0||!element.contains(event.target))return;
       drag.held=true;
       drag.disabled=false;
+      drag.upDetached=false;
+      drag.releaseLost=false;
       drag.shiftKey=event.shiftKey;
       drag.altKey=event.altKey;
       drag.ctrlKey=event.ctrlKey;
       drag.metaKey=event.metaKey;
-    }else drag.held=(event.buttons&1)!==0;
+      return;
+    }
+    const held=(event.buttons&1)!==0;
+    if(drag.held&&!held&&drag.upDetached)drag.releaseLost=true;
+    drag.held=held;
   };
   for(const type of ["mousedown","mousemove","mouseup"]){
     ownerDocument.addEventListener(type,remember,{capture:true,passive:true});
   }
   service.onProtocolChange(events=>{
     drag.events=events;
+    if(drag.held&&(events&XTERM_UP_EVENTS)===0)drag.upDetached=true;
     const reportsHeldDrag=(events&XTERM_HELD_DRAG_EVENTS)===XTERM_HELD_DRAG_EVENTS;
     if(!reportsHeldDrag){
       if(drag.held)drag.disabled=true;
       return;
     }
-    if(!drag.held||!drag.disabled||drag.timer)return;
+    if(!(drag.held||drag.releaseLost)||!drag.disabled||drag.timer)return;
     drag.timer=window.setTimeout(()=>{
       drag.timer=0;
-      if(!drag.held||!drag.disabled
+      if(!(drag.held||drag.releaseLost)||!drag.disabled
         ||(drag.events&XTERM_HELD_DRAG_EVENTS)!==XTERM_HELD_DRAG_EVENTS)return;
+      const releaseLost=drag.releaseLost;
+      const pointer={
+        bubbles:true,
+        cancelable:true,
+        view:window,
+        button:0,
+        clientX:drag.x,
+        clientY:drag.y,
+        shiftKey:drag.shiftKey,
+        altKey:drag.altKey,
+        ctrlKey:drag.ctrlKey,
+        metaKey:drag.metaKey,
+      };
       drag.disabled=false;
       mouseFlow.suppressPress=true;
       noteMouseFlow("rearm");
       try{
-        element.dispatchEvent(new window.MouseEvent("mousedown",{
-          bubbles:true,
-          cancelable:true,
-          view:window,
-          button:0,
-          buttons:1,
-          clientX:drag.x,
-          clientY:drag.y,
-          shiftKey:drag.shiftKey,
-          altKey:drag.altKey,
-          ctrlKey:drag.ctrlKey,
-          metaKey:drag.metaKey,
-        }));
+        element.dispatchEvent(new window.MouseEvent("mousedown",{...pointer,buttons:1}));
       }finally{
         mouseFlow.suppressPress=false;
       }
+      if(!releaseLost)return;
+      noteMouseFlow("replay-release");
+      element.dispatchEvent(new window.MouseEvent("mouseup",{...pointer,buttons:0}));
     },0);
   });
 };
