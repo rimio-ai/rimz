@@ -743,7 +743,7 @@ fn render_worktree_channel_leads_with_merge_glyph() {
 
     let rendered = snapshot_to_screen(&snapshot, 44, 14);
 
-    assert!(rendered.contains("⮌ codex-resets"), "header:\n{rendered}");
+    assert!(rendered.contains("↩ codex-resets"), "header:\n{rendered}");
     assert!(rendered.contains("✓ main"), "header:\n{rendered}");
     assert!(
         !rendered.contains("≡ main"),
@@ -1193,7 +1193,7 @@ fn render_pr_merged_pristine_worktree_uses_merge_glyphs() {
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
     assert!(
-        rendered.contains("⮌ feature-migration"),
+        rendered.contains("↩ feature-migration"),
         "merged PR swaps the left prefix:\n{rendered}"
     );
     assert!(rendered.contains("✓ main"), "header:\n{rendered}");
@@ -1446,7 +1446,7 @@ fn render_merged_worktree_uses_merge_glyph_on_left() {
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
     assert!(
-        rendered.contains("⮌ feature-migration"),
+        rendered.contains("↩ feature-migration"),
         "header:\n{rendered}"
     );
     assert!(

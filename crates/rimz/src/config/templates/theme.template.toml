@@ -202,7 +202,7 @@
 
 [theme.glyphs.unicode.worktree]
 ## branch = "⑂"
-## merge = "⮌"
+## merge = "↩"
 ## ahead = "⇡"
 ## behind = "⇣"
 ## trunk_equal = "≡"
