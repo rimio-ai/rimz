@@ -175,8 +175,8 @@ aggressive_resize = true
 ## command = ["rust-analyzer"]
 ## extensions = ["rs"]
 ## root-markers = ["Cargo.toml"]
-# Include functions and raise rust-analyzer's 128-result fuzzy-search cap for symbol-name queries.
-## init-options = { checkOnSave = false, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
+# Include functions and raise rust-analyzer's 128-result fuzzy-search cap for symbol-name queries, and drop the `needs Drop` hover line.
+## init-options = { checkOnSave = false, hover = { dropGlue = { enable = false } }, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
 ## policy = "optional"                # lazy start; "required" admits and starts before panes open
 ## wait-timeout = "10m"                # required-server queue deadline
 ## memory-estimate = "8G"              # used until this server's peak has been measured
