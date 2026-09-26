@@ -200,6 +200,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
     use serde_json::{Value, json};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
     use std::time::{Duration, Instant};
 
     let env = Env::new();
@@ -344,6 +345,22 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         );
     }
     env.rimz().args(["lsp", "find", "work"]).assert().success().stdout("function w::work  src/w.rs:1:1\nfunction w::worker  src/w.rs:1:1\nfunction r::rework  src/r.rs:1:1\nfunction u::unrelated  src/u.rs:1:1\n");
+    for args in [
+        &["lsp", "find", "work"][..],
+        &["lsp", "def", "nosuch"],
+        &["lsp", "list", "--json"],
+    ] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let output = env
+            .rimz()
+            .args(args)
+            .stdout(Stdio::from(writer))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+    }
     env.rimz()
         .args(["lsp", "callees", "lib.rs:1:4", "--external", "--json"])
         .assert()

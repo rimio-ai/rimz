@@ -142,27 +142,18 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         Err(error) => return query_error(error),
     };
     let code = output.exit_code();
-    let mut out = render::out();
-    match output {
+    let text = match output {
+        query::Output::Answer { result, .. } if args.json => {
+            format!("{}\n", serde_json::to_string_pretty(&result)?)
+        }
         query::Output::Answer {
             result,
             document_uri,
-        } => {
-            if args.json {
-                writeln!(out, "{}", serde_json::to_string_pretty(&result)?)?;
-            } else {
-                write!(
-                    out,
-                    "{}",
-                    query::render(verb, root, document_uri.as_deref(), result, scope)?
-                )?;
-            }
-        }
-        output => {
-            write!(out, "{}", query::render_outcome(root, &output, args.json)?)?;
-        }
-    }
-    out.flush()?;
+        } => query::render(verb, root, document_uri.as_deref(), result, scope)?,
+        output => query::render_outcome(root, &output, args.json)?,
+    };
+    let mut out = render::out();
+    render::finish(out.write_all(text.as_bytes()).and_then(|()| out.flush()))?;
     if code != 0 {
         std::process::exit(code);
     }
@@ -274,17 +265,17 @@ fn list(json: bool) -> Result<()> {
     };
     let mut out = render::out();
     if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&entries)?)?;
-        return Ok(());
+        return render::finish(writeln!(out, "{}", serde_json::to_string_pretty(&entries)?));
     }
-    list_table(&entries, rimz::utils::time::unix_now_ms(), |pid| {
-        (
-            rimz::proc::tree_totals(pid).map_or(0, |totals| totals.rss_kb),
-            rimz::lsp::memory::tree_peak_kb(pid),
-        )
-    })
-    .render(&mut out)?;
-    Ok(())
+    render::finish(
+        list_table(&entries, rimz::utils::time::unix_now_ms(), |pid| {
+            (
+                rimz::proc::tree_totals(pid).map_or(0, |totals| totals.rss_kb),
+                rimz::lsp::memory::tree_peak_kb(pid),
+            )
+        })
+        .render(&mut out),
+    )
 }
 
 fn stop(
@@ -313,6 +304,7 @@ fn stop(
         anyhow::bail!("multiple language servers; choose --server NAME");
     }
     let mut errors = Vec::new();
+    let mut stopped = String::new();
     for entry in entries {
         let response = registry::request(
             entry,
@@ -334,15 +326,11 @@ fn stop(
                 continue;
             }
         }
-        writeln!(
-            render::out(),
-            "stopped {} ({})",
-            entry.server,
-            entry.root.display()
-        )?;
+        stopped += &format!("stopped {} ({})\n", entry.server, entry.root.display());
     }
+    let written = render::out().write_all(stopped.as_bytes());
     anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
-    Ok(())
+    render::finish(written)
 }
 
 #[cfg(test)]
