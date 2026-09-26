@@ -48,13 +48,13 @@ Each worktree is its own checkout, so agents in `-w feat-x` get a separate serve
 
 An agent launched with a shared server available finds one paragraph in the system reminder RimZ appends, naming dormant and running servers and pointing at the `rimz-lsp` skill from your [skill library](./configuration.md#skills). It explains that a first query may wait for startup. The skill teaches the verbs below and the two exit codes that mean "use grep", so an agent spends no turn learning the tool. Without a shared server available there is no paragraph.
 
-An agent's query gets one of three availability outcomes. Exit 0 is an answer, and `no results` is a real one. Exit 3 means the server is unavailable, with the reason on one line, such as no server for this checkout or insufficient memory to start. Exit 4 means startup or indexing exceeded the query's 30-second wait, with elapsed time for that server start. A dormant server is not itself a failure: the query wakes it and answers normally if it becomes ready in time. Agents can use grep on 3 and 4 and try a later query; they are never messaged about a stop.
+An agent's query gets one of five lookup and availability outcomes. Exit 0 is an answer, and `no results` for a resolved symbol is a real one. Exit 3 means the server is unavailable, with the reason on one line, such as no server for this checkout or insufficient memory to start. Exit 4 means startup or indexing exceeded the query's 30-second wait, with elapsed time for that server start. Exit 5 means the name was not found as written; the output lists any symbols with the same last segment. Exit 6 means the name is ambiguous and lists the matching symbols. A dormant server is not itself a failure: the query wakes it and answers normally if it becomes ready in time. Agents can use grep on 3 and 4 and try a later query; they are never messaged about a stop.
 
 Claude's native `LSP` tool is switched off whenever a server is configured, even while it is dormant or a query cannot start it for lack of memory, so no private index starts outside the budget. `rimz agents validate` warns when a profile still lists `LSP` in its tools. OpenCode and Grok have no verified switch for their own servers, so with those two the shared server is an addition, not a replacement.
 
 ## Ask the server yourself
 
-The same command works from your shell, in the checkout, and it is the fastest way to check what the agents are getting. A target is a position (`path:line:col`, one-based) or an exact symbol name; `Type::method` names a method in its container.
+The same command works from your shell, in the checkout, and it is the fastest way to check what the agents are getting. A target is a position (`path:line:col`, one-based) or an exact symbol name. Write `Store::open` for a method, `launch_reminders::render` for a module function, or `rimz::store::Store` for a crate-qualified name. You can leave intermediate segments out, but incorrect segments are refused rather than guessed. A trailing `()` is accepted too.
 
 ```sh
 rimz lsp def MuxBackend                      # where it is defined
@@ -67,7 +67,7 @@ rimz lsp symbols crates/rimz/src/lib.rs      # a file's outline
 rimz lsp find Mux                            # workspace symbol search
 ```
 
-A name that matches several symbols lists the candidates with positions instead of guessing; rerun with one of them. Callers and callees list only code inside the checkout and end with how many were left out, if any; `--external` shows them. Add `--json` for the raw LSP result, and `--server <name>` when a checkout has more than one server and the file's extension does not settle it. The checkout is the one enclosing your current directory (or `--root`). Everything about targets, output, and flags is in the [reference](../reference/cli/lsp.md#queries).
+A name that matches several symbols lists the candidates instead of guessing; rerun with one of the listed qualified names or its position. A wrong qualifier lists possible names the same way, so you can repair the query in one rerun. Callers and callees list only code inside the checkout and end with how many were left out, if any; `--external` shows them. Add `--json` for structured output (the raw LSP result on success, an outcome and candidates for not-found or ambiguous names), and `--server <name>` when a checkout has more than one server and the file's extension does not settle it. The checkout is the one enclosing your current directory (or `--root`). Everything about targets, output, and flags is in the [reference](../reference/cli/lsp.md#queries).
 
 The server answers from the disk, kept current by watching saved files, not from anyone's editor buffer. An unsaved change is invisible to it, which is what you want when several agents share one view.
 

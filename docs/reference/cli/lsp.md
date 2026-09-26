@@ -26,14 +26,20 @@ rimz lsp find MuxBackend --server rust --json
 | `symbols` | file path | document symbol outline |
 | `find` | search string | workspace symbols matching the server's search |
 
-Positions are `path:line:col`, with one-based line and column; omitting the column is an error. Paths are checkout-relative or absolute. A symbol name is resolved by exact name from workspace search results; `Type::method` matches `method` in container `Type`. Matches sharing one definition count as one symbol; distinct definitions list candidates instead of guessing. Rerun with a candidate's position. Text locations use `path:line:col`; navigation includes source lines when available, outlines indent children, and hover prints markup. Empty answers print `no results`.
+Positions are `path:line:col`, with one-based line and column; omitting the column is an error. Paths are checkout-relative or absolute. Text locations use `path:line:col`; navigation includes source lines when available, outlines indent children, and hover prints markup. Empty answers for resolved targets print `no results`.
+
+Symbol names strip a trailing `()`, leading `crate`, `self`, and `super` segments, and generic arguments (`<…>`) from each segment. The last `::` segment is matched exactly against workspace symbols. The remaining segments must occur in order in the candidate's checkout-relative file path and container, but may skip intermediate segments: `launch_reminders::render`, `harness::launch_reminders::render`, and `rimz::harness::launch_reminders::render` can identify the same function. File extensions, `src` components, and final `mod`, `lib`, or `main` file stems do not contribute segments. Outside-checkout candidates contribute only their container. Wrong qualifiers never fall back to a bare-name match. Inline `mod` names are not available from workspace symbols: `query::tests::foo` is not found when only the file path `query::foo` is known; the hint lists the accepted spelling.
+
+Matches sharing one definition count as one symbol, including re-exports; distinct definitions list candidates instead of guessing. Rerun with a listed name or position. Candidate lines in `find`, flat `symbols`, not-found, and ambiguous output use `{kind} {qualified name}  {path:line:col}`. Qualified names start after the first `src` component, include the container, and are accepted as input. Not-found lists all exact-name candidates, even when the qualifier matches none. Not-found and ambiguous text lists show at most 20 candidates, followed by the remaining count; JSON and `find` are uncapped. Candidates sort by descending count of qualifier segments present in their path, then qualified name and position.
+
+`find` sorts case-insensitively by exact name, prefix, substring, then other matches, with qualified name and position breaking ties. This order applies to text and JSON.
 
 All eight verbs require one target. Query flags:
 
 | Flag | Effect |
 | --- | --- |
 | `--server <NAME>` | Select a configured server name. Otherwise a file's extension selects among checkout entries, or the sole entry is used. Ambiguous selection names this flag in the error. |
-| `--json` | Print the structured LSP result instead of text; ambiguous names print the candidate array. |
+| `--json` | Print the structured LSP result on exit 0. Exits 5 and 6 print an object with `outcome` (`not-found` or `ambiguous`), the written `name`, and `candidates`, each containing the qualified `name`, kind word `kind`, and `position` (`path:line:col`). |
 | `--external` | Callers and callees only: include items outside the checkout. Default text output hides these items and ends with `<n> outside the checkout hidden; add --external to show them` when any were hidden. `--json` is always unfiltered. |
 
 The checkout comes from cwd or the global `--root`, using the most deeply enclosing registered checkout when present. Different worktrees have different servers even though they share a room. Queries wait up to 30 seconds for indexing; there is no CLI wait-duration flag.
@@ -56,11 +62,15 @@ rimz lsp stop --all
 
 | Exit | Meaning |
 | --- | --- |
-| 0 | Answered, including no results or ambiguous symbol candidates; successful list or stop. |
+| 0 | Answered, including `no results` for a resolved symbol; successful list or stop. |
 | 1 | Command failed, including server-selection or protocol errors; details on stderr. |
 | 2 | Invalid command line, flag, or argument. |
 | 3 | No server for the checkout, memory admission refused, or terminal shutdown. The stderr line names the reason and grep fallback. |
 | 4 | Still indexing after the wait bound. The stderr line gives elapsed time. |
+| 5 | Symbol name not found; candidates with that last segment are listed on stdout. |
+| 6 | Symbol name ambiguous; candidates are listed on stdout, each with an accepted name. |
+
+Exits 5 and 6 write nothing to stderr. Not-found text is `not found: {written name}`, followed by `; {N} symbol(s) named {last segment}:` and candidate lines when candidates exist. Ambiguous text starts `ambiguous: {N} symbols named {written name}; rerun with one of these names or a position`.
 
 An absent configured server reports `not running`. A broker-side memory refusal reports `no language server for <root> (not started: memory short); use grep`, leaves the broker dormant, and is retried by a later query. Diagnostics do not determine this result. Stop-reason errors use `(stopped: <reason>)`, including `idle`, `evicted`, and `team done`; an ordinary query to a dormant server requests a restart instead.
 

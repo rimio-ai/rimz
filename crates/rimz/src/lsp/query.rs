@@ -132,8 +132,8 @@ impl UnavailableReason {
 }
 
 pub enum SymbolResolution {
-    Missing,
-    Unique(Location),
+    Missing { candidates: Vec<SymbolInformation> },
+    Unique(SymbolInformation),
     Ambiguous(Vec<SymbolInformation>),
 }
 
@@ -142,47 +142,121 @@ fn collapse_symbols(
     mut definition: impl FnMut(&Location) -> std::result::Result<Vec<Location>, QueryErr>,
 ) -> std::result::Result<SymbolResolution, QueryErr> {
     let mut groups = BTreeMap::new();
-    for mut symbol in symbols {
-        if let Ok([resolved]) = <[Location; 1]>::try_from(definition(&symbol.location)?) {
-            symbol.location = resolved;
-        }
+    for symbol in symbols {
+        let resolved = <[Location; 1]>::try_from(definition(&symbol.location)?)
+            .map(|[resolved]| resolved)
+            .unwrap_or_else(|_| symbol.location.clone());
         groups
-            .entry((symbol.location.uri.clone(), symbol.location.range.start))
-            .or_insert(symbol);
+            .entry((resolved.uri.clone(), resolved.range.start))
+            .and_modify(|(indexed, _): &mut (SymbolInformation, Location)| {
+                if symbol.location.uri == resolved.uri
+                    && symbol.location.range.start == resolved.range.start
+                {
+                    *indexed = symbol.clone();
+                }
+            })
+            .or_insert((symbol, resolved));
     }
     let mut symbols: Vec<_> = groups.into_values().collect();
     Ok(if symbols.len() == 1 {
-        SymbolResolution::Unique(symbols.remove(0).location)
+        let (mut symbol, definition) = symbols.remove(0);
+        symbol.location = definition;
+        SymbolResolution::Unique(symbol)
     } else {
-        SymbolResolution::Ambiguous(symbols)
+        SymbolResolution::Ambiguous(symbols.into_iter().map(|(symbol, _)| symbol).collect())
     })
 }
 
-pub fn resolve_symbol(name: &str, result: Value) -> Result<SymbolResolution> {
-    // Servers report only the innermost container, so `module::Type::method` matches container `Type`.
-    let last_segment = |path: &str| path.rsplit("::").next().unwrap_or(path).to_owned();
-    let (container, name) = name
-        .rsplit_once("::")
-        .map_or((None, name), |(container, name)| {
-            (Some(last_segment(container)), name)
-        });
+fn without_generics(raw: &str) -> String {
+    let mut depth = 0_u32;
+    raw.chars()
+        .filter(|character| match character {
+            '<' => {
+                depth += 1;
+                false
+            }
+            '>' => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            _ => depth == 0,
+        })
+        .collect()
+}
+
+fn name_segments(raw: &str) -> Vec<String> {
+    without_generics(raw.strip_suffix("()").unwrap_or(raw))
+        .split("::")
+        .skip_while(|segment| matches!(*segment, "crate" | "self" | "super"))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn module_path(root: &Path, uri: &str) -> Result<Vec<String>> {
+    let file = file_path(uri)?;
+    let Ok(relative) = file.strip_prefix(root) else {
+        return Ok(Vec::new());
+    };
+    let mut path: Vec<_> = relative
+        .with_extension("")
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if path
+        .last()
+        .is_some_and(|stem| matches!(stem.as_str(), "mod" | "lib" | "main"))
+    {
+        path.pop();
+    }
+    Ok(path)
+}
+
+fn container_path(symbol: &SymbolInformation) -> Vec<String> {
+    symbol
+        .container_name
+        .as_deref()
+        .map_or_else(Vec::new, |container| {
+            without_generics(container)
+                .split("::")
+                .map(str::to_owned)
+                .collect()
+        })
+}
+
+fn symbol_path(root: &Path, symbol: &SymbolInformation) -> Result<Vec<String>> {
+    Ok(module_path(root, &symbol.location.uri)?
+        .into_iter()
+        .filter(|segment| segment != "src")
+        .chain(container_path(symbol))
+        .collect())
+}
+
+pub fn resolve_symbol(root: &Path, name: &str, result: Value) -> Result<SymbolResolution> {
+    let mut qualifier = name_segments(name);
+    let name = qualifier.pop().unwrap_or_default();
     let symbols: Vec<SymbolInformation> = if result.is_null() {
         Vec::new()
     } else {
         serde_json::from_value(result)?
     };
-    let mut matches: Vec<_> = symbols
+    let candidates: Vec<_> = symbols
         .into_iter()
-        .filter(|symbol| {
-            symbol.name == name
-                && container.as_ref().is_none_or(|container| {
-                    symbol.container_name.as_deref().map(last_segment).as_ref() == Some(container)
-                })
-        })
+        .filter(|symbol| symbol.name == name)
         .collect();
+    let mut matches = Vec::new();
+    for symbol in &candidates {
+        let path = symbol_path(root, symbol)?;
+        let mut segments = path.iter();
+        if qualifier
+            .iter()
+            .all(|wanted| segments.any(|segment| segment == wanted))
+        {
+            matches.push(symbol.clone());
+        }
+    }
     Ok(match matches.len() {
-        0 => SymbolResolution::Missing,
-        1 => SymbolResolution::Unique(matches.remove(0).location),
+        0 => SymbolResolution::Missing { candidates },
+        1 => SymbolResolution::Unique(matches.remove(0)),
         _ => SymbolResolution::Ambiguous(matches),
     })
 }
@@ -244,29 +318,134 @@ fn kind_name(kind: u32) -> &'static str {
     }
 }
 
+#[derive(Serialize)]
+struct Candidate {
+    name: String,
+    kind: &'static str,
+    position: String,
+}
+
+impl Candidate {
+    fn new(root: &Path, symbol: &SymbolInformation) -> Result<Self> {
+        let path = module_path(root, &symbol.location.uri)?;
+        let start = path
+            .iter()
+            .position(|segment| segment == "src")
+            .map_or(0, |index| index + 1);
+        let name = path
+            .into_iter()
+            .skip(start)
+            .filter(|segment| segment != "src")
+            .chain(container_path(symbol))
+            .chain([symbol.name.clone()])
+            .collect::<Vec<_>>()
+            .join("::");
+        Ok(Self {
+            name,
+            kind: kind_name(symbol.kind),
+            position: position_text(root, &symbol.location.uri, symbol.location.range.start)?,
+        })
+    }
+
+    fn line(&self) -> String {
+        format!("{} {}  {}", self.kind, self.name, self.position)
+    }
+}
+
 fn render_find(root: &Path, symbols: &[SymbolInformation]) -> Result<String> {
-    let mut lines = Vec::new();
+    Ok(finish(
+        symbols
+            .iter()
+            .map(|symbol| Ok(Candidate::new(root, symbol)?.line()))
+            .collect::<Result<_>>()?,
+    ))
+}
+
+fn rank_find(root: &Path, query: &str, result: Value) -> Result<Value> {
+    if result.is_null() {
+        return Ok(result);
+    }
+    let query = query.to_lowercase();
+    let values: Vec<Value> = serde_json::from_value(result)?;
+    let mut ranked = Vec::new();
+    for value in values {
+        let symbol: SymbolInformation = serde_json::from_value(value.clone())?;
+        let candidate = Candidate::new(root, &symbol)?;
+        let name = symbol.name.to_lowercase();
+        let rank = if name == query {
+            0
+        } else if name.starts_with(&query) {
+            1
+        } else if name.contains(&query) {
+            2
+        } else {
+            3
+        };
+        ranked.push((rank, candidate.name, candidate.position, value));
+    }
+    ranked.sort_by(|a, b| (&a.0, &a.1, &a.2).cmp(&(&b.0, &b.1, &b.2)));
+    Ok(Value::Array(
+        ranked.into_iter().map(|(_, _, _, value)| value).collect(),
+    ))
+}
+
+pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String> {
+    let (Output::Ambiguous { name, symbols } | Output::NotFound { name, symbols }) = output else {
+        return Err(LspErr::Protocol(
+            "render lookup candidates only for not-found or ambiguous outcomes".into(),
+        ));
+    };
+    let mut qualifier = name_segments(name);
+    let last = qualifier.pop().unwrap_or_default();
+    let mut candidates = Vec::new();
     for symbol in symbols {
-        let container = symbol
-            .container_name
-            .as_ref()
-            .map_or_else(String::new, |name| format!(" in {name}"));
+        let path = symbol_path(root, symbol)?;
+        let score = qualifier
+            .iter()
+            .filter(|segment| path.contains(segment))
+            .count();
+        candidates.push((std::cmp::Reverse(score), Candidate::new(root, symbol)?));
+    }
+    candidates
+        .sort_by(|a, b| (&a.0, &a.1.name, &a.1.position).cmp(&(&b.0, &b.1.name, &b.1.position)));
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .collect();
+    let missing = matches!(output, Output::NotFound { .. });
+    if json {
+        return Ok(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "outcome": if missing { "not-found" } else { "ambiguous" },
+                "name": name, "candidates": candidates,
+            }))?
+        ));
+    }
+    let count = candidates.len();
+    let header = if missing {
+        if count == 0 {
+            format!("not found: {name}")
+        } else {
+            format!(
+                "not found: {name}; {count} {} named {last}:",
+                if count == 1 { "symbol" } else { "symbols" }
+            )
+        }
+    } else {
+        format!(
+            "ambiguous: {count} symbols named {name}; rerun with one of these names or a position"
+        )
+    };
+    let mut lines = vec![header];
+    lines.extend(candidates.iter().take(20).map(Candidate::line));
+    if count > 20 {
         lines.push(format!(
-            "{} {}  {}{container}",
-            kind_name(symbol.kind),
-            symbol.name,
-            position_text(root, &symbol.location.uri, symbol.location.range.start)?
+            "{} more; narrow with a qualifier or use find",
+            count - 20
         ));
     }
     Ok(finish(lines))
-}
-
-pub fn render_ambiguous(root: &Path, name: &str, symbols: &[SymbolInformation]) -> Result<String> {
-    Ok(format!(
-        "ambiguous: {} symbols named {name}; rerun with a position\n{}",
-        symbols.len(),
-        render_find(root, symbols)?
-    ))
 }
 
 #[derive(Deserialize)]
@@ -485,287 +664,4 @@ fn render_with_source(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn range() -> Value {
-        json!({"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 6}})
-    }
-
-    #[test]
-    fn configured_but_absent_server_has_neutral_reason() {
-        let config = serde_json::from_value(serde_json::json!({"command": ["server"], "extensions": ["rs"], "root-markers": ["Cargo.toml"]})).unwrap();
-        let error = select(
-            Path::new("/no-refusal-record"),
-            Vec::new(),
-            &BTreeMap::from([("rust".into(), config)]),
-            Some("rust"),
-            None,
-        )
-        .unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "no language server for /no-refusal-record (not running); use grep"
-        );
-    }
-
-    #[test]
-    fn missing_source_does_not_discard_locations() {
-        let result = render_with_source(
-            Verb::Refs,
-            Path::new("/checkout"),
-            None,
-            json!([{"uri": "file:///checkout/gone.rs", "range": range()}]),
-            Scope::Checkout,
-            |_, _| Err(LspErr::Protocol("missing line".into())),
-        );
-        assert_eq!(result.unwrap(), "gone.rs:2:3\n");
-    }
-
-    #[test]
-    fn qualified_symbols_match_their_container() {
-        let symbol = |container| json!({"name": "method", "containerName": container, "kind": 12, "location": {"uri": "file:///checkout/lib.rs", "range": range()}});
-        assert!(matches!(
-            resolve_symbol("Type::method", json!([symbol("Type"), symbol("Other")])).unwrap(),
-            SymbolResolution::Unique(_)
-        ));
-        assert!(matches!(
-            resolve_symbol(
-                "module::Type::method",
-                json!([symbol("Type"), symbol("Other")])
-            )
-            .unwrap(),
-            SymbolResolution::Unique(_)
-        ));
-    }
-
-    #[test]
-    fn aliases_collapse_to_definitions_without_guessing() {
-        let location = |file: &str| {
-            serde_json::from_value::<Location>(
-                json!({"uri": format!("file:///checkout/{file}.rs"), "range": range()}),
-            )
-            .unwrap()
-        };
-        let symbols = || {
-            ["alias", "original"]
-                .map(|file| SymbolInformation {
-                    name: "work".into(),
-                    kind: 12,
-                    location: location(file),
-                    container_name: None,
-                })
-                .to_vec()
-        };
-        let resolved = collapse_symbols(symbols(), |_| Ok(vec![location("definition")])).unwrap();
-        assert!(
-            matches!(resolved, SymbolResolution::Unique(found) if found == location("definition"))
-        );
-        for unresolved in [vec![], vec![location("one"), location("two")]] {
-            let resolved = collapse_symbols(symbols(), |candidate| {
-                Ok(if candidate.uri.ends_with("alias.rs") {
-                    unresolved.clone()
-                } else {
-                    vec![location("definition")]
-                })
-            })
-            .unwrap();
-            let SymbolResolution::Ambiguous(symbols) = resolved else {
-                panic!("distinct definitions");
-            };
-            insta::allow_duplicates! {
-                insta::assert_snapshot!(render_ambiguous(Path::new("/checkout"), "work", &symbols).unwrap(), @"
-                ambiguous: 2 symbols named work; rerun with a position
-                function work  alias.rs:2:3
-                function work  definition.rs:2:3
-                ");
-            }
-        }
-    }
-
-    #[test]
-    fn incomplete_position_requires_a_column() {
-        assert!(
-            parse_target("src/lib.rs:12")
-                .unwrap_err()
-                .to_string()
-                .contains("path:line:col")
-        );
-    }
-
-    #[test]
-    fn verb_text_renderers() {
-        let root = Path::new("/checkout");
-        let uri = "file:///checkout/src/lib.rs";
-        let location = json!({"uri": uri, "range": range()});
-        let show = |verb, result| {
-            render_with_source(verb, root, Some(uri), result, Scope::Checkout, |_, _| {
-                Ok("  fn work() {}  ".into())
-            })
-            .unwrap()
-        };
-        insta::assert_snapshot!(show(Verb::Def, location.clone()), @"src/lib.rs:2:3  fn work() {}");
-        insta::assert_snapshot!(show(Verb::Refs, json!([location, location])), @"src/lib.rs:2:3  fn work() {}");
-        insta::assert_snapshot!(show(Verb::Impl, json!([{"targetUri": uri, "targetSelectionRange": range()}])), @"src/lib.rs:2:3  fn work() {}");
-        insta::assert_snapshot!(show(Verb::Hover, json!({"contents": [{"language": "rust", "value": "fn work()"}, "Does work."]})), @"
-        ```rust
-        fn work()
-        ```
-
-        Does work.
-        ");
-        let child =
-            json!({"name": "work", "kind": 12, "range": range(), "selectionRange": range()});
-        insta::assert_snapshot!(show(Verb::Symbols, json!([{"name": "Engine", "kind": 23, "range": range(), "selectionRange": range(), "children": [child]}])), @"
-        struct Engine  src/lib.rs:2:3
-          function work  src/lib.rs:2:3
-        ");
-        let symbol =
-            json!({"name": "work", "kind": 12, "location": location, "containerName": "Engine"});
-        insta::assert_snapshot!(show(Verb::Find, json!([symbol])), @"function work  src/lib.rs:2:3 in Engine");
-        let item = json!({"name": "work", "kind": 12, "uri": uri, "range": range(), "selectionRange": range()});
-        insta::assert_snapshot!(show(Verb::Callers, json!([{"from": item}, {"from": item}])), @"work  src/lib.rs:2:3");
-        insta::assert_snapshot!(show(Verb::Callees, json!([{"to": item}])), @"work  src/lib.rs:2:3");
-        assert_eq!(show(Verb::Refs, json!([])), "no results\n");
-        assert_eq!(
-            show(
-                Verb::Hover,
-                json!({"contents": {"kind": "markdown", "value": "**work**"}})
-            ),
-            "**work**\n"
-        );
-        assert_eq!(
-            show(Verb::Symbols, json!([symbol])),
-            show(Verb::Find, json!([symbol]))
-        );
-    }
-
-    #[test]
-    fn call_hierarchy_hides_distinct_external_items() {
-        let item = |uri| json!({"name": "work", "kind": 12, "uri": uri, "range": range(), "selectionRange": range()});
-        let inside = item("file:///checkout/lib.rs");
-        let outside = item("file:///other/lib.rs");
-        let other = item("file:///sdk/lib.rs");
-        for verb in [Verb::Callers, Verb::Callees] {
-            let key = if verb == Verb::Callers { "from" } else { "to" };
-            let calls = json!([{key: inside}, {key: outside}, {key: other}, {key: outside}]);
-            assert_eq!(
-                render(
-                    verb,
-                    Path::new("/checkout"),
-                    None,
-                    calls.clone(),
-                    Scope::Checkout
-                )
-                .unwrap(),
-                "work  lib.rs:2:3\n2 outside the checkout hidden; add --external to show them\n"
-            );
-            assert_eq!(
-                render(verb, Path::new("/checkout"), None, calls, Scope::External).unwrap(),
-                "work  /other/lib.rs:2:3\nwork  /sdk/lib.rs:2:3\nwork  lib.rs:2:3\n"
-            );
-            assert_eq!(
-                render(
-                    verb,
-                    Path::new("/checkout"),
-                    None,
-                    json!([{key: outside}]),
-                    Scope::Checkout
-                )
-                .unwrap(),
-                "no results\n1 outside the checkout hidden; add --external to show them\n"
-            );
-        }
-    }
-
-    #[test]
-    fn symbols_require_exact_names_and_ambiguity_is_not_a_guess() {
-        let symbol = |name| json!({"name": name, "kind": 12, "location": {"uri": "file:///checkout/lib.rs", "range": range()}});
-        assert!(matches!(
-            resolve_symbol("work", json!([symbol("worker")])).unwrap(),
-            SymbolResolution::Missing
-        ));
-        assert!(matches!(
-            resolve_symbol("work", json!([symbol("worker"), symbol("work")])).unwrap(),
-            SymbolResolution::Unique(_)
-        ));
-        let SymbolResolution::Ambiguous(symbols) =
-            resolve_symbol("work", json!([symbol("work"), symbol("work")])).unwrap()
-        else {
-            panic!("ambiguous symbol");
-        };
-        insta::assert_snapshot!(render_ambiguous(Path::new("/checkout"), "work", &symbols).unwrap(), @"
-        ambiguous: 2 symbols named work; rerun with a position
-        function work  lib.rs:2:3
-        function work  lib.rs:2:3
-        ");
-    }
-
-    #[test]
-    fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
-        let reasons = [
-            UnavailableReason::NoneConfigured,
-            UnavailableReason::MemoryShort,
-            UnavailableReason::MemoryPressure,
-            UnavailableReason::Crashed,
-            UnavailableReason::CheckoutRemoved,
-            UnavailableReason::StoppedByHand,
-            UnavailableReason::Stopped(crate::lsp::registry::StopReason::Idle),
-            UnavailableReason::Stopped(crate::lsp::registry::StopReason::Evicted),
-            UnavailableReason::Stopped(crate::lsp::registry::StopReason::TeamDone),
-        ];
-        let lines = reasons
-            .into_iter()
-            .map(|reason| {
-                let error = QueryErr::Unavailable {
-                    root: "/checkout".into(),
-                    reason,
-                };
-                assert_eq!(error.exit_code(), 3);
-                error.to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        insta::assert_snapshot!(lines, @"
-        no language server for /checkout (none configured); use grep
-        no language server for /checkout (not started: memory short); use grep
-        no language server for /checkout (stopped: memory pressure); use grep
-        no language server for /checkout (stopped: crashed); use grep
-        no language server for /checkout (stopped: checkout removed); use grep
-        no language server for /checkout (stopped by hand); use grep
-        no language server for /checkout (stopped: idle); use grep
-        no language server for /checkout (stopped: evicted); use grep
-        no language server for /checkout (stopped: team done); use grep
-        ");
-        let indexing = QueryErr::Indexing {
-            server: "rust".into(),
-            seconds: 47,
-        };
-        assert_eq!(indexing.exit_code(), 4);
-        insta::assert_snapshot!(indexing.to_string(), @"rust still indexing after 47s; use grep for this question");
-    }
-
-    #[test]
-    fn editor_positions_are_one_based_and_symbols_are_not_guessed() {
-        assert_eq!(
-            parse_target("src/lib.rs:2:3").unwrap(),
-            Target::Position {
-                path: "src/lib.rs".into(),
-                position: Position {
-                    line: 1,
-                    character: 2
-                },
-            }
-        );
-        assert_eq!(
-            parse_target("MuxBackend").unwrap(),
-            Target::Symbol("MuxBackend".into())
-        );
-        assert!(parse_target("src/lib.rs:0:1").is_err());
-        assert_eq!(
-            parse_target("Type::method").unwrap(),
-            Target::Symbol("Type::method".into())
-        );
-    }
-}
+mod tests;

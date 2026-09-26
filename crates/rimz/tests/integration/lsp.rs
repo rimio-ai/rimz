@@ -197,6 +197,57 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         .assert()
         .success()
         .stdout("/fixture/definition.rs:1:1\n");
+    for name in [
+        "deep::pathed",
+        "crate::deep::pathed",
+        "deep::pathed::pathed",
+        "pathed()",
+        "a::twin",
+    ] {
+        env.rimz()
+            .args(["lsp", "def", name])
+            .assert()
+            .success()
+            .stderr("")
+            .stdout(if name == "a::twin" {
+                "src/a.rs:1:1\n"
+            } else {
+                "src/deep/pathed.rs:1:1\n"
+            });
+    }
+    env.rimz().args(["lsp", "def", "wrong::pathed"]).assert().code(5).stderr("").stdout("not found: wrong::pathed; 1 symbol named pathed:\nfunction deep::pathed::pathed  src/deep/pathed.rs:1:1\n");
+    env.rimz()
+        .args(["lsp", "def", "nosuch"])
+        .assert()
+        .code(5)
+        .stderr("")
+        .stdout("not found: nosuch\n");
+    env.rimz().args(["lsp", "def", "twin"]).assert().code(6).stderr("").stdout("ambiguous: 2 symbols named twin; rerun with one of these names or a position\nfunction a::twin  src/a.rs:1:1\nfunction b::twin  src/b.rs:1:1\n");
+    for (name, code, outcome, candidates) in [
+        ("nosuch", 5, "not-found", json!([])),
+        (
+            "twin",
+            6,
+            "ambiguous",
+            json!([
+                {"name": "a::twin", "kind": "function", "position": "src/a.rs:1:1"},
+                {"name": "b::twin", "kind": "function", "position": "src/b.rs:1:1"}
+            ]),
+        ),
+    ] {
+        let output = env
+            .rimz()
+            .args(["lsp", "def", name, "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(code));
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+            json!({"outcome": outcome, "name": name, "candidates": candidates})
+        );
+    }
+    env.rimz().args(["lsp", "find", "work"]).assert().success().stdout("function w::work  src/w.rs:1:1\nfunction w::worker  src/w.rs:1:1\nfunction r::rework  src/r.rs:1:1\nfunction u::unrelated  src/u.rs:1:1\n");
     env.rimz()
         .args(["lsp", "callees", "lib.rs:1:4", "--external", "--json"])
         .assert()
