@@ -108,7 +108,7 @@ Everything correctness-critical stays above the trait and is identical across ba
 
 ### Structure calls
 
-`append_companion_pane` checks native occupancy before birth and balances the grid best-effort afterward; a `Full` result guarantees no payload ran. Companion-grid planning excludes sidebar chrome before checking occupancy or balancing, and on Zellij it declines a tab holding a fullscreen or suppressed pane. tmux recognizes the sidebar by its spawn argv as well as its title and current command, decoding the outer quoting of a single shell-command argument, so a hook-born sidebar counts as chrome before its title arrives.
+`append_companion_pane` checks native occupancy before birth and balances the grid best-effort afterward; a `Full` result guarantees no payload ran. Companion-grid planning excludes sidebar chrome before checking occupancy or balancing, and on Zellij it declines a tab holding a fullscreen or suppressed pane. tmux uses the shared spawn-argv classification described under [Pane metadata](#pane-metadata), alongside its title and current-command checks.
 
 `TabOptions::after` opens a new view immediately after the view containing an anchor pane; `None` appends. tmux resolves the pane to its window id and runs `new-window -a`. Zellij appends, focuses the new tab long enough to move it left past the required neighbours, then restores an unfocused launch by re-resolving the original pane's tab position. Placement is best-effort on both backends: a failure leaves the view appended and the launch continues.
 
@@ -180,6 +180,8 @@ A pane's launch-name pin is separate from room identity. tmux stores it in the p
 The sidebar uses the foreground command for display, the spawn command for identity only while the pane root still runs the spawn program (or the foreground is briefly unreported), and cwd for worktree grouping ([sidebar.md → presence model](./sidebar/sidebar.md#presence-model)). A foreground shell therefore demotes a pane's historical agent argv. Foreground, title, and cwd exist on both backends. Spawn is optional because Zellij omits it for panes created with `action new-pane`, while tmux exposes the static `pane_start_command`. **The parity floor for presence is command plus cwd**, which both backends meet.
 
 Zellij adds two wrinkles. The foreground command reaches RimZ as a full argv string, so every Zellij source (the plugin cache on ingest and the authoritative listing) clears a `rimz agents <spec>` launcher command before a consumer reads it. A layout-named `rimz-sidebar` pane always reports `rimz-sidebar` as its foreground, so it filters as chrome even when Zellij omits the command fields.
+
+tmux reports `rimz-sidebar` as the command when either the title matches or `pane_start_command` decodes to a `sidebar serve` argv after the executable. The shared `spawn_command_is_sidebar_serve` predicate in `mux/tmux/options.rs` unwraps tmux's whole-command quoting before inspecting argv. A hook-born sidebar is therefore chrome from its first listing, before the renderer publishes its title, just as a Zellij sidebar is chrome from its birth name.
 
 tmux exposes `pane_floating_flag` from 3.7; older supported releases expand the unknown format empty and report every pane tiled. Floating agent panes stay addressable but out of the room-row projection, and a self-closing sidebar view closes same-view floating panes before its tiled anchor exits.
 

@@ -37,10 +37,10 @@ impl PartialOrd for ClientPaneView {
     }
 }
 
-/// Pane title/name that marks RimZ's own sidebar renderer — the one chrome
-/// classification key. The renderer sets it (terminal title escape), the
-/// Zellij layout names its pane with it, and the tmux/Zellij/store
-/// classifiers all match against it.
+/// Pane title/name and normalized command that mark RimZ's sidebar renderer.
+/// The renderer sets the title, and Zellij names the pane at birth. tmux also
+/// classifies sidebar spawn argv before the title arrives; both backends
+/// publish this command for downstream chrome classifiers.
 pub const SIDEBAR_CHROME_TITLE: &str = "rimz-sidebar";
 
 /// View name for the managed daemon tab. Shared by the launcher and pane

@@ -4,6 +4,8 @@ use crate::ids::{MuxClientId, MuxName, PaneId};
 use crate::mux::{ClientPresence, ClientView, MuxErr, Result};
 use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE};
 
+use super::options::spawn_command_is_sidebar_serve;
+
 /// Parse one comma-separated `list-panes -F` row into a [`PaneRef`]. Returns
 /// `None` for a row missing the three load-bearing leading columns (session,
 /// window, pane id) — a degraded answer the caller skips rather than surfaces.
@@ -35,6 +37,9 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         command: if cols
             .get(7)
             .is_some_and(|value| value.trim() == SIDEBAR_CHROME_TITLE)
+            || cols
+                .get(9)
+                .is_some_and(|value| spawn_command_is_sidebar_serve(value))
         {
             Some(SIDEBAR_CHROME_TITLE.to_owned())
         } else {
@@ -213,6 +218,28 @@ mod tests {
                 "needs session+window+pane: {malformed:?}",
             );
         }
+    }
+
+    #[test]
+    fn parse_pane_line_classifies_sidebar_spawn_before_title() {
+        let commands = [
+            "\"/home/u/.rimz/ws/room/rimz sidebar serve --mux tmux --workspace-id ws --session-name rimz-room\"",
+            "/home/u/.rimz/ws/room/rimz sidebar serve --mux tmux --workspace-id ws --session-name rimz-room",
+            "rimz loop watch --hold",
+            "rimz sidebar snapshot",
+            "rimz codex app-server serve",
+        ];
+        let parsed_commands = commands.map(|spawn| {
+            let row = format!("rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,hostname,0,{spawn}");
+            let pane = parse_pane_line(&row).expect("pane row");
+            assert_eq!(pane.title.as_deref(), Some("hostname"));
+            assert_eq!(pane.spawn_command.as_deref(), Some(spawn));
+            pane.command.expect("command")
+        });
+        assert_eq!(
+            parsed_commands,
+            ["rimz-sidebar", "rimz-sidebar", "rimz", "rimz", "rimz"]
+        );
     }
 
     #[test]
