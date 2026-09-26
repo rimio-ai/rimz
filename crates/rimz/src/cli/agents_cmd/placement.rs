@@ -195,6 +195,7 @@ fn prepare_resolved(
     } = request;
     Ok(match placement {
         Placement::NewTab => PreparedPlacement::NewTab(TabOptions {
+            env: identity_env,
             title,
             panes,
             focus: !background,
@@ -314,6 +315,7 @@ mod tests {
         };
         assert_eq!(options.sidebar.session_name, "room");
         assert_eq!(options.title, "#lane");
+        assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
         assert_eq!(options.sidebar.cwd, Path::new("/work"));
         assert_eq!(options.panes.columns[0].panes[0].argv, ["rimz", "agents"]);
         assert!(!options.focus);

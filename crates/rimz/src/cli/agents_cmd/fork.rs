@@ -202,7 +202,12 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             title,
             panes,
             sidebar,
-            identity_env: rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
+            identity_env: rimz::room::pane_identity_env(
+                workspace,
+                &seed.cwd,
+                channel.as_deref(),
+                false,
+            ),
             background: args.bg,
             errors: PlacementErrors {
                 new_tab: "opening agent fork tab",

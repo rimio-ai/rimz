@@ -1705,6 +1705,7 @@ exit 0
     );
     room.backend(&shim)
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "work".to_owned(),
             panes: LayoutPanes {
                 columns: vec![LayoutColumn {
@@ -1762,6 +1763,7 @@ exit 0
 
     room.backend(&shim)
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "new".to_owned(),
             panes: LayoutPanes {
                 columns: vec![LayoutColumn {

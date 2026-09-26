@@ -646,6 +646,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
         server
             .backend
             .open_tab(&TabOptions {
+                env: Default::default(),
                 title: "#self-wait".to_owned(),
                 panes: LayoutPanes {
                     columns: vec![tiled_column(vec![PaneCmd {
@@ -844,6 +845,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "#reborn".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -1966,6 +1968,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "#rimz-clean".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -2030,6 +2033,7 @@ fn failing_close_pane_agent_drops_to_shell() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "#rimz-fail".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {

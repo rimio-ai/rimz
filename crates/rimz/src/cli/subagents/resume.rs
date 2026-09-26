@@ -135,11 +135,8 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         )?,
         name: child.name.clone(),
     };
-    let mut env = rimz::room::pane_identity_env(&parent_workspace, child.channel.as_deref(), false);
-    env.insert(
-        rimz::workspace::ENV_WORKTREE_PATH.to_owned(),
-        cwd.display().to_string(),
-    );
+    let env =
+        rimz::room::pane_identity_env(&parent_workspace, &cwd, child.channel.as_deref(), false);
     let _guard = supervised::pane::lock_subagent_zone(store)?;
     let current = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     if supervised::pane::launch_has_bound_pane(&current.agents, &child.kind, launch_id) {
@@ -151,7 +148,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         store,
         &parent_workspace,
         &cwd,
-        env,
+        env.clone(),
         sidebar.clone(),
         &pane,
         child.name.as_deref().unwrap_or(child.agent_id.as_str()),
@@ -166,6 +163,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
                 _ => format!("run {}", child.kind),
             };
             room.backend().open_tab(&rimz::mux::TabOptions {
+                env,
                 title,
                 panes: rimz::mux::LayoutPanes {
                     columns: vec![rimz::mux::LayoutColumn {

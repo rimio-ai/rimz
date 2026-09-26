@@ -28,6 +28,7 @@ fn live_work_boundary_resize_is_audited() {
     let _client = AttachedClient::attach(&room, VIEW_COLS, 60);
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "audit".to_owned(),
             panes: LayoutPanes {
                 columns: vec![
@@ -784,6 +785,7 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
     let input_log = cwd.path().join("routed-input.log");
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: target_tab.to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {

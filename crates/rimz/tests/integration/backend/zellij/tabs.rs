@@ -10,6 +10,88 @@ use super::support::*;
 use crate::common::CommandTimeoutExt;
 
 #[test]
+fn tab_injects_env_into_every_column_and_row() {
+    require_zellij!();
+    let room = LiveZellijSession::new("tab-env");
+    let cwd = TempDir::new().unwrap();
+    room.create_plain_background(cwd.path(), "60");
+    wait_for_pane_count(room.path(), room.name(), 1);
+    let _client = AttachedClient::attach(&room, 200, 60);
+    let (_stub_dir, stub) = sidebar_stub_alive_for(60);
+    let sidebar = SidebarPaneOptions {
+        session_name: room.name().to_owned(),
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_owned(),
+        extra_env: Default::default(),
+        cwd: cwd.path().to_owned(),
+        target: rimz::mux::SidebarTarget {
+            share: rimz::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(50).unwrap(),
+            pinned: false,
+        },
+        detected_view_size: None,
+        rimz_bin: stub,
+        pristine_birth: false,
+        config: Default::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let columns = (0..2)
+        .map(|column| {
+            tiled_column(
+                (0..2)
+                    .map(|row| PaneCmd {
+                        argv: vec![
+                            "sh".into(),
+                            "-c".into(),
+                            "printf '%s' \"$RIMZ_TEST_VAR\" > \"$1\"; exec sleep 60".into(),
+                            "marker".into(),
+                            format!("marker-{column}-{row}"),
+                        ],
+                        name: None,
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    room.backend()
+        .open_tab(&TabOptions {
+            env: std::collections::BTreeMap::from([(
+                "RIMZ_TEST_VAR".into(),
+                "marker with spaces".into(),
+            )]),
+            title: "env".into(),
+            panes: LayoutPanes {
+                columns,
+                focused_pane: 0,
+            },
+            focus: false,
+            dock_sidebar: false,
+            after: None,
+            sidebar,
+        })
+        .unwrap();
+    for column in 0..2 {
+        for row in 0..2 {
+            let marker = cwd.path().join(format!("marker-{column}-{row}"));
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !std::fs::read_to_string(&marker).is_ok_and(|text| !text.is_empty()) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "missing {}",
+                    marker.display()
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(
+                std::fs::read_to_string(marker).unwrap(),
+                "marker with spaces"
+            );
+        }
+    }
+}
+
+#[test]
 fn companion_grid_preserves_processes_sidebar_and_focus() {
     use rimz::mux::{CompanionPaneAppend, SplitPaneOptions, SplitTarget};
 
@@ -69,6 +151,7 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
     };
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "companion".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -530,6 +613,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     let input_log = cwd.path().join("source-input.log");
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: source_tab.to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -570,6 +654,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
     let background_tab = "background run";
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: background_tab.to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -648,6 +733,7 @@ fn open_tab_after_anchor_inserts_next_to_it() {
     for title in ["middle", "tail"] {
         backend
             .open_tab(&TabOptions {
+                env: Default::default(),
                 title: title.to_owned(),
                 panes: LayoutPanes {
                     columns: vec![tiled_column(vec![pane()])],
@@ -667,6 +753,7 @@ fn open_tab_after_anchor_inserts_next_to_it() {
 
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "inserted".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![pane()])],
@@ -735,6 +822,7 @@ fn open_tab_can_omit_sidebar_for_gallery_layout() {
     };
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: tab_name.to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![work_pane()])],
@@ -809,6 +897,7 @@ fn native_focused_split_preserves_docked_sidebar() {
     let split_tab = "backend focused split";
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: split_tab.to_owned(),
             panes: LayoutPanes {
                 columns: vec![

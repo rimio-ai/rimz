@@ -755,6 +755,8 @@ impl LayoutPanes {
 
 #[derive(Clone, Debug)]
 pub struct TabOptions {
+    /// Environment applied to every command pane in the tab.
+    pub env: BTreeMap<String, String>,
     pub title: String,
     pub panes: LayoutPanes,
     pub focus: bool,

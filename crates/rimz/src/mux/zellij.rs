@@ -28,6 +28,7 @@ pub use presence::{ensure_presence_plugin_artifact, presence_plugin_build, prese
 pub use reap::{ReapOutcome, reap_lineage_clients};
 pub use socket::{ZellijSocketHeadroom, socket_headroom, socket_preflight};
 
+use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -86,6 +87,18 @@ const PRESENCE_RETIRE_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
 /// `list-tabs` can hit an action-client startup race during busy session ticks.
 const LIST_TABS_ATTEMPTS: u32 = 5;
 const LIST_TABS_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+/// Zellij has no per-pane env flag or layout property. An empty map leaves the command unchanged.
+fn env_prefixed(env: &BTreeMap<String, String>, command: Vec<String>) -> Vec<String> {
+    if env.is_empty() {
+        return command;
+    }
+    let mut wrapped = Vec::with_capacity(command.len() + env.len() + 1);
+    wrapped.push("env".to_owned());
+    wrapped.extend(env.iter().map(|(key, value)| format!("{key}={value}")));
+    wrapped.extend(command);
+    wrapped
+}
 
 fn pane_short_name(argv: &[String]) -> Option<String> {
     Path::new(argv.first()?)

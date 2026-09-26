@@ -1,6 +1,6 @@
 //! tmux window, pane, and tab-layout command helpers.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::ids::{MuxName, PaneId};
@@ -453,6 +453,7 @@ impl TmuxBackend {
         cwd: &Path,
         argv: &[String],
         after: Option<&PaneId>,
+        env: &BTreeMap<String, String>,
     ) -> Result<OpenedWindow> {
         let anchor_window = match after
             .map(|anchor| self.window_id_for_pane(anchor))
@@ -483,6 +484,9 @@ impl TmuxBackend {
             "-c".to_owned(),
             cwd.to_string_lossy().into_owned(),
         ]);
+        for (key, value) in env {
+            args.extend(["-e".to_owned(), format!("{key}={value}")]);
+        }
         let output = self.cmd().args(args).args(argv.iter().cloned()).run()?;
         let (window_id, first_pane) = parse_new_window_ids(&output.stdout)?;
         Ok(OpenedWindow {
@@ -1017,7 +1021,14 @@ impl TmuxBackend {
                 );
                 (&fallback_shell, Some(tab.label.as_str()))
             };
-            match self.open_named_window(&opts.session_name, &tab.label, &tab.cwd, first, None) {
+            match self.open_named_window(
+                &opts.session_name,
+                &tab.label,
+                &tab.cwd,
+                first,
+                None,
+                &BTreeMap::new(),
+            ) {
                 Ok(opened) => {
                     if let Some(name) = first_name {
                         self.set_pane_rimz_title(&opened.first_pane, name);
@@ -1029,9 +1040,12 @@ impl TmuxBackend {
                     // sidebar: `select-layout` retiles every pane in the window,
                     // including the managed left sidebar. Additional agents split
                     // the active work area and preserve the sidebar's fixed width.
-                    if let Err(err) =
-                        self.split_layout_columns(&opened.first_pane, &tab.cwd, &tab.layout)
-                    {
+                    if let Err(err) = self.split_layout_columns(
+                        &opened.first_pane,
+                        &tab.cwd,
+                        &tab.layout,
+                        &BTreeMap::new(),
+                    ) {
                         tracing::warn!(
                             session = %opts.session_name,
                             tab = %tab.label,
@@ -1065,6 +1079,7 @@ impl TmuxBackend {
         size: Option<&str>,
         cwd: &Path,
         pane: &crate::mux::PaneCmd,
+        env: &BTreeMap<String, String>,
     ) -> Result<String> {
         let pane_id = self.split_printed_with_reason(
             direction,
@@ -1073,6 +1088,7 @@ impl TmuxBackend {
             cwd,
             &pane.argv,
             "split-window did not print a pane id",
+            env,
         )?;
         if let Some(name) = &pane.name {
             self.set_pane_rimz_title(&pane_id, name);
@@ -1091,6 +1107,7 @@ impl TmuxBackend {
         anchor: &str,
         cwd: &Path,
         panes: &[&crate::mux::PaneCmd],
+        env: &BTreeMap<String, String>,
     ) -> Result<Vec<String>> {
         if panes.is_empty() {
             return Ok(Vec::new());
@@ -1105,6 +1122,7 @@ impl TmuxBackend {
                 Some(&size.to_string()),
                 cwd,
                 pane,
+                env,
             )?;
             created.push(previous.clone());
         }
@@ -1202,11 +1220,16 @@ impl TmuxBackend {
                 &pane.cwd,
                 &pane.argv,
                 empty_reason,
+                &BTreeMap::new(),
             )?;
         }
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "shared split options plus the caller's diagnostic and pane environment"
+    )]
     pub(super) fn split_printed_with_reason(
         &self,
         direction: &str,
@@ -1215,6 +1238,7 @@ impl TmuxBackend {
         cwd: &Path,
         argv: &[String],
         empty_reason: &str,
+        env: &BTreeMap<String, String>,
     ) -> Result<String> {
         let mut args = vec![
             "split-window".to_owned(),
@@ -1230,6 +1254,9 @@ impl TmuxBackend {
             args.extend(["-l".to_owned(), size.to_owned()]);
         }
         args.extend(["-c".to_owned(), cwd.to_string_lossy().into_owned()]);
+        for (key, value) in env {
+            args.extend(["-e".to_owned(), format!("{key}={value}")]);
+        }
         let output = self.cmd().args(args).args(argv.iter().cloned()).run()?;
         let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         if pane_id.is_empty() {

@@ -305,6 +305,12 @@ fn open_attempt_pane(
     pane: &PaneCmd,
 ) -> Result<()> {
     let target = own_pane_id(room.mux_name());
+    let env = rimz::room::pane_identity_env(
+        &prepared.workspace,
+        &prepared.launch.cwd,
+        prepared.room_channel.as_deref(),
+        request.worktree.is_none() && request.from_pr.is_none(),
+    );
     let tab_anchor = target.clone();
     let launch_identity = launch_batch.single_identity()?;
     let direction = rimz::mux::detect_terminal_size()
@@ -314,6 +320,7 @@ fn open_attempt_pane(
         let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
         room.backend()
             .open_tab(&TabOptions {
+                env: env.clone(),
                 title,
                 panes: LayoutPanes {
                     columns: vec![LayoutColumn {
@@ -344,26 +351,17 @@ fn open_attempt_pane(
                 command: Some(pane.argv.clone()),
                 title: pane.name.clone(),
                 close_on_exit: false,
-                env: rimz::room::pane_identity_env(
-                    &prepared.workspace,
-                    prepared.room_channel.as_deref(),
-                    request.worktree.is_none() && request.from_pr.is_none(),
-                ),
+                env: env.clone(),
                 placement: SplitPlacement::Directional(direction),
                 focus: false,
             })
             .map_err(anyhow::Error::from),
         RunPlacement::LoopZone => {
-            let env = rimz::room::pane_identity_env(
-                &prepared.workspace,
-                prepared.room_channel.as_deref(),
-                request.worktree.is_none() && request.from_pr.is_none(),
-            );
             match supervised::pane::split_into_loop_zone(
                 room.backend(),
                 &prepared.workspace,
                 &prepared.launch.cwd,
-                env,
+                env.clone(),
                 pane,
             )? {
                 true => Ok(()),
@@ -373,18 +371,13 @@ fn open_attempt_pane(
         RunPlacement::SubagentZone => match supervised::pane::lock_subagent_zone(&prepared.store) {
             Ok(guard) => {
                 subagent_zone_guard = Some(guard);
-                let env = rimz::room::pane_identity_env(
-                    &prepared.workspace,
-                    prepared.room_channel.as_deref(),
-                    request.worktree.is_none() && request.from_pr.is_none(),
-                );
                 let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
                 match supervised::pane::split_into_subagent_zone(
                     room.backend(),
                     &prepared.store,
                     &prepared.workspace,
                     &prepared.launch.cwd,
-                    env,
+                    env.clone(),
                     sidebar,
                     pane,
                     &launch_identity.name,
@@ -737,7 +730,7 @@ fn execute_attempt(
     )?;
     let launch_identity = launch_batch.single_identity()?;
     record.agent_name = Some(launch_identity.name.clone());
-    let mut pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
+    let pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
         runtime: prepared.store.runtime_paths(),
         adapter: prepared.adapter,
         run_id: &run_id,
@@ -761,19 +754,6 @@ fn execute_attempt(
     .inspect_err(|_| {
         let _ = prepared.store.fail_agent_launch_batch(&launch_batch);
     })?;
-    if request.cwd.is_some() {
-        pane.argv.splice(
-            0..0,
-            [
-                "env".to_owned(),
-                format!(
-                    "{}={}",
-                    rimz::workspace::ENV_WORKTREE_PATH,
-                    prepared.launch.cwd.display()
-                ),
-            ],
-        );
-    }
     let waiter = if request.background {
         None
     } else {

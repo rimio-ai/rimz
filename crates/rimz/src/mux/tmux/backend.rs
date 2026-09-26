@@ -1,6 +1,6 @@
 //! tmux [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -806,6 +806,7 @@ impl MuxBackend for TmuxBackend {
             &first_content.cwd,
             &first_content.argv,
             None,
+            &BTreeMap::new(),
         )?;
         let view_cols = self
             .window_width(&opened.window_id)
@@ -827,6 +828,7 @@ impl MuxBackend for TmuxBackend {
                 &first.cwd,
                 &first.argv,
                 "split-window did not print a daemon pane id",
+                &BTreeMap::new(),
             )?;
             self.append_equal_host_rows(
                 &first_daemon,
@@ -882,6 +884,7 @@ impl MuxBackend for TmuxBackend {
             &opts.sidebar.cwd,
             &first.argv,
             opts.after.as_ref(),
+            &opts.env,
         )?;
         let window_id = opened.window_id;
         let first_pane = opened.first_pane;
@@ -898,7 +901,8 @@ impl MuxBackend for TmuxBackend {
         // the sidebar before the splits so the columns land at full width.
         let normalized = self.normalize_tab_birth_width(&window_id, &first_pane, &opts.sidebar);
 
-        let split_result = self.split_layout_columns(&first_pane, &opts.sidebar.cwd, &opts.panes);
+        let split_result =
+            self.split_layout_columns(&first_pane, &opts.sidebar.cwd, &opts.panes, &opts.env);
         if normalized {
             // `resize-window` pins `window-size=manual`; undo it so the tab
             // tracks client size again like every other tab.
@@ -1024,6 +1028,7 @@ impl TmuxBackend {
         first_pane: &str,
         cwd: &Path,
         panes: &LayoutPanes,
+        env: &BTreeMap<String, String>,
     ) -> Result<()> {
         let Some((first_column, rest_columns)) = panes.columns.split_first() else {
             return Ok(());
@@ -1038,13 +1043,19 @@ impl TmuxBackend {
             column_rows.push(rows);
         }
         let mut anchors = vec![first_pane.to_owned()];
-        anchors.extend(self.split_even_run(SplitAxis::Columns, first_pane, cwd, &column_tops)?);
+        anchors.extend(self.split_even_run(
+            SplitAxis::Columns,
+            first_pane,
+            cwd,
+            &column_tops,
+            env,
+        )?);
         let mut layout_order = Vec::new();
         for (anchor, rows) in anchors.iter().zip(column_rows) {
             // tmux has no native stack, so stacked columns use tiled rows.
             let rows = rows.iter().collect::<Vec<_>>();
             layout_order.push(anchor.clone());
-            layout_order.extend(self.split_even_run(SplitAxis::Rows, anchor, cwd, &rows)?);
+            layout_order.extend(self.split_even_run(SplitAxis::Rows, anchor, cwd, &rows, env)?);
         }
         // Every split ran with `-d`, so the leading pane is already active.
         let focus_position = panes.focus_position();

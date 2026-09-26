@@ -3,6 +3,65 @@
 use super::support::*;
 
 #[test]
+fn tab_injects_env_into_every_column_and_row() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-tab-env";
+    ensure_rimz_session(&server, session, Some((200, 60)));
+    let cwd = TempDir::new().unwrap();
+    let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
+    let mut sidebar = sidebar_opts(session, stub, Some(200));
+    sidebar.cwd = cwd.path().to_owned();
+    let columns = (0..2)
+        .map(|column| {
+            tiled_column(
+                (0..2)
+                    .map(|row| PaneCmd {
+                        argv: vec![
+                            "sh".into(),
+                            "-c".into(),
+                            "printf '%s' \"$RIMZ_TEST_VAR\" > \"$1\"; exec sleep 60".into(),
+                            "marker".into(),
+                            format!("marker-{column}-{row}"),
+                        ],
+                        name: None,
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    server
+        .backend
+        .open_tab(&TabOptions {
+            env: BTreeMap::from([("RIMZ_TEST_VAR".into(), "marker with spaces".into())]),
+            title: "env".into(),
+            panes: LayoutPanes {
+                columns,
+                focused_pane: 0,
+            },
+            focus: false,
+            dock_sidebar: false,
+            after: None,
+            sidebar,
+        })
+        .unwrap();
+    for column in 0..2 {
+        for row in 0..2 {
+            let marker = cwd.path().join(format!("marker-{column}-{row}"));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !std::fs::read_to_string(&marker).is_ok_and(|text| !text.is_empty()) {
+                assert!(Instant::now() < deadline, "missing {}", marker.display());
+                thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(
+                std::fs::read_to_string(marker).unwrap(),
+                "marker with spaces"
+            );
+        }
+    }
+}
+
+#[test]
 fn companion_grid_preserves_processes_sidebar_and_focus() {
     require_tmux!();
     let server = TmuxServer::new();
@@ -20,6 +79,7 @@ fn companion_grid_preserves_processes_sidebar_and_focus() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "children".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -533,6 +593,7 @@ fn open_tab_builds_multi_column_layout() {
         server
             .backend
             .open_tab(&TabOptions {
+                env: Default::default(),
                 title: title.to_owned(),
                 panes: LayoutPanes {
                     columns: rows_per_column
@@ -581,6 +642,7 @@ fn open_tab_builds_multi_column_layout() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "solo".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![work_pane()])],
@@ -648,6 +710,7 @@ fn stacked_splits_tile_the_column_evenly() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "stacked".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -774,6 +837,7 @@ fn open_tab_after_anchor_inserts_next_to_it() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "inserted".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -838,6 +902,7 @@ fn open_tab_can_suppress_hook_docked_sidebar() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "gallery".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![work_pane()])],
@@ -932,6 +997,7 @@ fn open_tab_from_narrow_client_normalizes_to_full_width() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "float".to_owned(),
             panes: LayoutPanes {
                 columns: vec![

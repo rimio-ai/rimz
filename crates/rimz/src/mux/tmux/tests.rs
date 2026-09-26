@@ -501,6 +501,7 @@ fn open_tab_rejects_an_empty_layout() {
         refresh_ms: None,
     };
     let tab = |columns: Vec<Vec<PaneCmd>>| TabOptions {
+        env: Default::default(),
         title: "work".to_owned(),
         panes: LayoutPanes {
             columns: columns

@@ -356,9 +356,48 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
 }
 
 #[test]
+fn tab_layout_injects_env_into_every_pane_without_renaming() {
+    for dock_sidebar in [false, true] {
+        let opts = TabOptions {
+            env: std::collections::BTreeMap::from([(
+                "RIMZ_TEST_VAR".into(),
+                "marker with spaces".into(),
+            )]),
+            title: "env".into(),
+            panes: crate::mux::LayoutPanes {
+                columns: vec![
+                    layout_column(&[&["/bin/sh", "-l"], &["codex"]], false),
+                    layout_column(&[&["bash"], &["fish"]], true),
+                ],
+                focused_pane: 0,
+            },
+            focus: false,
+            dock_sidebar,
+            after: None,
+            sidebar: background_view_opts(vec![]).sidebar,
+        };
+        let layout = render_tab_layout(&opts, 25).unwrap();
+        assert_eq!(layout.matches(r#"command "env""#).count(), 4, "{layout}");
+        for argv in [r#""/bin/sh" "-l""#, r#""codex""#, r#""bash""#, r#""fish""#] {
+            assert!(
+                layout.contains(&format!(
+                    r#"args "RIMZ_TEST_VAR=marker with spaces" {argv}"#
+                )),
+                "{layout}"
+            );
+        }
+        for name in ["sh", "codex", "bash", "fish"] {
+            assert!(layout.contains(&format!(r#"name="{name}""#)), "{layout}");
+        }
+        assert!(!layout.contains(r#"name="env""#), "{layout}");
+    }
+}
+
+#[test]
 fn tab_layout_derives_percent_from_an_explicit_live_width() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
+        env: Default::default(),
         title: "review".to_owned(),
         panes: crate::mux::LayoutPanes {
             columns: vec![
@@ -407,6 +446,7 @@ fn tab_layout_derives_percent_from_an_explicit_live_width() {
 #[test]
 fn tab_layout_prefers_the_callers_pane_name_over_the_argv_wrapper() {
     let opts = TabOptions {
+        env: Default::default(),
         title: "#feature".to_owned(),
         panes: crate::mux::LayoutPanes {
             columns: vec![crate::mux::LayoutColumn {
@@ -438,6 +478,7 @@ fn tab_layout_prefers_the_callers_pane_name_over_the_argv_wrapper() {
 fn tab_layout_renders_tiled_and_stacked_columns() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
+        env: Default::default(),
         title: "review".to_owned(),
         panes: crate::mux::LayoutPanes {
             columns: vec![
@@ -474,6 +515,7 @@ fn tab_layout_renders_tiled_and_stacked_columns() {
 fn undocked_tab_layout_renders_stacked_columns() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
+        env: Default::default(),
         title: "review".to_owned(),
         panes: crate::mux::LayoutPanes {
             columns: vec![layout_column(&[&["coder"], &["reviewer"]], true)],
@@ -500,6 +542,7 @@ fn undocked_tab_layout_renders_stacked_columns() {
 fn tab_layout_can_omit_sidebar_for_gallery_columns() {
     let sidebar = background_view_opts(vec![]).sidebar;
     let opts = TabOptions {
+        env: Default::default(),
         title: "sidebar gallery".to_owned(),
         panes: crate::mux::LayoutPanes {
             columns: vec![layout_column(&[&["rimz", "sidebar"]], false)],
