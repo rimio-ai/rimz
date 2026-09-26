@@ -367,7 +367,9 @@ fn run(
         {
             let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
             for event in progress.try_iter() {
-                model.readiness.progress(&event, shared.elapsed());
+                if event["method"] == "$/progress" {
+                    model.readiness.progress(&event["params"], shared.elapsed());
+                }
             }
             if matches!(
                 model.entry.state,
