@@ -1,0 +1,8 @@
+# Paths ripgrep and fd skip by default: not an authority on behaviour, or pure noise.
+# `rg --no-ignore-dot`, or naming the path, searches them. Gates list files with
+# `git ls-files` and are unaffected.
+/examples/
+/Cargo.lock
+/supply-chain/
+/CHANGELOG.md
+/docs/externals/
