@@ -98,8 +98,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "lint",
-        summary: "Run all-feature and install-host clippy with warnings as errors.",
-        runs: "cargo clippy for all workspace targets and both host install feature shapes without testkit; every pass denies warnings",
+        summary: "Check formatting, then run all-feature and install-host clippy with warnings as errors.",
+        runs: "cargo fmt --all -- --check, then cargo clippy for all workspace targets and both host install feature shapes without testkit; every pass denies warnings",
     },
     TaskInfo {
         name: "check",
@@ -334,7 +334,10 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "brew-formula" => brew::brew_formula(root),
         "hooks" => hooks::install(root),
         "fmt" => gates::fmt(root),
-        "lint" => gates::lint(root),
+        // Standalone `lint` is the per-commit signal, so it checks formatting
+        // first, as the pre-commit hook does; the composite stacks run `fmt`
+        // as their own step and call `gates::lint` directly.
+        "lint" => gates::fmt(root).and_then(|()| gates::lint(root)),
         "check" => gates::check(root),
         "test" => gates::test(root, args),
         "test-archive" => gates::test_archive(root, args),
