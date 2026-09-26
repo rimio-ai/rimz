@@ -96,7 +96,7 @@ pub struct SidebarProviderPanel {
     /// API-key spend against an optional display ceiling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_credits: Option<ExtraCredits>,
-    /// Codex rate-limit reset credits, shown as a compact header marker.
+    /// Banked rate-limit reset credits, shown as a compact header marker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset_credits: Option<ResetCredits>,
     /// Auto-redeem forecast for the reset-credit marker: manual (auto-redeem

@@ -64,7 +64,7 @@ The rows print in this order, and a row with nothing to report is left out:
 | One row per window | Labelled by its length (`5h`, `7d`) or by the provider's quota name. The value is `N% used · resets in 1h23m`, `N% used · ready` for a window whose clock has not started, or `∞` for a limit the provider has lifted. |
 | `usage` | `∞` for an account without subscription windows, or `–` for a metered account with no window reading yet. |
 | `extra` | Paid usage beyond the windows: `disabled`, or whichever of `$ used`, `$ remaining`, and `$ limit` are known, or `–`. Without a provider-reported limit, `limit` is the display ceiling from [`[accounts.usage_limit_usd]`](../../guide/configuration.md#accounts). |
-| `resets` | Codex reset credits: the count, then the soonest known expiries, up to three. |
+| `resets` | Codex reset credits or Claude limit resets, only when at least one is banked: the count, then the soonest known expiries, up to three. |
 | `spend` | The provider's spend over the trailing 7 and 30 days, or `–` when none is published. On the `default` account only. |
 | `budget` | `$spent of $cap/day` for the account's daily cap, with `· parked` once the cap has parked agents ([Budget CLI](./budget.md#cap-the-room-and-accounts)). |
 

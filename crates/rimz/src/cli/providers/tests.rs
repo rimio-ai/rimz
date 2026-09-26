@@ -364,6 +364,32 @@ fn pretty_and_json_reports_are_stable() {
     insta::assert_snapshot!("provider_report_json", json);
 }
 
+#[test]
+fn pretty_report_hides_zero_reset_credits() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let (accounts, mut panel, spending) = protocol_fixture(now);
+    panel.reset_credits = Some(ResetCredits {
+        count: 0,
+        soonest_expiry: None,
+        expiries: Vec::new(),
+    });
+    let reports = assemble_reports(
+        &default_logins(),
+        &accounts,
+        default_panels(vec![panel]),
+        &spending,
+        None,
+        false,
+    );
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
+    assert!(
+        !String::from_utf8(out.into_inner())
+            .unwrap()
+            .contains("resets:")
+    );
+}
+
 fn rendered_resets(reset: &ResetCredits, now: Timestamp) -> String {
     let mut rows = KeyVals::new().indent(2);
     rows.push_lines("resets", reset_credit_lines(reset, now, &TimeZone::UTC));

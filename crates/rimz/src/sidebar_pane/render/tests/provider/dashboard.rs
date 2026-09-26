@@ -304,10 +304,10 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     );
 }
 
-/// The `↻` credit header is Codex-only and needs credits to report: a non-Codex
-/// account, a zero count, and an absent record all leave the header off.
+/// The `↻` credit header shows for any kind with credits to report: a zero
+/// count and an absent record leave the header off.
 #[test]
-fn codex_reset_credit_header_shows_only_when_actionable() {
+fn reset_credit_header_shows_for_any_kind_with_credits() {
     let theme = Theme::fixed(false);
     let credits = |count| {
         Some(crate::ResetCredits {
@@ -326,14 +326,13 @@ fn codex_reset_credit_header_shows_only_when_actionable() {
 
     let mut manual = codex.clone();
     manual.redeem_forecast = Some(crate::store::snapshot::RedeemForecast::Manual);
-    for panel in [codex, manual] {
+    for panel in [codex, manual, non_codex] {
         assert!(
             Dashboard::stacked(&theme, &[panel]).text().contains("↻ 3"),
-            "a Codex account with credits shows the manual header"
+            "an account with credits shows the manual header"
         );
     }
     for (panel, why) in [
-        (non_codex, "a non-Codex account"),
         (zero, "a zero credit count"),
         (absent, "an absent credit record"),
     ] {

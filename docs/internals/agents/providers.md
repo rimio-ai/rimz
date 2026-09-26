@@ -32,11 +32,11 @@ Four account-scoped facts feed a panel. Account identity and included balance ri
 | Account identity | [`AgentAccount`](../../../crates/rimz/src/agents/context.rs) | the non-secret `account_id`, the raw `plan` tier (`max`, `team`, `pro`), `metered`, the typed account scope, an optional `sub_provider` id, the probed version, and the credential file's mtime |
 | Included balance | [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs) | ordered [`RateLimitWindow`](../../../crates/rimz/src/agents/context.rs)s, each with `used_percentage`, a typed `resets_at`, `observed_at`, a `source`, and either a `duration_mins` or a provider scope (stable id plus compact label) |
 | Paid usage | [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs) | used USD, remaining USD, a limit, or a disabled state, each optional |
-| Reset credits | [`ResetCredits`](../../../crates/rimz/src/agents/credits.rs) | Codex only: the available count, every known valid expiry, and the earliest expiry |
+| Reset credits | [`ResetCredits`](../../../crates/rimz/src/agents/credits.rs) | Codex and Claude: the available count, every known valid expiry, and the earliest expiry. Claude's OAuth grants are display-only ([source and mapping](./adapter_claude.md#oauth-usage-probe)) |
 
 A window's identity is its duration or its scope id. Duration windows sort short to long (`5h`, `7d`) and support reset roll-forward, not-started detection, pace, and surplus; a window with an unknown duration makes each of those claims fail closed. Named provider windows (Copilot's monthly `AIC`, Qwen's Alibaba windows) fuse by scope id, display their real reset, and never roll forward.
 
-Paid usage keeps missing fields missing, so the renderer can show an unknown or uncapped `ex` row without inventing a cap. Disabled or exhausted paid usage does not make a parked turn terminal while a subscription window still has a future reset. Reset credits draw the compact dashboard marker, whose glyph forecasts what [auto-redeem](#auto-redeem) would do and which shows the earliest expiry within a week and never blinks; `rimz providers` lists each deadline.
+Paid usage keeps missing fields missing, so the renderer can show an unknown or uncapped `ex` row without inventing a cap. Disabled or exhausted paid usage does not make a parked turn terminal while a subscription window still has a future reset. Reset credits draw the compact dashboard marker, which shows the earliest expiry within a week and never blinks; for Codex its glyph also forecasts what [auto-redeem](#auto-redeem) would do. `rimz providers` lists the deadlines when credits are banked.
 
 ### Metered and unmetered
 
@@ -130,7 +130,7 @@ The account, rate-limit, and credits caches live under `~/.rimz/cache/providers/
 | --- | --- | --- |
 | `accounts.json` | `logins` | probed `AgentAccount` per login |
 | `rate_limits.json` | `entries` (login) | fused windows, account scope, bound account key and its authoritative copy, pending refills, the unknown-episode marker; schema gated by `RATE_LIMITS_CACHE_VERSION` |
-| `credits.json` | `logins` | paid usage, Codex plan and reset credits, the usage owner identity, and the direct-query claim |
+| `credits.json` | `logins` | paid usage, Codex plan, Codex and Claude reset credits, the usage owner identity, and the direct-query claim |
 
 The elected producer publishes all three; consumers read them and never fork. A publication replaces only the probing room's login keys. A cache in an older or kind-keyed shape cold-drops, because every value is rebuildable.
 
@@ -199,7 +199,7 @@ A panel meets its cached entry under the same rule as [session admission](#which
 
 ### The credits cache and usage identity
 
-`credits.json` has the same login keying and lock discipline as `rate_limits.json`. It persists provider-reported paid usage, plus Codex plan and reset-credit fields, so partial observations survive idle sessions. Reset credits keep every known valid expiry in ascending order, equal deadlines included; the earliest is the compact summary, and the provider count stays authoritative when detail is absent or malformed.
+`credits.json` has the same login keying and lock discipline as `rate_limits.json`. It persists provider-reported paid usage, Codex plan, and Codex and Claude reset-credit fields, so partial observations survive idle sessions. Reset credits keep every known valid expiry in ascending order, equal deadlines included; the earliest is the compact summary, and the provider count stays authoritative when detail is absent or malformed.
 
 Identity keeps the cache honest across account changes. Every [`AccountUsageProbe`](../../../crates/rimz/src/agents/credits.rs) result (found, no credentials, or failed) carries one `AccountUsageIdentity`: the non-secret owner and scope of the credentials read. `AccountUsageSnapshot` holds only the normalized plan, windows, paid credits, and reset credits. Pi and OpenCode select their delegated owner once through [`delegated_account.rs`](../../../crates/rimz/src/agents/delegated_account.rs), preferring an OpenAI account id and otherwise hashing the refresh or access token under an adapter-specific domain.
 
@@ -284,7 +284,7 @@ Each adapter page maps its native surfaces onto these types; this table is the i
 
 | Provider | Account identity → `AgentAccount` | Balance → `AgentRateLimits` / `ExtraCredits` |
 | --- | --- | --- |
-| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered | statusline 5h/7d windows, and the OAuth usage query ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
+| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered | statusline 5h/7d windows, and the OAuth usage query for windows and banked limit resets ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
 | Codex | app-server `planType`, or `$CODEX_HOME/auth.json` | app-server windows and credits, then the OAuth usage query with reset credits ([adapter_codex.md](./adapter_codex.md#account-and-balance)) |
 | Antigravity | statusline, or the running `agy` local service → plan, metered | paired status and quota read on one endpoint → hashed kind-wide owner, authoritative 5h and weekly windows; credits and dollars unknown ([adapter_antigravity.md](./adapter_antigravity.md#account-and-balance)) |
 | Copilot | `$COPILOT_HOME/config.json` non-secret login → metered | internal account query → plan, named monthly `AIC`, `cht`, and `prm` scopes; no paid usage or spend ([adapter_copilot.md](./adapter_copilot.md#account-and-balance)) |

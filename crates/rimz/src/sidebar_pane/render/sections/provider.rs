@@ -829,17 +829,14 @@ pub(in crate::sidebar_pane::render) fn reset_expiry_heat_amount(hours: f64) -> O
     }
 }
 
-/// The Codex reset-credit marker: the glyph and its tone say what auto-redeem
-/// would do if the longest window ran dry now, and the soonest expiry rides
-/// along within a week, heating only while the user has to act.
+/// The banked reset-credit marker: only Codex adds an auto-redeem forecast,
+/// and the soonest expiry rides along within a week, heating only while the
+/// user has to act.
 fn reset_header_spans(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     now: Timestamp,
 ) -> Vec<Span<'static>> {
-    if panel.kind != "codex" {
-        return Vec::new();
-    }
     let Some(reset_credits) = panel.reset_credits.as_ref() else {
         return Vec::new();
     };
