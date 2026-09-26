@@ -335,6 +335,50 @@ fn reset_explicit_rival_refuses_before_teardown() {
     );
 }
 
+#[test]
+fn reset_refuses_an_unbirthable_default_rebirth_before_teardown() {
+    if which::which("zellij").is_err() {
+        eprintln!("zellij not on PATH; skipping rebirth socket preflight test");
+        return;
+    }
+    let Some(room) = TmuxRoom::start() else {
+        return;
+    };
+    std::fs::write(
+        room.env.rimz_home().join("config.toml"),
+        "[mux]\ndefault = \"zellij\"\n",
+    )
+    .expect("write machine config");
+
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let archive_count_before = archive_entry_count(&paths.events_archive_dir);
+    let output = room
+        .rimz()
+        .args(["reset", "--yes"])
+        .env("ZELLIJ_SOCKET_DIR", format!("/tmp/{}", "x".repeat(140)))
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .expect("run reset");
+
+    assert!(
+        !output.status.success(),
+        "reset should refuse the zellij rebirth"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("export ZELLIJ_SOCKET_DIR=/tmp/zellij"),
+        "stderr should carry the socket fix, got: {stderr}",
+    );
+    assert!(
+        room.tmux_sessions().contains(&room.session_name),
+        "refused reset must leave the tmux room live",
+    );
+    assert_eq!(
+        archive_count_before,
+        archive_entry_count(&paths.events_archive_dir),
+        "refused reset must not archive room records",
+    );
+}
+
 struct TmuxRoom {
     env: Env,
     session_name: String,
