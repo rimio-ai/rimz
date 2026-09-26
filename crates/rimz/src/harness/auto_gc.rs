@@ -13,7 +13,17 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::config::GcConfig;
+use crate::disk::lock::WorkspaceLock;
 use crate::{RuntimePaths, StatePaths};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GcScope {
+    Room,
+    // Records written before scopes were introduced describe machine sweeps.
+    #[default]
+    Machine,
+}
 
 pub(crate) fn sweep_runtime_claims(runtime: &RuntimePaths) {
     if let Err(err) = crate::store::gc::collect_runtime_claims(runtime) {
@@ -62,7 +72,7 @@ pub(crate) fn sweep_if_due(
         {
             return Some(swept);
         }
-        *cached_sweep = read_stamp(state_paths);
+        *cached_sweep = read_stamp(&state_paths.auto_gc_stamp);
         *cached_sweep
     };
     if !due(config.auto, last_swept, producer_since, last_spawn, now) {
@@ -116,9 +126,9 @@ fn elapsed(since: Timestamp, span: Duration, now: Timestamp) -> bool {
     now.as_second() - since.as_second() >= span.as_secs() as i64
 }
 
-/// When this workspace last ran an unattended sweep; unreadable reads as never.
-fn read_stamp(paths: &StatePaths) -> Option<Timestamp> {
-    let bytes = std::fs::read(&paths.auto_gc_stamp).ok()?;
+/// When an unattended sweep last ran; unreadable reads as never.
+fn read_stamp(path: &Path) -> Option<Timestamp> {
+    let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice::<Stamp>(&bytes)
         .ok()
         .map(|stamp| stamp.swept_at)
@@ -126,8 +136,43 @@ fn read_stamp(paths: &StatePaths) -> Option<Timestamp> {
 
 /// Record an unattended sweep attempt so the next one waits a full interval.
 pub fn write_stamp(paths: &StatePaths, swept_at: Timestamp) -> Result<()> {
-    crate::disk::atomic::write_temp_then_rename(&paths.auto_gc_stamp, &Stamp { swept_at })
-        .with_context(|| format!("writing {}", paths.auto_gc_stamp.display()))
+    write_stamp_at(&paths.auto_gc_stamp, swept_at)
+}
+
+fn write_stamp_at(path: &Path, swept_at: Timestamp) -> Result<()> {
+    crate::disk::atomic::write_temp_then_rename(path, &Stamp { swept_at })
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+/// Elect one helper for the daily machine sweep; hold the guard through stamping.
+pub fn claim_machine_sweep(now: Timestamp) -> Option<WorkspaceLock> {
+    claim_machine_sweep_with(&crate::disk::paths::machine_auto_gc_stamp(), now, || {
+        match WorkspaceLock::try_acquire(&RuntimePaths::shared().shared_auto_gc_lock()) {
+            Ok(guard) => guard,
+            Err(err) => {
+                tracing::debug!(error = %err, "machine gc election unavailable");
+                None
+            }
+        }
+    })
+}
+
+/// Record a machine sweep attempt, including failed attempts.
+pub fn write_machine_stamp(swept_at: Timestamp) -> Result<()> {
+    write_stamp_at(&crate::disk::paths::machine_auto_gc_stamp(), swept_at)
+}
+
+fn claim_machine_sweep_with(
+    stamp: &Path,
+    now: Timestamp,
+    acquire: impl FnOnce() -> Option<WorkspaceLock>,
+) -> Option<WorkspaceLock> {
+    let due = || read_stamp(stamp).is_none_or(|swept| interval_elapsed(swept, now));
+    if !due() {
+        return None;
+    }
+    let guard = acquire()?;
+    due().then_some(guard)
 }
 
 #[cfg(test)]
@@ -137,6 +182,39 @@ mod tests {
 
     fn at(minutes: i64) -> Timestamp {
         Timestamp::from_second(1_000_000 + minutes * 60).expect("timestamp")
+    }
+
+    #[test]
+    fn machine_claim_obeys_interval_and_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp.json");
+        let lock = dir.path().join("gc.lock");
+        let claim = |now| {
+            claim_machine_sweep_with(&stamp, now, || WorkspaceLock::try_acquire(&lock).unwrap())
+        };
+        let guard = claim(at(0)).expect("absent stamp permits election");
+        assert!(claim(at(0)).is_none(), "another helper holds the lock");
+        drop(guard);
+        crate::disk::atomic::write_temp_then_rename(&stamp, &Stamp { swept_at: at(0) }).unwrap();
+        assert!(claim(at(24 * 60 - 1)).is_none());
+        assert!(claim(at(24 * 60)).is_some());
+    }
+
+    #[test]
+    fn machine_claim_rechecks_stamp_under_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("stamp.json");
+        let lock = dir.path().join("gc.lock");
+        let acquired = std::cell::Cell::new(false);
+        let claim = claim_machine_sweep_with(&stamp, at(0), || {
+            acquired.set(true);
+            crate::disk::atomic::write_temp_then_rename(&stamp, &Stamp { swept_at: at(0) })
+                .unwrap();
+            WorkspaceLock::try_acquire(&lock).unwrap()
+        });
+        assert!(acquired.get(), "first read found no stamp");
+        assert!(claim.is_none(), "another helper stamped before acquisition");
+        assert!(WorkspaceLock::try_acquire(&lock).unwrap().is_some());
     }
 
     #[test]
@@ -204,12 +282,12 @@ mod tests {
         )
         .expect("paths");
         std::fs::create_dir_all(&paths.root).expect("workspace dir");
-        assert_eq!(read_stamp(&paths), None);
+        assert_eq!(read_stamp(&paths.auto_gc_stamp), None);
 
         write_stamp(&paths, at(3)).expect("write stamp");
-        assert_eq!(read_stamp(&paths), Some(at(3)));
+        assert_eq!(read_stamp(&paths.auto_gc_stamp), Some(at(3)));
 
         std::fs::write(&paths.auto_gc_stamp, b"not json").expect("corrupt stamp");
-        assert_eq!(read_stamp(&paths), None);
+        assert_eq!(read_stamp(&paths.auto_gc_stamp), None);
     }
 }

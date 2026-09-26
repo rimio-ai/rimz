@@ -956,6 +956,10 @@ impl RuntimePaths {
         self.shared_root.join("accounts.lock")
     }
 
+    pub(crate) fn shared_auto_gc_lock(&self) -> PathBuf {
+        self.shared_root.join("auto-gc.lock")
+    }
+
     pub fn shared_rate_limits_path(&self) -> PathBuf {
         self.persistent_shared_root.join("rate_limits.json")
     }
@@ -1298,6 +1302,10 @@ pub fn builds_dir() -> PathBuf {
 /// [`providers_cache_dir`]. Safe to delete at any time.
 pub fn cache_dir() -> PathBuf {
     rimz_home().join("cache")
+}
+
+pub(crate) fn machine_auto_gc_stamp() -> PathBuf {
+    cache_dir().join("auto-gc.json")
 }
 
 /// Handoff notes; the name is reserved here and owned by the skills that write it.

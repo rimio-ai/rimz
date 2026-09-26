@@ -360,15 +360,20 @@ impl TaskCatalog {
         let catalog = Self::load_lenient(None);
         let mut reaped = catalog.reap_catalog_deliveries()?;
         for root in workspace_instance_roots() {
-            let catalog = Self::from_layers(
-                instances::load_from(&instance_root(&root)?),
-                Tasks::default(),
-                None,
-                Some(&root),
-            );
-            reaped += catalog.reap_catalog_deliveries()?;
+            reaped += Self::reap_dead_deliveries_for(&root)?;
         }
         Ok(reaped)
+    }
+
+    /// Reap this room's instance rows without loading machine or project tasks.
+    pub fn reap_dead_deliveries_for(project_root: &Path) -> Result<usize> {
+        Self::from_layers(
+            instances::load_from(&instance_root(project_root)?),
+            Tasks::default(),
+            None,
+            Some(project_root),
+        )
+        .reap_catalog_deliveries()
     }
 
     fn reap_catalog_deliveries(&self) -> Result<usize> {
@@ -522,6 +527,37 @@ pub(super) fn delivery_target_alive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_reaping_preserves_other_rooms() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_a = dir.path().join("a");
+        let root_b = dir.path().join("b");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+        let paths_a = StatePaths::for_project_root(&root_a).unwrap();
+        let paths_b = StatePaths::for_project_root(&root_b).unwrap();
+        for (root, paths) in [(&root_a, &paths_a), (&root_b, &paths_b)] {
+            instances::insert(
+                paths,
+                "actionless",
+                &TaskEntry {
+                    root: root.clone(),
+                    signal: Some("ci.failed".into()),
+                    ..TaskEntry::default()
+                },
+            )
+            .unwrap();
+        }
+        let before_b = std::fs::read(instances::path(&paths_b.root)).unwrap();
+        assert_eq!(TaskCatalog::reap_dead_deliveries_for(&root_a).unwrap(), 1);
+        assert!(instances::load_from(&paths_a.root).0.is_empty());
+        assert_eq!(
+            std::fs::read(instances::path(&paths_b.root)).unwrap(),
+            before_b
+        );
+        assert_eq!(TaskCatalog::reap_dead_deliveries_for(&root_a).unwrap(), 0);
+    }
 
     fn task(prompt: &str) -> TaskEntry {
         TaskEntry {

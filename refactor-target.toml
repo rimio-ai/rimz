@@ -251,7 +251,8 @@ allowed-dependencies = [
 # File-backed lock guards share blocking and immediate inode-checked acquisition.
 # Root-only readers share history probes and the remaining room retention policy.
 # Explicit state pairing and runtime-only preparation keep lock identity independent of runtime roots.
-surface-budget = 201
+# Daily machine GC shares its stamp and election-lock paths with the harness.
+surface-budget = 203
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -292,7 +293,9 @@ upward-dependencies = ["sidebar::refresh"]
 # IdleWindow carries the cache-expiry bound through that shared decision.
 # Deadline rungs, channel policy and locked claims serve the CLI and producer.
 # Locked board records expose their section, request, receipt, and typed errors to the CLI.
-surface-budget = 561
+# Room GC reaps only its instance rows; unattended GC elects and stamps machine sweeps.
+# GC scope is shared by the helper, durable assists, and stats projection.
+surface-budget = 565
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
