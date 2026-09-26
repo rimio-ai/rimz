@@ -168,6 +168,65 @@ fn checkout<'a>(cwd: &Path, entries: &'a [registry::Entry]) -> Option<&'a Path> 
         .map(|entry| entry.root.as_path())
 }
 
+fn list_table(
+    entries: &[registry::Entry],
+    now_ms: u64,
+    memory: impl Fn(u32) -> (u64, u64),
+) -> render::Table {
+    use render::status::{self, StateRole};
+    let rank = |state| match status::lsp(state) {
+        StateRole::Success | StateRole::Working => 0,
+        StateRole::Failed | StateRole::Waiting | StateRole::Paused | StateRole::Unavailable => 1,
+        StateRole::Neutral => 2,
+    };
+    let mut entries: Vec<_> = entries.iter().collect();
+    entries.sort_by_key(|entry| (rank(&entry.state), &entry.root, &entry.server));
+    let mut table = render::Table::new([
+        "STATE", "CHECKOUT", "SERVER", "RSS", "PEAK", "REQUESTS", "LAST", "RESTARTS", "LEASES",
+    ])
+    .right(&[3, 4, 5, 6, 7, 8]);
+    for entry in entries {
+        let running = matches!(
+            entry.state,
+            State::Starting | State::Indexing | State::Ready
+        );
+        let (glyph, style) = render::verdict(status::lsp(&entry.state));
+        let (rss, peak) = if running {
+            let (rss_kb, peak_kb) = entry.server_pid.map_or((0, 0), &memory);
+            (
+                render::cell(rimz::utils::size::decimal_bytes(
+                    rss_kb.saturating_mul(1024),
+                )),
+                render::cell(rimz::utils::size::decimal_bytes(
+                    entry.peak_rss_kb.max(peak_kb).saturating_mul(1024),
+                )),
+            )
+        } else {
+            (render::cell("-").dash(), render::cell("-").dash())
+        };
+        table.row([
+            render::cell(format!("{glyph} {}", render::lsp_state_label(&entry.state))).fg(style),
+            render::cell(render::home_relative_path(&entry.root)),
+            render::cell(&entry.server),
+            rss,
+            peak,
+            render::cell(entry.request_count.to_string()),
+            entry.last_request_at_ms.map_or_else(
+                || render::cell("-").dash(),
+                |at| {
+                    render::cell(format!(
+                        "{} ago",
+                        render::age_label(now_ms.saturating_sub(at) / 1000)
+                    ))
+                },
+            ),
+            render::cell(entry.restarts.to_string()),
+            render::cell(entry.leases.len().to_string()),
+        ]);
+    }
+    table
+}
+
 fn list(json: bool) -> Result<()> {
     let entries = {
         let _lock = registry::lock()?;
@@ -178,60 +237,13 @@ fn list(json: bool) -> Result<()> {
         writeln!(out, "{}", serde_json::to_string_pretty(&entries)?)?;
         return Ok(());
     }
-    let mut table = render::Table::new([
-        "CHECKOUT", "SERVER", "STATE", "RSS", "PEAK", "REQUESTS", "LAST", "RESTARTS", "LEASES",
-    ]);
-    for entry in entries {
-        let running = matches!(
-            entry.state,
-            State::Starting | State::Indexing | State::Ready
-        );
-        let state = match &entry.state {
-            State::Starting => "starting".into(),
-            State::Indexing => "indexing".into(),
-            State::Ready => "ready".into(),
-            State::Dormant { reason, .. } => {
-                reason.map_or_else(|| "dormant".into(), |reason| format!("dormant: {reason}"))
-            }
-            State::Stopped { reason, .. } => format!("stopped: {reason}"),
-        };
-        table.row(
-            [
-                entry.root.display().to_string(),
-                entry.server,
-                state,
-                rimz::utils::size::decimal_bytes(
-                    entry
-                        .server_pid
-                        .filter(|_| running)
-                        .and_then(rimz::proc::tree_totals)
-                        .map_or(0, |totals| totals.rss_kb.saturating_mul(1024)),
-                ),
-                rimz::utils::size::decimal_bytes(if running {
-                    entry
-                        .peak_rss_kb
-                        .max(entry.server_pid.map_or(0, rimz::lsp::memory::tree_peak_kb))
-                        .saturating_mul(1024)
-                } else {
-                    0
-                }),
-                entry.request_count.to_string(),
-                entry.last_request_at_ms.map_or_else(
-                    || "—".into(),
-                    |at| {
-                        format!(
-                            "{}s ago",
-                            rimz::utils::time::unix_now_ms().saturating_sub(at) / 1000
-                        )
-                    },
-                ),
-                entry.restarts.to_string(),
-                entry.leases.len().to_string(),
-            ]
-            .map(render::cell),
-        );
-    }
-    table.render(&mut out)?;
+    list_table(&entries, rimz::utils::time::unix_now_ms(), |pid| {
+        (
+            rimz::proc::tree_totals(pid).map_or(0, |totals| totals.rss_kb),
+            rimz::lsp::memory::tree_peak_kb(pid),
+        )
+    })
+    .render(&mut out)?;
     Ok(())
 }
 
@@ -291,4 +303,115 @@ fn stop(
     }
     anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use registry::StopReason;
+    use render::status::{self, StateRole};
+
+    #[test]
+    fn list_table_orders_and_styles_server_states() {
+        let entry = |root: &str, server: &str, state| registry::Entry {
+            root: root.into(),
+            project: None,
+            server: server.into(),
+            nonce: String::new(),
+            broker_pid: 1,
+            broker_start_token: String::new(),
+            server_pid: Some(2),
+            server_start_token: None,
+            state,
+            started_at_ms: 0,
+            ready_at_ms: None,
+            estimate_bytes: 0,
+            settings_hash: String::new(),
+            request_count: 3,
+            last_request_at_ms: None,
+            peak_rss_kb: 4,
+            restarts: 2,
+            leases: vec![],
+        };
+        let mut ready = entry("/z", "rust", State::Ready);
+        ready.last_request_at_ms = Some(11_000);
+        let entries = vec![
+            entry(
+                "/b",
+                "rust",
+                State::Dormant {
+                    since_ms: 0,
+                    reason: None,
+                },
+            ),
+            entry(
+                "/a",
+                "z",
+                State::Dormant {
+                    since_ms: 0,
+                    reason: Some(StopReason::Idle),
+                },
+            ),
+            entry(
+                "/c",
+                "rust",
+                State::Dormant {
+                    since_ms: 0,
+                    reason: Some(StopReason::Crashed),
+                },
+            ),
+            ready,
+            entry(
+                "/a",
+                "a",
+                State::Dormant {
+                    since_ms: 0,
+                    reason: None,
+                },
+            ),
+        ];
+        let table = list_table(&entries, 56_000, |pid| {
+            assert_eq!(pid, 2);
+            (2, 8)
+        });
+        let mut stripped = anstream::StripStream::new(Vec::new());
+        table.render(&mut stripped).unwrap();
+        let text = String::from_utf8(stripped.into_inner()).unwrap();
+        let rows: Vec<Vec<&str>> = text
+            .lines()
+            .map(|line| line.split_whitespace().collect())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                vec![
+                    "STATE", "CHECKOUT", "SERVER", "RSS", "PEAK", "REQUESTS", "LAST", "RESTARTS",
+                    "LEASES"
+                ],
+                vec![
+                    "✓", "ready", "/z", "rust", "2", "KB", "8.2", "KB", "3", "45s", "ago", "2", "0"
+                ],
+                vec![
+                    "✗", "dormant:", "crashed", "/c", "rust", "-", "-", "3", "-", "2", "0"
+                ],
+                vec![
+                    "·", "not", "started", "/a", "a", "-", "-", "3", "-", "2", "0"
+                ],
+                vec![
+                    "·", "dormant:", "idle", "/a", "z", "-", "-", "3", "-", "2", "0"
+                ],
+                vec![
+                    "·", "not", "started", "/b", "rust", "-", "-", "3", "-", "2", "0"
+                ],
+            ]
+        );
+        let mut raw = Vec::new();
+        table.render(&mut raw).unwrap();
+        let raw = String::from_utf8(raw).unwrap();
+        assert!(raw.contains(&render::paint(status::role(StateRole::Success), "✓ ready")));
+        assert!(raw.contains(&render::paint(
+            status::role(StateRole::Failed),
+            "✗ dormant: crashed"
+        )));
+    }
 }

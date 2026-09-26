@@ -73,7 +73,7 @@ The server answers from the disk, kept current by watching saved files, not from
 
 ## See what is running, and stop it
 
-`rimz lsp list` shows every shared server on the machine, whichever room registered it: its checkout, name, state (`dormant`, `starting`, `indexing`, `ready`, or briefly `stopped` during shutdown), current and peak memory for running servers, query count and time since the last query, restarts, and leases. Dormant entries name the stop reason when there is one. `rimz doctor` shows shared-server status under `LSP`, plus the last memory refusal, so when an agent says it is on grep you can see why in one place.
+`rimz lsp list` shows every shared server on the machine, whichever room registered it: its state (`not started`, `starting`, `indexing`, `ready`, `dormant: <reason>`, or briefly `stopped` during shutdown), checkout, name, current and peak memory for running servers, query count and time since the last query, restarts, and leases. Alive rows sort first, and a crash stands out with a failure glyph and tone. RSS and PEAK show `-` when not running. `not started` means the server has never run; other dormant entries name the stop reason. `rimz doctor` shows shared-server status under `LSP`, plus the last memory refusal, so when an agent says it is on grep you can see why in one place.
 
 A server can free its memory while agents remain:
 
