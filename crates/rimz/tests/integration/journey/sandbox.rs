@@ -49,7 +49,7 @@ fn tmux_sandbox_subagent_skills_are_judged_from_host_truth() {
         body.push_str(
             r#"set -eu
 test "$TMPDIR" = /tmp
-case "$*" in *'This pane runs in a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
+case "$*" in *'### Files'*'This pane runs in a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
 skill="$HOME/.claude/skills/librarian/SKILL.md"
 case "$*" in
     *sandbox-librarian-task*)
@@ -224,7 +224,7 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
         r#"set -eu
 test "$TMPDIR" = /tmp
 test -d /tmp/scratchpad
-case "$*" in *'This pane runs in a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
+case "$*" in *'### Files'*'This pane runs in a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
 test ! -e "$RIMZ_TEST_HOST_TMP_FILE"
 grep -q 'disable-model-invocation: true' "$HOME/.claude/skills/hidden/SKILL.md"
 grep -qx visible "$HOME/.claude/skills/visible/SKILL.md"

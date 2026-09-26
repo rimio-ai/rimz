@@ -103,18 +103,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
     match crate::lsp::registry::live_server_names(inputs.cwd) {
-        Ok(servers) => {
-            reminders.lsp_servers = servers
-                .into_iter()
-                .map(|name| {
-                    inputs
-                        .effective
-                        .and_then(|effective| effective.lsp_servers.get(&name))
-                        .and_then(|config| config.command.first())
-                        .map_or_else(|| name.clone(), |program| format!("{name} ({program})"))
-                })
-                .collect()
-        }
+        Ok(servers) => reminders.lsp_servers = servers,
         Err(error) => tracing::debug!(%error, "language-server launch reminder unavailable"),
     }
     reminders.sandbox = inputs.bwrap.is_some();

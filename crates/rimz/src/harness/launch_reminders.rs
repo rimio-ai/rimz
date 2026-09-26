@@ -39,24 +39,22 @@ impl Default for LaunchReminders {
 }
 
 const SANDBOX_REMINDER_BODY: &str = concat!(
-    "This pane runs in a bubblewrap sandbox. `/tmp` is the room's, separate from the host's ",
-    "`/tmp`, removed when the room closes; the host state path stays reachable. Every ",
-    "temporary file you make goes under `/tmp/scratchpad`, which is yours alone: every other ",
-    "agent and subagent has its own. A file another agent must read goes under `/tmp/shared`, ",
-    "in a subdirectory you name for the task. If your harness names a session-specific ",
-    "scratchpad and says to use `/tmp` only when asked, this is that ask: use ",
-    "`/tmp/scratchpad` in its place."
+    "### Files\n\n",
+    "This pane runs in a bubblewrap sandbox. Its `/tmp` belongs to the room: separate from the host's, removed when the room closes. The host state path stays reachable.\n\n",
+    "- `/tmp/scratchpad/`: every temporary file you make. Private to you; every agent and subagent has its own.\n",
+    "- `/tmp/shared/<task>/`: files another agent must read, in a subdirectory you name for the task.\n\n",
+    "If your harness names its own scratchpad and allows `/tmp` only when asked, this is that ask: use `/tmp/scratchpad/` instead."
 );
 
 const HOST_SCRATCH_REMINDER_BODY: &str = concat!(
-    "Your scratch directory is `$RIMZ_SCRATCH`, private to you and removed when the room ",
-    "closes; every temporary file you make goes there, and every other agent and subagent has ",
-    "its own. A file another agent must read goes under `$RIMZ_SHARED`, in a subdirectory you ",
-    "name for the task. If your harness names a session-specific scratchpad and says to use ",
-    "another location only when asked, this is that ask: use `$RIMZ_SCRATCH` in its place."
+    "### Files\n\n",
+    "- `$RIMZ_SCRATCH`: every temporary file you make. Private to you, removed when the room closes; every agent and subagent has its own.\n",
+    "- `$RIMZ_SHARED/<task>/`: files another agent must read, in a subdirectory you name for the task.\n\n",
+    "If your harness names its own scratchpad and allows another location only when asked, this is that ask: use `$RIMZ_SCRATCH` instead."
 );
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(
+    "### Subagents\n\n",
     "You are a subagent: a supervised child launched by another agent to ",
     "complete the task you were given. The task is scoped to this one run, so do the work ",
     "yourself rather than launching with Skill(rimz-agents, rimz-subagents, rimz-teams); ",
@@ -92,8 +90,12 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     } else if let Some(model) = reminders.model.then(|| model_fragment(params)).flatten() {
         paragraphs.push(model_line(params, &model));
     }
-    if let Some(env) = &reminders.env {
-        paragraphs.push(env_paragraph(env, cwd));
+    if reminders.env.is_some() || !reminders.lsp_servers.is_empty() {
+        paragraphs.push(env_paragraph(
+            reminders.env.as_ref(),
+            cwd,
+            &reminders.lsp_servers,
+        ));
     }
     paragraphs.push(if reminders.sandbox {
         SANDBOX_REMINDER_BODY.to_owned()
@@ -105,32 +107,42 @@ pub(super) fn render(request: &ExecRequest, reminders: &LaunchReminders, cwd: &P
     } else if let Some(catalog) = reminders.subagent_catalog.as_ref() {
         paragraphs.push(subagent_policy::reminder(catalog));
     }
-    if !reminders.lsp_servers.is_empty() {
-        paragraphs.push(format!(
-            "Language servers {} are shared read-only with every agent in this checkout. A server starts on the first query; the first answer may take its startup time. Navigate and explore code through Skill(rimz-lsp).",
-            reminders.lsp_servers.iter().map(|server| escape_reminder_text(server)).collect::<Vec<_>>().join(", ")
-        ));
-    }
     wrap(&paragraphs.join("\n\n"))
 }
 
-fn env_paragraph(env: &LaunchEnv, cwd: &Path) -> String {
-    let cwd = escape_reminder_text(&cwd.to_string_lossy());
-    let environment = match &env.shell {
-        Some(shell) => format!(
-            "Launch environment: cwd {cwd}; shell {} (your user shell, resolved from $SHELL or else the passwd entry).",
-            escape_reminder_text(&shell.to_string_lossy())
-        ),
-        None => format!("Launch environment: cwd {cwd}."),
+fn env_paragraph(env: Option<&LaunchEnv>, cwd: &Path, lsp_servers: &[String]) -> String {
+    let mut lines = vec!["### Environment\n".to_owned()];
+    if let Some(env) = env {
+        lines.push(format!(
+            "- cwd: {}",
+            escape_reminder_text(&cwd.to_string_lossy())
+        ));
+        if let Some(shell) = &env.shell {
+            lines.push(format!(
+                "- shell: {}",
+                escape_reminder_text(&shell.to_string_lossy())
+            ));
+        }
+    }
+    if !lsp_servers.is_empty() {
+        lines.push(format!(
+            "- lsp: {}, via Skill(rimz-lsp)",
+            lsp_servers
+                .iter()
+                .map(|server| escape_reminder_text(server))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let Some(git) = env.and_then(|env| env.git.as_ref()) else {
+        return lines.join("\n");
     };
-    let Some(git) = &env.git else {
-        return environment;
-    };
-    let mut lines = vec![
-        environment,
-        "RimZ ran these in the cwd at launch; read the output as if you had run them:".to_owned(),
-        "$ git status --short".to_owned(),
-    ];
+    lines.push(
+        "\nGit state at launch, run by RimZ in the cwd; treat it as output you ran yourself:\n"
+            .to_owned(),
+    );
+    lines.push("```".to_owned());
+    lines.push("$ git status --short".to_owned());
     if git.status.is_empty() {
         lines.push("(clean)".to_owned());
     } else {
@@ -146,6 +158,7 @@ fn env_paragraph(env: &LaunchEnv, cwd: &Path) -> String {
     lines.extend(git.head.lines().map(escape_reminder_text));
     lines.push("$ git log -1 --oneline".to_owned());
     lines.extend(git.log.lines().map(escape_reminder_text));
+    lines.push("```".to_owned());
     lines.join("\n")
 }
 
@@ -174,25 +187,22 @@ mod tests {
     use crate::config::{ProfilesConfig, Team};
 
     #[test]
-    fn shared_lsp_reminder_follows_policy_for_peers_and_children() {
+    fn shared_lsp_reminder_is_in_environment_for_peers_and_children() {
         let mut request =
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
         let reminders = LaunchReminders {
             lsp_configured: true,
-            lsp_servers: vec![
-                "rust (rust-analyzer)".to_owned(),
-                "python (pyright)".to_owned(),
-            ],
+            lsp_servers: vec!["rust".to_owned(), "python".to_owned()],
             ..LaunchReminders::default()
         };
         for subagent in [false, true] {
             request.subagent = subagent;
             let text = render(&request, &reminders, Path::new("/checkout"));
-            assert!(text.contains("rust (rust-analyzer)"));
-            assert!(text.contains("python (pyright)"));
-            assert!(text.contains("Skill(rimz-lsp)"));
+            assert!(text.contains(
+                "### Environment\n\n- lsp: rust, python, via Skill(rimz-lsp)\n\n### Files"
+            ));
             if subagent {
-                assert!(text.find(SUBAGENT_REMINDER_BODY) < text.find("Skill(rimz-lsp)"));
+                assert!(text.contains(SUBAGENT_REMINDER_BODY));
             }
             assert!(
                 !render(
@@ -200,13 +210,83 @@ mod tests {
                     &LaunchReminders::default(),
                     Path::new("/checkout")
                 )
-                .contains("Skill(rimz-lsp)")
+                .contains("### Environment")
             );
         }
     }
 
     fn team_reminder(team: Team) -> TeamReminder {
         TeamReminder::new(team, &ProfilesConfig::default())
+    }
+
+    #[test]
+    fn sandbox_full_catalog_rendering() {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        request.identity.params.role = Some("brainstormer".to_owned());
+        request.identity.params.model = Some("opus".to_owned());
+        let reminders = LaunchReminders {
+            sandbox: true,
+            env: Some(LaunchEnv {
+                shell: Some("/usr/bin/zsh".into()),
+                git: Some(super::super::launch_env::GitState {
+                    status: String::new(),
+                    head: "0505aa42f".to_owned(),
+                    log: "0505aa42f docs(teams): run the flip alone after every file write returns"
+                        .to_owned(),
+                }),
+            }),
+            lsp_servers: vec!["rust".to_owned(), "python".to_owned()],
+            subagent_catalog: Some(SubagentCatalog::Available(vec![
+                subagent_policy::SubagentProfile {
+                    name: "explorer".to_owned(),
+                    source: subagent_policy::SubagentProfileSource::Profile,
+                    agent: None,
+                    model: None,
+                    effort: None,
+                    description: Some("Finds files and traces code paths".to_owned()),
+                },
+            ])),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&request, &reminders, Path::new("/checkout")),
+            r#"<system_reminder>
+You are @brainstormer, running on Opus.
+
+### Environment
+
+- cwd: /checkout
+- shell: /usr/bin/zsh
+- lsp: rust, python, via Skill(rimz-lsp)
+
+Git state at launch, run by RimZ in the cwd; treat it as output you ran yourself:
+
+```
+$ git status --short
+(clean)
+$ git rev-parse --short HEAD
+0505aa42f
+$ git log -1 --oneline
+0505aa42f docs(teams): run the flip alone after every file write returns
+```
+
+### Files
+
+This pane runs in a bubblewrap sandbox. Its `/tmp` belongs to the room: separate from the host's, removed when the room closes. The host state path stays reachable.
+
+- `/tmp/scratchpad/`: every temporary file you make. Private to you; every agent and subagent has its own.
+- `/tmp/shared/<task>/`: files another agent must read, in a subdirectory you name for the task.
+
+If your harness names its own scratchpad and allows `/tmp` only when asked, this is that ask: use `/tmp/scratchpad/` instead.
+
+### Subagents
+
+Launch them through Skill(rimz-subagents), which also explains how their results come back.
+
+- `explorer`: Finds files and traces code paths
+</system_reminder>"#
+        );
     }
 
     #[test]
@@ -231,7 +311,7 @@ mod tests {
             assert_eq!(text.matches("?? a&lt;b&gt;&amp;c.md").count(), 40);
             assert_eq!(text.contains("… 3 more"), count > 40);
             assert!(text.contains("/repo/&lt;/system_reminder&gt;&amp;"));
-            assert!(text.contains("shell /shell/&lt;&gt;&amp;"));
+            assert!(text.contains("- shell: /shell/&lt;&gt;&amp;"));
             assert!(text.contains("$ git rev-parse --short HEAD\nabc123&lt;&gt;&amp;\n$ git log -1 --oneline\nabc123 &lt;base&gt;&amp;"));
             assert_eq!(text.matches("</system_reminder>").count(), 1);
         }
@@ -243,10 +323,15 @@ mod tests {
             shell: Some("/usr/bin/zsh".into()),
             git: None,
         };
-        assert_eq!(
-            env_paragraph(&env, Path::new("/checkout")),
-            "Launch environment: cwd /checkout; shell /usr/bin/zsh (your user shell, resolved from $SHELL or else the passwd entry)."
-        );
+        let request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        let reminders = LaunchReminders {
+            env: Some(env),
+            ..Default::default()
+        };
+        let text = render(&request, &reminders, Path::new("/checkout"));
+        assert!(text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /checkout\n- shell: /usr/bin/zsh\n\n### Files"));
+        assert!(!text.contains("git"));
     }
 
     #[test]
@@ -255,8 +340,16 @@ mod tests {
             shell: None,
             git: None,
         };
-        let text = env_paragraph(&env, Path::new("/checkout"));
-        assert_eq!(text, "Launch environment: cwd /checkout.");
+        let request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        let reminders = LaunchReminders {
+            env: Some(env),
+            ..Default::default()
+        };
+        let text = render(&request, &reminders, Path::new("/checkout"));
+        assert!(
+            text.starts_with("<system_reminder>\n### Environment\n\n- cwd: /checkout\n\n### Files")
+        );
         assert!(!text.contains("shell"));
     }
 
@@ -291,7 +384,12 @@ mod tests {
             ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
         assert_eq!(
             render(&request, &LaunchReminders::default(), cwd),
-            wrap(HOST_SCRATCH_REMINDER_BODY)
+            wrap(concat!(
+                "### Files\n\n",
+                "- `$RIMZ_SCRATCH`: every temporary file you make. Private to you, removed when the room closes; every agent and subagent has its own.\n",
+                "- `$RIMZ_SHARED/<task>/`: files another agent must read, in a subdirectory you name for the task.\n\n",
+                "If your harness names its own scratchpad and allows another location only when asked, this is that ask: use `$RIMZ_SCRATCH` instead."
+            ))
         );
         request.identity.params = LaunchParams {
             team: Some("forge".to_owned()),
@@ -328,9 +426,7 @@ mod tests {
                 let git = text
                     .find("$ git status --short\n(clean)")
                     .expect("git paragraph");
-                let env = text
-                    .find("Launch environment:")
-                    .expect("environment paragraph");
+                let env = text.find("### Environment").expect("environment paragraph");
                 assert!(model < env && env < git);
                 assert!(
                     git < text

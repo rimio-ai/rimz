@@ -65,8 +65,8 @@ pub fn catalog(
 
 pub(super) fn reminder(catalog: &SubagentCatalog) -> String {
     match catalog {
-        SubagentCatalog::Disabled => "Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.".to_owned(),
-        SubagentCatalog::Available(specs) if specs.is_empty() => "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `subagents/<name>.md` definitions.".to_owned(),
+        SubagentCatalog::Disabled => "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.".to_owned(),
+        SubagentCatalog::Available(specs) if specs.is_empty() => "### Subagents\n\nNo subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `subagents/<name>.md` definitions.".to_owned(),
         SubagentCatalog::Available(specs) => {
             let list = specs
                 .iter()
@@ -75,7 +75,7 @@ pub(super) fn reminder(catalog: &SubagentCatalog) -> String {
                 .join("\n");
             // The skill owns the how (batching, the settle digest, joins); this only says what.
             format!(
-                "Subagents: launch them through Skill(rimz-subagents), which also says how their results come back. Profiles you may launch:\n{list}"
+                "### Subagents\n\nLaunch them through Skill(rimz-subagents), which also explains how their results come back.\n\n{list}"
             )
         }
     }
@@ -285,17 +285,17 @@ mod tests {
         let text = reminder(&available);
         assert_eq!(
             text,
-            "Subagents: launch them through Skill(rimz-subagents), which also says how their results come back. Profiles you may launch:\n\
+            "### Subagents\n\nLaunch them through Skill(rimz-subagents), which also explains how their results come back.\n\n\
              - `explorer`: Finds files and traces code paths\n\
              - `lint`"
         );
         assert_eq!(
             reminder(&SubagentCatalog::Disabled),
-            "Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools."
+            "### Subagents\n\nSubagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools."
         );
         assert_eq!(
             reminder(&SubagentCatalog::Available(Vec::new())),
-            "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `subagents/<name>.md` definitions."
+            "### Subagents\n\nNo subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `subagents/<name>.md` definitions."
         );
     }
 }
