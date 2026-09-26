@@ -85,7 +85,7 @@ impl Target {
                 }) => {
                     if Instant::now() >= deadline {
                         return Ok(admission::Admitted {
-                            startup_refused: vec![reason.to_string()],
+                            startup_refused: vec![format!("{self} is stopped: {reason}")],
                             ..Default::default()
                         });
                     }
@@ -117,6 +117,7 @@ impl Target {
 
 pub enum Outcome {
     EditorClosed,
+    EditorFailed(String),
     BrokerClosed(String),
     Refused(String),
 }
@@ -175,38 +176,56 @@ pub fn bridge(
     let editor_exit = exit_forwarded.clone();
     let mut writer = stream.try_clone()?;
     let editor_done = send.clone();
+    let (root, server) = (entry.root.clone(), entry.server.clone());
     std::thread::Builder::new()
         .name("lsp-editor-input".into())
         .spawn(move || {
             let mut input = BufReader::new(input);
-            let outcome = (|| -> Result<Outcome> {
-                while !input.fill_buf()?.is_empty() {
-                    let frame = protocol::read_frame(&mut input)?;
-                    if frame["method"] == "exit" {
-                        // Serialize the completed write with the output pump's close decision.
-                        let mut forwarded = editor_exit.lock().unwrap_or_else(|e| e.into_inner());
-                        protocol::write_frame(&mut writer, &frame)?;
-                        *forwarded = true;
-                        return Ok(Outcome::EditorClosed);
-                    }
-                    protocol::write_frame(&mut writer, &frame)?;
+            let outcome = loop {
+                let frame = match input.fill_buf() {
+                    Ok([]) => break Outcome::EditorClosed,
+                    Ok(_) => match protocol::read_frame(&mut input) {
+                        Ok(frame) => frame,
+                        Err(error) => break Outcome::EditorFailed(error.to_string()),
+                    },
+                    Err(error) => break Outcome::EditorFailed(error.to_string()),
+                };
+                let exit = frame["method"] == "exit";
+                // Serialize the completed exit write with the output pump's close decision.
+                let mut forwarded = editor_exit.lock().unwrap_or_else(|e| e.into_inner());
+                if let Err(error) = protocol::write_frame(&mut writer, &frame) {
+                    break Outcome::BrokerClosed(error.to_string());
                 }
-                Ok(Outcome::EditorClosed)
-            })()
-            .unwrap_or_else(|error| Outcome::BrokerClosed(error.to_string()));
+                if exit {
+                    *forwarded = true;
+                    break Outcome::EditorClosed;
+                }
+            };
             let _ = editor_done.send(outcome);
         })?;
     std::thread::Builder::new()
         .name("lsp-editor-output".into())
         .spawn(move || {
-            let reason = match io::copy(&mut reader, &mut Flushed(output)) {
-                Ok(_) => "closed".into(),
-                Err(error) => error.to_string(),
+            let mut output = output;
+            let mut buffer = [0; 64 * 1024];
+            let closed = loop {
+                let count = match reader.read(&mut buffer) {
+                    Ok(0) => break Outcome::BrokerClosed(closed_reason(&root, &server)),
+                    Ok(count) => count,
+                    Err(error) => break Outcome::BrokerClosed(error.to_string()),
+                };
+                // Stdout is line-buffered, but a JSON body need not end with a newline.
+                if let Err(error) = output
+                    .write_all(&buffer[..count])
+                    .and_then(|()| output.flush())
+                {
+                    break Outcome::EditorFailed(error.to_string());
+                }
             };
             let outcome = if *exit_forwarded.lock().unwrap_or_else(|e| e.into_inner()) {
                 Outcome::EditorClosed
             } else {
-                Outcome::BrokerClosed(reason)
+                closed
             };
             let _ = send.send(outcome);
         })?;
@@ -217,19 +236,18 @@ pub fn bridge(
     Ok(outcome)
 }
 
-// Stdout is line-buffered, but a JSON body need not end with a newline.
-struct Flushed<W>(W);
-
-impl<W: Write> Write for Flushed<W> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let count = self.0.write(bytes)?;
-        self.0.flush()?;
-        Ok(count)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.flush()
-    }
+/// A terminal stop publishes its reason before the broker closes editor connections.
+fn closed_reason(root: &Path, server: &str) -> String {
+    registry::read_entries()
+        .ok()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry.root == root && entry.server == server)
+        .and_then(|entry| match entry.state {
+            registry::State::Stopped { reason, .. } => Some(format!("stopped: {reason}")),
+            _ => None,
+        })
+        .unwrap_or_else(|| "closed".into())
 }
 
 fn editor_root(root: Option<&Path>, first: &Value, cwd: &Path) -> Result<PathBuf> {

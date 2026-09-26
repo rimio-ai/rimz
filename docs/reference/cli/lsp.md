@@ -82,7 +82,7 @@ The global `--root` takes precedence over the editor's `initialize.rootUri`, the
 
 Attachment joins an existing broker or admits a new one using the configured trust, executable, and memory checks. Creating a required server can wait up to `wait-timeout`, printing queue position and remaining time to stderr every five seconds. A stopped entry is retried for five seconds before refusal. An optional server's memory refusal happens inside the LSP session, as failed requests and an editor message, not as a launch-time exit 3.
 
-Editor EOF exits 0. Broker refusal (including an older broker without attachment support), connection failure, or the broker closing first exits 3 with `language server <name> for <root> is <reason>` on stderr. A required-admission queue timeout also exits 3, with the queue-timeout diagnostic. Disconnecting releases the editor's lease; it does not stop a server still leased by other clients. See [editor setup](../../guide/lsp.md#use-it-from-your-editor) for supported Rust configurations.
+Editor EOF exits 0. Broker refusal (including an older broker without attachment support), connection failure, or the broker closing first exits 3 with `language server <name> for <root> is <reason>` on stderr; after a terminal stop the reason is `stopped: <stop reason>`, such as `stopped: checkout removed`. A server that did not start, or a required-admission queue timeout, also exits 3, with the admission diagnostic as written. A read error or malformed frame on the editor's side exits 1 with `editor stream failed: <error>`. Disconnecting releases the editor's lease; it does not stop a server still leased by other clients. See [editor setup](../../guide/lsp.md#use-it-from-your-editor) for supported Rust configurations.
 
 ## Shim
 
