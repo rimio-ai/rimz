@@ -6,31 +6,44 @@ use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 #[test]
-fn git_reminder_overlay_requires_trust_and_wins_in_both_directions() {
+fn env_reminder_overlay_requires_trust_and_wins_in_both_directions() {
     for machine_value in [false, true] {
         let project = tempdir().unwrap();
         let config = tempdir().unwrap();
         let machine = AgentsConfig {
-            git_reminder: machine_value,
+            env_reminder: machine_value,
             ..Default::default()
         };
         write_project_config(
             &project,
-            &format!("[agents]\ngit-reminder = {}\n", !machine_value),
+            &format!("[agents]\nenv-reminder = {}\n", !machine_value),
         );
         assert_eq!(
             load(&machine, project.path(), config.path())
                 .unwrap()
-                .git_reminder,
+                .env_reminder,
             machine_value
         );
         crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
         assert_eq!(
             load(&machine, project.path(), config.path())
                 .unwrap()
-                .git_reminder,
+                .env_reminder,
             !machine_value
         );
+    }
+}
+
+#[test]
+fn retired_git_reminder_rejects_project_trust() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    write_project_config(&project, "[agents]\ngit-reminder = false\n");
+    match crate::trust::grant_with_roots(project.path(), config.path()) {
+        Err(crate::trust::TrustErr::RemovedProjectKey { detail, .. }) => {
+            assert!(detail.contains("env-reminder"));
+        }
+        other => panic!("expected RemovedProjectKey, got {other:?}"),
     }
 }
 

@@ -823,7 +823,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                     &BTreeMap::new(),
                     &LaunchReminders {
                         model,
-                        git: None,
+                        env: None,
                         sandbox: false,
                         team: Some(team()),
                         subagent_catalog: Some(

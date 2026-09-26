@@ -735,7 +735,7 @@ allowed-dependencies = [
     "disk::atomic",
     "disk::paths",
     "harness::launch",
-    "harness::launch_git",
+    "harness::launch_env",
     "harness::launch_reminders",
     "harness::prompt_compose",
     "harness::subagent_policy",
@@ -746,7 +746,7 @@ allowed-dependencies = [
 ]
 # The exec wrapper and inspection share one read-only compiler and write boundary.
 # Apply refreshes the built-in consensus copy as best-effort enrichment.
-# Compile probes the provider cwd's git state read-only for the launch reminder.
+# Compile probes the provider cwd's shell and git state read-only for the launch reminder.
 surface-budget = 7
 
 [[module]]

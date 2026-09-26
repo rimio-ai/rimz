@@ -1,6 +1,6 @@
-//! Read-only, bounded git state enrichment for a launch.
+//! Launch shell and read-only, bounded git state enrichment.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -10,7 +10,19 @@ pub(super) struct GitState {
     pub log: String,
 }
 
-pub(super) fn read(cwd: &Path) -> Option<GitState> {
+pub(super) struct LaunchEnv {
+    pub shell: Option<PathBuf>,
+    pub git: Option<GitState>,
+}
+
+pub(super) fn read(cwd: &Path) -> LaunchEnv {
+    LaunchEnv {
+        shell: crate::proc::user_shell(),
+        git: read_git(cwd),
+    }
+}
+
+fn read_git(cwd: &Path) -> Option<GitState> {
     Some(GitState {
         status: output(cwd, &["status", "--short"])?,
         head: output(cwd, &["rev-parse", "--short", "HEAD"])?,
@@ -52,6 +64,12 @@ fn output(cwd: &Path, args: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn launch_env_reads_user_shell() {
+        let cwd = tempfile::tempdir().unwrap();
+        assert_eq!(read(cwd.path()).shell, crate::proc::user_shell());
+    }
+
     fn git(cwd: &Path, args: &[&str]) -> String {
         let output = std::process::Command::new("git")
             .current_dir(cwd)
@@ -88,9 +106,9 @@ mod tests {
             .unwrap()
             .set_modified(old)
             .unwrap();
-        assert_eq!(read(repo.path()).expect("clean state").status, "");
+        assert_eq!(read(repo.path()).git.expect("clean state").status, "");
         std::fs::write(repo.path().join("file"), "new").unwrap();
-        let state = read(repo.path()).expect("dirty state");
+        let state = read(repo.path()).git.expect("dirty state");
         assert_eq!(state.status, "?? file");
         assert_eq!(
             state.head,
@@ -104,9 +122,9 @@ mod tests {
     #[test]
     fn git_state_omits_non_repo_missing_path_and_unborn_head() {
         let repo = tempfile::tempdir().unwrap();
-        assert!(read(repo.path()).is_none());
-        assert!(read(&repo.path().join("missing")).is_none());
+        assert!(read(repo.path()).git.is_none());
+        assert!(read(&repo.path().join("missing")).git.is_none());
         git(repo.path(), &["init", "-q"]);
-        assert!(read(repo.path()).is_none());
+        assert!(read(repo.path()).git.is_none());
     }
 }

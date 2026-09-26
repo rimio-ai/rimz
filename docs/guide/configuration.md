@@ -85,11 +85,11 @@ RimZ reads configuration in four layers, and a later layer wins:
 3. per-machine config (`~/.rimz/`),
 4. CLI flags and `RIMZ_*` environment variables.
 
-The per-machine layer applies to everything; CLI flags and `RIMZ_*` variables override where each command defines them. The project layer is narrower than a general override: RimZ reads it for the trust hash, for the `[[agents]]` environment it injects, and for the four name tables and `git-reminder` preference below.
+The per-machine layer applies to everything; CLI flags and `RIMZ_*` variables override where each command defines them. The project layer is narrower than a general override: RimZ reads it for the trust hash, for the `[[agents]]` environment it injects, and for the four name tables and `env-reminder` preference below.
 
 One case inverts the order on purpose: a trusted project's launch names and loop-task names (`[profiles]`, `[subagents.profiles]`, `[agents.teams]`, `[tasks]`) overlay your machine config and win a name collision, so a repository can pin the exact executable surface it hashes ([Project config](#project-config)).
 
-The project layer also overrides one `[agents]` scalar: [`git-reminder`](#git-state-at-launch). Other `[agents]` preferences remain machine-local.
+The project layer also overrides one `[agents]` scalar: [`env-reminder`](#environment-at-launch). Other `[agents]` preferences remain machine-local.
 
 ### When a file is broken
 
@@ -573,13 +573,13 @@ max-chain-length = 3
 
 An agent that runs `rimz agents` or `rimz teams` launches independent top-level peers, not children. `max-chain-length` caps how many of those launches can chain from one human-started root, and defaults to three. A launch past the limit fails before it creates a pane, a worktree, or a provisional agent, and tells the calling agent not to retry.
 
-#### Git state at launch
+#### Environment at launch
 
-Agents receive the working tree's short status, short HEAD hash, and latest commit at launch by default, so they can start with the repository's state in view. To turn this off for your machine, set this in `~/.rimz/config.toml`:
+Agents receive their launch cwd, pane shell, and the working tree's short status, short HEAD hash, and latest commit by default, so they can start with their environment in view. The cwd and any resolved shell remain even when git is unavailable. To turn the whole environment paragraph off for your machine, set this in `~/.rimz/config.toml`:
 
 ```toml
 [agents]
-git-reminder = false
+env-reminder = false
 ```
 
 A trusted room's `.rimz/config.toml` can set the same key to override the machine value in either direction. `rimz agents explain <spec> --prompt` shows the reminder before launching. See [launch reminders](../internals/harness/fleet.md#launch-reminders) for output bounds and unavailable-git behavior.
@@ -727,7 +727,7 @@ Which providers appear on the dashboard, in what order, and with what brand styl
 
 ## Project config
 
-`<repo>/.rimz/config.toml` is committed, and it declares the workspace shape a team shares. On a trusted workspace RimZ injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents`, applies `[subagents.profiles]` to `rimz subagents`, overlays `[agents] git-reminder`, and loads `[tasks]` for `rimz loop`. Pick one `agents` shape per file: `[[agents]]` for env entries, or the `[agents]` table for `git-reminder` and shared `[agents.teams]`.
+`<repo>/.rimz/config.toml` is committed, and it declares the workspace shape a team shares. On a trusted workspace RimZ injects each `[[agents]]` `env` table into that agent's process at launch, applies top-level `[profiles]` and `[agents.teams]` to `rimz agents`, applies `[subagents.profiles]` to `rimz subagents`, overlays `[agents] env-reminder`, and loads `[tasks]` for `rimz loop`. Pick one `agents` shape per file: `[[agents]]` for env entries, or the `[agents]` table for `env-reminder` and shared `[agents.teams]`.
 
 ```toml
 [[agents]]
