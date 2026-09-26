@@ -132,7 +132,7 @@ Identity is never guessed. The shared [`resolve_subagent_identity`](../../../cra
 
 Claude stamps `agent_id` on every payload fired inside a subagent, and `decode_hook` treats any payload whose `agent_id` differs from its `session_id` as the child's. A backgrounded child's tool events, permission requests, and compaction events therefore fold onto the child row. This boundary matters for attention: a child's tool events folded onto the parent would advance the parent's `last_activity` past `waiting_since` and release its waiting row while the parent is still blocked.
 
-A subagent payload carries two transcripts: `transcript_path` is the parent's and `agent_transcript_path` is the child's. Child usage and model come from `agent_transcript_path` alone. Without it they stay unknown, so the parent's figures never land on the child's row.
+A subagent payload carries two transcripts: `transcript_path` is the parent's and `agent_transcript_path` is the child's. Child usage and model come from `agent_transcript_path` alone. Without it they stay unknown, so the parent's figures never land on the child's row. A child carries the request split and no `total_tokens`: its transcript's newest usage covers one request, not the run, so the sidebar types the child figure from the split (`SubAgentTokens::Window`) or a whole-run total instead.
 
 `SubagentStop` has no outcome or exit-code field, so the close is always non-errored. The reducer carries the child's type label forward: a stop that omits or blanks `agent_type` leaves a started child labelled. A stop-only child with no type has too little identity for a row and is ignored at reduction.
 
@@ -157,7 +157,7 @@ Claude names the session log in every hook payload's `transcript_path`. For the 
 | Transcript field | Internal |
 | --- | --- |
 | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | context tokens, the gauge numerator |
-| context tokens + `output_tokens` | `total_tokens` |
+| context tokens + `output_tokens` | `total_tokens`, root sessions only |
 | `input_tokens` | `fresh_input_tokens` |
 | `cache_read_input_tokens` | `cache_read_input_tokens` |
 | `cache_creation_input_tokens` | `cache_write_input_tokens` |

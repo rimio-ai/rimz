@@ -399,7 +399,9 @@ fn subagent_usage_comes_from_the_child_transcript_not_the_parents() {
             "agent_transcript_path": child.to_str().unwrap(),
         }),
     );
-    assert_eq!(obs.usage.total_tokens, Some(57));
+    // The child transcript's total spans one request, so a child carries the
+    // split and no total.
+    assert_eq!(obs.usage.total_tokens, None);
     assert_eq!(obs.usage.fresh_input_tokens, Some(10));
     assert_eq!(obs.usage.cache_read_input_tokens, Some(40));
     assert_eq!(obs.usage.output_tokens, Some(7));
