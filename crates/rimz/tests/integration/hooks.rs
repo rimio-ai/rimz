@@ -459,6 +459,101 @@ fn codex_side_conversation_hooks_credit_the_host_without_becoming_an_agent() {
 }
 
 #[test]
+fn claude_launch_seeds_do_not_replace_observed_identity() {
+    for observe_first in [true, false] {
+        let env = Env::new();
+        let transcript = env.project_root.join("identity.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        let hook = |event: &str,
+                    model: Option<&str>,
+                    effort: Option<&str>,
+                    expected_model: &str,
+                    expected_effort: &str| {
+            let payload = json!({
+                "hook_event_name": event,
+                "session_id": "identity-session",
+                "source": "startup",
+                "model": model,
+                "thinking_level": effort,
+                "transcript_path": transcript,
+                "tool_name": "Read",
+                "tool_input": {"file_path": "src/lib.rs"},
+                "tool_response": {},
+                "prompt": "continue",
+            });
+            let mut command = env.hook_command("claude");
+            command
+                .env(rimz::harness::launch::ENV_AGENT_MODEL, "fable")
+                .env(rimz::harness::launch::ENV_AGENT_EFFORT, "low");
+            let output = env
+                .spawn_payload(command, &payload.to_string())
+                .wait_with_output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let snapshot = env.snapshot_json();
+            assert_eq!(
+                snapshot["agents"][0]["model"], expected_model,
+                "{event}, observe_first={observe_first}"
+            );
+            assert_eq!(
+                snapshot["agents"][0]["effort"], expected_effort,
+                "{event}, observe_first={observe_first}"
+            );
+            if event == "UserPromptSubmit" {
+                let events = env.read_events();
+                let observation = events
+                    .iter()
+                    .rev()
+                    .find_map(|event| match event.kind() {
+                        rimz::store::event::EventKind::AgentLifecycle(payload) => {
+                            Some(payload.observation)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(observation.launch.effort, None);
+                if observe_first && std::fs::metadata(&transcript).unwrap().len() == 0 {
+                    assert_eq!(observation.launch.model, None);
+                }
+            }
+        };
+        if observe_first {
+            hook(
+                "SessionStart",
+                Some("claude-fable-5-1"),
+                Some("high"),
+                "claude-fable-5-1",
+                "high",
+            );
+            hook("UserPromptSubmit", None, None, "claude-fable-5-1", "high");
+        } else {
+            hook("SessionStart", None, None, "fable", "low");
+        }
+        std::fs::write(&transcript, r#"{"type":"assistant","message":{"model":"claude-fable-5-1","usage":{"input_tokens":100,"output_tokens":50}}}"#).unwrap();
+        hook(
+            "PostToolUse",
+            None,
+            Some("high"),
+            "claude-fable-5-1",
+            "high",
+        );
+        hook("UserPromptSubmit", None, None, "claude-fable-5-1", "high");
+        std::fs::write(&transcript, r#"{"type":"assistant","message":{"model":"claude-sonnet-native","usage":{"input_tokens":100,"output_tokens":50}}}"#).unwrap();
+        hook(
+            "PostToolUse",
+            None,
+            Some("medium"),
+            "claude-sonnet-native",
+            "medium",
+        );
+    }
+}
+
+#[test]
 fn claude_price_book_capacity_does_not_replace_an_established_window() {
     let env = Env::new();
     let pricing = env.runtime_paths().shared_pricing_cache_path();
