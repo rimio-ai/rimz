@@ -47,7 +47,7 @@ fn pending_waits_line_counts_armed_waits() {
     child.parent_agent_id = Some("claude-1".into());
     child.subagent_description = Some("inspect the renderer".to_owned());
     child.subagent_cost_usd = Some(0.42);
-    child.usage.total_tokens = Some(12_400);
+    child.usage.fresh_input_tokens = Some(12_400);
     let mut snapshot = snapshot_with(vec![parent, child]);
     let theme = Theme::fixed(false);
     let collapsed = group_lines(&snapshot, &theme, usize::MAX);

@@ -127,7 +127,7 @@ fn pi_session_envelopes_and_bridge_events_converge_on_one_rich_child() {
         );
         child_start.launch.model = Some("gpt-5.6-sol".to_owned());
         child_start.launch.effort = Some("xhigh".to_owned());
-        child_start.usage.total_tokens = Some(12_345);
+        child_start.usage.fresh_input_tokens = Some(12_345);
 
         let mut child_settled = AgentLifecycleObservation::new(
             Some("child-session".into()),
@@ -139,7 +139,7 @@ fn pi_session_envelopes_and_bridge_events_converge_on_one_rich_child() {
         );
         child_settled.launch.model = Some("gpt-5.6-sol".to_owned());
         child_settled.launch.effort = Some("xhigh".to_owned());
-        child_settled.usage.total_tokens = Some(12_345);
+        child_settled.usage.fresh_input_tokens = Some(12_345);
 
         let mut bridge = AgentLifecycleObservation::new(
             Some("child-session".into()),
@@ -186,7 +186,10 @@ fn pi_session_envelopes_and_bridge_events_converge_on_one_rich_child() {
         assert_eq!(children[0].id, "child-session");
         assert_eq!(children[0].model.as_deref(), Some("gpt-5.6-sol"));
         assert_eq!(children[0].effort.as_deref(), Some("xhigh"));
-        assert_eq!(children[0].total_tokens, Some(12_345));
+        assert_eq!(
+            children[0].tokens,
+            Some(crate::store::snapshot::SubAgentTokens::Window(12_345))
+        );
     }
 }
 

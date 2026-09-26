@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use tracing::debug;
 
 use crate::agents::{AgentSessionUsage, AgentState, AgentStatus};
-use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent};
+use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent, SubAgentTokens};
 
 use super::super::layout::cmp_start_asc;
 use crate::store::session_death::GHOST_SESSION_TTL_SECS;
@@ -264,7 +264,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
             .subagent_description
             .clone()
             .or_else(|| child.description.clone()),
-        total_tokens: child_total_tokens(child),
+        tokens: child_tokens(child),
         cost_usd: child_cost_usd(child),
         elapsed_secs,
         started_at,
@@ -273,10 +273,12 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
     }
 }
 
-/// A pane-backed child's spend fold carries cumulative session counters; the
-/// hook-reported total fills in before that fold lands or for providers that do
-/// not produce one.
-fn child_total_tokens(child: &AgentState) -> Option<u64> {
+/// Prefer window occupancy; otherwise use the session spend fold or an
+/// explicitly whole-run provider total, never an untyped per-call reading.
+fn child_tokens(child: &AgentState) -> Option<SubAgentTokens> {
+    if let Some(tokens) = child.context_used_tokens().filter(|tokens| *tokens > 0) {
+        return Some(SubAgentTokens::Window(tokens));
+    }
     child
         .context
         .as_ref()
@@ -287,7 +289,8 @@ fn child_total_tokens(child: &AgentState) -> Option<u64> {
         // pass panics in hir-ty/src/infer/callee.rs when inferring this
         // `Option::filter` closure through the iterator-style chain.
         .filter(|total: &u64| *total > 0)
-        .or(child.usage.total_tokens)
+        .or(child.usage.run_total_tokens.filter(|tokens| *tokens > 0))
+        .map(SubAgentTokens::Total)
 }
 
 fn child_cost_usd(child: &AgentState) -> Option<f64> {

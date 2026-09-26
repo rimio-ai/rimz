@@ -1,6 +1,6 @@
 ---
 source: crates/rimz/src/cli/sidebar/tests.rs
-expression: strip_sgr(&ansi)
+expression: rendered
 ---
   huddle                            /srv/code/huddle
 
@@ -17,11 +17,11 @@ expression: strip_sgr(&ansi)
 ▌  󰿦 183k · 󱥸 157k  18k  7k  22k             󰪠 22m▐
 ▌   subagents (5)                              $1.05▐
 ▌     Explore · summarize docs drift     󰪞 <1m $0.18▐
-▌       11k · Haiku · xhigh                         ▐
+▌      󰿦 11k · Haiku · xhigh                         ▐
 ▌     Explore · exercise auth edge cases 󰪞 <1m $0.27▐
-▌       18k · Haiku · xhigh                         ▐
+▌      󰿦 18k · Haiku · xhigh                         ▐
 ▌     Explore · trace handler graph      󰪞 <1m $0.34▐
-▌       20k · Haiku · xhigh                         ▐
+▌      󰿦 20k · Haiku · xhigh                         ▐
 ▌     Plan · split blocking checks       󰪞 <1m $0.12▐
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────

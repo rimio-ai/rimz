@@ -432,7 +432,8 @@ path = "crates/rimz/src/store"
 # Provider panels carry the auto-redeem forecast the header marker renders.
 # Submitted-prompt origin classification and a run's prompt origin are read by the lifecycle hooks in the binary crate.
 # Room-local class and orphan-temp collectors expose the scoped maintenance seam.
-surface-budget = 325
+# Child token figures share their window-versus-total vocabulary with both renderers.
+surface-budget = 326
 
 [[module]]
 path = "crates/rimz/src/theme"

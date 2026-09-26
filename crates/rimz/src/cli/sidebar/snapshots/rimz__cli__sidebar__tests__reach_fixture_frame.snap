@@ -1,6 +1,6 @@
 ---
 source: crates/rimz/src/cli/sidebar/tests.rs
-expression: strip_sgr(&ansi)
+expression: rendered
 ---
  ⌘ farlink                          /srv/code/farlink
 
@@ -17,7 +17,7 @@ expression: strip_sgr(&ansi)
 ▌  ▤ 333k · ◌ 286k ◍ 33k ↘ 13k ↗ 41k · ↻ 2           ▐
 ▌  ⧉ subagents (2)                              $0.46▐
 ▌    ⠁ Plan · run focused nextest               $0.12▐
-▌      ◇ 18k · Haiku · xhigh                    ◔  3m▐
+▌      ▤ 18k · Haiku · xhigh                    ◔  3m▐
 ▌    ✓ Explore · audit auth watcher chang ◔ <1m $0.34▐
 ▌      ◇ 22k · Haiku · xhigh                         ▐
 

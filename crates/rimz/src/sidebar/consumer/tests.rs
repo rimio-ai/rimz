@@ -929,6 +929,10 @@ fn read_published_snapshot_folds_subagent_context() {
         Some(12_400)
     );
     assert_eq!(parent.sub_agents()[0].cost_usd, Some(0.42));
+    assert_eq!(
+        parent.sub_agents()[0].tokens,
+        Some(crate::store::snapshot::SubAgentTokens::Window(12_400))
+    );
 }
 
 #[test]
