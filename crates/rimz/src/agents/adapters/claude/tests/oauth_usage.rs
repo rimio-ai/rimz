@@ -43,14 +43,22 @@ fn reportable_classifier_treats_unauthorized_as_settled_auth() {
 
 #[test]
 fn usage_url_override_accepts_only_official_or_loopback_hosts() {
-    assert_eq!(resolve_usage_url(None).unwrap(), DEFAULT_USAGE_URL);
-    assert_eq!(resolve_usage_url(Some("")).unwrap(), DEFAULT_USAGE_URL);
+    let default = format!("{DEFAULT_USAGE_URL}?cedar_ember=1");
+    assert_eq!(resolve_usage_url(None).unwrap(), default);
+    assert_eq!(resolve_usage_url(Some("")).unwrap(), default);
     for url in [
         "https://api.anthropic.com/api/oauth/usage",
         "http://127.0.0.1:8080/api/oauth/usage",
     ] {
-        assert_eq!(resolve_usage_url(Some(url)).unwrap(), url);
+        assert_eq!(
+            resolve_usage_url(Some(url)).unwrap(),
+            format!("{url}?cedar_ember=1")
+        );
     }
+    assert_eq!(
+        resolve_usage_url(Some("http://127.0.0.1:8080/api/oauth/usage?x=1")).unwrap(),
+        "http://127.0.0.1:8080/api/oauth/usage?x=1&cedar_ember=1"
+    );
 
     let url = "https://evil.example/private/path";
     let error = resolve_usage_url(Some(url)).unwrap_err();
@@ -320,7 +328,63 @@ fn usage_response_tolerates_verified_full_payload_shape() {
 #[test]
 fn user_agent_uses_claude_version_when_supplied() {
     assert_eq!(
-        claude_code_user_agent(Some(" 2.1.173 ")),
-        "claude-code/2.1.173"
+        claude_code_user_agent(Some(" 2.1.283 ")),
+        "claude-cli/2.1.283 (external, cli)"
     );
+    assert_eq!(
+        claude_code_user_agent(Some(USER_AGENT_FALLBACK_VERSION)),
+        "claude-cli/2.1.283 (external, cli)"
+    );
+}
+
+#[test]
+fn eligible_limit_reset_fixture_preserves_usage() {
+    let usage = parse_usage_response(include_str!("fixtures/limit-resets-eligible.json")).unwrap();
+    let reset = usage.reset_credits.expect("settled reset credits");
+    let expiry = "2026-10-22T16:00:00Z".parse::<Timestamp>().unwrap();
+    assert_eq!(reset.count, 1);
+    assert_eq!(reset.soonest_expiry, Some(expiry));
+    assert_eq!(reset.expiries, vec![expiry]);
+    let windows = usage.rate_limits.unwrap().windows;
+    assert_eq!(windows[0].used_percentage, Some(17));
+    assert_eq!(windows[1].used_percentage, Some(49));
+    assert_eq!(usage.extra_credits, Some(ExtraCredits::Disabled));
+}
+
+#[test]
+fn successful_usage_settles_missing_ineligible_and_empty_resets() {
+    for body in [
+        include_str!("fixtures/limit-resets-ineligible.json"),
+        "{}",
+        r#"{"cedar_ember":{"eligible":true,"grants":[]}}"#,
+        r#"{"cedar_ember":{"eligible":false,"grants":[{"resets_left":1}]}}"#,
+    ] {
+        let reset = parse_usage_response(body)
+            .unwrap()
+            .reset_credits
+            .expect("settled reset credits");
+        assert_eq!(reset.count, 0);
+        assert_eq!(reset.soonest_expiry, None);
+        assert!(reset.expiries.is_empty());
+    }
+}
+
+#[test]
+fn limit_resets_count_paused_grants_and_sort_repeated_expiries() {
+    let usage = parse_usage_response(r#"{"cedar_ember":{"eligible":true,"grants":[{"resets_left":2,"ends_at":"2026-10-22T16:00:00Z","paused":true},{"resets_left":1,"ends_at":"2026-10-21T16:00:00Z"}]}}"#).unwrap();
+    let reset = usage.reset_credits.expect("settled reset credits");
+    let early = "2026-10-21T16:00:00Z".parse::<Timestamp>().unwrap();
+    let late = "2026-10-22T16:00:00Z".parse::<Timestamp>().unwrap();
+    assert_eq!(reset.count, 3);
+    assert_eq!(reset.soonest_expiry, Some(early));
+    assert_eq!(reset.expiries, vec![early, late, late]);
+}
+
+#[test]
+fn limit_resets_without_valid_expiry_still_count() {
+    let usage = parse_usage_response(r#"{"cedar_ember":{"eligible":true,"grants":[{"resets_left":1,"ends_at":null},{"resets_left":1,"ends_at":"invalid"},{"resets_left":1}]}}"#).unwrap();
+    let reset = usage.reset_credits.expect("settled reset credits");
+    assert_eq!(reset.count, 3);
+    assert_eq!(reset.soonest_expiry, None);
+    assert!(reset.expiries.is_empty());
 }
