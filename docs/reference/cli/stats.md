@@ -117,6 +117,8 @@ $ rimz stats --json
 
 `tokens` is always input plus output plus cache-read tokens, and `input` includes cache writes. `tool_calls` and `tools` are omitted when zero or empty; `cache_hit_pct` is omitted when there is no input to measure.
 
+An `auto_gc` event carries `scope` (`room` or `machine`); records written before scopes existed read as `machine`. Totals cover the whole sweep's scope. The durable assist record additionally holds own-room `class_bytes`, which this JSON projection does not expose ([GC report](./maintenance.md#the-report)).
+
 The `assists.rollup` object holds `redeems` and `resets` (credit redemptions, and those that reset the budget), `resumes` and `recovered_secs` (delivered auto-continues, and the parked time they recovered), `compacts`, `restores` and `restored_sessions` (room restores, and the agents they brought back), and `sweeps` and `reclaimed_bytes` (completed automatic gc sweeps, and the bytes they freed). Each event carries an `assist` type (`auto_continue`, `auto_compact`, `idle_compact`, `flip_compact`, `auto_redeem`, `auto_resume`, or `auto_gc`), its `at` time in UTC, and the fields of that type. What each assist is lives in [the assist log](../../internals/harness/loops.md#the-assist-log).
 
 ## The assist timeline
@@ -140,7 +142,7 @@ assists (all) — Auto-continue: 110 (+77.0h) · Auto-compact: 340 · Auto-redee
 | `⌁` | Compaction: before a delivery (`auto-compact`), after an idle gap (`idle compacted`), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
 | `↻` | Credit redemption for a provider account, with its outcome. |
 | `⟲` | Room restore after a crash or reboot, with the channels it brought back. |
-| `♻` | Automatic `rimz gc` sweep: what it reclaimed and removed, with its cutoff, or `gc failed` with the error. |
+| `♻` | Automatic `rimz gc` sweep: `gc swept` for room scope or `machine gc swept` for machine scope, followed by what it reclaimed and removed and its cutoff; `gc failed` carries the error. |
 
 With no records, the command prints `no assists recorded`. There is no JSON form of the timeline; use the `assists.events` array of `--json`.
 

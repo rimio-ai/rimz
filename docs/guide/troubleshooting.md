@@ -402,34 +402,14 @@ The rebuilt room comes up with no agents in it, whichever flags you pass. A plai
 
 ### Sweep stale state with `rimz gc`
 
-`rimz gc` sweeps state that has outlived its use: ended agents' scratch and skill copies and terminal runs after seven days, audit history after 30 days or above 64 MiB per room, orphaned atomic-write temp files, dead workspace stores, abandoned queued messages, and clean RimZ-marked worktrees whose work has already landed with no live pane inside. It keeps anything dirty, pending, or unproven, and it always prints a checklist of what it cleaned, what it kept, and why. Every open room also runs it once a day on its own ([automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps)). Run `--dry-run` first to see the plan:
+When stale state piles up, `rimz gc` cleans the current room: expired scratch, terminal runs and audit history, orphaned temp files, abandoned messages, and clean RimZ-marked worktrees whose work has landed with no live pane inside. It keeps anything dirty, pending, or unproven and reports why. Add `--all` to sweep other rooms and shared state, including dead workspace stores. It never creates a store. Open rooms sweep daily, with one elected machine sweep also covering closed rooms ([automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps)). Run `--dry-run` first:
 
 ```sh
-rimz gc --dry-run          # preview reclaimable state, remove nothing
-rimz gc                    # sweep runtime state older than gc.older_than (7d by default)
+rimz gc --dry-run          # preview the current room, remove nothing
+rimz gc                    # sweep the current room
 rimz gc --older-than 1d    # tighten the cutoff to a day
-```
-
-```
-gc — would reclaim 62 MB (dry run)
-  checked 4 of 8 areas · cutoff 7d
-
-  ✦ worktrees       would remove 3 · 62 MB · 4 kept
-      kept: api-redesign — in use
-      kept: auth-fix — not merged yet
-      …
-      would remove: guides-tune  21 MB  merged
-      …
-  ✦ workspaces      would prune 31 · 9.2 KB
-      would prune: ws_8282bdd4e723c6a86e061fa8 — abandoned setup, never used (280 B)
-      …
-  ✦ runtime         would remove 178 stale files · 109 KB — 5 roots scanned
-      …
-  ✓ temp files      none orphaned
-  – messages        skipped (dry run)
-  – event log       skipped (dry run)
-  – agent cache     skipped (dry run)
-  – loop schedules  skipped (dry run)
+rimz gc --all --dry-run    # preview every room and shared machine state
+rimz gc --all              # sweep that machine-wide scope
 ```
 
 A kept worktree carries its reason (`in use`, `not merged yet`), so nothing with unlanded work is ever swept.

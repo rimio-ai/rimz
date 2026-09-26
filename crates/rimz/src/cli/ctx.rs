@@ -1,10 +1,9 @@
 //! The shared entry for participant-facing commands: resolve the current
 //! workspace, open its store, and derive the current channel in one step.
 //!
-//! Commands that address a running room open a `Ctx` and read what they need
-//! from it. Commands that name or create a room by path — `start`, `attach`,
-//! `gc`, `setup` — resolve directly through `WorkspaceResolver::resolve`
-//! instead; they take a varying path and have no store to open.
+//! Commands that address a running room open a `Ctx` and read what they need from it. Commands that name or create a room by path (`start`, `attach`, `setup`) resolve directly through `WorkspaceResolver::resolve` instead.
+//!
+//! `gc` addresses the running room through `resolve_participant` directly, then uses `open_existing_store` so it never creates a store.
 
 use anyhow::{Context, Result};
 

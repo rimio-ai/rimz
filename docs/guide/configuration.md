@@ -267,7 +267,7 @@ auto = true
 older_than = "7d"
 ```
 
-Stale runtime files, orphaned temp files, dead workspace stores, and landed worktrees pile up as rooms come and go. With `auto` on, the default, every open room runs [`rimz gc`](../reference/cli/maintenance.md#sweep-stale-state) once a day, starting five minutes after the room comes up. It removes exactly what a manual run removes, and keeps anything dirty, unmerged, occupied by an agent, or unproven. Each sweep shows up in `rimz stats --assists`.
+Stale runtime files, orphaned temp files, dead workspace stores, and landed worktrees pile up as rooms come and go. With `auto` on, the default, every open room runs [`rimz gc`](../reference/cli/maintenance.md#sweep-stale-state) once a day, starting five minutes after the room comes up. A manual `rimz gc` sweeps only the current room; `--all` adds every room and shared machine state. One daily helper is elected to run that machine scope, so closed rooms also get cleaned without every open room repeating the machine sweep. Both scopes keep anything dirty, unmerged, occupied by an agent, or unproven. Each sweep shows up in `rimz stats --assists`.
 
 `older_than` is the age past which runtime and temp files go, and it is also what `rimz gc --older-than` defaults to. It takes `s`, `m`, `h`, or `d`. `rimz config set gc.auto false` turns the daily sweep off and leaves `rimz gc` for you to run by hand.
 

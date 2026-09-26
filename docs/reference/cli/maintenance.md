@@ -12,11 +12,11 @@ These commands inspect, upgrade, repair, clean up, and remove RimZ. Which ones w
 | [`reload`](#reload-running-sidebars) | Every live room on the machine | Publishes the new build to each room | No |
 | [`sidebar repair`](#repair-sidebars) | Every live room on the machine | Adds, closes, or replaces sidebar panes | No |
 | [`reset`](#reset-a-wedged-room) | The current workspace's room | Tears the room down, archives its records, rebuilds | Yes |
-| [`gc`](#sweep-stale-state) | The machine, plus the current workspace | Removes stale runtime files, dead stores, landed worktrees | No |
+| [`gc`](#sweep-stale-state) | The current room; `--all` adds the machine | Removes stale state and landed worktrees; `--all` also prunes dead stores | No |
 | [`uninstall`](#uninstall-rimz) | The whole machine | Removes hooks, rooms, state, binaries | Yes |
 | [`ping`](#check-that-the-binary-runs) | Nothing | Nothing | No |
 
-"The current workspace" is the one the current directory resolves to, or `--root`. All of these take the [global flags](../cli.md#global-flags). Configuring the machine is [`rimz config`](./config.md), and the workflows for a stuck room, a stale pane, and full removal are in the [troubleshooting guide](../../guide/troubleshooting.md).
+"The current workspace" is the one the current directory resolves to, or `--root`; `gc` also follows the running room's identity ([room resolution](../cli.md#which-room-a-command-reaches)). All of these take the [global flags](../cli.md#global-flags). Configuring the machine is [`rimz config`](./config.md), and the workflows for a stuck room, a stale pane, and full removal are in the [troubleshooting guide](../../guide/troubleshooting.md).
 
 ## Check adapter coverage
 
@@ -259,29 +259,33 @@ What reset does to the store is in [store internals](../../internals/store.md#ma
 ## Sweep stale state
 
 ```sh
-rimz gc [--older-than <DURATION>] [--dry-run] [--json]
+rimz gc [--older-than <DURATION>] [--dry-run] [--json] [--all]
 ```
 
-`gc` removes state that has outlived its use and keeps anything dirty, pending, or unproven. Part of the sweep covers the whole machine; the rest runs only in the current workspace:
+`gc` removes state that has outlived its use and keeps anything dirty, pending, or unproven. By default it sweeps only the current room: `--root` overrides the running room's identity, which otherwise takes precedence over directory resolution. `--all` adds every room and shared machine state, while store maintenance and worktrees remain current-room only. Resolution failure exits non-zero and asks you to run inside a room or pass `--root`.
 
-| Area | Scope | What `gc` does |
+| Area | Room scope (default) | Machine scope (`--all`) |
 | --- | --- | --- |
-| `worktrees` | Current repository | Removes RimZ-owned worktrees that are clean, landed, and unoccupied, the same sweep as [`rimz worktree sweep`](./worktree.md#sweep-landed-worktrees). |
-| `workspaces` | Machine | Deletes workspace stores that provably hold nothing: the project folder is gone, or a `rimz start` was abandoned before any history. A store whose record is unreadable but which holds history is kept and reported. |
-| `runtime` | Machine | Applies room lifetime-class rules and removes stale shared provider probe markers. Only live files use `--older-than`; sockets use a connect probe and locks a try-lock. |
-| `temp files` | Machine | Removes temp files (`*.tmp.<pid>.<nonce>`) older than `--older-than`, left by a process killed mid-write. |
-| `messages` | Current workspace | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. |
-| `event log` | Current workspace | Cuts a corrupt tail off the event log. |
-| `agent cache` | Current workspace | Prunes prior-agent carryover older than 14 days. |
-| `loop schedules` | Machine | Removes loop delivery tasks whose target agent is gone and RimZ-owned instance rows that no longer compile to an action, and prunes [wait output files](./wait.md) older than 7 days that nothing claims. |
+| Room class blocks | The current room's lifetime classes. | Every remaining room, after dead workspace pruning. |
+| `worktrees` | Removes current-repository RimZ-owned worktrees that are clean, landed, and unoccupied, as in [`rimz worktree sweep`](./worktree.md#sweep-landed-worktrees). | Same. |
+| `workspaces` | Skipped; run with `--all`. | Deletes stores whose project folder is gone or whose setup was abandoned before any history. Unreadable records with history are kept and reported. |
+| `runtime` | The current room's runtime root only; no shared provider probe markers. Live files use `--older-than`, sockets a connect probe, locks a try-lock. | Every compatible runtime root and stale shared provider probe markers. |
+| `temp files` | Removes orphan atomic-write temps (`*.tmp.<pid>.<nonce>`) older than `--older-than` under the room's state and runtime roots. | Sweeps both whole roots. |
+| `messages` | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. | Same current-room maintenance. |
+| `event log` | Cuts a corrupt tail off the event log. | Same current-room maintenance. |
+| `agent cache` | Prunes prior-agent carryover older than 14 days. | Same current-room maintenance. |
+| `loop schedules` | Reaps this room's dead or invalid instance rows, prunes its orphan schedule overlays, and removes unclaimed [wait outputs](./wait.md) older than 7 days. Machine `loop.toml` is untouched. | Reaps machine delivery tasks and every root's instance rows; sweeps all rooms' wait outputs. Overlay cleanup still uses the current root's known scopes. |
+
+With either scope, an incompatible layout in the current room refuses the command with a layout error, rather than producing a retained class block. Run `--all` from a compatible room or a directory without a room to see other incompatible rooms retained with migration reasons. See the [layout migration guide](../../internals/store-layout-migration.md).
 
 | Flag | Default | Effect |
 | --- | --- | --- |
 | `--older-than <DURATION>` | the `gc.older_than` setting, `7d` | The age cutoff for `runtime` and `temp files`. Units: `s`, `m`, `h`, `d` ([durations](../cli.md#durations)). Must be greater than zero. |
 | `--dry-run` | off | Report what would be removed and remove nothing. `messages`, `event log`, `agent cache`, and `loop schedules` show as skipped. |
 | `--json` | off | Print the report as JSON instead. |
+| `--all` | off | Sweep every room and shared machine state. |
 
-The four current-workspace areas show `skipped — no rimz store here` when the directory has no RimZ store, and `worktrees` shows `skipped — not inside a git repo` outside a repository.
+GC never creates a store. Without one, `messages`, `event log`, `agent cache`, and repository `worktrees` show `skipped — no rimz store here`; outside a repository, `worktrees` shows `skipped — not inside a git repo`. An absent room state root produces no room class block.
 
 The `worktrees` area is the one that reaches past RimZ's own files: removing a tree deletes that checkout and its files, and deletes the branch behind it. A dirty, occupied, or unmerged tree is kept and reported rather than forced. The branch is the exception: when `git branch -d` refuses it as unmerged, RimZ compares its content against the base and deletes it with `git branch -D` once that comparison says the work already landed. A branch it cannot prove landed is kept.
 
@@ -289,26 +293,29 @@ The `worktrees` area is the one that reaches past RimZ's own files: removing a t
 
 Every open room runs `gc` on its own once a day, with the `gc.older_than` cutoff. The first sweep waits until the room has been up for 5 minutes, so a room coming back from a reboot finishes restoring its panes before the worktree area judges them. The last sweep time is kept per workspace, so a reboot does not reset the day. Each run, failed or not, appears in [`rimz stats --assists`](./stats.md#the-assist-timeline) as a `♻` line. Set `gc.auto = false` ([configuration](../../guide/configuration.md#garbage-collection)) to sweep only by hand. While a machine config file fails to load ([`rimz config get`](./config.md#read-a-value) names the error), automatic sweeps pause rather than fall back to the defaults.
 
+One of those helpers is elected for a machine sweep when the last automatic machine attempt is at least 24 hours old, or none is recorded. It runs the same scope as `--all`, including its own room; the other helpers sweep only their rooms. Failed machine attempts also wait a day before retrying. Closed rooms wait for that elected sweep or a manual `--all`; they do not start helpers themselves.
+
 ### The report
 
 `gc` shows progress while it runs, then prints a line per area with its verdict: `✓` healthy, `✦` acted, `⚠` warning, `✗` failed, `–` skipped. Each kept, removed, or failed worktree gets its own line under `worktrees`.
 
-The header gives total reclaimed bytes and the area count/cutoff. It then lists each room with one `class · file count · bytes` row per lifetime class, followed by the eight area verdicts and any kept/removed worktree reasons.
+The header gives total reclaimed bytes and the area count/cutoff, ending in `· room <workspace-dir>` or `· machine`. It then lists the selected rooms with one `class · file count · bytes` row per lifetime class, followed by the eight area verdicts and any kept/removed worktree reasons.
 
-The second line counts the areas that ran (`checked 4 of 8 areas` when the four store and schedule areas are skipped). The header adds a problem count (`· 1 problem`) when a worktree removal failed, a workspace record was unreadable, or the event log needed repair. Problems do not change the exit code: `gc` exits 0 whenever the sweep completes. Automatic-sweep assist records additionally carry `class_bytes`, the reclaimed bytes summed by class across rooms.
+The second line counts the areas that ran: normally `checked 7 of 8 areas` for a room, with `workspaces` skipped and a hint to use `--all`. Dry runs skip another four store and schedule areas. The header adds a problem count (`· 1 problem`) when a worktree removal failed, a workspace record was unreadable, or the event log needed repair. Problems do not change the exit code: `gc` exits 0 whenever the sweep completes. Automatic-sweep assist records carry `scope` (`room` or `machine`) and `class_bytes`, reclaimed bytes by class for the helper's own room only, even in a machine sweep. Other assist totals cover the run's full scope.
 
-Owned state has a seven-day grace; audit files expire after 30 days or oldest-first above 64 MiB. `--older-than` does not change those policies. Layout-1 rooms are retained with a migration reason.
+Owned state has a seven-day grace; audit files expire after 30 days or oldest-first above 64 MiB. `--older-than` does not change those policies.
 
 ### JSON output
 
 | Field | Content |
 | --- | --- |
-| `rooms` | Per-room `name`, `classes` (`class`, `files_removed`, `bytes_removed`). |
+| `scope` | `room` or `machine`. |
+| `rooms` | Per-room `name`, optional `retained_reason`, `classes` (`class`, `files_removed`, `bytes_removed`, `locks_would_check`). Room scope lists only the current room, or none when its state root is absent. |
 | `dry_run` | `true` under `--dry-run`. |
 | `older_than_secs` | The cutoff in seconds. |
 | `reclaimed_bytes` | Bytes removed, or that would be removed, across all areas. |
 | `worktrees` | `removed` (`name`, `branch`, `path`, `bytes`, `branch_deleted`, `archive_error`), `failed` (`path`, `error`), `kept` (`name`, `path`, `reason`: `in_use`, `uncommitted_changes`, `not_merged`), and `skipped` (`null`, `not_a_repo`, `no_store`, `roster_unavailable`, `list_failed`). |
-| `workspaces` | `removed` (`workspace_id`, `reason`: `project_root_gone` or `abandoned_scaffold`, `project_root`, `bytes`), `retained_unreadable` (`workspace_id`, `error`), and `kept` (a count). |
+| `workspaces` | `removed` (`workspace_id`, `reason`: `project_root_gone` or `abandoned_scaffold`, `project_root`, `bytes`), `retained_unreadable` (`workspace_id`, `error`), `kept` (a count), and `skipped` (`room_scope` for a room sweep, otherwise `null`). |
 | `runtime` | `roots_scanned`, `heartbeats_removed`, `sidecars_removed`, `sockets_removed`, `probe_markers_removed`, `dirs_removed`, `bytes_removed`. |
 | `temps` | `files_removed`, `bytes_removed`. |
 | `messages` | `archived`, `reconciled`. |
