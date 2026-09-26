@@ -360,6 +360,7 @@ mod tests {
             peak_rss_kb: 4,
             restarts: 2,
             leases: vec![],
+            attached: vec![],
         };
         let mut ready = entry("/z", "rust", State::Ready);
         ready.last_request_at_ms = Some(11_000);

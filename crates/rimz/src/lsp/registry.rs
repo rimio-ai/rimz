@@ -83,6 +83,22 @@ impl StopReason {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AttachedEditor {
+    pub pid: u32,
+    pub name: Option<String>,
+    pub since_ms: u64,
+    pub open: Vec<OpenDocument>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct OpenDocument {
+    pub uri: String,
+    pub owner: bool,
+    #[serde(default)]
+    pub dirty: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Entry {
     pub root: PathBuf,
     pub project: Option<PathBuf>,
