@@ -16,6 +16,173 @@ use serde_json::json;
 
 use crate::common::Env;
 
+fn stale_room_files(env: &Env, root: &Path) -> [std::path::PathBuf; 2] {
+    env.record(root);
+    let state = env.state_path_for(root);
+    let runtime = rimz::RuntimePaths::for_state_under(&state, &env.runtime_root);
+    runtime.ensure_dirs().unwrap();
+    state.ensure_tmp_dir().unwrap();
+    let files = [
+        runtime.heartbeat_dir.join("stale.json"),
+        state.waits_dir.join("old.output"),
+    ];
+    for file in &files {
+        std::fs::write(file, b"stale").unwrap();
+        std::fs::File::open(file)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(15 * 86_400))
+            .unwrap();
+    }
+    files
+}
+
+#[test]
+fn gc_defaults_to_room_and_all_sweeps_both_rooms() {
+    let env = Env::new();
+    let other = env.home_root.join("other");
+    let a = stale_room_files(&env, &env.project_root);
+    let b = stale_room_files(&env, &other);
+    let output = env.rimz().args(["gc", "--json"]).assert().success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["scope"], "room");
+    assert_eq!(report["rooms"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["rooms"][0]["name"],
+        env.state_path_for(&env.project_root).dir_name.as_str()
+    );
+    assert_eq!(report["workspaces"]["skipped"], "room_scope");
+    assert_eq!(report["runtime"]["roots_scanned"], 1);
+    assert!(a.iter().all(|file| !file.exists()));
+    assert!(b.iter().all(|file| file.exists()));
+    let a = stale_room_files(&env, &env.project_root);
+    let output = env
+        .rimz()
+        .args(["gc", "--all", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["scope"], "machine");
+    let mut names: Vec<_> = report["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|room| room["name"].as_str().unwrap().to_owned())
+        .collect();
+    names.sort();
+    let mut expected = vec![
+        env.state_path_for(&env.project_root).dir_name.to_string(),
+        env.state_path_for(&other).dir_name.to_string(),
+    ];
+    expected.sort();
+    assert_eq!(names, expected);
+    assert!(a.iter().chain(&b).all(|file| !file.exists()));
+}
+
+#[test]
+fn gc_follows_room_pin_with_explicit_root_override() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let other = env.home_root.join("other");
+    env.record(&other);
+    for explicit in [false, true] {
+        let mut cmd = env.rimz();
+        cmd.current_dir(&env.home_root)
+            .env("RIMZ_WORKSPACE_ID", env.workspace_id.as_str())
+            .env("RIMZ_PROJECT_ROOT", &env.project_root)
+            .args(["gc", "--dry-run", "--json"]);
+        if explicit {
+            cmd.arg("--root").arg(&other);
+        }
+        let output = cmd.assert().success();
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.get_output().stdout).unwrap();
+        assert_eq!(report["rooms"].as_array().unwrap().len(), 1);
+        let root = if explicit { &other } else { &env.project_root };
+        assert_eq!(
+            report["rooms"][0]["name"],
+            env.state_path_for(root).dir_name.as_str()
+        );
+    }
+}
+
+#[test]
+fn gc_does_not_create_an_abandoned_state_scaffold() {
+    let env = Env::new();
+    env.rimz().args(["gc", "--json"]).assert().success();
+    assert!(!env.state_path_for(&env.project_root).root.exists());
+    assert_eq!(
+        std::fs::read_dir(env.rimz_home().join("ws"))
+            .map(|entries| entries.count())
+            .unwrap_or(0),
+        0
+    );
+}
+
+#[test]
+fn gc_unattended_elects_one_machine_sweep_and_attributes_own_room() {
+    let env = Env::new();
+    let other = env.home_root.join("other");
+    stale_room_files(&env, &env.project_root);
+    stale_room_files(&env, &other);
+    let dead = env.home_root.join("dead");
+    env.record(&dead);
+    let dead_state = env.state_path_for(&dead);
+    std::fs::remove_dir_all(&dead).unwrap();
+    let machine_stamp = env.rimz_home().join("cache/auto-gc.json");
+    let mut first_stamp = Vec::new();
+    for (root, scope) in [(&env.project_root, "machine"), (&other, "room")] {
+        stale_room_files(&env, root);
+        let output = env
+            .rimz()
+            .args(["gc", "--unattended", "--json", "--root"])
+            .arg(root)
+            .assert()
+            .success();
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.get_output().stdout).unwrap();
+        assert_eq!(report["scope"], scope);
+        assert!(!dead_state.root.exists());
+        assert!(
+            report["rooms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|room| room["name"] != dead_state.dir_name.as_str())
+        );
+        let state = env.state_path_for(root);
+        assert!(state.auto_gc_stamp.exists());
+        let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+        let record = records.iter().find(|record| matches!(&record.assist, rimz::harness::assist_log::Assist::AutoGc { workspace_id, .. } if workspace_id == &state.workspace_id)).unwrap();
+        let assist = serde_json::to_value(&record.assist).unwrap();
+        assert_eq!(assist["scope"], scope);
+        assert_eq!(assist["workspaces_pruned"], usize::from(scope == "machine"));
+        let own = report["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|room| room["name"] == state.dir_name.as_str())
+            .unwrap();
+        let expected: serde_json::Map<String, serde_json::Value> = own["classes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|class| {
+                (
+                    class["class"].as_str().unwrap().to_owned(),
+                    class["bytes_removed"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(assist["class_bytes"], serde_json::Value::Object(expected));
+        let stamp = std::fs::read(&machine_stamp).unwrap();
+        if scope == "machine" {
+            first_stamp = stamp;
+        } else {
+            assert_eq!(stamp, first_stamp);
+        }
+    }
+}
+
 #[test]
 fn gc_preserves_quiet_loop_and_message_wake_lanes() {
     let env = Env::new();
@@ -151,10 +318,10 @@ fn gc_prunes_dead_root_workspace() {
     std::fs::write(&tmp_file, b"tmp").expect("write tmp");
     std::fs::remove_dir_all(&gone_root).expect("remove gone root");
 
-    // `gc` is the global garbage collector: it reaps provably-dead workspaces
+    // `gc --all` is the global garbage collector: it reaps provably-dead workspaces
     // alongside runtime liveness hints.
     env.rimz()
-        .args(["gc", "--older-than", "1h"])
+        .args(["gc", "--all", "--older-than", "1h"])
         .assert()
         .success()
         .stdout(contains("reclaimed"));
@@ -198,7 +365,7 @@ fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
     let gone_paths = env.state_path_for(&gone);
     std::fs::remove_dir_all(gone).unwrap();
     env.rimz()
-        .args(["gc"])
+        .args(["gc", "--all"])
         .assert()
         .success()
         .stdout(contains("1 wait log pruned"));
@@ -220,7 +387,11 @@ fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
         .unwrap()
         .set_modified(SystemTime::now() - Duration::from_secs(15 * 24 * 3600))
         .unwrap();
-    let output = env.rimz().args(["gc", "--json"]).assert().success();
+    let output = env
+        .rimz()
+        .args(["gc", "--all", "--json"])
+        .assert()
+        .success();
     let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
     assert_eq!(report["wait_logs_pruned"], 1);
     assert!(!log.exists());
@@ -245,7 +416,7 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
     std::fs::write(history.join("log/events.log.jsonl"), b"{}\n").expect("history");
 
     env.rimz()
-        .args(["gc", "--older-than", "1h"])
+        .args(["gc", "--all", "--older-than", "1h"])
         .assert()
         .success()
         .stdout(contains("reclaimed"))
@@ -297,7 +468,7 @@ fn gc_reaps_dead_loop_delivery_schedule() {
     .expect("write agents config");
 
     env.rimz()
-        .args(["gc", "--older-than", "1h"])
+        .args(["gc", "--all", "--older-than", "1h"])
         .assert()
         .success()
         .stdout(contains("loop schedules"))
@@ -472,7 +643,7 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
         .unwrap();
 
     env.rimz()
-        .args(["gc", "--older-than", "1h"])
+        .args(["gc", "--all", "--older-than", "1h"])
         .assert()
         .success()
         .stdout(contains("reclaimed"))
@@ -575,7 +746,7 @@ fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
     };
 
     write_machine_config(&env, "[gc]\nauto = false\n");
-    env.store();
+    env.record(&env.project_root);
     unattended();
     assert!(
         !state.auto_gc_stamp.exists(),

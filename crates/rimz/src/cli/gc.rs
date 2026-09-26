@@ -11,9 +11,10 @@ use serde::Serialize;
 
 use super::render::{self, fmt_bytes, paint, palette};
 use super::spinner::Spinner;
-use super::{GlobalFlags, open_store};
+use super::{GlobalFlags, open_existing_store};
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{self, Assist, AssistRecord};
+use rimz::harness::auto_gc::{self, GcScope};
 use rimz::store::event_log::RepairOutcome;
 use rimz::store::gc;
 use rimz::utils::time::format_duration_compact;
@@ -32,6 +33,9 @@ pub struct GcArgs {
     /// Emit the garbage collection report as JSON.
     #[arg(long)]
     json: bool,
+    /// Sweep every room and shared machine state.
+    #[arg(long, conflicts_with = "unattended")]
+    all: bool,
     /// Run as the room's automatic daily sweep: honour `gc.auto`, then record
     /// the assist and the workspace sweep stamp.
     #[arg(long, hide = true, conflicts_with = "dry_run")]
@@ -39,7 +43,7 @@ pub struct GcArgs {
 }
 
 pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
-    let outcome = if args.unattended {
+    let older_than = if args.unattended {
         // A destructive automation never starts from a config that fails to
         // parse: lenient defaults would re-enable a `gc.auto = false` opt-out.
         let Ok(config) = MachineConfig::load() else {
@@ -48,13 +52,46 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         if !config.gc.auto {
             return Ok(());
         }
-        sweep_unattended(args.older_than.unwrap_or(config.gc.older_than), globals)?
+        args.older_than.unwrap_or(config.gc.older_than)
     } else {
-        let older_than = args
-            .older_than
-            .unwrap_or(MachineConfig::load_lenient().gc.older_than);
-        sweep(older_than, args.dry_run, globals)?
+        args.older_than
+            .unwrap_or(MachineConfig::load_lenient().gc.older_than)
     };
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving the room for gc; run inside a room or pass --root")?;
+    let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
+        .context("preparing store paths")?;
+    let machine_claim = args
+        .unattended
+        .then(|| auto_gc::claim_machine_sweep(jiff::Timestamp::now()))
+        .flatten();
+    let scope = if args.all || machine_claim.is_some() {
+        GcScope::Machine
+    } else {
+        GcScope::Room
+    };
+    let result = sweep(older_than, args.dry_run, scope, &workspace, &paths, globals);
+    if args.unattended {
+        // Stamp failed attempts too, so persistent failures retry daily rather than per room.
+        let now = jiff::Timestamp::now();
+        assist_log::append(&AssistRecord {
+            at: now,
+            assist: auto_gc_assist(
+                &workspace.workspace_id,
+                paths.dir_name.as_str(),
+                scope,
+                older_than,
+                &result,
+            ),
+        });
+        if machine_claim.is_some() {
+            auto_gc::write_machine_stamp(now)?;
+        }
+        if paths.root.is_dir() {
+            auto_gc::write_stamp(&paths, now)?;
+        }
+    }
+    let outcome = result?;
     if args.json {
         print_json_report(&outcome)?;
     } else {
@@ -64,27 +101,10 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-/// Sweep, then record the attempt, failed or not, in the assist log and the
-/// workspace stamp so a persistent failure retries daily instead of per tick.
-fn sweep_unattended(older_than: Duration, globals: &GlobalFlags) -> Result<GcOutcome> {
-    let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
-        .context("resolving the workspace for automatic gc")?;
-    let result = sweep(older_than, false, globals);
-    let now = jiff::Timestamp::now();
-    assist_log::append(&AssistRecord {
-        at: now,
-        assist: auto_gc_assist(&workspace.workspace_id, older_than, &result),
-    });
-    let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
-        .context("preparing store paths")?;
-    if paths.root.is_dir() {
-        rimz::harness::auto_gc::write_stamp(&paths, now)?;
-    }
-    result
-}
-
 fn auto_gc_assist(
     workspace_id: &rimz::WorkspaceId,
+    room_name: &str,
+    scope: GcScope,
     older_than: Duration,
     result: &Result<GcOutcome>,
 ) -> Assist {
@@ -103,14 +123,19 @@ fn auto_gc_assist(
         },
     );
     let mut class_bytes = std::collections::BTreeMap::new();
-    for room in &outcome.runtime.rooms {
+    for room in outcome
+        .runtime
+        .rooms
+        .iter()
+        .filter(|room| room.name == room_name)
+    {
         for class in &room.classes {
             *class_bytes.entry(class.class.clone()).or_default() += class.bytes_removed;
         }
     }
     Assist::AutoGc {
         workspace_id: workspace_id.clone(),
-        scope: rimz::harness::auto_gc::GcScope::Machine,
+        scope,
         older_than_secs: older_than.as_secs(),
         reclaimed_bytes: outcome.reclaimed_bytes(),
         class_bytes,
@@ -128,81 +153,105 @@ fn auto_gc_assist(
     }
 }
 
-fn sweep(older_than: Duration, dry_run: bool, globals: &GlobalFlags) -> Result<GcOutcome> {
+fn sweep(
+    older_than: Duration,
+    dry_run: bool,
+    scope: GcScope,
+    workspace: &rimz::ResolvedWorkspace,
+    paths: &rimz::StatePaths,
+    globals: &GlobalFlags,
+) -> Result<GcOutcome> {
     let spinner = Spinner::new("starting gc…");
+    let prune = if scope == GcScope::Machine {
+        spinner.set("pruning dead workspaces…");
+        gc::prune_dead_workspaces(dry_run).context("pruning dead workspaces")?
+    } else {
+        gc::WorkspacePruneReport::default()
+    };
     spinner.set("sweeping room state…");
-    let report = gc::collect_classes(older_than, dry_run, |runtime, name| {
+    let watcher_is_live = |runtime: &rimz::RuntimePaths, name: &str| {
         rimz::harness::schedule::signal::watcher_info(runtime, name)
             .map(|watcher| watcher.is_some())
-    })
+    };
+    let report = match scope {
+        GcScope::Room => gc::collect_room(paths, older_than, dry_run, watcher_is_live),
+        GcScope::Machine => gc::collect_classes(older_than, dry_run, watcher_is_live),
+    }
     .context("collecting room garbage")?;
     let store_maintenance = if dry_run {
         StoreMaintenance::SkippedDryRun
     } else {
         spinner.set("repairing store…");
-        match WorkspaceResolver::resolve(".", globals.root.clone()) {
-            Ok(workspace) => match open_store(&workspace) {
-                Ok(store) => {
-                    // Repair before the sweep: the sweep's forced publish folds the
-                    // log and would self-heal a corpse itself, leaving this explicit
-                    // repair nothing to find — and the report below silent about a
-                    // cut this very run made.
-                    let repaired = store
-                        .repair_event_log()
-                        .context("repairing the event log")?;
-                    spinner.set("archiving orphan messages…");
-                    let messages_archived = store
-                        .archive_orphan_messages(&workspace.session_name)
-                        .context("archiving orphan messages")?;
-                    let reconcile = store
-                        .reconcile_stale_sent_messages(
-                            &workspace.session_name,
-                            jiff::Timestamp::now(),
-                            rimz::message::max_delivery_attempts_from_env(),
-                        )
-                        .context("reconciling sent messages")?;
-                    spinner.set("pruning store caches...");
-                    let carryover_pruned = store
-                        .prune_carryover(rimz::store::event_log::DEFAULT_RETENTION)
-                        .context("pruning carryover agents")?;
-                    StoreMaintenance::Done {
-                        archived: messages_archived,
-                        reconciled: reconcile.requeued + reconcile.timed_out,
-                        repaired,
-                        carryover_pruned,
-                    }
+        match open_existing_store(workspace) {
+            Ok(Some(store)) => {
+                // Repair before the sweep: the sweep's forced publish folds the
+                // log and would self-heal a corpse itself, leaving this explicit
+                // repair nothing to find — and the report below silent about a
+                // cut this very run made.
+                let repaired = store
+                    .repair_event_log()
+                    .context("repairing the event log")?;
+                spinner.set("archiving orphan messages…");
+                let messages_archived = store
+                    .archive_orphan_messages(&workspace.session_name)
+                    .context("archiving orphan messages")?;
+                let reconcile = store
+                    .reconcile_stale_sent_messages(
+                        &workspace.session_name,
+                        jiff::Timestamp::now(),
+                        rimz::message::max_delivery_attempts_from_env(),
+                    )
+                    .context("reconciling sent messages")?;
+                spinner.set("pruning store caches...");
+                let carryover_pruned = store
+                    .prune_carryover(rimz::store::event_log::DEFAULT_RETENTION)
+                    .context("pruning carryover agents")?;
+                StoreMaintenance::Done {
+                    archived: messages_archived,
+                    reconciled: reconcile.requeued + reconcile.timed_out,
+                    repaired,
+                    carryover_pruned,
                 }
-                Err(err) => {
-                    tracing::debug!(
-                        error = %err,
-                        "workspace store unavailable; runtime gc continues"
-                    );
-                    StoreMaintenance::SkippedNoStore
-                }
-            },
-            Err(_) => StoreMaintenance::SkippedNoStore,
+            }
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    "workspace store unavailable; runtime gc continues"
+                );
+                StoreMaintenance::SkippedNoStore
+            }
+            Ok(None) => StoreMaintenance::SkippedNoStore,
         }
     };
     spinner.set("reaping dead schedules…");
     let (schedules_reaped, wait_logs_pruned) = if dry_run {
         (0, report.wait_outputs_removed)
     } else {
-        let reaped = rimz::harness::schedule::catalog::TaskCatalog::reap_dead_deliveries()
-            .context("reaping dead loop schedules")?;
-        let project_root = WorkspaceResolver::resolve(".", globals.root.clone())
-            .ok()
-            .map(|workspace| workspace.project_root);
-        rimz::harness::schedule::catalog::TaskCatalog::load(project_root.as_deref())?
+        let reaped = match scope {
+            GcScope::Room => {
+                rimz::harness::schedule::catalog::TaskCatalog::reap_dead_deliveries_for(
+                    &workspace.project_root,
+                )
+            }
+            GcScope::Machine => {
+                rimz::harness::schedule::catalog::TaskCatalog::reap_dead_deliveries()
+            }
+        }
+        .context("reaping dead loop schedules")?;
+        rimz::harness::schedule::catalog::TaskCatalog::load(Some(&workspace.project_root))?
             .prune_orphan_overlays()
             .context("pruning orphan loop arming state")?;
         (reaped, report.wait_outputs_removed)
     };
-    spinner.set("pruning dead workspaces…");
-    let prune = gc::prune_dead_workspaces(dry_run).context("pruning dead workspaces")?;
     spinner.set("sweeping orphan temps…");
-    let temps = gc::collect_orphan_temps(older_than, dry_run);
-    let worktrees = sweep_worktrees(globals, &spinner, dry_run);
+    let temps = match scope {
+        GcScope::Room => gc::collect_room_orphan_temps(paths, older_than, dry_run)?,
+        GcScope::Machine => gc::collect_orphan_temps(older_than, dry_run),
+    };
+    let worktrees = sweep_worktrees(workspace, globals, &spinner, dry_run);
     Ok(GcOutcome {
+        scope,
+        room_name: paths.dir_name.to_string(),
         dry_run,
         older_than,
         runtime: report,
@@ -217,6 +266,8 @@ fn sweep(older_than: Duration, dry_run: bool, globals: &GlobalFlags) -> Result<G
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct GcOutcome {
+    scope: GcScope,
+    room_name: String,
     dry_run: bool,
     older_than: Duration,
     runtime: gc::GcReport,
@@ -329,14 +380,16 @@ impl WorktreeSkip {
     }
 }
 
-fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> WorktreeSweepStatus {
-    let Ok(workspace) = WorkspaceResolver::resolve(".", globals.root.clone()) else {
-        return WorktreeSweepStatus::Skipped(WorktreeSkip::NotARepo);
-    };
+fn sweep_worktrees(
+    workspace: &rimz::ResolvedWorkspace,
+    globals: &GlobalFlags,
+    spinner: &Spinner,
+    dry_run: bool,
+) -> WorktreeSweepStatus {
     if workspace.root_class != rimz::workspace::RootClass::Repo {
         return WorktreeSweepStatus::Skipped(WorktreeSkip::NotARepo);
     }
-    let store = match open_store_for_worktree_gc(&workspace, dry_run) {
+    let store = match open_existing_store(workspace) {
         Ok(Some(store)) => store,
         Ok(None) => {
             tracing::debug!("workspace store absent; worktree gc skipped");
@@ -350,7 +403,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             return WorktreeSweepStatus::Skipped(WorktreeSkip::NoStore);
         }
     };
-    let protection = match super::worktree_protection::for_automatic_gc(&workspace, &store, globals)
+    let protection = match super::worktree_protection::for_automatic_gc(workspace, &store, globals)
     {
         Ok(protection) => protection,
         Err(err) => {
@@ -380,16 +433,6 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             WorktreeSweepStatus::Skipped(WorktreeSkip::ListFailed)
         }
     }
-}
-
-fn open_store_for_worktree_gc(
-    workspace: &rimz::ResolvedWorkspace,
-    dry_run: bool,
-) -> Result<Option<rimz::Store>> {
-    if !dry_run {
-        return open_store(workspace).map(Some);
-    }
-    super::open_existing_store(workspace)
 }
 
 fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
@@ -425,7 +468,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
 
     let skipped = skipped_area_count(out);
     let checked = GC_AREAS - skipped;
-    let checked_text = if skipped > 0 {
+    let mut checked_text = if skipped > 0 {
         format!(
             "checked {checked} of {GC_AREAS} areas · cutoff {}",
             format_duration_compact(out.older_than)
@@ -436,6 +479,10 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             format_duration_compact(out.older_than)
         )
     };
+    match out.scope {
+        GcScope::Room => checked_text.push_str(&format!(" · room {}", out.room_name)),
+        GcScope::Machine => checked_text.push_str(" · machine"),
+    }
     writeln!(w, "  {}", paint(palette::muted(), &checked_text))?;
     writeln!(w)?;
 
@@ -611,6 +658,14 @@ fn render_worktrees(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
 }
 
 fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    if out.scope == GcScope::Room {
+        return render_row(
+            w,
+            RowVerdict::Skipped,
+            "workspaces",
+            "skipped — machine area, run with --all",
+        );
+    }
     let removed = out.prune.removed.len();
     let unreadable = out.prune.retained_unreadable.len();
     let outcome = if removed > 0 {
@@ -859,7 +914,7 @@ fn skipped_area_count(out: &GcOutcome) -> usize {
         StoreMaintenance::SkippedDryRun | StoreMaintenance::SkippedNoStore => 3,
     };
     let schedules = usize::from(out.dry_run);
-    worktree + store + schedules
+    worktree + store + schedules + usize::from(out.scope == GcScope::Room)
 }
 
 fn kept_summary(kept: &[KeptWorktree]) -> String {
@@ -932,6 +987,7 @@ fn print_json_report(outcome: &GcOutcome) -> Result<()> {
 
 #[derive(Serialize)]
 struct JsonReport {
+    scope: GcScope,
     dry_run: bool,
     older_than_secs: u64,
     reclaimed_bytes: u64,
@@ -951,11 +1007,15 @@ struct JsonReport {
 impl From<&GcOutcome> for JsonReport {
     fn from(out: &GcOutcome) -> Self {
         Self {
+            scope: out.scope,
             dry_run: out.dry_run,
             older_than_secs: out.older_than.as_secs(),
             reclaimed_bytes: out.reclaimed_bytes(),
             worktrees: JsonWorktrees::from(&out.worktrees),
-            workspaces: JsonWorkspaces::from(&out.prune),
+            workspaces: JsonWorkspaces {
+                skipped: (out.scope == GcScope::Room).then_some("room_scope"),
+                ..JsonWorkspaces::from(&out.prune)
+            },
             temps: JsonTemps::from(&out.temps),
             runtime: JsonRuntime::from(&out.runtime),
             rooms: out.runtime.rooms.clone(),
@@ -1058,6 +1118,7 @@ impl From<&KeptWorktree> for JsonKeptWorktree {
 
 #[derive(Serialize)]
 struct JsonWorkspaces {
+    skipped: Option<&'static str>,
     removed: Vec<JsonRemovedWorkspace>,
     retained_unreadable: Vec<JsonRetainedWorkspace>,
     kept: usize,
@@ -1066,6 +1127,7 @@ struct JsonWorkspaces {
 impl From<&gc::WorkspacePruneReport> for JsonWorkspaces {
     fn from(report: &gc::WorkspacePruneReport) -> Self {
         Self {
+            skipped: None,
             removed: report
                 .removed
                 .iter()
@@ -1268,9 +1330,40 @@ mod tests {
         let json = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
         assert_eq!(json["rooms"][0]["classes"][0]["bytes_removed"], 12);
         let id = rimz::WorkspaceId::from_project_root(std::path::Path::new("/test"));
-        let assist = auto_gc_assist(&id, Duration::ZERO, &Ok(outcome));
+        outcome.runtime.rooms.push(gc::RoomReport {
+            name: "other-abcd".to_owned(),
+            classes: vec![gc::ClassReport {
+                class: "audit".to_owned(),
+                bytes_removed: 99,
+                ..gc::ClassReport::default()
+            }],
+            ..gc::RoomReport::default()
+        });
+        let assist = auto_gc_assist(
+            &id,
+            "test-abcd",
+            GcScope::Room,
+            Duration::ZERO,
+            &Ok(outcome),
+        );
         let json = serde_json::to_value(assist).unwrap();
         assert_eq!(json["class_bytes"]["audit"], 12);
+        assert_eq!(json["scope"], "room");
+    }
+
+    #[test]
+    fn room_report_names_scope_and_skips_machine_area() {
+        let outcome = GcOutcome {
+            scope: GcScope::Room,
+            room_name: "test-abcd".to_owned(),
+            ..clean_outcome()
+        };
+        let out = strip_report(&outcome);
+        assert!(out.contains("checked 7 of 8 areas · cutoff 1h · room test-abcd"));
+        assert!(out.contains("– workspaces      skipped — machine area, run with --all"));
+        let json = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
+        assert_eq!(json["scope"], "room");
+        assert_eq!(json["workspaces"]["skipped"], "room_scope");
     }
 
     #[test]
@@ -1278,7 +1371,7 @@ mod tests {
         let out = strip_report(&clean_outcome());
 
         assert!(out.contains("gc — all clean, nothing to reclaim"));
-        assert!(out.contains("checked 8 areas · cutoff 1h"));
+        assert!(out.contains("checked 8 areas · cutoff 1h · machine"));
         assert!(out.contains("✓ worktrees"));
         assert!(out.contains("3 kept — 2 in use, 1 not merged yet"));
         assert!(out.contains("✓ workspaces"));
@@ -1409,6 +1502,8 @@ mod tests {
         let value = serde_json::to_value(JsonReport::from(&full_outcome(false))).unwrap();
 
         assert_eq!(value["dry_run"], false);
+        assert_eq!(value["scope"], "machine");
+        assert!(value["workspaces"]["skipped"].is_null());
         assert_eq!(value["older_than_secs"], 3600);
         assert_eq!(value["worktrees"]["removed"][0]["name"], "demo");
         assert_eq!(value["worktrees"]["removed"][0]["branch_deleted"], true);
@@ -1482,6 +1577,8 @@ mod tests {
 
     fn full_outcome(dry_run: bool) -> GcOutcome {
         GcOutcome {
+            scope: GcScope::Machine,
+            room_name: String::new(),
             dry_run,
             older_than: Duration::from_secs(3600),
             runtime: gc::GcReport {
