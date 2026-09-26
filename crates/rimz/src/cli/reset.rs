@@ -49,10 +49,12 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         mux,
         &workspace.session_name,
     )?)?;
-    // The rebirth takes the state dir name; refuse before the teardown when
-    // that name cannot be born.
+    // The rebirth takes the state dir name on the backend `start` resolves once
+    // the room is gone, which can differ from the owner; refuse before the
+    // teardown when that name cannot be born there.
     if !args.no_start {
-        super::room::birth_socket_preflight(mux, false, &workspace.project_root)?;
+        let rebirth_mux = rimz::mux::auto_detect_backend(globals.mux)?;
+        super::room::birth_socket_preflight(rebirth_mux, false, &workspace.project_root)?;
     }
 
     if !args.yes {
