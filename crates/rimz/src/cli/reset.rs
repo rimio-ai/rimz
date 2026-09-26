@@ -49,6 +49,11 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         mux,
         &workspace.session_name,
     )?)?;
+    // The rebirth takes the state dir name; refuse before the teardown when
+    // that name cannot be born.
+    if !args.no_start {
+        super::room::birth_socket_preflight(mux, false, &workspace.project_root)?;
+    }
 
     if !args.yes {
         if !std::io::stdin().is_terminal() {

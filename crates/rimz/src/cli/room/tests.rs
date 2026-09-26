@@ -1,10 +1,22 @@
 use std::path::PathBuf;
 
 use super::{
-    ResumePromptMode, preflight_machine_accounts, resume_prompt_mode, write_project_trust_offer_to,
+    ResumePromptMode, birth_socket_name, preflight_machine_accounts, resume_prompt_mode,
+    write_project_trust_offer_to,
 };
 
+use rimz::ids::MuxName;
 use rimz::trust::{BirthPromptOffer, SurfaceSummary};
+
+#[test]
+fn zellij_birth_preflights_the_state_dir_name_only_when_the_room_is_dead() {
+    assert_eq!(
+        birth_socket_name(MuxName::Zellij, false, "repo-abcd"),
+        Some("repo-abcd")
+    );
+    assert_eq!(birth_socket_name(MuxName::Zellij, true, "repo-abcd"), None);
+    assert_eq!(birth_socket_name(MuxName::Tmux, false, "repo-abcd"), None);
+}
 
 #[test]
 fn machine_account_preflight_propagates_only_account_config_errors() {

@@ -496,6 +496,25 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         was_live,
     )?;
 
+    // Every entry that births a room resolves and freezes its accounts; only
+    // `start` takes flags, and only `start` re-judges a room already live.
+    let birth_root = match &entry {
+        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
+            Some(workspace.project_root.as_path())
+        }
+        _ if was_live => None,
+        RoomEntry::AttachCwd { workspace, .. } => Some(workspace.project_root.as_path()),
+        RoomEntry::WebSession { record, .. } => Some(record.project_root.as_path()),
+        RoomEntry::AttachSession {
+            record: Ok(Some(record)),
+            ..
+        } => Some(record.project_root.as_path()),
+        RoomEntry::AttachSession { .. } => None,
+    };
+    if let Some(project_root) = birth_root {
+        birth_socket_preflight(mux, was_live, project_root)?;
+    }
+
     let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
         ensure_detected_agent_hooks(start_attended())?
     } else {
@@ -533,21 +552,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         prompt_project_trust(&workspace.project_root);
     }
 
-    // Every entry that births a room resolves and freezes its accounts; only
-    // `start` takes flags, and only `start` re-judges a room already live.
-    let birth_root = match &entry {
-        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
-            Some(workspace.project_root.as_path())
-        }
-        _ if was_live => None,
-        RoomEntry::AttachCwd { workspace, .. } => Some(workspace.project_root.as_path()),
-        RoomEntry::WebSession { record, .. } => Some(record.project_root.as_path()),
-        RoomEntry::AttachSession {
-            record: Ok(Some(record)),
-            ..
-        } => Some(record.project_root.as_path()),
-        RoomEntry::AttachSession { .. } => None,
-    };
     let requested = match &entry {
         RoomEntry::Start { args, .. } => crate::cli::accounts::requested_logins(&args.account)?,
         _ => RoomLogins::new(),
@@ -911,6 +915,27 @@ fn write_project_trust_notice(lines: &[&str]) -> std::io::Result<()> {
     let mut out = render::err();
     for line in lines {
         writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+/// The session name a Zellij birth will take and must fit the socket budget:
+/// a dead room is born under its state dir name, which can differ from the
+/// recorded name the entry preflight judged. A live room keeps its name.
+fn birth_socket_name(mux: MuxName, was_live: bool, dir_name: &str) -> Option<&str> {
+    (mux == MuxName::Zellij && !was_live).then_some(dir_name)
+}
+
+/// Refuse, before the room is touched, a birth whose session name would
+/// overflow Zellij's socket path.
+pub(in crate::cli) fn birth_socket_preflight(
+    mux: MuxName,
+    was_live: bool,
+    project_root: &Path,
+) -> Result<()> {
+    let paths = rimz::StatePaths::for_project_root(project_root)?;
+    if let Some(name) = birth_socket_name(mux, was_live, paths.dir_name.as_str()) {
+        rimz::mux::zellij::socket_preflight(name)?;
     }
     Ok(())
 }
