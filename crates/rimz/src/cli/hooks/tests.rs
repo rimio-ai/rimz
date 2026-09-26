@@ -1,5 +1,5 @@
-use super::lifecycle::fill_root_launch_identity;
 use super::lifecycle::handle_lifecycle_hook;
+use super::lifecycle::{fill_root_launch_identity, root_identity_rollup};
 use super::proctree::matches_agent_kind;
 use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
@@ -742,6 +742,40 @@ fn root_launch_identity_seeds_model_and_effort_independently() {
         assert_eq!(observed.launch.launch_ordinal, Some(2));
         assert_eq!(observed.launch.profile.as_deref(), Some("codex-coder"));
     }
+}
+
+#[test]
+fn root_identity_rollup_seeds_until_observed_and_hints_the_shown_model() {
+    let (_dir, store) = hooks_test_store();
+    let claude = rimz::agents::definition_by_kind("claude").unwrap();
+    assert_eq!(
+        root_identity_rollup(&store, "claude", &root_observation()),
+        ((true, true), None)
+    );
+
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-1",
+        "cwd": "/tmp/hooks-test",
+        "source": "startup",
+        "model": "claude-fable-5-1",
+    });
+    let mut decoded = claude.decode_hook("SessionStart", &payload).unwrap();
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        &store,
+        claude,
+        &mut decoded,
+        &payload,
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        root_identity_rollup(&store, "claude", &root_observation()),
+        ((false, true), Some("claude-fable-5-1".to_owned()))
+    );
 }
 
 #[test]
