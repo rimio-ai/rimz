@@ -42,9 +42,9 @@ Stage: <stage> (@<owner>)
 <verification evidence, the link to what shipped>
 ```
 
-The board is the leader's first product. On its first turn the leader writes `blackboard.md` with the Goal filled in (the request restated, and the path of any document it arrived as) above the empty Decisions, Progress, and Result sections. Then it flips to the first stage with the note `board opened; <aim>`. The flip adds the Stage line and the first Progress record, and wakes that stage's owner onto a board that already says what the run is for.
+The board is the leader's first product. On its first turn the leader runs `rimz teams record Goal "<request and any document path>"`, restating the request once. This creates the board with empty Decisions, Progress, and Result sections. Then it flips to the first stage with the note `board opened; <aim>`. The flip adds the Stage line and the first Progress record, and wakes that stage's owner onto a board that already says what the run is for.
 
-The Stage line and the Progress records belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Every other section appends: when the picture changes, add a line with the newer truth and leave the old ones standing.
+The Stage line and the Progress records belong to `rimz teams flip`. Progress holds stage changes and nothing else; what happened inside a stage lives in the stage file. Add to Goal, Decisions, or Result with `rimz teams record <section> "<text>"` (or `--file PATH` or `--stdin`). It appends a timestamped entry under your role while holding the same board lock as a flip, and prints what it wrote. When the picture changes, append the newer truth and leave the old lines standing. Amending an existing line is a direct edit and takes no lock.
 
 ### Stage files
 

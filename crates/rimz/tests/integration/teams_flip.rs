@@ -1,4 +1,4 @@
-//! Stage hand-offs through the CLI, durable store, and native hook delivery boundary.
+//! Board commands through the CLI, durable store, and native hook delivery boundary.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -28,6 +28,159 @@ roles:
     agent: worker
     owns: [Review]
 "#;
+
+#[test]
+fn record_bootstraps_without_a_cohort_or_side_effects_then_flip_uses_the_board() {
+    let fixture = Fixture::new();
+    let entry = success(
+        fixture
+            .command()
+            .args(["teams", "record", "Goal", "Ship it."])
+            .output()
+            .unwrap(),
+    );
+    assert!(entry.contains(" @user: Ship it.\n"), "{entry}");
+    assert_eq!(
+        std::fs::read_to_string(fixture.board()).unwrap(),
+        format!("# Blackboard\n\n## Goal\n{entry}\n## Decisions\n\n## Progress\n\n## Result\n")
+    );
+    assert!(fixture.signals().is_empty());
+    assert!(
+        fixture
+            .env
+            .store()
+            .list_pending_messages()
+            .unwrap()
+            .is_empty()
+    );
+    fixture.seed("coder", None);
+    success(fixture.flip("Build", Some("coder"), Some("Start.")));
+    let board = std::fs::read_to_string(fixture.board()).unwrap();
+    assert!(board.starts_with("# Blackboard\nStage: Build (@coder)\n"));
+    assert!(board.contains(&entry));
+    assert_eq!(board.matches("## Progress").count(), 1);
+    assert!(board.contains("@coder: opened Build"));
+}
+
+#[test]
+fn record_member_multiline_stdin_and_file_print_exact_receipts() {
+    let fixture = Fixture::new();
+    fixture.seed("coder", None);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let mut command = fixture.command();
+    command
+        .args(["teams", "record", "Goal", "--stdin"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch_coder")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = fixture
+        .env
+        .spawn_payload(command, "first\r\n## Injected\n\nStage: Done\n")
+        .wait_with_output()
+        .unwrap();
+    let entry = success(output);
+    assert!(
+        entry.ends_with("@coder: first\n  ## Injected\n\n  Stage: Done\n"),
+        "{entry}"
+    );
+    let board = std::fs::read_to_string(fixture.board()).unwrap();
+    assert!(board.contains(&entry));
+    assert!(board.contains("Stage: Build (@coder)"));
+    assert!(!board.contains("\n## Injected"));
+    let file = fixture.env.project_root.join("entry.txt");
+    std::fs::write(&file, "Outcome\nnext").unwrap();
+    let entry = success(
+        fixture
+            .command()
+            .args(["teams", "record", "Result", "--file"])
+            .arg(file)
+            .output()
+            .unwrap(),
+    );
+    assert!(entry.ends_with("@user: Outcome\n  next\n"));
+    assert!(
+        std::fs::read_to_string(fixture.board())
+            .unwrap()
+            .contains(&entry)
+    );
+    assert!(fixture.signals().is_empty());
+    assert!(
+        fixture
+            .env
+            .store()
+            .list_pending_messages()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn record_refusals_leave_board_unchanged() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    for (section, text, expected) in [
+        (
+            "Progress",
+            "x",
+            "`Progress` belongs to `rimz teams flip`; record takes Goal, Decisions, or Result",
+        ),
+        (
+            "Progress log",
+            "x",
+            "`Progress log` belongs to `rimz teams flip`; record takes Goal, Decisions, or Result",
+        ),
+        (
+            "Stage",
+            "x",
+            "`Stage` belongs to `rimz teams flip`; record takes Goal, Decisions, or Result",
+        ),
+        (
+            "Evidence",
+            "x",
+            "unknown board section `Evidence`; choose Goal, Decisions, or Result",
+        ),
+        (
+            "Goal",
+            " \r\n ",
+            "provide nonblank text for the board entry",
+        ),
+    ] {
+        let output = fixture
+            .command()
+            .args(["teams", "record", section, text])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "{output:?}"
+        );
+        assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
+    }
+}
+
+#[test]
+fn record_refuses_a_member_of_another_worktree() {
+    let fixture = Fixture::new();
+    let elsewhere = tempfile::tempdir().unwrap();
+    fixture.seed_member("coder", "coder", None, "elsewhere", elsewhere.path());
+    let output = fixture
+        .command()
+        .args(["teams", "record", "Goal", "x"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch_coder")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("calling agent belongs to a team cohort in another worktree"),
+        "{output:?}"
+    );
+    assert!(!fixture.board().exists());
+}
 
 #[test]
 fn done_flip_stops_checkout_server_but_review_does_not() {

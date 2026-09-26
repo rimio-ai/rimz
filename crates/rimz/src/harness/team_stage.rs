@@ -9,7 +9,6 @@ use serde_json::{Map, Value};
 use crate::Store;
 use crate::agents::AgentState;
 use crate::config::{DONE_STAGE, MachineConfig, Team};
-use crate::disk::{atomic, lock::WorkspaceLock};
 use crate::ids::{EventId, MessageId, MuxName, PaneId};
 use crate::message::compact::{self, CompactErr, CompactOutcome, CompactRequest};
 use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequest};
@@ -18,6 +17,7 @@ use crate::store::message::{AutoCompact, DeliveryGate, HarnessNotice, MessageSen
 use crate::workspace::ResolvedWorkspace;
 
 use super::assist_log::{self, Assist, AssistRecord};
+use super::board::{BoardErr, LockedBoard, rewrite_board, stamp};
 use super::schedule::signal::{Signal, fire_signal};
 use super::scratch::parse_board_stage;
 
@@ -192,9 +192,7 @@ pub enum FlipErr {
         source: std::io::Error,
     },
     #[error(transparent)]
-    Lock(#[from] crate::disk::lock::LockErr),
-    #[error(transparent)]
-    Atomic(#[from] atomic::AtomicErr),
+    Board(#[from] BoardErr),
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
@@ -222,11 +220,11 @@ impl FlipErr {
 
 pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
     let owner = resolve_owner(request.team_name, request.team, request.to)?;
-    let worktree = canonical_worktree(request.worktree)?;
-    let board = worktree.join("blackboard.md");
-    let _lock = WorkspaceLock::acquire(&request.store.runtime_paths().board_lock(&worktree))?;
-    let text = read_board(&board)?;
-    let from = parse_board_stage(&text).map(|stage| stage.name);
+    let locked = LockedBoard::open(request.store, request.worktree)?;
+    let worktree = locked.worktree.clone();
+    let board = locked.path.clone();
+    let text = &locked.text;
+    let from = parse_board_stage(text).map(|stage| stage.name);
     if hands_off(&request.by, request.team, from.as_deref(), owner) {
         let paths = uncommitted_paths(&worktree)?;
         if !paths.is_empty() {
@@ -240,8 +238,8 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
         request.to,
         request.note,
     );
-    let rewritten = rewrite_board(&text, request.to, owner, &ledger);
-    atomic::write_bytes_atomically(&board, rewritten.as_bytes())?;
+    let rewritten = rewrite_board(text, request.to, owner, &ledger);
+    locked.write(&rewritten)?;
     let opening = StageOpening {
         workspace: request.workspace,
         store: request.store,
@@ -288,11 +286,10 @@ pub fn rewake(
     if team.owned_stages().next().is_none() {
         return Ok(None);
     }
-    let worktree = canonical_worktree(worktree)?;
-    let board = worktree.join("blackboard.md");
-    let _lock = WorkspaceLock::acquire(&store.runtime_paths().board_lock(&worktree))?;
-    let text = read_board(&board)?;
-    let Some(stage) = parse_board_stage(&text) else {
+    let locked = LockedBoard::open(store, worktree)?;
+    let board = locked.path.clone();
+    let text = &locked.text;
+    let Some(stage) = parse_board_stage(text) else {
         return Ok(None);
     };
     if stage.name == DONE_STAGE
@@ -333,24 +330,6 @@ pub fn rewake(
         compaction: Compaction::Ineligible,
         signal_event,
     }))
-}
-
-fn canonical_worktree(worktree: &Path) -> Result<PathBuf, FlipErr> {
-    worktree.canonicalize().map_err(|source| FlipErr::Io {
-        path: worktree.to_path_buf(),
-        source,
-    })
-}
-
-fn read_board(board: &Path) -> Result<String, FlipErr> {
-    match std::fs::read_to_string(board) {
-        Ok(text) => Ok(text),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(source) => Err(FlipErr::Io {
-            path: board.to_path_buf(),
-            source,
-        }),
-    }
 }
 
 /// The pipeline as every human surface prints it: `A → [current] → Done`, terminal stage included.
@@ -723,83 +702,22 @@ fn compact_flipper(
     }
 }
 
-fn ledger_line(now: Timestamp, by: &str, from: Option<&str>, to: &str, note: &str) -> String {
-    let at = now.to_zoned(MachineConfig::load_lenient().time_zone());
+pub(super) fn ledger_line(
+    now: Timestamp,
+    by: &str,
+    from: Option<&str>,
+    to: &str,
+    note: &str,
+) -> String {
     let transition = match from {
         Some(from) => format!("{from} -> {to}"),
         None => format!("opened {to}"),
     };
     format!(
         "- {} @{by}: {transition} — {}",
-        at.strftime(super::scratch::PROGRESS_STAMP_FORMAT),
+        stamp(now),
         note.replace(['\r', '\n'], " ")
     )
-}
-
-fn rewrite_board(text: &str, to: &str, owner: Option<&str>, ledger: &str) -> String {
-    let mut result = String::with_capacity(text.len() + ledger.len() + to.len() + 64);
-    let stage = match owner {
-        Some(owner) => format!("Stage: {to} (@{owner})"),
-        None => format!("Stage: {to}"),
-    };
-    let mut replaced = false;
-    for line in text.split_inclusive('\n') {
-        if !replaced && line.starts_with("Stage:") {
-            result.push_str(&stage);
-            if line.ends_with("\r\n") {
-                result.push_str("\r\n");
-            } else if line.ends_with('\n') {
-                result.push('\n');
-            }
-            replaced = true;
-        } else {
-            result.push_str(line);
-        }
-    }
-    if !replaced {
-        let at = if text.starts_with("# ") {
-            text.find('\n').map_or(text.len(), |at| at + 1)
-        } else {
-            0
-        };
-        let prefix = if at > 0 && !text[..at].ends_with('\n') {
-            "\n"
-        } else {
-            ""
-        };
-        result.insert_str(at, &format!("{prefix}{stage}\n"));
-    }
-    let mut offset = 0;
-    let mut insertion = None;
-    for line in result.split_inclusive('\n') {
-        let content = line.trim_end_matches(['\r', '\n']);
-        if insertion.is_some() && content.starts_with('#') {
-            break;
-        }
-        offset += line.len();
-        if matches!(content, "## Progress" | "## Progress log")
-            || (insertion.is_some() && !content.trim().is_empty())
-        {
-            insertion = Some(offset);
-        }
-    }
-    match insertion {
-        Some(at) => {
-            let prefix = if result[..at].ends_with('\n') {
-                ""
-            } else {
-                "\n"
-            };
-            result.insert_str(at, &format!("{prefix}{ledger}\n"));
-        }
-        None => {
-            if !result.ends_with('\n') {
-                result.push('\n');
-            }
-            result.push_str(&format!("\n## Progress\n{ledger}\n"));
-        }
-    }
-    result
 }
 
 #[cfg(test)]
@@ -821,120 +739,6 @@ mod tests {
             stage_strip(&stages, Some("Plan (delta)")),
             "Plan → Plan review → Done"
         );
-    }
-
-    #[test]
-    fn board_rewrite_preserves_freeform_sections_and_appends_inside_ledger() {
-        let board = "# Blackboard\r\nStage:Plan (@planner)\r\n\r\n## Goal\r\nKeep this.\r\n\r\n## Progress log\r\n- old entry\r\n\r\n## Result\r\nUnchanged.\r\n";
-        assert_eq!(
-            rewrite_board(board, "Implement", Some("coder"), "- next"),
-            "# Blackboard\r\nStage: Implement (@coder)\r\n\r\n## Goal\r\nKeep this.\r\n\r\n## Progress log\r\n- old entry\r\n- next\n\r\n## Result\r\nUnchanged.\r\n"
-        );
-        assert_eq!(
-            rewrite_board("Stage: Plan", "Done", None, "- done"),
-            "Stage: Done\n\n## Progress\n- done\n"
-        );
-        assert_eq!(
-            rewrite_board("# Board\n", "Done", None, "- done"),
-            "# Board\nStage: Done\n\n## Progress\n- done\n"
-        );
-    }
-
-    #[test]
-    fn board_rewrite_handles_empty_ledger_and_unterminated_lines() {
-        for (board, expected) in [
-            (
-                "Stage: Plan\n## Progress log\n\n## Result\n",
-                "Stage: Done\n## Progress log\n- done\n\n## Result\n",
-            ),
-            (
-                "Stage: Plan\n## Progress log",
-                "Stage: Done\n## Progress log\n- done\n",
-            ),
-            (
-                "Stage: Plan\n## Progress log\n- previous",
-                "Stage: Done\n## Progress log\n- previous\n- done\n",
-            ),
-            (
-                "Stage: Plan\nStage: untouched\n",
-                "Stage: Done\nStage: untouched\n\n## Progress\n- done\n",
-            ),
-        ] {
-            assert_eq!(rewrite_board(board, "Done", None, "- done"), expected);
-        }
-    }
-
-    #[test]
-    fn ledger_line_round_trips_run_times_to_the_second() {
-        let now = "2026-09-12T14:02:37Z".parse().unwrap();
-        let line = ledger_line(now, "user", Some("Plan"), "Done", "finished");
-        let (stamp, _) = line.strip_prefix("- ").unwrap().split_once(" @").unwrap();
-        assert_eq!(
-            Timestamp::strptime(super::super::scratch::PROGRESS_STAMP_FORMAT, stamp).unwrap(),
-            now
-        );
-        let worktree = tempfile::tempdir().unwrap();
-        std::fs::write(
-            worktree.path().join("blackboard.md"),
-            format!("Stage: Done\n## Progress\n{line}\n"),
-        )
-        .unwrap();
-        let run = super::super::scratch::board_run(
-            worktree.path(),
-            &MachineConfig::load_lenient().time_zone(),
-        )
-        .unwrap();
-        assert_eq!(run.started_at, Some(now));
-        assert_eq!(run.done_at, Some(now));
-    }
-
-    #[test]
-    fn multiline_note_cannot_inject_a_board_heading() {
-        let line = ledger_line(
-            "2026-09-12T14:02:00Z".parse().unwrap(),
-            "planner",
-            Some("Plan"),
-            "Implement",
-            "ready\n## Result\r\nStage: Done",
-        );
-        assert_eq!(line.lines().count(), 1);
-        assert!(line.ends_with("@planner: Plan -> Implement — ready ## Result  Stage: Done"));
-    }
-
-    #[test]
-    fn first_flip_bootstraps_stage_and_progress_without_losing_freeform_text() {
-        for (text, expected) in [
-            ("", "Stage: Explore (@planner)\n\n## Progress\n- opened\n"),
-            (
-                "# Work",
-                "# Work\nStage: Explore (@planner)\n\n## Progress\n- opened\n",
-            ),
-            (
-                "# Work\n\n## Goal\nFind the bug.\n",
-                "# Work\nStage: Explore (@planner)\n\n## Goal\nFind the bug.\n\n## Progress\n- opened\n",
-            ),
-            (
-                "A freeform board.\n",
-                "Stage: Explore (@planner)\nA freeform board.\n\n## Progress\n- opened\n",
-            ),
-            (
-                "## Progress\n- existing\n\n## Result\n",
-                "Stage: Explore (@planner)\n## Progress\n- existing\n- opened\n\n## Result\n",
-            ),
-        ] {
-            assert_eq!(
-                rewrite_board(text, "Explore", Some("planner"), "- opened"),
-                expected
-            );
-        }
-        let ledger = ledger_line(
-            "2026-09-12T14:02:00Z".parse().unwrap(),
-            "planner",
-            None,
-            "Explore",
-            "sweep aimed",
-        );
-        assert!(ledger.ends_with("@planner: opened Explore — sweep aimed"));
     }
 
     #[test]

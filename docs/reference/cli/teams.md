@@ -14,6 +14,7 @@ A team is a configured set of roles and a layout. Each role keeps its own model,
 | `rimz teams focus`, `stop`, `restart` | [Drive a live team](#drive-a-live-team). |
 | `rimz teams wait` | [Wait for a cohort to finish](#wait-for-a-cohort-to-finish). |
 | `rimz teams flip` | [Flip the board to the next stage](#flip-the-board-to-the-next-stage). |
+| `rimz teams record` | [Record an entry on the board](#record-an-entry-on-the-board). |
 | `rimz teams install` | [Install a team bundle](#install-a-team-bundle). |
 
 `rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend. Per-agent shaping (model, effort, prompts, permission mode, name, pane placement, supervised runs) stays on [`rimz agents`](./agents.md), which also launches one role of a team as `rimz agents forge.reviewer`. Every form takes the [global flags](../cli.md#global-flags).
@@ -308,6 +309,46 @@ With one name, a completed wait prints the board's `## Result` section on stdout
 ```
 
 `status` is `completed`, `failed`, or `timed_out`; `stage` is the board's stage when the wait ended (`null` without a board); `result` is the `## Result` section, `null` unless completed with one; a failed entry adds `error`.
+
+## Record an entry on the board
+
+`rimz teams record <SECTION> [TEXT] [--file PATH] [--stdin]` appends one timestamped entry to `blackboard.md` in the current worktree. SECTION is Goal, Decisions, or Result, case-insensitive. Supply exactly one of TEXT, `--file PATH`, or `--stdin`; files and stdin are read to EOF. Text loses carriage returns and surrounding whitespace, but keeps internal blank lines.
+
+Run it in the team's worktree. It uses `RIMZ_WORKTREE_PATH` when set, otherwise the current Git toplevel. No live cohort is required and there is no `--team` flag. A member of a cohort in this worktree records under its role; other callers record as `user`. A member of a cohort in another worktree is refused.
+
+Entries have the following shape (stamp in the configured machine time zone):
+
+```text
+- 2026-09-26T15:20:59+02:00 @planner: first line
+  second line
+
+  a paragraph after a blank line
+```
+
+Continuation lines are indented two spaces. The command appends after the section's last nonblank line. A missing section is inserted in Goal, Decisions, Progress, Result order, before the first later section present or at EOF. A missing or empty board gets this template, with the entry under the selected heading:
+
+```markdown
+# Blackboard
+
+## Goal
+
+## Decisions
+
+## Progress
+
+## Result
+```
+
+There is no Stage line until a flip. Success exits 0 and prints exactly the appended entry, including all its lines. Recording does not flip the stage, send messages, compact agents, or require a clean worktree or trusted team definition. To amend or remove an existing line, edit the board directly; direct edits take no board lock.
+
+| Error | Result |
+| --- | --- |
+| Stage, Progress, or Progress log | Exit 1: names `rimz teams flip` as the owning command. |
+| Unknown section | Exit 1: lists Goal, Decisions, Result. |
+| Blank text | Exit 1: `provide nonblank text for the board entry`. |
+| Multiple text sources | clap conflict error. |
+| Caller belongs to a cohort elsewhere | Exit 1: `calling agent belongs to a team cohort in another worktree`. |
+| No worktree, unreadable input or board, lock timeout, write failure | Error with the underlying failure. |
 
 ## Flip the board to the next stage
 

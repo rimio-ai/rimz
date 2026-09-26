@@ -20,9 +20,13 @@ The reminder presents relative paths and line counts as a launch-time snapshot. 
 
 `rimz teams wait` is the third reader. It resolves each cohort once through the drive verbs' selector, then polls `board_stage` at the members' shared worktree every 500 ms: an exact `Done` settles completed and reads the `Result` section; any other stage, or no board, reads a fresh live snapshot, and when the cohort is gone from `address::team_cohorts` reads the board once more, settling completed on `Done` and failed otherwise, so a flip that races the members' exit is never reported as a failure. It never scans the event log or subscribes to `team.stage`, since signals do not replay and a blocking CLI cannot receive one.
 
+## Recording an entry
+
+`rimz teams record` calls `board::record` for Goal, Decisions, or Result. It normalizes text, rejects blank input, stamps the entry in the machine time zone, and indents nonblank continuation lines two spaces so they cannot become headings or Stage lines. Under the same board lock as a flip it reads, appends after the last nonblank section line, and publishes atomically. Section bounds are the board reader's: a `## <name>` heading matched after trimming, ended by the next ATX heading outside a code fence. Missing sections follow Goal, Decisions, Progress, Result order; a missing or empty board gets all four under `# Blackboard`, without Stage. It returns the appended entry to the CLI and emits no store record, signal, delivery, or compaction. The CLI shares worktree and caller resolution with flip but does not load or trust-check a team definition, and needs no live cohort.
+
 ## Flipping a stage
 
-`team_stage::flip` is the only RimZ code that writes the board. `rimz teams flip <stage> "<note>"` calls it, from a member (`Flipper::Member`) or the user (`Flipper::User`).
+`board.rs` owns the board's write-side mechanics: canonical worktree resolution, the per-worktree lock, reads for writes, stamping, section insertion, Stage rewriting, and atomic publication. `team_stage::flip` composes these through `board::LockedBoard`; registration re-wake reads through the same locked handle. `rimz teams flip <stage> "<note>"` calls the stage domain from a member (`Flipper::Member`) or the user (`Flipper::User`).
 
 1. **Resolve the owner.** The team must have at least one role that owns a stage (`NoOwners`), the destination must be a declared stage or `Done` (`UnknownStage`), and a stage other than `Done` must have an owning role (`UnownedStage`).
 2. **Lock and read.** The flip takes the per-worktree board lock (`RuntimePaths::board_lock`) and reads the board; a missing board reads as empty, and the current stage is the `from` of the flip.

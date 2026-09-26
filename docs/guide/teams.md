@@ -138,6 +138,8 @@ rimz teams wait forge      # block until the board reaches Done, then print its 
 
 A staged team keeps its state in files at the worktree root rather than in any one window, which is what lets a member that crashed, restarted, or compacted pick the run back up. `blackboard.md` is the board: the `Stage:` line, the goal, the decisions, an append-only progress ledger, and the result. Beside it sit the stage files the pipeline names, `plan-notes.md` and the rest. Both patterns (`/blackboard.md` and `/*-notes.md`) are registered in the repository's `.git/info/exclude` at launch and resume, so the files never show up in `git status` or a commit, and they are deleted with the worktree. Delete those lines to undo the exclusion.
 
+A hand edit can race a stage flip. Add goals, decisions, and results with `rimz teams record Decisions "<what changed and why>"`: it locks the board, appends a timestamped entry under your role (or `user`), and prints it. Use `--file PATH` or `--stdin` for longer entries; amending an existing line remains a direct edit without a lock. See [recording an entry](../reference/cli/teams.md#record-an-entry-on-the-board) for the input forms.
+
 Editing the board and separately messaging the next owner leaves two steps to forget. Once your stage's work is saved, hand it off with one command:
 
 ```sh
@@ -188,7 +190,7 @@ The stages decide who is woken when. `leader` names the seat that receives the l
 
 Put shared provider instructions in the kind base `agents/<kind>.md`, each role's craft in its own profile, and the workflow the seats share in the team's body. RimZ composes them in that order, slipping one layer of its own, a built-in consensus on how teammates cooperate, between each role's craft and the team's body. You can read that consensus in the copy RimZ writes to `~/.rimz/teams/consensus.md` ([read-only](../reference/definitions.md#the-built-in-consensus-copy); editing it changes nothing).
 
-Run `rimz agents validate` before launching: a definition that fails to resolve refuses the launch rather than quietly substituting a profile. Launching then opens every member in the layout, and the first `rimz teams flip` writes `blackboard.md` if the leader has not. `rimz agents forge.reviewer` launches or re-adds a single seat into the same channel, and a team launched by an agent is still a top-level peer cohort, not that agent's subagent.
+Run `rimz agents validate` before launching: a definition that fails to resolve refuses the launch rather than quietly substituting a profile. Launching then opens every member in the layout. The leader starts with `rimz teams record Goal "<the request>"` to create `blackboard.md`, then flips to the first stage; a flip can also bootstrap a missing board. `rimz agents forge.reviewer` launches or re-adds a single seat into the same channel, and a team launched by an agent is still a top-level peer cohort, not that agent's subagent.
 
 ### Send events to the responsible role
 

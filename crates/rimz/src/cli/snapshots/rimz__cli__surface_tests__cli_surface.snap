@@ -1209,6 +1209,8 @@ rimz help teams list
 
 rimz help teams profiles
 
+rimz help teams record
+
 rimz help teams restart
 
 rimz help teams resume
@@ -2762,6 +2764,8 @@ rimz teams help list
 
 rimz teams help profiles
 
+rimz teams help record
+
 rimz teams help restart
 
 rimz teams help resume
@@ -2819,6 +2823,18 @@ rimz teams profiles
     --mux <MUX>  [action=set takes=1..=1 global]
     --path  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz teams record
+    <section>  [action=set takes=1..=1 required]
+    <text>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --file <PATH>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --stdin  [action=set-true takes=0..=0]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
