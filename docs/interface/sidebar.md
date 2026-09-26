@@ -147,7 +147,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `ex` | paid extra usage |
 | `api` | an API-key budget |
 | `↻ 1h47m` | time until the window resets |
-| `↻ 2` in a block header | Codex rate-limit reset credits, auto-redeem off: redeeming is yours to do |
+| `↻ 2` in a block header | Codex reset credits with auto-redeem off, or Claude limit resets: redeeming is yours to do |
 | `⟳ 2` in a block header | auto-redeem armed: a credit would be spent if the longest window ran dry now |
 | `‖ 2` in a block header | auto-redeem holding: a dry window would wait for its natural reset |
 | `· 3h` after the credit count | time until the nearest credit expires, within a week |
@@ -511,7 +511,7 @@ With `provider_tabs = "auto"` (the default), two providers stack and three or mo
 
 | line | shows |
 |------|-------|
-| header | In tabs: the plan, then the version. Stacked: the provider and version, then the plan. The version reads `v?` until a source reports it, and the plan is absent until the account names one. `⇅ rc` and Codex's reset-credit marker (`↻ N`, `⟳ N`, or `‖ N`) sit on the right. |
+| header | In tabs: the plan, then the version. Stacked: the provider and version, then the plan. The version reads `v?` until a source reports it, and the plan is absent until the account names one. `⇅ rc` and the reset-credit marker (`↻ N`, or Codex-only `⟳ N` or `‖ N`) sit on the right. |
 | stats | `◎` sessions in the [spend window](#the-cockpit), the `◇ ↘ ↗ ◌` tokens with cache creation counted in `↘`, and the provider's spend. A provider with no usage history keeps the row: `◎` counts its sessions active in this room, and the token and dollar slots show `–`. |
 | budget rows | one bar per budget window: label, bar, and reset countdown |
 
@@ -558,7 +558,7 @@ The color of the `↻` glyph beside the countdown shows your pace. It is neutral
 
 A model's own cap inside a window draws as a `╱` tick on that window's bar instead of a row. The fill and the tick use different scales: the fill is the window's budget left, and the tick's position is the share of the model's cap left, across the full width of the bar. Only exactly 0% reaches the left end and only exactly 100% reaches the right. The tick's color follows the model's share, and it has no label or countdown. In [the whole frame](#the-whole-frame), the `7d` bar has about 65% left while the tick near 42% says the model's weekly cap is closer to spent than the window. A tick still draws on a spent bar when the model's reading is known. An unknown reading or an unlimited row has no tick.
 
-Codex's block header counts rate-limit reset credits behind a glyph that forecasts what [auto-redeem](../guide/loops.md#auto-redeem) would do if the longest window ran dry right now. `↻` in the body tone means auto-redeem is off and redeeming is yours to do; RimZ still rescues a credit in its last 30 minutes. A green `⟳` means armed: a credit would be spent, or no natural reset is known to wait for. A muted `‖` means holding: the reset is near and the nearest credit outlives it by a day, so the fleet would park until the reset, and it stays a hold until then. Within a week of the nearest credit's expiry the time left follows the count, floored to one unit (`· 6d`, `· 14h`, `· 29m`). That time heats from green to red while the marker is `↻`, and deepens from the body tone to green while auto-redeem handles it. The marker holds still in every state. The Nerd Font glyph set draws the three as `󰑐`, `󰁪`, and `󰏤`.
+A block header counts banked Codex reset credits or Claude limit resets with `↻` in the body tone: redeeming is yours to do. The marker is absent at zero. Pi and OpenCode accounts using Anthropic show the same banked count. Only Codex forecasts what [auto-redeem](../guide/loops.md#auto-redeem) would do if the longest window ran dry right now: a green `⟳` means armed (a credit would be spent, or no natural reset is known to wait for). A muted `‖` means holding: the reset is near and the nearest credit outlives it by a day, so the fleet would park until the reset, and it stays a hold until then. With Codex auto-redeem off, RimZ still rescues a credit in its last 30 minutes; Claude remains display-only. Within a week of the nearest credit's expiry the time left follows the count, floored to one unit (`· 6d`, `· 14h`, `· 29m`). That time heats from green to red while the marker is `↻`, and deepens from the body tone to green while auto-redeem handles it. The marker holds still in every state. The Nerd Font glyph set draws the three as `󰑐`, `󰁪`, and `󰏤`.
 
 How budgets are read, cached, and refreshed is in [provider internals](../internals/agents/providers.md).
 

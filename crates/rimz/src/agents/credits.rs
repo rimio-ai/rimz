@@ -246,7 +246,7 @@ pub enum ExtraCredits {
     },
 }
 
-/// Codex rate-limit reset credits: redeemable 100%/7-day usage-window resets.
+/// Banked rate-limit reset credits from Codex or Claude.
 /// A credit that expires unredeemed is wasted, so the dashboard shows the
 /// available count and colors the marker by the soonest expiry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

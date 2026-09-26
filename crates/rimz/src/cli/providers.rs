@@ -386,7 +386,9 @@ fn write_pretty(
                 None => rows.push("extra", unknown_cell()),
             }
         }
-        if let Some(reset) = &report.reset_credits {
+        if let Some(reset) = &report.reset_credits
+            && reset.count > 0
+        {
             rows.push_lines("resets", reset_credit_lines(reset, now, time_zone));
         }
         if let Some(spending) = &report.spending {

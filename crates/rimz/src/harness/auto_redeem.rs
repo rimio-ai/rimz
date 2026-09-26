@@ -431,8 +431,8 @@ fn cancel_attempt_reservation(runtime: &RuntimePaths, key: &LoginKey, request_id
 }
 
 /// Evaluate the Codex panel and spawn the account-wide helper when due.
-/// Codex is the only provider with reset credits today; keep that provider
-/// choice here while the verdict above remains provider-neutral.
+/// Only Codex supports automated redemption; keep that provider choice here
+/// while the verdict above remains provider-neutral.
 pub(crate) fn redeem_credits(
     panels: &[SidebarProviderPanel],
     runtime: &RuntimePaths,
