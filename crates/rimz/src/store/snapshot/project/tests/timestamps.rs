@@ -1,6 +1,77 @@
 use super::*;
 
 #[test]
+fn turn_end_clock_tracks_completions_not_resume_or_tools() {
+    let mut events = Vec::new();
+    let mut expected = None;
+    for (offset, signal, completes) in [
+        (0, json!({"signal": "registered"}), false),
+        (1, json!({"signal": "turn_started"}), false),
+        (
+            2,
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
+            true,
+        ),
+        (3, json!({"signal": "registered"}), false),
+        (
+            4,
+            json!({"signal": "tool_used", "name": "Read", "mutates": false}),
+            false,
+        ),
+        (5, json!({"signal": "turn_interrupted"}), true),
+        (6, json!({"signal": "compacting"}), false),
+        (
+            7,
+            json!({"signal": "compaction_ended", "failed": false, "auto": false}),
+            true,
+        ),
+        (8, json!({"signal": "compacting"}), false),
+        (
+            9,
+            json!({"signal": "compaction_ended", "failed": true, "auto": false}),
+            false,
+        ),
+        (
+            10,
+            json!({"signal": "turn_started", "turn_id": "old"}),
+            false,
+        ),
+        (
+            11,
+            json!({"signal": "turn_started", "turn_id": "new"}),
+            false,
+        ),
+        (
+            12,
+            json!({"signal": "turn_ended", "turn_id": "old", "errored": false, "parked_on_background": false}),
+            false,
+        ),
+        (
+            13,
+            json!({"signal": "turn_interrupted", "turn_id": "old"}),
+            false,
+        ),
+    ] {
+        let event = raw_lifecycle_at(
+            "claude",
+            offset,
+            json!({
+                "event_name": "test", "agent_id": "s1", "signal": signal,
+            }),
+        );
+        if completes {
+            expected = Some(event.timestamp);
+        }
+        events.push(event);
+        assert_eq!(
+            reduce_agent_states(&events)[0].turn_ended_at,
+            expected,
+            "offset {offset}"
+        );
+    }
+}
+
+#[test]
 fn promptless_launch_never_opens_a_turn() {
     let mut payload = launch_payload("launch_a", "lucid-atlas");
     payload.prompt = None;
