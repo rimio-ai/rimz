@@ -1,6 +1,6 @@
 //! Zellij [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -18,7 +18,7 @@ use super::raw_pane::{
     tab_fullscreen_active, tab_view_cols,
 };
 use super::sidebar::DockOutcome;
-use super::{HEALTH_PROBE_RETRY_DELAY, RECONCILE_LIST_TIMEOUT, ZellijBackend};
+use super::{HEALTH_PROBE_RETRY_DELAY, RECONCILE_LIST_TIMEOUT, ZellijBackend, env_prefixed};
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::companion_layout::{GridPane, balance, plan_append};
@@ -33,20 +33,6 @@ use crate::mux::{
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 use serde::Deserialize;
-
-/// Prefix `command` with an `env KEY=VALUE …` shim so a freshly split Zellij
-/// pane inherits the requested vars; Zellij's `new-pane` has no env flag of its
-/// own. An empty env map returns the command unchanged.
-fn env_prefixed(env: &BTreeMap<String, String>, command: Vec<String>) -> Vec<String> {
-    if env.is_empty() {
-        return command;
-    }
-    let mut wrapped = Vec::with_capacity(command.len() + env.len() + 1);
-    wrapped.push("env".to_owned());
-    wrapped.extend(env.iter().map(|(key, value)| format!("{key}={value}")));
-    wrapped.extend(command);
-    wrapped
-}
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RawTab {

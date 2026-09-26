@@ -41,6 +41,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
         let tab_name = "#self-wait";
         backend
             .open_tab(&TabOptions {
+                env: Default::default(),
                 title: tab_name.to_owned(),
                 panes: LayoutPanes {
                     columns: vec![tiled_column(vec![PaneCmd {
@@ -205,6 +206,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
     let tab_name = "#rimz-zellij";
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: tab_name.to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {

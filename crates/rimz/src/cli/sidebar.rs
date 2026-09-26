@@ -1075,6 +1075,7 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
     let gallery_pane = rimz::mux::PaneCmd { argv, name: None };
     room.backend()
         .open_tab(&rimz::mux::TabOptions {
+            env: Default::default(),
             title: "gallery".to_owned(),
             panes: rimz::mux::LayoutPanes {
                 columns: vec![rimz::mux::LayoutColumn {

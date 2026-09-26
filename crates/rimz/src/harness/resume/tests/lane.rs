@@ -214,9 +214,10 @@ fn fresh_lane_materializes_new_team_launches() {
         })
         .run()
         .unwrap();
-    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+    let LaneResumeAction::RestoreClosed { plan, channel, .. } = action else {
         panic!("expected fresh restore");
     };
+    assert_eq!(channel.as_deref(), Some("saved-channel"));
     let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
     let paths = crate::disk::paths::StatePaths::under(workspace.clone(), &dir.path().join("state"))
         .unwrap();

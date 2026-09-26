@@ -242,7 +242,7 @@ Room birth also carries one adapter-enrichment environment map through the mux s
 
 ### Placement
 
-A layout lands in a new tab, a split of the current tab, or, for a single non-worktree cell, the pane the user is already sitting in. Both backends receive the same `TabOptions` (session, title, cwd, focus flag, sidebar options, and the pre-built pane argv) and dock the global sidebar once before adding the layout cells; the per-backend split commands live in [`mux/`](../../../crates/rimz/src/mux/AGENTS.md).
+A layout lands in a new tab, a split of the current tab, or, for a single non-worktree cell, the pane the user is already sitting in. Both backends receive the same `TabOptions` (session, title, cwd, focus flag, sidebar options, the pre-built pane argv, and the environment map for every command pane) and dock the global sidebar once before adding the layout cells; the per-backend split commands live in [`mux/`](../../../crates/rimz/src/mux/AGENTS.md).
 
 **Placement resolves before the launch touches the store or creates a worktree**, so a rejected placement leaves no provisional rows or orphan worktree behind. The CLI placement resolver takes explicit flags first, then falls back to the per-machine [`[agents] placement`](../../guide/configuration.md#agent-profiles-commands-and-teams) policy.
 

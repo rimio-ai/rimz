@@ -3,6 +3,7 @@
 //! the RAII temp file the async `--default-layout` parse reads from. Pure
 //! `&options → String` renderers — no backend state, no subprocess.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::ids::MuxName;
@@ -163,6 +164,7 @@ pub(super) fn render_session_layout(
                 columns.push_str(&render_tab_column(
                     column,
                     &tab.cwd,
+                    &BTreeMap::new(),
                     &mut position,
                     focus_position,
                     16,
@@ -269,6 +271,7 @@ pub(super) fn render_tab_layout(opts: &TabOptions, sidebar_percent: u16) -> Resu
         columns.push_str(&render_tab_column(
             column,
             &opts.sidebar.cwd,
+            &opts.env,
             &mut position,
             focus_position,
             12,
@@ -292,6 +295,7 @@ fn render_undocked_tab_layout(opts: &TabOptions) -> Result<String> {
         columns.push_str(&render_tab_column(
             column,
             &opts.sidebar.cwd,
+            &opts.env,
             &mut position,
             focus_position,
             8,
@@ -424,6 +428,7 @@ fn render_plain_terminal_pane() -> Result<String> {
 fn render_tab_column(
     column: &LayoutColumn,
     cwd: &Path,
+    env: &BTreeMap<String, String>,
     position: &mut usize,
     focus_position: usize,
     indent: usize,
@@ -435,11 +440,17 @@ fn render_tab_column(
         focus
     };
     if rows.is_empty() {
-        return render_command_pane(first, cwd, take_focus(), indent);
+        return render_command_pane(first, cwd, env, take_focus(), indent);
     }
     let mut rendered = String::new();
     for pane in std::iter::once(first).chain(rows) {
-        rendered.push_str(&render_command_pane(pane, cwd, take_focus(), indent + 4)?);
+        rendered.push_str(&render_command_pane(
+            pane,
+            cwd,
+            env,
+            take_focus(),
+            indent + 4,
+        )?);
     }
     let base = " ".repeat(indent);
     let container = if column.stacked {
@@ -460,12 +471,14 @@ fn render_tab_column(
 fn render_command_pane(
     pane: &crate::mux::PaneCmd,
     cwd: &Path,
+    env: &BTreeMap<String, String>,
     focus: bool,
     indent: usize,
 ) -> Result<String> {
     let fallback = super::pane_short_name(&pane.argv);
     let name = pane.name.as_deref().or(fallback.as_deref());
-    render_named_command_pane(&pane.argv, cwd, focus, indent, None, name)
+    let argv = super::env_prefixed(env, pane.argv.clone());
+    render_named_command_pane(&argv, cwd, focus, indent, None, name)
 }
 
 fn render_managed_command_pane(

@@ -109,11 +109,7 @@ pub(in crate::cli) fn restart_resolved(
         store.runtime_paths(),
         &invocation,
     )?;
-    let mut env = rimz::room::pane_identity_env(workspace, agent.channel.as_deref(), false);
-    env.insert(
-        rimz::workspace::ENV_WORKTREE_PATH.to_owned(),
-        cwd.display().to_string(),
-    );
+    let env = rimz::room::pane_identity_env(workspace, &cwd, agent.channel.as_deref(), false);
     let backend = rimz::mux::backend_for(old_pane.mux());
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))

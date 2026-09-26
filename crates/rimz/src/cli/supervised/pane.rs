@@ -313,6 +313,7 @@ pub(in crate::cli) fn split_into_subagent_zone(
         }
     };
     let open_companion = |title| match backend.open_tab(&TabOptions {
+        env: env.clone(),
         title,
         panes: LayoutPanes {
             columns: vec![LayoutColumn {

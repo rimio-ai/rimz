@@ -21,7 +21,7 @@ Three rules follow from that split. Read them before any code in this module.
 
 **Cross-backend policy stays pure and above the backends.** [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns the one-sidebar-per-view planner and its execution accounting, [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing arithmetic, and [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs) turns normalized presence transitions into typed events over the vocabulary in [`wakeup/events.rs`](../../crates/rimz/src/wakeup/events.rs). These modules unit-test with no multiplexer installed. Each backend collects native facts and executes native effects. Geometry convergence stays in the adapters, because Zellij repairs geometry before structural execution and tmux only after structural success.
 
-**Backends stay ignorant of agents.** The CLI hands `open_tab` backend-neutral pane argv and layout geometry. Agent resolution, prompts, and worktree cleanup are already compiled into that argv (`rimz agents exec …`), so no backend knows what an agent kind or a worktree is. The layout IR is in [fleet.md](./harness/fleet.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#who-triggers-removal).
+**Backends stay ignorant of agents.** The CLI hands `open_tab` backend-neutral pane argv, layout geometry, and an environment map applied to every command pane. Agent resolution, prompts, and worktree cleanup are already compiled into that argv (`rimz agents exec …`), so no backend knows what an agent kind or a worktree is. The layout IR is in [fleet.md](./harness/fleet.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#who-triggers-removal).
 
 ## Module map
 

@@ -375,21 +375,6 @@ pub(super) fn launch_layout(
         &layout,
         team_name.as_deref().and_then(|name| teams.0.get(name)),
     );
-    if args.launch.cwd.is_some() {
-        for pane in panes
-            .columns
-            .iter_mut()
-            .flat_map(|column| &mut column.panes)
-        {
-            pane.argv.splice(
-                0..0,
-                [
-                    "env".to_owned(),
-                    format!("{}={}", rimz::workspace::ENV_WORKTREE_PATH, cwd.display()),
-                ],
-            );
-        }
-    }
     super::placement::execute(
         backend,
         store,
@@ -403,6 +388,7 @@ pub(super) fn launch_layout(
             sidebar,
             identity_env: rimz::room::pane_identity_env(
                 workspace,
+                &cwd,
                 room_channel.as_deref(),
                 !worktree_launch,
             ),
@@ -639,11 +625,11 @@ fn launch_resume_layout(
         PlacementRequest {
             placement,
             mux,
-            cwd,
+            cwd: cwd.clone(),
             title,
             panes,
             sidebar,
-            identity_env: rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
+            identity_env: rimz::room::pane_identity_env(workspace, &cwd, channel.as_deref(), false),
             background: args.launch.cohort.bg,
             errors: PlacementErrors {
                 new_tab: "opening agent tab",

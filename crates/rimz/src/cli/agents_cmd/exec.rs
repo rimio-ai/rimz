@@ -15,7 +15,13 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &args.request,
     )
     .context("decoding hidden agent exec request")?;
-    let mut invocation = ExecInvocationContext::new(&workspace);
+    let cwd = envelope
+        .request()
+        .worktree_path
+        .as_deref()
+        .map(absolute_lexical_path)
+        .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))?;
+    let mut invocation = ExecInvocationContext::new(&workspace, cwd);
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let launch_identity = exec_launch_identity(envelope.request())?;
     let machine_config = crate::cli::machine_config();
@@ -82,19 +88,10 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
-    let provider_cwd = request
-        .worktree_path
-        .as_deref()
-        .map(absolute_lexical_path)
-        .unwrap_or_else(|| std::env::current_dir().context("reading the agent pane cwd"))
-        .inspect_err(|_| {
-            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-            fail_run_on_exec_precondition(run_context.as_ref());
-        })?;
     let ambient_env = rimz::agents::ambient_env();
     let plan = rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
         request: &request,
-        cwd: &provider_cwd,
+        cwd: &invocation.cwd,
         project_root: &workspace.project_root,
         rimz_bin: &rimz::proc::rimz_exe(),
         runtime: &runtime,
@@ -142,7 +139,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         })?;
     let process = plan.process();
     if let Err(error) = rimz::lsp::lease::register(
-        &provider_cwd,
+        &invocation.cwd,
         request.identity.launch_id.as_deref(),
         std::process::id(),
     ) {
@@ -269,7 +266,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         RunExitContext {
             run: run_context.as_ref(),
             keep,
-            checkout: &provider_cwd,
+            checkout: &invocation.cwd,
         },
         launch_identity.as_ref(),
         entered_worktree.as_deref(),
@@ -738,14 +735,16 @@ fn leave_worktree_before_cleanup(path: &Path) {
 
 struct ExecInvocationContext<'a> {
     workspace: &'a rimz::ResolvedWorkspace,
+    cwd: PathBuf,
     store: RefCell<Option<rimz::Store>>,
     effective_isolation: Option<rimz::config::Isolation>,
 }
 
 impl<'a> ExecInvocationContext<'a> {
-    fn new(workspace: &'a rimz::ResolvedWorkspace) -> Self {
+    fn new(workspace: &'a rimz::ResolvedWorkspace, cwd: PathBuf) -> Self {
         Self {
             workspace,
+            cwd,
             store: RefCell::new(None),
             effective_isolation: None,
         }
@@ -1041,9 +1040,8 @@ fn record_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
         return;
     };
     let workspace = invocation.workspace;
-    let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
     match invocation.store().and_then(|store| {
-        store.bind_agent_launch(identity, &workspace.session_name, &cwd, &pane_id)?;
+        store.bind_agent_launch(identity, &workspace.session_name, &invocation.cwd, &pane_id)?;
         Ok(())
     }) {
         Ok(()) => {}
@@ -1137,9 +1135,8 @@ fn record_own_resume_pane(
 
 fn record_launch_failed(invocation: &ExecInvocationContext<'_>, identity: &LaunchIdentity) {
     let workspace = invocation.workspace;
-    let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
     if let Err(err) = invocation.store().and_then(|store| {
-        store.fail_agent_launch(identity, &workspace.session_name, &cwd)?;
+        store.fail_agent_launch(identity, &workspace.session_name, &invocation.cwd)?;
         Ok(())
     }) {
         tracing::debug!(

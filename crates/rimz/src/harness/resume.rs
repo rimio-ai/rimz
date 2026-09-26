@@ -206,6 +206,7 @@ pub enum LaneResumeAction {
     RestoreClosed {
         lane_label: String,
         cwd: PathBuf,
+        channel: Option<String>,
         plan: LaneRestorePlan,
     },
 }
@@ -1230,6 +1231,7 @@ fn plan_discovered_lane(
     Ok(LaneResumeAction::RestoreClosed {
         lane_label: lane.display.clone(),
         cwd: lane.path.clone(),
+        channel: lane.channel.clone(),
         plan: LaneRestorePlan {
             recovery: RecoveryPlan::new(TeamsConfig::default(), Vec::new(), flat),
             discovery_skipped,
@@ -1398,9 +1400,14 @@ fn plan_closed_lane(
             .filter(|agent| !request.fresh && supports_agent_resume(agent) && session_backed(agent))
             .map(|agent| agent.kind.clone()),
     );
+    let channel = lane
+        .channel
+        .clone()
+        .or_else(|| closed.first().and_then(AgentState::channel));
     Ok(LaneResumeAction::RestoreClosed {
         lane_label: lane.display,
         cwd: lane.path,
+        channel,
         plan: LaneRestorePlan {
             recovery: RecoveryPlan::new(restore.teams, team, flat),
             discovery_skipped: Vec::new(),

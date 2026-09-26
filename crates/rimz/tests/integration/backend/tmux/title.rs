@@ -26,6 +26,7 @@ fn window_names_keep_literal_hashes() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "#host#health".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -139,6 +140,7 @@ fn named_layout_pane_drives_the_terminal_title_format() {
     server
         .backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "#agents".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {

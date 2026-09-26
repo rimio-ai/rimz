@@ -111,17 +111,19 @@ pub fn resolve_birth_logins(
 /// Build the room identity pin carried by a pane opened in a managed session.
 pub fn pane_identity_env(
     workspace: &ResolvedWorkspace,
+    cwd: &Path,
     channel: Option<&str>,
     inherit_channel: bool,
 ) -> BTreeMap<String, String> {
     let ambient_channel = inherit_channel
         .then(|| std::env::var(crate::workspace::ENV_CHANNEL).ok())
         .flatten();
-    pane_identity_env_with_ambient(workspace, channel, ambient_channel.as_deref())
+    pane_identity_env_with_ambient(workspace, cwd, channel, ambient_channel.as_deref())
 }
 
 fn pane_identity_env_with_ambient(
     workspace: &ResolvedWorkspace,
+    cwd: &Path,
     channel: Option<&str>,
     ambient_channel: Option<&str>,
 ) -> BTreeMap<String, String> {
@@ -129,7 +131,7 @@ fn pane_identity_env_with_ambient(
     env.insert("RIMZ".to_owned(), "1".to_owned());
     env.insert(
         crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-        workspace.worktree_root.display().to_string(),
+        cwd.display().to_string(),
     );
     if let Some(channel) = channel
         .or(ambient_channel)
@@ -562,10 +564,7 @@ mod tests {
                 workspace.workspace_id.to_string(),
             ),
             ("RIMZ_PROJECT_ROOT".to_owned(), "/code/rimz".to_owned()),
-            (
-                "RIMZ_WORKTREE_PATH".into(),
-                "/code/rimz/../rimz-worktrees/demo".to_owned(),
-            ),
+            ("RIMZ_WORKTREE_PATH".into(), "/other/checkout".to_owned()),
         ]);
         for (explicit, ambient, channel) in [
             (Some("explicit"), Some("ambient"), Some("explicit")),
@@ -577,7 +576,12 @@ mod tests {
             if let Some(channel) = channel {
                 expected.insert("RIMZ_CHANNEL".to_owned(), channel.to_owned());
             }
-            let actual = pane_identity_env_with_ambient(&workspace, explicit, ambient);
+            let actual = pane_identity_env_with_ambient(
+                &workspace,
+                Path::new("/other/checkout"),
+                explicit,
+                ambient,
+            );
             assert_eq!(actual, expected);
         }
     }

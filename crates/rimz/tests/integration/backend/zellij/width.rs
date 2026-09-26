@@ -156,6 +156,7 @@ fn sidebar_width_steps_resize_birth_and_explicit_layout_panes() {
     let tab_name = "explicit width";
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: tab_name.to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
@@ -359,6 +360,7 @@ fn sidebar_widths_agree_across_tabs_after_a_pinned_retarget() {
     converge_each_sidebar_with_nudges(&backend, xdg, &name, target_cols, native_step);
     backend
         .open_tab(&TabOptions {
+            env: Default::default(),
             title: "retargeted".to_owned(),
             panes: LayoutPanes {
                 columns: vec![tiled_column(vec![PaneCmd {
