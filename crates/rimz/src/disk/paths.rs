@@ -35,7 +35,7 @@ const LATEST_SNAPSHOT_FILE: &str = "snapshots/latest.json";
 #[derive(Debug, thiserror::Error)]
 pub enum PathErr {
     #[error(
-        "workspace {path} uses layout {layout}; this binary requires layout 2; follow docs/internals/store-layout-migration.md to reset or migrate it"
+        "workspace {path} uses layout {layout}; this binary requires layout 2; run `rimz start` or `rimz reset` in its project to replace it with a fresh room"
     )]
     Layout { path: PathBuf, layout: u32 },
     #[error("io error preparing {path}: {source}")]
@@ -313,13 +313,6 @@ impl StatePaths {
         }
     }
 
-    /// Legacy history is evidence to retain a room, regardless of its record.
-    pub(crate) fn has_legacy_history(root: &Path) -> bool {
-        [EVENTS_LOG_FILE, "events.log.archive", LATEST_SNAPSHOT_FILE]
-            .iter()
-            .any(|name| root.join(name).exists())
-    }
-
     pub(crate) fn lock_path(&self, name: &str) -> PathBuf {
         Class::Locks.path_under(&self.root).join(name)
     }
@@ -423,6 +416,18 @@ impl StatePaths {
             }),
         }
     }
+
+    /// Remove the entire room state tree, including incompatible history.
+    pub fn remove_root(&self) -> Result<()> {
+        match fs::remove_dir_all(&self.root) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(PathErr::Io {
+                path: self.root.clone(),
+                source,
+            }),
+        }
+    }
 }
 
 /// The workspace dir name `workspace_id` resolves to in `ws_dir`, or the
@@ -504,7 +509,6 @@ fn find_workspace_dir(
     {
         match recorded_workspace_id(&ws_dir.join(name.as_str())) {
             Some(recorded) if recorded == workspace_id.as_str() => {
-                check_workspace_layout(&ws_dir.join(name.as_str()))?;
                 return Ok(Some(name));
             }
             Some(_) => {}
@@ -604,6 +608,18 @@ pub(crate) fn is_workspace_spending_file(name: &str) -> bool {
 }
 
 impl RuntimePaths {
+    /// Remove the entire room runtime tree.
+    pub fn remove_root(&self) -> Result<()> {
+        match fs::remove_dir_all(&self.root) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(PathErr::Io {
+                path: self.root.clone(),
+                source,
+            }),
+        }
+    }
+
     /// Runtime paths for a workspace known only by id, named after its state
     /// dir (or the `ws-<24hex>` fallback).
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {

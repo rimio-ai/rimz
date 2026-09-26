@@ -8,6 +8,8 @@ The defaults are the exception. Multiplexers were tuned for shells and editors d
 
 A room is one Zellij or tmux session. Every time RimZ opens or reattaches it, RimZ asserts the settings agents need and stops there; it never edits `~/.config/zellij/config.kdl` or `~/.tmux.conf`. Detach the way you always do, and `rimz start` in the project directory, or `rimz attach <session>` from anywhere, brings you back to the same panes.
 
+If an older RimZ wrote the room, `rimz start` tears it down and opens a fresh room instead. Its history is not carried over. See [starting a room](../reference/cli/getting-started.md#start-the-room).
+
 On Zellij the room starts in locked mode, so your keystrokes reach the agent until you press `Ctrl+g` for a Zellij mode. A single click on a sidebar card jumps to that agent whatever your own mouse settings say. A new pane opened with no direction splits the focused pane along its longer visual edge, and closing it returns the space to that sibling.
 
 Three more Zellij differences have nothing to do with typing. Session serialization is off, because RimZ rebuilds a room after a crash or reboot itself rather than letting Zellij resurrect a wall of suspended command panes that come back dead. Zellij's per-second session-metadata loop is off too, because at around 100 panes it costs a visible share of the Zellij server's CPU. And because RimZ supplies the room's tab layout, a RimZ tab carries Zellij's one-row compact bar instead of the status chrome your own `default_layout` would draw.

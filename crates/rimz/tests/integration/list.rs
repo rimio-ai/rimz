@@ -6,18 +6,20 @@ use std::time::{Duration, SystemTime};
 use crate::common::Env;
 
 #[test]
-fn legacy_rooms_are_reported_by_list_and_gc_without_mutation() {
+fn legacy_rooms_are_omitted_from_list_and_pruned_by_gc() {
     let env = Env::new();
     let room = env.rimz_home().join("ws/legacy-abcd");
     std::fs::create_dir_all(&room).unwrap();
     let record = br#"{"layout":1}"#;
     std::fs::write(room.join("workspace.json"), record).unwrap();
-    for args in [
-        vec!["list"],
-        vec!["list", "--json"],
-        vec!["gc", "--all"],
-        vec!["gc", "--all", "--json"],
-    ] {
+    let runtime_room = env
+        .runtime_paths()
+        .root
+        .parent()
+        .unwrap()
+        .join("legacy-abcd");
+    std::fs::create_dir_all(&runtime_room).unwrap();
+    for args in [vec!["list", "--all"], vec!["list", "--all", "--json"]] {
         let output = env.rimz().args(args).output().unwrap();
         assert!(
             output.status.success(),
@@ -25,14 +27,39 @@ fn legacy_rooms_are_reported_by_list_and_gc_without_mutation() {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8(output.stdout).unwrap();
-        assert!(stdout.contains("legacy-abcd"), "{stdout}");
-        assert!(stdout.contains("layout 1"), "{stdout}");
-        assert!(
-            stdout.contains("docs/internals/store-layout-migration.md"),
-            "{stdout}"
-        );
+        assert!(!stdout.contains("legacy-abcd"), "{stdout}");
         assert_eq!(std::fs::read(room.join("workspace.json")).unwrap(), record);
     }
+    let output = env
+        .rimz()
+        .args(["gc", "--all", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["workspaces"]["removed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|room| {
+                room["dir_name"] == "legacy-abcd" && room["reason"] == "incompatible_layout"
+            })
+    );
+    assert!(room.exists());
+    assert!(runtime_room.exists());
+    let output = env.rimz().args(["gc", "--all"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!room.exists());
+    assert!(!runtime_room.exists());
 }
 
 #[test]

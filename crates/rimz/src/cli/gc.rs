@@ -488,9 +488,6 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
 
     for room in &out.runtime.rooms {
         writeln!(w, "  {}", paint(palette::header(), &room.name))?;
-        if let Some(reason) = &room.retained_reason {
-            writeln!(w, "    retained: {reason}")?;
-        }
         for class in &room.classes {
             if class.locks_would_check > 0 {
                 writeln!(
@@ -963,6 +960,11 @@ fn removed_workspace_detail(removed: &gc::RemovedWorkspace) -> String {
         .as_ref()
         .map_or(removed.dir_name.as_str(), rimz::WorkspaceId::as_str);
     match removed.reason {
+        gc::PruneReason::IncompatibleLayout => format!(
+            "{} — written by an older RimZ (layout 1), unusable ({})",
+            name,
+            fmt_bytes(removed.bytes)
+        ),
         gc::PruneReason::ProjectRootGone => format!(
             "{} — project folder gone: {} ({})",
             name,
@@ -1277,6 +1279,7 @@ fn path_string(path: &std::path::Path) -> String {
 
 fn prune_reason_json(reason: gc::PruneReason) -> &'static str {
     match reason {
+        gc::PruneReason::IncompatibleLayout => "incompatible_layout",
         gc::PruneReason::ProjectRootGone => "project_root_gone",
         gc::PruneReason::AbandonedScaffold => "abandoned_scaffold",
     }
@@ -1319,7 +1322,6 @@ mod tests {
         let mut outcome = GcOutcome::default();
         outcome.runtime.rooms.push(gc::RoomReport {
             name: "test-abcd".to_owned(),
-            retained_reason: None,
             classes: vec![gc::ClassReport {
                 class: "audit".to_owned(),
                 files_removed: 2,
@@ -1337,7 +1339,6 @@ mod tests {
                 bytes_removed: 99,
                 ..gc::ClassReport::default()
             }],
-            ..gc::RoomReport::default()
         });
         let assist = auto_gc_assist(
             &id,
@@ -1554,6 +1555,15 @@ mod tests {
         let json = serde_json::to_value(JsonRemovedWorkspace::from(&removed)).unwrap();
         assert!(json["workspace_id"].is_null());
         assert_eq!(json["dir_name"], "unfinished");
+        let removed = gc::RemovedWorkspace {
+            reason: gc::PruneReason::IncompatibleLayout,
+            ..removed
+        };
+        assert!(
+            removed_workspace_detail(&removed)
+                .starts_with("unfinished — written by an older RimZ (layout 1), unusable (")
+        );
+        assert_eq!(prune_reason_json(removed.reason), "incompatible_layout");
     }
 
     fn clean_outcome() -> GcOutcome {

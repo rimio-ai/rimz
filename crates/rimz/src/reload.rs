@@ -97,10 +97,7 @@ fn sweep_unreferenced_builds(state_root: &Path, builds_dir: &Path, keep: &str) {
     if let Ok(entries) = fs::read_dir(workspaces) {
         for entry in entries.flatten() {
             let record_path = entry.path().join("workspace.json");
-            if let Err(err) = crate::disk::paths::check_workspace_layout(&entry.path()) {
-                tracing::warn!(error = %err, "retaining builds referenced by incompatible workspace");
-            }
-            if let Ok(record) = record::read_any_layout(&record_path)
+            if let Ok(record) = record::read(&record_path)
                 && let Some(build) = record.rimz_build
             {
                 referenced.insert(build);
@@ -1131,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn staging_keeps_builds_owned_by_legacy_rooms() {
+    fn staging_sweeps_builds_only_referenced_by_legacy_rooms() {
         let home = tempfile::tempdir().unwrap();
         let project = home.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -1156,7 +1153,7 @@ mod tests {
             )
             .unwrap();
         sweep_unreferenced_builds(home.path(), &builds, "new");
-        assert!(legacy.exists());
+        assert!(!legacy.exists());
     }
 
     #[test]

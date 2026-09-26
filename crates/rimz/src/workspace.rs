@@ -173,29 +173,12 @@ pub fn known_workspaces() -> io::Result<Vec<KnownWorkspace>> {
 
 /// [`known_workspaces`] over an explicit state root, for tests against a tempdir.
 pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWorkspace>> {
-    let scan = scan_workspaces_under(workspaces_root)?;
-    for (name, reason) in &scan.retained {
-        tracing::warn!(workspace = %name, %reason, "retaining incompatible workspace");
-    }
-    Ok(scan.workspaces)
-}
-
-/// Readable current rooms and incompatible rooms retained without adoption.
-#[derive(Default)]
-pub struct WorkspaceScan {
-    pub workspaces: Vec<KnownWorkspace>,
-    pub retained: Vec<(String, String)>,
-}
-
-/// Scanner report for maintenance surfaces that must show incompatible rooms.
-pub fn scan_workspaces_under(workspaces_root: &Path) -> io::Result<WorkspaceScan> {
     let entries = match std::fs::read_dir(workspaces_root) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(WorkspaceScan::default()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
     let mut by_session: BTreeMap<String, KnownWorkspaceCandidate> = BTreeMap::new();
-    let mut retained = Vec::new();
     for entry in entries {
         let path = entry?.path();
         if !path.is_dir() {
@@ -207,12 +190,6 @@ pub fn scan_workspaces_under(workspaces_root: &Path) -> io::Result<WorkspaceScan
         let Some(dir_name) = crate::ids::WorkspaceDirName::parse(name) else {
             continue;
         };
-        if let Err(err @ crate::disk::paths::PathErr::Layout { .. }) =
-            crate::disk::paths::check_workspace_layout(&path)
-        {
-            retained.push((name.to_owned(), err.to_string()));
-            continue;
-        }
         let record_path = path.join("workspace.json");
         match record::read(&record_path) {
             Ok(record) => {
@@ -239,14 +216,10 @@ pub fn scan_workspaces_under(workspaces_root: &Path) -> io::Result<WorkspaceScan
             }
         }
     }
-    retained.sort();
-    Ok(WorkspaceScan {
-        workspaces: by_session
-            .into_values()
-            .map(|candidate| candidate.workspace)
-            .collect(),
-        retained,
-    })
+    Ok(by_session
+        .into_values()
+        .map(|candidate| candidate.workspace)
+        .collect())
 }
 
 #[derive(Clone)]

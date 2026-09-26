@@ -252,7 +252,7 @@ The report goes to stderr before the rebuild:
 
 The report names the session deletion, process sweep, preserved temporary files, archive path, canceled runs, removed cache entries, and whether the prior-agent rollup was kept. Hard reset additionally removes audit, owned state, and tmp.
 
-Soft reset keeps transcripts, message history, run records, agent scratch and handled skill copies, room tmp, and standing fleet budget choices. Both resets clear handleless skill copies in `cache/skills/`. `--hard` deletes `audit/`, `owned/` except `owned/runs/`, `tmp/`, the active log and carryover; the rotated log archive remains. Run waiters can read Canceled after reset; terminal run records are reclaimed after the owned GC grace. Neither reset removes state `locks/`.
+For a room written by an older RimZ, reset instead removes the whole room and its runtime tree, without carrying over history. Otherwise, soft reset keeps transcripts, message history, run records, agent scratch and handled skill copies, room tmp, and standing fleet budget choices. Both resets clear handleless skill copies in `cache/skills/`. `--hard` deletes `audit/`, `owned/` except `owned/runs/`, `tmp/`, the active log and carryover; the rotated log archive remains. Run waiters can read Canceled after reset; terminal run records are reclaimed after the owned GC grace. Neither reset of a current room removes state `locks/`.
 
 What reset does to the store is in [store internals](../../internals/store.md#maintenance).
 
@@ -268,15 +268,15 @@ rimz gc [--older-than <DURATION>] [--dry-run] [--json] [--all]
 | --- | --- | --- |
 | Room class blocks | The current room's lifetime classes. | Every remaining room, after dead workspace pruning. |
 | `worktrees` | Removes current-repository RimZ-owned worktrees that are clean, landed, and unoccupied, as in [`rimz worktree sweep`](./worktree.md#sweep-landed-worktrees). | Same. |
-| `workspaces` | Skipped; run with `--all`. | Deletes stores whose project folder is gone or whose setup was abandoned before any history. Unreadable records with history are kept and reported. |
-| `runtime` | The current room's runtime root only; no shared provider probe markers. Live files use `--older-than`, sockets a connect probe, locks a try-lock. | Every compatible runtime root and stale shared provider probe markers. |
+| `workspaces` | Skipped; run with `--all`. | Deletes rooms written by an older RimZ, stores whose project folder is gone, and setups abandoned before any history, along with their runtime trees. Unreadable records with history are kept and reported. |
+| `runtime` | The current room's runtime root only; no shared provider probe markers. Live files use `--older-than`, sockets a connect probe, locks a try-lock. | Every runtime root and stale shared provider probe markers. |
 | `temp files` | Removes orphan atomic-write temps (`*.tmp.<pid>.<nonce>`) older than `--older-than` under the room's state and runtime roots. | Sweeps both whole roots. |
 | `messages` | Archives open messages whose receiver has ended, and requeues or times out messages stuck as sent. | Same current-room maintenance. |
 | `event log` | Cuts a corrupt tail off the event log. | Same current-room maintenance. |
 | `agent cache` | Prunes prior-agent carryover older than 14 days. | Same current-room maintenance. |
 | `loop schedules` | Reaps this room's dead or invalid instance rows, prunes its orphan schedule overlays, and removes unclaimed [wait outputs](./wait.md) older than 7 days. Machine `loop.toml` is untouched. | Reaps machine delivery tasks and every root's instance rows; sweeps all rooms' wait outputs. Overlay cleanup still uses the current root's known scopes. |
 
-With either scope, an incompatible layout in the current room refuses the command with a layout error, rather than producing a retained class block. Run `--all` from a compatible room or a directory without a room to see other incompatible rooms retained with migration reasons. See the [layout migration guide](../../internals/store-layout-migration.md).
+With either scope, a current room written by an older RimZ refuses the command with a layout error; run `rimz start` or `rimz reset` there to replace it with a fresh room.
 
 | Flag | Default | Effect |
 | --- | --- | --- |
@@ -303,19 +303,19 @@ The header gives total reclaimed bytes and the area count/cutoff, ending in `· 
 
 The second line counts the areas that ran: normally `checked 7 of 8 areas` for a room, with `workspaces` skipped and a hint to use `--all`. Dry runs skip another four store and schedule areas. The header adds a problem count (`· 1 problem`) when a worktree removal failed, a workspace record was unreadable, or the event log needed repair. Problems do not change the exit code: `gc` exits 0 whenever the sweep completes. Automatic-sweep assist records carry `scope` (`room` or `machine`) and `class_bytes`, reclaimed bytes by class for the helper's own room only, even in a machine sweep. Other assist totals cover the run's full scope.
 
-Owned state has a seven-day grace; audit files expire after 30 days or oldest-first above 64 MiB. `--older-than` does not change those policies.
+Owned state has a seven-day grace; audit files expire after 30 days or oldest-first above 64 MiB. `--older-than` does not change those policies. Rooms written by an older RimZ are removed along with their runtime trees.
 
 ### JSON output
 
 | Field | Content |
 | --- | --- |
 | `scope` | `room` or `machine`. |
-| `rooms` | Per-room `name`, optional `retained_reason`, `classes` (`class`, `files_removed`, `bytes_removed`, `locks_would_check`). Room scope lists only the current room, or none when its state root is absent. |
+| `rooms` | Per-room `name`, `classes` (`class`, `files_removed`, `bytes_removed`, `locks_would_check`). Room scope lists only the current room, or none when its state root is absent. |
 | `dry_run` | `true` under `--dry-run`. |
 | `older_than_secs` | The cutoff in seconds. |
 | `reclaimed_bytes` | Bytes removed, or that would be removed, across all areas. |
 | `worktrees` | `removed` (`name`, `branch`, `path`, `bytes`, `branch_deleted`, `archive_error`), `failed` (`path`, `error`), `kept` (`name`, `path`, `reason`: `in_use`, `uncommitted_changes`, `not_merged`), and `skipped` (`null`, `not_a_repo`, `no_store`, `roster_unavailable`, `list_failed`). |
-| `workspaces` | `removed` (`workspace_id`, `reason`: `project_root_gone` or `abandoned_scaffold`, `project_root`, `bytes`), `retained_unreadable` (`workspace_id`, `error`), `kept` (a count), and `skipped` (`room_scope` for a room sweep, otherwise `null`). |
+| `workspaces` | `removed` (`workspace_id`, `dir_name`, `reason`: `project_root_gone`, `abandoned_scaffold`, or `incompatible_layout`, `project_root`, `bytes`), `retained_unreadable` (`workspace_id`, `error`), `kept` (a count), and `skipped` (`room_scope` for a room sweep, otherwise `null`). Rooms written by an older RimZ are removed as `incompatible_layout`. |
 | `runtime` | `roots_scanned`, `heartbeats_removed`, `sidecars_removed`, `sockets_removed`, `probe_markers_removed`, `dirs_removed`, `bytes_removed`. |
 | `temps` | `files_removed`, `bytes_removed`. |
 | `messages` | `archived`, `reconciled`. |

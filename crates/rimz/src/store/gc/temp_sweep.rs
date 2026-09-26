@@ -12,10 +12,8 @@ use crate::disk::atomic;
 /// Only files older than `min_age` are removed, so an in-flight write stays
 /// intact. Reclaimed bytes count a hardlinked payload only when the sweep
 /// removes its final name.
-/// Machine sweeps supply the state-workspace root to protect incompatible rooms; room sweeps validate their own layout before calling with `None`.
 pub(super) fn sweep_orphan_temps_under(
     root: &Path,
-    state_workspaces: Option<&Path>,
     min_age: Duration,
     dry_run: bool,
 ) -> (usize, u64) {
@@ -24,18 +22,6 @@ pub(super) fn sweep_orphan_temps_under(
     let mut candidates = Vec::new();
 
     while let Some(dir) = stack.pop() {
-        let state_room = state_workspaces.and_then(|state_workspaces| {
-            dir.strip_prefix(root.join("ws"))
-                .ok()
-                .filter(|relative| relative.components().count() == 1)
-                .map(|relative| state_workspaces.join(relative))
-        });
-        if let Some(state_room) = state_room
-            && let Err(err) = crate::disk::paths::check_workspace_layout(&state_room)
-        {
-            tracing::warn!(error = %err, "skipping workspace temp sweep");
-            continue;
-        }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -126,46 +112,6 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn room_temp_root_does_not_interpret_nested_workspaces() {
-        let root = tempdir().unwrap();
-        let nested = root.path().join("ws/nested");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("workspace.json"), br#"{"layout":1}"#).unwrap();
-        let temp = nested.join("record.json.tmp.1.00000000000000000000000000000000");
-        std::fs::write(&temp, b"stale").unwrap();
-        assert_eq!(
-            sweep_orphan_temps_under(root.path(), None, Duration::ZERO, false),
-            (1, 5)
-        );
-        assert!(!temp.exists());
-    }
-
-    #[test]
-    fn legacy_room_temps_are_preserved_in_both_tiers() {
-        let home = tempdir().unwrap();
-        let runtime = tempdir().unwrap();
-        let state_rooms = home.path().join("ws");
-        let state_room = state_rooms.join("old-abcd");
-        let runtime_room = runtime.path().join("ws/old-abcd");
-        std::fs::create_dir_all(&state_room).unwrap();
-        std::fs::create_dir_all(&runtime_room).unwrap();
-        std::fs::write(state_room.join("workspace.json"), b"{}").unwrap();
-        for room in [&state_room, &runtime_room] {
-            std::fs::write(
-                room.join("record.json.tmp.1.00000000000000000000000000000000"),
-                b"keep",
-            )
-            .unwrap();
-        }
-        for root in [home.path(), runtime.path()] {
-            assert_eq!(
-                sweep_orphan_temps_under(root, Some(&state_rooms), Duration::ZERO, false),
-                (0, 0)
-            );
-        }
-    }
-
-    #[test]
     fn sweep_orphan_temps_removes_matching_recursively() {
         let dir = tempdir().unwrap();
         let nonce = "00000000000000000000000000000000";
@@ -186,12 +132,7 @@ mod tests {
                 .unwrap();
         }
 
-        let (files, bytes) = sweep_orphan_temps_under(
-            dir.path(),
-            Some(dir.path()),
-            Duration::from_secs(3600),
-            false,
-        );
+        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
 
         assert_eq!(files, 2);
         assert_eq!(bytes, 8);
@@ -212,12 +153,7 @@ mod tests {
             .set_modified(SystemTime::now() - Duration::from_secs(7200))
             .unwrap();
 
-        let (files, bytes) = sweep_orphan_temps_under(
-            dir.path(),
-            Some(dir.path()),
-            Duration::from_secs(3600),
-            true,
-        );
+        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
 
         assert_eq!((files, bytes), (1, 4));
         assert!(stale.exists(), "dry-run leaves temp file in place");
@@ -241,18 +177,8 @@ mod tests {
             .set_modified(old)
             .unwrap();
 
-        let preview = sweep_orphan_temps_under(
-            dir.path(),
-            Some(dir.path()),
-            Duration::from_secs(3600),
-            true,
-        );
-        let removed = sweep_orphan_temps_under(
-            dir.path(),
-            Some(dir.path()),
-            Duration::from_secs(3600),
-            false,
-        );
+        let preview = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
+        let removed = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
 
         assert_eq!(preview, (2, 12));
         assert_eq!(removed, preview);
@@ -273,18 +199,8 @@ mod tests {
             .set_modified(SystemTime::now() - Duration::from_secs(7200))
             .unwrap();
 
-        let preview = sweep_orphan_temps_under(
-            dir.path(),
-            Some(dir.path()),
-            Duration::from_secs(3600),
-            true,
-        );
-        let removed = sweep_orphan_temps_under(
-            dir.path(),
-            Some(dir.path()),
-            Duration::from_secs(3600),
-            false,
-        );
+        let preview = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), true);
+        let removed = sweep_orphan_temps_under(dir.path(), Duration::from_secs(3600), false);
 
         assert_eq!(preview, (1, 0));
         assert_eq!(removed, preview);
@@ -303,8 +219,7 @@ mod tests {
             std::fs::write(path, b"keep").unwrap();
         }
 
-        let (files, bytes) =
-            sweep_orphan_temps_under(dir.path(), Some(dir.path()), Duration::ZERO, false);
+        let (files, bytes) = sweep_orphan_temps_under(dir.path(), Duration::ZERO, false);
 
         assert_eq!((files, bytes), (0, 0));
         assert!(no_nonce.exists());

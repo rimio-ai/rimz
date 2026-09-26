@@ -126,21 +126,17 @@ pub fn read_optional(path: &Path) -> Result<Option<WorkspaceRecord>> {
 }
 
 pub fn read(path: &Path) -> Result<WorkspaceRecord> {
-    let record = read_any_layout(path)?;
-    crate::disk::paths::require_layout(path, record.layout)?;
-    Ok(record)
-}
-
-// Build retention must preserve executables still referenced by older rooms.
-pub(crate) fn read_any_layout(path: &Path) -> Result<WorkspaceRecord> {
     let bytes = fs::read(path).map_err(|source| WorkspaceRecordErr::Io {
         path: path.to_path_buf(),
         source,
     })?;
-    serde_json::from_slice(&bytes).map_err(|source| WorkspaceRecordErr::Json {
-        path: path.to_path_buf(),
-        source,
-    })
+    let record: WorkspaceRecord =
+        serde_json::from_slice(&bytes).map_err(|source| WorkspaceRecordErr::Json {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    crate::disk::paths::require_layout(path, record.layout)?;
+    Ok(record)
 }
 
 #[cfg(test)]

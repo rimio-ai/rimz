@@ -482,6 +482,15 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
     run_room_preflights(&entry, mux)?;
 
+    let backend = rimz::mux::backend_for(mux);
+    if let RoomEntry::Start { workspace, .. }
+    | RoomEntry::StartDetached { workspace, .. }
+    | RoomEntry::AttachCwd { workspace, .. } = &entry
+        && let Some(report) =
+            rimz::room::teardown::replace_incompatible_room(backend.as_ref(), workspace)?
+    {
+        render::room::print_replaced_room(&report)?;
+    }
     // Capture whether this is a plain reattach *before* `ensure_session`, which on
     // tmux would create the session and erase the distinction. A live room never
     // re-seeds prior agents, and its health verdict is reused by the attach gate.
