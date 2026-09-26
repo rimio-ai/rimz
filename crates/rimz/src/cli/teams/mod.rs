@@ -1,9 +1,11 @@
 //! `rimz teams` — discover, inspect, launch, and drive named teams.
 
+mod board_context;
 mod cohort;
 mod flip;
 mod install;
 mod list;
+mod record;
 mod show;
 mod wait;
 
@@ -87,6 +89,8 @@ enum TeamsSubcmd {
     Restart(CohortArgs),
     /// Hand the board to the next stage's owner.
     Flip(FlipArgs),
+    /// Append a stamped entry to the board's Goal, Decisions, or Result.
+    Record(RecordArgs),
     /// Block until team cohorts' boards reach Done, then print their Result.
     Wait(WaitArgs),
     /// List or install team bundles from the matching RimZ release.
@@ -192,6 +196,26 @@ struct FlipArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    group(clap::ArgGroup::new("input").required(true).args(["text", "file", "stdin"])),
+    override_usage = "rimz teams record <SECTION> <TEXT|--file <PATH>|--stdin>"
+)]
+struct RecordArgs {
+    /// Board section: Goal, Decisions, or Result (case-insensitive).
+    #[arg(value_name = "SECTION")]
+    section: String,
+    /// Text to append as one stamped entry.
+    #[arg(value_name = "TEXT")]
+    text: Option<String>,
+    /// Read the entry from a UTF-8 file.
+    #[arg(long, value_name = "PATH")]
+    file: Option<std::path::PathBuf>,
+    /// Read the entry from stdin to EOF.
+    #[arg(long)]
+    stdin: bool,
+}
+
+#[derive(Debug, Args)]
 struct WaitArgs {
     /// Team or team#lane whose live cohort to wait on; several wait on all.
     #[arg(
@@ -281,6 +305,7 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(TeamsSubcmd::Install(args)) => install::run(args),
         Some(TeamsSubcmd::Flip(args)) => flip::run(args, globals),
+        Some(TeamsSubcmd::Record(args)) => record::run(args, globals),
         Some(TeamsSubcmd::Wait(args)) => wait::run(args, globals),
     }
 }
@@ -437,6 +462,34 @@ mod tests {
         TeamsHarness::try_parse_from(argv)
             .expect("parse teams command")
             .args
+    }
+
+    #[test]
+    fn record_accepts_exactly_one_text_source_and_lists_sections() {
+        for args in [
+            vec!["rimz", "record", "Decisions", "text"],
+            vec!["rimz", "record", "Goal", "--stdin"],
+            vec!["rimz", "record", "Result", "--file", "entry.md"],
+        ] {
+            assert!(TeamsHarness::try_parse_from(args).is_ok());
+        }
+        for args in [
+            vec!["rimz", "record"],
+            vec!["rimz", "record", "Decisions"],
+            vec!["rimz", "record", "Goal", "text", "--file", "entry.md"],
+            vec!["rimz", "record", "Goal", "text", "--stdin"],
+            vec!["rimz", "record", "Goal", "--stdin", "--file", "entry.md"],
+            vec!["rimz", "record", "Goal", "text", "--team", "forge"],
+        ] {
+            assert!(TeamsHarness::try_parse_from(args).is_err());
+        }
+        let help = TeamsHarness::try_parse_from(["rimz", "record", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(help.contains("rimz teams record <SECTION> <TEXT|--file <PATH>|--stdin>"));
+        for section in ["Goal", "Decisions", "Result"] {
+            assert!(help.contains(section), "{help}");
+        }
     }
 
     #[test]

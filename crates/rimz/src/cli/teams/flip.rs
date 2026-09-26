@@ -1,15 +1,11 @@
 //! Resolve a live team cohort and present the durable stage-flip receipt.
 
 use std::io::Write;
-use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 
-use rimz::harness::ancestry::{resolve_caller, resolve_launch_caller};
 use rimz::harness::team_stage::{self, Compaction, Delivery, FlipRequest, Flipper};
-use rimz::utils::path::normalize_path_lexical;
 
 use super::super::{Ctx, GlobalFlags, render};
 use super::FlipArgs;
@@ -17,34 +13,12 @@ use super::FlipArgs;
 pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.resolution_snapshot_with_context()?;
-    let worktree = match std::env::var_os(rimz::workspace::ENV_WORKTREE_PATH) {
-        Some(path) => normalize_path_lexical(Path::new(&path)),
-        None => {
-            let output = Command::new("git")
-                .args(["rev-parse", "--show-toplevel"])
-                .current_dir(std::env::current_dir()?)
-                .output()
-                .context("resolve the current worktree with git")?;
-            if !output.status.success() {
-                bail!("cannot resolve the current worktree; run from a git worktree");
-            }
-            let path =
-                String::from_utf8(output.stdout).context("git worktree path is not UTF-8")?;
-            normalize_path_lexical(Path::new(path.trim()))
-        }
-    };
+    let worktree = super::board_context::worktree()?;
     let cohorts = rimz::address::team_cohorts(&snapshot.agents);
     let candidates = cohorts
         .iter()
         .filter(|cohort| args.team.as_deref().is_none_or(|team| cohort.team == team))
-        .filter(|cohort| {
-            cohort.members.iter().all(|member| {
-                member
-                    .worktree_path
-                    .as_deref()
-                    .is_some_and(|path| normalize_path_lexical(Path::new(path)) == worktree)
-            })
-        })
+        .filter(|cohort| super::board_context::in_worktree(cohort, &worktree))
         .collect::<Vec<_>>();
     let cohort = match candidates.as_slice() {
         [cohort] => *cohort,
@@ -74,9 +48,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         ),
     };
     let team_name = cohort.team;
-    let caller = resolve_caller(&snapshot.agents)
-        .map(|caller| resolve_launch_caller(&snapshot.agents, &caller))
-        .transpose()?;
+    let caller = super::board_context::caller(&snapshot.agents)?;
     let member = caller.filter(|caller| {
         cohort
             .members

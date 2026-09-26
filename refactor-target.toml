@@ -290,7 +290,8 @@ upward-dependencies = ["sidebar::refresh"]
 # PROMPT_CACHE_MARGIN, fire_point, resolve_mode and should_compact share one idle-compaction decision between producer and detached CLI helper.
 # IdleWindow carries the cache-expiry bound through that shared decision.
 # Deadline rungs, channel policy and locked claims serve the CLI and producer.
-surface-budget = 554
+# Locked board records expose their section, request, receipt, and typed errors to the CLI.
+surface-budget = 561
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

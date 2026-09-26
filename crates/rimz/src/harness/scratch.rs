@@ -255,7 +255,7 @@ fn parse_board_sections(board: &str, headings: &[&str]) -> Option<String> {
     (!section.is_empty()).then(|| section.to_owned())
 }
 
-fn is_atx_heading(line: &str) -> bool {
+pub(super) fn is_atx_heading(line: &str) -> bool {
     let text = line.trim_start_matches('#');
     (1..=6).contains(&(line.len() - text.len()))
         && (text.is_empty() || text.starts_with([' ', '\t']))

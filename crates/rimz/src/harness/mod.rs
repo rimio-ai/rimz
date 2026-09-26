@@ -5,6 +5,7 @@ pub mod assist_log;
 pub(crate) mod auto_continue;
 pub mod auto_gc;
 pub mod auto_redeem;
+pub mod board;
 pub mod budget;
 pub mod deadline;
 pub mod fleet;
