@@ -181,8 +181,75 @@ jq '.worktree_groups[].rows[] | select(.handle == "coder")' /tmp/snap.json
 
 Two rules for a check whose subject is time:
 
-- A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and launch no children, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent.
+- A room's own agents are the only real delegating parents available. A sandbox room's agents are synthetic and launch no children, so a scenario that needs a parent waiting on live subagents runs in the room you are working in: launch a child that keeps working, then observe the parent. A Claude-native child line whose check needs no live wait replays in the sandbox instead ([Native subagent replay](#native-subagent-replay)).
 - Put the wait in a background script (`sleep <secs>` followed by the capture commands, run detached) rather than a foreground sleep. An agent harness refuses a long foreground sleep, and any tool call you make during the window stamps the very activity clock you are trying to age.
+
+## Native subagent replay
+
+The sandbox's `claude` is a stub (`xtask/assets/sandbox-room/claude`), so no real Claude child ever starts in a held room. A change to a Claude-native child line (its tokens, model, status, or clock) is still checkable in one pass: copy a real parent and child transcript into the room, then feed the parent's hooks and the child's `subagentStatusLine` payload by hand, in the order Claude would send them.
+
+**Setup.** Hold a tmux room from the testkit build (see [Hold a room and join it](#hold-a-room-and-join-it)). From its card note the root, the `@coder#probe` Role pane (`%6` in the tmux card above), and a `#probe` consumer sidebar. The hooks also want the parent pane's process, which the card does not print; read it from the room's tmux socket, the one the card's Focus command names:
+
+```sh
+target/debug/xtask sandbox in "$ROOT" -- tmux -S "$ROOT/runtime/rimz/tmux/server" list-panes -a -F '#{pane_id} #{pane_pid}'
+```
+
+**Transcripts.** Pick one Claude session that launched a subagent and copy exactly two files from `~/.claude/projects/<project>/` into the room's `tmp/replay/`, keeping their relative layout: `<session>.jsonl` and `<session>/subagents/agent-<child>.jsonl`. The adapter derives the child directory from the parent transcript's path (`subagents_dir` in `agents/adapters/claude/subagents.rs`), so a flattened copy reads no child. Copy nothing else from `~/.claude`: no credentials, no settings.
+
+```sh
+mkdir -p "$ROOT/tmp/replay/$SESSION/subagents"
+cp ~/.claude/projects/<project>/"$SESSION".jsonl "$ROOT/tmp/replay/"
+cp ~/.claude/projects/<project>/"$SESSION"/subagents/agent-"$CHILD".jsonl "$ROOT/tmp/replay/$SESSION/subagents/"
+```
+
+**Payloads.** Four JSON files, each fed on stdin. `transcript_path` is the copied parent, `cwd` is the card's Worktree, and `agent_id` / `tasks[].id` is `<child>` from the child file's name (`agent-<child>.jsonl`). A `tokenCount` unlike the transcript's figure shows which source the line paints.
+
+```json
+{"hook_event_name":"SessionStart","session_id":"<session>","cwd":"<root>/home/room-worktrees/probe","source":"startup","transcript_path":"<root>/tmp/replay/<session>.jsonl"}
+{"hook_event_name":"SubagentStart","session_id":"<session>","agent_id":"<child>","agent_type":"Explore","cwd":"<root>/home/room-worktrees/probe","transcript_path":"<root>/tmp/replay/<session>.jsonl"}
+{"columns":80,"transcript_path":"<root>/tmp/replay/<session>.jsonl","tasks":[{"id":"<child>","type":"Explore","status":"running","description":"Replay occupancy check","tokenCount":999999}]}
+{"hook_event_name":"SubagentStop","session_id":"<session>","agent_id":"<child>","agent_type":"Explore","cwd":"<root>/home/room-worktrees/probe","transcript_path":"<root>/tmp/replay/<session>.jsonl","agent_transcript_path":"<root>/tmp/replay/<session>/subagents/agent-<child>.jsonl"}
+```
+
+**Feed.** Run each as the parent pane, with the built binary by its absolute path (`$PWD/target/debug/rimz` from the worktree root). `SubagentStop` is the one that carries `agent_transcript_path`, so check the running line between the third and fourth feeds.
+
+```sh
+x() { target/debug/xtask sandbox in "$ROOT" -- env RIMZ_AGENT_PID="$PARENT_PID" TMUX_PANE="$PARENT_PANE" "$PWD/target/debug/rimz" --tmux "$@"; }
+x hooks feed --source claude < parent-start.json
+x hooks feed --source claude < child-start.json
+x statusline feed --source claude --subagent < child-feed.json
+# observe the running line here
+x hooks feed --source claude < child-stop.json
+```
+
+Each feed exits 0 with no output.
+
+**Observe.** Read the child three ways, running and again after the stop:
+
+```sh
+target/debug/xtask sandbox in "$ROOT" -- "$PWD/target/debug/rimz" --tmux sidebar snapshot --json > /tmp/snap.json
+jq -c --arg c "$CHILD" '.worktree_groups[].rows[].sub_agents[]? | select(.id == $c) | {status, tokens}' /tmp/snap.json
+target/debug/xtask sandbox in "$ROOT" -- "$PWD/target/debug/rimz" --tmux agents show '@coder#probe' --json > /tmp/show.json
+jq -c '.agent.sub_agents[].tokens' /tmp/show.json
+```
+
+`agents show --json` wraps the card in an `agent` envelope, so a bare `.sub_agents` reads null. The frame comes from the consumer's Look then Capture, as in the four checks. The expected window is the newest assistant request in the child transcript, prompt side only:
+
+```sh
+jq -s '[.[] | select(.type == "assistant") | .message.usage] | last | .input_tokens + .cache_read_input_tokens + .cache_creation_input_tokens' agent-"$CHILD".jsonl
+```
+
+In the recorded run (2026-09-26, tmux) that sum was `2 + 118420 + 2589 = 121011`. The snapshot read `{"status":"running","tokens":{"window":121011}}`, then `{"status":"success","tokens":{"window":121011}}` after the stop; the `tokenCount` of 999999 did not replace it. The consumer's child line, running and stopped:
+
+```text
+▌    ⢁ Explore · Replay occupancy check          ▐
+▌      ▤ 121k · Opus 5                      ◔ <1m▐
+
+▌    ✓ Explore · Replay occupancy check     ◔ <1m▐
+▌      ▤ 121k · Opus 5                           ▐
+```
+
+The replay proves the adapter and renderer path from hook to frame. It does not prove that Claude sends these payloads in this order or shape; that contract lives in [claude-reference.md](../externals/agent-adapter/claude-reference.md). It has run on tmux only.
 
 ## Traps
 
@@ -192,4 +259,6 @@ Two rules for a check whose subject is time:
 - `sidebar click` is testkit-only. It uses the renderer's wakeup socket, exercising hit testing and focus routing but skipping terminal input and its parsing.
 - The pipeline line renders no owner name; the click's focus target is the evidence for ownership.
 - Read focus from the mux using the card's Focus command, not `rimz pane list`, which reports no focus on Zellij. Zellij's `is_focused` is per-tab and non-unique ([zellij-reference.md](../externals/mux-adapter/zellij-reference.md#types)): the check reads focus among the team tab's panes, so it proves pane focus inside that tab and not which tab the client is viewing.
+- A command inside `sandbox in` does not resolve a relative binary path against your worktree: `target/debug/rimz` fails with `env: 'target/debug/rimz': No such file or directory` and exit 127. Pass the binary by absolute path.
+- Wrapping `sandbox room` in your own `bwrap` (to keep its files in a scratch directory) needs `--dev-bind /dev /dev`; without it the room exits before starting with `starting sandbox cleanup reaper` / `Permission denied (os error 13)`.
 - Stop the room by letting `--for` expire or killing the `xtask sandbox room` PID itself. Killing a wrapper shell leaves the room running. Kill by PID from `pgrep`, not with `pkill -f <pattern>`: the pattern matches the invoking shell's own command line, so `pkill` kills the shell that ran it.
