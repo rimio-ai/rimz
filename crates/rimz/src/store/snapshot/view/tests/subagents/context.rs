@@ -7,8 +7,9 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
     let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
     child.model = None;
-    child.usage.fresh_input_tokens = Some(1);
     child.usage.output_tokens = Some(9);
+    let mut stopped = child_state("sess-root", "stopped-1", AgentStatus::Success, 5);
+    stopped.usage.fresh_input_tokens = Some(50_000);
     let mut fork = child_state("sess-root", "fork-1", AgentStatus::Running, 5);
     fork.task = None;
     let mut typed = child_state("sess-root", "typed-1", AgentStatus::Running, 5);
@@ -17,7 +18,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     typed.usage.fresh_input_tokens = Some(42);
     let started = ago(100);
 
-    let snapshot = room(vec![parent, child, fork, typed]);
+    let snapshot = room(vec![parent, child, fork, typed, stopped]);
     let folded = snapshot.with_subagent_context(vec![
         record(
             "child-1",
@@ -62,6 +63,22 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
             },
         ),
         record(
+            "stopped-1",
+            SubagentContext {
+                usage: Some(crate::agents::AgentUsageSummary {
+                    fresh_input_tokens: Some(12_400),
+                    ..Default::default()
+                }),
+                agent_type: None,
+                model: None,
+                effort: None,
+                description: None,
+                cost_usd: None,
+                started_at: None,
+                observed_at: epoch(),
+            },
+        ),
+        record(
             "ghost",
             SubagentContext {
                 usage: None,
@@ -91,6 +108,13 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     assert_eq!(child.subagent_started_at, Some(started));
     assert_eq!(child.model.as_deref(), Some("child-model"));
     assert_eq!(child.effort.as_deref(), Some("high"));
+
+    // A lifecycle split recorded at stop outlives the older sidecar reading.
+    let stopped = rollup_agent(&folded, "stopped-1");
+    assert_eq!(
+        sub_agent_from_state(stopped, epoch(), false).tokens,
+        Some(crate::store::snapshot::SubAgentTokens::Window(50_000))
+    );
 
     let fork = rollup_agent(&folded, "fork-1");
     assert_eq!(fork.task.as_deref(), Some("Explore"));
