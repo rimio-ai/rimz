@@ -104,7 +104,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | mark | meaning |
 |------|---------|
 | `⑂ name` | a worktree group, named by its branch |
-| `⮌ name` | a worktree group whose work has landed |
+| `↩ name` | a worktree group whose work has landed |
 | `# name` | a named channel with no git state |
 | `✓` `✕` `◌` beside the name | the trunk's HEAD-commit CI, or a branch's open or merged pull request's CI: passing, failing, running |
 | `#91` | the branch's pull request |
@@ -390,10 +390,10 @@ Each group starts with a header. Its left side names the work, and its right sid
 ```
 ▎⑂ feature-migration ◌ #91 ┄┄┄┄ ⇡3 ⇣1  +230 -23  ⑃ main🮇    ← diverged, open PR #91, CI running
 ▎⑂ fresh-fork ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main🮇    ← pristine: no commits of its own
-▎⮌ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main🮇    ← merged: safe to remove
+▎↩ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main🮇    ← merged: safe to remove
 ```
 
-On the left: `⑂` or `⮌`, the branch name, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, `#91` opens the pull request. When two groups have the same branch name, each adds a muted `· repo` qualifier, the shortest path suffix that tells the checkouts apart. When the header runs out of room, the name shortens first, then the pull request number is dropped, then the CI verdict last.
+On the left: `⑂` or `↩`, the branch name, the CI verdict (`✓` passing, `✕` failing, `◌` running), and the pull request number when the branch has one. An open or merged pull request supplies the CI verdict; a non-trunk branch without one shows no CI glyph, while the trunk shows its own HEAD-commit CI. Closed pull requests show no CI glyph. The team badge goes on the pipeline line when one is drawn, on the roster line when the group is folded, and on the header otherwise. In terminals that support hyperlinks, `#91` opens the pull request. When two groups have the same branch name, each adds a muted `· repo` qualifier, the shortest path suffix that tells the checkouts apart. When the header runs out of room, the name shortens first, then the pull request number is dropped, then the CI verdict last.
 
 On the right: commits ahead of and behind the trunk with zero counts left out, then lines added and removed, then the trunk marker. The line counts include committed, staged, unstaged, and untracked work, so work that `git diff` does not show still counts. The first marker that applies is shown:
 
@@ -476,7 +476,7 @@ A group shows at most six idle and process rows. The rest fold behind a dim `+K 
 A group is finished when its pull request merged or closed, or the trunk contains its work, its tree is clean, and no member is working or needs you. A finished group with several agents collapses to its header and a two-line receipt, unread results included:
 
 ```
- ⮌ merged-work                                   ✓ main
+ ↩ merged-work                                   ✓ main
  ▸ rimz  ✓ planner  ✓ coder  ✓ reviewer           $4.02
    ◇ 1M ↘ 300k ↗ 80k ◌ 900k · 75%                  ◉ 2h
 ```

@@ -75,7 +75,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(ValueApprox, "≈", None),
     glyph!(Seam, "·", None),
     glyph!(WorktreeBranch, "⑂", Some("\u{e0a0}")),
-    glyph!(WorktreeMerge, "⮌", Some("\u{f17f}")),
+    glyph!(WorktreeMerge, "↩", Some("\u{f17f}")),
     glyph!(WorktreeAhead, "⇡", None),
     glyph!(WorktreeBehind, "⇣", None),
     glyph!(WorktreeTrunkEqual, "≡", None),
