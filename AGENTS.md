@@ -134,7 +134,7 @@ This indexes what lives where. Runtime shape and the single-binary rationale liv
 - Daemon view — `daemon_view` spec and reconciliation; `daemon_content` supervisors; `remote_control` provider-neutral readiness/toggle coordination.
 - Process and config — `config`, `observability`, `agent_activity`, `lane`, `proc` user-shell selection and process inspection, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
 - Install lifecycle — `update` install-origin detection, release verification, and atomic binary replacement; `uninstall` machine-wide removal mechanics.
-- Shared language servers — `lsp/` admission, process leases, registry, cost history, broker, saved-file watching, memory watchdog, and read-only queries.
+- Shared language servers — `lsp/` admission, process leases, registry, cost history, broker, editor attachment, saved-file watching, memory watchdog, and read-only queries.
 
 ## Documentation map
 

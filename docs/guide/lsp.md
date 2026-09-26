@@ -30,7 +30,7 @@ Every field and its default is in the [reference](../reference/cli/lsp.md#config
 
 ## What a launch does on your machine
 
-Nothing runs until you launch agents. Every launch that opens panes, `rimz agents`, `rimz teams`, a `-p` run, a resume, and rebirth recovery, does the following for its checkout before the first pane opens:
+Nothing runs until you launch agents or attach an editor. Every launch that opens panes, `rimz agents`, `rimz teams`, a `-p` run, a resume, and rebirth recovery, does the following for its checkout before the first pane opens:
 
 1. It resolves which configured servers apply, by root markers, and checks each executable exists. A missing binary or an untrusted project entry refuses the launch here, with the fix.
 2. If a broker for this (checkout, name) already exists, dormant or running, the launch joins it. Otherwise it starts a small hidden broker, leaving the language server dormant by default. The broker's socket and registry entry live under RimZ's runtime directory, so they do not survive a reboot.
@@ -69,7 +69,32 @@ rimz lsp find Mux                            # workspace symbol search
 
 A name that matches several symbols lists the candidates instead of guessing; rerun with one of the listed qualified names or its position. A wrong qualifier lists possible names the same way, so you can repair the query in one rerun. Callers and callees list only code inside the checkout and end with how many were left out, if any; `--external` shows them. Add `--json` for structured output (the raw LSP result on success, an outcome and candidates for not-found or ambiguous names), and `--server <name>` when a checkout has more than one server and the file's extension does not settle it. The checkout is the one enclosing your current directory (or `--root`). Everything about targets, output, and flags is in the [reference](../reference/cli/lsp.md#queries).
 
-The server answers from the disk, kept current by watching saved files, not from anyone's editor buffer. An unsaved change is invisible to it, which is what you want when several agents share one view.
+For files no attached editor holds, the server answers from disk, kept current by watching saved files. Attaching your editor lets agents query your unsaved buffers too.
+
+## Use it from your editor
+
+Your editor already runs rust-analyzer for completion, navigation, and diagnostics. Point it at `rimz lsp attach` instead to share the index your agents use, and let their answers include the changes you have not saved yet. Configure the `rust` server above first, then replace the editor's server command using its setting below. The editor must run on the host, or in a sandbox that binds the host's `XDG_RUNTIME_DIR` so it can reach the shared server.
+
+| Editor | Setting |
+| --- | --- |
+| VS Code | Run `rimz lsp shim --server rust`, then set `"rust-analyzer.server.path": "<printed path>"`. VS Code's rust-analyzer server settings are ignored. |
+| Zed | Set `lsp.rust-analyzer.binary = { path = "rimz", arguments = ["lsp", "attach", "--server", "rust"] }`. |
+| Neovim | Set `cmd = { "rimz", "lsp", "attach", "--server", "rust" }`, with `root_dir` set to the checkout; `--root` is optional. |
+| Helix | Set `language-server.rust-analyzer = { command = "rimz", args = ["lsp", "attach", "--server", "rust"] }`. |
+
+For VS Code, the shim is an executable file at `~/.local/bin/rimz-lsp-rust` that runs RimZ with the attachment arguments; the command prints the path to paste into the setting. The other editors invoke RimZ directly, so `rimz` must be on their PATH. Restart the editor's language server after changing its configuration. Attachment uses the checkout reported by the editor, or the global `--root` if supplied. It joins the shared server or creates one when absent, without needing an agent launch first, under the same memory and trust policy.
+
+RimZ owns the server settings: editor initialization options and later server-setting changes are ignored. Change `init-options` in your RimZ server configuration instead. Attaching does not enable checking on save. To get cargo-check diagnostics, set `checkOnSave = true` and `cargo = { targetDir = true }` inside `init-options`, keeping any other options you use. The separate target directory avoids contention with agent builds; checking still costs CPU and memory.
+
+While attached, your unsaved buffers are visible to agents. Definition, reference, and implementation output replaces the disk source line with `(unsaved in editor)` for a buffer changed since it was opened or saved. This marker is advisory: an already-unsaved buffer when first opened is not detected, and editing back to the disk text does not clear it. Raw JSON output is unchanged.
+
+If two editors open the same file, the first opener's buffer supplies answers for both editors and the agents; their local buffers are not merged or overwritten. The second editor receives diagnostics only when its text matches the diagnostic snapshot, and stale diagnostics are cleared when its text diverges. The owner keeps its diagnostics until the server refreshes them. Closing the first editor's file transfers ownership to the next opener. `rimz lsp status --server rust` shows attached editors, their files, and which buffer owns each file.
+
+Rust-analyzer's Run, Debug, Impl, and Reference lenses and hover actions work in VS Code. Neovim shows lenses when lens display is enabled, but warns once when you activate an action it cannot run unless a plugin implements it. Helix has no code-lens UI.
+
+An attached editor does not keep an idle server's memory resident. The next request restarts it and restores held buffers. If a stop or memory refusal cancels outstanding requests, the editor gets one explanatory message; a stop with no outstanding requests produces no popup. VS Code also receives the server's stopped status.
+
+To return to the editor's own server, remove the command override above and restart its language server. For VS Code, also remove the generated shim with `rm ~/.local/bin/rimz-lsp-rust` (or the path printed for a custom directory). Disconnecting releases the editor's lease without stopping agents' server access.
 
 ### Check notes before hand-off
 
@@ -94,7 +119,7 @@ A server can free its memory while agents remain:
 - **Memory runs short.** Every broker samples free memory every five seconds. Below 5% of RAM, one broker stops servers in least-recently-queried order until memory recovers, without the age protections used for admission. The victim's whole process group goes, including any `cargo` children, and a record lands in `~/.rimz/logs/lsp.log.jsonl`. Servers carry a high `oom_score_adj` so the kernel favors them over agents if it acts first.
 - **The server crashes.** The broker records the crash and becomes dormant, ready for a later query to retry.
 
-Each restart checks memory again; `RESTARTS` counts starts after a stop, not the first lazy start. The entry remains available while agents hold leases. Once the last agent leaves, a 60-second grace lets a replacement rejoin before the broker exits, even if dormant. Removing the checkout ends its broker too. To turn sharing off for future launches, remove the `[lsp.servers.<name>]` table; Claude's native tool is then no longer denied. Existing agents keep their leases until they exit.
+Each restart checks memory again; `RESTARTS` counts starts after a stop, not the first lazy start. The entry remains available while agents or attached editors hold leases. Once the last one leaves, a 60-second grace lets a replacement rejoin before the broker exits, even if dormant. Removing the checkout ends its broker too. To turn sharing off for future launches, remove the `[lsp.servers.<name>]` table; Claude's native tool is then no longer denied. Existing agents keep their leases until they exit.
 
 ## Make a server a precondition
 

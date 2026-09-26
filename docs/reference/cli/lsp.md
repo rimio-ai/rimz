@@ -1,6 +1,6 @@
 # Shared language servers
 
-`rimz lsp` queries shared language servers registered for a checkout at agent launch. A query starts or restarts a dormant server when memory permits. For lifecycle and memory accounting, see the [internals](../../internals/lsp.md).
+`rimz lsp` queries shared language servers and attaches editors to them. Agent launches and editor attachment register servers for a checkout; requests start or restart dormant servers when memory permits. For lifecycle and memory accounting, see the [internals](../../internals/lsp.md).
 
 ## Queries
 
@@ -68,6 +68,31 @@ Text prints one line per failing or unchecked anchor: `<notes>:<line>  <status> 
 
 JSON includes every anchor, including `ok`. The fixed top-level keys are `notes`, `checkout`, `anchors`, and `summary`. Each anchor has `line`, `text`, `status`, `path`, `symbol`, `hint`, `range`, `candidates`, `files`, and `detail`. Paths are checkout-relative or null; symbols are segment arrays or null for line-only anchors. Hints and ranges are inclusive one-based `[start, end]` pairs or null. Candidates have `name`, `kind`, and `range`; files lists ambiguous paths. Summary has `anchors`, `ok`, `failed`, and `unchecked` counts.
 
+## Attach
+
+```sh
+rimz lsp attach --server rust
+rimz lsp attach --server rust --root /path/to/checkout --stdio
+rimz lsp attach --version
+```
+
+`attach [--server NAME] [--stdio] [--version]` bridges an editor's stdin and stdout to one shared server. Stdio is the only transport; `--stdio` is optional. Except for `--version`, stdout contains only Content-Length-framed LSP messages; diagnostics and admission waits go to stderr. The first input frame must be `initialize`, otherwise the command fails with `expected initialize`. `--version` prints `rimz lsp attach <version>` and exits 0 without reading input or loading configuration.
+
+The global `--root` takes precedence over the editor's `initialize.rootUri`, then its first workspace folder, then cwd. Editor roots must be file URIs. The most deeply enclosing live registered checkout is used when present; otherwise workspace resolution supplies the worktree root. `--server NAME` selects a configured server. Without it, exactly one configured server must have a matching root marker; zero or several matches fail with an error naming `--server`.
+
+Attachment joins an existing broker or admits a new one using the configured trust, executable, and memory checks. Creating a required server can wait up to `wait-timeout`, printing queue position and remaining time to stderr every five seconds. A stopped entry is retried for five seconds before refusal. An optional server's memory refusal happens inside the LSP session, as failed requests and an editor message, not as a launch-time exit 3.
+
+Editor EOF exits 0. Broker refusal (including an older broker without attachment support), connection failure, or the broker closing first exits 3 with `language server <name> for <root> is <reason>` on stderr. A required-admission queue timeout also exits 3, with the queue-timeout diagnostic. Disconnecting releases the editor's lease; it does not stop a server still leased by other clients. See [editor setup](../../guide/lsp.md#use-it-from-your-editor) for supported Rust configurations.
+
+## Shim
+
+```sh
+rimz lsp shim --server rust
+rimz lsp shim --server rust --dir /path/to/bin
+```
+
+`shim --server NAME [--dir DIR]` writes executable `DIR/rimz-lsp-NAME` and prints its path. DIR defaults to `~/.local/bin` and is created if absent. The shell script invokes the resolved RimZ executable with `lsp attach --server NAME`, forwarding all arguments. It replaces an existing file only when it starts with RimZ's shell-script header and attachment-shim marker; other files are refused. It does not change editor settings or start a server. Remove the generated file to uninstall it.
+
 ## List and stop
 
 ```sh
@@ -106,10 +131,10 @@ Text shows checkout, server name, state, broker and server pids, request count, 
 
 | Exit | Meaning |
 | --- | --- |
-| 0 | Answered, including `no results` for a resolved symbol; successful list, status, or stop; check has no failing anchors (unchecked anchors are allowed). |
+| 0 | Answered, including `no results` for a resolved symbol; successful list, status, stop, shim, or attach version probe; attach ended on editor EOF; check has no failing anchors (unchecked anchors are allowed). |
 | 1 | Command failed, including server-selection or protocol errors; details on stderr. |
 | 2 | Invalid command line, flag, or argument. |
-| 3 | No server for the checkout, memory admission refused, or terminal shutdown. The stderr line names the reason and grep fallback. |
+| 3 | Queries/status: no server for the checkout, memory admission refused, or terminal shutdown, with a reason and grep fallback on stderr. Attach: admission timeout/refusal, broker refusal, or broker connection closing/failing, with the diagnostic described above. |
 | 4 | Still indexing after the wait bound. The stderr line gives elapsed time. |
 | 5 | Symbol name not found; candidates with that last segment are listed on stdout. |
 | 6 | Symbol name ambiguous; candidates are listed on stdout, each with an accepted name. |
