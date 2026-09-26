@@ -5,6 +5,168 @@ use assert_cmd::assert::OutputAssertExt;
 use rimz::config::{MachineConfig, effective};
 
 #[test]
+fn lsp_check_reports_anchor_failures_and_coverage() {
+    use rimz::lsp::{admission::ServeRequest, registry};
+    use serde_json::{Value, json};
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let env = Env::new();
+    for args in [&["init", "-q", "-b", "main"][..], &["add", "."][..]] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&env.project_root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    for (file, contents) in [
+        ("lib.rs", "struct Type;\nfn saved() {}\n"),
+        ("src/dup.rs", ""),
+        ("other/dup.rs", ""),
+        ("notes.py", ""),
+        ("Cargo.toml", ""),
+        (
+            "notes.md",
+            "`lib.rs::Type::method` (~3)\n`lib.rs::Type.field`\n`lib.rs::nosuch`\n`dup.rs::x`\n`gone.rs::x`\n`lib.rs::saved` (~40)\n`lib.rs:2`\n`notes.py::f`\n",
+        ),
+        (
+            "ok.md",
+            "`lib.rs::Type::method` (~3)\n`lib.rs::Type.field`\n`lib.rs:2`\n",
+        ),
+    ] {
+        let path = env.project_root.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    let config: rimz::config::LspServerConfig = serde_json::from_value(json!({"command":[stub],"extensions":["rs"],"root-markers":["Cargo.toml"],"memory-estimate":"1M"})).unwrap();
+    let mut machine = MachineConfig::default();
+    machine.lsp.servers.insert("rust".into(), config.clone());
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        toml::to_string(&std::collections::BTreeMap::from([("lsp", &machine.lsp)])).unwrap(),
+    )
+    .unwrap();
+    let request = ServeRequest {
+        root: env.project_root.canonicalize().unwrap(),
+        project: env.project_root.clone(),
+        server: "rust".into(),
+        settings_hash: rimz::lsp::history::settings_hash(&config),
+        config,
+        policy: rimz::config::LspConfig {
+            kill_floor_percent: 0,
+            reserve_percent: 0,
+            reserve_min: "0".into(),
+            ..Default::default()
+        },
+        eager: false,
+    };
+    let directory = env
+        .runtime_root
+        .join("rimz/lsp")
+        .join(registry::key(&request.root, "rust").unwrap());
+    let mut broker = env
+        .rimz()
+        .args([
+            "lsp",
+            "serve",
+            "--request",
+            &serde_json::to_string(&request).unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !directory.join("entry.json").exists() {
+        assert!(broker.try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "notes.md"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(text.lines().count(), 6, "{text}");
+    for (line, status) in [
+        (3, "missing-symbol"),
+        (4, "ambiguous-path"),
+        (5, "missing-path"),
+        (6, "line-outside"),
+        (8, "unchecked"),
+    ] {
+        assert!(
+            text.contains(&format!("notes.md:{line}  {status}  ")),
+            "{text}"
+        );
+    }
+    assert!(text.ends_with("8 anchors in notes.md: 3 ok, 4 failed, 1 unchecked\n"));
+    let output = env
+        .rimz()
+        .args(["lsp", "check", "notes.md", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["summary"],
+        json!({"anchors":8,"ok":3,"failed":4,"unchecked":1})
+    );
+    let statuses: Vec<_> = value["anchors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            "ok",
+            "ok",
+            "missing-symbol",
+            "ambiguous-path",
+            "missing-path",
+            "line-outside",
+            "ok",
+            "unchecked"
+        ]
+    );
+    assert_eq!(value["anchors"][3]["files"].as_array().unwrap().len(), 2);
+    env.rimz()
+        .args(["lsp", "check", "ok.md"])
+        .assert()
+        .success()
+        .stderr("")
+        .stdout("3 anchors in ok.md: 3 ok, 0 failed, 0 unchecked\n");
+    env.rimz()
+        .args(["lsp", "check", "missing.md"])
+        .assert()
+        .code(1)
+        .stdout("");
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+    env.rimz()
+        .args(["lsp", "check", "ok.md"])
+        .assert()
+        .code(3)
+        .stdout("");
+}
+
+#[test]
 fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
     let env = Env::new();
     crate::common::write_kind_base(&env, "claude");
@@ -180,9 +342,10 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         .assert()
         .success()
         .stdout("[]\n");
+    std::fs::write(env.project_root.join("empty.rs"), "").unwrap();
     for verb in ["def", "refs", "impl", "callers", "callees", "symbols"] {
         let target = if verb == "symbols" {
-            "lib.rs"
+            "empty.rs"
         } else {
             "lib.rs:1:4"
         };

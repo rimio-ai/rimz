@@ -72,6 +72,13 @@ pub struct DocumentSymbol {
     pub children: Vec<DocumentSymbol>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(super) enum Symbols {
+    Flat(Vec<SymbolInformation>),
+    Tree(Vec<DocumentSymbol>),
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CallHierarchyItem {

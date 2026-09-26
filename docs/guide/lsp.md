@@ -71,6 +71,16 @@ A name that matches several symbols lists the candidates instead of guessing; re
 
 The server answers from the disk, kept current by watching saved files, not from anyone's editor buffer. An unsaved change is invisible to it, which is what you want when several agents share one view.
 
+### Check notes before hand-off
+
+A note can name a symbol that does not exist or point at an old line. Before handing it off, check its inline-code anchors against the checkout's files and shared server outlines:
+
+```sh
+rimz lsp check notes.md
+```
+
+Fix each flagged path, symbol, or line and rerun. A path suffix that names several files needs more of the path. The summary counts what passed, failed, or remained unchecked; `unchecked` means no server covers that language, so verify those anchors by hand. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) defines the accepted anchors and JSON output.
+
 ## See what is running, and stop it
 
 `rimz lsp list` shows every shared server on the machine, whichever room registered it: its state (`not started`, `starting`, `indexing`, `ready`, `dormant: <reason>`, or briefly `stopped` during shutdown), checkout, name, current and peak memory for running servers, query count and time since the last query, restarts, and leases. Alive rows sort first, and a crash stands out with a failure glyph and tone. RSS and PEAK show `-` when not running. `not started` means the server has never run; other dormant entries name the stop reason. `rimz doctor` shows shared-server status under `LSP`, plus the last memory refusal, so when an agent says it is on grep you can see why in one place.
