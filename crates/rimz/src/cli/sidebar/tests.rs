@@ -335,7 +335,17 @@ fn assert_fixture_frame_snapshot(state: SidebarFixtureState, snapshot_name: &str
     let mut ansi = Vec::new();
     rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 54, 34).unwrap();
 
-    insta::assert_snapshot!(snapshot_name, strip_sgr(&ansi));
+    let rendered = strip_sgr(&ansi);
+    if matches!(
+        state,
+        SidebarFixtureState::Reach | SidebarFixtureState::Provider
+    ) {
+        assert!(
+            rendered.lines().any(|line| line.starts_with("▌      ▤")),
+            "{rendered}"
+        );
+    }
+    insta::assert_snapshot!(snapshot_name, rendered);
 }
 
 #[test]

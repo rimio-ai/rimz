@@ -22,7 +22,7 @@ expression: strip_sgr(&ansi)
    󰿦 247k · 󱥸 212k  24k  9k  30k
     subagents (2)                              $0.46
      ⠁ Plan · run focused nextest               $0.12
-        18k · Haiku · xhigh                    󰪞  3m
+       󰿦 18k · Haiku · xhigh                    󰪞  3m
       Explore · audit auth watcher chang 󰪞 <1m $0.34
         22k · Haiku · xhigh
  ▁ claude · Opus 4.8 · xhigh · 1m              $28.90
@@ -48,7 +48,7 @@ expression: strip_sgr(&ansi)
    󰿦 185k · 󱥸 178k  7k  23k                   󰪥 54m
     subagents (2)
      ⠁ Plan · run focused nextest
-        18k · Haiku · xhigh                    󰪞  3m
+       󰿦 18k · Haiku · xhigh                    󰪞  3m
       Explore · audit auth watcher changes     󰪞 <1m
         22k · Haiku · xhigh
   claude · Opus 4.8 · xhigh
@@ -70,7 +70,7 @@ expression: strip_sgr(&ansi)
    󰿦 314k · 󱥸 270k  31k  12k  39k             󰪞 6m
     subagents (2)                              $0.46
      ⠁ Plan · run focused nextest               $0.12
-        18k · Haiku · xhigh                    󰪞  3m
+       󰿦 18k · Haiku · xhigh                    󰪞  3m
       Explore · audit auth watcher chang 󰪞 <1m $0.34
         22k · Haiku · xhigh
 

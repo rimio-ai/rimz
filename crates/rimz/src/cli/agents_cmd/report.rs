@@ -10,7 +10,7 @@ use rimz::agents::{
 };
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::store::snapshot::{
-    AgentCard, SidebarRow, SidebarSnapshot, WorktreeCi, WorktreePrState,
+    AgentCard, SidebarRow, SidebarSnapshot, SubAgentTokens, WorktreeCi, WorktreePrState,
     group_live_agents_by_worktree,
 };
 #[cfg(test)]
@@ -150,7 +150,8 @@ pub(super) struct SubAgentReport {
     pub status: AgentStatus,
     pub phase: TurnPhase,
     pub model: Option<String>,
-    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<SubAgentTokens>,
     pub elapsed_secs: Option<i64>,
 }
 
@@ -388,7 +389,7 @@ pub(super) fn build_entry(
                         status: sub_agent.status,
                         phase: sub_agent.phase,
                         model: model_label(sub_agent.model.as_deref(), sub_agent.effort.as_deref()),
-                        total_tokens: sub_agent.total_tokens,
+                        tokens: sub_agent.tokens,
                         elapsed_secs: sub_agent.elapsed_secs,
                     })
                     .collect()
@@ -787,7 +788,7 @@ mod tests {
                     model: Some("sonnet".to_owned()),
                     effort: Some("high".to_owned()),
                     description: None,
-                    total_tokens: Some(1_200),
+                    tokens: Some(SubAgentTokens::Window(1_200)),
                     cost_usd: None,
                     elapsed_secs: Some(12),
                     started_at: None,
@@ -822,6 +823,10 @@ mod tests {
             },
         );
 
+        assert_eq!(
+            serde_json::to_value(&entry).unwrap()["sub_agents"][0]["tokens"],
+            serde_json::json!({"window": 1_200})
+        );
         insta::assert_json_snapshot!("full_agent_report", entry);
     }
 

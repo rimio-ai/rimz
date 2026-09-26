@@ -487,7 +487,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `timeline` | Registration, turn-start, activity, and observation timestamps. |
 | `placement` | `channel`, `worktree`, `branch`, `pane`, and `pr`. A `pr` has `number`, `state` (`open`, `closed`, or `merged`), and `ci` (`pending`, `passing`, or `failing`). |
 | `budget` | `cap` (the effective cap), `spent_usd`, `parked`, and the `park` label. |
-| `sub_agents` | Nested children. |
+| `sub_agents` | Nested children. Each child's optional `tokens` is `{"window": N}` for current context occupancy or `{"total": N}` for whole-run consumption; absent when neither is known. |
 
 #### `show` / `inspect`
 

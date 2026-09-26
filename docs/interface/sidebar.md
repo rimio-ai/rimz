@@ -23,7 +23,7 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%              ◔ 8m▐    ← tokens in the window, cache hit, last activity
 ▌  ⧉ subagents (2) · ⧖ waits (3)                  $0.42▐    ← subagents and waits line
 ▌    ⠁ Explore · audit the trust hash                  ▐    ← running subagent
-▌      ◇ 3k · Opus 4.8                            ◔  3m▐    ← its tokens, model, elapsed time
+▌      ▤ 3k · Opus 4.8                            ◔  3m▐    ← its tokens, model, elapsed time
 ▌    ✓ Explore · locate the render seam           ◔  1m▐    ← finished subagent, time since it finished
 ▌    ◷ timer · in 12m                             ◔ 18m▐    ← timer wait, time since it was armed
 ▌    ⣾ shell · Run the test suite                 ◔  4m▐    ← background shell
@@ -290,7 +290,7 @@ Selecting a card only appends lines below it. When the selected agent belongs to
 ▌    ⠁ review · audit the trust hash                 ▐
 ▌      ◇  3k · Haiku 4.5                        ◔ <1m▐
 ▌    ✓ Explore · locate the render seam   ◔ <1m $0.42▐
-▌      ◇ 12k · Opus 4.8  · high                      ▐
+▌      ▤ 12k · Opus 4.8  · high                      ▐
 ```
 
 A card with waits uses the same entry layout:
@@ -313,8 +313,8 @@ Each entry starts with its live state or wait icon, then a type word and a ` · 
 
 | entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
-| running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | reported metadata: `◇` tokens, model, effort, and elapsed time |
-| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | time since it finished, then cost | reported metadata: `◇` tokens, model, effort |
+| running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and elapsed time |
+| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | time since it finished, then cost | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model and effort |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
 | command | working spinner | `command · cargo` (program name) | time since armed | full command, with the program path trimmed |

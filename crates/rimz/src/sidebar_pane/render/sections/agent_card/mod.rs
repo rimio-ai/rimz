@@ -7,7 +7,9 @@
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
-use crate::store::snapshot::{AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup};
+use crate::store::snapshot::{
+    AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup, SubAgentTokens,
+};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -294,20 +296,19 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
     Some(pin_right(left, right, width))
 }
 
-/// Up to two indented lines for each visible child. Line 1 leads
-/// with the same live cell an agent row wears — the thinking head while the
-/// child reasons, the working fill while it acts, or the static `✓`/`!` verdict
-/// once it finishes — then its type and description, with how long ago a
-/// finished child landed and its known cost pinned right. Line 2 carries
-/// the reported token figure `◇`, model, and reasoning effort on a per-card
-/// column grid, with elapsed work pinned right. Children stay at the soft middle
-/// weight and indent past the parent's stats. A pane-backed child's token figure
-/// is its cumulative session total; Claude-native children carry the cumulative
-/// `subagentStatusLine` figure and Codex-native children the current rollout
-/// context. A metadata-free child degrades to its bare type line, while a
-/// finished child keeps metadata but drops the elapsed clock.
-/// Entry lines for `rows`, laid on the metadata grid of every child in `grid`,
-/// so rows rendered in separate bands share one set of columns.
+/// Up to two indented lines for each visible child. Line 1 leads with the same
+/// live cell an agent row wears — the thinking head while the child reasons,
+/// the working fill while it acts, or the static `✓`/`!` verdict once it
+/// finishes — then its type and description, with how long ago a finished child
+/// landed and its known cost pinned right. Line 2 carries the typed token
+/// figure, model, and reasoning effort on a per-card column grid, with elapsed
+/// work pinned right. Children stay at the soft middle weight and indent past
+/// the parent's stats. The token glyph distinguishes current window occupancy
+/// from a whole-run total; unknown figures leave a blank slot. A metadata-free
+/// child degrades to its bare type line, while a finished child keeps metadata
+/// but drops the elapsed clock. Entry lines for `rows`, laid on the metadata
+/// grid of every child in `grid`, so rows rendered in separate bands share one
+/// set of columns.
 fn sub_agent_entry_lines(
     ctx: &RowCtx<'_>,
     grid: &[SidebarSubAgent],
@@ -386,7 +387,9 @@ fn sub_agent_entry_lines(
 }
 
 fn sub_agent_tokens(sub: &SidebarSubAgent) -> Option<u64> {
-    sub.total_tokens.filter(|total| *total > 0)
+    sub.tokens.map(|tokens| match tokens {
+        SubAgentTokens::Window(value) | SubAgentTokens::Total(value) => value,
+    })
 }
 
 /// A finished subagent has a verdict and no longer needs a live elapsed clock.
@@ -411,7 +414,7 @@ fn sub_agent_metadata_line(
         return None;
     }
     let mut left = vec![Span::raw("      ")];
-    let mut prev_rendered = append_sub_agent_tokens(theme, &mut left, tokens, token_col);
+    let mut prev_rendered = append_sub_agent_tokens(theme, &mut left, sub.tokens, token_col);
     append_sub_agent_model(
         theme,
         &mut left,
@@ -434,18 +437,27 @@ fn sub_agent_metadata_line(
 fn append_sub_agent_tokens(
     theme: &Theme,
     left: &mut Vec<Span<'static>>,
-    tokens: Option<u64>,
+    tokens: Option<SubAgentTokens>,
     token_col: usize,
 ) -> bool {
     if token_col == 0 {
         return false;
     }
     match tokens {
-        Some(total) => {
-            left.push(Span::styled(
-                token_total_glyph(theme),
-                theme.styled(Component::TokenTotal, Modifier::empty()),
-            ));
+        Some(tokens) => {
+            let (total, glyph, style) = match tokens {
+                SubAgentTokens::Window(total) => (
+                    total,
+                    theme.glyph(GlyphRole::TokensFilled).to_owned(),
+                    theme.muted(),
+                ),
+                SubAgentTokens::Total(total) => (
+                    total,
+                    token_total_glyph(theme),
+                    theme.styled(Component::TokenTotal, Modifier::empty()),
+                ),
+            };
+            left.push(Span::styled(glyph, style));
             left.push(Span::styled(
                 format!(" {:>token_col$}", tokens_int(total)),
                 theme.body(),

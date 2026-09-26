@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::{PendingWait, PendingWaitTrigger};
+use crate::store::snapshot::SubAgentTokens;
 
 #[test]
 fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
@@ -12,13 +13,16 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     running.subagent_description = Some("locate the render seam".to_owned());
     running.subagent_started_at = Some(started);
     running.subagent_cost_usd = Some(0.42);
-    running.usage.total_tokens = Some(12_400);
+    running.usage.fresh_input_tokens = Some(400);
+    running.usage.cache_read_input_tokens = Some(10_000);
+    running.usage.cache_write_input_tokens = Some(2_000);
+    running.usage.output_tokens = Some(99);
     running.model = Some("claude-opus-4-8".to_owned());
     running.effort = Some("high".to_owned());
     let sub = sub_agent_from_state(&running, now, false);
     assert_eq!(sub.phase, TurnPhase::Reasoning);
     assert_eq!(sub.description.as_deref(), Some("locate the render seam"));
-    assert_eq!(sub.total_tokens, Some(12_400));
+    assert_eq!(sub.tokens, Some(SubAgentTokens::Window(12_400)));
     assert_eq!(sub.cost_usd, Some(0.42));
     assert_eq!(sub.elapsed_secs, Some(100));
     assert_eq!(sub.model.as_deref(), Some("claude-opus-4-8"));
@@ -55,7 +59,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     let sub = sub_agent_from_state(&bare, now, false);
     assert_eq!(sub.phase, TurnPhase::Idle);
     assert_eq!(sub.description.as_deref(), Some("adapter task description"));
-    assert_eq!(sub.total_tokens, None);
+    assert_eq!(sub.tokens, None);
     assert_eq!(sub.cost_usd, None);
     assert_eq!(sub.elapsed_secs, Some(5));
     assert_eq!(sub.model, None);
@@ -119,7 +123,7 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
 }
 
 #[test]
-fn launched_child_tokens_prefer_the_cumulative_session_fold() {
+fn child_tokens_prefer_window_then_session_then_run_total_never_bare_total() {
     let mut child = agent("codex", "child", AgentStatus::Running, 0);
     child.parent_agent_id = Some("root".into());
     child.launch_depth = Some(1);
@@ -136,11 +140,11 @@ fn launched_child_tokens_prefer_the_cumulative_session_fold() {
         ..crate::agents::AgentTokenUsage::default()
     });
     child.context = Some(context);
-
-    assert_eq!(
-        sub_agent_from_state(&child, epoch(), false).total_tokens,
-        Some(37_000)
-    );
+    child.usage.fresh_input_tokens = Some(3_000);
+    child.usage.run_total_tokens = Some(22_116);
+    let mut actual = vec![sub_agent_from_state(&child, epoch(), false).tokens];
+    child.usage.fresh_input_tokens = None;
+    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
 
     child
         .context
@@ -148,9 +152,28 @@ fn launched_child_tokens_prefer_the_cumulative_session_fold() {
         .and_then(|context| context.tokens.as_mut())
         .expect("child token context")
         .session_usage = None;
+    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    child.usage.run_total_tokens = None;
+    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    child.usage.fresh_input_tokens = Some(0);
+    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    child.usage.fresh_input_tokens = None;
+    child.usage.run_total_tokens = Some(0);
+    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
+    child.usage.fresh_input_tokens = Some(0);
+    child.usage.run_total_tokens = Some(42);
+    actual.push(sub_agent_from_state(&child, epoch(), false).tokens);
     assert_eq!(
-        sub_agent_from_state(&child, epoch(), false).total_tokens,
-        Some(12_000)
+        actual,
+        [
+            Some(SubAgentTokens::Window(3_000)),
+            Some(SubAgentTokens::Total(37_000)),
+            Some(SubAgentTokens::Total(22_116)),
+            None,
+            None,
+            None,
+            Some(SubAgentTokens::Total(42)),
+        ]
     );
 }
 

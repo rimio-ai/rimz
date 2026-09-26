@@ -1,6 +1,6 @@
 ---
 source: crates/rimz/src/cli/sidebar/tests.rs
-expression: strip_sgr(&ansi)
+expression: rendered
 ---
   abacus                            /srv/code/abacus
 
@@ -16,7 +16,7 @@ expression: strip_sgr(&ansi)
 ▌  󰿦 175k · 󱥸 168k  7k  21k                        ▐
 ▌   subagents (2)                                   ▐
 ▌    ⠁ Plan · run focused nextest                    ▐
-▌       18k · Haiku · xhigh                    󰪞  3m▐
+▌      󰿦 18k · Haiku · xhigh                    󰪞  3m▐
 ▌     Explore · audit auth watcher changes     󰪞 <1m▐
 ▌       22k · Haiku · xhigh                         ▐
 ▎⢄ claude · Opus 4.8 · xhigh · 1m              $12.62🮇

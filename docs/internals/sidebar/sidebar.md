@@ -276,10 +276,12 @@ Each origin fills its entry from a different source:
 
 | Child | Source |
 |---|---|
-| Claude native | the runtime `subagentStatusLine` feed: description, cumulative tokens, exact cost, start time, folded on by [`with_subagent_context`](../../../crates/rimz/src/store/snapshot/view.rs) |
+| Claude native | description, exact cost, start time, and the newest request's token split from the child transcript, folded on by [`with_subagent_context`](../../../crates/rimz/src/store/snapshot/view.rs) |
 | Codex native | child lifecycle observations: nickname, task path, role, model and effort, and current context tokens, with durable registration as the elapsed-time fallback |
-| Copilot native | the model from the parent's start record, with the exact total reconciled from the completion record at the next parent checkpoint |
-| launched | its launch profile and session-sidecar cost; the token headline is the cumulative `session_usage` total of input, cache writes, and output, excluding cache reads |
+| Copilot native | the model from the parent's start record, with the cumulative `totalTokens` reconciled from the completion record at the next parent checkpoint |
+| launched | its launch profile and session-sidecar cost; window occupancy through `context_used_tokens`, else the cumulative `session_usage` total of input, cache writes, and output, excluding cache reads |
+
+Token selection prefers `AgentState::context_used_tokens()` (`SubAgentTokens::Window`), then a positive `session_usage.displayed_total_tokens()`, then `usage.run_total_tokens` (`SubAgentTokens::Total` for either cumulative source), otherwise no token cell. Claude's statusline hybrid counter is not a source: the incremental cost cursor retains the latest request split even without pricing, and the sidecar merges it over lifecycle usage per field.
 
 **Child activity counts as the parent's.** [`fold_child_activity_onto_parents`](../../../crates/rimz/src/store/snapshot/view/aggregate/subagents.rs) advances the parent row's displayed clock to the freshest child `last_activity`, so the stall check does not fire and the inactive sinks, ranking, and unread do not move while children work. The clock it replaces is recorded on the card as `own_last_activity`, whose one reader is the card's cache-age pin through `SidebarRow::own_last_activity`: a parent blocked on its children's reports makes no model call, so its prompt cache ages for the whole wait. A child still `running` also makes a resting parent display running or delegating; a child holding a terminal verdict never does. The fold is display-only: the rollup keeps the parent's own clock, a blocked or budget-parked parent stays put, and pause or failure evidence beats a ticking child. Cases are pinned in [`view/tests/subagents/`](../../../crates/rimz/src/store/snapshot/view/tests/subagents).
 

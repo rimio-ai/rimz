@@ -631,6 +631,19 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// The child's token figure, typed by what it measures so the glyph follows the
+/// meaning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubAgentTokens {
+    /// Tokens occupying the child's context window now
+    /// (`AgentState::context_used_tokens`); painted with the window glyph.
+    Window(u64),
+    /// Tokens the child consumed over its whole run; painted with the total
+    /// glyph.
+    Total(u64),
+}
+
 /// A compact summary of a child agent, nested under its parent's row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarSubAgent {
@@ -668,11 +681,9 @@ pub struct SidebarSubAgent {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Cumulative session total for a pane-backed child, the cumulative
-    /// `subagentStatusLine` count for a Claude-native child, or current context
-    /// for a Codex-native child.
+    /// Window occupancy when known, otherwise a provider-reported whole-run total.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<u64>,
+    pub tokens: Option<SubAgentTokens>,
     /// Exact cumulative cost from a provider-native child feed, or from a
     /// pane-backed child's own session sidecar. Provider-native cost is already
     /// included in the parent transcript; pane-backed cost is added separately.

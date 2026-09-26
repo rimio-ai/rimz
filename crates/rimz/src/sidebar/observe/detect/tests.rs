@@ -355,7 +355,7 @@ fn provider_child_attention_matches_declared_status_count() {
             model: None,
             effort: None,
             description: None,
-            total_tokens: None,
+            tokens: None,
             cost_usd: None,
             elapsed_secs: None,
             started_at: None,

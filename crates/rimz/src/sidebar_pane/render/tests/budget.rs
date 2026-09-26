@@ -33,7 +33,9 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
         model: Some("claude-opus-4-8".to_owned()),
         effort: Some("high".to_owned()),
         description: Some(format!("scan module {index} for callers")),
-        total_tokens: Some(40_000 + (index as u64) * 7_321),
+        tokens: Some(crate::store::snapshot::SubAgentTokens::Window(
+            40_000 + (index as u64) * 7_321,
+        )),
         cost_usd: None,
         elapsed_secs: Some(90 + index as i64),
         started_at: Some(now),

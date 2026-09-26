@@ -68,7 +68,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 25;
+pub const SNAPSHOT_VERSION: u32 = 26;
 
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.
@@ -487,10 +487,12 @@ impl SidebarSnapshot {
         self
     }
 
-    /// Attach each child's enrichment (description, latest request's token split, exact cost, start time) to its `AgentState` by `(kind, agent_id)`.
-    /// It must land on the `AgentState`, not the already-projected
+    /// Attach each child's enrichment (description, latest request's token
+    /// split, exact cost, start time) to its `AgentState` by `(kind,
+    /// agent_id)`. It must land on the `AgentState`, not the already-projected
     /// `SidebarSubAgent`: the live-pane fold re-runs `attach_sub_agents` →
-    /// `sub_agent_from_state`. The sidecar's usage wins per field, with lifecycle usage filling gaps. Display-only, like
+    /// `sub_agent_from_state`. The sidecar's usage wins per field, with
+    /// lifecycle usage filling gaps. Display-only, like
     /// [`with_agent_context`](Self::with_agent_context) — it never touches
     /// `last_activity`, so ranking is untouched. A record whose child is absent
     /// from the rollup is dropped; the key it is filed under is authority.

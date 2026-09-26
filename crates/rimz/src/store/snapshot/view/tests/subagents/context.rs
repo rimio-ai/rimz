@@ -82,6 +82,10 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         Some("locate the render path")
     );
     assert_eq!(child.context_used_tokens(), Some(12_400));
+    assert_eq!(
+        sub_agent_from_state(child, epoch(), false).tokens,
+        Some(crate::store::snapshot::SubAgentTokens::Window(12_400))
+    );
     assert_eq!(child.usage.output_tokens, Some(9));
     assert_eq!(child.subagent_cost_usd, Some(0.42));
     assert_eq!(child.subagent_started_at, Some(started));
@@ -98,6 +102,10 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
 
     let typed = rollup_agent(&folded, "typed-1");
     assert_eq!(typed.context_used_tokens(), Some(42));
+    assert_eq!(
+        sub_agent_from_state(typed, epoch(), false).tokens,
+        Some(crate::store::snapshot::SubAgentTokens::Window(42))
+    );
     assert_eq!(
         typed.task.as_deref(),
         Some("review"),

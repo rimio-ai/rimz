@@ -461,6 +461,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             context_pct: None,
             context_window: None,
             total_tokens: None,
+            run_total_tokens: None,
             cache_read_input_tokens: None,
             cache_write_input_tokens: None,
             fresh_input_tokens: None,

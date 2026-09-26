@@ -310,7 +310,7 @@ fn selected_pet_action_follows_the_focused_card() {
             model: None,
             effort: None,
             description: None,
-            total_tokens: None,
+            tokens: None,
             cost_usd: None,
             elapsed_secs: None,
             started_at: None,

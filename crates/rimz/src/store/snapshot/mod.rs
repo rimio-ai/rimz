@@ -50,7 +50,7 @@ pub(crate) use process::pane_agent_kind;
 pub(crate) use process::{pane_worktree_path, process_is_active};
 pub use row::{
     AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarRow,
-    SidebarSubAgent,
+    SidebarSubAgent, SubAgentTokens,
 };
 pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{

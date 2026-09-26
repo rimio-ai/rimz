@@ -78,7 +78,9 @@ expression: entry
       "status": "running",
       "phase": "reasoning",
       "model": "sonnet@high",
-      "total_tokens": 1200,
+      "tokens": {
+        "window": 1200
+      },
       "elapsed_secs": 12
     }
   ]

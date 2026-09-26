@@ -149,7 +149,7 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     child.subagent_started_at = Some(fixed_now() - Duration::from_secs(90));
     child.last_activity = fixed_now() - Duration::from_secs(30);
     child.last_seen = fixed_now() - Duration::from_secs(30);
-    child.usage.total_tokens = Some(12_400);
+    child.usage.fresh_input_tokens = Some(12_400);
     // A bare model id — the renderer prettifies it through `model_label`.
     child.model = Some("claude-opus-4-8".to_owned());
     // Claude reports the child's effort on its `SubagentStop`.
@@ -169,7 +169,7 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     fresh.phase = crate::agents::TurnPhase::Reasoning;
     fresh.subagent_description = Some("audit the trust hash".to_owned());
     fresh.subagent_started_at = Some(fixed_now() - Duration::from_secs(30));
-    fresh.usage.total_tokens = Some(3_100);
+    fresh.usage.run_total_tokens = Some(3_100);
     // A sibling on a different model — the per-child label tells them apart.
     fresh.model = Some("claude-haiku-4-5".to_owned());
 
@@ -223,12 +223,12 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     assert!(
         rendered
             .lines()
-            .any(|line| line.contains("◇ 12k · Opus 4.8") && line.contains("· high")),
+            .any(|line| line.contains("▤ 12k · Opus 4.8") && line.contains("· high")),
         "the finished child retains exact metadata:\n{rendered}"
     );
     let finished_line = rendered
         .lines()
-        .find(|line| line.contains("◇ 12k"))
+        .find(|line| line.contains("▤ 12k"))
         .expect("finished child metadata line");
     assert!(
         !finished_line.contains('◔'),
@@ -239,15 +239,15 @@ fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
         .lines()
         .filter(|line| {
             let trimmed = line.trim_start();
-            line.contains("◇")
-                && line.contains("▌")
+            (line.contains("◇") || line.contains("▤"))
+                && line.starts_with("▌      ")
                 && !trimmed.starts_with("W:")
                 && !trimmed.starts_with("M:")
         })
         .count();
     assert_eq!(
         subagent_metadata_rows, 2,
-        "both metadata-bearing children carry a `◇` row:\n{rendered}"
+        "both metadata-bearing children carry a token row:\n{rendered}"
     );
     assert_snapshot("subagent_two_line_entry", rendered);
 }
@@ -282,7 +282,7 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     child.launch_depth = Some(1);
     child.profile = Some("explorer".to_owned());
     child.description = Some("map sidebar".to_owned());
-    child.usage.total_tokens = Some(12_000);
+    child.usage.fresh_input_tokens = Some(12_000);
     let mut child_context = crate::agents::AgentContext::new("codex", fixed_now());
     child_context.cost = Some(crate::agents::AgentCost {
         total_cost_usd: Some(0.42),
@@ -333,8 +333,8 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
         "the lifetime stats line carries child cost:\n{rendered}"
     );
     assert!(
-        rendered.contains("◇ 37k"),
-        "the child metadata uses cumulative session tokens:\n{rendered}"
+        rendered.contains("▤ 12k"),
+        "the child metadata prefers window occupancy over session tokens:\n{rendered}"
     );
     assert!(
         rendered.lines().any(|line| line.contains("$0.52")),
@@ -559,11 +559,7 @@ fn metadata_free_finished_subagent_stays_one_line() {
 }
 #[test]
 fn subagent_metadata_blank_fills_the_per_card_grid() {
-    // A child missing a field a sibling carries blank-fills that slot, so the
-    // card's metadata lines stay one column grid: the token-less child's model
-    // starts exactly under its sibling's, with no bare `◇` and no orphan `·`
-    // seam leading the line. Both children are running so both render a metadata
-    // row — a finished child collapses to one line instead (covered separately).
+    // Window, total, and unknown figures share one grid; the token-less child's model stays aligned without a bare glyph or orphan seam.
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -584,7 +580,7 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
     );
     spender.parent_agent_id = Some("claude-1".into());
     spender.subagent_started_at = Some(fixed_now() - Duration::from_secs(90));
-    spender.usage.total_tokens = Some(12_400);
+    spender.usage.fresh_input_tokens = Some(12_400);
     spender.model = Some("claude-opus-4-8".to_owned());
     spender.effort = Some("high".to_owned());
 
@@ -601,7 +597,21 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
     quiet.parent_agent_id = Some("claude-1".into());
     quiet.model = Some("claude-haiku-4-5".to_owned());
 
-    let snapshot = snapshot_with(vec![parent, spender, quiet]);
+    let mut total = spender.clone();
+    total.agent_id = "child-3".into();
+    total.model = Some("claude-sonnet-4-6".to_owned());
+    let mut snapshot = snapshot_with(vec![parent, spender, quiet, total]);
+    for child in &mut snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .sub_agents
+    {
+        child.tokens = match child.id.as_str() {
+            "child-1" => Some(crate::store::snapshot::SubAgentTokens::Window(12_400)),
+            "child-3" => Some(crate::store::snapshot::SubAgentTokens::Total(3_100)),
+            _ => None,
+        };
+    }
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -610,7 +620,7 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
             ..Default::default()
         },
         54,
-        23,
+        27,
     );
 
     // Anchor each lookup to the child's own metadata line — the parent's
@@ -623,9 +633,15 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
         line[..line.find(col_needle).unwrap()].chars().count()
     };
     assert_eq!(
-        char_col("◇ 12k", "Opus 4.8"),
+        char_col("▤ 12k", "Opus 4.8"),
         char_col("Haiku 4.5", "Haiku 4.5"),
         "the token-less child's model starts under its sibling's:\n{rendered}"
+    );
+    assert_eq!(char_col("▤ 12k", "▤"), char_col("◇  3k", "◇"));
+    assert_eq!(char_col("▤ 12k", "k"), char_col("◇  3k", "k"));
+    assert_eq!(
+        char_col("▤ 12k", "Opus 4.8"),
+        char_col("◇  3k", "Sonnet 4.6")
     );
     assert!(
         !rendered.contains("· Haiku 4.5"),
@@ -662,7 +678,7 @@ fn codex_subagent_renders_nickname_nested_path_and_current_context() {
     child.parent_agent_id = Some("codex-root".into());
     child.name = Some("Atlas".to_owned());
     child.name_explicit = true;
-    child.usage.total_tokens = Some(32_100);
+    child.usage.fresh_input_tokens = Some(32_100);
     child.model = Some("gpt-5.5-codex".to_owned());
     child.effort = Some("xhigh".to_owned());
 
@@ -683,7 +699,7 @@ fn codex_subagent_renders_nickname_nested_path_and_current_context() {
         "nickname and flat nested path stay distinct:\n{rendered}"
     );
     assert!(
-        rendered.contains("◇ 32k"),
+        rendered.contains("▤ 32k"),
         "Codex's current context reading is rendered:\n{rendered}"
     );
 }
