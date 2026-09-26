@@ -215,6 +215,26 @@ fn colliding_roots(parent: &Path) -> (PathBuf, PathBuf) {
 }
 
 #[test]
+fn new_slugs_fit_both_socket_budgets_and_existing_long_slugs_are_adopted() {
+    let home = tempfile::tempdir().unwrap();
+    let root = Path::new("/src/abcdefghijklmnopqrstuvwxyz1234");
+    let id = WorkspaceId::from_project_root(root);
+    let paths = StatePaths::for_project_root_under(root, home.path()).unwrap();
+    assert_eq!(
+        paths.dir_name.as_str(),
+        format!("abcdefghijklmnopqrst-{}", &id.hex()[..4])
+    );
+    let old_name = WorkspaceDirName::mint("abcdefghijklmnopqrstuvwxyz123456", &id, 4);
+    write_record(home.path(), old_name.as_str(), &id);
+    assert_eq!(
+        StatePaths::for_project_root_under(root, home.path())
+            .unwrap()
+            .dir_name,
+        old_name
+    );
+}
+
+#[test]
 fn project_root_mints_a_basename_name_and_finds_it_again() {
     let home = tempfile::tempdir().unwrap();
     let root = Path::new("/src/My Repo");

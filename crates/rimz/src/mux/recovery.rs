@@ -1,5 +1,5 @@
 //! The dangerous step is the process sweep: it signals processes by heuristic, so
-//! it is scoped four ways — real uid, the exact path-derived session name in the
+//! it is scoped four ways — real uid, the exact recorded session name in the
 //! command line, an explicit exclusion of this process and its ancestors, and the
 //! inherited environment domain — and it runs where the process backend can
 //! enumerate the current user's process table.
@@ -28,6 +28,12 @@ enum RequiredDomainCheck {
     Mux(MuxName),
 }
 
+fn names_session(cmdline: &str, session_name: &str) -> bool {
+    cmdline
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .any(|token| token == session_name)
+}
+
 /// Classify an orphaned room process and carry the environment-domain guard
 /// required before signalling it. The exact session scopes both server and
 /// daemon matches; `include_mux_server` controls pure server matches only.
@@ -38,7 +44,7 @@ fn classify_sweep_target(
     workspace_id: &str,
     include_mux_server: bool,
 ) -> Option<RequiredDomainCheck> {
-    if !cmdline.contains(session_name) {
+    if !names_session(cmdline, session_name) {
         return None;
     }
     let mux_server = cmdline.contains("--server");
@@ -203,10 +209,10 @@ fn is_stats_refresh(cmdline: &str) -> bool {
 
 /// Whether `cmdline` is one of `(workspace, session)`'s sidebar *serve* processes
 /// — `rimz sidebar serve` — and not the mux server or the agent app-server. The
-/// exact, path-derived session name plus the workspace id scope it; `sidebar` + `serve` selects the renderer
+/// exact recorded session name plus the workspace id scope it; `sidebar` + `serve` selects the renderer
 /// pair and excludes `rimz codex app-server serve`.
 pub(crate) fn is_sidebar_serve(cmdline: &str, workspace_id: &str, session_name: &str) -> bool {
-    cmdline.contains(session_name)
+    names_session(cmdline, session_name)
         && cmdline.contains(workspace_id)
         && cmdline.contains("sidebar")
         && cmdline.contains("serve")
@@ -452,6 +458,24 @@ mod tests {
         assert!(!is_stats_refresh(
             "rimz sidebar serve --workspace ws --session rimz-x"
         ));
+    }
+
+    #[test]
+    fn sweep_and_sidebar_matching_do_not_cross_session_prefixes() {
+        for name in ["repo-abcdef", "other-repo-abcd", "repo-abcd-suffix"] {
+            let server = format!("zellij --server /run/zellij/contract_version_1/{name}");
+            let sidebar = format!("rimz sidebar serve --workspace-id {WS} --session-name {name}");
+            assert_eq!(classify_sweep_target(&server, "repo-abcd", WS, true), None);
+            assert_eq!(classify_sweep_target(&sidebar, "repo-abcd", WS, true), None);
+            assert!(!is_sidebar_serve(&sidebar, WS, "repo-abcd"));
+        }
+        for suffix in ["", " ", "/", "\t"] {
+            let server = format!("zellij --server /run/zellij/repo-abcd{suffix}");
+            assert_eq!(
+                classify_sweep_target(&server, "repo-abcd", WS, true),
+                Some(RequiredDomainCheck::Mux(MuxName::Zellij))
+            );
+        }
     }
 
     #[test]

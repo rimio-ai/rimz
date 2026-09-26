@@ -21,7 +21,7 @@ RimZ doctor
 WORKSPACE
   id:              ws_f89e49906df0621ad2765112
   project root:    /home/marvin/workspace/project-rimz/rimz
-  session:         rimz-rimz-f89e49
+  session:         rimz-f89e
   …
 
 MULTIPLEXER
@@ -111,7 +111,7 @@ A RimZ room is its own Zellij or tmux session, so it cannot nest inside a sessio
 
 ```
 You're already inside a zellij session, which can't host a nested room.
-This directory's room is `rimz-rimz-f89e49`. Detach to (re)launch it, or run `rimz` from outside the session.
+This directory's room is `rimz-f89e`. Detach to (re)launch it, or run `rimz` from outside the session.
 ```
 
 Open a fresh terminal window that is not attached to Zellij or tmux, then run `rimz` there.

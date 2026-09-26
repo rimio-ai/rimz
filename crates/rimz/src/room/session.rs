@@ -1,4 +1,4 @@
-//! Live room inventory, session-record lookup, mux choice, and renamed-session retirement.
+//! Live room inventory, session-record lookup, and mux choice.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -273,55 +273,6 @@ fn list_sessions_retrying(
         }
     }
     Ok(Vec::new())
-}
-
-/// Decide whether a workspace's live mux session is stranded by a session-name
-/// change. The session name is derived from the project root, so changing the
-/// derivation (or the path) leaves the previously-born session answering to the
-/// recorded name while every new lookup, wakeup, and sidebar launch keys on the
-/// derived one. Returns the recorded name to retire when it diverges from the
-/// derived name and a session under it is still live.
-fn renamed_session_to_retire<'a>(
-    recorded: Option<&'a str>,
-    derived: &str,
-    live: &[String],
-) -> Option<&'a str> {
-    let recorded = recorded?;
-    if recorded == derived {
-        return None;
-    }
-    live.iter().any(|name| name == recorded).then_some(recorded)
-}
-
-/// Retire a live session left behind by a session-name change so the upcoming
-/// `ensure_session` rebirths the workspace under the derived name (with a fresh
-/// sidebar) instead of orphaning the old one. Must run before `record_workspace`
-/// overwrites the stored name — that record is the only breadcrumb to the old
-/// session. Best-effort: any lookup failure leaves the launch to proceed.
-pub fn retire_renamed_session(backend: &dyn MuxBackend, workspace: &crate::ResolvedWorkspace) {
-    let Ok(paths) = StatePaths::for_project_root(&workspace.project_root) else {
-        return;
-    };
-    let recorded = match record::read(&paths.workspace_record) {
-        Ok(record) => record.session_name,
-        Err(_) => return, // No prior record: first birth, nothing to retire.
-    };
-    let live = backend.list_sessions().unwrap_or_default();
-    if let Some(stale) = renamed_session_to_retire(Some(&recorded), &workspace.session_name, &live)
-    {
-        match backend.kill_session(stale) {
-            Ok(()) => tracing::info!(
-                old = %stale,
-                new = %workspace.session_name,
-                "retired session left by a session-name change; rebirthing under the new name",
-            ),
-            Err(err) => tracing::warn!(
-                old = %stale,
-                error = %err,
-                "could not retire renamed session; launch will create the new session alongside it",
-            ),
-        }
-    }
 }
 
 pub fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
@@ -639,25 +590,6 @@ mod tests {
 
         assert!(matches!(err, crate::mux::MuxErr::Timeout { .. }));
         assert_eq!(calls, 1);
-    }
-
-    #[test]
-    fn renamed_session_retires_only_a_live_diverged_name() {
-        let live = vec!["rimz-old".to_owned(), "unrelated".to_owned()];
-
-        assert_eq!(
-            renamed_session_to_retire(Some("rimz-old"), "rimz-new", &live),
-            Some("rimz-old"),
-        );
-        assert_eq!(
-            renamed_session_to_retire(Some("rimz-old"), "rimz-old", &live),
-            None,
-        );
-        assert_eq!(
-            renamed_session_to_retire(Some("rimz-gone"), "rimz-new", &live),
-            None,
-        );
-        assert_eq!(renamed_session_to_retire(None, "rimz-new", &live), None);
     }
 
     #[test]

@@ -16,7 +16,7 @@ On tmux the room turns on the mouse, focus events, a 100,000-line scrollback, no
 
 Everything else is yours, inside the room and out: your theme, your prefix, your copy-mode bindings, your status bar, your keybinds. `~/.tmux.conf` and `config.kdl` are still read in a room, and the settings above layer over them. The one place the room reaches into your key tables is tmux's root table. It binds `S-Enter` and `M-Enter` there for soft newlines, plus a `User240` that turns a bare `ESC[27u` back into plain Escape; some terminals, Ghostty among them, answer the extended-keys request with that sequence.
 
-For the panes RimZ creates, the outer terminal's title is the room and a short pane identity: `rimz-myrepo-a1b2c3 | zsh`, `rimz-myrepo-a1b2c3 | codex`. Agent and channel panes carry their RimZ identity; any other pane shows its running command on tmux, and on Zellij the name it was launched with. Applications cannot overwrite it, so the shell that likes to set your title to an SSH host and a working path does not, and you can still pick the room's window out of a taskbar.
+For the panes RimZ creates, the outer terminal's title is the room and a short pane identity: `myrepo-a1b2 | zsh`, `myrepo-a1b2 | codex`. Agent and channel panes carry their RimZ identity; any other pane shows its running command on tmux, and on Zellij the name it was launched with. Applications cannot overwrite it, so the shell that likes to set your title to an SSH host and a working path does not, and you can still pick the room's window out of a taskbar.
 
 Closing every RimZ room undoes all of this. The settings live in the session, nothing was written to your config, and on tmux the whole server they live in exits with its last room. One thing outlives the room: on Zellij, RimZ seeds a permission grant for the presence plugin it ships, in Zellij's own permission cache, so your first attach is not interrupted by a plugin prompt. Revoking it stops the plugin until the next room birth seeds it again. The full boundary, and what the plugin may do, are in [security and trust](./security.md#the-zellij-presence-plugin).
 
@@ -30,7 +30,7 @@ tmux -S "${XDG_RUNTIME_DIR:-/tmp/rimz-$(id -u)}/rimz/tmux/server" ls
 
 It holds one session per project and exits when the last one closes. `rimz paths` prints the same directory as `runtime root`.
 
-Zellij has no such split: a RimZ room is an ordinary session in `zellij ls`, named `rimz-<project>-<hash>`, and `zellij action` addresses it with no extra flag.
+Zellij has no such split: a RimZ room is an ordinary session in `zellij ls`, and `zellij action` addresses it with no extra flag. On either backend, a new room's session name is its state directory name under `~/.rimz/ws/`, such as `myrepo-a1b2`, also shown by `rimz list` and `rimz gc`. A running room keeps its older name across an upgrade; `rimz start` and `rimz attach` join it unchanged. The next birth, after the session ends or you run `rimz reset`, takes the state directory name.
 
 ### Two keys that work from any pane
 

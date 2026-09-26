@@ -57,7 +57,7 @@ The report from inside a session names the room instead of nesting one session i
 ```console
 $ rimz
 You're already inside a zellij session, which can't host a nested room.
-This directory's room is `rimz-rimz-f89e49`. Detach to (re)launch it, or run `rimz` from outside the session.
+This directory's room is `rimz-f89e`. Detach to (re)launch it, or run `rimz` from outside the session.
 ```
 
 Inside a session, `rimz start --account` fails instead, because accounts apply only when a room is born.

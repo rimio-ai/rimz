@@ -1308,8 +1308,7 @@ enum StubRoomState {
 }
 
 fn workspace_session_name(env: &Env) -> String {
-    let hash = env.workspace_id.as_str().trim_start_matches("ws_");
-    format!("rimz-project-{}", &hash[..6])
+    env.state_path_for(&env.project_root).dir_name.to_string()
 }
 
 fn stub_mux_rooms(env: &Env, zellij: StubRoomState, tmux: StubRoomState) -> PathBuf {
