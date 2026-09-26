@@ -15,7 +15,7 @@ Every turn has the same shape.
 2. Do the stage work your craft defines. Its product goes in your stage file.
 3. End the turn with a flip, a message, or a rest. A finished stage is a flip. A question, an answer, or a changed file a teammate builds on is a message. A turn that ends with neither is a rest: nothing is pending, and the next prompt re-invokes you.
 
-The flip is `rimz teams flip <Stage> "<note>"`, naming the stage that opens next by its exact name. The note says what is done; the reasoning stays in your stage file, because a judging stage reads the board before it judges and your account only after. The flip wakes that stage's owner at its next turn boundary. A flip to a stage you own wakes nobody: carry on into it in the same turn.
+The flip is `rimz teams flip <Stage> "<note>"`, naming the stage that opens next by its exact name. The note says what is done; the reasoning stays in your stage file, because a judging stage reads the board before it judges and your account only after. The flip wakes that stage's owner at its next turn boundary. A flip to a stage you own wakes nobody: carry on into it in the same turn. The flip is the last call of the turn and runs alone, after every file write has returned.
 
 ## Memory
 
