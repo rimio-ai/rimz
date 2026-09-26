@@ -47,7 +47,7 @@ Bare `rimz`, `start`, and `attach` also take launch options (`--attach`, `--no-a
 
 A command reaches the room for the directory it runs in. RimZ resolves that directory to its enclosing Git repository, else the nearest project-marker directory, else the directory itself, so every worktree of one repository shares one room.
 
-Inside a room, panes carry the room's identity in `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, set when the room is born. Commands that act on the running room's agents (`agents`, `subagents`, `teams`, `asks`, `answer`, `budget`, `message`, `wait`, `pane`, `transcript`, `events`, `hooks`) follow that identity, so they reach the same room even from a subdirectory that is its own repository. Commands that open, configure, or maintain a room by path (`start`, `attach`, `web`, `channel`, `worktree`, `trust`, `loop add`, `gc`, `doctor`, `setup`, `reset`, `workspace`) resolve from the directory alone.
+Inside a room, panes carry the room's identity in `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, set when the room is born. Commands that act on the running room or its agents (`agents`, `subagents`, `teams`, `asks`, `answer`, `budget`, `message`, `wait`, `pane`, `transcript`, `events`, `hooks`, `gc`) follow that identity, so they reach the same room even from a subdirectory that is its own repository. Commands that open, configure, or maintain a room by path (`start`, `attach`, `web`, `channel`, `worktree`, `trust`, `loop add`, `doctor`, `setup`, `reset`, `workspace`) resolve from the directory alone.
 
 `--root <PATH>` overrides both. Use it in a monorepo whose packages you run as separate rooms, or to reach a room from outside its directory.
 

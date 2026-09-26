@@ -69,7 +69,7 @@ Three sources back the catalog.
 | `Project` | `<root>/.rimz/config.toml` under `[tasks.*]` | shared automation that travels with the repository; inert until trusted and enabled on this machine |
 | `Instance` | `~/.rimz/ws/<workspace-dir>/records/loop-instances.json` | RimZ-owned runtime rows: one-shots, poll-until rows, `once` subscriptions, and every session-pinned delivery, including recurring clocks and standing signals |
 
-The instance store keeps runtime churn out of user config. An agent that arms `rimz wait --in 30m` writes an instance row, not `loop.toml`, and the row retires itself after it fires. `TaskCatalog::load(Some(root))` reads that workspace's instances and `load(None)` reads machine tasks only. Wait rows found in `loop.toml` stay `Config` rows, and `rimz gc` reaps them.
+The instance store keeps runtime churn out of user config. An agent that arms `rimz wait --in 30m` writes an instance row, not `loop.toml`, and the row retires itself after it fires. `TaskCatalog::load(Some(root))` reads that workspace's instances and `load(None)` reads machine tasks only. Wait rows found in `loop.toml` stay `Config` rows, and machine-scope `rimz gc --all` reaps them.
 
 A project task cannot make machine-local claims, so loading rejects four fields: `root` and `dir` (a project task runs at the project root), `wait` (it cannot pin a session on another machine), and `deadline` (a poll-until timestamp is machine state). It also requires `every`, `cron`, or `signal`, because a one-shot would have to delete itself from a trust-hashed file.
 
@@ -483,7 +483,7 @@ The elder's tick also drives unattended recovery that is not a loop task. Each i
 | Auto-redeem ([`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs)) | spends a Codex reset credit when it buys capacity | [providers.md § Auto-redeem](../agents/providers.md#auto-redeem) |
 | Idle compaction ([`idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs)) | compacts an idle team member before prompt-cache expiry, or at an explicit idle threshold, while its board is not `Done` | [messaging.md § Idle compaction](./messaging.md#idle-compaction) |
 | The budget park | interrupts an agent over a dollar cap and arms its day reset | [budget.md § The park](./budget.md#the-park) |
-| Auto-gc ([`auto_gc.rs`](../../../crates/rimz/src/harness/auto_gc.rs)) | runs `rimz gc --unattended` once per 24 hours per workspace, after 5 minutes of producer uptime, paced by the durable `auto-gc.json` stamp the helper writes and a 10-minute respawn throttle; `gc.auto = false` skips it | [maintenance.md § Automatic sweeps](../../reference/cli/maintenance.md#automatic-sweeps) |
+| Auto-gc ([`auto_gc.rs`](../../../crates/rimz/src/harness/auto_gc.rs)) | runs `rimz gc --unattended` once per 24 hours per workspace, after 5 minutes of producer uptime, paced by the durable room stamp and a 10-minute respawn throttle; the helper sweeps its room unless it wins the daily machine election, which also covers closed rooms; `gc.auto = false` skips it | [maintenance.md § Automatic sweeps](../../reference/cli/maintenance.md#automatic-sweeps), [store.md § Maintenance](../store.md#maintenance) |
 
 Each decides on the producer tick and acts through a detached helper, which keeps store-writing code out of the sidebar's import graph ([sidebar.md](../sidebar/sidebar.md)).
 
@@ -501,7 +501,7 @@ The assist log is that invariant's record: `~/.rimz/logs/assists.log.jsonl`, acc
 | `idle_compact` | the detached idle-compaction helper | target provider and session, display handle, idle duration, resolved threshold (`idle_after_secs`, absent in old records), occupied context, durable compact-command message id, delivery verdict, and error when present |
 | `flip_compact` | `rimz teams flip` | flipper provider and session, role, previous and target stages, occupied context when known, effective threshold, the attempted compact-command message id (which may not resolve if a store error prevented publication), delivery verdict, and error when present |
 | `auto_resume` | rebirth recovery, after materialization restores at least one pane | workspace, session, death cause, recovered pane count, and planned tab labels |
-| `auto_gc` | `rimz gc --unattended`, after every attempt | workspace, cutoff, reclaimed bytes, removed worktrees, pruned workspaces, removed runtime and temp files, archived messages, problem count, and error when the sweep failed |
+| `auto_gc` | `rimz gc --unattended`, after every attempt | workspace, `scope` (`room` or `machine`, legacy records default to `machine`), cutoff, own-room `class_bytes`, and scope-wide totals: reclaimed bytes, removed worktrees, pruned workspaces, removed runtime and temp files, archived messages, problem count, and error when the sweep failed |
 
 `rimz stats` folds both generations, scoped to the active dashboard window, into one rollup: delivered continues and their summed recovered time (`recorded_at - parked_since`), compact commands sent, redeem attempts and `reset` outcomes, rebirths with restored panes, and completed gc sweeps with their reclaimed bytes. The dashboard shows whichever of those five categories are non-zero, `rimz stats --assists` renders the merged event stream newest first, and `rimz stats --json` publishes both.
 
