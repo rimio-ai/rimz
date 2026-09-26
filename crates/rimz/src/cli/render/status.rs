@@ -12,6 +12,30 @@ use rimz::trust::TrustState;
 
 use super::palette;
 
+/// A shared language server's registry state. Returns the role because verdict glyphs and doctor's health tally both start from it.
+pub(crate) fn lsp(state: &rimz::lsp::registry::State) -> StateRole {
+    use rimz::lsp::registry::{State, StopReason};
+    match state {
+        State::Ready => StateRole::Success,
+        State::Starting | State::Indexing => StateRole::Working,
+        State::Dormant { reason, .. } => match reason {
+            Some(StopReason::Crashed) => StateRole::Failed,
+            Some(StopReason::MemoryPressure) => StateRole::Waiting,
+            None
+            | Some(
+                StopReason::Idle
+                | StopReason::Evicted
+                | StopReason::TeamDone
+                | StopReason::StoppedByHand
+                | StopReason::Released
+                | StopReason::NeverLeased
+                | StopReason::CheckoutRemoved,
+            ) => StateRole::Neutral,
+        },
+        State::Stopped { .. } => StateRole::Neutral,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StateRole {
     Success,
@@ -91,5 +115,56 @@ pub(crate) fn provider(status: ProviderStatus) -> anstyle::Style {
         ProviderStatus::LoggedIn => role(StateRole::Success),
         ProviderStatus::LoggedOut => role(StateRole::Paused),
         ProviderStatus::Unavailable => role(StateRole::Unavailable),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::lsp::registry::{State, StopReason};
+
+    #[test]
+    fn lsp_roles_cover_states_and_stop_reasons() {
+        for (state, expected) in [
+            (State::Ready, StateRole::Success),
+            (State::Starting, StateRole::Working),
+            (State::Indexing, StateRole::Working),
+            (
+                State::Dormant {
+                    since_ms: 0,
+                    reason: None,
+                },
+                StateRole::Neutral,
+            ),
+            (
+                State::Stopped {
+                    at_ms: 0,
+                    reason: StopReason::Released,
+                },
+                StateRole::Neutral,
+            ),
+        ] {
+            assert_eq!(lsp(&state), expected, "{state:?}");
+        }
+        for (reason, expected) in [
+            (StopReason::Crashed, StateRole::Failed),
+            (StopReason::MemoryPressure, StateRole::Waiting),
+            (StopReason::Idle, StateRole::Neutral),
+            (StopReason::Evicted, StateRole::Neutral),
+            (StopReason::TeamDone, StateRole::Neutral),
+            (StopReason::StoppedByHand, StateRole::Neutral),
+            (StopReason::Released, StateRole::Neutral),
+            (StopReason::NeverLeased, StateRole::Neutral),
+            (StopReason::CheckoutRemoved, StateRole::Neutral),
+        ] {
+            assert_eq!(
+                lsp(&State::Dormant {
+                    since_ms: 0,
+                    reason: Some(reason)
+                }),
+                expected,
+                "{reason}"
+            );
+        }
     }
 }

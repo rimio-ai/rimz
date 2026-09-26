@@ -182,13 +182,13 @@ An ambiguous or not-found symbol name lists qualified candidates instead of gues
 | 5 | Symbol name not found; exact-name candidates are listed on stdout. |
 | 6 | Symbol name ambiguous; qualified candidates are listed on stdout. |
 
-`rimz lsp list` shows every machine key with state, tree RSS, the maximum of recorded and live tree peak for running servers, requests, last request, restarts, and leases; dormant and stopped entries show no live RSS or PEAK. A first lazy start is not a restart. `rimz lsp stop` makes a server dormant until the next query. The [reference](../reference/cli/lsp.md) owns flags.
+`rimz lsp list` shows every machine key with state, tree RSS, the maximum of recorded and live tree peak for running servers, requests, last request, restarts, and leases; dormant and stopped entries show `-` for RSS and PEAK. Never-started servers read `not started`. Human rows sort by running, attention, then neutral roles, with checkout and server name breaking ties. A first lazy start is not a restart. `rimz lsp stop` makes a server dormant until the next query. The [reference](../reference/cli/lsp.md) owns flags and output details.
 
 The external skill's model-invocation switches are ready for a separate release action. This implementation does not change them.
 
 ## Visibility
 
-Automation here is an internal repair, not a user assist, so it keeps diagnostic records rather than assist records: every refused admission, queue timeout, kill, and eviction appends one with the numbers behind it. `evicted` carries the watchdog's kill details plus `for: {root, server}` identifying the requester. Idle stops and restarts need no diagnostic; history carries them. `rimz lsp list` and `rimz doctor` surface running and dormant servers and the last refusal; doctor treats dormant as neutral. Query memory-short errors come from the broker's refusal, never an inference from diagnostics.
+Automation here is an internal repair, not a user assist, so it keeps diagnostic records rather than assist records: every refused admission, queue timeout, kill, and eviction appends one with the numbers behind it. `evicted` carries the watchdog's kill details plus `for: {root, server}` identifying the requester. Idle stops and restarts need no diagnostic; history carries them. `rimz lsp list` and `rimz doctor` surface running and dormant servers; doctor also shows the last refusal. Both use `cli/render/status.rs::lsp`: dormant is neutral except crashed (alarm) and memory pressure (warn); terminal stopped is neutral. They share state words through `cli/render/mod.rs::lsp_state_label`. Query memory-short errors come from the broker's refusal, never an inference from diagnostics.
 
 ## Open questions
 

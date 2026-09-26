@@ -9,7 +9,8 @@ use std::io::{self, Write};
 use jiff::Timestamp;
 
 use crate::cli::render::{
-    Cell, KeyVals, Table, age_label, cell, fmt_bytes, home_relative, paint, palette, status,
+    Cell, KeyVals, Table, age_label, cell, fmt_bytes, home_relative, lsp_state_label, paint,
+    palette, status,
 };
 use rimz::agents::AgentStatus;
 use rimz::trust::TrustState;
@@ -219,21 +220,18 @@ fn render_lsp(
     } else {
         let mut table = Table::new(["CHECKOUT", "SERVER", "STATE", "RSS", "LEASES"]);
         for server in &lsp.servers {
-            use rimz::lsp::registry::State;
-            let (health, state) = match &server.entry.state {
-                State::Starting => (Health::Info, "starting".to_owned()),
-                State::Indexing => (Health::Info, "indexing".to_owned()),
-                State::Ready => (Health::Ok, "ready".to_owned()),
-                State::Dormant { reason, .. } => (
-                    Health::Neutral,
-                    reason.map_or_else(|| "dormant".into(), |reason| format!("dormant: {reason}")),
-                ),
-                State::Stopped { reason, .. } => (Health::Warn, format!("stopped: {reason}")),
+            use status::StateRole;
+            let health = match status::lsp(&server.entry.state) {
+                StateRole::Success => Health::Ok,
+                StateRole::Working => Health::Info,
+                StateRole::Waiting | StateRole::Paused | StateRole::Unavailable => Health::Warn,
+                StateRole::Failed => Health::Alarm,
+                StateRole::Neutral => Health::Neutral,
             };
             table.row([
                 cell(server.entry.root.display().to_string()),
                 cell(&server.entry.server),
-                verdict(tally, health, state),
+                verdict(tally, health, lsp_state_label(&server.entry.state)),
                 cell(fmt_bytes(server.rss_bytes)),
                 cell(server.entry.leases.len().to_string()),
             ]);
