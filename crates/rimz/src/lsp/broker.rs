@@ -1,5 +1,7 @@
 //! One checkout's language server, shared through a nonce-checked local socket.
 
+#[cfg_attr(not(test), allow(dead_code))]
+mod clients;
 mod lifecycle;
 mod socket;
 mod transport;
@@ -17,6 +19,42 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use transport::Transport;
+
+fn client_capabilities(_config: &crate::config::LspServerConfig) -> Value {
+    let text_document = json!({
+        "synchronization": {"didSave": true, "willSave": true, "willSaveWaitUntil": true},
+        "publishDiagnostics": {"relatedInformation": true, "versionSupport": true, "tagSupport": {"valueSet": [1, 2]}, "codeDescriptionSupport": true, "dataSupport": true},
+        "completion": {"completionItem": {"documentationFormat": ["markdown", "plaintext"], "resolveSupport": {"properties": ["documentation", "detail", "additionalTextEdits"]}}},
+        "hover": {"contentFormat": ["markdown", "plaintext"]},
+        "signatureHelp": {"signatureInformation": {"documentationFormat": ["markdown", "plaintext"], "parameterInformation": {"labelOffsetSupport": true}}},
+        "references": {}, "documentHighlight": {},
+        "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
+        "codeAction": {"codeActionLiteralSupport": {"codeActionKind": {"valueSet": ["", "quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports"]}}, "resolveSupport": {"properties": ["edit"]}, "dataSupport": true},
+        "codeLens": {}, "formatting": {}, "rangeFormatting": {}, "onTypeFormatting": {},
+        "rename": {"prepareSupport": true}, "foldingRange": {}, "selectionRange": {},
+        "semanticTokens": {
+            "requests": {"range": true, "full": {"delta": true}}, "formats": ["relative"],
+            "tokenTypes": ["namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "parameter", "variable", "property", "enumMember", "event", "function", "method", "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator", "decorator"],
+            "tokenModifiers": ["declaration", "definition", "readonly", "static", "deprecated", "abstract", "async", "modification", "documentation", "defaultLibrary"]
+        },
+        "inlayHint": {"resolveSupport": {"properties": ["tooltip", "textEdits", "label.tooltip", "label.location", "label.command"]}},
+        "callHierarchy": {}, "typeHierarchy": {}, "typeDefinition": {}, "implementation": {}, "declaration": {}
+    });
+    json!({
+        "textDocument": text_document,
+        "workspace": {
+            "configuration": true, "workspaceFolders": true,
+            "didChangeWatchedFiles": {"dynamicRegistration": true},
+            "semanticTokens": {"refreshSupport": true}, "codeLens": {"refreshSupport": true}, "inlayHint": {"refreshSupport": true},
+            "workspaceEdit": {"documentChanges": true, "resourceOperations": ["create", "rename", "delete"]}, "symbol": {}
+        },
+        "window": {"workDoneProgress": true, "showMessage": {}},
+        "experimental": {
+            "serverStatusNotification": true, "hoverActions": true, "codeActionGroup": true,
+            "commands": {"commands": ["rust-analyzer.runSingle", "rust-analyzer.debugSingle", "rust-analyzer.showReferences", "rust-analyzer.gotoLocation", "rust-analyzer.triggerParameterHints", "rust-analyzer.rename"]}
+        }
+    })
+}
 
 struct Shared {
     model: Mutex<Model>,
@@ -294,11 +332,14 @@ fn lifetime(shared: &Shared, request: &ServeRequest) -> Result<bool> {
         folders.clone(),
         progress_tx,
     );
-    let (_, initialized) = transport.request("initialize", json!({
+    let (_, initialized) = transport.request(
+        "initialize",
+        json!({
             "processId": std::process::id(), "rootUri": uri.as_str(), "workspaceFolders": folders,
             "initializationOptions": options,
-            "capabilities": {"window": {"workDoneProgress": true}, "workspace": {"configuration": true, "workspaceFolders": true, "didChangeWatchedFiles": {"dynamicRegistration": true}}, "textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": true}}}
-        }))?;
+            "capabilities": client_capabilities(&request.config)
+        }),
+    )?;
     shared
         .model
         .lock()
