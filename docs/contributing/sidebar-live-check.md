@@ -236,7 +236,7 @@ jq -c '.agent.sub_agents[].tokens' /tmp/show.json
 `agents show --json` wraps the card in an `agent` envelope, so a bare `.sub_agents` reads null. The frame comes from the consumer's Look then Capture, as in the four checks. The expected window is the newest assistant request in the child transcript, prompt side only:
 
 ```sh
-jq -s '[.[] | select(.type == "assistant") | .message.usage] | last | .input_tokens + .cache_read_input_tokens + .cache_creation_input_tokens' agent-"$CHILD".jsonl
+jq -s '[.[] | select(.type == "assistant") | .message.usage] | last | .input_tokens + .cache_read_input_tokens + .cache_creation_input_tokens' "$ROOT/tmp/replay/$SESSION/subagents/agent-$CHILD.jsonl"
 ```
 
 In the recorded run (2026-09-26, tmux) that sum was `2 + 118420 + 2589 = 121011`. The snapshot read `{"status":"running","tokens":{"window":121011}}`, then `{"status":"success","tokens":{"window":121011}}` after the stop; the `tokenCount` of 999999 did not replace it. The consumer's child line, running and stopped:
