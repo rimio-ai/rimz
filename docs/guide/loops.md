@@ -107,7 +107,7 @@ A wait on a timer is a guess about when something will happen. A signal is the t
 
 | Signal | Fires when | Payload carries |
 | --- | --- | --- |
-| `ci.passed`, `ci.failed` | the checks on a worktree branch settle on success or failure, with or without a pull request | `path`, `branch`, `repo`, plus `head` and `checks_url` when the commit is known, and `number` and `url` when a pull request exists |
+| `ci.passed`, `ci.failed` | the checks on a commit a worktree branch added settle on success or failure, with or without a pull request | `path`, `branch`, `repo`, plus `head` and `checks_url` when the commit is known, and `number` and `url` when a pull request exists |
 | `pr.merged`, `pr.closed` | the pull request on one of the room's worktree branches leaves the open state | `path`, `branch`, `repo`, `state`, plus `number`, `url`, `head`, and `checks_url` when known |
 | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | one agent's own lifecycle transitions | `kind`, `session`, `status`, `errored`, plus `handle` when the card has a name |
 | `team.idle`, `team.waiting`, `team.failed`, `team.ended` | a [team](./teams.md) cohort settles: every member at rest with nothing queued and no wait armed, one member waiting on input, one member's turn failing, or the last member ending | `team`, `instance` (`forge#feat-x`), `member`, and `members` with each handle and status |

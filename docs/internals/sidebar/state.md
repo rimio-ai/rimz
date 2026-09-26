@@ -249,9 +249,9 @@ A repository is due when its tier TTL has passed, when a target's HEAD differs f
 | Change | Signal |
 | --- | --- |
 | A link leaves the open state | `pr.merged` or `pr.closed` |
-| A PR's or tracked branch's CI verdict settles to passing or failing | `ci.passed` or `ci.failed` |
+| A PR's CI verdict, or a PR-less path's verdict for a commit the branch added (trunk exempt), settles to passing or failing | `ci.passed` or `ci.failed` |
 
-A transition counts only when the same target stamp owns both readings and the repository probe succeeded, so a branch switch or a failed probe emits nothing. The payload carries `path`, `branch`, and `repo`, plus `number`, `url`, and `state` when a link exists, and the observed `head` with a `checks_url` built from the target's `RemoteRepo` (GitHub's `/commit/<head>/checks` page, Gitea's commit page). The producer stays read-only: it spawns a detached `rimz events emit --source forge`, which appends the event durably and fires subscribed loop and wait tasks ([loops.md](../harness/loops.md#the-signal-vocabulary)).
+A transition counts only when the same target stamp owns both readings and the repository probe succeeded, so a branch switch or a failed probe emits nothing. A PR-less path emits only for a commit the branch added: a known HEAD matching the worktree marker's base commit or the cached merge base (an ancestor of the resolved trunk) is inherited and emits nothing. Trunk targets are exempt, and unknown facts preserve emission. The badge still shows the inherited verdict. The payload carries `path`, `branch`, and `repo`, plus `number`, `url`, and `state` when a link exists, and the observed `head` with a `checks_url` built from the target's `RemoteRepo` (GitHub's `/commit/<head>/checks` page, Gitea's commit page). The producer stays read-only: it spawns a detached `rimz events emit --source forge`, which appends the event durably and fires subscribed loop and wait tasks ([loops.md](../harness/loops.md#the-signal-vocabulary)).
 
 ### Sidecars
 
