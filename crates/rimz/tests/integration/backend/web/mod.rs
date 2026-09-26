@@ -362,6 +362,16 @@ endY:r.y+({end_raw_y}+.5)*r.cellHeight
     let received_after_drag = frames.received();
     fixture.stop_mouse_mode_churn();
     std::thread::sleep(Duration::from_millis(100));
+    // Land the release inside a churn gap, where xterm has dropped its
+    // mouseup listener, instead of leaving that to runner timing.
+    let write_mode = |sequence: &str| {
+        tab.evaluate(
+            &format!("new Promise(done=>window.term.write('\\x1b[?{sequence}',done))"),
+            true,
+        )
+        .expect("write xterm mouse mode");
+    };
+    write_mode("1002l");
     dispatch_mouse(
         &tab,
         Input::DispatchMouseEventTypeOption::MouseReleased,
@@ -370,6 +380,7 @@ endY:r.y+({end_raw_y}+.5)*r.cellHeight
         Some(Input::MouseButton::Left),
         None,
     );
+    write_mode("1002h");
     let release_deadline = Instant::now() + Duration::from_secs(2);
     while !frames
         .sent_payloads()
