@@ -541,7 +541,6 @@ pub enum DiagEvent {
         cause: RendererExitCause,
     },
     FrameAnomaly {
-        role: ObserveRole,
         anomaly: AnomalyKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         window_ms: Option<u64>,
@@ -1420,15 +1419,6 @@ impl PaneDropViewEvidence {
 pub struct ManagedPaneEvidence {
     pub pane_id: PaneId,
     pub agent_kind: AgentKind,
-}
-
-/// Whether the writing instance was the elected elder (runs real-world
-/// cross-checks) or a plain consumer at record time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ObserveRole {
-    Elder,
-    Consumer,
 }
 
 /// Per-row value the frame-stream observer watches for oscillation.

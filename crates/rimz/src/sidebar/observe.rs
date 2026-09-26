@@ -10,7 +10,7 @@ mod detect;
 mod sig;
 pub(crate) mod writer;
 
-use crate::diag::record::{AnomalyKind, FrameStamp, ObserveRole, WatchedField};
+use crate::diag::record::{AnomalyKind, FrameStamp, WatchedField};
 pub(crate) use detect::Observer;
 use sig::{EventsSig, FrameSig, RosterSig};
 pub(crate) use sig::{PulledFrameSig, extract_sig};
