@@ -567,6 +567,10 @@ pub(super) fn clamp_pct(value: Option<f64>) -> Option<u8> {
 /// Resume state for exact, incremental pricing of one child's transcript.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SubagentUsageCursor {
+    /// Newest assistant request's token split, retained across incremental
+    /// folds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_call: Option<super::AgentUsageSummary>,
     /// Provider transcript this cursor resumes. A path change resets the fold.
     pub transcript_path: String,
     /// Byte offset just past the last complete JSONL record consumed.
@@ -612,15 +616,20 @@ pub struct PricedRequest {
 }
 
 /// Per-subagent enrichment a paneless child cannot publish for itself. Claude's
-/// `subagentStatusLine` is `exec`d to render the agent panel's child rows and is
-/// handed each task's `type`, `model`, `effort`, `description`, `tokenCount`,
-/// and `startTime`; RimZ harvests those into one of these per child so the
-/// expanded card paints what the child is doing, what it has spent, and how long it has run. Identity-free like
-/// [`AgentContext`] — the child it belongs to is the `(kind, agent_id)` key it is
-/// filed under, never a field here. `subagentStatusLine` is Claude-only, so a
-/// Codex child simply has no record and the card degrades to its bare type line.
+/// `subagentStatusLine` is `exec`d to render the agent panel's child rows and
+/// is handed each task's `type`, `model`, `effort`, `description`, and
+/// `startTime`; RimZ also harvests the newest request's token split from the
+/// child transcript so the expanded card paints what the child is doing, what
+/// it has spent, and how long it has run. Identity-free like [`AgentContext`] —
+/// the child it belongs to is the `(kind, agent_id)` key it is filed under,
+/// never a field here. `subagentStatusLine` is Claude-only, so a Codex child
+/// simply has no record and the card degrades to its bare type line.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SubagentContext {
+    /// Newest assistant request's four components from the child transcript,
+    /// for window occupancy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<super::AgentUsageSummary>,
     /// The agent's type label (`Explore`, `review`, …) from the task's `type`
     /// field. Folds onto `AgentState.task` when the lifecycle events never
     /// provided one — the common case for fork agents that carry no `agent_type`.
@@ -639,11 +648,6 @@ pub struct SubagentContext {
     /// render.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Cumulative tokens the child has spent. Folds onto the child's
-    /// `AgentState.total_tokens`, which is otherwise always `None` for a paneless
-    /// subagent that never reads a transcript.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_count: Option<u64>,
     /// Exact cumulative per-request-priced child cost, when the provider exposes
     /// a dedicated transcript and every priceable request resolved. Display-only:
     /// parent/session spend already includes child requests, so this is never

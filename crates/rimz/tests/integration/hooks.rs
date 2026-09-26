@@ -3132,7 +3132,14 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
         records[0].context.description.as_deref(),
         Some("locate the render seam")
     );
-    assert_eq!(records[0].context.token_count, Some(12_400));
+    assert_eq!(
+        records[0]
+            .context
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.input_context_tokens()),
+        Some(1_000)
+    );
     assert_eq!(records[0].context.model.as_deref(), Some("child-model"));
     let first_cost = records[0]
         .context
@@ -3147,7 +3154,7 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
     );
     assert!(records[0].context.started_at.is_some());
     assert_eq!(records[1].agent_id, "child-2");
-    assert_eq!(records[1].context.token_count, Some(3_100));
+    assert_eq!(records[1].context.usage, None);
     assert_eq!(records[1].context.cost_usd, None);
     assert_eq!(records[1].context.model, None);
 
@@ -3185,6 +3192,14 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
         .expect("grown child context");
     assert!(grown.context.cost_usd.expect("grown child cost") > first_cost);
     assert_eq!(grown.context.model.as_deref(), Some("child-model"));
+    assert_eq!(
+        grown
+            .context
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.input_context_tokens()),
+        Some(2_000)
+    );
 }
 
 /// Build the `rimz hooks feed --source codex` command with `RIMZ_CODEX_BIN`

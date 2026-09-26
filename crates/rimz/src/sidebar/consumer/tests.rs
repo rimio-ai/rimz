@@ -877,11 +877,14 @@ fn read_published_snapshot_folds_subagent_context() {
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &base).unwrap();
     let now = Timestamp::now();
     let context = crate::agents::context::SubagentContext {
+        usage: Some(crate::agents::AgentUsageSummary {
+            fresh_input_tokens: Some(12_400),
+            ..Default::default()
+        }),
         agent_type: Some("Explore".to_owned()),
         model: None,
         effort: None,
         description: Some("trace the sidebar rows".to_owned()),
-        token_count: Some(12_400),
         cost_usd: Some(0.42),
         started_at: Some(now),
         observed_at: now,
@@ -916,7 +919,15 @@ fn read_published_snapshot_folds_subagent_context() {
         parent.sub_agents()[0].description.as_deref(),
         Some("trace the sidebar rows"),
     );
-    assert_eq!(parent.sub_agents()[0].total_tokens, Some(12_400));
+    assert_eq!(
+        snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == "child-1")
+            .unwrap()
+            .context_used_tokens(),
+        Some(12_400)
+    );
     assert_eq!(parent.sub_agents()[0].cost_usd, Some(0.42));
 }
 

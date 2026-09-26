@@ -66,11 +66,11 @@ pub fn update(
             kind: AgentKind::new_unchecked(kind),
             agent_id: agent_id.into(),
             context: SubagentContext {
+                usage: None,
                 agent_type: None,
                 model: None,
                 effort: None,
                 description: None,
-                token_count: None,
                 cost_usd: None,
                 started_at: None,
                 observed_at: Timestamp::now(),
@@ -121,11 +121,14 @@ mod tests {
 
     fn ctx(observed_at: Timestamp) -> SubagentContext {
         SubagentContext {
+            usage: Some(crate::agents::AgentUsageSummary {
+                fresh_input_tokens: Some(12_400),
+                ..Default::default()
+            }),
             agent_type: None,
             model: Some("child-model".to_owned()),
             effort: Some("high".to_owned()),
             description: Some("locate the render seam".to_owned()),
-            token_count: Some(12_400),
             cost_usd: None,
             started_at: Some(observed_at),
             observed_at,
@@ -148,7 +151,14 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].kind, "claude");
         assert_eq!(all[0].agent_id, "child-1");
-        assert_eq!(all[0].context.token_count, Some(12_400));
+        assert_eq!(
+            all[0]
+                .context
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.input_context_tokens()),
+            Some(12_400)
+        );
         assert_eq!(all[0].context.model.as_deref(), Some("child-model"));
         assert_eq!(all[0].context.effort.as_deref(), Some("high"));
         assert_eq!(
@@ -182,6 +192,7 @@ mod tests {
         let (_dir, runtime) = runtime();
         let now = Timestamp::now();
         let cursor = SubagentUsageCursor {
+            last_call: None,
             transcript_path: "/tmp/parent/subagents/agent-child-1.jsonl".to_owned(),
             offset: 412,
             model: Some("child-model".to_owned()),
@@ -247,6 +258,7 @@ mod tests {
         })
         .unwrap();
         let cursor = SubagentUsageCursor {
+            last_call: None,
             transcript_path: "child.jsonl".to_owned(),
             offset: 7,
             model: Some("child-model".to_owned()),

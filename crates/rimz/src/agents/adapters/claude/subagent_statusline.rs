@@ -26,7 +26,7 @@ pub(crate) struct SubagentStatuslinePayload {
 
 /// One child row. `name`, `status`, `label`, `cwd`, and `tokenSamples` are
 /// carried by the upstream payload but RimZ ignores them; `type`, `model`,
-/// `effort`, `description`, `tokenCount`, and `startTime` are painted.
+/// `effort`, `description`, and `startTime` are painted.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SubagentTask {
@@ -48,10 +48,6 @@ struct SubagentTask {
     /// seconds or milliseconds).
     #[serde(rename = "startTime")]
     start_time: Option<Value>,
-    /// `tokenCount`. Usually a number; held as a raw value so a string or odd
-    /// shape drops only this figure, not the whole task.
-    #[serde(rename = "tokenCount")]
-    token_count: Option<Value>,
 }
 
 impl SubagentStatuslinePayload {
@@ -66,11 +62,11 @@ impl SubagentStatuslinePayload {
                 Some(SubagentObservation {
                     agent_id,
                     context: SubagentContext {
+                        usage: None,
                         agent_type: task.r#type.filter(|t| !t.is_empty()),
                         model: task.model.filter(|model| !model.is_empty()),
                         effort: task.effort.filter(|effort| !effort.is_empty()),
                         description: task.description.filter(|d| !d.is_empty()),
-                        token_count: task.token_count.as_ref().and_then(value_as_u64),
                         cost_usd: None,
                         started_at: task.start_time.as_ref().and_then(value_as_timestamp),
                         observed_at,
@@ -78,16 +74,6 @@ impl SubagentStatuslinePayload {
                 })
             })
             .collect()
-    }
-}
-
-/// A JSON number (or stringified integer) as `u64`; anything else is `None`. A
-/// fractional number floors to the unit, a negative one clamps to zero.
-fn value_as_u64(value: &Value) -> Option<u64> {
-    match value {
-        Value::Number(n) => n.as_u64().or_else(|| n.as_f64().map(|f| f.max(0.0) as u64)),
-        Value::String(s) => s.trim().parse::<u64>().ok(),
-        _ => None,
     }
 }
 
@@ -145,15 +131,13 @@ mod tests {
                     "effort": "high",
                     "status": "running",
                     "description": "locate the render seam",
-                    "startTime": 1_700_000_000,
-                    "tokenCount": 12_400
+                    "startTime": 1_700_000_000
                 },
                 {
                     "id": "child-2",
                     "type": "review",
                     "description": "audit the trust hash",
-                    "startTime": 1_700_000_055,
-                    "tokenCount": 3_100
+                    "startTime": 1_700_000_055
                 }
             ]
         }));
@@ -166,7 +150,7 @@ mod tests {
             obs[0].context.description.as_deref(),
             Some("locate the render seam")
         );
-        assert_eq!(obs[0].context.token_count, Some(12_400));
+        assert_eq!(obs[0].context.usage, None);
         assert_eq!(
             obs[0].context.started_at,
             Some(Timestamp::from_second(1_700_000_000).unwrap())
@@ -177,9 +161,7 @@ mod tests {
 
     #[test]
     fn malformed_sparse_and_empty_tasks_are_tolerated() {
-        assert!(
-            observe(json!({ "tasks": [{ "description": "orphan", "tokenCount": 5 }] })).is_empty()
-        );
+        assert!(observe(json!({ "tasks": [{ "description": "orphan" }] })).is_empty());
         assert!(observe(json!({})).is_empty());
         assert!(observe(json!({ "tasks": [] })).is_empty());
 
@@ -189,7 +171,7 @@ mod tests {
         assert_eq!(obs[0].context.model, None);
         assert_eq!(obs[0].context.effort, None);
         assert_eq!(obs[0].context.description, None);
-        assert_eq!(obs[0].context.token_count, None);
+        assert_eq!(obs[0].context.usage, None);
         assert_eq!(obs[0].context.started_at, None);
 
         // An empty `type` string is not a useful label — treat it as absent so
@@ -203,14 +185,13 @@ mod tests {
                 "id": "c",
                 "description": "still here",
                 "startTime": "not-a-date",
-                "tokenCount": "lots",
                 "tokenSamples": [1, 2]
             }]
         }));
         assert_eq!(obs.len(), 1);
         assert_eq!(obs[0].context.description.as_deref(), Some("still here"));
         assert_eq!(obs[0].context.started_at, None);
-        assert_eq!(obs[0].context.token_count, None);
+        assert_eq!(obs[0].context.usage, None);
     }
 
     #[test]
