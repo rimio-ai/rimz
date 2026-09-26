@@ -15,8 +15,8 @@ fn legacy_rooms_are_reported_by_list_and_gc_without_mutation() {
     for args in [
         vec!["list"],
         vec!["list", "--json"],
-        vec!["gc"],
-        vec!["gc", "--json"],
+        vec!["gc", "--all"],
+        vec!["gc", "--all", "--json"],
     ] {
         let output = env.rimz().args(args).output().unwrap();
         assert!(
