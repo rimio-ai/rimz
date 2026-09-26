@@ -91,13 +91,13 @@ idle-timeout = "10m"
 command = ["rust-analyzer"]
 extensions = ["rs"]
 root-markers = ["Cargo.toml"]
-init-options = { checkOnSave = false, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
+init-options = { checkOnSave = false, hover = { dropGlue = { enable = false } }, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
 policy = "optional"
 wait-timeout = "10m"
 memory-estimate = "8G"
 ```
 
-The Rust options disable checking that would contend with agent builds, include functions in workspace search (rust-analyzer defaults to types only), and raise its 128-result search cap. Without that tuning, symbol-name queries can miss functions; a position query does not need workspace search.
+The Rust options disable checking that would contend with agent builds, include functions in workspace search (rust-analyzer defaults to types only), raise its 128-result search cap, and drop the `needs Drop` section from hover output. RimZ prints hover markdown as the server sends it, and rust-analyzer has no setting for its `Implements notable traits` section, so that section still appears. Without that tuning, symbol-name queries can miss functions; a position query does not need workspace search.
 
 | Machine `[lsp]` field | Default | Meaning |
 | --- | --- | --- |

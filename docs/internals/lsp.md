@@ -136,7 +136,7 @@ idle-timeout = "10m"
 command = ["rust-analyzer"]            # trust-hashed in project config
 extensions = ["rs"]
 root-markers = ["Cargo.toml"]
-init-options = { checkOnSave = false, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
+init-options = { checkOnSave = false, hover = { dropGlue = { enable = false } }, workspace = { symbol = { search = { kind = "all_symbols", limit = 10000 } } } }
 policy = "optional"                    # or "required"
 wait-timeout = "10m"                   # required only
 memory-estimate = "8G"                 # until learned
@@ -144,7 +144,7 @@ memory-estimate = "8G"                 # until learned
 
 `command` and `init-options` run or configure a process, so both join the executable surface ([trust.md § Adding a command-running field](./harness/trust.md#adding-a-command-running-field)), with a hash-coverage case each.
 
-Trusted project entries replace machine entries whole by name. The empty trust projection is omitted so existing hashes hold. Sizes are decimal (`8G`); `8GiB` is binary. The [reference](../reference/cli/lsp.md#configuration) owns field defaults. The Rust tuning includes functions and raises rust-analyzer's default 128-result workspace search cap, which otherwise hides symbol-name navigation targets.
+Trusted project entries replace machine entries whole by name. The empty trust projection is omitted so existing hashes hold. Sizes are decimal (`8G`); `8GiB` is binary. The [reference](../reference/cli/lsp.md#configuration) owns field defaults. The Rust tuning includes functions and raises rust-analyzer's default 128-result workspace search cap, which otherwise hides symbol-name navigation targets, and switches off the `needs Drop` hover section; hover markdown reaches agents verbatim, and rust-analyzer offers no switch for its notable-traits section.
 
 ## What agents see
 
