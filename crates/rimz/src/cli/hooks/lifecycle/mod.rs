@@ -24,6 +24,8 @@ use reactors::ReactorCtx;
 use transcript::*;
 
 pub(super) use identity::fill_root_launch_identity;
+#[cfg(test)]
+pub(super) use observe::root_identity_rollup;
 
 pub(super) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
