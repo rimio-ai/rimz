@@ -57,10 +57,12 @@ pub const ENV_LAUNCH_GROUP: &str = "RIMZ_LAUNCH_GROUP";
 /// agent-cell index. Set by the wrapper; read into lifecycle observations.
 pub const ENV_LAUNCH_ORDINAL: &str = "RIMZ_LAUNCH_ORDINAL";
 /// The model selected by launch flags or profile presets. Set by the launch
-/// wrapper; read into the lifecycle observation as card identity fallback.
+/// wrapper; read into lifecycle observations only while the session's rollup
+/// has no model.
 pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
 /// The reasoning effort selected by launch flags or profile presets. Set by
-/// the launch wrapper; read into the lifecycle observation as card identity fallback.
+/// the launch wrapper; read into lifecycle observations only while the
+/// session's rollup has no effort.
 pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
 /// The canonical dollar cap selected by launch flags, profiles, or roles.
 /// Set by the launch wrapper and read into lifecycle observations.

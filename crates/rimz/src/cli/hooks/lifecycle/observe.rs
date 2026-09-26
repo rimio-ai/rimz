@@ -118,6 +118,32 @@ fn context_window_is_unset(
         .is_none_or(|state| state.usage.context_window.is_none())
 }
 
+/// The rollup's view of a root session for the launch-identity seed: whether
+/// model and effort may still be seeded, and the model the row already shows.
+/// Without a session id or a readable snapshot nothing is seeded, as with
+/// `context_window_is_unset`.
+pub(in crate::cli::hooks) fn root_identity_rollup(
+    store: &Store,
+    kind: &str,
+    observation: &AgentLifecycleObservation,
+) -> ((bool, bool), Option<String>) {
+    let Some(agent_id) = observation.agent_id.as_ref() else {
+        return ((false, false), None);
+    };
+    let Ok(snapshot) = store.snapshot_cached() else {
+        return ((false, false), None);
+    };
+    let state = snapshot
+        .agents
+        .iter()
+        .find(|state| state.kind.as_str() == kind && state.agent_id == *agent_id);
+    let seed = (
+        observation.launch.model.is_none() && state.is_none_or(|state| state.model.is_none()),
+        observation.launch.effort.is_none() && state.is_none_or(|state| state.effort.is_none()),
+    );
+    (seed, state.and_then(|state| state.model.clone()))
+}
+
 pub(super) fn record_derived_lifecycle_observation(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -150,6 +176,7 @@ fn record_mapped_lifecycle_observation(
             validate_agent_name_env,
         );
     }
+    let mut rollup_model = None;
     if observation.parent_agent_id.is_none()
         && (observation.launch.role.is_none()
             || observation.launch.channel.is_none()
@@ -157,15 +184,19 @@ fn record_mapped_lifecycle_observation(
             || observation.launch.model.is_none()
             || observation.launch.effort.is_none())
     {
-        let configured_identity =
-            if observation.launch.model.is_none() || observation.launch.effort.is_none() {
-                agent.configured_identity()
-            } else {
-                (None, None)
-            };
-        fill_root_launch_identity(&mut observation, configured_identity, |agent_pid, var| {
-            agent_identity_env(agent_pid, var, validate_non_empty_identity_env)
-        });
+        let (seed, model) = root_identity_rollup(store, agent.spec().kind, &observation);
+        rollup_model = model;
+        let configured_identity = if seed.0 || seed.1 {
+            agent.configured_identity()
+        } else {
+            (None, None)
+        };
+        fill_root_launch_identity(
+            &mut observation,
+            configured_identity,
+            seed,
+            |agent_pid, var| agent_identity_env(agent_pid, var, validate_non_empty_identity_env),
+        );
     }
     if observation.worktree_path.is_none() {
         observation.worktree_path = Some(workspace.worktree_root.display().to_string());
@@ -182,7 +213,7 @@ fn record_mapped_lifecycle_observation(
         store,
         &mut observation,
     );
-    let model_hint = observation.launch.model.clone();
+    let model_hint = observation.launch.model.clone().or(rollup_model);
     let spawned_subagents = if observation.parent_agent_id.is_none()
         && matches!(
             observation.signal,
