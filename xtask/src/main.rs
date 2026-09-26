@@ -88,7 +88,7 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "hooks",
-        summary: "Install the tracked git hooks (pre-commit fmt, invariants, docs-links gate).",
+        summary: "Install the tracked git hooks (pre-commit fmt, invariants, conform, docs-links gate).",
         runs: "git config core.hooksPath .githooks",
     },
     TaskInfo {

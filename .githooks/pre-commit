@@ -22,6 +22,15 @@ if ! cargo xtask invariants; then
 	exit 1
 fi
 
+# Surface budget and allowed dependencies from refactor-target.toml; `check`
+# and `lint` never see them, so an overrun would otherwise surface only at the
+# end of `cargo xtask gate`.
+if ! cargo xtask atlas conform --ratchet; then
+	echo >&2
+	echo "pre-commit: \`cargo xtask atlas conform --ratchet\` failed — paste the rule it printed into refactor-target.toml with a comment naming why, and commit again." >&2
+	exit 1
+fi
+
 # Documentation links and #anchors.
 if ! cargo xtask docs-links; then
 	echo >&2
