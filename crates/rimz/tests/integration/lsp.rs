@@ -653,6 +653,39 @@ fn lsp_attach_bridge_resolves_admits_and_versions() {
         format!("rimz lsp attach {}\n", rimz::build_id::VERSION)
     );
 
+    let mut child = env
+        .rimz()
+        .args(["lsp", "attach", "--server", "rust"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    rimz::lsp::protocol::write_frame(&mut input, &first).unwrap();
+    assert_eq!(
+        rimz::lsp::protocol::read_frame(&mut output).unwrap()["id"],
+        1
+    );
+    let root = env.project_root.canonicalize().unwrap();
+    let directory = env
+        .runtime_root
+        .join("rimz/lsp")
+        .join(rimz::lsp::registry::key(&root, "rust").unwrap());
+    editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}));
+    while rimz::lsp::protocol::read_frame(&mut output).is_ok() {}
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        format!(
+            "language server rust for {} is stopped: checkout removed\n",
+            root.display()
+        )
+    );
+    drop(input);
+
     let required = Env::new();
     std::fs::write(required.project_root.join("Cargo.toml"), "").unwrap();
     std::fs::write(required.rimz_home().join("config.toml"), "[lsp]\nreserve-min = '1000000G'\n[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = 'required'\nwait-timeout = '1s'\n").unwrap();

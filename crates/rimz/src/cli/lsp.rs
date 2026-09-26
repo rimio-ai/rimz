@@ -249,8 +249,10 @@ fn attach(server: Option<String>, version: bool, globals: &GlobalFlags) -> Resul
             }
             Err(error) => return Err(error.into()),
         };
-        if let Some(reason) = admitted.startup_refused.into_iter().next() {
-            break Outcome::Refused(reason);
+        if let Some(message) = admitted.startup_refused.into_iter().next() {
+            drop(queue);
+            writeln!(render::err(), "{message}")?;
+            std::process::exit(3)
         }
         if let Some(entry) = admitted.admitted.first() {
             break attach::bridge(entry, input, std::io::stdout(), &first)?;
@@ -266,6 +268,7 @@ fn attach(server: Option<String>, version: bool, globals: &GlobalFlags) -> Resul
     drop(queue);
     match outcome {
         Outcome::EditorClosed => Ok(()),
+        Outcome::EditorFailed(reason) => anyhow::bail!("editor stream failed: {reason}"),
         Outcome::BrokerClosed(reason) | Outcome::Refused(reason) => {
             writeln!(render::err(), "{target} is {reason}")?;
             std::process::exit(3)
