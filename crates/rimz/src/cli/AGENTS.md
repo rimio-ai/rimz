@@ -4,7 +4,7 @@ Local contract for `crates/rimz/src/cli/` — command parsing, presentation, and
 
 ## What lives here
 
-- clap argument types, stdin/file parsing, workspace lookup at the entry point, interactive prompts, stdout/stderr presentation, exit codes.
+- clap argument types, stdin/file parsing, workspace lookup at the entry point, interactive prompts, stdout/stderr presentation, exit codes. A new, removed, or renamed flag updates the `cli_surface_is_stable` snapshot in the same commit: `cargo xtask test --name cli::surface_tests::cli_surface_is_stable`.
 - Cross-command orchestration where one user action intentionally combines room, mux, store, agent, and message operations — `rimz start`, supervised runs, gc sweeps.
 - `wait/` is the self-only face of the scheduler: it resolves the calling live agent for delay and command waits and presents receipts, pending lists, and caller-owned cancellation. It and `loop_cmd/` call `harness::schedule::arm` for delivery construction, signal defaults and guards, dedupe, and detached watcher spawning; neither command imports the other. The shared resolver supports `@me`, including bare `loop add --wait` ([loops.md](../../../../docs/internals/harness/loops.md#waits)).
 - Human and JSON rendering. Large render surfaces stay here: doctor, stats panels, transcript, pane, loop, and gc reports.

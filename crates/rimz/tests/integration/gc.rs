@@ -334,6 +334,40 @@ fn gc_prunes_dead_root_workspace() {
 }
 
 #[test]
+fn gc_all_dry_run_previews_a_pruned_room_only_as_a_workspace() {
+    let env = Env::new();
+    let gone_root = env.home_root.join("gone-project");
+    stale_room_files(&env, &gone_root);
+    let gone = env.state_path_for(&gone_root).dir_name.to_string();
+    std::fs::remove_dir_all(&gone_root).unwrap();
+    let run = |dry_run: bool| {
+        let mut cmd = env.rimz();
+        cmd.args(["gc", "--all", "--json"]);
+        if dry_run {
+            cmd.arg("--dry-run");
+        }
+        let output = cmd.assert().success();
+        serde_json::from_slice::<serde_json::Value>(&output.get_output().stdout).unwrap()
+    };
+    let preview = run(true);
+    assert_eq!(
+        preview["workspaces"]["removed"][0]["project_root"],
+        json!(gone_root)
+    );
+    let named = |report: &serde_json::Value| {
+        report["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|room| room["name"] == gone.as_str())
+    };
+    assert!(!named(&preview), "{preview}");
+    let applied = run(false);
+    assert!(!named(&applied), "{applied}");
+    assert_eq!(preview["reclaimed_bytes"], applied["reclaimed_bytes"]);
+}
+
+#[test]
 fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
     let env = Env::new();
     let other = env.home_root.join("other-project");
