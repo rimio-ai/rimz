@@ -868,6 +868,11 @@ mod tests {
     fn ledger_line_round_trips_run_times_to_the_second() {
         let now = "2026-09-12T14:02:37Z".parse().unwrap();
         let line = ledger_line(now, "user", Some("Plan"), "Done", "finished");
+        let (stamp, _) = line.strip_prefix("- ").unwrap().split_once(" @").unwrap();
+        assert_eq!(
+            Timestamp::strptime(super::super::scratch::PROGRESS_STAMP_FORMAT, stamp).unwrap(),
+            now
+        );
         let worktree = tempfile::tempdir().unwrap();
         std::fs::write(
             worktree.path().join("blackboard.md"),

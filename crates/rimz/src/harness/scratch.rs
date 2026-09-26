@@ -8,11 +8,17 @@ use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 
 use crate::config::DONE_STAGE;
 
-pub(super) const PROGRESS_STAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+pub(super) const PROGRESS_STAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%:z";
+const LEGACY_SECONDS_STAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+const LEGACY_MINUTES_STAMP_FORMAT: &str = "%Y-%m-%d %H:%M";
 
+/// Reads an offset stamp by its own offset, and a legacy offset-less stamp in `zone`.
 fn parse_progress_stamp(stamp: &str, zone: &TimeZone) -> Option<Timestamp> {
-    DateTime::strptime(PROGRESS_STAMP_FORMAT, stamp)
-        .or_else(|_| DateTime::strptime("%Y-%m-%d %H:%M", stamp))
+    if let Ok(at) = Timestamp::strptime(PROGRESS_STAMP_FORMAT, stamp) {
+        return Some(at);
+    }
+    DateTime::strptime(LEGACY_SECONDS_STAMP_FORMAT, stamp)
+        .or_else(|_| DateTime::strptime(LEGACY_MINUTES_STAMP_FORMAT, stamp))
         .ok()?
         .to_zoned(zone.clone())
         .ok()
@@ -312,6 +318,10 @@ mod tests {
         assert_eq!(run.stage_started_at, run.done_at);
         assert_eq!(run.stage_prior_secs, 0);
         assert_eq!(run.visited, ["Plan", "Done"].map(str::to_owned).into());
+        let board = "Stage: Done\n## Progress\n- 2026-09-12 14:02 @user: opened Plan\n- 2026-09-12 14:03:07 @planner: Plan -> Implement\n- 2026-09-12T16:34:08+08:00 @coder: Implement -> Done";
+        let run = parse_board_run(board, &zone).unwrap();
+        assert_eq!(run.started_at, Some(first));
+        assert_eq!(run.done_at, Some(finish));
         let board = "Stage: Implement\n## Progress\n- 2026-09-12 14:02 @user: opened Plan\n- 2026-09-12 14:03 @planner: Plan -> Implement\n- 2026-09-12 14:04 @coder: Implement -> Review\n- 2026-09-12 14:05 @reviewer: Review -> Implement";
         let run = parse_board_run(board, &zone).unwrap();
         assert_eq!(

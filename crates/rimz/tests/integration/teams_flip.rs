@@ -341,7 +341,7 @@ fn flip_cli_persists_board_signal_and_owner_note() {
                 .map(|(stamp, _)| stamp)
         })
         .unwrap();
-    jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", stamp).unwrap();
+    jiff::Timestamp::strptime("%Y-%m-%dT%H:%M:%S%:z", stamp).unwrap();
     let signals = fixture.signals();
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].source, SignalSource::Team);
