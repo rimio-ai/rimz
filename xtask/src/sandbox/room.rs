@@ -31,6 +31,7 @@ struct Pane {
     pane_id: String,
     kind: String,
     agent: Option<Agent>,
+    pid: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -522,7 +523,10 @@ fn render_card(
             if pane.kind == "agent"
                 && let Some(agent) = &pane.agent
             {
-                writeln!(card, "Role: {}  {}", agent.handle, pane.pane_id)?;
+                let pid = pane
+                    .pid
+                    .map_or_else(|| "-".to_owned(), |pid| pid.to_string());
+                writeln!(card, "Role: {}  {}  pid {pid}", agent.handle, pane.pane_id)?;
             }
         }
     }
@@ -581,7 +585,7 @@ mod tests {
 
     #[test]
     fn room_card_uses_live_roles_and_snapshot_owner() {
-        let panes = serde_json::from_str(r##"{"session":"private","tabs":[{"name":"shell","panes":[{"kind":"sidebar","pane_id":"tmux:%1"}]},{"name":"#probe","panes":[{"kind":"sidebar","pane_id":"tmux:%3"},{"kind":"agent","pane_id":"tmux:%4","agent":{"handle":"@coder#probe"}}]}]}"##).unwrap();
+        let panes = serde_json::from_str(r##"{"session":"private","tabs":[{"name":"shell","panes":[{"kind":"sidebar","pane_id":"tmux:%1"}]},{"name":"#probe","panes":[{"kind":"sidebar","pane_id":"tmux:%3"},{"kind":"agent","pane_id":"tmux:%4","pid":4242,"agent":{"handle":"@coder#probe"}}]}]}"##).unwrap();
         let renderers: Vec<Renderer> = serde_json::from_str(
             r#"[{"role":"producer","pane_id":"tmux:%3"},{"role":"consumer","pane_id":"tmux:%1"}]"#,
         )
@@ -609,7 +613,7 @@ mod tests {
         assert!(card.contains("Sidebar: tmux:%1  Tab: shell  consumer"));
         assert!(card.contains("Sidebar: tmux:%3  Tab: #probe  producer"));
         assert!(card.contains("Stage: Build  Owner: coder"));
-        assert!(card.contains("Role: @coder#probe  tmux:%4"));
+        assert!(card.contains("Role: @coder#probe  tmux:%4  pid 4242"));
         assert!(card.contains(
             "target/debug/xtask sandbox in '/sandbox' -- '/dev/rimz' --tmux pane capture 'tmux:%3'"
         ));
