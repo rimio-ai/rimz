@@ -28,6 +28,10 @@ macro_rules! glyph {
 /// Unicode glyph in the Nerd Font set: drawn gauges, spines, caps, hairlines,
 /// spinner/clock heads, and the compacting wave stay on the terminal grid.
 /// Verify new Nerd Font codepoints against the font's cmap with fontTools before adding them.
+/// Unicode-set glyphs must render through stock fallback fonts, not only the
+/// terminal's primary face: `unicode_glyphs_stay_in_fallback_covered_blocks`
+/// holds the allowed blocks and the justified exceptions. Check a new codepoint
+/// with `fc-list ':charset=<hex>'` or fontTools before adding it.
 const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(StatusWaiting, "?", Some("\u{f128}")),
     glyph!(StatusAttention, "!", Some("\u{f12a}")),
@@ -395,6 +399,62 @@ mod tests {
                     "nerd-font {name}"
                 );
                 assert_ne!(nerd, unicode, "{name} carries a real Nerd Font icon");
+            }
+        }
+    }
+
+    /// CI carries no fonts, so coverage is pinned by Unicode block: every
+    /// non-ASCII Unicode-set glyph sits in a block that stock fallback fonts
+    /// (DejaVu, FreeFont, Apple Symbols) carry, or in a justified exception.
+    #[test]
+    fn unicode_glyphs_stay_in_fallback_covered_blocks() {
+        const COVERED_BLOCKS: &[(&str, std::ops::RangeInclusive<char>)] = &[
+            ("Latin-1 Supplement", '\u{00a0}'..='\u{00ff}'),
+            ("Phonetic Extensions Supplement", '\u{1d80}'..='\u{1dbf}'),
+            ("General Punctuation", '\u{2000}'..='\u{206f}'),
+            ("Arrows", '\u{2190}'..='\u{21ff}'),
+            ("Mathematical Operators", '\u{2200}'..='\u{22ff}'),
+            ("Miscellaneous Technical", '\u{2300}'..='\u{23ff}'),
+            ("Control Pictures", '\u{2400}'..='\u{243f}'),
+            ("Box Drawing", '\u{2500}'..='\u{257f}'),
+            ("Block Elements", '\u{2580}'..='\u{259f}'),
+            ("Geometric Shapes", '\u{25a0}'..='\u{25ff}'),
+            ("Miscellaneous Symbols", '\u{2600}'..='\u{26ff}'),
+            ("Dingbats", '\u{2700}'..='\u{27bf}'),
+            ("Braille Patterns", '\u{2800}'..='\u{28ff}'),
+            ("Variation Selectors", '\u{fe00}'..='\u{fe0f}'),
+        ];
+        const EXCEPTIONS: &[(char, &str)] = &[
+            (
+                '⟲',
+                "Supplemental Arrows-A; DejaVu Sans, FreeMono, Apple Symbols",
+            ),
+            (
+                '⟳',
+                "Supplemental Arrows-A; DejaVu Sans, FreeMono, Apple Symbols",
+            ),
+            ('⑂', "OCR; DejaVu Sans, and the Nerd Font set replaces it"),
+            ('⑃', "OCR; DejaVu Sans, and the Nerd Font set replaces it"),
+            ('⧉', "Misc Math Symbols-B; the Nerd Font set replaces it"),
+            ('⧖', "Misc Math Symbols-B; the Nerd Font set replaces it"),
+            (
+                '🮇',
+                "Legacy Computing; terminal sprite renderers draw it, xtask/src/screenshot.rs remaps it",
+            ),
+        ];
+        for row in GLYPH_CATALOG {
+            for glyph in row.unicode.chars().filter(|glyph| !glyph.is_ascii()) {
+                let covered = COVERED_BLOCKS
+                    .iter()
+                    .any(|(_, block)| block.contains(&glyph))
+                    || EXCEPTIONS.iter().any(|&(exception, _)| exception == glyph);
+                assert!(
+                    covered,
+                    "{} uses U+{:04X} outside the fallback-covered blocks; swap the glyph \
+                     or add a justified exception",
+                    row.role.namespaced_name(),
+                    u32::from(glyph),
+                );
             }
         }
     }
