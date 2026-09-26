@@ -116,14 +116,9 @@ pub(super) fn push_queued_message(
     let label = message_target_for_record(record, &snapshot);
     let delivered = deliver::deliver_one(workspace, store, &message_id, globals.mux, policy)?;
     if delivered {
-        let action = if matches!(policy, deliver::DeliveryPolicy::Interrupt { .. }) {
-            "delivered"
-        } else {
-            "sent"
-        };
         #[expect(clippy::print_stdout, reason = "command result")]
         {
-            println!("{action} to {label} ({message_id})");
+            println!("sent to {label} ({message_id})");
         }
         return Ok(());
     }
@@ -134,31 +129,7 @@ pub(super) fn push_queued_message(
     else {
         bail!("message {message_id} is no longer queued");
     };
-    if matches!(policy, deliver::DeliveryPolicy::Interrupt { .. })
-        && record.status == MessageStatus::Claimed
-    {
-        #[expect(clippy::print_stdout, reason = "message confirmation")]
-        {
-            println!("queued for {label} ({message_id}): delivery in progress");
-        }
-        return Ok(());
-    }
     let check = deliver::explain(record, &messages, &snapshot, Timestamp::now());
-    if matches!(policy, deliver::DeliveryPolicy::Interrupt { .. })
-        && record.status == MessageStatus::Queued
-        && (!check.ask.waiting
-            || record.force
-            || matches!(policy, deliver::DeliveryPolicy::Interrupt { force: true }))
-    {
-        let reason = record.last_error.as_deref().unwrap_or("delivery deferred");
-        #[expect(clippy::print_stdout, reason = "message confirmation")]
-        {
-            println!(
-                "queued for {label} ({message_id}): {reason}; retry: rimz message interrupt {message_id}"
-            );
-        }
-        return Ok(());
-    }
     bail!("{}", steer_failure(&check, &label, &message_id))
 }
 

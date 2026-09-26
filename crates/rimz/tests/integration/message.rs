@@ -43,7 +43,7 @@ fn is_escape_key(line: &str) -> bool {
     line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t27"))
 }
 
-fn interrupt_proof_case(kind: &str, queued: bool, force: bool) {
+fn interrupt_order_case(kind: &str, queued: bool, force: bool) {
     let (env, panes) = interrupt_fixture(kind);
     let message_id = queued.then(|| queue_add(&env, &format!("@{kind}"), "new direction"));
     if force {
@@ -53,8 +53,7 @@ fn interrupt_proof_case(kind: &str, queued: bool, force: bool) {
     let mut command = traced_rimz(&env, &trace);
     command
         .env("RIMZ_TEST_PANE_LIST", &panes)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "50");
     if let Some(id) = &message_id {
         command.args(["message", "interrupt", id]);
     } else {
@@ -68,88 +67,39 @@ fn interrupt_proof_case(kind: &str, queued: bool, force: bool) {
     if force {
         command.arg("--force");
     }
-    let mut child = command.spawn().expect("interrupt child");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !trace_lines(&trace).iter().any(|line| is_escape_key(line)) {
-        assert!(
-            child.try_wait().unwrap().is_none(),
-            "interrupt must press Escape before exiting: {:?}",
-            trace_lines(&trace)
-        );
-        assert!(Instant::now() < deadline, "interrupt must press Escape");
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        !trace_lines(&trace)
-            .iter()
-            .any(|line| is_paste(line, &user_message("new direction")))
-    );
-    // The wait must release the pane lock so native answers and other writers can proceed.
-    let writer = rimz::mux::PaneWriter::open(
-        &env.runtime_paths(),
-        &PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
-    )
-    .expect("interrupt released writer");
-    drop(writer);
-    if kind == "claude" {
-        let now = jiff::Timestamp::now();
-        let mut context = rimz::agents::context::AgentContext::new(kind, now);
-        context.settle = Some(rimz::agents::context::TurnSettle::new(
-            now,
-            rimz::agents::context::TurnSettleOutcome::Interrupted,
-        ));
-        rimz::store::agent_context::write(&env.runtime_paths(), kind, "sess-interrupt", &context)
-            .expect("statusline rest certificate");
-    } else {
-        let owner = dummy_agent_process();
-        let pid = owner.id();
-        reap_later(owner);
-        run_hook_for_owner(
-            &env,
-            kind,
-            json!({"hook_event_name":"Interrupt", "session_id":"sess-interrupt"}),
-            &[("ZELLIJ_PANE_ID", "3")],
-            pid,
-        );
-    }
-    let output = child.wait_with_output().expect("interrupt exits");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    run_success(&mut command, "interrupt");
     let lines = trace_lines(&trace);
     assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
-    let escape = lines.iter().position(|line| is_escape_key(line)).unwrap();
     let paste = lines
         .iter()
         .position(|line| is_paste(line, &user_message("new direction")))
-        .expect("paste after proof");
+        .expect("prompt pasted");
     let enter = lines.iter().position(|line| is_enter_key(line)).unwrap();
-    assert!(escape < paste && paste < enter, "{lines:?}");
+    let escape = lines.iter().position(|line| is_escape_key(line)).unwrap();
+    assert!(paste < enter && enter < escape, "{lines:?}");
     let records = env.store().list_messages().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, MessageStatus::Sent);
 }
 
 #[test]
-fn interrupt_codex_waits_for_hook_before_paste() {
-    interrupt_proof_case("codex", false, false);
+fn interrupt_codex_pastes_then_presses_escape() {
+    interrupt_order_case("codex", false, false);
 }
 
 #[test]
-fn interrupt_claude_waits_for_context_before_paste() {
-    interrupt_proof_case("claude", false, false);
+fn interrupt_claude_pastes_then_presses_escape() {
+    interrupt_order_case("claude", false, false);
 }
 
 #[test]
-fn interrupt_queued_record_waits_for_stop() {
-    interrupt_proof_case("codex", true, false);
+fn interrupt_queued_record_pastes_then_presses_escape() {
+    interrupt_order_case("codex", true, false);
 }
 
 #[test]
-fn interrupt_force_cancels_native_ask_before_paste() {
-    interrupt_proof_case("claude", false, true);
+fn interrupt_force_pastes_past_native_ask() {
+    interrupt_order_case("claude", false, true);
 }
 
 #[test]
@@ -173,140 +123,6 @@ fn interrupt_waiting_refuses_before_record() {
         "refusal must not terminalize a newly written record"
     );
     assert!(trace_lines(&trace).is_empty());
-}
-
-#[test]
-fn interrupt_timeout_parks_without_paste() {
-    let (env, panes) = interrupt_fixture("claude");
-    let trace = env.project_root.join("interrupt-timeout.log");
-    let output = run_success(
-        traced_rimz(&env, &trace)
-            .env("RIMZ_TEST_PANE_LIST", &panes)
-            .env("RIMZ_MESSAGE_INTERRUPT_WAIT_MS", "200")
-            .args(["message", "--interrupt", "@claude", "new direction"]),
-        "interrupt timeout",
-    );
-    let records = env.store().list_messages().unwrap();
-    assert_eq!(records[0].status, MessageStatus::Queued);
-    assert_eq!(
-        records[0].last_error.as_deref(),
-        Some("turn still running 200ms after escape")
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains(&format!("rimz message interrupt {}", records[0].message_id))
-    );
-    let lines = trace_lines(&trace);
-    assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
-    for _ in 0..3 {
-        run_success(
-            traced_rimz(&env, &trace)
-                .env("RIMZ_TEST_PANE_LIST", &panes)
-                .env("RIMZ_MESSAGE_INTERRUPT_WAIT_MS", "200")
-                .args(["message", "interrupt", records[0].message_id.as_str()]),
-            "retry unproven interrupt",
-        );
-        let parked = message_by_id(&env, &records[0].message_id);
-        assert_eq!(parked.status, MessageStatus::Queued);
-        assert_eq!(parked.attempts, 0, "unwritten text spends no attempt");
-    }
-    assert!(
-        !trace_lines(&trace)
-            .iter()
-            .any(|line| is_paste(line, &user_message("new direction")))
-    );
-    run_hook(
-        &env,
-        json!({"hook_event_name":"Stop", "session_id":"sess-interrupt"}),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    run_success(
-        traced_rimz(&env, &trace)
-            .env("RIMZ_TEST_PANE_LIST", panes)
-            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args([
-                "message",
-                "deliver",
-                "--message-id",
-                records[0].message_id.as_str(),
-            ]),
-        "checkpoint delivery after timeout",
-    );
-    assert_eq!(
-        message_by_id(&env, &records[0].message_id).status,
-        MessageStatus::Sent
-    );
-    run_hook(
-        &env,
-        json!({"hook_event_name":"UserPromptSubmit", "session_id":"sess-interrupt", "prompt":user_message("new direction")}),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    assert!(
-        env.store()
-            .list_message_history()
-            .unwrap()
-            .iter()
-            .any(|record| record.message_id == records[0].message_id
-                && record.status == MessageStatus::Delivered)
-    );
-}
-
-#[test]
-fn interrupt_does_not_paste_after_claim_is_replaced() {
-    let (env, panes) = interrupt_fixture("claude");
-    let id = MessageId::parse(&queue_add(&env, "@claude", "new direction")).unwrap();
-    let trace = env.project_root.join("interrupt-reclaimed.log");
-    let mut child = traced_rimz(&env, &trace)
-        .env("RIMZ_TEST_PANE_LIST", &panes)
-        .args(["message", "interrupt", id.as_str()])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !trace_lines(&trace).iter().any(|line| is_escape_key(line)) {
-        assert!(child.try_wait().unwrap().is_none());
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let store = env.store();
-    let writer = rimz::mux::PaneWriter::open(
-        &env.runtime_paths(),
-        &PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
-    )
-    .unwrap();
-    store
-        .release_message_claims(std::slice::from_ref(&id), "another delivery", "rimz-test")
-        .unwrap();
-    let replacement = store
-        .claim_message_for_steer(&id, jiff::Timestamp::now())
-        .unwrap()
-        .unwrap();
-    append_lifecycle(
-        &env,
-        "claude",
-        "Stop",
-        "sess-interrupt",
-        LifecycleSignal::TurnInterrupted { turn_id: None },
-        |_| {},
-    );
-    drop(writer);
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !trace_lines(&trace)
-            .iter()
-            .any(|line| is_paste(line, &user_message("new direction"))),
-        "superseded sender must not paste"
-    );
-    let current = message_by_id(&env, &id);
-    assert_eq!(current.status, MessageStatus::Claimed);
-    assert_eq!(current.last_attempt_at, replacement.last_attempt_at);
-    assert_eq!(current.attempts, replacement.attempts);
 }
 
 #[test]
@@ -474,7 +290,6 @@ fn interrupt_refuses_create_policy_before_delivery() {
     let (env, panes) = interrupt_fixture("claude");
     let output = traced_rimz(&env, "interrupt-create.log")
         .env("RIMZ_TEST_PANE_LIST", panes)
-        .env("RIMZ_MESSAGE_INTERRUPT_WAIT_MS", "1")
         .args([
             "message",
             "--interrupt",
