@@ -17,16 +17,12 @@ fn identity_marker_tab(
     rows: &[usize],
 ) -> rimz::mux::ResumeTab {
     let project_root = cwd.parent().expect("marker cwd has a parent");
-    let mut env = rimz::workspace::pin_env(
+    let env = rimz::workspace::pane_pin_env(
         &rimz::ids::WorkspaceId::from_project_root(project_root),
         project_root,
+        cwd,
+        Some(channel),
     );
-    env.insert("RIMZ".to_owned(), "1".to_owned());
-    env.insert(
-        rimz::workspace::ENV_WORKTREE_PATH.to_owned(),
-        cwd.display().to_string(),
-    );
-    env.insert(rimz::workspace::ENV_CHANNEL.to_owned(), channel.to_owned());
     let mut marker = 0;
     let columns = rows
         .iter()
