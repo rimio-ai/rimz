@@ -170,17 +170,21 @@ Callers and callees text output defaults to items inside the checkout. The rende
 | `impl` | `textDocument/implementation` |
 | `symbols` | `textDocument/documentSymbol` |
 | `find` | `workspace/symbol` |
+| `check` | `textDocument/documentSymbol`, once per file with symbol anchors |
 | `callers`, `callees` | call hierarchy incoming and outgoing |
 
-An ambiguous or not-found symbol name lists qualified candidates instead of guessing. `query::Output::exit_code` and `query::QueryErr::exit_code` own the outcome and error codes respectively. The [complete exit table](../reference/cli/lsp.md#exit-codes) is a contract with the `rimz-lsp` skill, which teaches agents to branch on them:
+An ambiguous or not-found symbol name lists qualified candidates instead of guessing. `query::Output::exit_code` and `query::QueryErr::exit_code` own the query outcome and error codes; `check::Report::exit_code` owns anchor-check outcomes. The [complete exit table](../reference/cli/lsp.md#exit-codes) is a contract with the `rimz-lsp` skill, which teaches agents to branch on them:
 
 | Exit | Meaning |
 | --- | --- |
-| 0 | Answered; `no results` is a real answer. |
+| 0 | Answered; `no results` is a real answer. Check has no failing anchors, including when some are unchecked. |
 | 3 | No server for this checkout, memory admission refused, or terminal shutdown; the one line names the reason. |
 | 4 | Still indexing after the readiness bound; the line gives the elapsed time. |
 | 5 | Symbol name not found; exact-name candidates are listed on stdout. |
 | 6 | Symbol name ambiguous; qualified candidates are listed on stdout. |
+| 7 | Anchor check found failures; verdicts on stdout, nothing on stderr. |
+
+`lsp/check.rs` extracts inline-code anchors with the Markdown parser and resolves exact paths before unique suffixes over Git's tracked and untracked, non-ignored files. Matching uses ordered ancestor subsequences, removes generic arguments, and also compares each container's last whitespace-delimited token. This naming rule handles container headers without any Rust keyword in the matcher; flat and hierarchical outlines share it. Line-only anchors read disk without a server. Missing language configuration yields `unchecked`; a configured server's failure aborts the whole report through the existing query error path. The [reference](../reference/cli/lsp.md#check-anchors-in-a-notes-file) owns the grammar and report format.
 
 `rimz lsp list` shows every machine key with state, tree RSS, the maximum of recorded and live tree peak for running servers, requests, last request, restarts, and leases; dormant and stopped entries show no live RSS or PEAK. A first lazy start is not a restart. `rimz lsp stop` makes a server dormant until the next query. The [reference](../reference/cli/lsp.md) owns flags.
 

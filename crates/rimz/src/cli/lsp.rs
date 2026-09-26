@@ -4,6 +4,7 @@ use super::{GlobalFlags, render};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use rimz::lsp::{
+    check,
     query::{self, QueryErr, Verb},
     registry::{self, State},
 };
@@ -35,6 +36,12 @@ enum Command {
     Symbols(Query),
     /// Search workspace symbols.
     Find(Query),
+    /// Check every path::symbol anchor in a Markdown file against the outline.
+    Check {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// List shared servers on this machine.
     List {
         #[arg(long)]
@@ -83,6 +90,21 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(rimz::lsp::broker::serve(serde_json::from_str(&request)?)?);
         }
         Command::List { json } => return list(json),
+        Command::Check { file, json } => {
+            let context = query_context(globals)?;
+            let report = match check::run(&file, &context.root, &context.entries, &context.servers)
+            {
+                Ok(report) => report,
+                Err(error) => return query_error(error),
+            };
+            let mut out = render::out();
+            write!(out, "{}", report.render(json)?)?;
+            out.flush()?;
+            if report.exit_code() != 0 {
+                std::process::exit(report.exit_code());
+            }
+            return Ok(());
+        }
         Command::Stop {
             checkout,
             server,
@@ -97,12 +119,8 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         Command::Symbols(args) => (Verb::Symbols, args),
         Command::Find(args) => (Verb::Find, args),
     };
-    let entries = registry::read_entries()?;
-    let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
-    let workspace = rimz::workspace::WorkspaceResolver::resolve(&cwd, globals.root.clone())?;
-    let root = checkout(&cwd, &entries).unwrap_or(&workspace.worktree_root);
-    let machine = rimz::config::MachineConfig::load()?;
-    let config = rimz::config::effective::load(&machine, workspace.launch_repo_root())?;
+    let context = query_context(globals)?;
+    let root = &context.root;
     let path = match verb {
         Verb::Symbols => Some(PathBuf::from(&args.target)),
         Verb::Find => None,
@@ -113,8 +131,8 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let result = query::select(
         root,
-        entries.clone(),
-        &config.lsp_servers,
+        context.entries,
+        &context.servers,
         args.server.as_deref(),
         path.as_deref(),
     )
@@ -149,6 +167,28 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         std::process::exit(code);
     }
     Ok(())
+}
+
+struct QueryContext {
+    root: PathBuf,
+    entries: Vec<registry::Entry>,
+    servers: std::collections::BTreeMap<String, rimz::config::LspServerConfig>,
+}
+
+fn query_context(globals: &GlobalFlags) -> Result<QueryContext> {
+    let entries = registry::read_entries()?;
+    let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
+    let workspace = rimz::workspace::WorkspaceResolver::resolve(&cwd, globals.root.clone())?;
+    let root = checkout(&cwd, &entries)
+        .unwrap_or(&workspace.worktree_root)
+        .to_owned();
+    let machine = rimz::config::MachineConfig::load()?;
+    let config = rimz::config::effective::load(&machine, workspace.launch_repo_root())?;
+    Ok(QueryContext {
+        root,
+        entries,
+        servers: config.lsp_servers,
+    })
 }
 
 fn query_error(error: QueryErr) -> Result<()> {

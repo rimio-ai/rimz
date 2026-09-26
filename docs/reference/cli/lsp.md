@@ -25,6 +25,7 @@ rimz lsp find MuxBackend --server rust --json
 | `callees` | position or exact symbol name | outgoing call hierarchy items, inside the checkout by default |
 | `symbols` | file path | document symbol outline |
 | `find` | search string | workspace symbols matching the server's search |
+| `check` | Markdown notes file | anchor verdicts and coverage summary |
 
 Positions are `path:line:col`, with one-based line and column; omitting the column is an error. Paths are checkout-relative or absolute. Text locations use `path:line:col`; navigation includes source lines when available, outlines indent children, and hover prints markup. Empty answers for resolved targets print `no results`.
 
@@ -44,6 +45,29 @@ All eight verbs require one target. Query flags:
 
 The checkout comes from cwd or the global `--root`, using the most deeply enclosing registered checkout when present. Different worktrees have different servers even though they share a room. Queries wait up to 30 seconds for indexing; there is no CLI wait-duration flag.
 
+## Check anchors in a notes file
+
+`rimz lsp check <FILE> [--json]` checks a note's file, symbol, and line references before hand-off. FILE is cwd-relative or absolute; anchors use the checkout enclosing cwd (or global `--root`). There is no `--server` flag.
+
+Only inline code spans count, never fenced blocks or prose. A path must have a filename extension holding at least one letter before the first colon, so `127.0.0.1:8080` is not an anchor. Bare paths, bare symbols, and module names such as `config::Error` are ignored. Accepted anchors are `src/config.rs::Type::method`, `src/config.rs::Type.field`, and line-only forms such as `src/config.rs:42`, `src/config.rs:~42`, `src/config.rs:42:3`, or `src/config.rs:42-45`.
+
+Symbol chains use either `::` or `.`. Generic arguments are removed; decorations end the symbol at whitespace, `(`, `{`, `[`, `,`, `~`, `#`, `!`, `=`, or `;`; trailing colons and dots are removed. Thus `config.rs::ConfigErr::Definition(DefinitionErr)` checks `ConfigErr::Definition`. A line hint inside the span after the symbol, or immediately following the span, accepts `(~42)`, `(42)`, `(~42-45)`, `(42-45)`, `~42`, `:~42`, `:42`, and `:42:3`. Symbol hints must overlap a matching outline range widened by three lines at each end. Every line of a line-only hint must exist in the file; it needs no server.
+
+Paths resolve exactly first, then by a unique component-boundary suffix among tracked and untracked, non-ignored files present on disk; a deleted file whose removal is not yet staged is `missing-path`. Lengthen an ambiguous suffix instead of guessing. Symbols match an outline node and an ordered subsequence of its ancestors, ignoring generic arguments. A container's final whitespace-separated token also matches, so a method under `impl Type<T>` matches `Type::method`. Multiple matching nodes are accepted; a hint need only match one.
+
+| Status | Meaning |
+| --- | --- |
+| `ok` | Resolved path and symbol or valid line-only anchor. |
+| `missing-path` | No checkout file matches. |
+| `ambiguous-path` | Several files match the suffix. |
+| `missing-symbol` | No outline node matches the chain. |
+| `line-outside` | The hint misses every matching range, or lies outside the file. |
+| `unchecked` | No configured server covers the extension; verify it by hand. |
+
+Text prints one line per failing or unchecked anchor: `<notes>:<line>  <status>  <anchor as written, hint included>  <detail>`. Details show candidate files, near-miss symbols and ranges, file length, or the missing server. The last line is `<N> anchors in <notes>: <ok> ok, <failed> failed, <unchecked> unchecked`. Exit 7 means at least one failure; exit 0 includes unchecked anchors and files with no anchors. An unreadable note or non-git checkout exits 1. A configured server that cannot answer aborts before printing any verdict, with the query's exit 1, 3, or 4.
+
+JSON includes every anchor, including `ok`. The fixed top-level keys are `notes`, `checkout`, `anchors`, and `summary`. Each anchor has `line`, `text`, `status`, `path`, `symbol`, `hint`, `range`, `candidates`, `files`, and `detail`. Paths are checkout-relative or null; symbols are segment arrays or null for line-only anchors. Hints and ranges are inclusive one-based `[start, end]` pairs or null. Candidates have `name`, `kind`, and `range`; files lists ambiguous paths. Summary has `anchors`, `ok`, `failed`, and `unchecked` counts.
+
 ## List and stop
 
 ```sh
@@ -62,13 +86,14 @@ rimz lsp stop --all
 
 | Exit | Meaning |
 | --- | --- |
-| 0 | Answered, including `no results` for a resolved symbol; successful list or stop. |
+| 0 | Answered, including `no results` for a resolved symbol; successful list or stop; check has no failing anchors (unchecked anchors are allowed). |
 | 1 | Command failed, including server-selection or protocol errors; details on stderr. |
 | 2 | Invalid command line, flag, or argument. |
 | 3 | No server for the checkout, memory admission refused, or terminal shutdown. The stderr line names the reason and grep fallback. |
 | 4 | Still indexing after the wait bound. The stderr line gives elapsed time. |
 | 5 | Symbol name not found; candidates with that last segment are listed on stdout. |
 | 6 | Symbol name ambiguous; candidates are listed on stdout, each with an accepted name. |
+| 7 | Anchor check found failures; verdicts on stdout, nothing on stderr. |
 
 Exits 5 and 6 write nothing to stderr. Not-found text is `not found: {written name}`, followed by `; {N} symbol(s) named {last segment}:` and candidate lines when candidates exist. Ambiguous text starts `ambiguous: {N} symbols named {written name}; rerun with one of these names or a position`.
 

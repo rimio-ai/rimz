@@ -66,8 +66,8 @@ surface-budget = 34
 
 [[module]]
 path = "crates/rimz/src/lsp"
-# Output::exit_code distinguishes not-found and ambiguous lookup outcomes.
-surface-budget = 81
+# Anchor checks expose run, Report, and its exit-code and rendering methods.
+surface-budget = 85
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"

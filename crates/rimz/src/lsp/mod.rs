@@ -2,6 +2,7 @@
 
 pub mod admission;
 pub mod broker;
+pub mod check;
 pub mod history;
 pub mod lease;
 pub mod memory;

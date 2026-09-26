@@ -3,9 +3,7 @@
 mod client;
 pub use client::{Output, execute, select};
 
-use super::protocol::{
-    CallHierarchyItem, DocumentSymbol, Location, Position, Range, SymbolInformation,
-};
+use super::protocol::{CallHierarchyItem, Location, Position, Range, SymbolInformation, Symbols};
 use super::{LspErr, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -180,7 +178,7 @@ fn collapse_candidates(
     })
 }
 
-fn without_generics(raw: &str) -> String {
+pub(super) fn without_generics(raw: &str) -> String {
     let mut depth = 0_u32;
     raw.chars()
         .filter(|character| match character {
@@ -299,7 +297,7 @@ fn position_text(root: &Path, uri: &str, position: Position) -> Result<String> {
     ))
 }
 
-fn kind_name(kind: u32) -> &'static str {
+pub(super) fn kind_name(kind: u32) -> &'static str {
     match kind {
         1 => "file",
         2 => "module",
@@ -585,37 +583,26 @@ fn render_with_source(
             root,
             &serde_json::from_value::<Vec<SymbolInformation>>(result)?,
         ),
-        Verb::Symbols => {
-            #[derive(Deserialize)]
-            #[serde(untagged)]
-            enum Symbols {
-                Flat(Vec<SymbolInformation>),
-                Tree(Vec<DocumentSymbol>),
-            }
-            match serde_json::from_value(result)? {
-                Symbols::Flat(symbols) => render_find(root, &symbols),
-                Symbols::Tree(symbols) => {
-                    let uri = document_uri.ok_or_else(|| {
-                        LspErr::Protocol("document symbols need a file URI".into())
-                    })?;
-                    let mut lines = Vec::new();
-                    let mut pending: Vec<_> =
-                        symbols.iter().rev().map(|symbol| (symbol, 0)).collect();
-                    while let Some((symbol, depth)) = pending.pop() {
-                        lines.push(format!(
-                            "{}{} {}  {}",
-                            "  ".repeat(depth),
-                            kind_name(symbol.kind),
-                            symbol.name,
-                            position_text(root, uri, symbol.selection_range.start)?
-                        ));
-                        pending
-                            .extend(symbol.children.iter().rev().map(|child| (child, depth + 1)));
-                    }
-                    Ok(finish(lines))
+        Verb::Symbols => match serde_json::from_value(result)? {
+            Symbols::Flat(symbols) => render_find(root, &symbols),
+            Symbols::Tree(symbols) => {
+                let uri = document_uri
+                    .ok_or_else(|| LspErr::Protocol("document symbols need a file URI".into()))?;
+                let mut lines = Vec::new();
+                let mut pending: Vec<_> = symbols.iter().rev().map(|symbol| (symbol, 0)).collect();
+                while let Some((symbol, depth)) = pending.pop() {
+                    lines.push(format!(
+                        "{}{} {}  {}",
+                        "  ".repeat(depth),
+                        kind_name(symbol.kind),
+                        symbol.name,
+                        position_text(root, uri, symbol.selection_range.start)?
+                    ));
+                    pending.extend(symbol.children.iter().rev().map(|child| (child, depth + 1)));
                 }
+                Ok(finish(lines))
             }
-        }
+        },
         Verb::Callers | Verb::Callees => {
             #[derive(Deserialize)]
             struct Incoming {

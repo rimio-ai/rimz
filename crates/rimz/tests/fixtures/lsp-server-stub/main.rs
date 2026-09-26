@@ -56,6 +56,33 @@ fn main() {
                 }
             }
             "textDocument/hover" => json!({"contents": "fixture hover"}),
+            "textDocument/documentSymbol"
+                if message["params"]["textDocument"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| uri.ends_with("/lib.rs")) =>
+            {
+                let symbol = |name, kind, start, end, children| {
+                    let range = json!({"start":{"line":start,"character":0},"end":{"line":end,"character":1}});
+                    json!({"name":name,"kind":kind,"range":range,"selectionRange":range,"children":children})
+                };
+                json!([
+                    symbol(
+                        "Type",
+                        23,
+                        0,
+                        1,
+                        json!([symbol("field", 8, 1, 1, json!([]))])
+                    ),
+                    symbol(
+                        "impl Type",
+                        19,
+                        2,
+                        5,
+                        json!([symbol("method", 6, 2, 5, json!([]))])
+                    ),
+                    symbol("saved", 12, 6, 6, json!([]))
+                ])
+            }
             "textDocument/definition"
                 if message["params"]["textDocument"]["uri"]
                     .as_str()
