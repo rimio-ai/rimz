@@ -132,7 +132,7 @@ Cues that already span a full color step, such as the neutral ladder and the hea
 
 The sidebar reads glyphs through `Theme::glyph(GlyphRole)`; CLI renderers call `theme_glyphs(&ThemeConfig)`, which resolves the set once and returns a lookup closure. `agent_status_glyph_role` maps each `AgentStatus` to its status role for every surface, and `strip_status_glyph_suffix` removes a status glyph from any built-in or configured set off the end of a Zellij tab or tmux window name, so the mux backends can match a room tab by its base name.
 
-`nerd_font_probe_glyphs` (eight catalog icons) and `nerd_font_probe_gradient` (a color sweep) back the first-run setup probe in `cli/first_run.rs`. The probe asks whether the terminal renders each, and writes `theme.mode` or `theme.glyphs.set` only when the answer changes the effective default, so the color and glyph halves of `modern` degrade independently.
+`nerd_font_probe_glyphs` (eight catalog icons) and `nerd_font_probe_gradient` (a color sweep) back the first-run setup probe in `cli/first_run.rs`. The probe asks whether the terminal renders each, and writes `theme.mode` or `theme.glyphs.set` only when the answer changes the effective default, so the color and glyph halves of `modern` degrade independently. The probe checks only Nerd Font icons; the Unicode set instead relies on stock fallback fonts, and the `glyphs.rs` test `unicode_glyphs_stay_in_fallback_covered_blocks` confines its codepoints to the Unicode blocks those fonts carry, plus a short list of justified exceptions.
 
 ## Provider identity
 
