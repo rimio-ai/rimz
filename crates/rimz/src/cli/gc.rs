@@ -110,6 +110,7 @@ fn auto_gc_assist(
     }
     Assist::AutoGc {
         workspace_id: workspace_id.clone(),
+        scope: rimz::harness::auto_gc::GcScope::Machine,
         older_than_secs: older_than.as_secs(),
         reclaimed_bytes: outcome.reclaimed_bytes(),
         class_bytes,

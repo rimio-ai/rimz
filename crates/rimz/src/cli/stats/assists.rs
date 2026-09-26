@@ -120,6 +120,7 @@ pub(super) enum AssistEvent {
     Gc {
         at: Timestamp,
         workspace_id: rimz::ids::WorkspaceId,
+        scope: rimz::harness::auto_gc::GcScope,
         older_than_secs: u64,
         reclaimed_bytes: u64,
         worktrees_removed: usize,
@@ -320,6 +321,7 @@ impl AssistEvent {
             },
             Assist::AutoGc {
                 workspace_id,
+                scope,
                 older_than_secs,
                 reclaimed_bytes,
                 worktrees_removed,
@@ -332,6 +334,7 @@ impl AssistEvent {
             } => Self::Gc {
                 at: record.at,
                 workspace_id,
+                scope,
                 older_than_secs,
                 reclaimed_bytes,
                 worktrees_removed,
@@ -611,6 +614,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             )
         }
         AssistEvent::Gc {
+            scope,
             reclaimed_bytes,
             worktrees_removed,
             workspaces_pruned,
@@ -631,8 +635,12 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             .filter(|(count, _)| *count > 0)
             .map(|(count, noun)| format!(", {count} {noun}{}", plural(count)))
             .collect::<String>();
+            let scope = match scope {
+                rimz::harness::auto_gc::GcScope::Room => "",
+                rimz::harness::auto_gc::GcScope::Machine => "machine ",
+            };
             format!(
-                "{time} ♻ gc swept — {} reclaimed{facts}",
+                "{time} ♻ {scope}gc swept — {} reclaimed{facts}",
                 render::fmt_bytes(*reclaimed_bytes)
             )
         }

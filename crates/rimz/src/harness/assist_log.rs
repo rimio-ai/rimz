@@ -104,6 +104,8 @@ pub enum Assist {
     },
     AutoGc {
         workspace_id: crate::ids::WorkspaceId,
+        #[serde(default)]
+        scope: crate::harness::auto_gc::GcScope,
         older_than_secs: u64,
         reclaimed_bytes: u64,
         #[serde(default)]

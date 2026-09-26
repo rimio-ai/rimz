@@ -1591,6 +1591,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             at: ts(4_300),
             assist: Assist::AutoGc {
                 workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                scope: rimz::harness::auto_gc::GcScope::Machine,
                 older_than_secs: 7 * 86_400,
                 reclaimed_bytes: 2_048,
                 class_bytes: Default::default(),
@@ -1606,6 +1607,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             at: ts(4_400),
             assist: Assist::AutoGc {
                 workspace_id: rimz::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                scope: rimz::harness::auto_gc::GcScope::Machine,
                 older_than_secs: 7 * 86_400,
                 reclaimed_bytes: 0,
                 class_bytes: Default::default(),
@@ -1697,7 +1699,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         line.contains("workspace ws_0123456789abcdef01234567 · session rimz-test")
     }));
     assert!(forensics.iter().any(|line| {
-        line.contains("♻ gc swept — 2 KB reclaimed, 2 worktrees, 1 workspace · workspace ws_0123456789abcdef01234567 · cutoff 7d")
+        line.contains("♻ machine gc swept — 2 KB reclaimed, 2 worktrees, 1 workspace · workspace ws_0123456789abcdef01234567 · cutoff 7d")
     }));
     assert!(
         forensics
@@ -1709,6 +1711,35 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(json["rollup"]["resumes"], 1);
     assert_eq!(json["rollup"]["sweeps"], 1);
     assert_eq!(json["events"][0]["assist"], "auto_gc");
+}
+
+#[test]
+fn gc_assist_scope_defaults_to_machine_and_preserves_room() {
+    use rimz::harness::assist_log::AssistRecord;
+
+    let legacy = serde_json::json!({
+        "at": "2026-01-01T00:00:00Z", "assist": "auto_gc",
+        "workspace_id": "ws_0123456789abcdef01234567", "older_than_secs": 604800,
+        "reclaimed_bytes": 2048, "worktrees_removed": 0, "workspaces_pruned": 0,
+        "files_removed": 1, "messages_archived": 0, "problems": 0
+    });
+    for (scope, label) in [(None, "machine gc swept"), (Some("room"), "♻ gc swept")] {
+        let mut value = legacy.clone();
+        if let Some(scope) = scope {
+            value["scope"] = scope.into();
+        }
+        let record: AssistRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(&record).unwrap()["scope"],
+            scope.unwrap_or("machine")
+        );
+        let stats = AssistStats::from_records("test", vec![record]);
+        assert_eq!(
+            serde_json::to_value(&stats).unwrap()["events"][0]["scope"],
+            scope.unwrap_or("machine")
+        );
+        assert!(benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC).contains(label));
+    }
 }
 
 #[test]
