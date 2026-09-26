@@ -156,7 +156,7 @@ Trusted project entries replace machine entries whole by name. The empty trust p
 
 ## Query surface
 
-Ambiguous workspace symbols are resolved through `textDocument/definition` for each candidate and grouped by definition URI and start position. Exactly one returned location becomes the candidate's identity; empty or multiple answers keep its own location. One group resolves uniquely, while distinct groups list definition positions without guessing. Request errors propagate.
+Every nonempty workspace-symbol match set, including a unique path match, is resolved through `textDocument/definition` for each candidate and grouped by definition URI and start position. Exactly one returned location becomes the candidate's identity; empty or multiple answers keep its own location. One group resolves uniquely at its definition. Distinct groups retain indexed candidates' names and source locations so their printed names remain accepted input, preferring the definition's own indexed symbol over a re-export when available. Request errors propagate. Name normalization and path matching follow the [query grammar](../reference/cli/lsp.md#queries).
 
 Callers and callees text output defaults to items inside the checkout. The renderer deduplicates before counting hidden outside items and appends the hidden count with a `--external` hint. That flag includes outside items; JSON remains the raw, unfiltered LSP answer.
 
@@ -172,13 +172,15 @@ Callers and callees text output defaults to items inside the checkout. The rende
 | `find` | `workspace/symbol` |
 | `callers`, `callees` | call hierarchy incoming and outgoing |
 
-An ambiguous symbol name lists its candidates with positions instead of guessing. The exit codes are a contract with the `rimz-lsp` skill, which teaches agents to branch on them:
+An ambiguous or not-found symbol name lists qualified candidates instead of guessing. `query::Output::exit_code` and `query::QueryErr::exit_code` own the outcome and error codes respectively. The [complete exit table](../reference/cli/lsp.md#exit-codes) is a contract with the `rimz-lsp` skill, which teaches agents to branch on them:
 
 | Exit | Meaning |
 | --- | --- |
 | 0 | Answered; `no results` is a real answer. |
 | 3 | No server for this checkout, memory admission refused, or terminal shutdown; the one line names the reason. |
 | 4 | Still indexing after the readiness bound; the line gives the elapsed time. |
+| 5 | Symbol name not found; exact-name candidates are listed on stdout. |
+| 6 | Symbol name ambiguous; qualified candidates are listed on stdout. |
 
 `rimz lsp list` shows every machine key with state, tree RSS, the maximum of recorded and live tree peak for running servers, requests, last request, restarts, and leases; dormant and stopped entries show no live RSS or PEAK. A first lazy start is not a restart. `rimz lsp stop` makes a server dormant until the next query. The [reference](../reference/cli/lsp.md) owns flags.
 

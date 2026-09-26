@@ -123,6 +123,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         Ok(output) => output,
         Err(error) => return query_error(error),
     };
+    let code = output.exit_code();
     let mut out = render::out();
     match output {
         query::Output::Answer {
@@ -139,13 +140,13 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 )?;
             }
         }
-        query::Output::Ambiguous { name, symbols } => {
-            if args.json {
-                writeln!(out, "{}", serde_json::to_string_pretty(&symbols)?)?;
-            } else {
-                write!(out, "{}", query::render_ambiguous(root, &name, &symbols)?)?;
-            }
+        output => {
+            write!(out, "{}", query::render_outcome(root, &output, args.json)?)?;
         }
+    }
+    out.flush()?;
+    if code != 0 {
+        std::process::exit(code);
     }
     Ok(())
 }
