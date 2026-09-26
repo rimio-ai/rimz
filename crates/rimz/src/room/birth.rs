@@ -15,6 +15,24 @@ use crate::{StatePaths, Store};
 
 use super::RoomContext;
 
+fn birth_session_name(
+    recorded: &str,
+    dir_name: &str,
+    sessions: crate::mux::Result<Vec<String>>,
+) -> (String, bool) {
+    match sessions {
+        Ok(live) if live.iter().any(|name| name == recorded) => (recorded.to_owned(), true),
+        Ok(live) => (
+            dir_name.to_owned(),
+            live.iter().any(|name| name == dir_name),
+        ),
+        Err(err) => {
+            tracing::debug!(session = recorded, error = %err, "could not prove session is absent before birth; using non-destructive sidebar split");
+            (recorded.to_owned(), true)
+        }
+    }
+}
+
 /// Selected normal-room recovery state from the CLI's two-phase inspection.
 pub enum NormalRebirth {
     /// Existing healthy room: preserve its durable incarnation.
@@ -100,19 +118,13 @@ impl RoomContext {
                     (cwd, None, None, None, None, recovery, true)
                 }
             };
-        let pre_existed = match self.backend.list_sessions() {
-            Ok(sessions) => sessions
-                .iter()
-                .any(|name| name == &self.workspace.session_name),
-            Err(err) => {
-                tracing::debug!(
-                    session = %self.workspace.session_name,
-                    error = %err,
-                    "could not prove session is absent before birth; using non-destructive sidebar split",
-                );
-                true
-            }
-        };
+        let (session_name, pre_existed) = birth_session_name(
+            &self.workspace.session_name,
+            self.runtime.dir_name.as_str(),
+            self.backend.list_sessions(),
+        );
+        let renamed = session_name != self.workspace.session_name;
+        self.workspace.session_name = session_name;
         if !pre_existed {
             if Isolation::ambient(&crate::agents::ambient_env()) == Some(Isolation::Sandbox) {
                 bail!("this pane runs inside a RimZ sandbox; start the room from a host shell");
@@ -156,6 +168,14 @@ impl RoomContext {
         }
         if self.machine_config.agents.isolation == crate::config::Isolation::Sandbox {
             StatePaths::for_project_root(&self.workspace.project_root)?.ensure_tmp_dir()?;
+        }
+        if renamed {
+            let paths = StatePaths::for_project_root(&self.workspace.project_root)
+                .context("preparing store paths for birth")?;
+            Store::open(paths, self.runtime.clone())
+                .context("opening store for birth")?
+                .record_workspace(&self.workspace)
+                .context("recording the born session name")?;
         }
         self.backend.ensure_session(&self.session_options(&cwd))?;
         if supervised && pre_existed {
@@ -365,5 +385,40 @@ impl RoomContext {
             .context("recording workspace metadata for reset")?;
         let records = reset_records(&store).context("resetting workspace records")?;
         Ok(RoomResetReport { teardown, records })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn birth_keeps_live_recorded_name_and_migrates_dead_name() {
+        for (recorded, live, expected, existed) in [
+            (
+                "rimz-old-123456",
+                vec!["rimz-old-123456"],
+                "rimz-old-123456",
+                true,
+            ),
+            ("rimz-old-123456", vec![], "repo-abcd", false),
+            ("rimz-old-123456", vec!["repo-abcd"], "repo-abcd", true),
+            ("repo-abcd", vec![], "repo-abcd", false),
+        ] {
+            let sessions = Ok(live.into_iter().map(str::to_owned).collect());
+            assert_eq!(
+                birth_session_name(recorded, "repo-abcd", sessions),
+                (expected.to_owned(), existed)
+            );
+        }
+        let failure = Err(crate::mux::MuxErr::Timeout {
+            program: "mux".to_owned(),
+            args: "list".to_owned(),
+            seconds: 1,
+        });
+        assert_eq!(
+            birth_session_name("rimz-old-123456", "repo-abcd", failure),
+            ("rimz-old-123456".to_owned(), true)
+        );
     }
 }

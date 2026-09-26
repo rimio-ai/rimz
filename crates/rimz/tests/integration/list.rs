@@ -54,7 +54,12 @@ fn list_json_emits_canonical_fields() {
             .unwrap()
             .contains("query-engine")
     );
-    assert!(row["session_name"].as_str().unwrap().starts_with("rimz-"));
+    assert_eq!(
+        row["session_name"],
+        env.state_path_for(&env.project_root.join("query-engine"))
+            .dir_name
+            .as_str()
+    );
     // No real mux session is bound; expect None.
     assert!(row["running_on"].is_null());
     // Activity should be populated from workspace.json mtime even without events.

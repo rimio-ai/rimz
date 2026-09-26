@@ -10,6 +10,124 @@ use rimz::workspace::WorkspaceResolver;
 use crate::common::{CommandTimeoutExt, Env, ROOM_WORKFLOW_TIMEOUT, ScrubSessionEnvExt};
 
 #[test]
+fn room_name_tracks_state_dir_without_rebirthing_a_live_old_name() {
+    let Some(room) = TmuxRoom::start() else {
+        return;
+    };
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let dir_name = paths.dir_name.as_str();
+    assert_eq!(room.tmux_sessions(), vec![dir_name]);
+    let mut record = rimz::workspace::record::read(&paths.workspace_record).unwrap();
+    assert_eq!(record.session_name, dir_name);
+    let owner = (
+        record.rimz_bin.clone(),
+        record.rimz_build.clone(),
+        record.logins.clone(),
+    );
+    let old = "rimz-old-123456";
+    assert!(
+        tmux_output(
+            &room.env.runtime_root,
+            &["rename-session", "-t", dir_name, old]
+        )
+        .status
+        .success()
+    );
+    record.session_name = old.to_owned();
+    rimz::workspace::record::write(&paths, &record).unwrap();
+    let session_id = tmux_output(
+        &room.env.runtime_root,
+        &["display-message", "-p", "-t", old, "#{session_id}"],
+    )
+    .stdout;
+
+    let list = room
+        .rimz()
+        .args(["list", "--json"])
+        .bounded_output()
+        .unwrap();
+    assert!(list.status.success());
+    let rows: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(rows[0]["session_name"], old);
+    assert_eq!(rows[0]["running_on"], "tmux");
+    let agents = room
+        .rimz()
+        .arg("agents")
+        .envs(rimz::workspace::pin_env(
+            &record.workspace_id,
+            &record.project_root,
+        ))
+        .bounded_output()
+        .unwrap();
+    assert!(
+        agents.status.success(),
+        "{}",
+        String::from_utf8_lossy(&agents.stderr)
+    );
+    for args in [vec!["start"], vec!["attach", "--print"]] {
+        let output = room
+            .rimz()
+            .args(args)
+            .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains(old));
+        assert_eq!(room.tmux_sessions(), vec![old]);
+        assert_eq!(
+            tmux_output(
+                &room.env.runtime_root,
+                &["display-message", "-p", "-t", old, "#{session_id}"]
+            )
+            .stdout,
+            session_id
+        );
+    }
+    let preserved = rimz::workspace::record::read(&paths.workspace_record).unwrap();
+    assert_eq!(
+        (preserved.rimz_bin, preserved.rimz_build, preserved.logins),
+        owner
+    );
+    let reset = room
+        .rimz()
+        .args(["--mux", "tmux", "reset", "--yes"])
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .unwrap();
+    assert!(
+        reset.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    assert_eq!(room.tmux_sessions(), vec![dir_name]);
+    assert_eq!(
+        rimz::workspace::record::read(&paths.workspace_record)
+            .unwrap()
+            .session_name,
+        dir_name
+    );
+    assert_eq!(
+        String::from_utf8(
+            tmux_output(
+                &room.env.runtime_root,
+                &["display-message", "-p", "-t", dir_name, "#S"]
+            )
+            .stdout
+        )
+        .unwrap()
+        .trim(),
+        dir_name
+    );
+    for args in [vec!["list"], vec!["gc", "--dry-run"]] {
+        let output = room.rimz().args(args).bounded_output().unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(dir_name));
+    }
+}
+
+#[test]
 fn start_refuses_when_rival_backend_runs_room() {
     let Some(room) = TmuxRoom::start() else {
         return;

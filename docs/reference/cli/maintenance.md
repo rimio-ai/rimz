@@ -72,7 +72,7 @@ $ rimz workspace resolve
   "root_class": "repo",
   "worktree_root": "/home/me/code/query-engine-worktrees/docs",
   "worktree_branch": "docs",
-  "session_name": "rimz-query-engine-f89e49",
+  "session_name": "query-engine-f89e",
   "mux_hint": null
 }
 ```

@@ -433,8 +433,8 @@ fn workspace_dir_name(ws_dir: &Path, workspace_id: &WorkspaceId) -> Result<Works
         .unwrap_or_else(|| WorkspaceDirName::fallback(workspace_id)))
 }
 
-/// Longest basename slug a minted name carries, bounding the socket budget.
-const WORKSPACE_DIR_SLUG_MAX: usize = 32;
+/// Bound new slugs for both RimZ's runtime socket dir and Zellij's socket path.
+const WORKSPACE_DIR_SLUG_MAX: usize = 20;
 
 /// The existing dir for `workspace_id` in `ws_dir`, else a minted
 /// `<basename>-<hex>` whose hex no dir in `ws_dir` already carries.

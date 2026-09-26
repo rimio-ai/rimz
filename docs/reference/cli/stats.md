@@ -130,7 +130,7 @@ assists (all) — Auto-continue: 110 (+77.0h) · Auto-compact: 340 · Auto-redee
 2026-09-12 19:21 ⌁ @coder auto-compact — 260k ctx cleared before delivery · agent 01a0950c-2a1d-7900-b4ec-b5c79226860a · message msg_06g9amhl56ac37d8 · threshold 258k
 2026-09-12 15:15 ▶ @finder resumed — overload park, 15:12→15:15 (0.1h recovered) · agent 01a09475-8284-7c60-9bd3-3f1803b10e14 · message msg_06g98u2jncrghd65 · delivered true
 2026-09-10 13:48 ↻ codex credit — blocked gain → budget reset ✓ · request 01a089db-f2cc-7970-a32f-8e1c1d3b743c · 2 credits · expiry 2026-10-04 13:42 · natural reset 2026-09-15 10:04 · windows 5h→unknown, 7d→2026-09-17 13:48
-2026-09-08 10:56 ⟲ rebirth recovery — 13 agents restored after crash (#wait-all, #subagents-card, #subagents-wait, #codex-claude, #rimz) · workspace ws_f89e49906df0621ad2765112 · session rimz-rimz-f89e49
+2026-09-08 10:56 ⟲ rebirth recovery — 13 agents restored after crash (#wait-all, #subagents-card, #subagents-wait, #codex-claude, #rimz) · workspace ws_f89e49906df0621ad2765112 · session rimz-f89e
 2026-07-30 08:49 ⌁ @coder idle compacted after 8.1h — 88k ctx · agent 019faea5-d8ce-7e92-a15e-3c9fad352934 · message msg_06fr0vovclep1ivs · delivered true
 ```
 

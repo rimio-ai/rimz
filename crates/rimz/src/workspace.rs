@@ -34,7 +34,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use self::record::{WorkspaceRecord, WorkspaceRecordErr};
-use crate::ids::{MuxName, WorkspaceDirName, WorkspaceId};
+use crate::ids::{MuxName, WorkspaceId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceErr {
@@ -42,6 +42,8 @@ pub enum WorkspaceErr {
     Resolve { path: PathBuf, reason: String },
     #[error("git probe failed: {0}")]
     GitProbe(#[from] io::Error),
+    #[error(transparent)]
+    Paths(#[from] crate::disk::paths::PathErr),
 }
 
 pub type Result<T> = std::result::Result<T, WorkspaceErr>;
@@ -265,7 +267,6 @@ fn normalize_known_workspace_record(
     }
     if let Ok(project_root) = record.project_root.canonicalize() {
         let canonical_id = WorkspaceId::from_project_root(&project_root);
-        let session_name = session_name_for(&project_root);
         if canonical_id != workspace_id {
             tracing::debug!(
                 workspace = %workspace_id,
@@ -276,9 +277,8 @@ fn normalize_known_workspace_record(
             return None;
         }
 
-        if record.project_root != project_root || record.session_name != session_name {
+        if record.project_root != project_root {
             record.project_root = project_root;
-            record.session_name = session_name;
             record.updated_at = jiff::Timestamp::now();
             if let Err(err) = record::write_path(record_path, &record) {
                 tracing::warn!(
@@ -520,7 +520,8 @@ impl WorkspaceResolver {
         let worktree_root = normalized_root(worktree_root)?;
 
         let workspace_id = WorkspaceId::from_project_root(&project_root);
-        let session_name = session_name_for(&project_root);
+        let paths = crate::StatePaths::for_project_root(&project_root)?;
+        let session_name = recorded_session_name(&paths);
         let worktree_branch = current_branch(&worktree_root)?;
 
         Ok(ResolvedWorkspace {
@@ -722,12 +723,15 @@ fn has_project_marker(dir: &Path) -> bool {
     })
 }
 
-const SESSION_BASENAME_SLUG_MAX: usize = 8;
-
-fn session_name_for(project_root: &Path) -> String {
-    let slug = WorkspaceDirName::basename_slug(project_root, SESSION_BASENAME_SLUG_MAX);
-    let workspace_id = WorkspaceId::from_project_root(project_root);
-    format!("rimz-{slug}-{}", &workspace_id.hex()[..6])
+fn recorded_session_name(paths: &crate::StatePaths) -> String {
+    match record::read_optional(&paths.workspace_record) {
+        Ok(Some(record)) => return record.session_name,
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(path = %paths.workspace_record.display(), error = %err, "could not read room session name; using state directory name")
+        }
+    }
+    paths.dir_name.as_str().to_owned()
 }
 
 #[cfg(test)]

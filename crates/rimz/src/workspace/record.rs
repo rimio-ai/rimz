@@ -51,6 +51,7 @@ pub struct WorkspaceRecord {
     /// back to [`Self::project_root`] and self-heal on the next owner re-record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_root: Option<PathBuf>,
+    /// The mux session this room was last born under.
     pub session_name: String,
     /// Which ladder tier the root is. Records predating the field decode as
     /// [`RootClass::Repo`] — today's behavior — and self-heal on the next

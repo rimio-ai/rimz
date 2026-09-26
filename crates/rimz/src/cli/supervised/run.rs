@@ -923,7 +923,7 @@ pub(in crate::cli) fn run_supervised(
     presentation: SupervisedPresentation,
     globals: &GlobalFlags,
 ) -> Result<Option<SupervisedRunOutcome>> {
-    let Some(prepared) = prepare_supervised(&request, &presentation, globals)? else {
+    let Some(mut prepared) = prepare_supervised(&request, &presentation, globals)? else {
         return Ok(None);
     };
     let logins = prepared.logins.clone();
@@ -977,6 +977,7 @@ pub(in crate::cli) fn run_supervised(
         }),
         room.session_name(),
     )?;
+    prepared.workspace.session_name = room.session_name().to_owned();
     let retries = request.retries;
     let base_prompt = prepared.prompt.clone();
     let mut prompt = prepared.prompt.clone();

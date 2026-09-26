@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 
 use rimz::ids::{MuxName, RoomLogins, WorkspaceId};
 use rimz::room::session::{
-    MissingSessionReport, ensure_single_backend_room, pick_mux_for_session, retire_renamed_session,
+    MissingSessionReport, ensure_single_backend_room, pick_mux_for_session,
     session_probe_retry_timeout, session_probe_timeout, workspace_record_for_session,
 };
 use rimz::room::{AttendedRecovery, NormalRebirth, RoomBirth, RoomContext, RoomSizing};
@@ -482,7 +482,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
 
     run_room_preflights(&entry, mux)?;
 
-    let backend = rimz::mux::backend_for(mux);
     // Capture whether this is a plain reattach *before* `ensure_session`, which on
     // tmux would create the session and erase the distinction. A live room never
     // re-seeds prior agents, and its health verdict is reused by the attach gate.
@@ -527,12 +526,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         }
     }
 
-    if let RoomEntry::Start { workspace, .. }
-    | RoomEntry::StartDetached { workspace, .. }
-    | RoomEntry::AttachCwd { workspace, .. } = &entry
-    {
-        retire_renamed_session(backend.as_ref(), workspace);
-    }
     if let RoomEntry::Start { workspace, .. } = &entry
         && !was_live
         && start_attended()

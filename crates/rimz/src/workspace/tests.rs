@@ -26,43 +26,37 @@ fn known_workspaces_skips_legacy_rooms() {
     );
 }
 
-fn hash6(root: &Path) -> String {
-    WorkspaceId::from_project_root(root).as_str()[3..9].to_owned()
-}
-
-fn expected_session(root: &Path, slug: &str) -> String {
-    format!("rimz-{slug}-{}", hash6(root))
+#[test]
+fn resolution_without_record_uses_state_dir_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut names = Vec::new();
+    for relative in ["one/project", "two/project"] {
+        let root = dir.path().join(relative);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = WorkspaceResolver::resolve(&root, None).unwrap();
+        let paths = crate::StatePaths::for_project_root(&workspace.project_root).unwrap();
+        assert_eq!(workspace.session_name, paths.dir_name.as_str());
+        assert_eq!(
+            WorkspaceResolver::resolve(&root, None)
+                .unwrap()
+                .session_name,
+            workspace.session_name
+        );
+        names.push(workspace.session_name);
+    }
+    assert_ne!(names[0], names[1]);
 }
 
 #[test]
-fn session_name_uses_bounded_basename_and_workspace_hash() {
-    let root = Path::new("/home/user/xxx");
-    assert_eq!(session_name_for(root), expected_session(root, "xxx"));
-    assert!(session_name_for(root).len() <= 20);
-}
-
-#[test]
-fn session_name_truncates_long_basename() {
-    let root = Path::new("/tmp/abcdefghijklmnop");
-    assert_eq!(session_name_for(root), expected_session(root, "abcdefgh"));
-}
-
-#[test]
-fn session_name_distinguishes_roots_with_the_same_basename() {
-    let a = Path::new("/tmp/one/project");
-    let b = Path::new("/tmp/two/project");
-
-    assert_ne!(session_name_for(a), session_name_for(b));
-    assert!(session_name_for(a).starts_with("rimz-project-"));
-    assert!(session_name_for(b).starts_with("rimz-project-"));
-}
-
-#[test]
-fn session_name_hash_matches_workspace_id_prefix() {
-    let root = Path::new("/home/user/rimio");
-    let name = session_name_for(root);
-
-    assert_eq!(name, format!("rimz-rimio-{}", hash6(root)));
+fn recorded_session_survives_resolution() {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceResolver::resolve(home.path(), None).unwrap();
+    let paths =
+        crate::StatePaths::for_project_root_under(&workspace.project_root, home.path()).unwrap();
+    let mut record = WorkspaceRecord::from_resolved(&workspace);
+    record.session_name = "rimz-old-123456".to_owned();
+    record::write(&paths, &record).unwrap();
+    assert_eq!(recorded_session_name(&paths), record.session_name);
 }
 
 #[test]
@@ -88,7 +82,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
                 workspace_id,
                 project_root: project_root.clone(),
                 worktree_root: None,
-                session_name: session_name_for(&project_root),
+                session_name: paths.dir_name.as_str().to_owned(),
                 root_class: RootClass::Repo,
                 rimz_bin: None,
                 rimz_build: None,
@@ -113,7 +107,12 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
         sessions,
         ["/home/user/alpha", "/home/user/beta"]
             .into_iter()
-            .map(|project| session_name_for(Path::new(project)))
+            .map(
+                |project| StatePaths::for_project_root_under(Path::new(project), state_root)
+                    .unwrap()
+                    .dir_name
+                    .to_string()
+            )
             .collect::<Vec<_>>(),
     );
 }
@@ -155,12 +154,12 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     assert_eq!(known[0].workspace_id, workspace_id);
     assert_eq!(known[0].dir_name, paths.dir_name);
     assert_eq!(known[0].project_root, canonical_root);
-    assert_eq!(known[0].session_name, session_name_for(&canonical_root));
+    assert_eq!(known[0].session_name, "rimz-stale");
 
     let repaired = record::read(&paths.workspace_record).expect("read repaired");
     assert_eq!(repaired.workspace_id, workspace_id);
     assert_eq!(repaired.project_root, project_root.canonicalize().unwrap());
-    assert_eq!(repaired.session_name, session_name_for(&canonical_root));
+    assert_eq!(repaired.session_name, "rimz-stale");
 }
 
 #[test]
@@ -185,7 +184,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
             workspace_id: canonical_id.clone(),
             project_root: canonical_root.clone(),
             worktree_root: None,
-            session_name: session_name_for(&canonical_root),
+            session_name: "recorded-session".to_owned(),
             root_class: RootClass::Repo,
             rimz_bin: None,
             rimz_build: None,
@@ -207,7 +206,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
             workspace_id: stale_id,
             project_root: noncanonical_root,
             worktree_root: None,
-            session_name: session_name_for(&canonical_root),
+            session_name: "recorded-session".to_owned(),
             root_class: RootClass::Repo,
             rimz_bin: None,
             rimz_build: None,
@@ -221,7 +220,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
     assert_eq!(known.len(), 1);
     assert_eq!(known[0].workspace_id, canonical_id);
     assert_eq!(known[0].project_root, canonical_root);
-    assert_eq!(known[0].session_name, session_name_for(&canonical_root));
+    assert_eq!(known[0].session_name, "recorded-session");
 }
 
 #[test]
@@ -258,20 +257,6 @@ fn recorded_room_bin_prefers_stable_then_recorded_then_current() {
     );
 
     std::fs::remove_dir_all(&paths.root).expect("clean workspace state");
-}
-
-#[test]
-fn session_name_collapses_unsafe_runs() {
-    // Spaces and `/` both fold to `-`, and runs collapse to a single `-`.
-    let root = Path::new("/tmp/my repo");
-    assert_eq!(session_name_for(root), expected_session(root, "my-repo"));
-}
-
-#[test]
-fn session_name_is_stable_for_same_root() {
-    let a = session_name_for(Path::new("/repo"));
-    let b = session_name_for(Path::new("/repo"));
-    assert_eq!(a, b);
 }
 
 #[test]
