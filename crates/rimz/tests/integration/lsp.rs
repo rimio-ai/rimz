@@ -553,6 +553,138 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
 }
 
 #[test]
+fn lsp_attach_bridge_resolves_admits_and_versions() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(["lsp", "attach", "--version"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("rimz lsp attach {}\n", rimz::build_id::VERSION)
+    );
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), format!("[lsp]\nreserve-percent = 0\nreserve-min = '0'\nkill-floor-percent = 0\n[lsp.servers.rust]\ncommand = [{}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\nmemory-estimate = '1M'\n", serde_json::to_string(&stub).unwrap())).unwrap();
+    let first = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap()}});
+    let mut child = env
+        .rimz()
+        .args(["lsp", "attach", "--server", "rust", "--stdio"])
+        .current_dir(&env.home_root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    rimz::lsp::protocol::write_frame(&mut input, &first).unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let answer = rimz::lsp::protocol::read_frame(&mut output).unwrap();
+    assert_eq!(answer["id"], 1);
+    assert_eq!(
+        answer["result"]["capabilities"]["textDocumentSync"]["change"],
+        1
+    );
+    let status = env
+        .rimz()
+        .args(["lsp", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(status.status.success(), "{status:?}");
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["attached"][0]["pid"], child.id());
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let mut child = env
+        .rimz()
+        .args(["lsp", "attach", "--server", "rust"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    rimz::lsp::protocol::write_frame(&mut input, &first).unwrap();
+    assert_eq!(
+        rimz::lsp::protocol::read_frame(&mut output).unwrap()["id"],
+        1
+    );
+    for frame in [
+        json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"shutdown"}),
+    ] {
+        rimz::lsp::protocol::write_frame(&mut input, &frame).unwrap();
+    }
+    loop {
+        let frame = rimz::lsp::protocol::read_frame(&mut output).unwrap();
+        if frame["id"] == 2 {
+            assert_eq!(frame["result"], Value::Null);
+            assert!(frame.get("error").is_none(), "{frame}");
+            break;
+        }
+    }
+    rimz::lsp::protocol::write_frame(&mut input, &json!({"jsonrpc":"2.0","method":"exit"}))
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    drop(input);
+
+    let shim_dir = env.home_root.join("bin with ' quote");
+    let shim = env
+        .rimz()
+        .args(["lsp", "shim", "--server", "rust", "--dir"])
+        .arg(&shim_dir)
+        .output()
+        .unwrap();
+    assert!(shim.status.success(), "{shim:?}");
+    let output = std::process::Command::new(shim_dir.join("rimz-lsp-rust"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("rimz lsp attach {}\n", rimz::build_id::VERSION)
+    );
+
+    let required = Env::new();
+    std::fs::write(required.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(required.rimz_home().join("config.toml"), "[lsp]\nreserve-min = '1000000G'\n[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\npolicy = 'required'\nwait-timeout = '1s'\n").unwrap();
+    let mut child = required
+        .rimz()
+        .args(["lsp", "attach", "--server", "rust"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    rimz::lsp::protocol::write_frame(
+        child.stdin.as_mut().unwrap(),
+        &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("waiting to start language server rust"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("position 1 in the queue"), "{stderr}");
+    assert!(
+        stderr.contains("required but memory stayed short for 1s"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
     let env = Env::new();
     crate::common::write_kind_base(&env, "claude");

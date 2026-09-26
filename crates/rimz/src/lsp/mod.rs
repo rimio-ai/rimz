@@ -1,6 +1,7 @@
 //! Machine-shared, checkout-scoped language-server admission and query domain.
 
 pub mod admission;
+pub mod attach;
 pub mod broker;
 pub mod check;
 pub mod history;
