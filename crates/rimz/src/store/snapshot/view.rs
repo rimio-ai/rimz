@@ -491,11 +491,13 @@ impl SidebarSnapshot {
     /// split, exact cost, start time) to its `AgentState` by `(kind,
     /// agent_id)`. It must land on the `AgentState`, not the already-projected
     /// `SidebarSubAgent`: the live-pane fold re-runs `attach_sub_agents` →
-    /// `sub_agent_from_state`. The sidecar's usage wins per field, with
-    /// lifecycle usage filling gaps. Display-only, like
-    /// [`with_agent_context`](Self::with_agent_context) — it never touches
-    /// `last_activity`, so ranking is untouched. A record whose child is absent
-    /// from the rollup is dropped; the key it is filed under is authority.
+    /// `sub_agent_from_state`. Lifecycle usage wins per field, with the
+    /// sidecar's running split filling gaps: once `SubagentStop` records the
+    /// child's own split, an older sidecar reading never masks it.
+    /// Display-only, like [`with_agent_context`](Self::with_agent_context) — it
+    /// never touches `last_activity`, so ranking is untouched. A record whose
+    /// child is absent from the rollup is dropped; the key it is filed under is
+    /// authority.
     pub fn with_subagent_context(mut self, records: Vec<SubagentContextRecord>) -> Self {
         if records.is_empty() {
             return self;
@@ -526,7 +528,7 @@ impl SidebarSnapshot {
                 agent.subagent_cost_usd = context.cost_usd;
                 agent.subagent_started_at = context.started_at;
                 if let Some(usage) = context.usage {
-                    agent.usage = usage.merge(Some(&agent.usage), None);
+                    agent.usage = agent.usage.merge(Some(&usage), None);
                 }
             }
         }
