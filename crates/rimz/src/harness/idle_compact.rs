@@ -76,16 +76,6 @@ pub fn fire_point(
     }
 }
 
-pub fn resolve_teams(config: &MachineConfig, project_root: Option<&Path>) -> TeamsConfig {
-    project_root
-        .and_then(|root| {
-            crate::config::effective::load(config, root)
-                .ok()
-                .map(|effective| effective.teams)
-        })
-        .unwrap_or_else(|| config.agents.teams.clone())
-}
-
 pub fn resolve_mode(
     agent: &AgentState,
     teams: &TeamsConfig,
@@ -149,8 +139,9 @@ pub(crate) fn compact_idle_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
+    teams: &TeamsConfig,
 ) {
-    compact_idle_agents_with(snapshot, runtime, config, |request| {
+    compact_idle_agents_with(snapshot, runtime, config, teams, |request| {
         spawn_idle_compact(runtime, request)
     });
 }
@@ -159,14 +150,13 @@ fn compact_idle_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
+    teams: &TeamsConfig,
     mut spawn: impl FnMut(&IdleCompactRequest) -> bool,
 ) {
-    let teams = std::cell::OnceCell::new();
     for agent in &snapshot.agents {
         if !eligible_seat(agent) {
             continue;
         }
-        let teams = teams.get_or_init(|| resolve_teams(config, snapshot.project_root.as_deref()));
         let mode = resolve_mode(agent, teams, config.harness.idle_compact);
         let account =
             crate::sidebar::refresh::accounts::cached_account(runtime, &agent.login_key());
@@ -476,10 +466,16 @@ mod tests {
         let mut config = crate::config::MachineConfig::default();
         config.harness.idle_compact = IdleCompactMode::After(Duration::from_secs(59 * 60));
         let mut requests = Vec::new();
-        compact_idle_agents_with(&snapshot, &runtime, &config, |request| {
-            requests.push(request.clone());
-            true
-        });
+        compact_idle_agents_with(
+            &snapshot,
+            &runtime,
+            &config,
+            &config.agents.teams,
+            |request| {
+                requests.push(request.clone());
+                true
+            },
+        );
         assert_eq!(requests.len(), 1);
         assert_eq!(
             requests[0].command,
@@ -493,7 +489,9 @@ mod tests {
         );
         std::fs::remove_file(&path).unwrap();
         snapshot.agents[0].team = None;
-        compact_idle_agents_with(&snapshot, &runtime, &config, |_| panic!("solo spawn"));
+        compact_idle_agents_with(&snapshot, &runtime, &config, &config.agents.teams, |_| {
+            panic!("solo spawn")
+        });
         assert!(!path.exists());
     }
 

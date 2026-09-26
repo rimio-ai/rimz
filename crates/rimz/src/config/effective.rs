@@ -124,6 +124,22 @@ pub fn load(machine: &MachineConfig, project_root: &Path) -> Result<LaunchAgents
     load_with_roots(machine, project_root, &crate::disk::paths::rimz_home())
 }
 
+/// Effective teams for background policy, falling back to the machine snapshot.
+pub fn teams(machine: &MachineConfig, project_root: Option<&Path>) -> TeamsConfig {
+    teams_with_roots(machine, project_root, &crate::disk::paths::rimz_home())
+}
+
+fn teams_with_roots(
+    machine: &MachineConfig,
+    project_root: Option<&Path>,
+    config_root: &Path,
+) -> TeamsConfig {
+    project_root
+        .and_then(|root| load_with_roots(machine, root, config_root).ok())
+        .map(|agents| agents.teams)
+        .unwrap_or_else(|| machine.agents.teams.clone())
+}
+
 /// `trust::status_with_roots` parses `.rimz/config.toml` before anything here reads it, so a malformed project file fails at trust status whatever the trust state.
 pub fn load_with_roots(
     machine: &MachineConfig,

@@ -31,22 +31,9 @@ pub(super) fn refresh_pipeline_for(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
+    teams: &TeamsConfig,
 ) {
-    let has_team = snapshot
-        .worktree_groups
-        .iter()
-        .any(|group| group.team.is_some());
-    let groups = if has_team {
-        let local_teams = snapshot.project_root.as_deref().and_then(|root| {
-            crate::config::effective::load(config, root)
-                .ok()
-                .map(|agents| agents.teams)
-        });
-        let teams = local_teams.as_ref().unwrap_or(&config.agents.teams);
-        compute_pipelines(&snapshot.worktree_groups, teams, &config.time_zone())
-    } else {
-        BTreeMap::new()
-    };
+    let groups = compute_pipelines(&snapshot.worktree_groups, teams, &config.time_zone());
     let refreshed = PipelineCache {
         version: PIPELINE_CACHE_VERSION,
         groups,
@@ -212,7 +199,7 @@ mod tests {
         snapshot.worktree_groups = vec![group(dir.path())];
         let mut config = MachineConfig::default();
         config.agents.teams = teams();
-        refresh_pipeline_for(&snapshot, &runtime, &config);
+        refresh_pipeline_for(&snapshot, &runtime, &config, &config.agents.teams);
         let path = runtime.pipeline_path();
         let cache = read_pipeline_cache(&path);
         assert_eq!(cache.groups.len(), 1);
@@ -223,7 +210,7 @@ mod tests {
             .unwrap()
             .set_modified(old)
             .unwrap();
-        refresh_pipeline_for(&snapshot, &runtime, &config);
+        refresh_pipeline_for(&snapshot, &runtime, &config, &config.agents.teams);
         assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), old);
         let stale = PipelineCache {
             version: PIPELINE_CACHE_VERSION + 1,
@@ -231,11 +218,11 @@ mod tests {
         };
         crate::disk::atomic::write_temp_then_rename_cache(&path, &stale).unwrap();
         assert_eq!(read_pipeline_cache(&path), PipelineCache::default());
-        refresh_pipeline_for(&snapshot, &runtime, &config);
+        refresh_pipeline_for(&snapshot, &runtime, &config, &config.agents.teams);
         assert_eq!(read_pipeline_cache(&path), cache);
         // A team that leaves the snapshot must not keep projecting its old entry.
         snapshot.worktree_groups[0].team = None;
-        refresh_pipeline_for(&snapshot, &runtime, &config);
+        refresh_pipeline_for(&snapshot, &runtime, &config, &config.agents.teams);
         assert!(read_pipeline_cache(&path).groups.is_empty());
     }
 }

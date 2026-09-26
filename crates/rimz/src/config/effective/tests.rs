@@ -776,6 +776,26 @@ fn repo_prompt_file_paths_resolve_against_rimz_dir() {
 }
 
 #[test]
+fn teams_fall_back_to_machine_without_project_or_on_load_error() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    let mut machine = MachineConfig::default();
+    machine
+        .agents
+        .teams
+        .0
+        .insert("machine".to_owned(), Team::default());
+    assert_eq!(super::teams(&machine, None), machine.agents.teams);
+
+    write_project_config(&project, "[broken");
+    assert!(super::load_with_roots(&machine, project.path(), config.path()).is_err());
+    assert_eq!(
+        teams_with_roots(&machine, Some(project.path()), config.path()),
+        machine.agents.teams
+    );
+}
+
+#[test]
 fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
@@ -798,6 +818,13 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
     )]));
 
     let effective = effective_teams(&machine, project.path(), config.path()).expect("effective");
+
+    let mut machine_config = MachineConfig::default();
+    machine_config.agents.teams = machine;
+    assert_eq!(
+        teams_with_roots(&machine_config, Some(project.path()), config.path()),
+        effective
+    );
 
     let role = &effective.0.get("review").expect("repo team").roles[0];
     assert_eq!(role.role, "planner");
