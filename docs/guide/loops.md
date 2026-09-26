@@ -330,6 +330,8 @@ A Codex plan grants reset credits: redeem one and a spent usage window refills o
 
 The reflex fails closed and paces itself. Every rule starts from a credit in hand, blocked gain and doomed credit also require a readable reset time, and attempts are throttled account-wide across every room on the machine: ten minutes between attempts, thirty after a success. A successful redemption refreshes the account reading at once, and because the refilled window is exactly the reset [auto-continue](#auto-continue) waits for, it wakes the turns parked on it.
 
+The Codex block in the sidebar shows what auto-redeem would do if the longest usage window ran dry right now. `⟳ 2` means armed: a credit would be spent, or no natural reset is known to wait for. `‖ 2` means holding: the reset is close and the nearest credit outlives it by a day, so the fleet would wait for the free reset instead, and a hold stays a hold until that reset. `↻ 2` means `auto_redeem` is off and redeeming is up to you, though expiry rescue still spends a credit in its last thirty minutes. Within a week of the nearest expiry, the time left follows the count, as in `⟳ 2 · 3h`.
+
 ### Idle compaction
 
 An idle team member can outlive its provider's warm prompt cache, so its next stage pays to cache the whole accumulated conversation again. Idle compaction submits the member's native compact command with the team brief, with no new prompt behind it. The member summarizes its conversation and carries on from that smaller context; details not preserved in the summary are lost.

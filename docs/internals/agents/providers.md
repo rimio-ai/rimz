@@ -36,7 +36,7 @@ Four account-scoped facts feed a panel. Account identity and included balance ri
 
 A window's identity is its duration or its scope id. Duration windows sort short to long (`5h`, `7d`) and support reset roll-forward, not-started detection, pace, and surplus; a window with an unknown duration makes each of those claims fail closed. Named provider windows (Copilot's monthly `AIC`, Qwen's Alibaba windows) fuse by scope id, display their real reset, and never roll forward.
 
-Paid usage keeps missing fields missing, so the renderer can show an unknown or uncapped `ex` row without inventing a cap. Disabled or exhausted paid usage does not make a parked turn terminal while a subscription window still has a future reset. Reset credits color the compact dashboard glyph from the count and earliest expiry, blinking while a spent duration window makes a manual redemption useful; `rimz providers` lists each deadline.
+Paid usage keeps missing fields missing, so the renderer can show an unknown or uncapped `ex` row without inventing a cap. Disabled or exhausted paid usage does not make a parked turn terminal while a subscription window still has a future reset. Reset credits draw the compact dashboard marker, whose glyph forecasts what [auto-redeem](#auto-redeem) would do and which shows the earliest expiry within a week and never blinks; `rimz providers` lists each deadline.
 
 ### Metered and unmetered
 
@@ -102,6 +102,7 @@ Each panel field has one source:
 | `windows` | `fresh_windows` over the admitted sessions, then fused with cache ([Window fusion](#window-fusion)); cleared on an unmetered panel |
 | `window_placeholders` | the spec's `expected_windows`, painted as empty tracks before the first reading |
 | `extra_credits`, `reset_credits` | the `credits.json` entry, or a local API spend projection |
+| `redeem_forecast` | [`project_redeem_forecasts`](../../../crates/rimz/src/harness/auto_redeem.rs) over the cached capacity and burn rate, only on a Codex panel carrying `reset_credits` ([Auto-redeem](#auto-redeem)) |
 | `spending` | the kind's [`SpendTally`](./spending.md#what-reads-the-totals) from `provider-spending.json` |
 | brand art and color | `AgentSpec` color and name, the embedded emblem catalog, and `[theme.providers.<kind>]` overrides; an unknown kind gets neutral grey ([theme.md](../../guide/theme.md#provider-styling)) |
 
@@ -254,6 +255,8 @@ A missing reset disables the spent-window clauses; a missing expiry disables onl
 The schedule spaces credits by predicted refill time. The producer samples growth in the longest duration window into the user-shared `auto_redeem_rate.codex@<account>.json`, and a three-day half-life EWMA predicts how long a fresh window takes to fill. The sorted expiry list yields backward chain deadlines spaced by that refill time. A deadline is never earlier than one predicted refill after the projected longest window began, so a redemption or a natural reset pushes the next attempt out instead of spending more credits into a fresh window. A natural reset less than `auto_redeem_min_gain` away defers the deadline when the first credit still outlives it by 24 hours. Missing window timing or a negligible burn rate collapses scheduling to the 30-minute rescue.
 
 For any verdict, the elected producer spawns a detached helper under the room's Codex login. The helper refuses if the room no longer runs that account, takes the user-shared `auto_redeem.codex@<account>.lock`, refreshes windows and per-credit details, re-evaluates the verdict, and consumes the soonest-expiring credit with an idempotency key. The user-shared `auto_redeem.codex@<account>.json` stamp throttles attempts to one per 10 minutes and holds 30 minutes after a success, across every room. Each attempted consume appends its evidence and outcome to the [assist log](../harness/loops.md#the-assist-log). A success republishes authoritative usage and reset credits at once, so [auto-continue](#auto-continue) can wake parked turns on the recovered capacity.
+
+The sidebar's Codex header marker is a forecast of this policy. `project_redeem_forecasts` runs at both renderer-facing folds, the main enrich and `provider_panels_from_caches`, after the budget views. It reads the same kind-wide capacity and burn-rate caches the producer evaluates and writes neither. It runs `redeem_verdict` on a hypothetical capacity whose longest duration window is spent at its projected reset: any verdict is `Armed`, none is `Holding`, `auto_redeem = false` is `Manual`, and a capacity without a dated longest window is `Armed`, since no hold can be proven. A hold is firm. With no verdict, the hypothetical natural reset is under `auto_redeem_min_gain` away and the soonest credit outlives it by 24 hours; both carry over to the longest window's reset, which the scheduling tail's defer check keys on, and advancing time only brings that reset closer. The forecast therefore stays `Holding` until the reset, and the verdict on the real capacity stays silent throughout.
 
 ### Auto-continue
 
