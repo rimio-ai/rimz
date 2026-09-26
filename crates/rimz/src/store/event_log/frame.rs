@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::store::event::EventEnvelope;
@@ -24,13 +24,18 @@ pub(super) fn encode_frame(payload: &[u8]) -> Vec<u8> {
 /// Split the log into raw `(offset, terminated, line bytes)` rows from byte
 /// `start` — the scan `read_from_offset` folds and `repair` validates.
 pub(super) fn read_rows(path: &Path, start: u64) -> Result<Vec<(u64, bool, Vec<u8>)>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let mut file = File::open(path).map_err(|e| EventLogErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    // A missing log reads as empty, decided by the open itself: rotation can
+    // rename the active log away between any existence check and the open.
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(EventLogErr::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
     file.seek(SeekFrom::Start(start))
         .map_err(|source| EventLogErr::Io {
             path: path.to_path_buf(),

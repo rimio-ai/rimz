@@ -379,6 +379,36 @@ mod tests {
     }
 
     #[test]
+    fn poll_before_the_generation_bump_waits_then_drains_the_tail_once() {
+        let (_dir, store, paths) = fixture();
+        append(&store, LifecycleSignal::Registered);
+        let mut follower = EventFollower::open(paths.clone(), false).unwrap();
+        append(&store, LifecycleSignal::TurnStarted { turn_id: None });
+        let cursor = follower.cursor.offset;
+
+        // Rotation renames the active log before the commit boundary bumps
+        // the generation: replay that window by restoring the old marker. The
+        // short-active-log guard answers it; the rename racing the open
+        // itself is pinned in `read_from_offset_resume_cases`.
+        let old_rollup = fs::read(&paths.rollup_cache).unwrap();
+        store.rotate_event_log(1, None).unwrap();
+        let new_rollup = fs::read(&paths.rollup_cache).unwrap();
+        fs::write(&paths.rollup_cache, &old_rollup).unwrap();
+        assert!(!paths.events_log.exists());
+        assert!(follower.poll().unwrap().events.is_empty());
+        assert_eq!(follower.cursor.offset, cursor);
+
+        fs::write(&paths.rollup_cache, &new_rollup).unwrap();
+        let batch = follower.poll().unwrap();
+        assert!(batch.warnings.is_empty());
+        assert_eq!(batch.events.len(), 1);
+        let FollowEvent::Lifecycle(event) = &batch.events[0] else {
+            panic!("lifecycle")
+        };
+        assert_eq!(event.status, crate::agents::AgentStatus::Running);
+    }
+
+    #[test]
     fn late_report_for_a_superseded_turn_is_ignored_from_the_seed_and_the_log() {
         let (_dir, store, paths) = fixture();
         let start = |id: &str| LifecycleSignal::TurnStarted {
