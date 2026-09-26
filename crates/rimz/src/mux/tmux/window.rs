@@ -1004,33 +1004,24 @@ impl TmuxBackend {
             if !seeded.insert(label.clone()) {
                 continue; // already seeded by an earlier birth
             }
-            let fallback_shell;
-            let (first, first_name) = if let Some(first) = tab
+            let Some(first) = tab
                 .layout
                 .columns
                 .first()
                 .and_then(|column| column.panes.first())
-            {
-                (&first.argv, first.name.as_deref())
-            } else {
-                fallback_shell = crate::workspace::channel_label_shell_argv(
-                    &opts.workspace_id,
-                    &opts.project_root,
-                    &tab.cwd,
-                    &tab.label,
-                );
-                (&fallback_shell, Some(tab.label.as_str()))
+            else {
+                continue;
             };
             match self.open_named_window(
                 &opts.session_name,
                 &tab.label,
                 &tab.cwd,
-                first,
+                &first.argv,
                 None,
-                &BTreeMap::new(),
+                &tab.env,
             ) {
                 Ok(opened) => {
-                    if let Some(name) = first_name {
+                    if let Some(name) = first.name.as_deref() {
                         self.set_pane_rimz_title(&opened.first_pane, name);
                     }
                     if focus_window.is_none() {
@@ -1044,7 +1035,7 @@ impl TmuxBackend {
                         &opened.first_pane,
                         &tab.cwd,
                         &tab.layout,
-                        &BTreeMap::new(),
+                        &tab.env,
                     ) {
                         tracing::warn!(
                             session = %opts.session_name,

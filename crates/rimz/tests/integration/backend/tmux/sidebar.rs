@@ -757,40 +757,16 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
     let server = TmuxServer::new();
     server.ensure_with_shell("rimz-resume");
     let (_stub_dir, stub) = sidebar_command_stub();
+    let work = TempDir::new().expect("resume cwd");
     let sidebar = SidebarPaneOptions {
-        // A harmless stand-in for the agent CLIs (`claude`/`codex` aren't on a CI
-        // PATH); the seeding contract is the window, not what runs in it.
-        resume_tabs: vec![rimz::mux::ResumeTab {
-            label: "#feature".to_owned(),
-            cwd: std::env::temp_dir(),
-            // A stacked leading column: reborn rows must not swallow the
-            // column beside them, which is what splitting rows first did.
-            layout: rimz::mux::LayoutPanes {
-                columns: vec![
-                    rimz::mux::LayoutColumn {
-                        panes: vec![
-                            rimz::mux::PaneCmd {
-                                argv: vec!["sleep".to_owned(), "120".to_owned()],
-                                name: None,
-                            },
-                            rimz::mux::PaneCmd {
-                                argv: vec!["sleep".to_owned(), "120".to_owned()],
-                                name: None,
-                            },
-                        ],
-                        stacked: false,
-                    },
-                    rimz::mux::LayoutColumn {
-                        panes: vec![rimz::mux::PaneCmd {
-                            argv: vec!["sleep".to_owned(), "120".to_owned()],
-                            name: None,
-                        }],
-                        stacked: false,
-                    },
-                ],
-                focused_pane: 0,
-            },
-        }],
+        // Marker shells stand in for the agent CLIs (`claude`/`codex` aren't on
+        // a CI PATH). A two-column layout: reborn rows must not swallow the
+        // column beside them, which is what splitting rows first did.
+        resume_tabs: vec![super::super::identity_marker_tab(
+            work.path(),
+            "feature",
+            &[2, 1],
+        )],
         ..sidebar_opts("rimz-resume", stub, Some(80))
     };
     server
@@ -821,6 +797,8 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         agent_panes, 4,
         "resumed window should be born sidebar | agents"
     );
+    // Every reborn pane starts under the tab's pane identity pin.
+    super::super::assert_identity_markers(&sidebar.resume_tabs[0], "feature");
     let panes = server.wait_for_panes("rimz-resume:#feature", 4);
     // Two full-height work columns of even rows, and resume seeding keeps the
     // hook-docked sidebar at its birth width.

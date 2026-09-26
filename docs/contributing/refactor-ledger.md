@@ -294,7 +294,6 @@ Candidates a pass judged real but could not land, each with the condition that u
 - `harness/schedule/runner.rs`: `run_command` and `prepare_check` carry the module's `cx`; the one-caller flags on `fire_due_tasks` and `parse_signal_selector` are the visible seams. A deepen that needs the module's `hot` pace to settle, since pass 23b reopened it at 179 escaping items and narrowed six.
 - `message`: `ReplyWait::run` three methods → one plus `ReplyEvent` (timing pinned by `27077a848`/`cfe1240a3`); `compact_idle` absorbing idle preflight needs `send_compact` to return the id.
 - `store/message` ↔ `address`: `address::message_header` respells the `Type:`/`From:`/`Content:` literals `store::message` parses; a store-owned `compose_header` measured line-neutral (pass 21b), so it waits for a header grammar change that edits both sides.
-- `room/mod.rs:88-99` repeats `workspace::channel_shell_argv`'s room-pin map.
 - `proc::in_pane_agent_start` is uncalled; its eager `then_some(starts[0])` panics on an empty match. Deletion trips `dead_code`; reported, not fixed.
 - `agents/attribution`: a `testkit`-gated fixture builder would let the binary's attribution-command tests stop naming `MessageCounts`, `SubagentStat`, `Presence`, `TeamRef` and `LaneLifetime`, so those could narrow; a deepen that waits for the module's `fix(attribution)` churn to settle.
 - `agents/adapters/codex`: transcript lookup ignores `CODEX_HOME` (`codex/transcript.rs`), substring daemon classification (`codex/process.rs`), per-attempt refresh budget (`codex/app_server.rs`); reported, not fixed.

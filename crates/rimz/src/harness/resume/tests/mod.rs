@@ -9,6 +9,8 @@ use jiff::Timestamp;
 
 const RIMZ_BIN: &str = "/bin/rimz";
 static NO_LOGINS: RoomLogins = RoomLogins::new();
+static WORKSPACE: std::sync::LazyLock<WorkspaceId> =
+    std::sync::LazyLock::new(|| WorkspaceId::from_project_root(Path::new("/repo")));
 static RUNTIME: std::sync::LazyLock<RuntimePaths> = std::sync::LazyLock::new(|| {
     RuntimePaths::under(
         crate::WorkspaceId::from_project_root(Path::new("/repo")),
@@ -197,6 +199,7 @@ fn ctx<'a>(
 ) -> ResumeContext<'a> {
     ResumeContext {
         project_root,
+        workspace_id: &WORKSPACE,
         rimz_bin: Path::new(RIMZ_BIN),
         runtime: &RUNTIME,
         profiles,
@@ -496,6 +499,7 @@ impl<'a> LaneCase<'a> {
                 worktrees: self.worktrees,
                 current_root: self.current_root,
                 project_root: Path::new("/repo"),
+                workspace_id: &WORKSPACE,
                 max: self.max,
                 rimz_bin: Path::new(RIMZ_BIN),
                 runtime: &RUNTIME,

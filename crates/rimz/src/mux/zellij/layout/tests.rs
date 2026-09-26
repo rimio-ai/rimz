@@ -146,20 +146,14 @@ fn assert_undocked_work_area_template(layout: &str, visible_compact_bars: usize,
 }
 
 fn resume_tab(label: &str, panes: &[&[&str]], cwd: &str) -> ResumeTab {
-    ResumeTab::flat(
-        label.to_owned(),
-        PathBuf::from(cwd),
-        panes
-            .iter()
-            .map(|argv| argv.iter().map(|arg| arg.to_string()).collect())
-            .collect(),
-    )
+    resume_tab_with_columns(label, &[panes], cwd)
 }
 
 fn resume_tab_with_columns(label: &str, columns: &[&[&[&str]]], cwd: &str) -> ResumeTab {
     ResumeTab {
         label: label.to_owned(),
         cwd: PathBuf::from(cwd),
+        env: std::collections::BTreeMap::new(),
         layout: crate::mux::LayoutPanes {
             columns: columns
                 .iter()
@@ -639,7 +633,9 @@ fn session_layout_renders_resume_columns() {
 #[test]
 fn session_layout_names_an_empty_resumed_channel_pane() {
     let opts = background_view_opts(vec![]).sidebar;
-    let resume = vec![resume_tab("#feature", &[], "/proj/feature")];
+    let mut tab = resume_tab("#feature", &[&["/bin/sh"]], "/proj/feature");
+    tab.layout.columns[0].panes[0].name = Some("#feature".to_owned());
+    let resume = vec![tab];
 
     let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
 
@@ -647,6 +643,45 @@ fn session_layout_names_an_empty_resumed_channel_pane() {
         layout.contains(r##"pane focus=true name="#feature""##),
         "empty resumed channel pane must keep its channel identity:\n{layout}",
     );
+}
+
+#[test]
+fn session_layout_injects_resume_tab_env_into_every_pane_without_renaming() {
+    let opts = background_view_opts(vec![]).sidebar;
+    let mut tab = resume_tab_with_columns(
+        "#feature",
+        &[&[&["claude"], &["codex"]], &[&["/bin/sh"]]],
+        "/proj/feature",
+    );
+    tab.env = std::collections::BTreeMap::from([
+        ("RIMZ_CHANNEL".to_owned(), "feature".to_owned()),
+        ("RIMZ_WORKTREE_PATH".to_owned(), "/proj/feature".to_owned()),
+    ]);
+    for (pane, name) in tab
+        .layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.panes)
+        .zip(["claude", "codex", "#feature"])
+    {
+        pane.name = Some(name.to_owned());
+    }
+
+    let layout = render_session_layout(&opts, None, &[tab]).expect("render resume layout");
+
+    assert_eq!(layout.matches(r#"command "env""#).count(), 3, "{layout}");
+    for argv in [r#""claude""#, r#""codex""#, r#""/bin/sh""#] {
+        assert!(
+            layout.contains(&format!(
+                r#"args "RIMZ_CHANNEL=feature" "RIMZ_WORKTREE_PATH=/proj/feature" {argv}"#
+            )),
+            "{layout}"
+        );
+    }
+    for name in ["claude", "codex", "#feature"] {
+        assert!(layout.contains(&format!(r#"name="{name}""#)), "{layout}");
+    }
+    assert!(!layout.contains(r#"name="env""#), "{layout}");
 }
 
 #[test]

@@ -191,7 +191,13 @@ impl RoomContext {
             }
         };
 
-        let sidebar = self.sidebar_options(&cwd, resume.tabs.clone(), refresh_ms);
+        let resume_tabs = resume
+            .tabs
+            .iter()
+            .chain(&resume.channel_tabs)
+            .cloned()
+            .collect();
+        let sidebar = self.sidebar_options(&cwd, resume_tabs, refresh_ms);
 
         self.register_room_keys();
 

@@ -698,47 +698,25 @@ fn pin_env_carries_both_identity_keys() {
 }
 
 #[test]
-fn channel_shell_argv_pins_room_identity_order_and_label_fallback() {
-    let shell = crate::proc::user_shell_program();
+fn pane_pin_env_extends_the_session_pin_with_worktree_and_channel() {
     let project_root = Path::new("/proj root");
     let worktree_path = Path::new("/proj root/wt");
     let ws = WorkspaceId::from_project_root(project_root);
-    let expected_argv = |channel: &str| {
-        vec![
-            "env".to_owned(),
-            "RIMZ=1".to_owned(),
-            format!("RIMZ_WORKSPACE_ID={ws}"),
-            "RIMZ_PROJECT_ROOT=/proj root".to_owned(),
-            "RIMZ_WORKTREE_PATH=/proj root/wt".to_owned(),
-            format!("RIMZ_CHANNEL={channel}"),
-            shell.clone(),
-        ]
-    };
-    for channel in ["feature", ""] {
+    let mut expected = pin_env(&ws, project_root);
+    expected.insert("RIMZ".to_owned(), "1".to_owned());
+    expected.insert(ENV_WORKTREE_PATH.to_owned(), "/proj root/wt".to_owned());
+    for channel in [None, Some("")] {
         assert_eq!(
-            channel_shell_argv(&ws, project_root, worktree_path, channel),
-            expected_argv(channel),
+            pane_pin_env(&ws, project_root, worktree_path, channel),
+            expected,
             "channel {channel:?}"
         );
     }
-    for (label, channel) in [
-        ("", None),
-        ("plain", None),
-        ("#", None),
-        ("#feature", Some("feature")),
-        ("##x", Some("#x")),
-        ("# ", Some(" ")),
-    ] {
-        let expected = match channel {
-            Some(channel) => expected_argv(channel),
-            None => vec![shell.clone()],
-        };
-        assert_eq!(
-            channel_label_shell_argv(&ws, project_root, worktree_path, label),
-            expected,
-            "label {label:?}"
-        );
-    }
+    expected.insert(ENV_CHANNEL.to_owned(), "feature".to_owned());
+    assert_eq!(
+        pane_pin_env(&ws, project_root, worktree_path, Some("feature")),
+        expected
+    );
 }
 
 /// The scan-side twin of [`pin_of`]: a sibling agent process carrying the

@@ -322,6 +322,64 @@ fn resume_tab_labels_and_replayed_channel() {
 }
 
 #[test]
+fn flat_resume_tab_env_pins_cwd_and_the_replayed_channel() {
+    let project_root = Path::new("/code/project");
+    for (label, agent, tab_label, channel) in [
+        (
+            "an explicit channel is pinned and replayed",
+            AgentState {
+                channel: Some("design".to_owned()),
+                ..agent("codex", "c1", "/code/project-wt/auth", 1)
+            },
+            "#design",
+            Some("design"),
+        ),
+        (
+            "a room-root tab labelled by its directory carries no channel",
+            agent("codex", "c1", "/code/project", 1),
+            "#project",
+            None,
+        ),
+    ] {
+        let plan = plan_with(
+            std::slice::from_ref(&agent),
+            crate::config::ResumeConfig::default().max,
+            Some(project_root),
+            |_| true,
+            |_| true,
+        );
+
+        let tab = &plan.tabs[0];
+        assert_eq!(tab.label, tab_label, "{label}");
+        let request = decode_exec_request(&first_argv(tab));
+        assert_eq!(
+            request.identity.params.channel.as_deref(),
+            channel,
+            "{label}"
+        );
+        assert_eq!(
+            tab.env,
+            crate::workspace::pane_pin_env(&WORKSPACE, project_root, &tab.cwd, channel),
+            "{label}"
+        );
+        assert_eq!(
+            tab.env
+                .get(crate::workspace::ENV_WORKTREE_PATH)
+                .map(String::as_str),
+            agent.worktree_path.as_deref(),
+            "{label}"
+        );
+        assert_eq!(
+            tab.env
+                .get(crate::workspace::ENV_CHANNEL)
+                .map(String::as_str),
+            channel,
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn flat_resume_replays_every_durable_identity_field() {
     let agent = AgentState {
         name: Some("swift-otter".to_owned()),

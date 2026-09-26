@@ -127,19 +127,12 @@ fn pane_identity_env_with_ambient(
     channel: Option<&str>,
     ambient_channel: Option<&str>,
 ) -> BTreeMap<String, String> {
-    let mut env = crate::workspace::pin_env(&workspace.workspace_id, &workspace.project_root);
-    env.insert("RIMZ".to_owned(), "1".to_owned());
-    env.insert(
-        crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-        cwd.display().to_string(),
-    );
-    if let Some(channel) = channel
-        .or(ambient_channel)
-        .filter(|value| !value.is_empty())
-    {
-        env.insert(crate::workspace::ENV_CHANNEL.to_owned(), channel.to_owned());
-    }
-    env
+    crate::workspace::pane_pin_env(
+        &workspace.workspace_id,
+        &workspace.project_root,
+        cwd,
+        channel.or(ambient_channel),
+    )
 }
 
 /// Terminal sizing policy for room operations.

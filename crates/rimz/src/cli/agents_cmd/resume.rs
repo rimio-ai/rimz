@@ -57,6 +57,7 @@ pub(super) fn resume_lane(
             worktrees: &worktrees,
             current_root: &workspace.worktree_root,
             project_root: &workspace.project_root,
+            workspace_id: &workspace.workspace_id,
             max: machine_config.resume.max,
             rimz_bin: &rimz::proc::rimz_exe(),
             runtime: store.runtime_paths(),
@@ -147,10 +148,7 @@ pub(super) fn resume_lane(
             Ok(())
         }
         LaneResumeAction::RestoreClosed {
-            lane_label,
-            channel,
-            plan,
-            ..
+            lane_label, plan, ..
         } => {
             report_discovery_skips(plan.discovery_skipped())?;
             report_resume_skips(plan.skipped())?;
@@ -158,7 +156,7 @@ pub(super) fn resume_lane(
             let tabs = plan.materialize(&store, &workspace.session_name)?;
             let count = tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
             for tab in tabs {
-                open_resume_tab(&room, &workspace, channel.as_deref(), tab, bg)?;
+                open_resume_tab(&room, tab, bg)?;
             }
             writeln!(
                 std::io::stdout().lock(),
@@ -225,18 +223,11 @@ fn discover_lane_sessions(
         .collect()
 }
 
-fn open_resume_tab(
-    room: &RoomContext,
-    workspace: &rimz::ResolvedWorkspace,
-    channel: Option<&str>,
-    tab: ResumeTab,
-    bg: bool,
-) -> Result<()> {
+fn open_resume_tab(room: &RoomContext, tab: ResumeTab, bg: bool) -> Result<()> {
     let sidebar = room.sidebar_options(&tab.cwd, Vec::new(), None);
-    let env = rimz::room::pane_identity_env(workspace, &tab.cwd, channel, false);
     room.backend()
         .open_tab(&TabOptions {
-            env,
+            env: tab.env,
             title: tab.label,
             panes: tab.layout,
             focus: !bg,

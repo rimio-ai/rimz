@@ -148,30 +148,19 @@ pub(super) fn render_session_layout(
     let mut agent_tabs = String::new();
     for (index, tab) in resume.iter().enumerate() {
         let tab_name = kdl_string(&tab.label)?;
-        let agent_panes = if tab.layout.columns.is_empty() {
-            let argv = crate::workspace::channel_label_shell_argv(
-                &opts.workspace_id,
-                &opts.project_root,
+        let mut position = 0;
+        let focus_position = tab.layout.focus_position();
+        let mut agent_panes = String::new();
+        for column in &tab.layout.columns {
+            agent_panes.push_str(&render_tab_column(
+                column,
                 &tab.cwd,
-                &tab.label,
-            );
-            render_named_command_pane(&argv, &tab.cwd, true, 16, None, Some(&tab.label))?
-        } else {
-            let mut position = 0;
-            let focus_position = tab.layout.focus_position();
-            let mut columns = String::new();
-            for column in &tab.layout.columns {
-                columns.push_str(&render_tab_column(
-                    column,
-                    &tab.cwd,
-                    &BTreeMap::new(),
-                    &mut position,
-                    focus_position,
-                    16,
-                )?);
-            }
-            columns
-        };
+                &tab.env,
+                &mut position,
+                focus_position,
+                16,
+            )?);
+        }
         let body = render_sidebar_work_area(&sidebar, &agent_panes, 8);
         let focus_attr = if index == 0 { " focus=true" } else { "" };
         agent_tabs.push_str(&format!(

@@ -15,7 +15,7 @@ use crate::harness::resume::{
     resume_session_present, split_team_and_flat,
 };
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
-use crate::mux::{MuxBackend, ResumeTab};
+use crate::mux::{LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, ResumeTab};
 use crate::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
 use crate::{Store, channel};
 
@@ -309,9 +309,9 @@ fn inspect_at(
             &paths,
             &runtime,
             &roster,
-            &machine.resume,
+            project_root,
+            machine,
             &teams_and_profiles,
-            &machine.agents.commands,
         )
     } else {
         RecoveryPlan::default()
@@ -361,28 +361,27 @@ fn plan_recovery(
     paths: &StatePaths,
     runtime: &RuntimePaths,
     roster: &BTreeSet<(AgentKind, AgentSessionId)>,
-    resume_cfg: &crate::config::ResumeConfig,
+    project_root: &Path,
+    machine: &MachineConfig,
     teams_and_profiles: &(TeamsConfig, ProfilesConfig),
-    commands: &crate::config::CommandsConfig,
 ) -> RecoveryPlan {
     let (teams, profiles) = teams_and_profiles;
     let Some(projection) = projection else {
         return RecoveryPlan::default();
     };
     let agents = scope_to_roster(projection.agents.clone(), roster);
-    let record = crate::workspace::record::read(&paths.workspace_record).ok();
-    let logins = record
-        .as_ref()
-        .and_then(|record| record.logins.clone())
+    let logins = crate::workspace::record::read(&paths.workspace_record)
+        .ok()
+        .and_then(|record| record.logins)
         .unwrap_or_default();
-    let project_root = record.map(|record| record.project_root);
     let (team, flat_agents) = split_team_and_flat(
         &agents,
         &logins,
         teams,
         profiles,
-        commands,
-        project_root.as_deref(),
+        &machine.agents.commands,
+        Some(project_root),
+        &paths.workspace_id,
         Path::is_dir,
         resume_session_present,
         false,
@@ -395,11 +394,12 @@ fn plan_recovery(
         &flat_agents,
         &projection.ended,
         crate::harness::resume::ResumeContext {
-            project_root: project_root.as_deref(),
+            project_root: Some(project_root),
+            workspace_id: &paths.workspace_id,
             rimz_bin: &crate::proc::rimz_exe(),
             runtime,
             profiles,
-            max: resume_cfg.max.saturating_sub(team_panes),
+            max: machine.resume.max.saturating_sub(team_panes),
             logins: &logins,
         },
         Path::is_dir,
@@ -436,15 +436,15 @@ fn materialize_recovery(
             }
         }
     };
-    for tab in empty_tabs {
-        if !final_plan
-            .tabs
-            .iter()
-            .any(|existing| existing.label == tab.label)
-        {
-            final_plan.tabs.push(tab);
-        }
-    }
+    final_plan.channel_tabs = empty_tabs
+        .into_iter()
+        .filter(|tab| {
+            !final_plan
+                .tabs
+                .iter()
+                .any(|existing| existing.label == tab.label)
+        })
+        .collect();
     if let Some(store) = store {
         record_agents_ended(
             store,
@@ -465,11 +465,27 @@ fn empty_named_channel_tabs(paths: &StatePaths) -> Vec<ResumeTab> {
         .unwrap_or_default()
         .into_iter()
         .map(|channel| {
-            ResumeTab::flat(
-                format!("#{}", channel.name),
-                record.project_root.clone(),
-                Vec::new(),
-            )
+            let label = format!("#{}", channel.name);
+            ResumeTab {
+                env: crate::workspace::pane_pin_env(
+                    &paths.workspace_id,
+                    &record.project_root,
+                    &record.project_root,
+                    Some(&channel.name),
+                ),
+                cwd: record.project_root.clone(),
+                layout: LayoutPanes {
+                    columns: vec![LayoutColumn {
+                        panes: vec![PaneCmd {
+                            argv: vec![crate::proc::user_shell_program()],
+                            name: Some(label.clone()),
+                        }],
+                        stacked: false,
+                    }],
+                    focused_pane: 0,
+                },
+                label,
+            }
         })
         .collect()
 }
