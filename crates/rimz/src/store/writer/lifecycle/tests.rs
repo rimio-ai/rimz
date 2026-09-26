@@ -614,7 +614,7 @@ fn spawned_child_reconciliation_closes_running_then_dedupes_by_metadata() {
     child.parent_agent_id = Some(AgentSessionId::from("parent"));
     child.task = Some("child task".to_owned());
     child.launch.model = Some("old-model".to_owned());
-    child.usage.total_tokens = Some(10);
+    child.usage.run_total_tokens = Some(10);
     child.pane_id = Some(pane);
     store
         .append_agent_lifecycle(AgentLifecycleIntent {
@@ -639,11 +639,16 @@ fn spawned_child_reconciliation_closes_running_then_dedupes_by_metadata() {
         role: Some("coder".to_owned()),
         prompt: Some("child task".to_owned()),
         model: Some(model.to_owned()),
-        total_tokens: Some(total_tokens),
+        usage: crate::agents::AgentUsageSummary {
+            run_total_tokens: Some(total_tokens),
+            ..Default::default()
+        },
     };
     for (facts, expected) in [
         (spawned("old-model", 10), 1),
         (spawned("old-model", 10), 0),
+        (spawned("old-model", 15), 1),
+        (spawned("old-model", 15), 0),
         (spawned("new-model", 20), 1),
         (spawned("new-model", 20), 0),
     ] {
@@ -674,8 +679,40 @@ fn spawned_child_reconciliation_closes_running_then_dedupes_by_metadata() {
         .find(|state| state.agent_id == "child")
         .unwrap();
     assert_eq!(state.model.as_deref(), Some("new-model"));
-    assert_eq!(state.usage.total_tokens, Some(20));
+    assert_eq!(state.usage.run_total_tokens, Some(20));
+    assert_eq!(state.usage.total_tokens, None);
     assert_eq!(state.status, AgentStatus::Success);
+
+    child.signal = LifecycleSignal::SubagentStopped { errored: false };
+    child.launch.model = Some("new-model".to_owned());
+    child.usage.run_total_tokens = Some(20);
+    child.usage.context_window = Some(100_000);
+    child.usage.fresh_input_tokens = Some(1_000);
+    child.usage.context_pct = Some(77);
+    store
+        .append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "rimz-test",
+            agent_kind: kind.clone(),
+            event_name: "SubagentStop",
+            observation: &child,
+            spawned_subagents: &[],
+        })
+        .unwrap();
+    let mut facts = spawned("new-model", 20);
+    facts.usage = child.usage.clone();
+    facts.usage.context_pct = None;
+    for _ in 0..2 {
+        let receipt = store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: kind.clone(),
+                event_name: "PostToolUse",
+                observation: &parent,
+                spawned_subagents: std::slice::from_ref(&facts),
+            })
+            .unwrap();
+        assert!(receipt.events.is_empty(), "unchanged tokens must dedupe");
+    }
 }
 
 #[test]

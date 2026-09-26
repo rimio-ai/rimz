@@ -7,7 +7,8 @@ use serde::Deserialize;
 
 use super::{statusline, usage_from_transcript_tail};
 use crate::agents::{
-    SpawnedSubagent, non_empty_trimmed, read_transcript_tail, sanitize_user_prompt,
+    AgentUsageSummary, SpawnedSubagent, non_empty_trimmed, read_transcript_tail,
+    sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -71,7 +72,13 @@ fn interrupted_subagent(transcript: PathBuf) -> Option<SpawnedSubagent> {
         role: None,
         prompt: sanitize_user_prompt(metadata.description.as_deref()),
         model: usage.model,
-        total_tokens: usage.total_tokens,
+        usage: AgentUsageSummary {
+            fresh_input_tokens: usage.fresh_input_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+            cache_write_input_tokens: usage.cache_write_input_tokens,
+            output_tokens: usage.output_tokens,
+            ..Default::default()
+        },
     })
 }
 

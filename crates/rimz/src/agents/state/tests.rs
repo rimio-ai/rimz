@@ -481,6 +481,7 @@ fn usage_summary_stays_flat_in_persisted_state_wire() {
         context_pct: Some(42),
         context_window: Some(200_000),
         total_tokens: Some(84_000),
+        run_total_tokens: None,
         cache_read_input_tokens: Some(60_000),
         cache_write_input_tokens: Some(4_000),
         fresh_input_tokens: Some(20_000),
