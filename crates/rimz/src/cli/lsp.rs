@@ -4,6 +4,7 @@ use super::{GlobalFlags, render};
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use rimz::lsp::{
+    attach::{self, Outcome, Target},
     check,
     query::{self, QueryErr, Verb},
     registry::{self, State},
@@ -20,6 +21,23 @@ pub struct LspArgs {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Connect an editor over stdio to the checkout's shared server.
+    Attach {
+        #[arg(long)]
+        server: Option<String>,
+        /// Use the stdio transport (the default).
+        #[arg(long)]
+        stdio: bool,
+        #[arg(long)]
+        version: bool,
+    },
+    /// Install an executable editor bridge for a configured server.
+    Shim {
+        #[arg(long)]
+        server: String,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
     /// Find a definition by position or exact symbol name.
     Def(Query),
     /// Find references by position or exact symbol name.
@@ -94,6 +112,10 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
         _ => query::Scope::Checkout,
     };
     let (verb, args) = match args.command {
+        Command::Attach {
+            server, version, ..
+        } => return attach(server, version, globals),
+        Command::Shim { server, dir } => return shim(&server, dir),
         Command::Serve { request } => {
             return Ok(rimz::lsp::broker::serve(serde_json::from_str(&request)?)?);
         }
@@ -202,6 +224,67 @@ fn query_context(globals: &GlobalFlags) -> Result<QueryContext> {
         entries,
         servers: config.lsp_servers,
     })
+}
+
+fn attach(server: Option<String>, version: bool, globals: &GlobalFlags) -> Result<()> {
+    if version {
+        writeln!(
+            std::io::stdout().lock(),
+            "rimz lsp attach {}",
+            rimz::build_id::VERSION
+        )?;
+        return Ok(());
+    }
+    let mut input = std::io::BufReader::new(std::io::stdin());
+    let first = rimz::lsp::protocol::read_frame(&mut input)?;
+    let target = Target::resolve(globals.root.as_deref(), &first, server.as_deref())?;
+    let mut queue = rimz::lsp::admission::WaitQueue::default();
+    let outcome = loop {
+        let admitted = match target.admit(&mut queue) {
+            Ok(admitted) => admitted,
+            Err(error @ rimz::lsp::LspErr::QueueTimeout(_)) => {
+                drop(queue);
+                writeln!(render::err(), "{error}")?;
+                std::process::exit(3)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(reason) = admitted.startup_refused.into_iter().next() {
+            break Outcome::Refused(reason);
+        }
+        if let Some(entry) = admitted.admitted.first() {
+            break attach::bridge(entry, input, std::io::stdout(), &first)?;
+        }
+        if admitted.wait_for_required.is_empty() {
+            anyhow::bail!("{target}: no matching root-markers");
+        }
+        for wait in admitted.wait_for_required {
+            super::lsp_admission::write_wait(&wait)?;
+        }
+        std::thread::sleep(Duration::from_secs(5));
+    };
+    drop(queue);
+    match outcome {
+        Outcome::EditorClosed => Ok(()),
+        Outcome::BrokerClosed(reason) | Outcome::Refused(reason) => {
+            writeln!(render::err(), "{target} is {reason}")?;
+            std::process::exit(3)
+        }
+    }
+}
+
+fn shim(server: &str, dir: Option<PathBuf>) -> Result<()> {
+    let dir = match dir {
+        Some(dir) => dir,
+        None => PathBuf::from(
+            std::env::var_os("HOME")
+                .ok_or_else(|| anyhow::anyhow!("HOME is not set; choose --dir DIR"))?,
+        )
+        .join(".local/bin"),
+    };
+    let path = attach::install_shim(server, &dir)?;
+    writeln!(render::out(), "{}", path.display())?;
+    Ok(())
 }
 
 fn query_error(error: QueryErr) -> Result<()> {

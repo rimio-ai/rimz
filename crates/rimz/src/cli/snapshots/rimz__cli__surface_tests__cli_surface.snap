@@ -1042,6 +1042,8 @@ rimz help loop watch
 
 rimz help lsp
 
+rimz help lsp attach
+
 rimz help lsp callees
 
 rimz help lsp callers
@@ -1061,6 +1063,8 @@ rimz help lsp list
 rimz help lsp refs
 
 rimz help lsp serve [hidden]
+
+rimz help lsp shim
 
 rimz help lsp status
 
@@ -1648,6 +1652,17 @@ rimz lsp
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz lsp attach
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --server <SERVER>  [action=set takes=1..=1]
+    --stdio  [action=set-true takes=0..=0]
+    --tmux  [action=set-true takes=0..=0 global]
+    --version  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz lsp callees
     <target>  [action=set takes=1..=1 required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
@@ -1706,6 +1721,8 @@ rimz lsp find
 
 rimz lsp help
 
+rimz lsp help attach
+
 rimz lsp help callees
 
 rimz lsp help callers
@@ -1727,6 +1744,8 @@ rimz lsp help list
 rimz lsp help refs
 
 rimz lsp help serve [hidden]
+
+rimz lsp help shim
 
 rimz lsp help status
 
@@ -1782,6 +1801,16 @@ rimz lsp serve [hidden]
     --mux <MUX>  [action=set takes=1..=1 global]
     --request <REQUEST>  [action=set takes=1..=1 required]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz lsp shim
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --dir <DIR>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --server <SERVER>  [action=set takes=1..=1 required]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
