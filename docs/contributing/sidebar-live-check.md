@@ -16,61 +16,61 @@ cargo build -p rimz --bin rimz --features testkit
 
 ## Room cards
 
-The root identifies the held sandbox; the mux and session identify its private multiplexer, and Worktree names the team's checkout. Each Sidebar block names its pane, tab, and producer or consumer role, followed by Look, Capture, and Click commands. A tab can carry more than one sidebar pane, so read the role labels rather than counting blocks. The Role lines map agent roles to panes. Stage and Owner give the initial board state; Flip changes the stage, and Focus reads focus from the multiplexer.
+The root identifies the held sandbox; the mux and session identify its private multiplexer, and Worktree names the team's checkout. Each Sidebar block names its pane, tab, and producer or consumer role, followed by Look, Capture, and Click commands. A tab can carry more than one sidebar pane, so read the role labels rather than counting blocks. The Role lines map agent roles to panes and give each pane's process ID (`pid -` when the multiplexer reported none). Stage and Owner give the initial board state; Flip changes the stage, and Focus reads focus from the multiplexer.
 
 ### tmux
 
 ```text
-Sandbox root: /tmp/rimz-sandbox-NBM9ln
-Mux: tmux  Session: rimz-room-130105
-Worktree: /tmp/rimz-sandbox-NBM9ln/home/room-worktrees/probe
+Sandbox root: /tmp/rimz-sandbox-BcOEKE
+Mux: tmux  Session: room-2f4c
+Worktree: /tmp/rimz-sandbox-BcOEKE/home/room-worktrees/probe
 Sidebar: tmux:%3  Tab: rimzd  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%3'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux pane capture 'tmux:%3'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux sidebar click 'tmux:%3' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%3'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux pane capture 'tmux:%3'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux sidebar click 'tmux:%3' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: tmux:%0  Tab: zsh  producer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%0'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux pane capture 'tmux:%0'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux sidebar click 'tmux:%0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%0'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux pane capture 'tmux:%0'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux sidebar click 'tmux:%0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: tmux:%9  Tab: #probe  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%9'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux pane capture 'tmux:%9'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux sidebar click 'tmux:%9' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%9'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux pane capture 'tmux:%9'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux sidebar click 'tmux:%9' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: tmux:%7  Tab: #probe  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%7'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux pane capture 'tmux:%7'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux sidebar click 'tmux:%7' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Role: @coder#probe  tmux:%6
-Role: @reviewer#probe  tmux:%8
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' '--tmux' 'pane' 'focus' 'tmux:%7'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux pane capture 'tmux:%7'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux sidebar click 'tmux:%7' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+Role: @coder#probe  tmux:%6  pid 1930429
+Role: @reviewer#probe  tmux:%8  pid 1930467
 Stage: Build  Owner: coder
-Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --tmux teams flip Review 'live check' --team forge
-Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-NBM9ln' -- tmux -S '/tmp/rimz-sandbox-NBM9ln/runtime/rimz/tmux/server' display -p '#{pane_id}'
+Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --tmux teams flip Review 'live check' --team forge
+Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-BcOEKE' -- tmux -S '/tmp/rimz-sandbox-BcOEKE/runtime/rimz/tmux/server' display -p '#{pane_id}'
 Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame.
 ```
 
 ### Zellij
 
 ```text
-Sandbox root: /tmp/rimz-sandbox-JISAUo
-Mux: zellij  Session: rimz-room-ca2bf6
-Worktree: /tmp/rimz-sandbox-JISAUo/home/room-worktrees/probe
+Sandbox root: /tmp/rimz-sandbox-CmV7r2
+Mux: zellij  Session: room-8597
+Worktree: /tmp/rimz-sandbox-CmV7r2/home/room-worktrees/probe
 Sidebar: zellij:terminal_0  Tab: rimzd  producer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- 'zellij' '--session' 'rimz-room-ca2bf6' 'action' 'go-to-tab' '1'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --zellij pane capture 'zellij:terminal_0'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --zellij sidebar click 'zellij:terminal_0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- 'zellij' '--session' 'room-8597' 'action' 'go-to-tab' '1'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij pane capture 'zellij:terminal_0'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij sidebar click 'zellij:terminal_0' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: zellij:terminal_4  Tab: zsh  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- 'zellij' '--session' 'rimz-room-ca2bf6' 'action' 'go-to-tab' '2'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --zellij pane capture 'zellij:terminal_4'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --zellij sidebar click 'zellij:terminal_4' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- 'zellij' '--session' 'room-8597' 'action' 'go-to-tab' '2'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij pane capture 'zellij:terminal_4'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij sidebar click 'zellij:terminal_4' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
 Sidebar: zellij:terminal_6  Tab: #probe  consumer
-  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- 'zellij' '--session' 'rimz-room-ca2bf6' 'action' 'go-to-tab' '3'
-  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --zellij pane capture 'zellij:terminal_6'
-  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --zellij sidebar click 'zellij:terminal_6' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
-Role: @coder#probe  zellij:terminal_7
-Role: @reviewer#probe  zellij:terminal_8
+  Look: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- 'zellij' '--session' 'room-8597' 'action' 'go-to-tab' '3'
+  Capture: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij pane capture 'zellij:terminal_6'
+  Click: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij sidebar click 'zellij:terminal_6' 2 "${ROOM_ROW:?set ROOM_ROW to the 0-based pipeline row from a fresh capture}"
+Role: @coder#probe  zellij:terminal_7  pid 1948379
+Role: @reviewer#probe  zellij:terminal_8  pid 1948382
 Stage: Build  Owner: coder
-Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- '/mnt/data/build/marvin/cargo/rimz/sidebar-sandbox-14bd145736ae92747c4a/debug/rimz' --zellij teams flip Review 'live check' --team forge
-Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-JISAUo' -- zellij --session 'rimz-room-ca2bf6' action list-panes -a -j
+Flip: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- '/mnt/data/build/marvin/cargo/rimz/room-card-pid-7885e5e36022eada6b14/debug/rimz' --zellij teams flip Review 'live check' --team forge
+Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-CmV7r2' -- zellij --session 'room-8597' action list-panes -a -j
 Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame.
 ```
 
@@ -188,11 +188,7 @@ Two rules for a check whose subject is time:
 
 The sandbox's `claude` is a stub (`xtask/assets/sandbox-room/claude`), so no real Claude child ever starts in a held room. A change to a Claude-native child line (its tokens, model, status, or clock) is still checkable in one pass: copy a real parent and child transcript into the room, then feed the parent's hooks and the child's `subagentStatusLine` payload by hand, in the order Claude would send them.
 
-**Setup.** Hold a tmux room from the testkit build (see [Hold a room and join it](#hold-a-room-and-join-it)). From its card note the root, the `@coder#probe` Role pane (`%6` in the tmux card above), and a `#probe` consumer sidebar. The hooks also want the parent pane's process, which the card does not print; read it from the room's tmux socket, the one the card's Focus command names:
-
-```sh
-target/debug/xtask sandbox in "$ROOT" -- tmux -S "$ROOT/runtime/rimz/tmux/server" list-panes -a -F '#{pane_id} #{pane_pid}'
-```
+**Setup.** Hold a tmux room from the testkit build (see [Hold a room and join it](#hold-a-room-and-join-it)). From its card note the root, the `@coder#probe` Role pane (`%6` in the tmux card above), and a `#probe` consumer sidebar. The hooks also want the parent pane's process as `RIMZ_AGENT_PID`: take `PARENT_PID` from the same Role line (`pid 1930429` in the tmux card above).
 
 **Transcripts.** Pick one Claude session that launched a subagent and copy exactly two files from `~/.claude/projects/<project>/` into the room's `tmp/replay/`, keeping their relative layout: `<session>.jsonl` and `<session>/subagents/agent-<child>.jsonl`. The adapter derives the child directory from the parent transcript's path (`subagents_dir` in `agents/adapters/claude/subagents.rs`), so a flattened copy reads no child. Copy nothing else from `~/.claude`: no credentials, no settings.
 
