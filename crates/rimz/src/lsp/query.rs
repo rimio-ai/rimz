@@ -167,6 +167,19 @@ fn collapse_symbols(
     })
 }
 
+fn collapse_candidates(
+    symbols: Vec<SymbolInformation>,
+    definition: impl FnMut(&Location) -> std::result::Result<Vec<Location>, QueryErr>,
+) -> std::result::Result<Vec<SymbolInformation>, QueryErr> {
+    Ok(match collapse_symbols(symbols, definition)? {
+        SymbolResolution::Unique(symbol) => vec![symbol],
+        SymbolResolution::Ambiguous(symbols)
+        | SymbolResolution::Missing {
+            candidates: symbols,
+        } => symbols,
+    })
+}
+
 fn without_generics(raw: &str) -> String {
     let mut depth = 0_u32;
     raw.chars()

@@ -157,17 +157,7 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                     json!({"query": name_segments(&name).last().cloned().unwrap_or_default()}),
                 )?,
             )?;
-            let symbols = match resolution {
-                SymbolResolution::Missing { candidates } => {
-                    return Ok(Output::NotFound {
-                        name,
-                        symbols: candidates,
-                    });
-                }
-                SymbolResolution::Unique(symbol) => vec![symbol],
-                SymbolResolution::Ambiguous(symbols) => symbols,
-            };
-            let resolution = collapse_symbols(symbols, |location| {
+            let definition = |location: &Location| {
                 Ok(locations(request(
                     entry,
                     "textDocument/definition",
@@ -176,7 +166,18 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                         "position": location.range.start,
                     }),
                 )?)?)
-            })?;
+            };
+            let symbols = match resolution {
+                SymbolResolution::Missing { candidates } => {
+                    return Ok(Output::NotFound {
+                        name,
+                        symbols: collapse_candidates(candidates, definition)?,
+                    });
+                }
+                SymbolResolution::Unique(symbol) => vec![symbol],
+                SymbolResolution::Ambiguous(symbols) => symbols,
+            };
+            let resolution = collapse_symbols(symbols, definition)?;
             match resolution {
                 SymbolResolution::Missing { .. } => {
                     unreachable!("collapse_symbols receives a nonempty match set")

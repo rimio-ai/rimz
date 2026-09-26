@@ -156,7 +156,7 @@ Trusted project entries replace machine entries whole by name. The empty trust p
 
 ## Query surface
 
-Every nonempty workspace-symbol match set, including a unique path match, is resolved through `textDocument/definition` for each candidate and grouped by definition URI and start position. Exactly one returned location becomes the candidate's identity; empty or multiple answers keep its own location. One group resolves uniquely at its definition. Distinct groups retain indexed candidates' names and source locations so their printed names remain accepted input, preferring the definition's own indexed symbol over a re-export when available. Request errors propagate. Name normalization and path matching follow the [query grammar](../reference/cli/lsp.md#queries).
+Every nonempty workspace-symbol match set, including a unique path match and the exact-name candidates of a not-found, is resolved through `textDocument/definition` for each candidate and grouped by definition URI and start position. Exactly one returned location becomes the candidate's identity; empty or multiple answers keep its own location. One group resolves uniquely at its definition. Distinct groups retain indexed candidates' names and source locations so their printed names remain accepted input, preferring the definition's own indexed symbol over a re-export when available. Request errors propagate. Name normalization and path matching follow the [query grammar](../reference/cli/lsp.md#queries).
 
 Callers and callees text output defaults to items inside the checkout. The renderer deduplicates before counting hidden outside items and appends the hidden count with a `--external` hint. That flag includes outside items; JSON remains the raw, unfiltered LSP answer.
 
