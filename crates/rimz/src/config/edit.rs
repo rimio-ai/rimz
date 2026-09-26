@@ -952,6 +952,7 @@ fn parse_edit_value(raw: &str) -> Value {
 fn parse_set_value(path: &[String], raw: &str) -> Value {
     if matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && field == "auto-compact")
         || is_harness_smart_compact_edit(path)
+        || is_harness_flip_compact_edit(path)
         || is_harness_compact_instruction_edit(path)
         || is_harness_idle_compact_edit(path)
         || is_daily_budget_edit(path)
@@ -1011,6 +1012,15 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         if let Err(err) = crate::store::message::AutoCompact::parse(threshold) {
             invalid_value!("{err}");
         }
+    }
+    if is_harness_flip_compact_edit(path)
+        && !value.as_str().is_some_and(|raw| {
+            raw == "off" || crate::store::message::AutoCompact::parse(raw).is_ok()
+        })
+    {
+        invalid_value!(
+            "harness.flip_compact must be off, a token count such as 180k, or a percentage such as 70%"
+        );
     }
     if is_harness_compact_instruction_edit(path) && !value.is_str() {
         invalid_value!("harness.compact_instruction must be a string");
@@ -1076,6 +1086,10 @@ fn is_harness_compact_instruction_edit(path: &[String]) -> bool {
 
 fn is_harness_idle_compact_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "idle_compact")
+}
+
+fn is_harness_flip_compact_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "flip_compact")
 }
 
 fn is_daily_budget_edit(path: &[String]) -> bool {

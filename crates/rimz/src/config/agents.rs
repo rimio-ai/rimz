@@ -347,16 +347,12 @@ impl Team {
             .unwrap_or(default)
     }
 
-    pub fn flip_compact(&self, role: &str, default: Option<AutoCompact>) -> Option<AutoCompact> {
-        match self
-            .roles
-            .iter()
-            .find(|binding| binding.role == role)
-            .and_then(|binding| binding.flip_compact)
-        {
+    pub fn flip_compact(&self, role: &str, default: Option<FlipCompact>) -> Option<AutoCompact> {
+        let binding = self.roles.iter().find(|binding| binding.role == role)?;
+        match binding.flip_compact.or(default) {
             Some(FlipCompact::Off) => None,
             Some(FlipCompact::Threshold(threshold)) => Some(threshold),
-            None => default,
+            None => Some(default_flip_compact(&binding.owns)),
         }
     }
 
@@ -398,6 +394,14 @@ impl Team {
             None => Vec::new(),
         }
     }
+}
+
+fn default_flip_compact(owns: &[String]) -> AutoCompact {
+    AutoCompact::Tokens(if owns.iter().any(|stage| stage == "Plan") {
+        120_000
+    } else {
+        180_000
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

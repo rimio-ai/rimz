@@ -100,6 +100,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "agents.worktree.hooks.removed",
     "agents.placement",
     "harness.smart_compact",
+    "harness.flip_compact",
     "harness.compact_instruction",
     "harness.idle_compact",
     "harness.budget",
@@ -286,6 +287,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "notifications.title",
         "notifications.body",
         "harness.smart_compact",
+        "harness.flip_compact",
         "harness.compact_instruction",
         "harness.idle_compact",
         "harness.budget",
@@ -1143,6 +1145,30 @@ fn harness_compact_instruction_values_are_parsed_as_strings() {
             .to_string(),
         "harness.compact_instruction must be a string"
     );
+}
+
+#[test]
+fn harness_flip_compact_values_are_parsed_as_strings() {
+    let key = parse_key("harness.flip_compact").unwrap();
+    for raw in ["120000", "off", "180k", "70%"] {
+        assert_eq!(parse_set_value(&key, raw).as_str(), Some(raw));
+    }
+}
+
+#[test]
+fn harness_flip_compact_validation_accepts_off_and_thresholds() {
+    let key = parse_key("harness.flip_compact").unwrap();
+    for raw in ["off", "180k", "70%", "120000"] {
+        validate_set_value(&key, &Value::from(raw)).expect("valid flip policy");
+    }
+    for value in [Value::from("soon"), Value::from("OFF"), Value::from(120000)] {
+        assert_eq!(
+            validate_set_value(&key, &value)
+                .expect_err("invalid flip policy")
+                .to_string(),
+            "harness.flip_compact must be off, a token count such as 180k, or a percentage such as 70%"
+        );
+    }
 }
 
 #[test]

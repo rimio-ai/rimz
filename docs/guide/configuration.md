@@ -257,7 +257,7 @@ Only team members qualify, never solo agents, `rimz subagents` children, or prov
 flip_compact = "180k"
 ```
 
-`flip_compact` compacts a [team](./teams.md) member at the stage flip that hands its own stage to another role, once its context is at least this full. It takes the same thresholds as `smart_compact` and is unset by default, which means no flip compacts. A role's own `flip-compact` field overrides it, and Markdown roles set that field themselves: `120k` for the owner of `Plan` and `180k` for every other owner, or `off` to disable it for that role.
+`flip_compact` compacts a [team](./teams.md) member at the stage flip that hands its own stage to another role, once its context is at least this full. It takes the same thresholds as `smart_compact`, or `"off"` to disable hand-off compaction. Unset uses the built-in role defaults: `120k` for a role owning `Plan`, `180k` otherwise. A role's own `flip-compact` field overrides the machine setting, including `"off"`, and the built-in defaults.
 
 ### Garbage collection
 

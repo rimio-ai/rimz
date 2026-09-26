@@ -180,7 +180,7 @@ This field is valid only on a team role. A standalone definition is rejected bec
 
 ### Flip compaction
 
-`flip-compact` accepts nonnegative integer token counts, strings such as `120k` or `1m`, percentages from `0%` through `100%`, or case-insensitive `off`; decimals, repeated suffixes, and overflowing counts fail. By default, a seat owning `Plan` gets `120k`; other seats get `180k`. These role defaults override the machine handoff setting. A provider without a manual compact command requires `off`.
+`flip-compact` accepts nonnegative integer token counts, strings such as `120k` or `1m`, percentages from `0%` through `100%`, or case-insensitive `off`; decimals, repeated suffixes, and overflowing counts fail. Omission inherits `harness.flip_compact`; when that is unset, a seat owning `Plan` gets `120k` and other seats get `180k`. An explicit role value overrides both, including a machine `off`. A provider without a manual compact command requires `off` on the role or machine-wide.
 
 ```yaml
 flip-compact: off
