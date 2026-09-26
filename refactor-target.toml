@@ -203,7 +203,8 @@ upward-dependencies = [
 # The existing frontmatter splitter supplies Codex's host skill key parser.
 # Worktree lifecycle hooks and their validation error cross the config/worktree seam.
 # IdleCompactMode parsing, Team::idle_compact and ConfigEditor::retire_idle_compact_keys share role policy and setup retirement with consumers, replacing the old idle-span accessor/parser.
-surface-budget = 167
+# effective::teams shares the machine fallback between producer lanes and the idle-compaction helper.
+surface-budget = 168
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -285,10 +286,10 @@ upward-dependencies = ["sidebar::refresh"]
 # Rebirth checkout roots feed pre-pane language-server admission.
 # Response paths, publication errors and publication serve CLI receipts/reports; fleet exposes settled rows.
 # `ancestry::check_launch_room` lets both CLI launch entries refuse before opening a store.
-# PROMPT_CACHE_MARGIN, fire_point, resolve_teams, resolve_mode and should_compact share one idle-compaction decision between producer and detached CLI helper.
+# PROMPT_CACHE_MARGIN, fire_point, resolve_mode and should_compact share one idle-compaction decision between producer and detached CLI helper.
 # IdleWindow carries the cache-expiry bound through that shared decision.
 # Deadline rungs, channel policy and locked claims serve the CLI and producer.
-surface-budget = 554
+surface-budget = 553
 
 [[module]]
 path = "crates/rimz/src/ids.rs"

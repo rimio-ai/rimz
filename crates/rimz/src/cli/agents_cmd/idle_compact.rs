@@ -6,9 +6,7 @@ use jiff::Timestamp;
 
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::harness::idle_compact::{
-    IdleCompactRequest, fire_point, resolve_mode, resolve_teams, should_compact,
-};
+use rimz::harness::idle_compact::{IdleCompactRequest, fire_point, resolve_mode, should_compact};
 use rimz::ids::MessageId;
 use rimz::message::compact::{
     CompactErr, CompactOutcome, CompactRequest, refuse_repeat, send_compact,
@@ -31,7 +29,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         .iter()
         .find(|agent| agent.kind == request.kind && agent.agent_id == request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
-    let teams = resolve_teams(&config, Some(&workspace.project_root));
+    let teams = rimz::config::effective::teams(&config, Some(&workspace.project_root));
     let mode = resolve_mode(agent, &teams, config.harness.idle_compact);
     let account =
         rimz::sidebar::refresh::accounts::cached_account(ctx.runtime(), &agent.login_key());
