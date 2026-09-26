@@ -11,6 +11,7 @@
 //! record is unreadable but still holds history is kept and reported, never
 //! deleted — durable history stays the correctness source.
 
+use std::collections::BTreeSet;
 use std::fs::ReadDir;
 use std::io;
 use std::path::Path;
@@ -188,6 +189,7 @@ fn collect_room_temps_under(
 pub fn collect_classes(
     older_than: Duration,
     dry_run: bool,
+    pruned: &BTreeSet<String>,
     watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
 ) -> Result<GcReport> {
     let mut report = collect::collect_runtime_under(
@@ -196,11 +198,15 @@ pub fn collect_classes(
         &paths::RuntimePaths::shared().shared_root,
         older_than,
         dry_run,
+        pruned,
     )?;
     let root = paths::workspaces_dir();
     let rooms = crate::workspace::known_workspaces_under(&root)
         .map_err(|source| GcErr::ReadDir { path: root, source })?;
-    for room in rooms {
+    for room in rooms
+        .into_iter()
+        .filter(|room| !pruned.contains(room.dir_name.as_str()))
+    {
         let paths = paths::StatePaths::under_named(
             room.workspace_id,
             room.dir_name.clone(),

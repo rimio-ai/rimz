@@ -34,6 +34,7 @@ fn known_room_keeps_empty_class_roots() {
         &rt.shared_root,
         Duration::ZERO,
         false,
+        &Default::default(),
     )
     .unwrap();
     for class in Class::RUNTIME {
@@ -217,6 +218,7 @@ fn runtime_gc_reaps_sidecars_and_unblocks_the_workspace_root() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         false,
+        &Default::default(),
     )
     .unwrap();
 
@@ -280,6 +282,7 @@ fn runtime_gc_expires_old_live_entries_even_with_a_fresh_sibling() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         false,
+        &Default::default(),
     )
     .unwrap();
 
@@ -311,6 +314,7 @@ fn runtime_gc_dry_run_reports_apply_without_removing() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         true,
+        &Default::default(),
     )
     .unwrap();
 
@@ -323,6 +327,7 @@ fn runtime_gc_dry_run_reports_apply_without_removing() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         false,
+        &Default::default(),
     )
     .unwrap();
 
@@ -356,6 +361,7 @@ fn runtime_gc_accounts_for_stale_telemetry_and_keeps_fresh_files() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         true,
+        &Default::default(),
     )
     .unwrap();
     assert_eq!(preview.sidecar_files_removed, 1);
@@ -368,6 +374,7 @@ fn runtime_gc_accounts_for_stale_telemetry_and_keeps_fresh_files() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         false,
+        &Default::default(),
     )
     .unwrap();
     assert_eq!(preview, applied);
@@ -406,6 +413,7 @@ fn runtime_gc_does_not_unlink_a_live_room_exporter() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         false,
+        &Default::default(),
     )
     .unwrap();
 
@@ -452,6 +460,7 @@ fn runtime_gc_expires_all_live_entries_and_probes_socket_listeners() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         false,
+        &Default::default(),
     )
     .unwrap();
 
@@ -498,6 +507,7 @@ fn runtime_gc_expires_read_marks_at_class_ttl_even_with_a_fresh_owner() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         false,
+        &Default::default(),
     )
     .unwrap();
 
@@ -540,6 +550,7 @@ fn runtime_gc_reaps_stale_probe_markers() {
         &temp.path().join("rimz/shared"),
         Duration::from_secs(3600),
         false,
+        &Default::default(),
     )
     .unwrap();
 
@@ -559,8 +570,15 @@ fn runtime_gc_walks_directories_without_parsing_workspace_ids() {
     for name in ["project-abcd", "unfinished"] {
         fs::create_dir_all(workspaces.join(name)).unwrap();
     }
-    let report =
-        collect_runtime_under(&workspaces, &workspaces, &shared, Duration::ZERO, false).unwrap();
+    let report = collect_runtime_under(
+        &workspaces,
+        &workspaces,
+        &shared,
+        Duration::ZERO,
+        false,
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(report.runtime_roots_scanned, 2);
     assert!(!workspaces.join("project-abcd").exists());
     assert!(!workspaces.join("unfinished").exists());
@@ -584,6 +602,7 @@ fn runtime_sweep_reaps_empty_legacy_room_trees() {
         &temp.path().join("shared"),
         Duration::ZERO,
         false,
+        &Default::default(),
     )
     .unwrap();
     assert_eq!(report.runtime_roots_scanned, 1);

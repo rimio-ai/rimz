@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,6 +21,7 @@ pub(crate) fn collect_runtime_under(
     shared_root: &Path,
     older_than: Duration,
     dry_run: bool,
+    pruned: &BTreeSet<String>,
 ) -> Result<GcReport> {
     let entries = read_dir_if_exists(runtime_root)?;
 
@@ -32,7 +33,7 @@ pub(crate) fn collect_runtime_under(
             source,
         })?;
         let root = entry.path();
-        if !root.is_dir() {
+        if !root.is_dir() || pruned.contains(entry.file_name().to_string_lossy().as_ref()) {
             continue;
         }
         let known = crate::disk::paths::check_workspace_layout(&state_root.join(entry.file_name()))

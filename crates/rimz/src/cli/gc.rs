@@ -175,7 +175,14 @@ fn sweep(
     };
     let report = match scope {
         GcScope::Room => gc::collect_room(paths, older_than, dry_run, watcher_is_live),
-        GcScope::Machine => gc::collect_classes(older_than, dry_run, watcher_is_live),
+        GcScope::Machine => {
+            let pruned = prune
+                .removed
+                .iter()
+                .map(|removed| removed.dir_name.clone())
+                .collect();
+            gc::collect_classes(older_than, dry_run, &pruned, watcher_is_live)
+        }
     }
     .context("collecting room garbage")?;
     let store_maintenance = if dry_run {
