@@ -235,22 +235,27 @@ fn parse_board_section(board: &str, heading: &str) -> Option<String> {
 }
 
 fn parse_board_sections(board: &str, headings: &[&str]) -> Option<String> {
-    let section = board
-        .lines()
-        .skip_while(|line| {
-            !line
-                .strip_prefix("## ")
-                .is_some_and(|heading| headings.contains(&heading.trim()))
-        })
-        .skip(1)
-        .scan(false, |in_fence, line| {
-            if ["```", "~~~"].iter().any(|fence| line.starts_with(fence)) {
-                *in_fence = !*in_fence;
+    let mut in_fence = false;
+    let mut section: Option<Vec<&str>> = None;
+    for line in board.lines() {
+        let heading = !in_fence && is_atx_heading(line);
+        if ["```", "~~~"].iter().any(|fence| line.starts_with(fence)) {
+            in_fence = !in_fence;
+        }
+        match &mut section {
+            Some(_) if heading => break,
+            Some(lines) => lines.push(line),
+            None if heading
+                && line
+                    .strip_prefix("## ")
+                    .is_some_and(|title| headings.contains(&title.trim())) =>
+            {
+                section = Some(Vec::new());
             }
-            (*in_fence || !is_atx_heading(line)).then_some(line)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+            None => {}
+        }
+    }
+    let section = section?.join("\n");
     let section = section.trim();
     (!section.is_empty()).then(|| section.to_owned())
 }
@@ -554,6 +559,14 @@ mod tests {
                 "{heading}"
             );
         }
+        assert_eq!(
+            parse_board_section(
+                "## Goal\n~~~md\n## Result\nquoted\n~~~\n\n## Result\n- real\n",
+                "Result"
+            )
+            .as_deref(),
+            Some("- real")
+        );
         std::fs::write(worktree.path().join("blackboard.md"), text).expect("board");
         assert_eq!(
             board_section(worktree.path(), "Tail").as_deref(),
