@@ -72,7 +72,7 @@ pub fn pin_env(workspace_id: &WorkspaceId, project_root: &Path) -> BTreeMap<Stri
 
 /// The pane-scope identity pin: the session pin plus `RIMZ=1`, the pane's
 /// worktree path, and its channel when it has one.
-pub(crate) fn pane_pin_env(
+pub fn pane_pin_env(
     workspace_id: &WorkspaceId,
     project_root: &Path,
     worktree_path: &Path,
