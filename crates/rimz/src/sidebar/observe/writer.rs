@@ -105,7 +105,11 @@ impl Writer {
             }
         }
         if crate::proc::process_start(std::process::id()).is_some() {
-            for kind in self.dead_pids.check(&roster, crate::proc::process_start) {
+            for kind in self.dead_pids.check(
+                &roster,
+                crate::proc::process_start,
+                crate::proc::in_pane_agent_start_for_root,
+            ) {
                 self.emit_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
             }
             for kind in self.hostless_agents.check(
@@ -168,6 +172,7 @@ impl DeadPidTracker {
         &mut self,
         roster: &RosterSig,
         process_start: fn(u32) -> Option<Timestamp>,
+        agent_start: fn(&str, u32) -> Option<Timestamp>,
     ) -> Vec<AnomalyKind> {
         let mut active = BTreeSet::new();
         let mut anomalies = Vec::new();
@@ -177,7 +182,13 @@ impl DeadPidTracker {
             };
             let key = (row.row_id.clone(), pid);
             active.insert(key.clone());
-            let reason = match process_start(pid) {
+            let live_start = process_start(pid).map(|root_start| {
+                row.agent_kind
+                    .as_deref()
+                    .and_then(|kind| agent_start(kind, pid))
+                    .unwrap_or(root_start)
+            });
+            let reason = match live_start {
                 None => Some("gone".to_owned()),
                 Some(actual)
                     if row.pane_process_start.is_some_and(|expected| {
@@ -324,6 +335,14 @@ mod tests {
         }
     }
 
+    fn check_root(
+        tracker: &mut DeadPidTracker,
+        roster: &RosterSig,
+        process_start: fn(u32) -> Option<Timestamp>,
+    ) -> Vec<AnomalyKind> {
+        tracker.check(roster, process_start, |_, _| None)
+    }
+
     fn missing_process_start(_: u32) -> Option<Timestamp> {
         None
     }
@@ -398,15 +417,34 @@ mod tests {
     }
 
     #[test]
+    fn dead_pid_accepts_shell_hosted_agent_start() {
+        let mut tracker = DeadPidTracker::default();
+        let roster = roster_with_pid("a", 123, Timestamp::from_second(30).unwrap());
+
+        for _ in 0..4 {
+            assert!(
+                tracker
+                    .check(&roster, live_process_start, |kind, pid| {
+                        assert_eq!((kind, pid), ("claude", 123));
+                        Some(Timestamp::from_second(30).unwrap())
+                    })
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn dead_pid_requires_consecutive_confirmations_and_clears_on_recovery() {
         let mut tracker = DeadPidTracker::default();
         let roster = roster_with_pid("a", 123, Timestamp::from_second(10).unwrap());
 
-        assert!(tracker.check(&roster, missing_process_start).is_empty());
-        assert!(tracker.check(&roster, live_process_start).is_empty());
-        assert!(tracker.check(&roster, missing_process_start).is_empty());
+        assert!(check_root(&mut tracker, &roster, missing_process_start).is_empty());
+        assert!(check_root(&mut tracker, &roster, live_process_start).is_empty());
+        assert!(check_root(&mut tracker, &roster, missing_process_start).is_empty());
 
-        let anomalies = tracker.check(&roster, missing_process_start);
+        let anomalies = tracker.check(&roster, missing_process_start, |_, _| {
+            live_process_start(123)
+        });
 
         assert!(matches!(
             anomalies.as_slice(),
@@ -422,18 +460,21 @@ mod tests {
 
         // Two confirmations arm the first report; the standing condition then
         // stays quiet however many frames it persists.
-        assert!(tracker.check(&roster, missing_process_start).is_empty());
-        assert_eq!(tracker.check(&roster, missing_process_start).len(), 1);
-        assert!(tracker.check(&roster, missing_process_start).is_empty());
-        assert!(tracker.check(&roster, missing_process_start).is_empty());
+        assert!(check_root(&mut tracker, &roster, missing_process_start).is_empty());
+        assert_eq!(
+            check_root(&mut tracker, &roster, missing_process_start).len(),
+            1
+        );
+        assert!(check_root(&mut tracker, &roster, missing_process_start).is_empty());
+        assert!(check_root(&mut tracker, &roster, missing_process_start).is_empty());
 
         // A different reason is a new episode: it re-arms and reports once more.
-        assert!(tracker.check(&roster, mismatched_process_start).is_empty());
+        assert!(check_root(&mut tracker, &roster, mismatched_process_start).is_empty());
         assert!(matches!(
-            tracker.check(&roster, mismatched_process_start).as_slice(),
+            check_root(&mut tracker, &roster, mismatched_process_start).as_slice(),
             [AnomalyKind::DeadPid { reason, .. }] if reason == "starttime-mismatch"
         ));
-        assert!(tracker.check(&roster, mismatched_process_start).is_empty());
+        assert!(check_root(&mut tracker, &roster, mismatched_process_start).is_empty());
     }
 
     #[test]

@@ -163,7 +163,7 @@ The writer thread re-verifies the latest roster against the world every `OBSERVE
 | Detector | Fires when |
 | --- | --- |
 | `row_pane_missing_from_frame`, `cards_exceed_panes` | A roster pane id is absent from the published frame, or the roster outnumbers the frame's panes. Runs only when the roster's fold stamp equals the frame's `produced_at_ms`, since a republish between fold and read is normal skew |
-| `dead_pid` | A row's pane pid, checked through the process backend with the start-time pid-reuse guard, stays dead for `OBSERVE_DEADPID_CONFIRMATIONS` (2) consecutive passes. Platforms without process metrics skip it |
+| `dead_pid` | A row's pane root is gone or its live start mismatches the published stamp for `OBSERVE_DEADPID_CONFIRMATIONS` (2) consecutive passes. Agent rows derive the agent CLI's start under that root, as the producer does, falling back to the root's start when derivation is unavailable; process rows compare the root's start. Platforms without process metrics skip it |
 | `agent_card_without_process` | An agent row's live pane root authoritatively hosts no process of that kind for `OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS` (2) consecutive passes. Unreadable or branching process trees stay silent, and dead roots are `dead_pid`'s verdict |
 
 ### Roles and cost
