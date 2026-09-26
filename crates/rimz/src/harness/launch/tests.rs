@@ -1,7 +1,7 @@
 use super::*;
 use crate::harness::launch_reminders::{subagent_reminder, wrap};
 
-/// The reminder a bare subagent launch carries: the host scratch line, then the child policy.
+/// The reminder a bare subagent launch carries: Files, then the child policy under Subagents.
 fn child_reminder() -> String {
     let mut request =
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
@@ -795,7 +795,7 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             assert_eq!(text.matches("<system_reminder>").count(), 1);
             assert_eq!(text.matches("</system_reminder>").count(), 1);
             assert!(text.contains("This pane runs in a bubblewrap sandbox."));
-            assert!(text.contains("`/tmp/scratchpad`"));
+            assert!(text.contains("- `/tmp/scratchpad/`:"));
             assert_eq!(text.contains("You are a subagent:"), subagent);
             assert_eq!(
                 text,
@@ -885,7 +885,7 @@ fn process_compiler_carries_only_the_scratch_line_when_nothing_else_applies() {
     .expect("process");
     assert!(process.provider_argv.contains(&process.reminder));
     assert!(process.reminder.contains("`$RIMZ_SCRATCH`"));
-    assert!(process.reminder.contains("`$RIMZ_SHARED`"));
+    assert!(process.reminder.contains("`$RIMZ_SHARED/<task>/`"));
     assert!(!process.reminder.contains("You are"));
 }
 

@@ -583,7 +583,7 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                 assert_eq!(
                     plan.process()
                         .reminder
-                        .contains(&format!("Launch environment: cwd {}", cwd.display())),
+                        .contains(&format!("### Environment\n\n- cwd: {}", cwd.display())),
                     enabled
                 );
                 assert_eq!(

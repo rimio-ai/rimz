@@ -148,7 +148,7 @@ Trusted project entries replace machine entries whole by name. The empty trust p
 
 ## What agents see
 
-**The launch reminder.** `launch_plan::compile` reads `registry::live_server_names` without writing. [`launch_reminders.rs`](../../crates/rimz/src/harness/launch_reminders.rs) names dormant and running servers after the subagent paragraph and points to `Skill(rimz-lsp)`, including for children. It explains first-query startup and the possible wait. Without a broker there is no paragraph.
+**The launch reminder.** `launch_plan::compile` reads `registry::live_server_names` without writing. [`launch_reminders.rs`](../../crates/rimz/src/harness/launch_reminders.rs) lists language names only in an `- lsp:` bullet under `### Environment` and points to `Skill(rimz-lsp)`, including for children. The bullet appears even when `env_reminder` is off; without servers it is omitted.
 
 **The skill.** `rimz-lsp` lives in the user's skill library beside `rimz-subagents`, not in this repository. It teaches the query verbs, the exit codes, and the grep fallback. Under host isolation the skill stays visible even when no server runs, because profile skill lists apply only under sandbox isolation ([sandbox.md § Profile skill views](./sandbox.md#profile-skill-views)); the CLI's no-server exit covers that case.
 
