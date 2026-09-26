@@ -346,8 +346,8 @@ Formats are tmux's read surface: every `-F`, filter, hook command, and `#()` exp
 | `pane_current_command` | foreground process name | the name, not its argv |
 | `pane_current_path` | foreground process working directory | |
 | `pane_pid` | PID of the pane's first process | the spawned shell or command, never the foreground child |
-| `pane_title` | title set by OSC 0/2 or `select-pane -T` | writable by applications while `allow-set-title` is on; sanitized of C0 and invisible characters (3.7) |
-| `pane_start_command` / `pane_start_path` | command and directory the pane was created with | empty for a pane created with no command while `default-command` is empty (the default), that is a pane running `default-shell` (`spawn.c`) |
+| `pane_title` | title set by OSC 0/2 or `select-pane -T` | defaults to the host name, so it is never empty; writable by applications while `allow-set-title` is on; sanitized of C0 and invisible characters (3.7) |
+| `pane_start_command` / `pane_start_path` | command and directory the pane was created with | a pane spawned with one shell-command argument (`split-window 'a b c'`) reports it as one double-quoted string, `"a b c"`; a pane spawned with an argv (`respawn-pane -k a b c`) reports the words joined by spaces, unquoted (probed on 3.7c); empty for a pane created with no command while `default-command` is empty (the default), that is a pane running `default-shell` (`spawn.c`) |
 | `pane_dead` / `pane_dead_status` / `pane_dead_signal` / `pane_dead_time` | exit facts for a pane kept by `remain-on-exit` | |
 | `client_name` / `client_tty` / `client_pid` / `client_session` | client identity | |
 | `client_width` / `client_height` | client terminal size | |
