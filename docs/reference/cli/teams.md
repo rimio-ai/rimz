@@ -341,15 +341,15 @@ A member handing off needs a clean worktree. A hand-off is a member leaving a st
 The first flip creates `<worktree>/blackboard.md` when absent. Each flip, under a per-worktree lock:
 
 1. Replaces the first line starting `Stage:` with `Stage: <stage> (@<owner>)`, or `Stage: Done`. With no such line, it inserts one after a leading `# ` heading, else at the top.
-2. Appends a ledger line to the `## Progress` section (an existing `## Progress log` is used too), creating the section when absent: `- YYYY-MM-DD HH:MM:SS @by: from -> to — note`, or `opened <to>` instead of the transition when there was no stage. The time is in the configured local time zone with seconds, and a multiline note is joined onto one line. The sidebar's [run clock](../../interface/sidebar.md#worktree-headers) reads this ledger and still accepts older minute-form stamps.
+2. Appends a ledger line to the `## Progress` section (an existing `## Progress log` is used too), creating the section when absent: `- YYYY-MM-DDTHH:MM:SS±HH:MM @by: from -> to — note`, or `opened <to>` instead of the transition when there was no stage. The time is RFC 3339 with its UTC offset, written in the configured time zone, and a multiline note is joined onto one line. The sidebar's [run clock](../../interface/sidebar.md#worktree-headers) reads this ledger and still accepts older stamps without an offset (seconds or minute form), read in the configured zone.
 3. Appends a durable `team.stage` signal and fires its subscriptions.
 4. Delivers a `STAGE` notice to the owner, as described below.
 
 Other board text is left as it is; the leader writes the rest of the board.
 
 ```text
-- 2026-09-12 14:02:11 @planner: opened Explore — board opened; sweep aimed at rate-limit handling
-- 2026-09-12 14:20:36 @planner: Plan -> Implement — plan ready in plan-notes.md; three advisories carried in
+- 2026-09-12T14:02:11+02:00 @planner: opened Explore — board opened; sweep aimed at rate-limit handling
+- 2026-09-12T14:20:36+02:00 @planner: Plan -> Implement — plan ready in plan-notes.md; three advisories carried in
 ```
 
 To undo a mistaken flip, flip back to the intended stage; both entries stay in the ledger. A flip to the current stage repeats the ledger line, signal, and delivery. The board and ledger mechanics are in [team memory and stages](../../internals/harness/teams.md).
