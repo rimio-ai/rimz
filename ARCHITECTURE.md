@@ -25,7 +25,7 @@ Detail lives in four places, narrowing as you go:
 
 There is no general RimZ daemon. Store writes belong to CLI or hook subprocesses, and the sidebar is a native pane that reads store state in process.
 
-Optional [shared language servers](./docs/internals/lsp.md) each have a hidden `rimz lsp serve` broker: a nonce-checked Unix query socket per checkout/server key and an on-demand stdio server. Agent wrappers hold process leases; the broker remains dormant between server lifetimes and exits after lease-release grace or checkout removal. Queries admit and start dormant servers; idle timeout, eviction, memory pressure, hand stops, crashes, and team Done flips return them to dormant. Required launch admission starts eagerly. Admission and the memory watchdog coordinate across rooms with a machine lock. Brokers write their own runtime entries and lifetime cost history, plus diagnostics, never agent store state.
+Optional [shared language servers](./docs/internals/lsp.md) each have a hidden `rimz lsp serve` broker: a nonce-checked Unix query and attach socket per checkout/server key and an on-demand stdio server. Agent wrappers and attached editors hold process leases; the broker remains dormant between server lifetimes and exits after lease-release grace or checkout removal. Agent queries and editor requests admit and start dormant servers; idle timeout, eviction, memory pressure, hand stops, crashes, and team Done flips return them to dormant. Required launch admission starts eagerly. Admission and the memory watchdog coordinate across rooms with a machine lock. Brokers write their own runtime entries and lifetime cost history, plus diagnostics, never agent store state.
 
 The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar elder. Its fires run in transient user scopes under systemd and in their own process groups, so they and any room they birth outlive the tick. Spawn and scheduled check-only fires open their root's room if needed, leaving its elder to own later occurrences. Signals follow the same shape: whichever process observes the event (`rimz events emit`, the sidebar producer's forge diff, a lifecycle write) fires the tasks listening for it in place, and a `rimz wait -- <command>` watcher is a detached subprocess holding a state-tier lock for its command's lifetime ([loops.md](./docs/internals/harness/loops.md#the-signal-vocabulary)).
 
@@ -65,7 +65,7 @@ With machine `agents.isolation = "sandbox"`, the agent exec wrapper launches its
 | Sidebar | rendering, focus affordances, human actions through the CLI | durable state files |
 | ttyd browser daemons | authenticated writable transport; no-auth input-blocked transport | workspace identity, session validation, broadcast allowlist, durable state |
 | Agents | native UI, prompts, sandboxing, bypass behaviour | RimZ store state |
-| Language-server broker | server stdio, saved-file watcher, query socket, process leases, memory accounting | agent state, panes, room lifecycle |
+| Language-server broker | server stdio, saved-file watcher, query and attach socket, editor buffers, process leases, memory accounting | agent state, panes, room lifecycle |
 | Host | process resurrection, OS sandboxing | workspace state |
 
 ### State on disk

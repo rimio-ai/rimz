@@ -52,11 +52,25 @@ rimz lsp stop --all
 
 `stop [CHECKOUT]` defaults to the current checkout (or global `--root`). `--server <NAME>` selects one server when several exist. `--all` stops every machine entry and conflicts with both CHECKOUT and `--server`. Dead entries are swept first; a failure stopping one entry does not prevent attempts on the others. Stop prints one acknowledgment line per entry; no matching entries produce no lines. It has no `--json` flag. A hand stop frees server memory and leaves `dormant: stopped by hand`; the next query can restart it. Stopping an already dormant entry leaves its reason unchanged.
 
+## Status
+
+```sh
+rimz lsp status
+rimz lsp status /path/to/checkout --server rust
+rimz lsp status --server rust --json
+```
+
+`status [CHECKOUT]` inspects one server without starting it. CHECKOUT defaults to cwd or the global `--root`; the most deeply enclosing registered checkout is used. Dead entries are swept first. `--server <NAME>` selects a server and is required when several entries match. No matching entry exits 3.
+
+Text shows checkout, server name, state, broker and server pids, request count, and lease count. Each attached editor shows its pid, client name (or `unnamed`), and seconds since attachment, followed by indented buffer paths relative to the checkout where possible. `(owner)` marks the holder whose buffer the server uses; `(unsaved in editor)` means changed since open or save, not a comparison with disk. A buffer already unsaved when opened is not detected, and editing back to disk text does not clear the marker.
+
+`--json` returns the server's current registry entry, including `attached`: each editor has `pid`, optional `name`, `since_ms`, and `open`; each open buffer has `uri`, `owner`, and `dirty`. Buffer text is not included. The [editor model](../../internals/lsp.md#editors) defines ownership and marker semantics.
+
 ## Exit codes
 
 | Exit | Meaning |
 | --- | --- |
-| 0 | Answered, including no results or ambiguous symbol candidates; successful list or stop. |
+| 0 | Answered, including no results or ambiguous symbol candidates; successful list, status, or stop. |
 | 1 | Command failed, including server-selection or protocol errors; details on stderr. |
 | 2 | Invalid command line, flag, or argument. |
 | 3 | No server for the checkout, memory admission refused, or terminal shutdown. The stderr line names the reason and grep fallback. |
