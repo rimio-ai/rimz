@@ -14,6 +14,20 @@ pub enum Output {
         name: String,
         symbols: Vec<SymbolInformation>,
     },
+    NotFound {
+        name: String,
+        symbols: Vec<SymbolInformation>,
+    },
+}
+
+impl Output {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Answer { .. } => 0,
+            Self::NotFound { .. } => 5,
+            Self::Ambiguous { .. } => 6,
+        }
+    }
 }
 
 pub fn select(
@@ -112,7 +126,11 @@ fn uri(root: &Path, path: &Path) -> Result<String> {
 pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<Output, QueryErr> {
     if verb == Verb::Find {
         return Ok(Output::Answer {
-            result: request(entry, "workspace/symbol", json!({"query": target}))?,
+            result: rank_find(
+                &entry.root,
+                target,
+                request(entry, "workspace/symbol", json!({"query": target}))?,
+            )?,
             document_uri: None,
         });
     }
@@ -131,37 +149,44 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
         Target::Position { path, position } => (uri(&entry.root, &path)?, position),
         Target::Symbol(name) => {
             let resolution = resolve_symbol(
+                &entry.root,
                 &name,
                 request(
                     entry,
                     "workspace/symbol",
-                    json!({"query": name.rsplit("::").next().unwrap_or(&name)}),
+                    json!({"query": name_segments(&name).last().cloned().unwrap_or_default()}),
                 )?,
             )?;
-            let resolution = match resolution {
-                SymbolResolution::Ambiguous(symbols) => collapse_symbols(symbols, |location| {
-                    Ok(locations(request(
-                        entry,
-                        "textDocument/definition",
-                        json!({
-                            "textDocument": {"uri": location.uri},
-                            "position": location.range.start,
-                        }),
-                    )?)?)
-                })?,
-                resolution => resolution,
-            };
-            match resolution {
-                SymbolResolution::Missing => {
-                    return Ok(Output::Answer {
-                        result: Value::Null,
-                        document_uri: None,
+            let symbols = match resolution {
+                SymbolResolution::Missing { candidates } => {
+                    return Ok(Output::NotFound {
+                        name,
+                        symbols: candidates,
                     });
+                }
+                SymbolResolution::Unique(symbol) => vec![symbol],
+                SymbolResolution::Ambiguous(symbols) => symbols,
+            };
+            let resolution = collapse_symbols(symbols, |location| {
+                Ok(locations(request(
+                    entry,
+                    "textDocument/definition",
+                    json!({
+                        "textDocument": {"uri": location.uri},
+                        "position": location.range.start,
+                    }),
+                )?)?)
+            })?;
+            match resolution {
+                SymbolResolution::Missing { .. } => {
+                    unreachable!("collapse_symbols receives a nonempty match set")
                 }
                 SymbolResolution::Ambiguous(symbols) => {
                     return Ok(Output::Ambiguous { name, symbols });
                 }
-                SymbolResolution::Unique(location) => (location.uri, location.range.start),
+                SymbolResolution::Unique(symbol) => {
+                    (symbol.location.uri, symbol.location.range.start)
+                }
             }
         }
     };
