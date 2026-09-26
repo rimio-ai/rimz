@@ -27,7 +27,7 @@ fn read_from_offset_resume_cases() {
     let missing = dir.path().join("missing.log.jsonl");
     let (events, end) = read_from_offset(&missing, 64).unwrap();
     assert!(events.is_empty());
-    assert_eq!(end, 0, "no log, no extent");
+    assert_eq!(end, 64, "a missing log never rewinds the extent");
 
     let path = dir.path().join("events.log.jsonl");
     append(&path, &test_event("event.first")).unwrap();

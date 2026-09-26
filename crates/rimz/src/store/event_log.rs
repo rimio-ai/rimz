@@ -128,10 +128,8 @@ pub fn read_all(path: &Path) -> Result<Vec<EventEnvelope>> {
 /// never claims bytes the fold skipped. A torn record followed by more frames
 /// is corruption and stays a hard error.
 pub(crate) fn read_from_offset(path: &Path, start: u64) -> Result<(Vec<EventEnvelope>, u64)> {
-    if !path.exists() {
-        // No log, no extent — a fresh workspace folds nothing.
-        return Ok((Vec::new(), 0));
-    }
+    // A missing log yields no rows and leaves the extent at `start`: a log
+    // rotated away mid-read must not rewind the caller's cursor.
     let rows = frame::read_rows(path, start)?;
     let mut events = Vec::new();
     let mut end = start;
