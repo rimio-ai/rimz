@@ -83,12 +83,6 @@ pub(super) enum FetchPhase {
     Final,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PaneFrame {
-    Held,
-    Fresh,
-}
-
 /// Typed publication from one fetch cycle. Variant shape rules out an
 /// unchanged error, an interim failure, or conflicting protocol flags.
 pub(super) enum FetchUpdate {
@@ -99,13 +93,11 @@ pub(super) enum FetchUpdate {
         snapshot: Box<SidebarSnapshot>,
         role: FetchRole,
         phase: FetchPhase,
-        pane_frame: PaneFrame,
         source: SnapshotSource,
     },
     Failed {
         error: String,
         role: FetchRole,
-        pane_frame: PaneFrame,
     },
 }
 
@@ -119,7 +111,6 @@ struct SnapshotPublication {
     snapshot: SidebarSnapshot,
     role: FetchRole,
     phase: FetchPhase,
-    pane_frame: PaneFrame,
     source: SnapshotSource,
 }
 
@@ -139,13 +130,6 @@ impl FetchUpdate {
             Self::Unchanged { role } | Self::Snapshot { role, .. } | Self::Failed { role, .. } => {
                 *role
             }
-        }
-    }
-
-    pub(super) fn pane_frame(&self) -> PaneFrame {
-        match self {
-            Self::Snapshot { pane_frame, .. } | Self::Failed { pane_frame, .. } => *pane_frame,
-            Self::Unchanged { .. } => PaneFrame::Held,
         }
     }
 
@@ -269,7 +253,6 @@ struct FastFold {
     result: crate::store::snapshot::Result<SidebarSnapshot>,
     role: FetchRole,
     produce: bool,
-    pane_frame: PaneFrame,
 }
 
 impl FetchWorker {
@@ -355,14 +338,12 @@ impl FetchWorker {
             self.reader.read_adopting(state)
         };
         let produce = self.start_produce_if_due(request, role, frame_stamps, &fast, now_ms);
-        let pane_frame = fast_pane_frame(request, frame_stamps, &fast);
         let fast_fold_ok = self.publish_fast_fold(
             state,
             FastFold {
                 result: fast,
                 role,
                 produce,
-                pane_frame,
             },
             sink,
         );
@@ -454,7 +435,6 @@ impl FetchWorker {
                         snapshot,
                         role: fold.role,
                         phase,
-                        pane_frame: fold.pane_frame,
                         source: SnapshotSource::Published,
                     },
                     sink,
@@ -465,7 +445,6 @@ impl FetchWorker {
                 sink.publish(FetchUpdate::Failed {
                     error: err.to_string(),
                     role: fold.role,
-                    pane_frame: PaneFrame::Held,
                 });
                 false
             }
@@ -481,11 +460,6 @@ impl FetchWorker {
         role: FetchRole,
         sink: &mut ResultSink,
     ) {
-        let pane_frame = if request.mode.produces_fresh_panes() {
-            PaneFrame::Fresh
-        } else {
-            PaneFrame::Held
-        };
         let opts = crate::sidebar::produce::ProduceOptions {
             mux: self.config.mux,
             session_name: self.config.session_name.clone(),
@@ -521,17 +495,12 @@ impl FetchWorker {
                         snapshot,
                         role,
                         phase: FetchPhase::Final,
-                        pane_frame,
                         source: SnapshotSource::Produced,
                     },
                     sink,
                 );
             }
-            Err(error) => sink.publish(FetchUpdate::Failed {
-                error,
-                role,
-                pane_frame,
-            }),
+            Err(error) => sink.publish(FetchUpdate::Failed { error, role }),
         }
     }
 
@@ -585,7 +554,6 @@ impl FetchWorker {
             mut snapshot,
             role,
             phase,
-            pane_frame,
             source,
         } = publication;
         let final_producer = role.is_producer() && phase == FetchPhase::Final;
@@ -615,7 +583,6 @@ impl FetchWorker {
             snapshot: Box::new(snapshot),
             role,
             phase,
-            pane_frame,
             source,
         });
         deliver_notifications(
@@ -637,24 +604,6 @@ fn consumer_stamp_recordable(request: FetchRequest, is_producer: bool) -> bool {
         && request.mode == FetchMode::Normal
         && request.min_pane_cache_ms.is_none()
         && !request.force_fold
-}
-
-fn fast_pane_frame(
-    request: FetchRequest,
-    frame_stamps: Option<(u64, u64)>,
-    fast: &crate::store::snapshot::Result<SidebarSnapshot>,
-) -> PaneFrame {
-    if fast.as_ref().is_ok_and(|snapshot| {
-        snapshot.panes_produced_at_ms.is_some()
-            && (request.published_frame_hint
-                || request
-                    .min_pane_cache_ms
-                    .is_some_and(|min| frame_stamps.is_some_and(|(_, observed)| observed >= min)))
-    }) {
-        PaneFrame::Fresh
-    } else {
-        PaneFrame::Held
-    }
 }
 
 fn emit_producer_transition(
@@ -840,10 +789,6 @@ impl FetchMode {
             other
         }
     }
-
-    fn produces_fresh_panes(self) -> bool {
-        matches!(self, Self::ProducerFreshPanes | Self::HardRefresh)
-    }
 }
 
 impl FetchRequest {
@@ -966,7 +911,6 @@ impl FetchWorker {
                 Err(err) => sink.publish(FetchUpdate::Failed {
                     error: format!("resolving workspace state paths: {err}"),
                     role: FetchRole::Consumer,
-                    pane_frame: PaneFrame::Held,
                 }),
             }
             // A closed loop still gets all current-cycle durable and external

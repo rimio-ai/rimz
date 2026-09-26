@@ -33,7 +33,7 @@ use ratatui::backend::CrosstermBackend;
 use tracing::{debug, warn};
 
 use super::fetch::{
-    FetchDispatcher, FetchPhase, FetchRequest, FetchRole, FetchUpdate, PaneFrame, SnapshotSource,
+    FetchDispatcher, FetchPhase, FetchRequest, FetchRole, FetchUpdate, SnapshotSource,
 };
 use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
@@ -496,13 +496,11 @@ impl LoopState {
             return false;
         }
         let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
-        let fresh_pane_frame = update.pane_frame() == PaneFrame::Fresh;
         let update = match update {
             FetchUpdate::Snapshot {
                 snapshot,
                 role,
                 phase,
-                pane_frame,
                 source,
             } => {
                 let now_ms = crate::utils::time::unix_now_ms();
@@ -518,7 +516,6 @@ impl LoopState {
                     snapshot: Box::new(snapshot),
                     role,
                     phase,
-                    pane_frame,
                     source,
                 }
             }
@@ -531,18 +528,20 @@ impl LoopState {
             self.last_self_close_check = Instant::now();
             self.retry_pending_focus_repair();
         }
-        self.release_paint_hold_after_snapshot(rejected, fresh_pane_frame);
+        self.release_paint_hold_after_snapshot(rejected);
         rejected
     }
 
-    fn release_paint_hold_after_snapshot(&mut self, rejected: bool, fresh_pane_frame: bool) {
+    fn release_paint_hold_after_snapshot(&mut self, rejected: bool) {
+        // Release by pane stamp alone. A `Fresh` frame is fresh against the
+        // request that fetched it, and a request sent before the grow can land
+        // after it with a pane list that still counts the closed sibling.
         if !self.should_exit
             && !rejected
             && !self.self_close.confirming_empty()
-            && (fresh_pane_frame
-                || self
-                    .paint_hold
-                    .releases_on_stamp(self.current.panes_observed_at_ms))
+            && self
+                .paint_hold
+                .releases_on_stamp(self.current.panes_observed_at_ms)
         {
             // The snapshot folded a post-signal pane frame. Its own-view
             // verdict has decided the resize-grow case: exit without
@@ -577,7 +576,6 @@ impl LoopState {
             FetchUpdate::Snapshot {
                 snapshot: Box::new(fused),
                 phase: FetchPhase::Interim,
-                pane_frame: PaneFrame::Held,
                 source: SnapshotSource::Published,
                 role: if self.last_known_elder {
                     FetchRole::Producer

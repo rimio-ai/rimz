@@ -86,7 +86,6 @@ fn refresh_override_stamps_folded_snapshot() {
         snapshot: Box::new(folded),
         role: FetchRole::Consumer,
         phase: FetchPhase::Final,
-        pane_frame: PaneFrame::Held,
         source: SnapshotSource::Published,
     });
 
@@ -936,7 +935,7 @@ fn consumer_stamp_other_mandatory_folds_clear_before_ordinary_reseed() {
 }
 
 #[test]
-fn force_fold_bypasses_consumer_unchanged_skip_without_fresh_pane_claim() {
+fn force_fold_bypasses_consumer_unchanged_skip() {
     let fixture = ConsumerFixture::new();
     fixture.write_pane_frame();
     let mut rollup = SidebarSnapshot::build(
@@ -963,7 +962,6 @@ fn force_fold_bypasses_consumer_unchanged_skip_without_fresh_pane_claim() {
 
     assert_eq!(forced.len(), 1);
     assert!(matches!(forced[0], FetchUpdate::Snapshot { .. }));
-    assert_eq!(forced[0].pane_frame(), PaneFrame::Held);
 }
 
 #[test]
@@ -990,7 +988,6 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     assert_eq!(outcomes.len(), 1);
     let outcome = outcomes.pop().unwrap();
     assert!(outcome.is_final());
-    assert_eq!(outcome.pane_frame(), PaneFrame::Held);
     let folded = snapshot(&outcome);
     assert_eq!(folded.display_name, "cold-room");
     assert_eq!(folded.panes_produced_at_ms, None);
@@ -1009,7 +1006,6 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
     assert_eq!(outcomes.len(), 1);
     let outcome = outcomes.pop().unwrap();
     assert!(outcome.is_final());
-    assert_eq!(outcome.pane_frame(), PaneFrame::Held);
     let reason = match &outcome {
         FetchUpdate::Failed { error, .. } => error,
         _ => panic!("expected failed consumer read"),
@@ -1146,7 +1142,6 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
     assert_eq!(outcomes.len(), 1, "consumer folds once from cache");
     let outcome = outcomes.pop().unwrap();
     assert!(outcome.is_final());
-    assert_eq!(outcome.pane_frame(), PaneFrame::Fresh);
     let snapshot = snapshot(&outcome);
     assert!(
         !snapshot.worktree_groups.is_empty(),

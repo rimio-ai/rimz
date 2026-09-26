@@ -1,9 +1,7 @@
 use super::*;
 use crate::agents::AgentStatus;
 use crate::diag::record::{DiagEvent, GateRule};
-use crate::sidebar_pane::app::fetch::{
-    FetchPhase, FetchRole, FetchUpdate, PaneFrame, SnapshotSource,
-};
+use crate::sidebar_pane::app::fetch::{FetchPhase, FetchRole, FetchUpdate, SnapshotSource};
 use crate::sidebar_pane::app::fixtures::{serve_config, snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
@@ -337,7 +335,6 @@ impl ApplyHarness {
             snapshot: Box::new(snapshot),
             role: FetchRole::Producer,
             phase: FetchPhase::Final,
-            pane_frame: PaneFrame::Fresh,
             source: SnapshotSource::Produced,
         })
     }
@@ -350,7 +347,6 @@ impl ApplyHarness {
         self.apply_outcome(FetchUpdate::Failed {
             error: reason.to_owned(),
             role: FetchRole::Producer,
-            pane_frame: PaneFrame::Held,
         })
     }
 }
@@ -615,7 +611,6 @@ fn interim_success_does_not_recover_health_and_final_failure_advances_once() {
         snapshot: Box::new(row_snapshot(&ws, AgentStatus::Running, false)),
         role: FetchRole::Producer,
         phase: FetchPhase::Interim,
-        pane_frame: PaneFrame::Held,
         source: SnapshotSource::Published,
     });
     assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES);
@@ -647,7 +642,6 @@ fn focused_read_clear_survives_failure_without_duplicate_trace() {
         snapshot: Box::new(focused),
         role: FetchRole::Producer,
         phase: FetchPhase::Final,
-        pane_frame: PaneFrame::Fresh,
         source: SnapshotSource::Produced,
     });
     assert!(!row_unread(&h.current));
@@ -1023,7 +1017,6 @@ fn frameless_fold_does_not_blip_switch_in() {
         snapshot: Box::new(frameless),
         role: FetchRole::Producer,
         phase: FetchPhase::Interim,
-        pane_frame: PaneFrame::Held,
         source: SnapshotSource::Published,
     });
     assert_eq!(a.ui.viewing_own_tab, Some(true));
@@ -1092,7 +1085,6 @@ fn published_fast_success_keeps_refresh_alert_active() {
         snapshot: Box::new(snapshot(&ws)),
         role: FetchRole::Producer,
         phase: FetchPhase::Final,
-        pane_frame: PaneFrame::Fresh,
         source: SnapshotSource::Published,
     });
 
@@ -1119,7 +1111,6 @@ fn consumer_published_success_recovers_refresh_health() {
         snapshot: Box::new(snapshot(&ws)),
         role: FetchRole::Consumer,
         phase: FetchPhase::Final,
-        pane_frame: PaneFrame::Held,
         source: SnapshotSource::Published,
     });
 
