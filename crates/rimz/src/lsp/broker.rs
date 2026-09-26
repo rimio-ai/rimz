@@ -1,8 +1,8 @@
 //! One checkout's language server, shared through a nonce-checked local socket.
 
-#[cfg_attr(not(test), allow(dead_code))]
 mod clients;
 mod lifecycle;
+mod router;
 mod socket;
 mod transport;
 mod watch;
@@ -57,6 +57,7 @@ fn client_capabilities(_config: &crate::config::LspServerConfig) -> Value {
 }
 
 struct Shared {
+    router: mpsc::Sender<router::RouterEvent>,
     model: Mutex<Model>,
     changed: Condvar,
     started: Instant,
@@ -166,6 +167,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         peak_rss_kb: 0,
         restarts: 0,
         leases: Vec::new(),
+        attached: Vec::new(),
     };
     let directory = registry::directory(&root, &request.server)?;
     crate::disk::paths::ensure_private_runtime_dir(&directory)?;
@@ -174,7 +176,9 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     let _socket = crate::sock::SocketGuard::new(path.clone());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
+    let (router_tx, router_rx) = mpsc::channel();
     let shared = Arc::new(Shared {
+        router: router_tx,
         model: Mutex::new(Model {
             entry,
             lifecycle: Lifecycle::default(),
@@ -192,10 +196,13 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         started: Instant::now(),
         in_flight: std::sync::atomic::AtomicUsize::new(0),
     });
+    let routing = shared.clone();
+    let router = std::thread::spawn(move || router::run(routing, router_rx));
     socket::listen(listener, shared.clone());
     registry::publish(&shared.model.lock().unwrap_or_else(|e| e.into_inner()).entry)?;
 
     let mut eager = request.eager;
+    let mut lifetime_epoch = 0;
     let mut last_housekeeping = Instant::now();
     loop {
         if last_housekeeping.elapsed() >= Duration::from_secs(5) {
@@ -221,10 +228,11 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         if !admitted {
             continue;
         }
-        let result = lifetime(&shared, &request);
-        if matches!(result, Ok(false)) {
-            continue;
-        }
+        lifetime_epoch += 1;
+        let _ = shared
+            .router
+            .send(router::RouterEvent::Starting(lifetime_epoch));
+        let result = lifetime(&shared, &request, lifetime_epoch);
         if let Err(error) = &result {
             tracing::warn!(%error, "language server stopped");
             shared.stop(StopReason::Crashed);
@@ -233,6 +241,18 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         model.transport = None;
         model.entry.server_pid = None;
         model.entry.server_start_token = None;
+        let reason = match model.entry.state {
+            State::Stopped { reason, .. }
+            | State::Dormant {
+                reason: Some(reason),
+                ..
+            } => reason,
+            _ => StopReason::Crashed,
+        };
+        let _ = shared.router.send(router::RouterEvent::Ended(reason));
+        if matches!(result, Ok(false)) {
+            continue;
+        }
         record_stop(
             &model.entry,
             model.lifetime_peak_kb,
@@ -242,6 +262,8 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         registry::publish(&model.entry)?;
         shared.changed.notify_all();
     }
+    let _ = shared.router.send(router::RouterEvent::Close);
+    let _ = router.join();
     let _lock = registry::lock()?;
     drop(_socket);
     std::fs::remove_dir_all(directory)?;
@@ -265,7 +287,8 @@ fn prepare_start(shared: &Shared, request: &ServeRequest, eager: bool) -> Result
         let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
         model.start_requested = false;
         model.refusal_epoch += 1;
-        model.refusal = Some(shortfall);
+        model.refusal = Some(shortfall.clone());
+        let _ = shared.router.send(router::RouterEvent::Refused(shortfall));
         shared.changed.notify_all();
         return Ok(false);
     }
@@ -297,7 +320,7 @@ fn prepare_start(shared: &Shared, request: &ServeRequest, eager: bool) -> Result
 }
 
 /// `Ok(false)`: a stop landed before the spawn, so no lifetime ran.
-fn lifetime(shared: &Shared, request: &ServeRequest) -> Result<bool> {
+fn lifetime(shared: &Shared, request: &ServeRequest, epoch: u64) -> Result<bool> {
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
     if model.entry.state != State::Starting {
         return Ok(false);
@@ -323,14 +346,25 @@ fn lifetime(shared: &Shared, request: &ServeRequest) -> Result<bool> {
         .map_err(|()| LspErr::Protocol("invalid checkout URI".into()))?;
     let folders = json!([{"uri": uri.as_str(), "name": request.root.file_name().unwrap_or_default().to_string_lossy()}]);
     let options = request.config.init_options.clone().unwrap_or(Value::Null);
-    let (progress_tx, progress) = mpsc::channel();
+    let (messages_tx, messages) = mpsc::channel();
+    let sender = shared.router.clone();
+    std::thread::spawn(move || {
+        for frame in messages {
+            if sender
+                .send(router::RouterEvent::Message(epoch, frame))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
     // Piped handles were requested on this child and have not yet been taken.
     let transport = Transport::start(
         server.0.stdout.take().expect("piped stdout"),
         server.0.stdin.take().expect("piped stdin"),
         options.clone(),
         folders.clone(),
-        progress_tx,
+        messages_tx,
     );
     let (_, initialized) = transport.request(
         "initialize",
@@ -359,7 +393,6 @@ fn lifetime(shared: &Shared, request: &ServeRequest) -> Result<bool> {
         &mut server,
         &transport,
         initialized,
-        progress,
         (&mut watcher, events),
     );
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
@@ -376,7 +409,6 @@ fn run(
     server: &mut Server,
     transport: &Arc<Transport>,
     initialized: mpsc::Receiver<Result<Value>>,
-    progress: mpsc::Receiver<Value>,
     watch: (
         &mut impl notify::Watcher,
         mpsc::Receiver<notify::Result<notify::Event>>,
@@ -384,19 +416,21 @@ fn run(
 ) -> Result<()> {
     let (watcher, events) = watch;
     let mut initialized = Some(initialized);
+    let mut replaying = None;
     let mut last_housekeeping = Instant::now();
     loop {
         if let Some(receiver) = &initialized {
             match receiver.try_recv() {
                 Ok(result) => {
-                    result?;
+                    let initialize_result = result?;
                     transport.notify("initialized", json!({}))?;
-                    shared
-                        .model
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .readiness
-                        .initialized(shared.elapsed());
+                    let (replayed, replay) = mpsc::channel();
+                    let _ = shared.router.send(router::RouterEvent::Started(
+                        transport.clone(),
+                        initialize_result,
+                        replayed,
+                    ));
+                    replaying = Some(replay);
                     initialized = None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -405,13 +439,25 @@ fn run(
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
+        if let Some(receiver) = &replaying {
+            match receiver.try_recv() {
+                Ok(()) => {
+                    shared
+                        .model
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .readiness
+                        .initialized(shared.elapsed());
+                    replaying = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return Err(LspErr::Protocol("editor replay failed".into()));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         {
             let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-            for event in progress.try_iter() {
-                if event["method"] == "$/progress" {
-                    model.readiness.progress(&event["params"], shared.elapsed());
-                }
-            }
             if matches!(
                 model.entry.state,
                 State::Stopped { .. } | State::Dormant { .. }
