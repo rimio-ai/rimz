@@ -428,7 +428,8 @@ path = "crates/rimz/src/store"
 # The lifetime-class GC reports per-room, per-class removals to the CLI and the auto-GC assist.
 # Provider panels carry the auto-redeem forecast the header marker renders.
 # Submitted-prompt origin classification and a run's prompt origin are read by the lifecycle hooks in the binary crate.
-surface-budget = 323
+# Room-local class and orphan-temp collectors expose the scoped maintenance seam.
+surface-budget = 325
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -628,7 +629,8 @@ allowed-dependencies = [
     "wakeup",
     "workspace",
 ]
-surface-budget = 15
+# Room-scoped class and orphan-temp entry points complement the machine sweeps.
+surface-budget = 17
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"

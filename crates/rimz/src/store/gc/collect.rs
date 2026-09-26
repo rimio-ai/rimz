@@ -57,7 +57,7 @@ pub(crate) fn collect_runtime_under(
     Ok(report)
 }
 
-fn collect_runtime_classes(
+pub(super) fn collect_runtime_classes(
     workspace_root: &Path,
     older_than: Duration,
     sweep: &mut Sweep,
