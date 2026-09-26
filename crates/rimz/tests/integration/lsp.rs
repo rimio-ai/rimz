@@ -6,10 +6,7 @@ use rimz::config::{MachineConfig, effective};
 
 #[test]
 fn lsp_check_reports_anchor_failures_and_coverage() {
-    use rimz::lsp::{admission::ServeRequest, registry};
     use serde_json::{Value, json};
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
 
     let env = Env::new();
     for args in [&["init", "-q", "-b", "main"][..], &["add", "."][..]] {
@@ -41,51 +38,40 @@ fn lsp_check_reports_anchor_failures_and_coverage() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, contents).unwrap();
     }
-    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
-    let config: rimz::config::LspServerConfig = serde_json::from_value(json!({"command":[stub],"extensions":["rs"],"root-markers":["Cargo.toml"],"memory-estimate":"1M"})).unwrap();
-    let mut machine = MachineConfig::default();
-    machine.lsp.servers.insert("rust".into(), config.clone());
+    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    let staged = env.project_root.join("staged.rs");
+    std::fs::write(&staged, "fn f() {}\n").unwrap();
     std::fs::write(
-        env.rimz_home().join("config.toml"),
-        toml::to_string(&std::collections::BTreeMap::from([("lsp", &machine.lsp)])).unwrap(),
+        env.project_root.join("deleted.md"),
+        "`staged.rs:1`\n`staged.rs::f`\n",
     )
     .unwrap();
-    let request = ServeRequest {
-        root: env.project_root.canonicalize().unwrap(),
-        project: env.project_root.clone(),
-        server: "rust".into(),
-        settings_hash: rimz::lsp::history::settings_hash(&config),
-        config,
-        policy: rimz::config::LspConfig {
-            kill_floor_percent: 0,
-            reserve_percent: 0,
-            reserve_min: "0".into(),
-            ..Default::default()
-        },
-        eager: false,
-    };
-    let directory = env
-        .runtime_root
-        .join("rimz/lsp")
-        .join(registry::key(&request.root, "rust").unwrap());
-    let mut broker = env
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["add", "staged.rs"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::remove_file(&staged).unwrap();
+    let output = env
         .rimz()
-        .args([
-            "lsp",
-            "serve",
-            "--request",
-            &serde_json::to_string(&request).unwrap(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .args(["lsp", "check", "deleted.md"])
+        .output()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !directory.join("entry.json").exists() {
-        assert!(broker.try_wait().unwrap().is_none());
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    for line in [1, 2] {
+        assert!(
+            text.contains(&format!("deleted.md:{line}  missing-path  ")),
+            "{text}"
+        );
     }
     let output = env
         .rimz()
@@ -211,67 +197,14 @@ fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
 
 #[test]
 fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
-    use rimz::lsp::{admission::ServeRequest, registry};
     use serde_json::{Value, json};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
-    use std::process::Stdio;
     use std::time::{Duration, Instant};
 
     let env = Env::new();
-    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
-    let config: rimz::config::LspServerConfig = serde_json::from_value(
-        json!({"command": [stub], "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"}),
-    )
-    .unwrap();
-    let mut machine = MachineConfig::default();
-    machine.lsp.servers.insert("rust".into(), config.clone());
-    std::fs::create_dir_all(env.rimz_home()).unwrap();
-    std::fs::write(
-        env.rimz_home().join("config.toml"),
-        toml::to_string(&std::collections::BTreeMap::from([("lsp", &machine.lsp)])).unwrap(),
-    )
-    .unwrap();
-    let request = ServeRequest {
-        root: env.project_root.canonicalize().unwrap(),
-        project: env.project_root.join("parent-project"),
-        server: "rust".into(),
-        settings_hash: rimz::lsp::history::settings_hash(&config),
-        config,
-        policy: rimz::config::LspConfig {
-            kill_floor_percent: 0,
-            reserve_percent: 0,
-            reserve_min: "0".into(),
-            ..Default::default()
-        },
-        eager: false,
-    };
-    let directory = env
-        .runtime_root
-        .join("rimz/lsp")
-        .join(registry::key(&request.root, "rust").unwrap());
-    let mut broker = env
-        .rimz()
-        .args([
-            "lsp",
-            "serve",
-            "--request",
-            &serde_json::to_string(&request).unwrap(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !directory.join("entry.json").exists() {
-        assert!(
-            broker.try_wait().unwrap().is_none(),
-            "broker failed before publishing"
-        );
-        assert!(Instant::now() < deadline, "broker startup deadline");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let (mut broker, directory, request) =
+        start_stub_broker(&env, env.project_root.join("parent-project"));
     let rpc = |value: Value| -> Value {
         let mut stream = UnixStream::connect(directory.join("sock")).unwrap();
         stream
@@ -562,6 +495,75 @@ fn lsp_project_servers_are_inert_until_trusted_and_overlay_whole_entries() {
     assert!(config.untrusted_lsp_servers.is_empty());
     assert_eq!(config.lsp_servers["rust"].command, ["project-ra"]);
     assert!(config.lsp_servers["rust"].init_options.is_none());
+}
+
+fn start_stub_broker(
+    env: &Env,
+    project: std::path::PathBuf,
+) -> (
+    std::process::Child,
+    std::path::PathBuf,
+    rimz::lsp::admission::ServeRequest,
+) {
+    use rimz::lsp::{admission::ServeRequest, registry};
+    use serde_json::json;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    let config: rimz::config::LspServerConfig = serde_json::from_value(
+        json!({"command": [stub], "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"}),
+    )
+    .unwrap();
+    let mut machine = MachineConfig::default();
+    machine.lsp.servers.insert("rust".into(), config.clone());
+    std::fs::create_dir_all(env.rimz_home()).unwrap();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        toml::to_string(&std::collections::BTreeMap::from([("lsp", &machine.lsp)])).unwrap(),
+    )
+    .unwrap();
+    let request = ServeRequest {
+        root: env.project_root.canonicalize().unwrap(),
+        project,
+        server: "rust".into(),
+        settings_hash: rimz::lsp::history::settings_hash(&config),
+        config,
+        policy: rimz::config::LspConfig {
+            kill_floor_percent: 0,
+            reserve_percent: 0,
+            reserve_min: "0".into(),
+            ..Default::default()
+        },
+        eager: false,
+    };
+    let directory = env
+        .runtime_root
+        .join("rimz/lsp")
+        .join(registry::key(&request.root, "rust").unwrap());
+    let mut broker = env
+        .rimz()
+        .args([
+            "lsp",
+            "serve",
+            "--request",
+            &serde_json::to_string(&request).unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !directory.join("entry.json").exists() {
+        assert!(
+            broker.try_wait().unwrap().is_none(),
+            "broker failed before publishing"
+        );
+        assert!(Instant::now() < deadline, "broker startup deadline");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    (broker, directory, request)
 }
 
 pub(super) fn spawn_test_broker(
