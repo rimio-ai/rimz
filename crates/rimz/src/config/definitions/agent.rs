@@ -7,7 +7,9 @@ use crate::agents::{self, ManualSkill, PresetField, ToolSet};
 use crate::config::{Isolation, Profile, PromptSource, SkillName};
 
 use super::frontmatter::AgentFrontmatter;
-use super::{DefinitionErr, LoadedDefinitions, Namespace, SkillCheck, frontmatter, traits};
+use super::{
+    DefinitionCause, DefinitionErr, LoadedDefinitions, Namespace, SkillCheck, frontmatter, traits,
+};
 
 #[derive(Clone)]
 struct Resolved {
@@ -168,6 +170,9 @@ impl Resolver<'_> {
                     path,
                     format!("follows `{parent_name}`, which failed to load"),
                 )
+                .with_cause(DefinitionCause::DependsOnFailed {
+                    name: parent_name.clone(),
+                })
             })?;
             fm.inherit(&parent.frontmatter);
             let mut profile = empty_profile(&parent.profile.agent);
@@ -258,7 +263,10 @@ impl Resolver<'_> {
                 return Err(DefinitionErr::new(
                     path,
                     format!("allows subagent '{failed}', which failed to load"),
-                ));
+                )
+                .with_cause(DefinitionCause::DependsOnFailed {
+                    name: failed.clone(),
+                }));
             }
             let unknown: Vec<_> = names
                 .iter()
@@ -450,19 +458,18 @@ pub(super) fn skill_policy(
     for name in names(path, "skills", listed)? {
         let skill: SkillName = name.parse().map_err(|_| DefinitionErr::new(path, format!("lists skill {name:?}; rimz reads one bare directory name, so a `<name>:<mode>` suffix, a path, or whitespace is refused")))?;
         if let SkillCheck::Check { env, library, .. } = check {
-            let candidates: Vec<PathBuf> = definition
+            let roots: Vec<PathBuf> = definition
                 .and_then(|definition| definition.skills_home(env))
                 .into_iter()
                 .chain([library.to_path_buf()])
-                .map(|root| root.join(&name).join("SKILL.md"))
                 .collect();
             let Some(found) = discovered
                 .as_ref()
                 .and_then(|skills| skills.get(skill.as_str()))
             else {
-                let searched: Vec<String> = candidates
+                let searched: Vec<String> = roots
                     .iter()
-                    .map(|candidate| candidate.display().to_string())
+                    .map(|root| root.join(&name).join("SKILL.md").display().to_string())
                     .collect();
                 return Err(DefinitionErr::new(
                     path,
@@ -470,7 +477,8 @@ pub(super) fn skill_policy(
                         "lists skill '{name}', missing at {}",
                         searched.join(" and ")
                     ),
-                ));
+                )
+                .with_cause(DefinitionCause::MissingSkill { skill, roots }));
             };
             let skill_path = found.source.join("SKILL.md");
             let text = std::fs::read_to_string(&skill_path).map_err(|error| {

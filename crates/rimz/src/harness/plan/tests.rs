@@ -404,9 +404,10 @@ fn agent_launch_precondition_surfaces_definition_error() {
     config
         .notices
         .definition_errors
-        .push(crate::config::DefinitionError {
+        .push(crate::config::definitions::DefinitionErr {
             path,
             message: "invalid frontmatter".to_owned(),
+            cause: crate::config::definitions::DefinitionCause::Invalid,
         });
     let launch = effective_launch(&config, root.path());
     for (spec, agent_override) in [

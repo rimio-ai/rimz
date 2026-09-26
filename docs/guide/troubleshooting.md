@@ -351,7 +351,7 @@ Two fields load, enter the trust hash so a grant covers them, and are then read 
 
 The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, or `loop.toml` RimZ cannot parse, with the precise error. A broken file does not stop the room: `rimz start` warns on stderr and opens with built-in defaults for every setting in that file. Fix it, then restart so RimZ loads the values you meant.
 
-Markdown definitions fail differently. A broken profile, team, or subagent definition refuses only the launches that select it, while read-only views keep showing the definitions that loaded. `rimz agents validate` names the file and the error; nothing rewrites a definition for you.
+Markdown definitions fail differently. A broken profile, team, or subagent definition refuses only the launches that select it, while read-only views keep showing the definitions that loaded. `rimz start` summarizes broken definitions in a few lines grouped by cause; `rimz agents validate` lists each file and error. Nothing rewrites a definition for you.
 
 ### A `[zellij]` or `[tmux]` setting did nothing
 

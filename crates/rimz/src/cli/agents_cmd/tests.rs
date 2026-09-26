@@ -2492,9 +2492,10 @@ fn exec_refuses_only_fresh_launches_of_an_unshadowed_failed_profile() {
     machine
         .notices
         .definition_errors
-        .push(rimz::config::DefinitionError {
+        .push(rimz::config::definitions::DefinitionErr {
             path,
             message: "invalid frontmatter".to_owned(),
+            cause: rimz::config::definitions::DefinitionCause::Invalid,
         });
     let request = |action| {
         let mut request = minimal_exec_request("codex", action);
