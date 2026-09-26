@@ -602,7 +602,7 @@ pub(super) fn spawned_subagents_under(
             role: normalized(Some(&pair.spec.role)),
             prompt: sanitize_user_prompt(Some(&pair.spec.prompt)),
             model: None,
-            total_tokens: None,
+            usage: Default::default(),
         })
         .collect()
 }

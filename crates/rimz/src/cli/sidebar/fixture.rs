@@ -1877,6 +1877,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> SidebarRow {
             context_pct,
             context_window,
             total_tokens,
+            run_total_tokens: None,
             cache_read_input_tokens: split.map(|tokens| tokens.0),
             cache_write_input_tokens: split.map(|tokens| tokens.1),
             fresh_input_tokens: split.map(|tokens| tokens.2),

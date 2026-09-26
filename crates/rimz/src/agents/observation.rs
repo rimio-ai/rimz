@@ -161,7 +161,7 @@ pub struct SpawnedSubagent {
     pub role: Option<String>,
     pub prompt: Option<String>,
     pub model: Option<String>,
-    pub total_tokens: Option<u64>,
+    pub usage: AgentUsageSummary,
 }
 
 /// Durable provider-neutral token and context-window enrichment.
@@ -177,6 +177,10 @@ pub struct AgentUsageSummary {
     pub context_window: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
+    /// The child's whole-run total as reported by the provider, never a
+    /// per-call or window figure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_total_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_read_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,6 +230,7 @@ impl AgentUsageSummary {
             context_pct: None,
             context_window: self.context_window.or(prior.context_window),
             total_tokens: self.total_tokens.or(prior.total_tokens),
+            run_total_tokens: self.run_total_tokens.or(prior.run_total_tokens),
             cache_read_input_tokens: self
                 .cache_read_input_tokens
                 .or(prior.cache_read_input_tokens),
@@ -453,6 +458,7 @@ mod tests {
             context_pct: Some(91),
             context_window: Some(200_000),
             total_tokens: Some(80_000),
+            run_total_tokens: Some(120_000),
             cache_read_input_tokens: Some(60_000),
             cache_write_input_tokens: Some(5_000),
             fresh_input_tokens: Some(15_000),
@@ -471,6 +477,16 @@ mod tests {
         assert_eq!(merged.context_pct, Some(50));
         assert_eq!(merged.total_tokens, Some(100_000));
         assert_eq!(merged.output_tokens, Some(2_000));
+        assert_eq!(merged.run_total_tokens, Some(120_000));
+        assert_eq!(
+            AgentUsageSummary {
+                run_total_tokens: Some(150_000),
+                ..Default::default()
+            }
+            .merge(Some(&merged), None)
+            .run_total_tokens,
+            Some(150_000)
+        );
     }
 
     #[test]

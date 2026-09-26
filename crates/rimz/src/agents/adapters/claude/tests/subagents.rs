@@ -96,7 +96,13 @@ fn interrupted_child_recovers_identity_and_usage() {
             role: None,
             prompt: Some("inspect lifecycle".to_owned()),
             model: Some("claude-sonnet-4-5".to_owned()),
-            total_tokens: Some(26),
+            usage: crate::agents::AgentUsageSummary {
+                fresh_input_tokens: Some(5),
+                cache_read_input_tokens: Some(6),
+                cache_write_input_tokens: Some(7),
+                output_tokens: Some(8),
+                ..Default::default()
+            },
         }]
     );
 }
@@ -112,7 +118,7 @@ fn marker_only_child_closes_without_optional_identity() {
     assert!(children[0].agent_name.is_none());
     assert!(children[0].prompt.is_none());
     assert!(children[0].model.is_none());
-    assert_eq!(children[0].total_tokens, Some(0));
+    assert_eq!(children[0].usage.total_tokens, None);
 }
 
 #[test]
@@ -186,7 +192,7 @@ fn nested_replay_cannot_close_the_outer_child() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].child_agent_id, "outer");
     assert_eq!(found[0].model.as_deref(), Some("claude-sonnet-4-5"));
-    assert_eq!(found[0].total_tokens, Some(26));
+    assert_eq!(found[0].usage.input_context_tokens(), Some(18));
     assert!(
         ClaudeAdapter
             .spawned_subagents(SubagentSpawnInput {

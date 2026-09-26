@@ -199,6 +199,20 @@ mod tests {
     fn correlates_start_and_completion_metadata_by_exact_child_id() {
         let (_dir, path) = transcript(FIXTURE);
 
+        use crate::agents::capabilities::HookCapability;
+        let children =
+            super::super::CopilotAdapter.spawned_subagents(crate::agents::SubagentSpawnInput {
+                parent_agent_id: &crate::ids::AgentSessionId::from("parent-session"),
+                parent_transcript_path: Some(&path),
+                parent_workspace: None,
+            });
+        let child = children
+            .iter()
+            .find(|child| child.child_agent_id == "toolu_alpha")
+            .unwrap();
+        assert_eq!(child.usage.run_total_tokens, Some(22_116));
+        assert_eq!(child.usage.total_tokens, None);
+
         assert_eq!(
             correlate(&path, "parent-session", "toolu_alpha"),
             Some(Correlated {

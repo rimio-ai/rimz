@@ -35,6 +35,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
             ],
             tool_calls: BTreeMap::from([("Read".to_owned(), 4)]),
             usage: AgentUsageSummary {
+                run_total_tokens: None,
                 context_pct: Some(42),
                 context_window: Some(200_000),
                 total_tokens: Some(84_000),

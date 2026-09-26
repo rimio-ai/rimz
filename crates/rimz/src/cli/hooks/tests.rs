@@ -281,7 +281,7 @@ impl rimz::agents::capabilities::HookCapability for CorrelationTestAdapter {
                     role: Some(role.to_owned()),
                     prompt: Some(prompt.to_owned()),
                     model: None,
-                    total_tokens: None,
+                    usage: Default::default(),
                 }
             };
         match input.parent_agent_id.as_str() {
@@ -1046,7 +1046,8 @@ fn copilot_child_metadata_reconciles_at_the_parent_checkpoint() {
     assert_eq!(child.name.as_deref(), Some("researcher"));
     assert_eq!(child.task.as_deref(), Some("Inspect auth retry"));
     assert_eq!(child.model.as_deref(), Some("claude-haiku-4.5"));
-    assert_eq!(child.usage.total_tokens, Some(22_116));
+    assert_eq!(child.usage.run_total_tokens, Some(22_116));
+    assert_eq!(child.usage.total_tokens, None);
     assert_eq!(child.status, rimz::agents::AgentStatus::Success);
 
     let reconciliation_count = || {
@@ -1207,7 +1208,8 @@ fn copilot_uuid_child_hooks_join_through_the_start_record_agent_id() {
 
     parent("postToolUse", serde_json::json!({"toolName":"task"}));
     let reconciled = state(child_id).unwrap();
-    assert_eq!(reconciled.usage.total_tokens, Some(11_444));
+    assert_eq!(reconciled.usage.run_total_tokens, Some(11_444));
+    assert_eq!(reconciled.usage.total_tokens, None);
     assert!(state("call_alpha").is_none());
     assert_eq!(
         state("parent-session").unwrap().status,

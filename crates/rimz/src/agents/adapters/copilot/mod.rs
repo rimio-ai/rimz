@@ -40,7 +40,7 @@ use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
 use super::observation::payload_has_context_observation;
 use super::{
-    AgentLifecycleObservation, AgentTurnError, AskKind, HookOutput, HookRouting,
+    AgentLifecycleObservation, AgentTurnError, AgentUsageSummary, AskKind, HookOutput, HookRouting,
     LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SanitizedPrompt,
     SessionOrigin, SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput,
     SubagentIdentity, SubagentSpawnInput, TranscriptMessage, TurnErrorClass,
@@ -571,7 +571,10 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                 role: child.task.clone(),
                 prompt: sanitize_user_prompt(child.prompt.as_deref()),
                 model: child.model,
-                total_tokens: child.total_tokens,
+                usage: AgentUsageSummary {
+                    run_total_tokens: child.total_tokens,
+                    ..Default::default()
+                },
             })
             .collect()
     }
