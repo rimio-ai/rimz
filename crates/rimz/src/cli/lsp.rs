@@ -8,7 +8,7 @@ use rimz::lsp::{
     registry::{self, State},
 };
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Args)]
@@ -37,6 +37,14 @@ enum Command {
     Find(Query),
     /// List shared servers on this machine.
     List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect a shared server and its attached editors.
+    Status {
+        checkout: Option<PathBuf>,
+        #[arg(long)]
+        server: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -83,6 +91,11 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(rimz::lsp::broker::serve(serde_json::from_str(&request)?)?);
         }
         Command::List { json } => return list(json),
+        Command::Status {
+            checkout,
+            server,
+            json,
+        } => return status(checkout, server, json, globals),
         Command::Stop {
             checkout,
             server,
@@ -100,7 +113,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     let entries = registry::read_entries()?;
     let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
     let workspace = rimz::workspace::WorkspaceResolver::resolve(&cwd, globals.root.clone())?;
-    let root = checkout(&cwd, &entries).unwrap_or(&workspace.worktree_root);
+    let root = registry::enclosing_checkout(&cwd, &entries).unwrap_or(&workspace.worktree_root);
     let machine = rimz::config::MachineConfig::load()?;
     let config = rimz::config::effective::load(&machine, workspace.launch_repo_root())?;
     let path = match verb {
@@ -111,15 +124,24 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             _ => None,
         },
     };
-    let result = query::select(
+    let entry = match query::select(
         root,
         entries.clone(),
         &config.lsp_servers,
         args.server.as_deref(),
         path.as_deref(),
-    )
-    .and_then(|entry| query::execute(&entry, verb, &args.target));
-    let output = match result {
+    ) {
+        Ok(entry) => entry,
+        Err(error) => return query_error(error),
+    };
+    let dirty = entry
+        .attached
+        .iter()
+        .flat_map(|editor| &editor.open)
+        .filter(|document| document.owner && document.dirty)
+        .map(|document| document.uri.clone())
+        .collect();
+    let output = match query::execute(&entry, verb, &args.target) {
         Ok(output) => output,
         Err(error) => return query_error(error),
     };
@@ -135,7 +157,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                 write!(
                     out,
                     "{}",
-                    query::render(verb, root, document_uri.as_deref(), result, scope)?
+                    query::render(verb, root, document_uri.as_deref(), result, scope, &dirty)?
                 )?;
             }
         }
@@ -159,12 +181,112 @@ fn query_error(error: QueryErr) -> Result<()> {
     std::process::exit(code)
 }
 
-fn checkout<'a>(cwd: &Path, entries: &'a [registry::Entry]) -> Option<&'a Path> {
-    entries
-        .iter()
-        .filter(|entry| cwd.starts_with(&entry.root))
-        .max_by_key(|entry| entry.root.components().count())
-        .map(|entry| entry.root.as_path())
+fn status(
+    path: Option<PathBuf>,
+    server: Option<String>,
+    json: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let entries = {
+        let _lock = registry::lock()?;
+        registry::sweep_locked()?
+    };
+    let cwd = std::fs::canonicalize(
+        path.or_else(|| globals.root.clone())
+            .unwrap_or(std::env::current_dir()?),
+    )?;
+    let root = registry::enclosing_checkout(&cwd, &entries).unwrap_or(&cwd);
+    let mut selected = entries.iter().filter(|entry| {
+        entry.root == root && server.as_ref().is_none_or(|server| server == &entry.server)
+    });
+    let Some(entry) = selected.next() else {
+        return query_error(QueryErr::Unavailable {
+            root: root.to_owned(),
+            reason: query::UnavailableReason::NotRunning,
+        });
+    };
+    if selected.next().is_some() {
+        anyhow::bail!("multiple language servers; choose --server NAME");
+    }
+    let entry: registry::Entry = serde_json::from_value(registry::request(
+        entry,
+        &serde_json::json!({"op":"status"}),
+        Duration::from_secs(2),
+    )?)?;
+    let mut out = render::out();
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&entry)?)?;
+        return Ok(());
+    }
+    let mut facts = render::KeyVals::new();
+    facts.push("checkout", render::cell(entry.root.display().to_string()));
+    facts.push("server", render::cell(&entry.server));
+    facts.push(
+        "state",
+        render::cell(match entry.state {
+            State::Starting => "starting".into(),
+            State::Indexing => "indexing".into(),
+            State::Ready => "ready".into(),
+            State::Dormant { reason, .. } => {
+                reason.map_or_else(|| "dormant".into(), |reason| format!("dormant: {reason}"))
+            }
+            State::Stopped { reason, .. } => format!("stopped: {reason}"),
+        }),
+    );
+    facts.push("broker pid", render::cell(entry.broker_pid.to_string()));
+    facts.push(
+        "server pid",
+        render::cell(
+            entry
+                .server_pid
+                .map_or_else(|| "none".into(), |pid| pid.to_string()),
+        ),
+    );
+    facts.push("requests", render::cell(entry.request_count.to_string()));
+    facts.push("leases", render::cell(entry.leases.len().to_string()));
+    facts.render(&mut out)?;
+    for editor in entry.attached {
+        let mut details = render::KeyVals::new();
+        details.push(
+            "editor",
+            render::cell(format!(
+                "{}  {}  attached {}s ago",
+                editor.pid,
+                editor.name.as_deref().unwrap_or("unnamed"),
+                rimz::utils::time::unix_now_ms().saturating_sub(editor.since_ms) / 1000
+            )),
+        );
+        details.render(&mut out)?;
+        let mut buffers = render::KeyVals::new().indent(2);
+        for document in editor.open {
+            let path = url::Url::parse(&document.uri)
+                .ok()
+                .and_then(|uri| uri.to_file_path().ok());
+            let path = path
+                .as_deref()
+                .map(|path| {
+                    path.strip_prefix(&entry.root)
+                        .unwrap_or(path)
+                        .display()
+                        .to_string()
+                })
+                .unwrap_or(document.uri);
+            buffers.push(
+                "buffer",
+                render::cell(format!(
+                    "{path}{}{}",
+                    if document.owner { " (owner)" } else { "" },
+                    if document.dirty {
+                        " (unsaved in editor)"
+                    } else {
+                        ""
+                    }
+                )),
+            );
+        }
+        buffers.render(&mut out)?;
+    }
+    Ok(())
 }
 
 fn list(json: bool) -> Result<()> {
@@ -248,7 +370,7 @@ fn stop(
         path.or_else(|| globals.root.clone())
             .unwrap_or(std::env::current_dir()?),
     )?;
-    let root = checkout(&cwd, &entries).unwrap_or(&cwd);
+    let root = registry::enclosing_checkout(&cwd, &entries).unwrap_or(&cwd);
     let entries: Vec<_> = entries
         .iter()
         .filter(|entry| {

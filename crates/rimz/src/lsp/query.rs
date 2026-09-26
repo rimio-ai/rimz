@@ -9,7 +9,7 @@ use super::protocol::{
 use super::{LspErr, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -342,14 +342,23 @@ pub fn render(
     document_uri: Option<&str>,
     result: Value,
     scope: Scope,
+    dirty: &BTreeSet<String>,
 ) -> Result<String> {
-    render_with_source(verb, root, document_uri, result, scope, |uri, line| {
-        let text = std::fs::read_to_string(file_path(uri)?)?;
-        text.lines()
-            .nth(line as usize)
-            .map(str::to_owned)
-            .ok_or_else(|| LspErr::Protocol("location is past the end of the file".into()))
-    })
+    render_with_source(
+        verb,
+        root,
+        document_uri,
+        result,
+        scope,
+        dirty,
+        |uri, line| {
+            let text = std::fs::read_to_string(file_path(uri)?)?;
+            text.lines()
+                .nth(line as usize)
+                .map(str::to_owned)
+                .ok_or_else(|| LspErr::Protocol("location is past the end of the file".into()))
+        },
+    )
 }
 
 fn render_with_source(
@@ -358,6 +367,7 @@ fn render_with_source(
     document_uri: Option<&str>,
     result: Value,
     scope: Scope,
+    dirty: &BTreeSet<String>,
     mut source: impl FnMut(&str, u32) -> Result<String>,
 ) -> Result<String> {
     if result.is_null() {
@@ -373,7 +383,9 @@ fn render_with_source(
             let mut lines = Vec::new();
             for location in sorted.into_values() {
                 let mut line = position_text(root, &location.uri, location.range.start)?;
-                if let Ok(text) = source(&location.uri, location.range.start.line) {
+                if dirty.contains(&location.uri) {
+                    line.push_str("  (unsaved in editor)");
+                } else if let Ok(text) = source(&location.uri, location.range.start.line) {
                     line.push_str("  ");
                     line.push_str(text.trim());
                 }
@@ -518,9 +530,26 @@ mod tests {
             None,
             json!([{"uri": "file:///checkout/gone.rs", "range": range()}]),
             Scope::Checkout,
+            &BTreeSet::new(),
             |_, _| Err(LspErr::Protocol("missing line".into())),
         );
         assert_eq!(result.unwrap(), "gone.rs:2:3\n");
+    }
+
+    #[test]
+    fn dirty_locations_never_read_disk_source() {
+        let dirty = BTreeSet::from(["file:///checkout/gone.rs".to_owned()]);
+        for verb in [Verb::Def, Verb::Refs, Verb::Impl] {
+            let mut consulted = Vec::new();
+            let rendered = render_with_source(verb, Path::new("/checkout"), None,
+                json!([{"uri":"file:///checkout/clean.rs","range":range()}, {"uri":"file:///checkout/gone.rs","range":range()}]),
+                Scope::Checkout, &dirty, |uri, _| { consulted.push(uri.to_owned()); Ok("disk source".into()) }).unwrap();
+            assert_eq!(
+                rendered,
+                "clean.rs:2:3  disk source\ngone.rs:2:3  (unsaved in editor)\n"
+            );
+            assert_eq!(consulted, ["file:///checkout/clean.rs"]);
+        }
     }
 
     #[test]
@@ -600,9 +629,15 @@ mod tests {
         let uri = "file:///checkout/src/lib.rs";
         let location = json!({"uri": uri, "range": range()});
         let show = |verb, result| {
-            render_with_source(verb, root, Some(uri), result, Scope::Checkout, |_, _| {
-                Ok("  fn work() {}  ".into())
-            })
+            render_with_source(
+                verb,
+                root,
+                Some(uri),
+                result,
+                Scope::Checkout,
+                &BTreeSet::new(),
+                |_, _| Ok("  fn work() {}  ".into()),
+            )
             .unwrap()
         };
         insta::assert_snapshot!(show(Verb::Def, location.clone()), @"src/lib.rs:2:3  fn work() {}");
@@ -656,13 +691,22 @@ mod tests {
                     Path::new("/checkout"),
                     None,
                     calls.clone(),
-                    Scope::Checkout
+                    Scope::Checkout,
+                    &BTreeSet::new()
                 )
                 .unwrap(),
                 "work  lib.rs:2:3\n2 outside the checkout hidden; add --external to show them\n"
             );
             assert_eq!(
-                render(verb, Path::new("/checkout"), None, calls, Scope::External).unwrap(),
+                render(
+                    verb,
+                    Path::new("/checkout"),
+                    None,
+                    calls,
+                    Scope::External,
+                    &BTreeSet::new()
+                )
+                .unwrap(),
                 "work  /other/lib.rs:2:3\nwork  /sdk/lib.rs:2:3\nwork  lib.rs:2:3\n"
             );
             assert_eq!(
@@ -671,7 +715,8 @@ mod tests {
                     Path::new("/checkout"),
                     None,
                     json!([{key: outside}]),
-                    Scope::Checkout
+                    Scope::Checkout,
+                    &BTreeSet::new()
                 )
                 .unwrap(),
                 "no results\n1 outside the checkout hidden; add --external to show them\n"
