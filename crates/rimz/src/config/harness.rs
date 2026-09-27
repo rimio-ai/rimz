@@ -9,6 +9,9 @@ use crate::agents::BudgetWindow;
 use crate::harness::budget::BudgetSpec;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
+/// Request anchoring excludes final generation; covers the producer tick, helper spawn, and submission.
+pub(crate) const PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(60);
+
 const DEFAULT_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags. Include relevant information in the summary such that this conversation will be continued by a new context window without needing to redo work or be reprovided with relevant constraints or context. Be sure to preserve: (1) any difficulties or problems that came up, and how they were handled or resolved; (2) any possibilities, options, or approaches that were raised, tried, or set aside, and why; (3) anything that was asked for, decided, agreed, ruled out, or established as a preference, constraint, or boundary — stated exactly; (4) exactly where things stand now — what has been covered, settled, or completed so far; (5) anything still open, unresolved, promised, or expected to happen next; (6) specific details that would be hard to reconstruct — names, numbers, dates, exact wording, links or references — kept exactly. Be complete on these even at the cost of length; keep everything else concise. Weight the two voices differently: keep what the user said, asked for, shared, or established carefully and close to their own words; your own explanations and reasoning can be condensed much further, to what they concluded or produced — as long as nothing in the six items above is dropped.";
 const TEAM_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags so a new context window continues without redoing work. This seat is a team member: on resume I reread the board, the stage files, and git, so point at them by path and section and copy nothing they hold. Keep only what this window alone knows: (1) facts, decisions, and drafts not yet filed, and the words of the user and teammates that shaped them, each tagged with the file and section it belongs in, so my first act on resume writes it there; (2) what is in flight: replies I wait on, messages I owe.";
 
@@ -348,7 +351,7 @@ mod prompt_cache_ttl_serde {
         }
         parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
             .ok()
-            .filter(|ttl| *ttl > crate::harness::idle_compact::PROMPT_CACHE_MARGIN)
+            .filter(|ttl| *ttl > PROMPT_CACHE_MARGIN)
             .map(Some)
             .ok_or_else(|| {
                 format!(

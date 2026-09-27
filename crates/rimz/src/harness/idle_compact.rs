@@ -21,9 +21,6 @@ use crate::store::snapshot::SidebarSnapshot;
 /// Below this fill, re-caching costs less than an extra compaction turn.
 pub const IDLE_COMPACT_MIN_TOKENS: u64 = 50_000;
 
-/// Request anchoring excludes final generation; covers the producer tick, helper spawn, and submission.
-pub const PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(60);
-
 /// Bounds duplicate helper spawns while a frame or context reading catches up.
 const IDLE_COMPACT_RESPAWN_THROTTLE: Duration = Duration::from_secs(10 * 60);
 
@@ -64,9 +61,7 @@ pub fn fire_point(
         }),
         IdleCompactMode::On => {
             let ttl = harness.prompt_cache_ttl(&agent.kind)?;
-            let fire_after = ttl
-                .checked_sub(PROMPT_CACHE_MARGIN)
-                .filter(|duration| !duration.is_zero())?;
+            let fire_after = ttl.checked_sub(crate::config::PROMPT_CACHE_MARGIN)?;
             Some(IdleWindow {
                 fire_after,
                 cache_expires: Some(ttl),

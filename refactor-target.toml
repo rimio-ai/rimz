@@ -205,8 +205,6 @@ path = "crates/rimz/src/config"
 upward-dependencies = [
     "agents",
     "harness::budget",
-    # TTL overrides must exceed the shared cache timer margin.
-    "harness::idle_compact",
     "harness::schedule",
     "harness::spec",
     "harness::team_prompt",

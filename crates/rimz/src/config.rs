@@ -84,6 +84,7 @@ pub(crate) use gc::GcConfig;
 pub use gc::parse_older_than;
 pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
+pub(crate) use harness::PROMPT_CACHE_MARGIN;
 pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
