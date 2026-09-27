@@ -358,6 +358,10 @@ const NO_SCAN: PinScan<'static> = &|_| Vec::new();
 impl WorkspaceResolver {
     /// Resolve a room choice from a starting path. `root_override` corresponds
     /// to the `--root` CLI flag and `[workspace] root` in `.rimz/config.toml`.
+    ///
+    /// Ignores the pane's room pin: it answers "which room would a start here
+    /// create", not "which room am I in". To read the caller's current room,
+    /// use [`Self::resolve_participant`].
     pub fn resolve(
         start: impl AsRef<Path>,
         root_override: Option<PathBuf>,
