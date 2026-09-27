@@ -222,7 +222,6 @@ fn build_command<S: AsRef<OsStr>>(
         .envs(envs.iter().map(|(key, value)| (*key, value)));
     if crate::sccache::should_wrap(program, args) {
         command.env("RUSTC_WRAPPER", "sccache");
-        command.env("CARGO_INCREMENTAL", "0");
     }
     for key in removed_envs {
         command.env_remove(key);
