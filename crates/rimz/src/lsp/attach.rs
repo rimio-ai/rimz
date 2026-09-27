@@ -275,12 +275,9 @@ fn select_server(
             "unknown language server {name}; choose --server NAME from the configured servers"
         )));
     }
-    let mut matched = servers.iter().filter(|(_, config)| {
-        config
-            .root_markers
-            .iter()
-            .any(|marker| root.join(marker).exists())
-    });
+    let mut matched = servers
+        .iter()
+        .filter(|(_, config)| config.matches_root(root));
     if let Some((name, _)) = matched.next()
         && matched.next().is_none()
     {

@@ -511,11 +511,7 @@ pub(crate) fn select_server(
             )));
         }
     }
-    if !config
-        .root_markers
-        .iter()
-        .any(|marker| root.join(marker).exists())
-    {
+    if !config.matches_root(root) {
         return Ok(false);
     }
     validate_options(server, config)?;
@@ -535,27 +531,24 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             result.ignored_untrusted.push(message);
         }
     }
-    let minimum = match validate_policy(request.policy) {
-        Ok(minimum) => minimum,
-        Err(LspErr::Configuration(message)) => {
-            if request.servers.values().any(|config| {
-                config.policy == LspPolicy::Required
-                    && config
-                        .root_markers
-                        .iter()
-                        .any(|marker| root.join(marker).exists())
-            }) {
-                return Err(LspErr::Configuration(message));
+    let minimum =
+        match validate_policy(request.policy) {
+            Ok(minimum) => minimum,
+            Err(LspErr::Configuration(message)) => {
+                if request.servers.values().any(|config| {
+                    config.policy == LspPolicy::Required && config.matches_root(&root)
+                }) {
+                    return Err(LspErr::Configuration(message));
+                }
+                if queue.startup_refused.insert("policy:".into()) {
+                    record_refusal(&root, "[lsp]", &message);
+                    result.startup_refused.push(message);
+                }
+                queue.ticket = None;
+                return Ok(result);
             }
-            if queue.startup_refused.insert("policy:".into()) {
-                record_refusal(&root, "[lsp]", &message);
-                result.startup_refused.push(message);
-            }
-            queue.ticket = None;
-            return Ok(result);
-        }
-        Err(error) => return Err(error),
-    };
+            Err(error) => return Err(error),
+        };
     let mut matched = Vec::new();
     for (server, config) in request.servers {
         if queue.startup_refused.contains(&format!("server:{server}")) {
