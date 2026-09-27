@@ -93,7 +93,18 @@ pub(crate) fn fmt(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn lint(root: &Path) -> Result<()> {
-    for args in LINT_ARG_SETS {
+    lint_arg_sets(root, LINT_ARG_SETS)
+}
+
+/// The per-commit iteration signal: one all-feature clippy pass. The two
+/// install-host passes each re-check the whole `rimz` crate under another
+/// feature set, so they stay with `gate` and the `checks` composite.
+pub(crate) fn lint_all_features(root: &Path) -> Result<()> {
+    lint_arg_sets(root, &[ALL_FEATURE_LINT_ARGS])
+}
+
+fn lint_arg_sets(root: &Path, arg_sets: &[&[&str]]) -> Result<()> {
+    for args in arg_sets {
         let captured = capture_cargo_task(root, "lint", args.iter().copied(), &[], &[])?;
         if !captured.status.success() {
             report_task_failure(
