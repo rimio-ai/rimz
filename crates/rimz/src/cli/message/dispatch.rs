@@ -64,7 +64,7 @@ pub(super) fn send_message(
     );
     send::validate_reply_wait(wait, !no_enter, create, scheduled)?;
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
-    let mode = dispatch_mode(mode, !no_enter, force, create, smart_compact)?;
+    let mode = dispatch_mode(mode, create)?;
     rimz::address::require_mention(&target)?;
     let target = if target == "@me" {
         let snapshot = ctx.cached_snapshot()?;
@@ -97,6 +97,9 @@ pub(super) fn send_message(
             caller_identity: send::caller_identity(caller.as_ref()),
         }),
         mux: globals.mux,
+        enter: !no_enter,
+        force,
+        auto_compact: smart_compact,
         mode: mode.clone(),
     };
     let miss = || RecipientMiss {
@@ -144,31 +147,17 @@ pub(super) fn send_message(
 
 /// Validate the flag combinations a send mode forbids, then resolve it into the
 /// domain dispatch mode.
-fn dispatch_mode(
-    mode: SendKind,
-    enter: bool,
-    force: bool,
-    create: bool,
-    smart_compact: Option<AutoCompact>,
-) -> Result<DispatchMode> {
+fn dispatch_mode(mode: SendKind, create: bool) -> Result<DispatchMode> {
     let machine_config = crate::cli::machine_config();
     let (gate, schedule, after, when) = match mode {
         SendKind::Interrupt => {
             if create {
                 bail!("--interrupt needs an existing recipient; remove --create");
             }
-            return Ok(DispatchMode::Interrupt {
-                enter,
-                force,
-                auto_compact: smart_compact,
-            });
+            return Ok(DispatchMode::Interrupt);
         }
         SendKind::Steer => {
-            return Ok(DispatchMode::Steer {
-                enter,
-                force,
-                auto_compact: smart_compact,
-            });
+            return Ok(DispatchMode::Steer);
         }
         SendKind::Boundary {
             gate,
@@ -190,10 +179,7 @@ fn dispatch_mode(
     }
     let now = Timestamp::now().to_zoned(machine_config.time_zone());
     Ok(DispatchMode::Boundary {
-        enter,
         gate,
-        force,
-        auto_compact: smart_compact,
         not_before: schedule
             .as_deref()
             .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
