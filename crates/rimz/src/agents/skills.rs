@@ -9,11 +9,11 @@ use crate::config::SkillName;
 pub struct ProviderSkillKey(String);
 
 impl ProviderSkillKey {
-    pub(crate) fn new(name: String) -> Self {
+    pub(super) fn new(name: String) -> Self {
         Self(name)
     }
 
-    pub(crate) fn as_str(&self) -> &str {
+    pub(super) fn as_str(&self) -> &str {
         &self.0
     }
 }
