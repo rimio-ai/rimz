@@ -3,15 +3,68 @@
 use super::{RequestPhase, Shared, clients::Event, registry, router::RouterEvent};
 use crate::lsp::{
     LspErr, Result,
-    protocol::QueryRequest,
+    protocol::{CallHierarchyItem, Position},
     registry::{LaunchId, Lease, State, StopReason},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TextDocument {
+    uri: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentPosition {
+    text_document: TextDocument,
+    position: Position,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct References {
+    #[serde(flatten)]
+    position: DocumentPosition,
+    context: ReferenceContext,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReferenceContext {
+    include_declaration: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "method", content = "params")]
+enum QueryRequest {
+    #[serde(rename = "textDocument/definition")]
+    Definition(DocumentPosition),
+    #[serde(rename = "textDocument/references")]
+    References(References),
+    #[serde(rename = "textDocument/hover")]
+    Hover(DocumentPosition),
+    #[serde(rename = "textDocument/implementation")]
+    Implementation(DocumentPosition),
+    #[serde(rename = "textDocument/documentSymbol")]
+    DocumentSymbols {
+        #[serde(rename = "textDocument")]
+        text_document: TextDocument,
+    },
+    #[serde(rename = "workspace/symbol")]
+    WorkspaceSymbols { query: String },
+    #[serde(rename = "textDocument/prepareCallHierarchy")]
+    PrepareCallHierarchy(DocumentPosition),
+    #[serde(rename = "callHierarchy/incomingCalls")]
+    IncomingCalls { item: CallHierarchyItem },
+    #[serde(rename = "callHierarchy/outgoingCalls")]
+    OutgoingCalls { item: CallHierarchyItem },
+}
 
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]

@@ -27,33 +27,6 @@ pub struct Location {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TextDocument {
-    pub uri: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocumentPosition {
-    pub text_document: TextDocument,
-    pub position: Position,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct References {
-    #[serde(flatten)]
-    pub position: DocumentPosition,
-    pub context: ReferenceContext,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReferenceContext {
-    pub include_declaration: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SymbolInformation {
     pub name: String,
     pub kind: u32,
@@ -63,7 +36,7 @@ pub struct SymbolInformation {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DocumentSymbol {
+pub(super) struct DocumentSymbol {
     pub name: String,
     pub kind: u32,
     pub range: Range,
@@ -81,7 +54,7 @@ pub(super) enum Symbols {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CallHierarchyItem {
+pub(super) struct CallHierarchyItem {
     pub name: String,
     pub kind: u32,
     pub uri: String,
@@ -89,32 +62,6 @@ pub struct CallHierarchyItem {
     pub selection_range: Range,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "method", content = "params")]
-pub enum QueryRequest {
-    #[serde(rename = "textDocument/definition")]
-    Definition(DocumentPosition),
-    #[serde(rename = "textDocument/references")]
-    References(References),
-    #[serde(rename = "textDocument/hover")]
-    Hover(DocumentPosition),
-    #[serde(rename = "textDocument/implementation")]
-    Implementation(DocumentPosition),
-    #[serde(rename = "textDocument/documentSymbol")]
-    DocumentSymbols {
-        #[serde(rename = "textDocument")]
-        text_document: TextDocument,
-    },
-    #[serde(rename = "workspace/symbol")]
-    WorkspaceSymbols { query: String },
-    #[serde(rename = "textDocument/prepareCallHierarchy")]
-    PrepareCallHierarchy(DocumentPosition),
-    #[serde(rename = "callHierarchy/incomingCalls")]
-    IncomingCalls { item: CallHierarchyItem },
-    #[serde(rename = "callHierarchy/outgoingCalls")]
-    OutgoingCalls { item: CallHierarchyItem },
 }
 
 /// The broker's last frame on an editor connection after a terminal stop; attach consumes it.
