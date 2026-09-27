@@ -56,6 +56,111 @@ fn editor_query(directory: &Path, name: &str) -> Value {
         .clone()
 }
 
+#[test]
+fn lsp_server_arms_deliver_settings_capabilities_and_status() {
+    for (kind, options, sections, answers) in [
+        (
+            "pyright",
+            json!({"python":{"analysis":{"typeCheckingMode":"strict"}},"pyright":{"disableOrganizeImports":true}}),
+            vec!["python", "pyright", "python.analysis", "absent"],
+            json!([{"analysis":{"typeCheckingMode":"strict"}},{"disableOrganizeImports":true},{"typeCheckingMode":"strict"},null]),
+        ),
+        (
+            "basedpyright",
+            json!({"python":{"pythonPath":"python3"},"basedpyright":{"analysis":{"typeCheckingMode":"strict"}},"pyright":{"disableOrganizeImports":true}}),
+            vec!["python", "basedpyright", "pyright"],
+            json!([{"pythonPath":"python3"},{"analysis":{"typeCheckingMode":"strict"}},{"disableOrganizeImports":true}]),
+        ),
+        (
+            "ruff",
+            json!({"settings":{"lineLength":100}}),
+            vec!["settings"],
+            json!([{"lineLength":100}]),
+        ),
+        (
+            "rust-analyzer",
+            json!({"checkOnSave":false}),
+            vec!["rust-analyzer", "rust-analyzer.checkOnSave", "absent"],
+            json!([{"checkOnSave":false},false,null]),
+        ),
+    ] {
+        let env = Env::new();
+        let mut command = vec![
+            crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"))
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        for section in sections {
+            command.extend(["--configuration-section".into(), section.into()]);
+        }
+        let request = rimz::lsp::admission::ServeRequest {
+            root: env.project_root.canonicalize().unwrap(), project: env.project_root.clone(), server: "python".into(), settings_hash: "arms-test".into(),
+            config: serde_json::from_value(json!({"kind":kind,"command":command,"extensions":["py"],"root-markers":["pyproject.toml"],"init-options":options,"memory-estimate":"1M"})).unwrap(),
+            policy: rimz::config::LspConfig { kill_floor_percent: 0, reserve_percent: 0, reserve_min: "0".into(), ..Default::default() }, eager: false,
+        };
+        let (mut broker, directory) = spawn_test_broker(&env, &request);
+        let _editor = Editor::attach(&directory, "arms-test");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let requests = loop {
+            let result = editor_query(&directory, "requests");
+            if result["requests"]
+                .as_array()
+                .is_some_and(|frames| frames.iter().any(|f| f["id"] == "configuration"))
+            {
+                break result["requests"].as_array().unwrap().clone();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "configuration response missing: {result}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let initialized = requests
+            .iter()
+            .find(|f| f["method"] == "initialize")
+            .unwrap();
+        assert_eq!(initialized["params"]["initializationOptions"], options);
+        let experimental = &initialized["params"]["capabilities"]["experimental"];
+        if kind == "rust-analyzer" {
+            assert_eq!(
+                experimental["commands"]["commands"],
+                json!([
+                    "rust-analyzer.runSingle",
+                    "rust-analyzer.debugSingle",
+                    "rust-analyzer.showReferences",
+                    "rust-analyzer.gotoLocation",
+                    "rust-analyzer.triggerParameterHints",
+                    "rust-analyzer.rename"
+                ])
+            );
+        } else {
+            assert!(experimental.is_null(), "{kind}: {experimental}");
+        }
+        assert_eq!(
+            requests
+                .iter()
+                .find(|f| f["id"] == "configuration")
+                .unwrap()["result"],
+            answers
+        );
+        let output = env
+            .rimz()
+            .args(["lsp", "status", "--server", "python", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.stdout).unwrap()["kind"],
+            kind
+        );
+        assert_eq!(
+            editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+            true
+        );
+        broker.wait().unwrap();
+    }
+}
+
 struct Editor(BufReader<UnixStream>);
 
 impl Editor {
@@ -1506,6 +1611,7 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_broker() {
     let runtime = tempfile::tempdir().unwrap();
     let pid = std::process::id();
     let entry = Entry {
+        kind: None,
         root: runtime.path().join("checkout"),
         project: Some(runtime.path().join("project")),
         server: "live".into(),

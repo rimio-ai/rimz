@@ -20,7 +20,7 @@ impl Transport {
     pub(super) fn start(
         reader: impl Read + Send + 'static,
         writer: impl Write + Send + 'static,
-        options: Value,
+        settings: Arc<Mutex<super::Settings>>,
         folders: Value,
         sink: mpsc::Sender<Value>,
     ) -> Arc<Self> {
@@ -33,7 +33,7 @@ impl Transport {
         let background = transport.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(reader);
-            let result = background.read(&mut reader, &options, &folders, &sink);
+            let result = background.read(&mut reader, &settings, &folders, &sink);
             let message = result
                 .err()
                 .map_or_else(|| "server closed".into(), |e| e.to_string());
@@ -116,7 +116,7 @@ impl Transport {
     fn read(
         &self,
         reader: &mut impl std::io::BufRead,
-        options: &Value,
+        settings: &Mutex<super::Settings>,
         folders: &Value,
         sink: &mpsc::Sender<Value>,
     ) -> Result<()> {
@@ -124,7 +124,16 @@ impl Transport {
             let message = protocol::read_frame(reader)?;
             if let Some(method) = message.get("method").and_then(Value::as_str) {
                 if let Some(id) = message.get("id") {
-                    let response = server_response(method, &message["params"], options, folders);
+                    let response = {
+                        let settings = settings.lock().unwrap_or_else(|e| e.into_inner());
+                        server_response(
+                            settings.kind,
+                            method,
+                            &message["params"],
+                            &settings.options,
+                            folders,
+                        )
+                    };
                     let mut reply = json!({"jsonrpc": "2.0", "id": id});
                     match response {
                         Ok(result) => reply["result"] = result,
@@ -164,6 +173,7 @@ impl Transport {
 }
 
 fn server_response(
+    kind: crate::config::LspServerKind,
     method: &str,
     params: &Value,
     options: &Value,
@@ -179,9 +189,13 @@ fn server_response(
                     let Some(section) = item["section"].as_str() else {
                         return options.clone();
                     };
-                    // Initialization options are already scoped to the language server.
-                    let section = section.strip_prefix("rust-analyzer.").unwrap_or(section);
-                    if section == "rust-analyzer" {
+                    let rust_analyzer = kind == crate::config::LspServerKind::RustAnalyzer;
+                    // rust-analyzer's initialization options are already scoped to its own section.
+                    let section = match section.strip_prefix("rust-analyzer.") {
+                        Some(stripped) if rust_analyzer => stripped,
+                        _ => section,
+                    };
+                    if rust_analyzer && section == "rust-analyzer" {
                         return options.clone();
                     }
                     section
@@ -207,6 +221,57 @@ fn server_response(
 mod tests {
     use super::*;
 
+    fn settings() -> Arc<Mutex<super::super::Settings>> {
+        Arc::new(Mutex::new(super::super::Settings {
+            kind: crate::config::LspServerKind::RustAnalyzer,
+            options: Value::Null,
+        }))
+    }
+
+    fn server_response(
+        method: &str,
+        params: &Value,
+        options: &Value,
+        folders: &Value,
+    ) -> std::result::Result<Value, ()> {
+        super::server_response(
+            crate::config::LspServerKind::RustAnalyzer,
+            method,
+            params,
+            options,
+            folders,
+        )
+    }
+
+    #[test]
+    fn python_and_generic_configuration_walk_sections_without_rust_prefixes() {
+        let options = json!({"python":{"analysis":{"typeCheckingMode":"strict"}},"pyright":{"disableOrganizeImports":true}});
+        for kind in [
+            crate::config::LspServerKind::Pyright,
+            crate::config::LspServerKind::Basedpyright,
+            crate::config::LspServerKind::Ruff,
+            crate::config::LspServerKind::Generic,
+        ] {
+            assert_eq!(
+                super::server_response(
+                    kind,
+                    "workspace/configuration",
+                    &json!({"items":[{"section":"python"},{"section":"pyright"},{"section":"python.analysis"},{"section":"absent"},{"section":"rust-analyzer.python"},{}]}),
+                    &options,
+                    &Value::Null
+                ),
+                Ok(json!([
+                    options["python"],
+                    options["pyright"],
+                    options["python"]["analysis"],
+                    null,
+                    null,
+                    options
+                ]))
+            );
+        }
+    }
+
     #[test]
     fn raw_replies_preserve_errors_and_report_closure() {
         struct Reader(mpsc::Receiver<u8>);
@@ -229,7 +294,7 @@ mod tests {
         let transport = Transport::start(
             Reader(reader),
             Vec::<u8>::new(),
-            Value::Null,
+            settings(),
             Value::Null,
             sink,
         );
@@ -331,7 +396,7 @@ mod tests {
         let (sender, sink) = mpsc::channel();
         assert!(
             transport
-                .read(&mut bytes.as_slice(), &Value::Null, &Value::Null, &sender)
+                .read(&mut bytes.as_slice(), &settings(), &Value::Null, &sender)
                 .is_err()
         );
         assert_eq!(sink.try_iter().collect::<Vec<_>>(), frames);
@@ -360,7 +425,7 @@ mod tests {
         let (sender, _) = mpsc::channel();
         assert!(
             transport
-                .read(&mut bytes.as_slice(), &Value::Null, &Value::Null, &sender)
+                .read(&mut bytes.as_slice(), &settings(), &Value::Null, &sender)
                 .is_err()
         );
         assert_eq!(first.recv().unwrap().unwrap(), "first");

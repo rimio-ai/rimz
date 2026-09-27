@@ -441,6 +441,32 @@ fn committed_growth(estimate: u64, rss: u64) -> u64 {
     estimate.saturating_sub(rss)
 }
 
+fn validate_options(server: &str, config: &crate::config::LspServerConfig) -> Result<()> {
+    let Some(options) = &config.init_options else {
+        return Ok(());
+    };
+    let options = options.as_object().ok_or_else(|| {
+        LspErr::Configuration(format!(
+            "language server {server}: init-options must be a table"
+        ))
+    })?;
+    use crate::config::LspServerKind;
+    let kind = config.resolved_kind();
+    let keys: &[&str] = match kind {
+        LspServerKind::Pyright => &["python", "pyright"],
+        LspServerKind::Basedpyright => &["python", "basedpyright", "pyright"],
+        LspServerKind::Ruff => &["settings", "globalSettings"],
+        LspServerKind::RustAnalyzer | LspServerKind::Generic => return Ok(()),
+    };
+    if let Some(key) = options.keys().find(|key| !keys.contains(&key.as_str())) {
+        return Err(LspErr::Configuration(format!(
+            "language server {server}: init-options key {key} is not read by {kind}; use one of: {}",
+            keys.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 /// Validate one configuration and select it when a checkout marker exists.
 pub(crate) fn select_server(
     root: &Path,
@@ -478,15 +504,7 @@ pub(crate) fn select_server(
     {
         return Ok(false);
     }
-    if config
-        .init_options
-        .as_ref()
-        .is_some_and(|options| !options.is_object())
-    {
-        return Err(LspErr::Configuration(format!(
-            "language server {server}: init-options must be a table"
-        )));
-    }
+    validate_options(server, config)?;
     Ok(true)
 }
 
@@ -736,6 +754,57 @@ mod tests {
         let error = idle_timeout(&policy).unwrap_err().to_string();
         assert!(error.contains("idle-timeout"), "{error}");
         assert!(error.contains("s/m/h"), "{error}");
+    }
+
+    #[test]
+    fn server_arms_refuse_unread_settings() {
+        for (kind, options, expected) in [
+            (
+                "pyright",
+                serde_json::json!({"analysis":{}}),
+                Some(
+                    "language server python: init-options key analysis is not read by pyright; use one of: python, pyright",
+                ),
+            ),
+            (
+                "ruff",
+                serde_json::json!({"lineLength":100}),
+                Some(
+                    "language server python: init-options key lineLength is not read by ruff; use one of: settings, globalSettings",
+                ),
+            ),
+            (
+                "basedpyright",
+                serde_json::json!({"analysis":{}}),
+                Some(
+                    "language server python: init-options key analysis is not read by basedpyright; use one of: python, basedpyright, pyright",
+                ),
+            ),
+            (
+                "ruff",
+                serde_json::json!({"settings":{"lineLength":100}}),
+                None,
+            ),
+            (
+                "basedpyright",
+                serde_json::json!({"python":{},"basedpyright":{},"pyright":{}}),
+                None,
+            ),
+            ("rust-analyzer", serde_json::json!({"anything":true}), None),
+            ("generic", serde_json::json!({"anything":true}), None),
+        ] {
+            let config = serde_json::from_value(serde_json::json!({"kind":kind,"command":["stub"],"extensions":["py"],"root-markers":["pyproject.toml"],"init-options":options})).unwrap();
+            let error = validate_options("python", &config)
+                .err()
+                .map(|e| e.to_string());
+            match expected {
+                Some(expected) => assert!(
+                    error.as_deref().is_some_and(|e| e.contains(expected)),
+                    "{error:?}"
+                ),
+                None => assert!(error.is_none(), "{error:?}"),
+            }
+        }
     }
 
     #[test]

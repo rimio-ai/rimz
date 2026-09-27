@@ -87,7 +87,7 @@ pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
 pub use loop_::{CheckOn, FileMark, LoopConfig, TaskEntry, TaskTarget, Tasks, WatchSpec};
-pub use lsp::{LspConfig, LspPolicy, LspServerConfig};
+pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
 pub use mux::MultiplexerConfig;
 use mux::MuxConfig;
 pub(crate) use mux::{TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderStatus, ZellijConfig};

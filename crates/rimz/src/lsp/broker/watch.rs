@@ -9,7 +9,19 @@ fn excluded(path: &Path) -> bool {
     path.components().any(|part| {
         matches!(
             part.as_os_str().to_str(),
-            Some(".git" | "target" | "node_modules")
+            Some(
+                ".git"
+                    | "target"
+                    | "node_modules"
+                    | ".venv"
+                    | "venv"
+                    | "__pycache__"
+                    | ".tox"
+                    | ".nox"
+                    | ".mypy_cache"
+                    | ".pytest_cache"
+                    | ".ruff_cache"
+            )
         )
     })
 }
@@ -104,11 +116,20 @@ pub(super) fn register_created(
 }
 
 pub(super) fn changes(
+    kind: crate::config::LspServerKind,
     root: &Path,
     extensions: &[String],
     root_markers: &[String],
     events: impl IntoIterator<Item = Event>,
 ) -> Value {
+    use crate::config::LspServerKind;
+    let config_files: &[&str] = match kind {
+        LspServerKind::Pyright | LspServerKind::Basedpyright => {
+            &["pyrightconfig.json", "pyproject.toml"]
+        }
+        LspServerKind::Ruff => &["pyproject.toml", "ruff.toml", ".ruff.toml"],
+        LspServerKind::RustAnalyzer | LspServerKind::Generic => &[],
+    };
     let mut changes = Vec::new();
     for event in events {
         for (index, path) in event.paths.iter().enumerate() {
@@ -128,7 +149,9 @@ pub(super) fn changes(
             let marker = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| root_markers.iter().any(|marker| marker == name));
+                .is_some_and(|name| {
+                    config_files.contains(&name) || root_markers.iter().any(|marker| marker == name)
+                });
             if excluded(relative)
                 || (!deleted_tree
                     && !marker
@@ -165,6 +188,47 @@ pub(super) fn changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_arms_watch_configuration_basenames() {
+        for kind in [
+            crate::config::LspServerKind::Ruff,
+            crate::config::LspServerKind::Pyright,
+            crate::config::LspServerKind::Basedpyright,
+            crate::config::LspServerKind::RustAnalyzer,
+        ] {
+            let output = changes(
+                kind,
+                Path::new("/checkout"),
+                &["py".into()],
+                &["Cargo.toml".into()],
+                [Event::new(EventKind::Modify(ModifyKind::Any))
+                    .add_path("/checkout/pyproject.toml".into())],
+            );
+            assert_eq!(
+                output["changes"].as_array().unwrap().len(),
+                usize::from(kind != crate::config::LspServerKind::RustAnalyzer),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn python_cache_directories_are_excluded() {
+        for path in [
+            ".venv/lib/x.py",
+            "venv/x.py",
+            "__pycache__/x.pyc",
+            ".tox/x.py",
+            ".nox/x.py",
+            ".mypy_cache/x.py",
+            ".pytest_cache/x.py",
+            ".ruff_cache/x.py",
+        ] {
+            assert!(excluded(Path::new(path)), "{path}");
+        }
+        assert!(!excluded(Path::new("src/x.py")));
+    }
 
     #[test]
     fn unwatchable_directories_are_reported_without_stopping() {
@@ -239,7 +303,13 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(2))
             .unwrap()
             .unwrap();
-        let output = changes(root.path(), &["rs".into()], &[], [event]);
+        let output = changes(
+            crate::config::LspServerKind::RustAnalyzer,
+            root.path(),
+            &["rs".into()],
+            &[],
+            [event],
+        );
         assert!(
             output["changes"]
                 .as_array()
@@ -273,6 +343,7 @@ mod tests {
         ];
         assert_eq!(
             changes(
+                crate::config::LspServerKind::RustAnalyzer,
                 Path::new("/checkout"),
                 &["rs".into()],
                 &["Cargo.toml".into()],

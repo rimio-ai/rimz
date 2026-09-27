@@ -463,6 +463,14 @@ fn status(
     facts.push("checkout", render::cell(entry.root.display().to_string()));
     facts.push("server", render::cell(&entry.server));
     facts.push(
+        "kind",
+        render::cell(
+            entry
+                .kind
+                .map_or_else(|| "unknown".into(), |kind| kind.to_string()),
+        ),
+    );
+    facts.push(
         "state",
         render::cell(match entry.state {
             State::Starting => "starting".into(),
@@ -748,6 +756,7 @@ mod tests {
 
     fn entry(root: &str, server: &str, state: State) -> registry::Entry {
         registry::Entry {
+            kind: None,
             root: root.into(),
             project: None,
             server: server.into(),

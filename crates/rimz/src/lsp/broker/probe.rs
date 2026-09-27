@@ -150,7 +150,10 @@ fn probe(root: &Path, name: &str, config: &LspServerConfig) -> Outcome {
     let transport = super::transport::Transport::start(
         server.child.stdout.take().expect("piped stdout"),
         server.child.stdin.take().expect("piped stdin"),
-        config.init_options.clone().unwrap_or(Value::Null),
+        std::sync::Arc::new(std::sync::Mutex::new(super::Settings {
+            kind: config.resolved_kind(),
+            options: config.init_options.clone().unwrap_or(Value::Null),
+        })),
         params
             .as_ref()
             .map_or(Value::Null, |params| params["workspaceFolders"].clone()),
