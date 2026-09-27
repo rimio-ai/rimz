@@ -23,7 +23,7 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | `Prompt` | A human prompt when no question is open, or a system prompt or command with `from: "rimz"` | `user: @receiver, text` for a human prompt; a system prompt or command is hidden with the output of the turn it opens |
 | `Message` | An inter-agent delivery, or a launched child's launch brief, with structured `from` | `@sender: @receiver, text` |
 | `SubagentReport` | The status-only launched-child fleet digest, with `from: rimz` | Hidden with the output of the turn it opens |
-| `Wait` | A `Type: WAIT`, `Type: SIGNAL`, or `Type: STAGE` delivery, with `from: rimz` | Hidden with the output of the turn it opens |
+| `Wait` | A `Type: WAIT`, `Type: SIGNAL`, `Type: STAGE`, or `Type: CACHE_KEEPALIVE` delivery, with `from: rimz` | Hidden with the output of the turn it opens |
 | `Assistant` | A root turn's final assistant message | `@receiver: text` |
 | `Ask` | A native question or plan approval, carrying option labels and descriptions | The agent's question |
 | `Answer` | The effective answer, from the native prompt UI or the first human prompt submitted while a question is open | `you` to the agent, folded into its ask card |
@@ -53,7 +53,7 @@ The receiver's turn-start hook first records and folds the lifecycle event into 
 | --- | --- |
 | `AGENT_MESSAGE` | `Message`, with structured `from` |
 | `SUBAGENT_REPORT` | `SubagentReport`, with `from: rimz` |
-| `WAIT`, `SIGNAL`, `STAGE` | `Wait`, with `from: rimz` |
+| `WAIT`, `SIGNAL`, `STAGE`, `CACHE_KEEPALIVE` | `Wait`, with `from: rimz` |
 | `USER_MESSAGE` | `Prompt`, header removed, no `from` |
 | none, matches a confirmed record or a record RimZ has in flight to this card | That record's origin: human → `Prompt` without `from`; agent → `Message` from its handle; subagent report → `SubagentReport`; notice → `Wait`; system → `Prompt` with `from: "rimz"` |
 | none, nothing accounts for it | Human `Prompt`, subject to the launch-run and open-ask cases below |

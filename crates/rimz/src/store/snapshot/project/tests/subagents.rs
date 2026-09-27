@@ -2,7 +2,13 @@ use super::*;
 
 #[test]
 fn harness_prompt_keeps_finished_children_listed() {
-    for header in ["AGENT_MESSAGE", "SUBAGENT_REPORT", "WAIT", "SIGNAL"] {
+    for header in [
+        "AGENT_MESSAGE",
+        "SUBAGENT_REPORT",
+        "WAIT",
+        "SIGNAL",
+        "CACHE_KEEPALIVE",
+    ] {
         let mut events = vec![
             raw_lifecycle_at(
                 "claude",

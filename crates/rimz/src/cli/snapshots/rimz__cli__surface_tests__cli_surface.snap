@@ -158,6 +158,15 @@ rimz agents budget-park [hidden]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz agents cache-keepalive [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --request <JSON>  [action=set takes=1..=1 required hidden]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz agents check
     <kind>  [action=set takes=1..=1 required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
@@ -245,6 +254,8 @@ rimz agents help auto-redeem [hidden]
 rimz agents help budget
 
 rimz agents help budget-park [hidden]
+
+rimz agents help cache-keepalive [hidden]
 
 rimz agents help check
 
@@ -879,6 +890,8 @@ rimz help agents auto-redeem [hidden]
 rimz help agents budget
 
 rimz help agents budget-park [hidden]
+
+rimz help agents cache-keepalive [hidden]
 
 rimz help agents check
 

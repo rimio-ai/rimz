@@ -28,6 +28,7 @@ fn submitted_sections_cover_every_sender_and_body() {
         HarnessNotice::Wait,
         HarnessNotice::Signal,
         HarnessNotice::Stage,
+        HarnessNotice::CacheKeepalive,
         HarnessNotice::Other("future".to_owned()),
     ] {
         let origin = if notice == HarnessNotice::SubagentReport {
@@ -191,6 +192,9 @@ fn normalized_paste_is_harness_delivered() {
 
 #[test]
 fn prompt_origin_requires_only_non_user_headers() {
+    assert!(prompt_is_harness_delivered(
+        "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nPrompt cache keepalive."
+    ));
     let labeled = "Type: AGENT_MESSAGE\nFrom: @calm-fox (planner)\nContent:\nfirst";
     assert!(prompt_is_harness_delivered(labeled));
     assert!(prompt_is_harness_delivered(&format!(

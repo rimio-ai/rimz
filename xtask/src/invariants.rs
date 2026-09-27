@@ -505,6 +505,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         "auto_gc.rs",
         "auto_redeem.rs",
         "budget.rs",
+        "cache_keepalive.rs",
         "deadline.rs",
         "idle_compact.rs",
         "orphan_sweep.rs",

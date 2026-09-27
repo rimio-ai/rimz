@@ -376,6 +376,7 @@ Content:
 | `USER_MESSAGE` | A human's `rimz message` | `@user` |
 | `SUBAGENT_REPORT` | The status-only fleet digest after all of an agent's launched children and `-p --bg` peer runs settle | `@rimz` |
 | `WAIT` | A timer, command, or clock wait delivery | `@rimz` |
+| `CACHE_KEEPALIVE` | A neutral prompt-cache ping for a sleeping agent ([policy](./loops.md#prompt-cache-keepalive)) | `@rimz` |
 | `SIGNAL` | Every delivery fired by a `Trigger::Signal` row | `@rimz` |
 | `STAGE` | A direct prose-only stage-open delivery from a flip or registration re-wait | `@rimz` |
 | The notice name, upper-cased | A harness notice this binary does not know (`HarnessNotice::Other`) | `@rimz` |

@@ -223,15 +223,24 @@ pub fn nudge_now(
         gate,
         Some(pane_id),
     );
-    store.queue_message(&message, &workspace.session_name)?;
-    let delivered = deliver_one(
+    let delivered = deliver_now(workspace, store, &message)?;
+    Ok((message.message_id, delivered))
+}
+
+/// Queue attributed text and attempt boundary delivery, retaining the caller's id on failure.
+pub fn deliver_now(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    message: &MessageRecord,
+) -> Result<bool> {
+    store.queue_message(message, &workspace.session_name)?;
+    deliver_one(
         workspace,
         store,
         &message.message_id,
-        Some(pane_id.mux()),
+        message.pane_id.as_ref().map(PaneId::mux),
         DeliveryPolicy::Boundary,
-    )?;
-    Ok((message.message_id, delivered))
+    )
 }
 
 pub fn deliver_one(

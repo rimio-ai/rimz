@@ -204,6 +204,23 @@ fn hidden_helper_requests_round_trip_through_cli() {
     let agent_id = AgentSessionId::from("session -- 1");
     let pane_id = PaneId::parse("tmux:%3").unwrap();
 
+    let keepalive = rimz::harness::cache_keepalive::CacheKeepaliveRequest {
+        workspace_id: workspace_id.clone(),
+        kind: kind.clone(),
+        agent_id: agent_id.clone(),
+        pane_id: pane_id.clone(),
+        anchor: "2026-01-02T03:04:05Z".parse().unwrap(),
+        label: "@coder".into(),
+    };
+    let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(
+        "cache-keepalive",
+        &keepalive,
+    ));
+    let Some(AgentsSubcmd::CacheKeepalive(args)) = parsed.command else {
+        panic!("expected cache-keepalive");
+    };
+    assert_eq!(args.request, keepalive);
+
     let auto_continue = AutoContinueRequest {
         workspace_id: workspace_id.clone(),
         kind: kind.clone(),

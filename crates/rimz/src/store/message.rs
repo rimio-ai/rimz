@@ -56,6 +56,7 @@ pub enum MessageSender {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessNotice {
+    CacheKeepalive,
     Deadline,
     SubagentReport,
     Wait,
@@ -69,6 +70,7 @@ pub enum HarnessNotice {
 impl HarnessNotice {
     pub(crate) fn header_type(&self) -> String {
         match self {
+            Self::CacheKeepalive => "CACHE_KEEPALIVE".to_owned(),
             Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
             Self::Deadline => "DEADLINE".to_owned(),
             Self::Wait => "WAIT".to_owned(),
@@ -92,6 +94,7 @@ impl MessageSender {
             Self::Harness {
                 notice:
                     HarnessNotice::Deadline
+                    | HarnessNotice::CacheKeepalive
                     | HarnessNotice::Wait
                     | HarnessNotice::Signal
                     | HarnessNotice::Stage
@@ -955,6 +958,7 @@ pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool
 /// The sender class named by a structured message header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderKind {
+    CacheKeepalive,
     Deadline,
     Agent,
     Subagent,
@@ -966,6 +970,7 @@ pub enum HeaderKind {
 
 fn classify_header_line(line: &str) -> Option<HeaderKind> {
     match line {
+        "Type: CACHE_KEEPALIVE" => Some(HeaderKind::CacheKeepalive),
         "Type: AGENT_MESSAGE" => Some(HeaderKind::Agent),
         "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),
         "Type: WAIT" => Some(HeaderKind::Wait),
@@ -1099,6 +1104,7 @@ pub fn classify_submitted_prompt<'a>(
                     HeaderKind::Agent => SectionOrigin::Agent(sender),
                     HeaderKind::Subagent => SectionOrigin::Subagent(sender),
                     HeaderKind::Wait
+                    | HeaderKind::CacheKeepalive
                     | HeaderKind::Signal
                     | HeaderKind::Stage
                     | HeaderKind::Deadline => SectionOrigin::Notice(sender),

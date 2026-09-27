@@ -5,6 +5,7 @@ mod auto_continue;
 mod auto_redeem;
 mod budget;
 mod budget_park;
+mod cache_keepalive;
 mod check;
 mod compact;
 mod exec;
@@ -545,6 +546,9 @@ enum AgentsSubcmd {
     /// before its provider prompt cache expires.
     #[command(hide = true)]
     IdleCompact(HelperRequestArgs<IdleCompactRequest>),
+    /// Hidden helper that refreshes a sleeping agent's prompt cache.
+    #[command(hide = true)]
+    CacheKeepalive(HelperRequestArgs<rimz::harness::cache_keepalive::CacheKeepaliveRequest>),
     /// Hidden helper the producer spawns to redeem an account-wide Codex reset
     /// credit after rechecking current provider state.
     #[command(hide = true)]
@@ -664,6 +668,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(*exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args.request),
         Some(AgentsSubcmd::IdleCompact(args)) => return run_idle_compact(args.request),
+        Some(AgentsSubcmd::CacheKeepalive(args)) => return cache_keepalive::run(args.request),
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args.request),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),
         Some(AgentsSubcmd::RunTimeout(args)) => return run_timeout(args.request, globals),
