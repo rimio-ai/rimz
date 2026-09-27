@@ -311,6 +311,17 @@ fn bucket_style(
     rest_style
 }
 
+/// Worktrees holding at least one unread card: a team lane with four unread
+/// agents counts once.
+pub(in crate::sidebar_pane::render) fn unread_worktree_total(
+    groups: &[SidebarWorktreeGroup],
+) -> usize {
+    groups
+        .iter()
+        .filter(|group| group.rows.iter().any(|row| row.unread))
+        .count()
+}
+
 pub(in crate::sidebar_pane::render) fn open_pr_total(groups: &[SidebarWorktreeGroup]) -> usize {
     groups
         .iter()
