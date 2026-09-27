@@ -222,7 +222,6 @@ fn render_lsp(
         servers.sort_by_key(|server| status::lsp_order(&server.entry));
         let mut table = Table::new(["STATE", "CHECKOUT", "SERVER", "RSS", "LEASES"]).right(&[3, 4]);
         for server in servers {
-            use rimz::lsp::registry::State;
             use status::StateRole;
             let health = match status::lsp(&server.entry.state) {
                 StateRole::Success => Health::Ok,
@@ -231,10 +230,7 @@ fn render_lsp(
                 StateRole::Failed => Health::Alarm,
                 StateRole::Neutral => Health::Neutral,
             };
-            let rss = if matches!(
-                server.entry.state,
-                State::Starting | State::Indexing | State::Ready
-            ) {
+            let rss = if server.entry.state.is_running() {
                 cell(rimz::utils::size::decimal_bytes(server.rss_bytes))
             } else {
                 cell("-").dash()

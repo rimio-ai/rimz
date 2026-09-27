@@ -42,6 +42,12 @@ pub enum State {
     },
 }
 
+impl State {
+    pub fn is_running(&self) -> bool {
+        matches!(self, Self::Starting | Self::Indexing | Self::Ready)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, thiserror::Error)]
 pub enum StopReason {
     #[serde(rename = "released")]
@@ -151,6 +157,12 @@ pub struct Entry {
     pub attached: Vec<AttachedEditor>,
 }
 
+impl Entry {
+    pub(super) fn broker_is_alive(&self) -> bool {
+        crate::proc::process_is_live(self.broker_pid, Some(&self.broker_start_token))
+    }
+}
+
 pub fn key(root: &Path, server: &str) -> Result<String> {
     if server.is_empty()
         || !server
@@ -198,7 +210,7 @@ fn directory_at(base: &Path, root: &Path, server: &str) -> Result<PathBuf> {
     Ok(directory)
 }
 
-pub fn lock() -> Result<crate::disk::lock::WorkspaceLock> {
+pub(super) fn lock() -> Result<crate::disk::lock::WorkspaceLock> {
     ensure_runtime()?;
     Ok(crate::disk::lock::WorkspaceLock::acquire(
         &crate::disk::paths::lsp_runtime_dir().join("admission.lock"),
@@ -304,7 +316,7 @@ pub fn is_live(entry: &Entry) -> bool {
 }
 
 fn is_live_at(base: &Path, entry: &Entry) -> bool {
-    crate::proc::process_is_live(entry.broker_pid, Some(&entry.broker_start_token))
+    entry.broker_is_alive()
         && request_at(
             base,
             entry,
@@ -314,17 +326,20 @@ fn is_live_at(base: &Path, entry: &Entry) -> bool {
         .is_ok()
 }
 
+pub fn sweep() -> Result<Vec<Entry>> {
+    let _lock = lock()?;
+    sweep_locked()
+}
+
 /// Call under the admission lock; only dead brokers are swept.
-pub fn sweep_locked() -> Result<Vec<Entry>> {
+pub(super) fn sweep_locked() -> Result<Vec<Entry>> {
     sweep_at(&crate::disk::paths::lsp_runtime_dir())
 }
 
 fn sweep_at(base: &Path) -> Result<Vec<Entry>> {
     let mut live = Vec::new();
     for entry in read_entries_at(base)? {
-        if is_live_at(base, &entry)
-            || crate::proc::process_is_live(entry.broker_pid, Some(&entry.broker_start_token))
-        {
+        if is_live_at(base, &entry) || entry.broker_is_alive() {
             live.push(entry);
             continue;
         }
