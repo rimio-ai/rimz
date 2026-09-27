@@ -18,13 +18,13 @@ rimz lsp find MuxBackend --server rust --json
 | Verb | Target | Result |
 | --- | --- | --- |
 | `def` | position or exact symbol name | definition locations |
-| `refs` | position or exact symbol name | reference locations |
+| `refs` | position or exact symbol name | reference locations, inside the checkout by default |
 | `hover` | position or exact symbol name | type and documentation |
-| `impl` | position or exact symbol name | implementation locations |
+| `impl` | position or exact symbol name | implementation locations, inside the checkout by default |
 | `callers` | position or exact symbol name | incoming call hierarchy items, inside the checkout by default |
 | `callees` | position or exact symbol name | outgoing call hierarchy items, inside the checkout by default |
 | `symbols` | file path | document symbol outline |
-| `find` | search string | workspace symbols matching the server's search |
+| `find` | search string | workspace symbols matching the server's search, inside the checkout by default |
 | `check` | Markdown notes file | anchor verdicts and coverage summary |
 
 Positions are `path:line:col`, with one-based line and column; omitting the column is an error. Paths are checkout-relative or absolute. Text locations use `path:line:col`; navigation includes source lines when available, outlines indent children, and hover prints markup. Empty answers for resolved targets print `no results`.
@@ -41,7 +41,9 @@ All eight verbs require one target. Query flags:
 | --- | --- |
 | `--server <NAME>` | Select a configured server name. Otherwise a file's extension selects among checkout entries, or the sole entry is used. Ambiguous selection names this flag in the error. |
 | `--json` | Print the structured LSP result on exit 0. Exits 5 and 6 print an object with `outcome` (`not-found` or `ambiguous`), the written `name`, and `candidates`, each containing the qualified `name`, kind word `kind`, and `position` (`path:line:col`). |
-| `--external` | Callers and callees only: include items outside the checkout. Default text output hides these items and ends with `<n> outside the checkout hidden; add --external to show them` when any were hidden. `--json` is always unfiltered. |
+| `--external` | `refs`, `impl`, `callers`, `callees`, `find`: include results outside the checkout. Default text output hides these results and ends with `<n> outside the checkout hidden; add --external to show them` when any were hidden. `def`, `hover`, and `symbols` are never filtered and reject this flag. `--json` is always unfiltered. |
+
+`find --external` shows everything the server's search returned; it does not widen the search itself. Rust-analyzer's default search covers the workspace and its path dependencies, not registry crates or the standard library.
 
 The checkout comes from cwd or the global `--root`, using the most deeply enclosing registered checkout when present. Different worktrees have different servers even though they share a room. Queries wait up to 30 seconds for indexing; there is no CLI wait-duration flag.
 

@@ -432,14 +432,35 @@ fn verb_text_renderers() {
 }
 
 #[test]
-fn call_hierarchy_hides_distinct_external_items() {
-    let item = |uri| json!({"name": "work", "kind": 12, "uri": uri, "range": range(), "selectionRange": range()});
-    let inside = item("file:///checkout/lib.rs");
-    let outside = item("file:///other/lib.rs");
-    let other = item("file:///sdk/lib.rs");
-    for verb in [Verb::Callers, Verb::Callees] {
-        let key = if verb == Verb::Callers { "from" } else { "to" };
-        let calls = json!([{key: inside}, {key: outside}, {key: other}, {key: outside}]);
+fn list_verbs_hide_external_items() {
+    for verb in [
+        Verb::Refs,
+        Verb::Impl,
+        Verb::Find,
+        Verb::Callers,
+        Verb::Callees,
+    ] {
+        let item = |uri| {
+            let location = json!({"uri": uri, "range": range()});
+            let call = json!({"name": "work", "kind": 12, "uri": uri, "range": range(), "selectionRange": range()});
+            match verb {
+                Verb::Refs | Verb::Impl => location,
+                Verb::Find => json!({"name": "work", "kind": 12, "location": location}),
+                Verb::Callers => json!({"from": call}),
+                Verb::Callees => json!({"to": call}),
+                _ => unreachable!(),
+            }
+        };
+        let inside = item("file:///checkout/lib.rs");
+        let outside = item("file:///other/lib.rs");
+        let other = item("file:///sdk/lib.rs");
+        let calls = json!([inside, outside, other, outside]);
+        let prefix = match verb {
+            Verb::Refs | Verb::Impl => "",
+            Verb::Find => "function work  ",
+            _ => "work  ",
+        };
+        let hidden = if verb == Verb::Find { 3 } else { 2 };
         assert_eq!(
             render(
                 verb,
@@ -450,7 +471,9 @@ fn call_hierarchy_hides_distinct_external_items() {
                 &BTreeSet::new()
             )
             .unwrap(),
-            "work  lib.rs:2:3\n2 outside the checkout hidden; add --external to show them\n"
+            format!(
+                "{prefix}lib.rs:2:3\n{hidden} outside the checkout hidden; add --external to show them\n"
+            )
         );
         assert_eq!(
             render(
@@ -462,20 +485,85 @@ fn call_hierarchy_hides_distinct_external_items() {
                 &BTreeSet::new()
             )
             .unwrap(),
-            "work  /other/lib.rs:2:3\nwork  /sdk/lib.rs:2:3\nwork  lib.rs:2:3\n"
+            if verb == Verb::Find {
+                format!(
+                    "{prefix}lib.rs:2:3\n{prefix}/other/lib.rs:2:3\n{prefix}/sdk/lib.rs:2:3\n{prefix}/other/lib.rs:2:3\n"
+                )
+            } else {
+                format!("{prefix}/other/lib.rs:2:3\n{prefix}/sdk/lib.rs:2:3\n{prefix}lib.rs:2:3\n")
+            }
         );
         assert_eq!(
             render(
                 verb,
                 Path::new("/checkout"),
                 None,
-                json!([{key: outside}]),
+                json!([outside]),
                 Scope::Checkout,
                 &BTreeSet::new()
             )
             .unwrap(),
             "no results\n1 outside the checkout hidden; add --external to show them\n"
         );
+    }
+}
+
+#[test]
+fn find_scope_preserves_ranked_order() {
+    let symbol =
+        |name, uri| json!({"name": name, "kind": 12, "location": {"uri": uri, "range": range()}});
+    let root = Path::new("/checkout");
+    let ranked = rank_find(
+        root,
+        "work",
+        json!([
+            symbol("rework", "file:///checkout/lib.rs"),
+            symbol("work", "file:///outside/lib.rs"),
+            symbol("worker", "file:///checkout/lib.rs"),
+            symbol("work", "file:///checkout/lib.rs")
+        ]),
+    )
+    .unwrap();
+    assert_eq!(
+        render(
+            Verb::Find,
+            root,
+            None,
+            ranked,
+            Scope::Checkout,
+            &BTreeSet::new()
+        )
+        .unwrap(),
+        "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\n1 outside the checkout hidden; add --external to show them\n"
+    );
+}
+
+#[test]
+fn single_answer_verbs_ignore_scope() {
+    let location = json!({"uri": "file:///outside/lib.rs", "range": range()});
+    for (verb, result, expected) in [
+        (Verb::Def, location.clone(), "/outside/lib.rs:2:3\n"),
+        (
+            Verb::Symbols,
+            json!([{"name": "work", "kind": 12, "location": location}]),
+            "function work  /outside/lib.rs:2:3\n",
+        ),
+        (Verb::Hover, json!({"contents": "docs"}), "docs\n"),
+    ] {
+        for scope in [Scope::Checkout, Scope::External] {
+            assert_eq!(
+                render(
+                    verb,
+                    Path::new("/checkout"),
+                    None,
+                    result.clone(),
+                    scope,
+                    &BTreeSet::new()
+                )
+                .unwrap(),
+                expected
+            );
+        }
     }
 }
 

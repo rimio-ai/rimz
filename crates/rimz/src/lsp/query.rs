@@ -363,13 +363,15 @@ impl Candidate {
     }
 }
 
-fn render_find(root: &Path, symbols: &[SymbolInformation]) -> Result<String> {
-    Ok(finish(
-        symbols
-            .iter()
-            .map(|symbol| Ok(Candidate::new(root, symbol)?.line()))
-            .collect::<Result<_>>()?,
-    ))
+fn render_find(root: &Path, symbols: &[SymbolInformation], scope: Scope) -> Result<String> {
+    let mut lines = Vec::new();
+    for symbol in symbols {
+        if scope.includes(&displayed_path(root, &symbol.location.uri)?) {
+            lines.push(Candidate::new(root, symbol)?.line());
+        }
+    }
+    let hidden = symbols.len() - lines.len();
+    Ok(finish_scoped(lines, hidden))
 }
 
 fn rank_find(root: &Path, query: &str, result: Value) -> Result<Value> {
@@ -496,6 +498,16 @@ fn finish(lines: Vec<String>) -> String {
     }
 }
 
+fn finish_scoped(lines: Vec<String>, hidden: usize) -> String {
+    let mut output = finish(lines);
+    if hidden > 0 {
+        output.push_str(&format!(
+            "{hidden} outside the checkout hidden; add --external to show them\n"
+        ));
+    }
+    output
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum HoverContents {
@@ -523,6 +535,12 @@ impl HoverContents {
 pub enum Scope {
     Checkout,
     External,
+}
+
+impl Scope {
+    fn includes(self, displayed_path: &str) -> bool {
+        self == Self::External || !Path::new(displayed_path).is_absolute()
+    }
 }
 
 /// `document_uri` is supplied for document-symbol trees, which omit their own URI.
@@ -570,6 +588,11 @@ fn render_with_source(
                 let position = location.range.start;
                 sorted.insert((displayed_path(root, &location.uri)?, position), location);
             }
+            let total = sorted.len();
+            if verb != Verb::Def {
+                sorted.retain(|(path, _), _| scope.includes(path));
+            }
+            let hidden = total - sorted.len();
             let mut lines = Vec::new();
             for location in sorted.into_values() {
                 let mut line = position_text(root, &location.uri, location.range.start)?;
@@ -581,7 +604,7 @@ fn render_with_source(
                 }
                 lines.push(line);
             }
-            Ok(finish(lines))
+            Ok(finish_scoped(lines, hidden))
         }
         Verb::Hover => {
             #[derive(Deserialize)]
@@ -594,9 +617,10 @@ fn render_with_source(
         Verb::Find => render_find(
             root,
             &serde_json::from_value::<Vec<SymbolInformation>>(result)?,
+            scope,
         ),
         Verb::Symbols => match serde_json::from_value(result)? {
-            Symbols::Flat(symbols) => render_find(root, &symbols),
+            Symbols::Flat(symbols) => render_find(root, &symbols, Scope::External),
             Symbols::Tree(symbols) => {
                 let uri = document_uri
                     .ok_or_else(|| LspErr::Protocol("document symbols need a file URI".into()))?;
@@ -646,14 +670,10 @@ fn render_with_source(
                     item,
                 );
             }
-            let hidden = if scope == Scope::Checkout {
-                let total = sorted.len();
-                sorted.retain(|(path, _, _), _| !Path::new(path).is_absolute());
-                total - sorted.len()
-            } else {
-                0
-            };
-            let mut output = finish(
+            let total = sorted.len();
+            sorted.retain(|(path, _, _), _| scope.includes(path));
+            let hidden = total - sorted.len();
+            Ok(finish_scoped(
                 sorted
                     .into_values()
                     .map(|item| {
@@ -664,13 +684,8 @@ fn render_with_source(
                         ))
                     })
                     .collect::<Result<_>>()?,
-            );
-            if hidden > 0 {
-                output.push_str(&format!(
-                    "{hidden} outside the checkout hidden; add --external to show them\n"
-                ));
-            }
-            Ok(output)
+                hidden,
+            ))
         }
     }
 }
