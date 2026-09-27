@@ -8,6 +8,7 @@ use super::{LspErr, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -453,13 +454,13 @@ impl Candidate {
     }
 }
 
-fn render_find(root: &Path, symbols: &[SymbolInformation], scope: Scope) -> Result<String> {
+fn render_find(root: &Path, symbols: &[SymbolInformation], options: ListOptions) -> Result<String> {
     let mut lines = Vec::new();
     let mut external = Vec::new();
     let mut hidden = 0;
     for symbol in symbols {
         let path = displayed_path(root, &symbol.location.uri)?;
-        if !scope.includes(&path) {
+        if !options.scope.includes(&path) {
             hidden += 1;
         } else if Scope::Checkout.includes(&path) {
             lines.push(Candidate::new(root, symbol)?.line());
@@ -468,7 +469,10 @@ fn render_find(root: &Path, symbols: &[SymbolInformation], scope: Scope) -> Resu
         }
     }
     lines.extend(external);
-    Ok(finish_scoped(lines, hidden))
+    let total = lines.len();
+    let shown = options.shown(total);
+    lines.truncate(shown);
+    Ok(finish_list(lines, hidden, total, shown, "symbols"))
 }
 
 fn rank_find(root: &Path, query: &str, result: Value) -> Result<Value> {
@@ -648,6 +652,20 @@ fn finish_scoped(lines: Vec<String>, hidden: usize) -> String {
     output
 }
 
+fn finish_list(
+    mut lines: Vec<String>,
+    hidden: usize,
+    total: usize,
+    shown: usize,
+    noun: &str,
+) -> String {
+    if shown < total {
+        lines.insert(0, format!("{total} {noun} (showing {shown})"));
+        lines.push(format!("{} more; add --limit N or --all", total - shown));
+    }
+    finish_scoped(lines, hidden)
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum HoverContents {
@@ -683,13 +701,36 @@ impl Scope {
     }
 }
 
+const LIST_CAP: usize = 50;
+
+#[derive(Clone, Copy)]
+pub struct ListOptions {
+    pub scope: Scope,
+    pub limit: Option<NonZeroUsize>,
+}
+
+impl From<Scope> for ListOptions {
+    fn from(scope: Scope) -> Self {
+        Self {
+            scope,
+            limit: NonZeroUsize::new(LIST_CAP),
+        }
+    }
+}
+
+impl ListOptions {
+    fn shown(self, total: usize) -> usize {
+        self.limit.map_or(total, |limit| total.min(limit.get()))
+    }
+}
+
 /// `document_uri` is supplied for document-symbol trees, which omit their own URI.
 pub fn render(
     verb: Verb,
     root: &Path,
     document_uri: Option<&str>,
     result: Value,
-    scope: Scope,
+    options: ListOptions,
     dirty: &BTreeSet<String>,
 ) -> Result<String> {
     let mut files = BTreeMap::new();
@@ -698,7 +739,7 @@ pub fn render(
         root,
         document_uri,
         result,
-        scope,
+        options,
         dirty,
         |uri, line| {
             let lines = files.entry(DocumentKey::new(uri)).or_insert_with(|| {
@@ -744,10 +785,11 @@ fn render_with_source(
     root: &Path,
     document_uri: Option<&str>,
     result: Value,
-    scope: Scope,
+    options: ListOptions,
     dirty: &BTreeSet<String>,
     mut source: impl FnMut(&str, u32) -> Result<String>,
 ) -> Result<String> {
+    let scope = options.scope;
     if result.is_null() {
         return Ok("no results\n".into());
     }
@@ -787,13 +829,20 @@ fn render_with_source(
             let total = sorted.len();
             sorted.retain(|(_, path, _), _| scope.includes(path));
             let hidden = total - sorted.len();
+            let total = sorted.len();
+            let shown = options.shown(total);
             let mut lines = Vec::new();
             let mut previous = None;
-            for ((_, path, position), location) in sorted {
+            for ((_, path, position), location) in sorted.into_iter().take(shown) {
                 let line = grouped_position(&mut lines, &mut previous, path, position);
                 lines.push(format!("{line}{}", source_suffix(&location)));
             }
-            Ok(finish_scoped(lines, hidden))
+            let noun = if verb == Verb::Refs {
+                "references"
+            } else {
+                "implementations"
+            };
+            Ok(finish_list(lines, hidden, total, shown, noun))
         }
         Verb::Hover => {
             #[derive(Deserialize)]
@@ -806,10 +855,17 @@ fn render_with_source(
         Verb::Find => render_find(
             root,
             &serde_json::from_value::<Vec<SymbolInformation>>(result)?,
-            scope,
+            options,
         ),
         Verb::Symbols => match serde_json::from_value(result)? {
-            Symbols::Flat(symbols) => render_find(root, &symbols, Scope::External),
+            Symbols::Flat(symbols) => render_find(
+                root,
+                &symbols,
+                ListOptions {
+                    scope: Scope::External,
+                    limit: None,
+                },
+            ),
             Symbols::Tree(symbols) => {
                 let uri = document_uri
                     .ok_or_else(|| LspErr::Protocol("document symbols need a file URI".into()))?;
@@ -864,13 +920,20 @@ fn render_with_source(
             let total = sorted.len();
             sorted.retain(|(_, path, _, _), _| scope.includes(path));
             let hidden = total - sorted.len();
+            let total = sorted.len();
+            let shown = options.shown(total);
             let mut lines = Vec::new();
             let mut previous = None;
-            for ((_, path, position, _), item) in sorted {
+            for ((_, path, position, _), item) in sorted.into_iter().take(shown) {
                 let line = grouped_position(&mut lines, &mut previous, path, position);
                 lines.push(format!("{line}  {}", item.name));
             }
-            Ok(finish_scoped(lines, hidden))
+            let noun = if verb == Verb::Callers {
+                "callers"
+            } else {
+                "callees"
+            };
+            Ok(finish_list(lines, hidden, total, shown, noun))
         }
     }
 }
