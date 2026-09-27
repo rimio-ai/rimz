@@ -25,7 +25,7 @@ fn usage_credentials_and_birth_key_share_one_secret_choice() {
 
 #[test]
 fn user_agent_without_a_supplied_version_keeps_the_cli_product_shape() {
-    let ua = claude_code_user_agent(None);
+    let ua = claude_code_user_agent();
     assert!(ua.starts_with("claude-cli/") && ua.ends_with(" (external, cli)"));
 }
 
@@ -354,13 +354,9 @@ fn usage_response_tolerates_verified_full_payload_shape() {
 }
 
 #[test]
-fn user_agent_uses_claude_version_when_supplied() {
+fn user_agent_formats_the_claude_cli_product() {
     assert_eq!(
-        claude_code_user_agent(Some(" 2.1.283 ")),
-        "claude-cli/2.1.283 (external, cli)"
-    );
-    assert_eq!(
-        claude_code_user_agent(Some(USER_AGENT_FALLBACK_VERSION)),
+        user_agent(USER_AGENT_FALLBACK_VERSION),
         "claude-cli/2.1.283 (external, cli)"
     );
 }
