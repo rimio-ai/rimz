@@ -320,7 +320,8 @@ path = "crates/rimz/src/harness"
 # Cache keepalive shares its request, helper recheck, prompt and producer entry across the CLI/sidebar seam.
 # `Redeemed` hands the refreshed usage to the CLI entry that publishes it through `sidebar::refresh`.
 # Peer launch receipts share the per-run response path with the publisher.
-surface-budget = 567
+# The peer-run interface serves launch, hook enrollment, and terminal backstops.
+surface-budget = 572
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -466,7 +467,8 @@ path = "crates/rimz/src/store"
 # Shared PrStack and StackPr are carried by both PR links and sidebar groups.
 # append_signal moved from writer/signal.rs into writer.rs; atlas now counts the method it under-counted there (pass 27b); real visibility unchanged.
 # Peer turn metadata and exact run-to-agent matching are shared with CLI consumers.
-surface-budget = 331
+# Delivery selection provenance crosses the locked acknowledgment callback seam.
+surface-budget = 332
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -812,7 +814,8 @@ allowed-dependencies = [
 # The lifecycle fold parks on an owed wake, and the stranded-park settle reads the same predicate.
 # Response paths, the publisher and its typed error cross the CLI/library boundary.
 # Hook and pane consumers claim each deadline rung through the same locked CAS.
-surface-budget = 37
+# Peer creation, lookup, enrollment, failure and adapter gating are shared with the CLI.
+surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

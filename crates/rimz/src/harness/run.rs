@@ -1,6 +1,10 @@
 //! Supervised and launcher-opened peer run transitions, responses, and cancellation.
 
+mod peer;
 pub mod report;
+pub use peer::{
+    create_peer_prompt, enroll_peer_run, fail_peer_run, open_peer_run, peer_can_report,
+};
 
 use std::path::PathBuf;
 use std::sync::Arc;

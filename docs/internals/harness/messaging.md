@@ -299,6 +299,10 @@ Origin classification is a separate, read-only decision in `store::message::clas
 
 A `TurnStarted` hook aligns the submitted prompt against the candidate `Prompt` batches for its card through [`align_submitted_prompt`](../../../crates/rimz/src/store/message.rs). Record text supplies the boundaries between adjacent messages: agent-, human-, and harness-authored records match through their structured headers (`SIGNAL` included), and system records match verbatim. Inside a batch the text and the blank-line joins must match exactly; only the outer whitespace follows the hook payload's normalization.
 
+`Store::confirm_delivered_for_card_with` exposes the exact selected records to a callback inside the workspace lock, before the queue write. `DeliveryAckMatch` distinguishes `PromptCorrelated` from `OldestSentBatch`; a blank or absent prompt and compaction use the latter. The original `confirm_delivered_for_card` delegates with a no-op callback, preserving delivery behavior. Callback consumers must not reacquire the workspace lock or propagate enrichment failures into acknowledgment.
+
+The peer enrollment consumer, `harness::run::enroll_peer_run`, accepts only a prompt-correlated selection, a launcher-stamped root peer, and an adapter with native turn-start and turn-end hooks. It compares each agent sender's kind and non-absent `agent_id` to `launched_by`, never its name. Matching records create one running peer turn with the launcher's text and message ids, or append ids to the already-open turn without replacing its task. The run codec writes inside the acknowledgment's lock; launch-prompt creation takes that same lock independently. An old mid-turn steer later confirmed by the no-prompt fallback is delivered but cannot enroll a human turn. A real launcher message whose turn-start hook omits prompt text likewise opens no peer run.
+
 | Record state and event | Result |
 | --- | --- |
 | `Sent` + submission containing the batch exactly | `Delivered` |
