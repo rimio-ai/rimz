@@ -151,7 +151,7 @@ fn should_keepalive(agent: &AgentState, config: &HarnessConfig, now: Timestamp) 
     ) else {
         return false;
     };
-    let Some(fire_after) = ttl.checked_sub(super::idle_compact::PROMPT_CACHE_MARGIN) else {
+    let Some(fire_after) = ttl.checked_sub(crate::config::PROMPT_CACHE_MARGIN) else {
         return false;
     };
     let Ok(idle) = Duration::try_from(now.duration_since(anchor)) else {
