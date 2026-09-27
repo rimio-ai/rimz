@@ -1,6 +1,94 @@
 use super::*;
 use crate::ids::WorkspaceId;
 
+impl StatePaths {
+    /// Room-local state paths.
+    fn all_paths(&self) -> Vec<PathBuf> {
+        vec![
+            self.workspace_lock.clone(),
+            self.publish_lock.clone(),
+            self.tmp_dir.clone(),
+            self.scratchpad_dir.clone(),
+            self.agents_dir.clone(),
+            self.shared_dir.clone(),
+            self.subagents_dir.clone(),
+            self.skills_dir.clone(),
+            self.events_log.clone(),
+            self.events_archive_dir.clone(),
+            self.agents_carryover.clone(),
+            self.snapshots_dir.clone(),
+            self.latest_snapshot.clone(),
+            self.rollup_cache.clone(),
+            self.messages_dir.clone(),
+            self.message_history_dir.clone(),
+            self.fleet_budget_record.clone(),
+            self.transcript_dir.clone(),
+            self.runs_dir.clone(),
+            self.waits_dir.clone(),
+            self.cache_dir.clone(),
+            self.workspace_record.clone(),
+            self.room_bin.clone(),
+            self.channels_record.clone(),
+            self.boot_marker.clone(),
+            self.live_roster.clone(),
+            self.last_death_marker.clone(),
+            self.doctor_watermark.clone(),
+            self.auto_gc_stamp.clone(),
+            self.crashes_dir.clone(),
+            Class::Audit.path_under(&self.root),
+            Class::Records.path_under(&self.root),
+        ]
+    }
+}
+
+impl RuntimePaths {
+    /// Room-local paths only; account-shared paths are outside the class model.
+    /// Keyed file families are represented by their containing directory.
+    fn all_paths(&self) -> Vec<PathBuf> {
+        vec![
+            self.sock_dir.clone(),
+            self.live_dir.clone(),
+            self.lanes_dir.clone(),
+            self.locks_dir.clone(),
+            self.lock_path("workspace.lock"),
+            self.lock_path("publish.lock"),
+            self.lock_path("subagent-zone.lock"),
+            self.lock_path("loop-instances.lock"),
+            self.lock_path("message-sweep.lock"),
+            self.lock_path("sidebar-launch.lock"),
+            self.lock_path("snapshot.lock"),
+            self.lock_path("pr-state.lock"),
+            self.lock_path("diff-stats.lock"),
+            self.lock_path("budget.fleet.lock"),
+            self.lock_path("pane-write"),
+            self.heartbeat_dir.clone(),
+            self.read_marks_dir.clone(),
+            self.agent_context_dir.clone(),
+            self.subagent_context_dir.clone(),
+            self.agent_telemetry_dir.clone(),
+            self.agent_activity_dir.clone(),
+            self.active_time_dir.clone(),
+            self.prompt_dir(),
+            self.copilot_otel_path(),
+            self.sidebar_width_path(),
+            self.sidebar_filter_path(),
+            self.unread_path(),
+            self.pane_frame_path(),
+            self.agent_projection_path(),
+            self.topology_writer_lock(),
+            self.authoritative_pane_probe_path(),
+            self.authoritative_pane_probe_lock(),
+            self.diff_stats_path(),
+            self.cohort_spend_path(),
+            self.pipeline_path(),
+            self.pr_state_path(),
+            self.focus_anchor_path(),
+            self.focus_anchor_lock(),
+            self.codex_app_server_socket_path(),
+        ]
+    }
+}
+
 #[test]
 fn spending_service_names_differ_only_by_extension() {
     let runtime = RuntimePaths::under(
