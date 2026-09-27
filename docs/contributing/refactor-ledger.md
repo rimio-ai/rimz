@@ -4,11 +4,11 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-Survey at `0a4d96f7c` (2026-09-28, pass 27b). Rewrite this section whenever a pass ends.
+Survey at `0a4d96f7c` (2026-09-28, pass 27b); pass 26b rows re-stamped at `fe69b82fb`. Rewrite this section whenever a pass ends.
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
-- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08); pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`.
+- **Reopened** (churn past the row's count): none; pass 27a closed `agents/adapters/claude`, pass 27b `store/writer`, pass 26b `sidebar_pane/app` and `sidebar_pane/render/sections`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
 - **Atlas gap:** `ledger.rs::commits_since` resolves an off-trunk SHA without an ancestry check, so a rebased-away row SHA reports no problem (reported in pass 27b).
@@ -200,20 +200,20 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `sidebar/body_filter` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
 | `sidebar/agent_projection` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
 | `sidebar/workspace_projection` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
-| `sidebar_pane/app` | holds; landed pass-11 | `f0d27f230` | 30 | loop, dispatch, folds, focus repair and input; width control and elder-gated workers hold. |
+| `sidebar_pane/app` | holds; landed pass-26b | `fe69b82fb` | 30 | loop clock mechanics consume one render animation answer. |
 | `sidebar_pane/pets` | holds; landed pass-22a | `b8e4115e3` | 30 | preview types `pub` for the CLI. |
 | `sidebar_pane/pixel` | holds; landed pass-22a | `b8e4115e3` | 30 | resend gate (`30108e572`) and Kitty support variants (`3718d6f34`) hold. |
 | `sidebar_pane/supervise` | holds; landed pass-22a | `b8e4115e3` | 30 | worker entry points `pub` for the CLI. |
 | `sidebar_pane/render/chrome` | holds; landed pass-22a | `b8e4115e3` | 30 | bottom-chrome builders are `compose`'s vocabulary. |
 | `sidebar_pane/render/labels` | holds; landed pass-22a | `b8e4115e3` | 30 | glyph and meter vocabulary at render reach. |
 | `sidebar_pane/render/theme` | holds; landed pass-22a | `b8e4115e3` | 30 | the Layer-3/4 carrier the color invariant exempts. |
-| `sidebar_pane/render/animation` | holds; landed pass-23c | `bc333aa67` | 30 | cadence enum is the pane's, breath math the renderer's. |
-| `sidebar_pane/render/(root)` | holds; landed pass-18b | `045f8bfe6` | 30 | render bundle; root items deferred. |
+| `sidebar_pane/render/animation` | holds; landed pass-26b | `fe69b82fb` | 30 | cadence decision is now render's, contradicting pass 23c. |
+| `sidebar_pane/render/(root)` | holds; landed pass-26b | `fe69b82fb` | 30 | one live draw entry and pane-reach selectors. |
 | `sidebar_pane/render/compose` | holds; landed pass-18b | `045f8bfe6` | 30 | render bundle; frame types at pane reach. |
-| `sidebar_pane/render/sections` | holds; landed pass-18b | `045f8bfe6` | 30 | full-frame snapshots pin root → compose → sections; width budgets are distinct rules. |
+| `sidebar_pane/render/sections` | holds; landed pass-26b | `fe69b82fb` | 30 | distinct width-budget rules with section-private gutter and layout imports. |
 | `sidebar_pane/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `sidebar_pane/view` | holds; landed pass-24c | `e083557ba` | 30 | the pane's body projection; row cap read by the CLI fixture. |
-| `sidebar_pane/render/ui_state` | holds; landed pass-24c | `e083557ba` | 30 | fields at pane reach; `UiState`/`Alert` floored by the render root (deferred). |
+| `sidebar_pane/render/ui_state` | holds; landed pass-26b | `fe69b82fb` | 30 | pane-reach state owns the active roster projection. |
 | `sidebar_pane/render/interaction` | holds; landed pass-24c | `e083557ba` | 30 | hit map pane-internal. |
 | `sidebar_pane/render/odometer` | holds; landed pass-24c | `e083557ba` | 30 | `Roll` floored by `TallyAnim`. |
 | `sidebar_pane/render/scrollbar` | holds; landed pass-24c | `e083557ba` | 30 | pane-internal. |
@@ -306,8 +306,7 @@ Candidates a pass judged real but could not land, each with what unblocks it.
 - `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Waits for its `fix(attribution)` churn to settle.
 - `disk`: the `StatePaths`/`RuntimePaths` constructor family (5 + 8, ~460 test sites on `under`/`under_named`) → `for_project_root(root, home)`, `for_workspace(id, home)`, `RuntimePaths::for_state(state, runtime_root)`. Waits for a round with no concurrent passes.
 - `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Belongs to a `store/snapshot` pass, which owns its callers.
-- `ids::ViewId::as_str` and `sidebar_pane::render::ui_state::Alert::active`: no production reader, `dead_code` blocks narrowing, tests hold them. Wait for passes on `sidebar/produce` and `sidebar_pane/app`.
-- `sidebar_pane/render/(root)`: `UiState`, `Alert` and ten root items could go to pane reach once a pass owns `render/mod.rs` bodies.
+- `ids::ViewId::as_str`: no production reader, `dead_code` blocks narrowing, tests hold it. Wait for a pass on `sidebar/produce`.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
 - `sidebar_pane ↔ web`: four sites; closing either side needs a neutral pixel-wire module below both (a seam pass).
 - Reported, not fixed: Codex transcript lookup ignores `CODEX_HOME`, substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
