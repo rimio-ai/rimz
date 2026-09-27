@@ -476,6 +476,77 @@ fn correlated_ack_settles_before_only_mixed_submit_with_reason() {
 }
 
 #[test]
+fn later_human_turn_with_prompt_does_not_confirm_launcher_steer() {
+    assert_later_human_turn_does_not_confirm_launcher_steer(Some("human follow-up"));
+}
+
+#[test]
+fn later_human_turn_without_prompt_confirms_launcher_steer_by_fallback() {
+    assert_later_human_turn_does_not_confirm_launcher_steer(None);
+}
+
+fn assert_later_human_turn_does_not_confirm_launcher_steer(prompt: Option<&str>) {
+    let q = Queue::new();
+    let append_lifecycle = |signal| {
+        let observation = AgentLifecycleObservation::new(Some("sess-1".into()), signal);
+        q.append_event(&EventEnvelope::agent_lifecycle(
+            q.workspace_id.clone(),
+            "session",
+            "claude",
+            "hook",
+            &observation,
+        ))
+        .unwrap();
+    };
+    append_lifecycle(LifecycleSignal::Registered);
+    append_lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
+    let steer = q.queue_with(1, |message| {
+        message.gate = DeliveryGate::Any;
+        message.text = "launcher correction during the human turn".to_owned();
+        message.sender = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: Some("launcher".to_owned()),
+            profile: None,
+            role: None,
+            channel: None,
+        };
+        message.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
+    });
+    // Fresh live steers reach write_batch without a boundary claim.
+    let sent = q.record_sent_batch(&[steer], "session").unwrap();
+    assert_eq!(sent[0].status, MessageStatus::Sent);
+    append_lifecycle(LifecycleSignal::TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    });
+    append_lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
+
+    let delivered = q
+        .confirm_delivered_for_card(
+            &sent[0].kind,
+            &sent[0].agent_id,
+            None,
+            DeliveryAck::TurnStarted { prompt },
+            "session",
+        )
+        .unwrap();
+
+    if prompt.is_some() {
+        assert!(
+            delivered.is_empty(),
+            "later human turn confirmed the mid-turn steer: {delivered:?}"
+        );
+        assert_eq!(q.live(), sent);
+    } else {
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].message_id, sent[0].message_id);
+        assert_eq!(delivered[0].status, MessageStatus::Delivered);
+        assert!(q.live().is_empty());
+    }
+}
+
+#[test]
 fn correlated_ack_settles_mixed_submit_with_reason() {
     let q = Queue::new();
     let sent = q.sent_with(1, |message| message.text = "rimz prompt".to_owned());
