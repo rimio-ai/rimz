@@ -263,13 +263,12 @@ The launch keys live on the pane's child (the stub's `sleep`), not on the pane p
 error: the calling agent has not registered a real session yet
 ```
 
-**Recipe.** Run it in zsh from the worktree root. Take `ROOT` and the `@coder#probe` Role pane and pid from your card (`%6` and `pid 284191` in the recorded run). `cargo metadata` resolves the same absolute `rimz` path the card prints, and does not wait on the held room's build lock. Copy the child's `RIMZ_AGENT_*` into an array, feed one SessionStart as that agent, then run the command:
+**Recipe.** Run it in zsh from the worktree root. Take `ROOT` and the `@coder#probe` Role pane and pid from your card (`%6` and `pid 284191` in the recorded run). Copy the child's `RIMZ_AGENT_*` into an array, feed one SessionStart as that agent, then run the command:
 
 ```sh
-PANE=%6 PID=284191
-RIMZ_BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/rimz"
+PANE=%6 PID=284191 BIN="$PWD/target/debug/rimz"
 AENV=(${(f)"$(tr '\0' '\n' < /proc/$(pgrep -P "$PID")/environ | rg '^RIMZ_AGENT_')"})
-a() { target/debug/xtask sandbox in "$ROOT" -- env RIMZ_AGENT_PID="$PID" TMUX_PANE="$PANE" $AENV "$RIMZ_BIN" --tmux "$@"; }
+a() { target/debug/xtask sandbox in "$ROOT" -- env RIMZ_AGENT_PID="$PID" TMUX_PANE="$PANE" $AENV "$BIN" --tmux "$@"; }
 print -r -- "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"cwd\":\"$ROOT/home/room-worktrees/probe\",\"source\":\"startup\"}" > "$ROOT/tmp/session-start.json"
 a hooks feed --source claude < "$ROOT/tmp/session-start.json"
 a wait --check true
