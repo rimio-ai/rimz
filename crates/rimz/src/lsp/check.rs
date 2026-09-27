@@ -110,8 +110,11 @@ pub fn run(
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => {
                 let server = query::select(root, entries.to_vec(), servers, None, Some(path))?;
-                let query::Output::Answer { result, .. } =
-                    query::execute(&server, query::Verb::Symbols, &path.to_string_lossy())?
+                let query::Output::Answer { result, .. } = query::execute(
+                    &server,
+                    query::Verb::Symbols,
+                    &query::Target::File(path.clone()),
+                )?
                 else {
                     return Err(LspErr::Protocol(
                         "document symbols returned a lookup outcome".into(),

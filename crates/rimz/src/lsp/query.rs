@@ -15,50 +15,67 @@ use std::path::{Path, PathBuf};
 pub enum Target {
     Position { path: PathBuf, position: Position },
     Symbol(String),
+    File(PathBuf),
+    Find(String),
 }
 
-pub fn parse_target(raw: &str) -> Result<Target> {
-    if raw.is_empty() {
-        return Err(LspErr::Protocol("empty position or symbol".into()));
-    }
-    let mut parts = raw.rsplitn(3, ':');
-    let column = parts.next();
-    let line = parts.next();
-    let path = parts.next();
-    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    let (Some(column), Some(line), Some(path)) = (column, line, path) else {
-        if line.is_some() && column.is_some_and(numeric) {
-            return Err(LspErr::Protocol(format!(
-                "invalid position {raw}; use path:line:col with 1-based line and column"
-            )));
+impl Target {
+    pub fn parse(verb: Verb, raw: &str) -> Result<Self> {
+        match verb {
+            Verb::Symbols => return Ok(Self::File(raw.into())),
+            Verb::Find => return Ok(Self::Find(raw.into())),
+            _ => {}
         }
-        return Ok(Target::Symbol(raw.to_owned()));
-    };
-    // Rust qualified symbol names contain colons too; only a numeric suffix denotes an editor position.
-    if !numeric(column) && !numeric(line) {
-        return Ok(Target::Symbol(raw.to_owned()));
-    }
-    let parse = |value: &str| {
-        value
-            .parse::<u32>()
-            .ok()
-            .and_then(|value| value.checked_sub(1))
-            .ok_or_else(|| {
-                LspErr::Protocol(format!(
+        if raw.is_empty() {
+            return Err(LspErr::Protocol("empty position or symbol".into()));
+        }
+        let mut parts = raw.rsplitn(3, ':');
+        let column = parts.next();
+        let line = parts.next();
+        let path = parts.next();
+        let numeric =
+            |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+        let (Some(column), Some(line), Some(path)) = (column, line, path) else {
+            if line.is_some() && column.is_some_and(numeric) {
+                return Err(LspErr::Protocol(format!(
                     "invalid position {raw}; use path:line:col with 1-based line and column"
-                ))
-            })
-    };
-    if path.is_empty() {
-        return Err(LspErr::Protocol("position has no path".into()));
+                )));
+            }
+            return Ok(Target::Symbol(raw.to_owned()));
+        };
+        // Rust qualified symbol names contain colons too; only a numeric suffix denotes an editor position.
+        if !numeric(column) && !numeric(line) {
+            return Ok(Target::Symbol(raw.to_owned()));
+        }
+        let parse = |value: &str| {
+            value
+                .parse::<u32>()
+                .ok()
+                .and_then(|value| value.checked_sub(1))
+                .ok_or_else(|| {
+                    LspErr::Protocol(format!(
+                        "invalid position {raw}; use path:line:col with 1-based line and column"
+                    ))
+                })
+        };
+        if path.is_empty() {
+            return Err(LspErr::Protocol("position has no path".into()));
+        }
+        Ok(Target::Position {
+            path: path.into(),
+            position: Position {
+                line: parse(line)?,
+                character: parse(column)?,
+            },
+        })
     }
-    Ok(Target::Position {
-        path: path.into(),
-        position: Position {
-            line: parse(line)?,
-            character: parse(column)?,
-        },
-    })
+
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Position { path, .. } | Self::File(path) => Some(path),
+            Self::Symbol(_) | Self::Find(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
