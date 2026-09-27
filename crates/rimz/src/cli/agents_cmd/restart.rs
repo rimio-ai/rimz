@@ -409,7 +409,6 @@ fn append_fresh_launch(
             session_name: workspace.session_name.clone(),
             cwd: cwd.to_path_buf(),
             branch: None,
-            channel: agent.channel.clone(),
             description: None,
         },
     )?;

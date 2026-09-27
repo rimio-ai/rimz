@@ -75,7 +75,6 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
                 session_name: "rimz-test".to_owned(),
                 cwd: PathBuf::from("/repo-worktrees/auth"),
                 branch: Some("feat/auth".to_owned()),
-                channel: Some("fallback-channel".to_owned()),
                 description: Some("  launch description  ".to_owned()),
             },
         )
@@ -237,7 +236,7 @@ fn attach_agent_pane_records_process_owned_placement() {
 }
 
 #[test]
-fn launch_event_builder_uses_scope_channel_and_omits_blank_text() {
+fn launch_event_builder_omits_blank_text() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
@@ -258,7 +257,6 @@ fn launch_event_builder_uses_scope_channel_and_omits_blank_text() {
                 session_name: "rimz-test".to_owned(),
                 cwd: PathBuf::from("/repo"),
                 branch: None,
-                channel: Some("fallback-channel".to_owned()),
                 description: Some("  ".to_owned()),
             },
         )
@@ -267,7 +265,6 @@ fn launch_event_builder_uses_scope_channel_and_omits_blank_text() {
     let crate::store::event::EventKind::AgentLaunch(payload) = events[0].kind() else {
         panic!("agent launch event")
     };
-    assert_eq!(payload.launch.channel.as_deref(), Some("fallback-channel"));
     assert_eq!(payload.prompt, None);
     assert_eq!(payload.description, None);
 }
@@ -294,7 +291,6 @@ fn launch_batch_keeps_request_and_follow_up_order() {
                 session_name: "rimz-test".to_owned(),
                 cwd: dir.path().to_path_buf(),
                 branch: None,
-                channel: None,
                 description: None,
             },
         )
@@ -354,7 +350,6 @@ fn launch_batch_failure_keeps_earlier_identity_committed() {
                 session_name: "rimz-test".to_owned(),
                 cwd: dir.path().to_path_buf(),
                 branch: None,
-                channel: None,
                 description: None,
             },
         )
@@ -418,7 +413,6 @@ fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
                 session_name: "rimz-test".to_owned(),
                 cwd: dir.path().to_path_buf(),
                 branch: Some("auth".to_owned()),
-                channel: Some("fallback".to_owned()),
                 description: None,
             },
         )
@@ -592,7 +586,6 @@ fn launch_batch_stamps_room_logins_over_caller_values() {
                     session_name: "rimz-test".to_owned(),
                     cwd: dir.path().to_path_buf(),
                     branch: None,
-                    channel: None,
                     description: None,
                 },
             )

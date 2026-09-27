@@ -1542,7 +1542,6 @@ fn materialize_team_restore_tab(
                 session_name: session_name.to_owned(),
                 cwd: planned.cwd.clone(),
                 branch: None,
-                channel: planned.channel.clone(),
                 description: None,
             },
         )?)

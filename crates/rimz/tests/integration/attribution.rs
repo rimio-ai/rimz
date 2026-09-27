@@ -44,7 +44,6 @@ fn attribution_omits_a_promptless_launch_in_every_mode() {
                 session_name: workspace.session_name,
                 cwd: env.project_root.clone(),
                 branch: None,
-                channel: None,
                 description: None,
             },
         )
