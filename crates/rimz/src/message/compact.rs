@@ -11,7 +11,7 @@ use crate::store::message::{
 use crate::store::writer::DeliveryFailureDisposition;
 use crate::workspace::ResolvedWorkspace;
 
-use super::deliver::{self, DeliveryPolicy};
+use super::deliver;
 
 type Result<T> = std::result::Result<T, CompactErr>;
 
@@ -84,7 +84,6 @@ pub fn send_compact(
     request: CompactRequest<'_>,
 ) -> Result<CompactOutcome> {
     refuse_repeat(store, request.agent, Timestamp::now())?;
-    let mux = request.pane_id.mux();
     let mut message = MessageRecord::new(
         workspace.workspace_id.clone(),
         request.agent,
@@ -98,14 +97,7 @@ pub fn send_compact(
     .with_pane_id(request.pane_id);
     message.message_id = request.message_id;
     message.compacted_context_tokens = request.agent.occupied_context_tokens();
-    store.queue_message(&message, &workspace.session_name)?;
-    if deliver::deliver_one(
-        workspace,
-        store,
-        &message.message_id,
-        Some(mux),
-        DeliveryPolicy::Boundary,
-    )? {
+    if deliver::deliver_now(workspace, store, &message)? {
         return Ok(CompactOutcome::Sent);
     }
     let retry = store.record_message_delivery_failures(
