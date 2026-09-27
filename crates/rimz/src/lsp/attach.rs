@@ -192,8 +192,10 @@ pub fn bridge(
                 let exit = frame["method"] == "exit";
                 // Serialize the completed exit write with the output pump's close decision.
                 let mut forwarded = editor_exit.lock().unwrap_or_else(|e| e.into_inner());
-                if let Err(error) = protocol::write_frame(&mut writer, &frame) {
-                    break Outcome::BrokerClosed(error.to_string());
+                if protocol::write_frame(&mut writer, &frame).is_err() {
+                    // The broker closed the socket, so the output pump reaches EOF
+                    // too; its outcome carries the stop reason, which this one lacks.
+                    return;
                 }
                 if exit {
                     *forwarded = true;
