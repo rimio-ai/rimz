@@ -104,6 +104,16 @@ fn main() {
                     Value::Null
                 } else if message["params"]["query"] == "changes" {
                     changes.clone()
+                } else if let Some(name @ ("Type" | "TwinType" | "UniqueMember" | "BroadType")) =
+                    message["params"]["query"].as_str()
+                {
+                    let files = match name {
+                        "TwinType" => vec!["a/lib.rs".to_owned(), "b/lib.rs".to_owned()],
+                        "UniqueMember" => vec!["lib.rs".to_owned(), "empty.rs".to_owned()],
+                        "BroadType" => (0..21).map(|n| format!("broad{n}.rs")).collect(),
+                        _ => vec!["lib.rs".to_owned()],
+                    };
+                    json!(files.into_iter().map(|file| json!({"name":name,"kind":23,"location":{"uri":format!("{}/{file}", root.trim_end_matches('/')),"range":alias_location("alias")["range"]}})).collect::<Vec<_>>())
                 } else if message["params"]["query"] == "alias" {
                     json!([{"name": "alias", "kind": 12, "location": alias_location("alias")}, {"name": "alias", "kind": 12, "location": alias_location("definition")}])
                 } else if let Some(name @ ("pathed" | "twin" | "work")) =
