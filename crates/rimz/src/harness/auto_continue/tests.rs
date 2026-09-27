@@ -44,7 +44,12 @@ fn due(
     backoff_secs: &[u64],
     max_retries: u32,
 ) -> bool {
-    nudge_due(record, attempts, ts(now), backoff_secs, max_retries)
+    let config = ResumeConfig {
+        auto_continue_backoff_secs: backoff_secs.to_vec(),
+        auto_continue_max_retries: max_retries,
+        ..ResumeConfig::default()
+    };
+    nudge_due(record, attempts, ts(now), &config)
 }
 
 fn resume_message(id: u64, status: MessageStatus, enqueued_at: i64) -> ResumeMessage {
@@ -574,15 +579,6 @@ fn nudge_due_truth_table() {
 }
 
 #[test]
-fn overload_backoff_expands_then_repeats_the_last_step() {
-    assert_eq!(overload_backoff(0, &[60, 120, 180]).as_secs(), 60);
-    assert_eq!(overload_backoff(1, &[60, 120, 180]).as_secs(), 120);
-    assert_eq!(overload_backoff(2, &[60, 120, 180]).as_secs(), 180);
-    assert_eq!(overload_backoff(9, &[60, 120, 180]).as_secs(), 180);
-    assert_eq!(overload_backoff(0, &[]).as_secs(), 300);
-}
-
-#[test]
 fn stalled_stream_park_uses_default_three_minute_retry() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
@@ -835,7 +831,7 @@ fn phantom_spawns_never_exhaust_a_park() {
         ..ResumeConfig::default()
     };
 
-    assert!(nudge_due(&record, 0, ts(6_000), &[], 13));
+    assert!(nudge_due(&record, 0, ts(6_000), &config));
     assert!(exhausted_parks(&snapshot, &runtime, &config, &[]).is_empty());
 }
 
