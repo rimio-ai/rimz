@@ -711,6 +711,25 @@ fn replies_adapt_links_per_method_and_editor() {
             json!([link])
         );
     }
+    // rust-analyzer's module navigation answers like a definition, keyed on its linkSupport.
+    for method in ["experimental/parentModule", "experimental/childModules"] {
+        frame(
+            &mut c,
+            B,
+            "initialize",
+            json!({"capabilities":{"textDocument":{"definition":{"linkSupport":true}}}}),
+        );
+        assert_eq!(
+            reply(&mut c, A, method, json!([link])),
+            json!([{"uri":"file:///u", "range":range}])
+        );
+        assert_eq!(
+            reply(&mut c, A, method, link.clone()),
+            json!({"uri":"file:///u", "range":range})
+        );
+        assert_eq!(reply(&mut c, A, method, Value::Null), Value::Null);
+        assert_eq!(reply(&mut c, B, method, json!([link])), json!([link]));
+    }
 }
 
 #[test]
