@@ -238,6 +238,8 @@ pub(super) fn report_settled_child(
 pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::Result<()> {
     let ctx = super::Ctx::for_workspace(request.workspace_id, None)
         .context("resolving subagent digest workspace")?;
+    settle_peer_turns(&ctx.store, &request.parent_agent_id)
+        .context("settling abandoned peer turns")?;
     let outcome = report_fleet(&ctx.workspace, &ctx.store, &request.parent_agent_id)
         .context("reconstructing subagent fleet digest")?;
     let ReportOutcome::Queued { message_id, .. } = outcome else {
@@ -252,6 +254,52 @@ pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::
         parent_agent_id: request.parent_agent_id,
         message_id,
     });
+    Ok(())
+}
+
+fn settle_peer_turns(store: &Store, parent_id: &AgentSessionId) -> Result<(), ReportErr> {
+    let projection = store.runtime_projection(RuntimeScope::Audit)?;
+    let Some(parent) = report_parent(&projection.agents, parent_id, None) else {
+        return Ok(());
+    };
+    let mut stranded = Vec::new();
+    let agents = &projection.agents;
+    // Judge each launch by its current row: an ended predecessor conversation
+    // shares the launch id, and so the open run, of its live successor.
+    for peer in rimz::address::launched_fleet(agents, parent)
+        .into_iter()
+        .filter(|peer| {
+            rimz::address::launch_row(
+                agents,
+                &peer.kind,
+                peer.launch_id.as_ref().unwrap_or(&peer.agent_id),
+            )
+            .is_some_and(|row| std::ptr::eq(row, *peer))
+        })
+    {
+        let Some(record) = run::open_peer_run(store.paths(), peer)? else {
+            continue;
+        };
+        if peer.ended_at.is_some()
+            || rimz::store::runtime::agent_liveness(peer)
+                == rimz::store::runtime::AgentLiveness::Dead
+        {
+            run::fail_peer_run(store, peer, "peer session ended")?;
+            continue;
+        }
+        if let run::ParkCheck::Stranded(at) = run::settle_stranded_park(store, &record, None)? {
+            stranded.push((record.run_id, at));
+        }
+    }
+    if stranded.is_empty() {
+        return Ok(());
+    }
+    // Match the wrapper's strand cadence, allowing stamp-before-queue producers to finish.
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    for (id, at) in stranded {
+        let record = run::load(store.paths(), &id)?;
+        run::settle_stranded_park(store, &record, Some(at))?;
+    }
     Ok(())
 }
 
@@ -660,6 +708,72 @@ mod tests {
                 spawned_subagents: &[],
             })
             .unwrap();
+    }
+
+    #[test]
+    fn backstop_settles_dead_and_stranded_peer_turns_before_reporting() {
+        for ended in [false, true] {
+            let (_dir, workspace, store) = fixture();
+            append_agent(&store, "launcher", None);
+            append_peer(&store, "peer", Some("launcher"));
+            store
+                .begin_agent_launch_batch(
+                    &[rimz::store::writer::AgentLaunchRequest {
+                        kind: AgentKind::new_unchecked("codex"),
+                        agent_id: "peer".into(),
+                        name: rimz::store::writer::AgentLaunchName::Mint,
+                        launch: rimz::agents::LaunchParams {
+                            launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+                                kind: AgentKind::new_unchecked("codex"),
+                                agent_id: "launcher".into(),
+                            })),
+                            ..Default::default()
+                        },
+                        run_id: None,
+                        prompt: None,
+                    }],
+                    rimz::store::writer::AgentLaunchScope {
+                        session_name: "report-test".into(),
+                        cwd: workspace.worktree_root.clone(),
+                        branch: None,
+                        channel: None,
+                        description: None,
+                    },
+                )
+                .unwrap();
+            if ended {
+                let observation =
+                    AgentLifecycleObservation::new(Some("peer".into()), LifecycleSignal::Ended);
+                store
+                    .append_agent_lifecycle(AgentLifecycleIntent {
+                        session_name: "report-test",
+                        agent_kind: AgentKind::new_unchecked("codex"),
+                        event_name: "test",
+                        observation: &observation,
+                        spawned_subagents: &[],
+                    })
+                    .unwrap();
+            }
+            let mut record = child_run(&workspace.workspace_id, "peer", RunStatus::Running);
+            record.subagent = false;
+            record.peer = Some(rimz::store::run::PeerRun {
+                launch_id: "peer".into(),
+                opened_by: Vec::new(),
+            });
+            record.parked_at = (!ended).then_some(Timestamp::now());
+            record.last_message = Some("waiting".into());
+            run::create(store.paths(), &record).unwrap();
+            settle_peer_turns(&store, &"launcher".into()).unwrap();
+            assert_eq!(
+                run::load(store.paths(), &record.run_id).unwrap().status,
+                RunStatus::Failed
+            );
+            assert!(matches!(
+                report_fleet(&workspace, &store, &"launcher".into()).unwrap(),
+                ReportOutcome::Queued { .. }
+            ));
+            assert_eq!(store.list_messages().unwrap().len(), 1);
+        }
     }
 
     #[test]

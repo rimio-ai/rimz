@@ -61,7 +61,9 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
         )?;
         return Ok(());
     }
-    if let Some(run) = newest_run_by_ref(store, &reference, live_agent)? {
+    if let Some(run) =
+        newest_run_by_ref(store, &reference, live_agent)?.filter(|run| run.peer.is_none())
+    {
         supervised::stop_supervised_run(workspace, store, globals, &run)?;
         return Ok(());
     }
@@ -88,7 +90,7 @@ fn stop_live_agent(
     globals: &GlobalFlags,
     agent: &AgentState,
 ) -> Result<()> {
-    if let Some(run) = newest_run_for_agent(store, agent)? {
+    if let Some(run) = newest_run_for_agent(store, agent)?.filter(|run| run.peer.is_none()) {
         supervised::stop_supervised_run(workspace, store, globals, &run)
     } else {
         close_agent_pane(workspace, agent)
@@ -182,4 +184,64 @@ fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> 
     backend
         .close_pane(&workspace.session_name, &pane.pane_id)
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stopping_peer_uses_interactive_pane_path_without_canceling_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+        let workspace = rimz::ResolvedWorkspace {
+            workspace_id: workspace_id.clone(),
+            project_root: dir.path().into(),
+            cwd_project_root: None,
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: dir.path().into(),
+            worktree_branch: None,
+            session_name: "stop-test".into(),
+            mux_hint: None,
+        };
+        let store = rimz::Store::open(
+            rimz::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap(),
+            rimz::RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap(),
+        )
+        .unwrap();
+        let globals = GlobalFlags {
+            mux: None,
+            zellij: false,
+            tmux: false,
+            root: None,
+            color: crate::cli::ColorWhen::Never,
+        };
+        let mut peer = AgentState::stub("codex", "peer", rimz::agents::AgentStatus::Idle);
+        peer.name = Some("peer".into());
+        peer.launch_id = Some("peer-launch".into());
+        for status in [
+            rimz::store::run::RunStatus::Running,
+            rimz::store::run::RunStatus::Completed,
+        ] {
+            let mut record = rimz::store::run::RunRecord::new(
+                workspace_id.clone(),
+                peer.kind.clone(),
+                rimz::agents::PermissionMode::Auto,
+                "task".into(),
+                dir.path().into(),
+            );
+            record.peer = Some(rimz::store::run::PeerRun {
+                launch_id: "peer-launch".into(),
+                opened_by: Vec::new(),
+            });
+            record.status = status;
+            rimz::harness::run::create(store.paths(), &record).unwrap();
+            let error = stop_live_agent(&workspace, &store, &globals, &peer).unwrap_err();
+            assert!(error.to_string().contains("has no bound pane"), "{error:#}");
+            assert_eq!(
+                rimz::harness::run::load(store.paths(), &record.run_id).unwrap(),
+                record
+            );
+        }
+    }
 }

@@ -146,6 +146,12 @@ pub(in crate::cli) fn restart_resolved(
         }
         return Err(err);
     }
+    if let Err(err) = settle_peer_before_restart(store, agent) {
+        let _ = writeln!(
+            std::io::stderr(),
+            "warning: could not settle the peer's open turn before restart: {err:#}"
+        );
+    }
     backend
         .close_pane(&workspace.session_name, &old_pane)
         .context("closing the replaced agent pane")?;
@@ -416,9 +422,70 @@ fn append_fresh_launch(
     Ok(batch)
 }
 
+fn settle_peer_before_restart(store: &rimz::Store, agent: &AgentState) -> Result<()> {
+    if rimz::harness::run::fail_peer_run(store, agent, "peer restarted")?.is_some()
+        && let Some((_, launcher)) = agent.launcher()
+    {
+        rimz::harness::orphan_sweep::spawn_digest_helper(store.runtime_paths(), launcher.clone());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restarting_peer_fails_only_its_open_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+        let store = rimz::Store::open(
+            rimz::StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap(),
+            rimz::RuntimePaths::under(workspace_id, &dir.path().join("runtime")).unwrap(),
+        )
+        .unwrap();
+        let mut peer = rimz::testkit::agent_state("claude", "peer", jiff::Timestamp::now());
+        peer.launch_id = Some("peer-launch".into());
+        peer.launched_by = Some(rimz::agents::LaunchedBy {
+            kind: peer.kind.clone(),
+            agent_id: "launcher".into(),
+        });
+        let adapter = rimz::agents::find_definition("claude").unwrap();
+        let record = rimz::harness::run::create_peer_prompt(
+            store.paths(),
+            &peer,
+            adapter,
+            "task",
+            dir.path(),
+        )
+        .unwrap()
+        .unwrap();
+        rimz::harness::run::record_lifecycle(
+            store.paths(),
+            &record.run_id,
+            "claude",
+            &rimz::agents::AgentLifecycleObservation::new(
+                Some(peer.agent_id.clone()),
+                rimz::agents::LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+            None,
+            || None,
+        )
+        .unwrap();
+        settle_peer_before_restart(&store, &peer).unwrap();
+        let failed = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+        assert_eq!(failed.status, rimz::store::run::RunStatus::Failed);
+        assert_eq!(failed.failure_tail.as_deref(), Some("peer restarted"));
+        assert!(
+            failed.report_message_id.is_none(),
+            "failed turn remains eligible for the fleet reporter"
+        );
+        settle_peer_before_restart(&store, &peer).unwrap();
+        assert_eq!(
+            rimz::harness::run::list(store.paths()).unwrap(),
+            vec![failed]
+        );
+    }
 
     #[test]
     fn resume_classification_names_each_fresh_reason() {

@@ -242,9 +242,12 @@ The elected sidebar producer runs [`harness/orphan_sweep.rs`](../../../crates/ri
 | Scan | Condition | Helper action | Diagnostic |
 | --- | --- | --- | --- |
 | missed digest | a live launcher whose `launched_fleet` rows are all terminal, with at least one row neither reported nor joined | runs the same fleet reporter | `subagent_digest_backstopped` when it queues |
+| abandoned peer turn | a launcher's open peer run whose row ended, whose recorded process died, or which is parked with no running or unreported runs in its own fleet | rechecks the peer; fails an ended or dead peer's turn, or checks a parked turn twice five seconds apart through `settle_stranded_park`, then runs the fleet reporter | `subagent_digest_backstopped` when it queues |
 | orphan | a live, non-kept child whose parent launch's latest row ended, or that has no row, `ORPHAN_GRACE` (10 minutes) ago, measured from that end stamp or from the child's registration | closes the child and records its durable end | `subagent_orphan_reaped`, or `subagent_orphan_repair_failed`, which stays eligible for the next scan |
 
 Row stamps make repeated passes and races idempotent. Each diagnostic means the normal wrapper path was missed ([diagnostics.md](../diagnostics.md)).
+
+Peer settlement never closes its pane. The read-only sweep delegates parked candidates only when their own fleet has no running or unreported runs, without reading the wake queues; the helper verifies that nothing is owed on both checks and keeps a racing wake turn intact. A directly exec'd provider can die before its first hook without an ended row: the wrapper attaches its process identity before exec, so the peer backstop also checks that recorded process's liveness, including for a `Pending` launch run. Unknown liveness is not death. Restart fails an open peer turn before opening the replacement, and room rebirth fails open peer turns whether their peers recover or not. Idle peers with no open turn create no failed result.
 
 Neither scan covers a `--keep` child: its wrapper runs no watchdog, and the orphan scan skips kept runs, so only `rimz subagents stop` or a manual pane close ends it. Stopping the parent through `rimz agents stop`, or `rimz teams stop` reaching that parent, stops its live launched children first, kept ones included.
 
