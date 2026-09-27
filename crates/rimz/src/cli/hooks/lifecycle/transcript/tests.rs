@@ -615,6 +615,171 @@ fn launched_child_brief_is_attributed_to_parent() {
     assert_eq!(entries[2].text, "inspect the infra");
 }
 
+fn peer_hook_fixture(store: &Store) -> rimz::agents::AgentState {
+    append_launched_agent(
+        store,
+        "codex",
+        "launcher",
+        Some("launcher-id"),
+        "launcher",
+        Default::default(),
+    );
+    append_launched_agent(
+        store,
+        "claude",
+        "peer-session",
+        Some("peer-id"),
+        "peer",
+        rimz::agents::LaunchParams {
+            launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+                kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                agent_id: "launcher-id".into(),
+            })),
+            ..Default::default()
+        },
+    );
+    agent_state(
+        store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &"peer-session".into(),
+    )
+    .unwrap()
+}
+
+fn feed_peer_hook(store: &Store, event: &str, fields: serde_json::Value) {
+    let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+    let mut payload =
+        serde_json::json!({"session_id": "peer-session", "cwd": "/tmp/hooks-test/chat"});
+    payload
+        .as_object_mut()
+        .unwrap()
+        .extend(fields.as_object().unwrap().clone());
+    let mut decoded = adapter.decode_hook(event, &payload).unwrap();
+    super::super::handle_lifecycle_hook(
+        &workspace(),
+        store,
+        adapter,
+        &mut decoded,
+        &payload,
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+        &crate::cli::GlobalFlags {
+            root: None,
+            mux: None,
+            zellij: false,
+            tmux: false,
+            color: crate::cli::ColorWhen::Never,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn peer_launch_hook_claims_prompt_but_later_identical_human_turn_does_not() {
+    let (_dir, store) = store();
+    let peer = peer_hook_fixture(&store);
+    let run = rimz::harness::run::create_peer_prompt(
+        store.paths(),
+        &peer,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        "inspect the infra",
+        &workspace().worktree_root,
+    )
+    .unwrap()
+    .unwrap();
+    feed_peer_hook(
+        &store,
+        "UserPromptSubmit",
+        serde_json::json!({"prompt":"inspect the infra"}),
+    );
+    let running = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(running.status, rimz::store::run::RunStatus::Running);
+    assert_eq!(running.agent_id, Some(peer.agent_id.clone()));
+    let state_root = super::super::user_input_state_root(&store).unwrap();
+    assert!(rimz::agents::spending::user_input::load_in(state_root).is_empty());
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Message);
+    assert_eq!(entries[0].from.as_deref(), Some("@launcher"));
+    feed_peer_hook(
+        &store,
+        "Stop",
+        serde_json::json!({"last_assistant_message":"finished"}),
+    );
+    let done = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(done.status, rimz::store::run::RunStatus::Completed);
+    let response = rimz::harness::run::peer_response_path(store.paths(), "peer", &done.run_id);
+    let bytes = std::fs::read(&response).unwrap();
+    feed_peer_hook(
+        &store,
+        "UserPromptSubmit",
+        serde_json::json!({"prompt":"inspect the infra"}),
+    );
+    feed_peer_hook(
+        &store,
+        "Stop",
+        serde_json::json!({"last_assistant_message":"human answer"}),
+    );
+    assert_eq!(rimz::harness::run::list(store.paths()).unwrap(), vec![done]);
+    assert_eq!(std::fs::read(response).unwrap(), bytes);
+    assert_eq!(
+        rimz::agents::spending::user_input::load_in(state_root).len(),
+        1
+    );
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    let human = entries
+        .iter()
+        .rev()
+        .find(|entry| entry.text == "inspect the infra")
+        .unwrap();
+    assert_eq!(human.entry, rimz::transcript::TranscriptKind::Prompt);
+    assert_eq!(human.from, None);
+}
+
+#[test]
+fn peer_hook_enrolls_launcher_delivery_and_fails_it_on_session_end() {
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender};
+    let (_dir, store) = store();
+    let peer = peer_hook_fixture(&store);
+    let message = MessageRecord::new(
+        store.paths().workspace_id.clone(),
+        &peer,
+        "next task".into(),
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Agent {
+        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        agent_id: Some("launcher-id".into()),
+        name: Some("launcher".into()),
+        profile: None,
+        role: None,
+        channel: None,
+    });
+    store.queue_message(&message, "session").unwrap();
+    store
+        .record_sent_batch(std::slice::from_ref(&message), "session")
+        .unwrap();
+    feed_peer_hook(
+        &store,
+        "UserPromptSubmit",
+        serde_json::json!({"prompt":"Type: AGENT_MESSAGE\nFrom: @launcher\nContent:\nnext task"}),
+    );
+    let run = rimz::harness::run::open_peer_run(store.paths(), &peer)
+        .unwrap()
+        .expect("launcher delivery enrolls a run");
+    assert_eq!(
+        run.peer.as_ref().unwrap().opened_by,
+        vec![message.message_id]
+    );
+    assert_eq!(run.prompt, "next task");
+    assert_eq!(run.status, rimz::store::run::RunStatus::Running);
+    feed_peer_hook(&store, "SessionEnd", serde_json::json!({}));
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &run.run_id)
+            .unwrap()
+            .status,
+        rimz::store::run::RunStatus::Failed
+    );
+}
+
 #[test]
 fn run_briefs_keep_loop_human_and_unresolved_parent_origins() {
     for (subagent, loop_task, expected_from) in [
@@ -966,7 +1131,7 @@ fn in_flight_turn_openers_keep_origin_causality_and_spend() {
         assert_eq!(in_flight.len(), 1);
         if body == MessageBody::Command {
             assert!(
-                confirm_sent_message_for_lifecycle(&store, agent, &started, "session").is_empty()
+                confirm_sent_message_for_lifecycle(&store, agent, &started, &workspace).is_empty()
             );
         }
         let sections =

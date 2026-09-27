@@ -41,7 +41,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     store: &Store,
     agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
-    session_name: &str,
+    workspace: &ResolvedWorkspace,
 ) -> Vec<rimz::store::message::MessageRecord> {
     let ack = match recorded.observation.signal {
         LifecycleSignal::TurnStarted { .. } => rimz::store::writer::DeliveryAck::TurnStarted {
@@ -59,12 +59,29 @@ pub(super) fn confirm_sent_message_for_lifecycle(
         return Vec::new();
     };
     let kind = agent.spec().kind_id();
-    match store.confirm_delivered_for_card(
-        &kind,
-        agent_id,
-        recorded.observation.agent_name.as_deref(),
+    let peer = agent_state(store, agent, agent_id);
+    match store.confirm_delivered_for_card_with(
+        rimz::agents::AgentCardRef::new(
+            &kind,
+            agent_id,
+            recorded.observation.agent_name.as_deref(),
+        ),
         ack,
-        session_name,
+        &workspace.session_name,
+        |records, selection| {
+            if let Some(peer) = peer.as_ref()
+                && let Err(error) = rimz::harness::run::enroll_peer_run(
+                    store.paths(),
+                    peer,
+                    agent,
+                    records,
+                    selection,
+                    &workspace.worktree_root,
+                )
+            {
+                warn!(%error, "lifecycle: failed to enroll peer run");
+            }
+        },
     ) {
         Ok(delivered) => delivered,
         Err(err) => {

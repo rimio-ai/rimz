@@ -92,12 +92,13 @@ pub(super) fn handle_lifecycle_hook(
     if derived_rotation_due || released.is_some_and(|released| released.rotation_due) {
         spawn_auto_rotation(workspace);
     }
+    let mut run_id = session_run_id(store, agent, agent_id.as_ref());
     let assistant_message =
         record_assistant_response(workspace, store, agent, decoded, recorded.as_ref());
-    if let (Some(run_id), Some((agent_id, message))) = (env_run_id(), assistant_message)
+    if let (Some(run_id), Some((agent_id, message))) = (run_id.as_ref(), assistant_message)
         && let Err(err) = rimz::harness::run::record_assistant_message(
             store.paths(),
-            &run_id,
+            run_id,
             agent.spec().kind,
             &agent_id,
             message,
@@ -198,16 +199,16 @@ pub(super) fn handle_lifecycle_hook(
     }
     let mut run_completion = None;
     if let Some(recorded) = recorded.as_ref() {
-        let assistant_message =
-            assistant_message_for_lifecycle(recorded, env_run_id().is_some(), || {
-                decoded.final_message().map(ToOwned::to_owned)
-            });
+        let assistant_message = assistant_message_for_lifecycle(recorded, run_id.is_some(), || {
+            decoded.final_message().map(ToOwned::to_owned)
+        });
         run_completion = record_run_lifecycle(
             store,
             agent,
             &event_name,
             recorded,
             assistant_message.as_deref(),
+            run_id.as_ref(),
         );
         if recorded.observation.parent_agent_id.is_none()
             && matches!(
@@ -215,10 +216,10 @@ pub(super) fn handle_lifecycle_hook(
                 LifecycleSignal::ToolUsed { .. }
             )
             && agent.spec().capabilities.hook_context
-            && let Some(run_id) = env_run_id()
+            && let Some(run_id) = run_id.as_ref()
             && let Err(error) = rimz::harness::run::claim_rung(
                 store.paths(),
-                &run_id,
+                run_id,
                 jiff::Timestamp::now(),
                 |rung| agent.attach_hook_context(decoded, &rung.text()),
             )
@@ -226,8 +227,10 @@ pub(super) fn handle_lifecycle_hook(
             warn!(%run_id, %error, "lifecycle: failed to claim deadline context");
         }
         let in_flight = in_flight_messages_for_lifecycle(store, agent, recorded);
-        let delivered =
-            confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
+        let delivered = confirm_sent_message_for_lifecycle(store, agent, recorded, workspace);
+        if run_id.is_none() {
+            run_id = session_run_id(store, agent, recorded.observation.agent_id.as_ref());
+        }
         let sections = rimz::store::message::classify_submitted_prompt(
             recorded.observation.prompt.as_deref().unwrap_or_default(),
             &delivered.iter().collect::<Vec<_>>(),
@@ -239,14 +242,13 @@ pub(super) fn handle_lifecycle_hook(
             recorded,
             &sections,
             &delivered,
-            env_run_id().is_some(),
+            run_id.is_some(),
             user_input_state_root(store),
         );
         let questions = match &recorded.observation.signal {
             LifecycleSignal::AwaitingInput { .. } => decoded.questions(),
             _ => &[],
         };
-        let run_id = env_run_id();
         if let Err(err) = record_conversation(
             workspace,
             store,
@@ -460,11 +462,12 @@ fn record_run_lifecycle(
     event_name: &str,
     recorded: &RecordedLifecycle,
     assistant_message: Option<&str>,
+    run_id: Option<&rimz::RunId>,
 ) -> Option<rimz::store::run::RunRecord> {
-    let run_id = env_run_id()?;
+    let run_id = run_id?;
     match rimz::harness::run::record_lifecycle(
         store.paths(),
-        &run_id,
+        run_id,
         agent.spec().kind,
         &recorded.observation,
         assistant_message.map(ToOwned::to_owned),
@@ -479,6 +482,8 @@ fn record_run_lifecycle(
             }
         },
     ) {
+        // Spend is session-cumulative, so it would overstate a later peer turn.
+        Ok(Some(record)) if record.peer.is_some() => Some(record),
         Ok(Some(record)) => {
             let cost_usd = recorded
                 .observation
@@ -527,6 +532,34 @@ fn record_run_lifecycle(
                 error = %err,
                 "lifecycle: failed to update the supervised run",
             );
+            None
+        }
+    }
+}
+
+fn session_run_id(
+    store: &Store,
+    agent: &AgentDefinition,
+    agent_id: Option<&rimz::ids::AgentSessionId>,
+) -> Option<rimz::RunId> {
+    if let Some(run_id) = env_run_id() {
+        return Some(run_id);
+    }
+    let agent_id = agent_id?;
+    // SessionEnd has already removed the peer from the live snapshot.
+    let peer = agent_state(store, agent, agent_id).or_else(|| {
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .inspect_err(|error| warn!(%error, "lifecycle: failed to read peer identity"))
+            .ok()?
+            .agents
+            .into_iter()
+            .find(|peer| peer.kind == agent.spec().kind && peer.agent_id == *agent_id)
+    })?;
+    match rimz::harness::run::open_peer_run(store.paths(), &peer) {
+        Ok(record) => record.map(|record| record.run_id),
+        Err(error) => {
+            warn!(%error, "lifecycle: failed to find peer run");
             None
         }
     }
@@ -730,7 +763,7 @@ mod tests {
                 side_conversation: None,
                 waiting_cleared: false,
             },
-            "session",
+            &test_workspace(),
         );
         let messages = store.list_messages().unwrap();
         assert!(
@@ -768,7 +801,7 @@ mod tests {
                 side_conversation: None,
                 waiting_cleared: false,
             },
-            "session",
+            &test_workspace(),
         );
         let messages = store.list_messages().unwrap();
         assert!(

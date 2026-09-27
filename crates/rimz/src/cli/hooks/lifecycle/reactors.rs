@@ -58,6 +58,19 @@ fn run_wake(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
         return;
     };
     rimz::store::run::wake_run(ctx.store.runtime_paths(), record);
+    if record.peer.is_some()
+        && let Ok(snapshot) = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)
+        && let Some(peer) = snapshot
+            .agents
+            .iter()
+            .find(|peer| peer.kind == event.kind && peer.agent_id == event.agent_id)
+        && let Some(launcher) = peer.launched_by.as_ref()
+    {
+        rimz::harness::orphan_sweep::spawn_digest_helper(
+            ctx.store.runtime_paths(),
+            launcher.agent_id.clone(),
+        );
+    }
 }
 
 fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {

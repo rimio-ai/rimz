@@ -280,15 +280,13 @@ pub(super) fn record_conversation(
                     {
                         match run.prompt_origin() {
                             RunPromptOrigin::Parent => {
-                                let parent = state
-                                    .filter(|state| state.is_launched_child())
-                                    .and_then(|state| {
-                                        launched_parent_handle(
-                                            snapshot.as_ref()?,
-                                            state,
-                                            channel.as_deref(),
-                                        )
-                                    });
+                                let parent = state.and_then(|state| {
+                                    launched_parent_handle(
+                                        snapshot.as_ref()?,
+                                        state,
+                                        channel.as_deref(),
+                                    )
+                                });
                                 if let Some(handle) = parent {
                                     entry.entry = TranscriptKind::Message;
                                     entry.from = Some(handle);
@@ -378,7 +376,8 @@ fn launched_parent_handle(
     child: &rimz::agents::AgentState,
     child_channel: Option<&str>,
 ) -> Option<String> {
-    let sender = match rimz::address::launched_parent(&snapshot.agents, child) {
+    let (kind, id) = child.launcher()?;
+    let sender = match rimz::address::launch_row(&snapshot.agents, kind, id) {
         Some(parent) => rimz::store::message::MessageSender::Agent {
             agent_id: None,
             kind: parent.kind.clone(),
@@ -389,7 +388,7 @@ fn launched_parent_handle(
         },
         None => rimz::store::message::MessageSender::Agent {
             agent_id: None,
-            kind: child.parent_agent_kind.clone()?,
+            kind: kind.clone(),
             name: None,
             profile: None,
             role: None,
