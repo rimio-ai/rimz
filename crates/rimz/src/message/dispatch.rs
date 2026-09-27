@@ -267,7 +267,7 @@ pub fn dispatch(
             .smart_compact,
     );
     let boundary = request.mode.kind() == DeliveryKind::Boundary;
-    let mut pending = if boundary {
+    let pending = if boundary {
         store.list_messages()?
     } else {
         Vec::new()
@@ -362,17 +362,16 @@ pub fn dispatch(
         request.text
     };
     let in_reply_to = turn_openers_for_sender(&snapshot, &request.sender);
-    let mut state = DispatchState {
+    let state = DispatchState {
         workspace,
         store,
         snapshot: &snapshot,
-        pending: &mut pending,
-        track_pending: boundary,
+        pending: &pending,
         scope_channel: request.current_channel.as_deref(),
         reply_wait: reply_preparation.is_some(),
         in_reply_to: &in_reply_to,
     };
-    let (outcomes, compacted) = dispatch_targets(&mut state, &targets, &text, &mode)?;
+    let (outcomes, compacted) = dispatch_targets(&state, &targets, &text, &mode)?;
     let reply = reply_preparation
         .map(|preparation| {
             // Preparation exists only when the same request supplied a join mode.
@@ -822,8 +821,7 @@ struct DispatchState<'a> {
     workspace: &'a ResolvedWorkspace,
     store: &'a Store,
     snapshot: &'a SidebarSnapshot,
-    pending: &'a mut Vec<MessageRecord>,
-    track_pending: bool,
+    pending: &'a [MessageRecord],
     scope_channel: Option<&'a str>,
     reply_wait: bool,
     in_reply_to: &'a [MessageId],
@@ -868,7 +866,7 @@ impl DispatchState<'_> {
 }
 
 fn dispatch_targets(
-    state: &mut DispatchState<'_>,
+    state: &DispatchState<'_>,
     targets: &[ResolvedTarget],
     text: &str,
     mode: &PreparedMode,
@@ -876,9 +874,7 @@ fn dispatch_targets(
     let now = Timestamp::now();
     let decisions = targets
         .iter()
-        .map(|target| {
-            dispatch_decision(state.snapshot, state.pending.as_slice(), target, mode, now)
-        })
+        .map(|target| dispatch_decision(state.snapshot, state.pending, target, mode, now))
         .collect::<Vec<_>>();
     let mut live_send = send::LiveSend::new(mode.draft.force, mode.kind);
     let mut preflighted_logins = BTreeSet::new();
@@ -992,7 +988,7 @@ fn dispatch_decision(
 }
 
 fn dispatch_one(
-    state: &mut DispatchState<'_>,
+    state: &DispatchState<'_>,
     live_send: &mut send::LiveSend,
     compacted: &mut Vec<String>,
     target: &ResolvedTarget,
@@ -1049,46 +1045,32 @@ fn dispatch_one(
             label: handle,
             message_id,
         }),
-        deliver::AttemptOutcome::Queued => {
-            push_pending(state, message);
-            Ok(DispatchOutcome::Queued {
-                label: handle,
-                message_id,
-                reason: None,
-            })
-        }
-        deliver::AttemptOutcome::CompactionPending => {
-            push_pending(state, message);
-            Ok(DispatchOutcome::CompactionPending {
-                label: handle,
-                message_id,
-            })
-        }
+        deliver::AttemptOutcome::Queued => Ok(DispatchOutcome::Queued {
+            label: handle,
+            message_id,
+            reason: None,
+        }),
+        deliver::AttemptOutcome::CompactionPending => Ok(DispatchOutcome::CompactionPending {
+            label: handle,
+            message_id,
+        }),
     }
 }
 
 fn dispatch_parked(
-    state: &mut DispatchState<'_>,
+    state: &DispatchState<'_>,
     target: &ResolvedTarget,
     text: &str,
     mode: &PreparedMode,
     handle: String,
     reason: Option<ParkReason>,
 ) -> Result<DispatchOutcome> {
-    let message = state.enqueue(target, None, text, mode, &handle)?;
-    let message_id = message.message_id.clone();
-    push_pending(state, message);
+    let message_id = state.enqueue(target, None, text, mode, &handle)?.message_id;
     Ok(DispatchOutcome::Queued {
         label: handle,
         message_id,
         reason,
     })
-}
-
-fn push_pending(state: &mut DispatchState<'_>, message: MessageRecord) {
-    if state.track_pending {
-        state.pending.push(message);
-    }
 }
 
 fn preflight_queue_hooks(
