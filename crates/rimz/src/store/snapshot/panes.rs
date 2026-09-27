@@ -349,7 +349,7 @@ pub struct SidebarOwnView {
     pub working_pane_ids: Vec<PaneId>,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
     /// after dropping any sidebar pane, are non-empty and all daemon-dashboard
-    /// infrastructure panes ([`crate::pane::pane_is_host`]).
+    /// infrastructure panes (`pane_is_host`).
     /// `#[serde(default)]` keeps the wire shape stable for older producers.
     #[serde(default)]
     pub own_view_is_daemon: bool,
