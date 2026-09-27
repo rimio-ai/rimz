@@ -4,12 +4,12 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-Survey at `cf8ed681b` (2026-09-27). Rewrite this section whenever a pass ends.
+Survey at `cf8ed681b` (2026-09-27), updated for pass 26a at `17cc18ca6`. Rewrite this section whenever a pass ends.
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
 - **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `message`, `store/writer`, `disk`. The last two surfaced once sixteen rows from passes 18 and 19 were re-stamped from pre-rebase SHAs to their record commits' parents on trunk.
-- **Never reviewed:** `lsp` (6.6k SLOC, cx 138.6, the crate's highest; born 2026-09-26 and `hot`, so it waits for its pace to settle), `config/lsp`, `agents/skills`, `harness/{board,cache_keepalive,deadline,launch_env}`.
+- **Never reviewed:** `agents/skills`, `harness/{board,cache_keepalive,deadline,launch_env}`.
 - **Unreviewed admission:** `config` → `harness::idle_compact` (1 site).
 - **Unjudged families:** the skills `read_dir` shape family (`agents/skills.rs`, `sandbox/skills.rs`, `room/session.rs`, `workspace.rs`).
 
@@ -99,6 +99,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/glyphs` | holds; landed pass-24a | `4e445b73d` | 30 | `GlyphRole` names stay `pub` for `theme/glyphs.rs`. |
 | `config/harness` | holds; landed pass-24a | `4e445b73d` | 30 | `DayCap`/`TurnCap` verdicts hold. |
 | `config/loop_` | holds; landed pass-24a | `4e445b73d` | 30 | `Tasks` and `LoopConfig` stay `pub` for the integration crate. |
+| `config/lsp` | holds; landed pass-26a | `17cc18ca6` | 30 | one root-marker predicate on the server config; façade controls reach. |
 | `config/mux` | holds | `4e445b73d` | 30 | backend option records test-gated at the façade. |
 | `config/notifications` | holds; landed pass-24a | `4e445b73d` | 30 | `NotificationKind` re-exported by `sidebar/notify.rs`. |
 | `config/pets` | holds; landed pass-24a | `4e445b73d` | 30 | `is_default` is a live serde predicate. |
@@ -145,6 +146,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/launch_plan` | holds; landed pass-24c | `e083557ba` | 30 | error and warning types floor `compile`/`apply`. |
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
+| `lsp` | holds; landed pass-26a | `17cc18ca6` | 30 | one sweep, memory measure, parsed target and lease list; domain presentation and broker RAII hold. |
 | `message` | holds; landed pass-13 | `efe38f50c` | 30 | one System queue shape; settle owned by `message deliver`; reply machine holds. |
 | `mux` | holds; landed pass-18c | `9ba3585b9` | 30 | planner verdicts private; `SplitPaneOptions::from_command` owns the pane-command projection. |
 | `mux/(root)` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
