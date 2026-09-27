@@ -162,7 +162,7 @@ impl Rig {
     }
 
     fn frame_active(&mut self) -> bool {
-        self.state.tick = Duration::from_secs(10);
+        self.state.config.tick_seconds = 10;
         self.state.frame_timing().0
     }
 }

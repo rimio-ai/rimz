@@ -5,7 +5,12 @@
 //! composition lives in `sections`; vocabulary labels in `labels`;
 //! pure formatting helpers in `fmt`.
 //!
-//! `draw_to_terminal` takes an optional `Alert` alongside the snapshot. The alert is the sticky health line pinned to the bottom of the sidebar: while the refresh loop is unhealthy it shows the reason and elapsed time, and after recovery it lingers as a dismissable "last alert" notice. The fixed renders carry no alert. This is the reload-recovery contract documented in [`docs/internals/sidebar/sidebar.md`](../../docs/internals/sidebar/sidebar.md).
+//! `draw_to_terminal` takes an optional `Alert` alongside the snapshot; the
+//! fixed renders carry none. The alert is the sticky health line pinned to the
+//! bottom of the sidebar: while the refresh loop is unhealthy it shows the
+//! reason and elapsed time, and after recovery it lingers as a dismissable
+//! "last alert" notice. This is the reload-recovery contract documented in
+//! [`docs/internals/sidebar/sidebar.md`](../../docs/internals/sidebar/sidebar.md).
 
 mod animation;
 mod ansi;
@@ -516,11 +521,15 @@ fn dashboard_mode(snapshot: &SidebarSnapshot) -> DashboardMode {
     }
 }
 
-pub(in crate::sidebar_pane) fn dashboard_present(
+fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) -> bool {
+    !alert_active && (!snapshot.providers.is_empty() || snapshot.theme.pets.enabled)
+}
+
+pub(in crate::sidebar_pane) fn pets_on_dashboard(
     snapshot: &SidebarSnapshot,
     alert_active: bool,
 ) -> bool {
-    !alert_active && (!snapshot.providers.is_empty() || snapshot.theme.pets.enabled)
+    snapshot.theme.pets.enabled && dashboard_present(snapshot, alert_active)
 }
 
 pub(in crate::sidebar_pane) fn pet_motion_enabled(
@@ -575,8 +584,7 @@ pub(in crate::sidebar_pane) fn animation_interval(
     // The dashboard pet paints on its track cadence, but a money climb in the
     // still-visible cockpit must keep sampling on the money grid, so a rolling
     // room takes the faster of the two.
-    if snapshot.theme.pets.enabled
-        && dashboard_present(snapshot, alert_active)
+    if pets_on_dashboard(snapshot, alert_active)
         && let Some(pet_interval) = ui.pet.as_ref().and_then(|pet| pet.frame_interval)
     {
         return Some(if money_rolling {

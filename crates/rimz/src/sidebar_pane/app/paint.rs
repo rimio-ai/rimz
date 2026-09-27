@@ -132,10 +132,8 @@ impl FramePainter {
             self.caps,
             !snapshot.providers.is_empty() && pet_body_enabled,
         );
-        let body = (snapshot.theme.pets.enabled
-            && render::dashboard_present(snapshot, alert_active)
-            && pet_body_enabled)
-            .then_some(tier);
+        let body =
+            (render::pets_on_dashboard(snapshot, alert_active) && pet_body_enabled).then_some(tier);
         let unread_triggered = if snapshot.theme.pets.enabled {
             self.assets
                 .observe_unread_rows(render::unread_pet_row_ids(snapshot))
