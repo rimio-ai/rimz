@@ -239,16 +239,24 @@ compact_instruction = "preserve the open questions and exact decisions"
 idle_compact = "on"
 ```
 
-An idle team member may return for another stage after its provider's warm prompt cache has expired. Compaction first reduces the conversation that must be cached again. `idle_compact` defaults to `on`: compact three minutes before the provider's prompt-cache lifetime runs out. `off` disables it; a duration such as `"25m"` sets the idle threshold directly, without a cache-lifetime lookup. Durations take `s`, `m`, `h`, or `d`. A role's [`idle-compact`](../reference/definitions.md#idle-compaction) overrides this machine default.
+An idle team member may return for another stage after its provider's warm prompt cache has expired. Compaction first reduces the conversation that must be cached again. `idle_compact` defaults to `on`: compact one minute before the provider's prompt-cache lifetime runs out. `off` disables it; a duration such as `"25m"` sets the idle threshold directly, without a cache-lifetime lookup. Durations take `s`, `m`, `h`, or `d`. A role's [`idle-compact`](../reference/definitions.md#idle-compaction) overrides this machine default.
 
-| Provider and account | Prompt-cache lifetime used | Idle threshold with `on` |
+| Provider | Default prompt-cache lifetime | Idle threshold with `on` |
 | --- | --- | --- |
-| Claude subscription, any model | 60 minutes | 57 minutes |
-| Codex GPT-5.6 or newer (including `terra` and `luna`), any account | 30 minutes | 27 minutes |
+| Claude, any model or account | 60 minutes | 59 minutes |
+| Codex, any model or account | 30 minutes | 29 minutes |
 
-With `on`, Claude API-key or unknown accounts, older or unknown Codex models, and other providers are skipped. An explicit duration bypasses that lookup but still requires a native compact command.
+Other providers have no default lifetime and are skipped with `on`. Configure a different lifetime for your setup, such as an API-key account with a five-minute cache, or use `off` when no warm-cache lifetime is known:
 
-Only team members qualify, never solo agents, `rimz subagents` children, or provider subagents. A board at `Done` disables compaction; another stage or a missing board counts as live. The member needs at least 50,000 occupied context tokens and a bound pane, and must be idle rather than working, awaiting input, budget-parked, or already compacting. The reflex sends the native command with the [team brief](#smart-compaction) at a turn boundary and fires at most once per idle stretch. Idle time is measured from the member's last completed turn, so restarting or resuming an idle member does not restart it, and with the default cache-timed setting a member found past its cache lifetime is left alone rather than compacted cold. Neither another member working nor an open pull request is required. See [loops → idle compaction](./loops.md#idle-compaction) for the action and its record.
+```toml
+[harness.prompt_cache_ttl]
+claude = "5m"
+codex = "off"
+```
+
+Keys name built-in or installed plugin provider kinds, not models or named logins. Values accept `off` or a duration longer than one minute; unknown kinds and shorter durations are refused. An explicit `idle_compact` duration bypasses that lookup but still requires a native compact command. `harness.cache_keepalive` defaults to `true` and controls waiting-agent cache pings independently of idle compaction.
+
+Only team members qualify, never solo agents, `rimz subagents` children, or provider subagents. A board at `Done` disables compaction; another stage or a missing board counts as live. The member needs at least 50,000 occupied context tokens and a bound pane, and must be idle rather than working, awaiting input, budget-parked, or already compacting. The reflex sends the native command with the [team brief](#smart-compaction) at a turn boundary and fires at most once per idle stretch. Idle time starts at the last tool event or, without one, the turn start, capped at the completed turn's end. Restarting an idle member does not restart this clock. With the default cache-timed setting a member found past its cache lifetime is left alone rather than compacted cold. Timing is best-effort: missing hooks, a slow sidebar pass, or early provider eviction can cost a cache write, never correctness. Neither another member working nor an open pull request is required. See [loops → idle compaction](./loops.md#idle-compaction) for the action and its record.
 
 ### Hand-off compaction
 

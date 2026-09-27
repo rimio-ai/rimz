@@ -16,6 +16,7 @@ fn repeated_tool_loop_escalates_and_self_clears() {
         kind: session.kind.clone(),
         agent_id: session.agent_id.clone(),
         at: epoch(),
+        tool_at: None,
         repeat: Some(repeat),
     };
 
@@ -44,6 +45,7 @@ fn stale_activity_repeat_does_not_override_a_newer_turn_boundary() {
         kind: session.kind.clone(),
         agent_id: session.agent_id.clone(),
         at: ago(1),
+        tool_at: Some(ago(2)),
         repeat: Some(crate::agent_activity::ToolRepeat {
             digest: "stale".to_owned(),
             tool: "Bash".to_owned(),
@@ -58,6 +60,8 @@ fn stale_activity_repeat_does_not_override_a_newer_turn_boundary() {
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(row.status(), Some(AgentStatus::Running));
     assert_eq!(row.turn_error_label(), None);
+    assert_eq!(snapshot.agents[0].last_tool_at, Some(ago(2)));
+    assert_eq!(snapshot.agents[0].last_activity, epoch());
 }
 
 #[test]
@@ -77,6 +81,7 @@ fn stalled_running_agent_recovers_when_activity_resumes() {
         kind: AgentKind::new_unchecked("claude"),
         agent_id: "live-claude".into(),
         at: epoch(),
+        tool_at: None,
         repeat: None,
     };
     let snapshot = room(vec![session])

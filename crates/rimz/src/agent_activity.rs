@@ -1,14 +1,6 @@
 //! Per-agent activity liveness heartbeat.
 //!
-//! A latency hint, not store truth. The durable event log is turn-grained —
-//! an agent's `last_activity` advances only on `SessionStart`/`UserPromptSubmit`
-//! /`Stop` — so the sidebar cannot tell a busy agent (running tools silently
-//! between turn boundaries) from a wedged one. This file closes that gap: the
-//! agent's hook touches it on every progress-proving event (a completed tool
-//! call, a turn boundary), and the snapshot folds the freshest touch into the
-//! agent's `last_activity`. That gives a per-tool "the agent is doing
-//! something" signal without appending a durable event — and a sidebar
-//! wakeup — per tool call.
+//! A latency hint, not store truth. Named or mutating tool observations can enter the durable log; anonymous progress need not. Hooks touch this heartbeat on every progress-proving event, and snapshots fold the freshest touch into `last_activity`. The separate `tool_at` clock records root tool observations and survives turn-boundary touches, providing a best-effort request anchor for cache timers. Missing hints can cost a cache write, never correctness.
 //!
 //! The file is overwritten in place (one per `(kind, agent_id)`), so a live
 //! agent's touch never grows the directory, and a stale touch left by a dead
@@ -40,6 +32,8 @@ pub struct AgentActivity {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat: Option<ToolRepeat>,
 }
@@ -93,10 +87,16 @@ pub fn touch(
     kind: &str,
     agent_id: &str,
     run: ToolRun<'_>,
+    tool_used: bool,
 ) -> Result<u32, atomic::AtomicErr> {
     let path = activity_path(runtime, kind, agent_id);
     let now = Timestamp::now();
     let prior = read_one(path.clone());
+    let tool_at = if tool_used {
+        Some(now)
+    } else {
+        prior.as_ref().and_then(|record| record.tool_at)
+    };
     let repeat = match run {
         ToolRun::Call { tool, digest } => match prior.and_then(|record| record.repeat) {
             Some(mut repeat) if repeat.digest == digest => {
@@ -118,10 +118,27 @@ pub fn touch(
         kind: AgentKind::new_unchecked(kind),
         agent_id: agent_id.into(),
         at: now,
+        tool_at,
         repeat,
     };
     atomic::write_temp_then_rename_cache(&path, &record)?;
     Ok(count)
+}
+
+/// Advance only the tool clock for a non-progress tool event (a pre-tool
+/// hook), leaving `at` and the repeated-tool run as the last progress touch
+/// wrote them. Without a prior touch there is nothing to carry, so it skips.
+pub fn touch_tool_clock(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+) -> Result<(), atomic::AtomicErr> {
+    let path = activity_path(runtime, kind, agent_id);
+    let Some(mut record) = read_one(path.clone()) else {
+        return Ok(());
+    };
+    record.tool_at = Some(Timestamp::now());
+    atomic::write_temp_then_rename_cache(&path, &record)
 }
 
 fn read_one(path: PathBuf) -> Option<AgentActivity> {
@@ -243,7 +260,7 @@ mod tests {
     #[test]
     fn touch_then_read_round_trips_the_identity() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset, false).expect("touch");
         let all = read_all(&runtime);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].kind, "claude");
@@ -258,8 +275,10 @@ mod tests {
             tool: "Bash",
             digest: "same",
         };
-        assert_eq!(touch(&runtime, "claude", "sess-1", call).unwrap(), 1);
-        assert_eq!(touch(&runtime, "claude", "sess-1", call).unwrap(), 2);
+        assert_eq!(touch(&runtime, "claude", "sess-1", call, true).unwrap(), 1);
+        assert_eq!(touch(&runtime, "claude", "sess-1", call, true).unwrap(), 2);
+        let tool_at = read_all(&runtime).pop().unwrap().tool_at;
+        assert!(tool_at.is_some());
         let repeated = read_all(&runtime).pop().unwrap().repeat.unwrap();
         assert_eq!(repeated.tool, "Bash");
         assert_eq!(repeated.digest, "same");
@@ -274,6 +293,7 @@ mod tests {
                     tool: "Read",
                     digest: "different",
                 },
+                true,
             )
             .unwrap(),
             1
@@ -283,10 +303,49 @@ mod tests {
         assert_eq!(restarted.count, 1);
 
         assert_eq!(
-            touch(&runtime, "claude", "sess-1", ToolRun::Reset).unwrap(),
+            touch(&runtime, "claude", "sess-1", ToolRun::Reset, false).unwrap(),
             0
         );
         assert_eq!(read_all(&runtime).pop().unwrap().repeat, None);
+        assert!(read_all(&runtime).pop().unwrap().tool_at >= tool_at);
+    }
+
+    #[test]
+    fn pre_tool_clock_keeps_the_repeated_tool_run_and_activity() {
+        let (_dir, runtime) = runtime();
+        let call = ToolRun::Call {
+            tool: "Bash",
+            digest: "same",
+        };
+        touch_tool_clock(&runtime, "claude", "sess-1").unwrap();
+        assert!(read_all(&runtime).is_empty(), "no prior touch to carry");
+        for expected in 1..=3 {
+            touch_tool_clock(&runtime, "claude", "sess-1").unwrap();
+            assert_eq!(
+                touch(&runtime, "claude", "sess-1", call, true).unwrap(),
+                expected
+            );
+        }
+        let post = read_all(&runtime).pop().unwrap();
+        touch_tool_clock(&runtime, "claude", "sess-1").unwrap();
+        let pre = read_all(&runtime).pop().unwrap();
+        assert_eq!((pre.at, pre.repeat), (post.at, post.repeat));
+        assert!(pre.tool_at > post.tool_at);
+    }
+
+    #[test]
+    fn anonymous_tool_clock_survives_stop_and_legacy_records() {
+        let (_dir, runtime) = runtime();
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset, true).unwrap();
+        let tool = read_all(&runtime).pop().unwrap();
+        assert_eq!(tool.tool_at, Some(tool.at));
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset, false).unwrap();
+        assert_eq!(read_all(&runtime).pop().unwrap().tool_at, tool.tool_at);
+        let legacy: AgentActivity = serde_json::from_str(
+            r#"{"kind":"claude","agent_id":"sess-1","at":"2026-05-30T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.tool_at, None);
     }
 
     #[test]
@@ -310,21 +369,21 @@ mod tests {
     #[test]
     fn touch_overwrites_in_place_per_identity() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
-        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch again");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset, false).expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset, false).expect("touch again");
         // One file per (kind, agent_id): the second touch overwrites the first.
         assert_eq!(read_all(&runtime).len(), 1);
         // A different identity gets its own file.
-        touch(&runtime, "codex", "sess-1", ToolRun::Reset).expect("touch codex");
+        touch(&runtime, "codex", "sess-1", ToolRun::Reset, false).expect("touch codex");
         assert_eq!(read_all(&runtime).len(), 2);
     }
 
     #[test]
     fn read_for_keys_reads_only_requested_identities() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-live", ToolRun::Reset).expect("touch live");
-        touch(&runtime, "claude", "sess-stale", ToolRun::Reset).expect("touch stale");
-        touch(&runtime, "codex", "sess-stale", ToolRun::Reset).expect("touch other stale");
+        touch(&runtime, "claude", "sess-live", ToolRun::Reset, false).expect("touch live");
+        touch(&runtime, "claude", "sess-stale", ToolRun::Reset, false).expect("touch stale");
+        touch(&runtime, "codex", "sess-stale", ToolRun::Reset, false).expect("touch other stale");
 
         let all = read_for_keys(&runtime, [("claude", "sess-live")]);
         assert_eq!(all.len(), 1);
@@ -335,7 +394,7 @@ mod tests {
     #[test]
     fn keyed_read_serves_an_unchanged_stat_from_cache() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset, false).expect("touch");
         let first = read_for_keys(&runtime, [("claude", "sess-1")]);
         assert_eq!(first.len(), 1);
         let original_at = first[0].at;
@@ -373,8 +432,8 @@ mod tests {
     #[test]
     fn keyed_read_prunes_cache_entries_for_keys_no_longer_queried() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-dead", ToolRun::Reset).expect("touch dead");
-        touch(&runtime, "claude", "sess-live", ToolRun::Reset).expect("touch live");
+        touch(&runtime, "claude", "sess-dead", ToolRun::Reset, false).expect("touch dead");
+        touch(&runtime, "claude", "sess-live", ToolRun::Reset, false).expect("touch live");
         // Prime the cache with both keys, then drop the dead one from the
         // queried set — a dead agent leaving the snapshot.
         read_for_keys(&runtime, [("claude", "sess-dead"), ("claude", "sess-live")]);
@@ -405,7 +464,7 @@ mod tests {
     #[test]
     fn read_all_skips_interrupted_write_temp_siblings() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset, false).expect("touch");
         let canonical = read_all(&runtime);
         assert_eq!(canonical.len(), 1);
         // An interrupted atomic write can leave a fully-valid-JSON
@@ -429,7 +488,7 @@ mod tests {
     #[test]
     fn read_all_skips_unreadable_files() {
         let (_dir, runtime) = runtime();
-        touch(&runtime, "claude", "sess-1", ToolRun::Reset).expect("touch");
+        touch(&runtime, "claude", "sess-1", ToolRun::Reset, false).expect("touch");
         std::fs::write(
             runtime.agent_activity_dir.join("garbage.json"),
             b"{ not json",

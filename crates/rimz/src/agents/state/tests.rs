@@ -2,6 +2,31 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
+fn last_request_anchor_uses_tools_and_clamps_context_resets() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    let ts = |seconds| Timestamp::from_second(seconds).unwrap();
+    for (start, tool, end, expected) in [
+        (Some(100), Some(200), Some(300), Some(200)),
+        (Some(100), None, Some(300), Some(100)),
+        (Some(100), Some(50), Some(300), Some(100)),
+        (Some(400), Some(200), Some(300), Some(300)),
+        (Some(400), Some(200), Some(400), Some(400)),
+        (None, Some(200), Some(300), Some(200)),
+        (None, None, Some(300), None),
+        (Some(100), Some(200), None, None),
+    ] {
+        agent.turn_started_at = start.map(ts);
+        agent.last_tool_at = tool.map(ts);
+        agent.turn_ended_at = end.map(ts);
+        assert_eq!(
+            agent.last_request_at(),
+            expected.map(ts),
+            "{start:?}/{tool:?}/{end:?}"
+        );
+    }
+}
+
+#[test]
 fn legacy_state_defaults_to_no_observed_branches() {
     let mut agent = test_agent(AgentStatus::Idle, 1_000);
     agent.worktree_branch = Some("main".to_owned());

@@ -1430,16 +1430,20 @@ fn repeated_tool_payload_updates_and_restarts_the_activity_run() {
             "prompt": "check the project",
         }),
     );
-    let payload = |command: &str| {
+    let hook = |event: &str, command: &str| {
         json!({
-            "hook_event_name": "PostToolUse",
+            "hook_event_name": event,
             "session_id": "sess-repeat",
             "tool_name": "Bash",
             "tool_input": {"command": command},
         })
     };
+    let payload = |command: &str| hook("PostToolUse", command);
 
+    // Claude fires PreToolUse before each PostToolUse; the pre-tool hook
+    // advances only the tool clock and must not restart the run.
     for _ in 0..3 {
+        run_claude_lifecycle(&env, hook("PreToolUse", "cargo check"));
         run_claude_lifecycle(&env, payload("cargo check"));
     }
     let runtime = env.runtime_paths();

@@ -20,6 +20,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         transcript_path,
         turn_ended,
         tool_run,
+        tool_used,
     } = context;
     // Remove the session's statusline context sidecar before the normal
     // activity, merge, and refresh fall-through. Refresh-capable adapters can
@@ -38,7 +39,22 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     // Refresh the activity heartbeat on progress-proving events so the
     // sidebar's `last_activity` advances per tool call, not just per turn.
     if decoded.records_progress() || parent_agent_id.is_some() {
-        touch_agent_activity(workspace, store, agent, event_name, agent_id, tool_run);
+        touch_agent_activity(
+            workspace, store, agent, event_name, agent_id, tool_run, tool_used,
+        );
+    } else if tool_used
+        && let Err(err) = rimz::agent_activity::touch_tool_clock(
+            store.runtime_paths(),
+            agent.spec().kind,
+            agent_id,
+        )
+    {
+        warn!(
+            agent = agent.spec().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to advance the tool clock",
+        );
     }
     if let Some(parent_agent_id) = parent_activity_id {
         touch_agent_activity(
@@ -48,6 +64,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
             event_name,
             parent_agent_id,
             rimz::agent_activity::ToolRun::Reset,
+            false,
         );
     }
     // Child details travel on the durable child observation. Provider payloads
@@ -93,8 +110,15 @@ pub(super) fn touch_agent_activity(
     event_name: &str,
     agent_id: &str,
     run: rimz::agent_activity::ToolRun<'_>,
+    tool_used: bool,
 ) {
-    match rimz::agent_activity::touch(store.runtime_paths(), agent.spec().kind, agent_id, run) {
+    match rimz::agent_activity::touch(
+        store.runtime_paths(),
+        agent.spec().kind,
+        agent_id,
+        run,
+        tool_used,
+    ) {
         Ok(count)
             if count
                 == crate::cli::machine_config()
@@ -464,6 +488,7 @@ mod tests {
                 transcript_path: None,
                 turn_ended: false,
                 tool_run: rimz::agent_activity::ToolRun::Reset,
+                tool_used: false,
             },
         });
 
@@ -522,6 +547,7 @@ mod tests {
                 transcript_path: None,
                 turn_ended: false,
                 tool_run: rimz::agent_activity::ToolRun::Reset,
+                tool_used: false,
             },
         });
 

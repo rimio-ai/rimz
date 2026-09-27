@@ -59,6 +59,7 @@ pub(super) fn handle_lifecycle_hook(
                 decoded.event_name(),
                 host.as_str(),
                 rimz::agent_activity::ToolRun::Reset,
+                false,
             );
             active_time::record_side_conversation(
                 store,
@@ -185,6 +186,13 @@ pub(super) fn handle_lifecycle_hook(
                 transcript_path,
                 turn_ended,
                 tool_run,
+                tool_used: parent_agent_id.is_none()
+                    && recorded.as_ref().is_some_and(|recorded| {
+                        matches!(
+                            recorded.observation.signal,
+                            LifecycleSignal::ToolUsed { .. }
+                        )
+                    }),
             },
         });
     }
@@ -430,6 +438,7 @@ struct LifecycleEventContext<'a> {
     transcript_path: Option<&'a str>,
     turn_ended: bool,
     tool_run: rimz::agent_activity::ToolRun<'a>,
+    tool_used: bool,
 }
 
 struct ContextSidecarInput<'a> {
@@ -590,6 +599,7 @@ mod tests {
                 transcript_path: None,
                 turn_ended: false,
                 tool_run: rimz::agent_activity::ToolRun::Reset,
+                tool_used: false,
             },
         });
         assert!(
