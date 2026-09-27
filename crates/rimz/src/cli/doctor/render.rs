@@ -9,8 +9,8 @@ use std::io::{self, Write};
 use jiff::Timestamp;
 
 use crate::cli::render::{
-    Cell, KeyVals, Table, age_label, cell, fmt_bytes, home_relative, lsp_state_label, paint,
-    palette, status,
+    Cell, KeyVals, Table, age_label, cell, fmt_bytes, home_relative, home_relative_path,
+    lsp_state_label, paint, palette, status,
 };
 use rimz::agents::AgentStatus;
 use rimz::trust::TrustState;
@@ -218,8 +218,11 @@ fn render_lsp(
     if lsp.servers.is_empty() {
         note(tally, w, Health::Neutral, "no shared language servers")?;
     } else {
-        let mut table = Table::new(["CHECKOUT", "SERVER", "STATE", "RSS", "LEASES"]);
-        for server in &lsp.servers {
+        let mut servers: Vec<_> = lsp.servers.iter().collect();
+        servers.sort_by_key(|server| status::lsp_order(&server.entry));
+        let mut table = Table::new(["STATE", "CHECKOUT", "SERVER", "RSS", "LEASES"]).right(&[3, 4]);
+        for server in servers {
+            use rimz::lsp::registry::State;
             use status::StateRole;
             let health = match status::lsp(&server.entry.state) {
                 StateRole::Success => Health::Ok,
@@ -228,11 +231,19 @@ fn render_lsp(
                 StateRole::Failed => Health::Alarm,
                 StateRole::Neutral => Health::Neutral,
             };
+            let rss = if matches!(
+                server.entry.state,
+                State::Starting | State::Indexing | State::Ready
+            ) {
+                cell(rimz::utils::size::decimal_bytes(server.rss_bytes))
+            } else {
+                cell("-").dash()
+            };
             table.row([
-                cell(server.entry.root.display().to_string()),
-                cell(&server.entry.server),
                 verdict(tally, health, lsp_state_label(&server.entry.state)),
-                cell(fmt_bytes(server.rss_bytes)),
+                cell(home_relative_path(&server.entry.root)),
+                cell(&server.entry.server),
+                rss,
                 cell(server.entry.leases.len().to_string()),
             ]);
         }
@@ -246,7 +257,7 @@ fn render_lsp(
             &format!(
                 "{}: {} {} {} ({})",
                 record.at,
-                record.root.display(),
+                home_relative_path(&record.root),
                 record.server,
                 record.event,
                 record.details

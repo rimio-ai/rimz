@@ -55,6 +55,67 @@ fn shared_language_servers_show_dormant_reason_and_last_refusal() {
 }
 
 #[test]
+fn shared_language_servers_read_like_lsp_list() {
+    use rimz::lsp::registry::{State, StopReason};
+    let server = |root: &str, name: &str, state| super::super::model::LspServer {
+        entry: rimz::lsp::registry::Entry {
+            root: root.into(),
+            project: None,
+            server: name.into(),
+            nonce: String::new(),
+            broker_pid: 1,
+            broker_start_token: String::new(),
+            server_pid: Some(2),
+            server_start_token: None,
+            state,
+            started_at_ms: 0,
+            ready_at_ms: None,
+            estimate_bytes: 0,
+            settings_hash: String::new(),
+            request_count: 0,
+            last_request_at_ms: None,
+            peak_rss_kb: 0,
+            restarts: 0,
+            leases: vec![],
+            attached: vec![],
+        },
+        rss_bytes: 4_700_000_000,
+    };
+    let dormant = |reason| State::Dormant {
+        since_ms: 0,
+        reason,
+    };
+    let lsp = Probe::Ready(super::super::model::Lsp {
+        servers: vec![
+            server("/b", "rust", dormant(None)),
+            server("/a", "z", dormant(Some(StopReason::Idle))),
+            server("/c", "rust", dormant(Some(StopReason::Crashed))),
+            server("/z", "rust", State::Ready),
+            server("/a", "a", dormant(None)),
+        ],
+        last_refusal: None,
+    });
+    let rendered = strip(|w| render_lsp(w, &lsp, &mut Tally::default()));
+    let rows: Vec<Vec<&str>> = rendered
+        .lines()
+        .map(|line| line.split_whitespace().collect())
+        .filter(|row: &Vec<&str>| !row.is_empty())
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            vec!["LSP"],
+            vec!["STATE", "CHECKOUT", "SERVER", "RSS", "LEASES"],
+            vec!["✓", "ready", "/z", "rust", "4.7", "GB", "0"],
+            vec!["✗", "dormant:", "crashed", "/c", "rust", "-", "0"],
+            vec!["·", "not", "started", "/a", "a", "-", "0"],
+            vec!["·", "dormant:", "idle", "/a", "z", "-", "0"],
+            vec!["·", "not", "started", "/b", "rust", "-", "0"],
+        ]
+    );
+}
+
+#[test]
 fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
     for mode in [
         rimz::config::Isolation::Host,
