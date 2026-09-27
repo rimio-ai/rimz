@@ -6,6 +6,7 @@
 
 ```sh
 rimz lsp def MuxBackend
+rimz lsp def Store::open QueryErr
 rimz lsp refs GcReport
 rimz lsp hover Store::open
 rimz lsp impl MuxBackend
@@ -37,12 +38,12 @@ Matches sharing one definition count as one symbol, including re-exports; distin
 
 `find` sorts case-insensitively by exact name, prefix, substring, then other matches, with qualified name and position breaking ties. This order applies to text and JSON.
 
-All eight verbs require one target. Query flags:
+All eight verbs require one or more targets. Targets run sequentially in argument order, including duplicates. With several targets, text labels each block `==> TARGET <==` using the argument as written, with one blank line between blocks. A target's failure does not omit later blocks. One target keeps the unlabelled output. Quote a search containing spaces to pass it as one `find` target. Query flags apply to every target:
 
 | Flag | Effect |
 | --- | --- |
 | `--server <NAME>` | Select a configured server name. Otherwise a file's extension selects among checkout entries, or the sole entry is used. Ambiguous selection names this flag in the error. |
-| `--json` | Print the structured LSP result on exit 0. Exits 5 and 6 print an object with `outcome` (`not-found` or `ambiguous`), the written `name`, and `candidates`, each containing the qualified `name`, kind word `kind`, and `position` (`path:line:col`). |
+| `--json` | One target: print the structured LSP result on exit 0. Exits 5 and 6 print an object with `outcome` (`not-found` or `ambiguous`), the written `name`, and `candidates`, each containing the qualified `name`, kind word `kind`, and `position` (`path:line:col`). Several targets: print an array in argument order, with `target`, `outcome`, and `exit` on each object. Answers have `outcome: "answer"` and the raw result in `result`; not-found and ambiguous objects keep their other fields; errors have `outcome: "error"` and a message in `error`. |
 | `--external` | `refs`, `impl`, `callers`, `callees`, `find`: include results outside the checkout. Default text output hides these results and ends with `<n> outside the checkout hidden; add --external to show them` when any were hidden. `def`, `hover`, and `symbols` are never filtered and reject this flag. `--json` is always unfiltered. |
 
 `find --external` shows everything the server's search returned; it does not widen the search itself. Rust-analyzer's default search covers the workspace and its path dependencies, not registry crates or the standard library.
@@ -133,6 +134,8 @@ Text shows checkout, server name, state, broker and server pids, request count, 
 
 ## Exit codes
 
+With several query targets, exit 0 means every target answered; otherwise the most severe outcome wins, in the order 3 > 4 > 1 > 6 > 5. Per-target errors appear on stdout as `error: <message>` in their block (or in their JSON object), with empty stderr. A server returning 3 or 4 is not queried again during the call; its later targets reuse that error. Configuration/registry loading, rendering, and write failures still abort the call. The stderr descriptions below apply to single-target queries.
+
 | Exit | Meaning |
 | --- | --- |
 | 0 | Answered, including `no results` for a resolved symbol; successful list, status, stop, shim, or attach version probe; attach ended on editor EOF; check has no failing anchors (unchecked anchors are allowed). |
@@ -148,7 +151,7 @@ Exits 5 and 6 write nothing to stderr. Not-found text is `not found: {written na
 
 An absent configured server reports `not running`. A broker-side memory refusal reports `no language server for <root> (not started: memory short); use grep`, leaves the broker dormant, and is retried by a later query. Diagnostics do not determine this result. Stop-reason errors use `(stopped: <reason>)`, including `idle`, `evicted`, and `team done`; an ordinary query to a dormant server requests a restart instead.
 
-Other failures follow the [CLI error conventions](../cli.md). `--json` does not change the stderr form of exits 3 and 4.
+Other failures follow the [CLI error conventions](../cli.md). With one target, `--json` does not change the stderr form of exits 3 and 4.
 
 ## Configuration
 
