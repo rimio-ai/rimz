@@ -2,16 +2,12 @@
 //! History append and retention failures never fail a queue commit.
 
 use std::collections::BTreeSet;
-#[cfg(test)]
-use std::time::Duration;
 
 use jiff::Timestamp;
 
 use crate::agents::{AgentCardRef, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::event::{EventEnvelope, MessageEventMethod};
-#[cfg(test)]
-use crate::store::message::CLAIM_TTL;
 use crate::store::message::{
     AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
     claim_expired, delivery_batch_indices,
@@ -43,7 +39,6 @@ pub struct ReconcileReport {
 pub enum BlockerUpdate<'a> {
     Set(&'a str),
     ClearOwn(fn(&str) -> bool),
-    Keep,
 }
 
 pub enum DeliveryAck<'a> {
@@ -701,7 +696,6 @@ impl Store {
                         message.last_error = None;
                     }
                 }
-                BlockerUpdate::Keep => {}
             }
             queue.upsert(message);
             Ok(())
@@ -721,26 +715,20 @@ impl Store {
         self.commit_queue(|queue| {
             let now = Timestamp::now();
             let oldest_sent_batch = |body| {
-                let Some(oldest) = queue.live().iter().find(|message| {
+                let pool = queue.live().iter().filter(|message| {
                     message.status == MessageStatus::Sent
                         && message.body == body
                         && message.same_card(card)
-                }) else {
+                });
+                let Some(oldest) = pool.clone().next() else {
                     return BTreeSet::new();
                 };
-                queue
-                    .live()
-                    .iter()
-                    .filter(|message| {
-                        message.message_id == oldest.message_id
-                            || (oldest.batch_id.is_some()
-                                && message.status == MessageStatus::Sent
-                                && message.body == body
-                                && message.same_card(card)
-                                && message.batch_id == oldest.batch_id)
-                    })
-                    .map(|message| message.message_id.as_str().to_owned())
-                    .collect()
+                pool.filter(|message| {
+                    message.message_id == oldest.message_id
+                        || (oldest.batch_id.is_some() && message.batch_id == oldest.batch_id)
+                })
+                .map(|message| message.message_id.as_str().to_owned())
+                .collect()
             };
             let selected = match ack {
                 DeliveryAck::TurnStarted {
@@ -752,8 +740,7 @@ impl Store {
                         .filter(|message| {
                             message.body == MessageBody::Prompt
                                 && message.same_card(card)
-                                && (message.status == MessageStatus::Sent
-                                    || message.awaiting_late_ack())
+                                && message.in_flight()
                         })
                         .collect::<Vec<_>>();
                     let mut selected = (BTreeSet::new(), None);
@@ -771,16 +758,14 @@ impl Store {
                                     .iter()
                                     .map(|message| message.message_id.as_str().to_owned()),
                             );
-                            let before = leading.map_or(0, str::len);
-                            let after = trailing.map_or(0, str::len);
-                            if before > 0 || after > 0 {
-                                let mut parts = Vec::new();
-                                if before > 0 {
-                                    parts.push(format!("{before} stray bytes before"));
-                                }
-                                if after > 0 {
-                                    parts.push(format!("{after} stray bytes after"));
-                                }
+                            let parts = [(leading, "before"), (trailing, "after")]
+                                .into_iter()
+                                .filter_map(|(text, side)| {
+                                    text.filter(|text| !text.is_empty())
+                                        .map(|text| format!("{} stray bytes {side}", text.len()))
+                                })
+                                .collect::<Vec<_>>();
+                            if !parts.is_empty() {
                                 selected.1 = Some(format!(
                                     "confirmed inside a mixed submit; {}",
                                     parts.join(", ")
@@ -981,9 +966,6 @@ impl Store {
                     result.head_found = true;
                     result.head_sent = message.status == MessageStatus::Sent;
                 }
-                if message.status == MessageStatus::Sent || message.status.is_terminal() {
-                    return MessageUpdate::Keep;
-                }
                 if !message.status.is_open() {
                     return MessageUpdate::Keep;
                 }
@@ -1020,7 +1002,7 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn record_unresolved_message(&self, bounce: UnresolvedMessage<'_>) -> Result<MessageId> {
+    pub fn record_unresolved_message(&self, bounce: UnresolvedMessage<'_>) -> Result<()> {
         let event = EventEnvelope::unresolved_message_event(
             bounce.workspace_id,
             bounce.session_name,
@@ -1030,12 +1012,7 @@ impl Store {
             bounce.text_len,
             bounce.reason.to_owned(),
         );
-        let message_id = match event.kind() {
-            crate::store::event::EventKind::Message { payload, .. } => payload.message_id,
-            _ => unreachable!("unresolved_message_event is a message event"),
-        };
-        self.commit(|txn| txn.append(&event))?;
-        Ok(message_id)
+        self.commit(|txn| txn.append(&event))
     }
 
     #[must_use = "durability barrier; check the result"]

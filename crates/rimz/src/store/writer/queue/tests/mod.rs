@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tempfile::tempdir;
 
 use super::*;
@@ -7,7 +9,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use crate::store::event_log;
 use crate::store::message::{
-    AfterCondition, AutoCompact, DeliveryGate, MessageSender, WhenCondition,
+    AfterCondition, AutoCompact, CLAIM_TTL, DeliveryGate, MessageSender, WhenCondition,
 };
 use crate::{RuntimePaths, StatePaths};
 

@@ -25,8 +25,12 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
         Some(until)
     );
     assert_eq!(q.live()[0].last_error.as_deref(), Some(BLOCKER));
-    q.defer_message_wake(&queued.message_id, until, BlockerUpdate::Keep)
-        .unwrap();
+    q.defer_message_wake(
+        &queued.message_id,
+        until,
+        BlockerUpdate::ClearOwn(|_| false),
+    )
+    .unwrap();
     let deferred = &q.live()[0];
     assert_eq!(deferred.last_error.as_deref(), Some(BLOCKER));
     assert_eq!(deferred.status, MessageStatus::Queued);
@@ -71,7 +75,7 @@ fn defer_message_wake_sets_retry_after_only_for_queued_messages() {
     assert_eq!(messages[0].retry_after, None);
     assert_eq!(messages[0].last_error, None);
 
-    q.defer_message_wake(&message_id(999), until, BlockerUpdate::Keep)
+    q.defer_message_wake(&message_id(999), until, BlockerUpdate::ClearOwn(|_| false))
         .unwrap();
 }
 
