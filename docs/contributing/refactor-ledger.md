@@ -8,7 +8,7 @@ Survey at `c5edd6ff8` (2026-09-28, pass 26c), rebased onto pass 26a (`17cc18ca6`
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
-- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `message`, `store/writer`, `disk`.
+- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `message`, `store/writer`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
 - **Unjudged families:** the install shape family `PendingWrite::optional+report_files+settings_json::commit_pair+…` (`agents/adapters/{copilot,cursor}/install.rs`), newly over the finding gate; guard families `RunStatus::Completed` (four sites), `wait_for_required` (lsp, with 26a), `Isolation::Host`, and `degraded`.
@@ -115,7 +115,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/worktree` | holds; landed pass-24a | `4e445b73d` | 30 | base parse errors left the façade. |
 | `daemon_view` | holds; landed pass-15c | `0175c3c6b` | 30 | loop-panel acquisition is one operation; both cycles held by intent. |
 | `diag` | holds; landed pass-16 | `6fccc2b04` | 30 | evidence vocabulary and append mechanics at L3 below store; one sink admission point. |
-| `disk` | holds; landed pass-19b | `aad546d17` | 30 | durability classes, filenames, locking and three distinct file identities hold. |
+| `disk` | holds; landed pass-27d | `94ef122d1` | 30 | durability classes, filenames and lock identity hold; the class partition lives only in `Class::STATE`/`RUNTIME`. |
 | `harness` | landed pass-5; pass-7; pass-8; pass-14; pass-20a; pass-23b; pass-25 | — | — | policy reaching down; never reaches `sidebar`: usage refresh returns, its CLI entry publishes. |
 | `harness/schedule` | holds; landed pass-14; pass-23b | `5a052d17b` | 30 | one arming rule; catalog, arm, team and signal error types are signature floors. |
 | `harness/resume` | holds; landed pass-19a | `bdaedf434` | 30 | posture composes `plan::ResumeLaunchPosture`; recovery interior `pub(super)`. |
@@ -300,6 +300,8 @@ Candidates a pass judged real but could not land, each with what unblocks it.
 - `message`: `ReplyWait::run` three methods → one plus `ReplyEvent` (timing pinned by `27077a848`, `cfe1240a3`); `compact_idle` absorbing idle preflight needs `send_compact` to return the id.
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
 - `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Waits for its `fix(attribution)` churn to settle.
+- `disk`: the `StatePaths`/`RuntimePaths` constructor family (5 + 8, ~460 test sites on `under`/`under_named`) → `for_project_root(root, home)`, `for_workspace(id, home)`, `RuntimePaths::for_state(state, runtime_root)`. Waits for a round with no concurrent passes.
+- `disk::parse_cache`: fold the `(mtime,len)` key onto the full `FileStamp`. Belongs to a `store/snapshot` pass, which owns its callers.
 - `ids::ViewId::as_str` and `sidebar_pane::render::ui_state::Alert::active`: no production reader, `dead_code` blocks narrowing, tests hold them. Wait for passes on `sidebar/produce` and `sidebar_pane/app`.
 - `sidebar_pane/render/(root)`: `UiState`, `Alert` and ten root items could go to pane reach once a pass owns `render/mod.rs` bodies.
 - `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
