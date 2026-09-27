@@ -46,9 +46,7 @@ use self::install::MANAGED_SOURCE;
 use self::payloads::{
     ClaudeCommon, ClaudePermissionRequest, ClaudePostCompact, ClaudePostToolUse, ClaudePreToolUse,
     ClaudeSessionStart, ClaudeStop, ClaudeStopFailure, ClaudeSubagentStart, ClaudeSubagentStop,
-    ClaudeUserPromptSubmit, parse_permission_request, parse_post_compact, parse_post_tool_use,
-    parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start,
-    parse_subagent_stop, parse_user_prompt_submit,
+    ClaudeUserPromptSubmit, parse,
 };
 use super::AskKind;
 use super::RemoteControlStatus;
@@ -1099,29 +1097,17 @@ struct ClaudeLifecycleParts {
 
 impl ClaudeLifecycleParts {
     fn parse(event_name: &str, payload: &Value) -> Self {
-        let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
-        let user_prompt =
-            (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
-        let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
-        let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
-        let stop = (event_name == "Stop").then(|| parse_stop(payload));
-        let stop_failure = (event_name == "StopFailure").then(|| parse_stop_failure(payload));
-        let pre_tool_use = (event_name == "PreToolUse").then(|| parse_pre_tool_use(payload));
-        let post_tool_use = (event_name == "PostToolUse").then(|| parse_post_tool_use(payload));
-        let permission_request =
-            (event_name == "PermissionRequest").then(|| parse_permission_request(payload));
-        let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
         Self {
-            session_start,
-            user_prompt,
-            subagent_start,
-            subagent_stop,
-            stop,
-            stop_failure,
-            pre_tool_use,
-            post_tool_use,
-            permission_request,
-            post_compact,
+            session_start: (event_name == "SessionStart").then(|| parse(payload)),
+            user_prompt: (event_name == "UserPromptSubmit").then(|| parse(payload)),
+            subagent_start: (event_name == "SubagentStart").then(|| parse(payload)),
+            subagent_stop: (event_name == "SubagentStop").then(|| parse(payload)),
+            stop: (event_name == "Stop").then(|| parse(payload)),
+            stop_failure: (event_name == "StopFailure").then(|| parse(payload)),
+            pre_tool_use: (event_name == "PreToolUse").then(|| parse(payload)),
+            post_tool_use: (event_name == "PostToolUse").then(|| parse(payload)),
+            permission_request: (event_name == "PermissionRequest").then(|| parse(payload)),
+            post_compact: (event_name == "PostCompact").then(|| parse(payload)),
         }
     }
 

@@ -140,27 +140,12 @@ pub struct ClaudePermissionRequest {
 
 // ── Parse helpers ──────────────────────────────────────────────────────────
 //
-// Each returns `T::default()` on deserialization failure, matching the current
+// Returns `T::default()` on deserialization failure, matching the current
 // silent-`None` behavior of the raw `payload.get("field").and_then(...)` chains.
 
-macro_rules! parse_fn {
-    ($fn_name:ident, $ty:ty) => {
-        pub fn $fn_name(payload: &Value) -> $ty {
-            serde_json::from_value(payload.clone()).unwrap_or_default()
-        }
-    };
+pub(super) fn parse<T: serde::de::DeserializeOwned + Default>(payload: &Value) -> T {
+    serde_json::from_value(payload.clone()).unwrap_or_default()
 }
-
-parse_fn!(parse_session_start, ClaudeSessionStart);
-parse_fn!(parse_user_prompt_submit, ClaudeUserPromptSubmit);
-parse_fn!(parse_pre_tool_use, ClaudePreToolUse);
-parse_fn!(parse_post_tool_use, ClaudePostToolUse);
-parse_fn!(parse_stop, ClaudeStop);
-parse_fn!(parse_stop_failure, ClaudeStopFailure);
-parse_fn!(parse_subagent_start, ClaudeSubagentStart);
-parse_fn!(parse_subagent_stop, ClaudeSubagentStop);
-parse_fn!(parse_post_compact, ClaudePostCompact);
-parse_fn!(parse_permission_request, ClaudePermissionRequest);
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -176,7 +161,7 @@ mod tests {
     /// and sparse payloads, and carry typed vecs / trigger enums.
     #[test]
     fn parse_helpers_flatten_default_and_tolerate_drift() {
-        let session = parse_session_start(&json!({
+        let session = parse::<ClaudeSessionStart>(&json!({
             "session_id": "sess-1",
             "model": "claude-opus-4-8",
             "source": "startup",
@@ -187,16 +172,16 @@ mod tests {
         assert_eq!(session.source, SessionSource::Startup);
         // An unknown source variant falls back rather than failing the parse.
         assert_eq!(
-            parse_session_start(&json!({"source": "brand_new_source"})).source,
+            parse::<ClaudeSessionStart>(&json!({"source": "brand_new_source"})).source,
             SessionSource::Unknown
         );
 
-        let sparse = parse_stop(&json!({}));
+        let sparse = parse::<ClaudeStop>(&json!({}));
         assert!(sparse.background_tasks.is_none());
         assert!(sparse.session_crons.is_empty());
         assert_eq!(sparse.common.common.session_id, None);
 
-        let stop = parse_stop(&json!({
+        let stop = parse::<ClaudeStop>(&json!({
             "background_tasks": [
                 {"id": "t1", "status": "running", "description": "linting"},
                 {"id": "t2", "status": "completed", "description": "done"}
@@ -216,7 +201,7 @@ mod tests {
         );
 
         assert_eq!(
-            parse_post_compact(&json!({"trigger": "manual"})).trigger,
+            parse::<ClaudePostCompact>(&json!({"trigger": "manual"})).trigger,
             CompactTrigger::Manual
         );
     }
