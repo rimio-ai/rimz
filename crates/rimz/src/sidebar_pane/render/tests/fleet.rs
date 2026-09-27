@@ -649,6 +649,28 @@ fn render_cockpit_unread_count() {
         screen.lines().any(|line| line.contains("¤ 2 (1) ⑃ 1")),
         "live-agent summary carries unread and open-PR counts in order:\n{screen}"
     );
+
+    let unread_group = snapshot
+        .worktree_groups
+        .iter()
+        .position(|group| group.rows.iter().any(|row| row.unread))
+        .expect("unread group");
+    let mut sibling = snapshot.worktree_groups[unread_group].rows[0].clone();
+    sibling.id.push_str("-sibling");
+    sibling.name.push_str("-sibling");
+    snapshot.worktree_groups[unread_group].rows.push(sibling);
+    let screen = snapshot_to_screen(&snapshot, 38, 20);
+    assert!(
+        screen.lines().any(|line| line.contains("¤ 2 (1) ⑃ 1")),
+        "two unread cards in one worktree count once:\n{screen}"
+    );
+
+    snapshot.worktree_groups[1 - unread_group].rows[0].unread = true;
+    let screen = snapshot_to_screen(&snapshot, 38, 20);
+    assert!(
+        screen.lines().any(|line| line.contains("¤ 2 (2) ⑃ 1")),
+        "each worktree holding an unread card counts once:\n{screen}"
+    );
 }
 
 #[test]

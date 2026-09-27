@@ -51,7 +51,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 }
 
 pub(in crate::sidebar_pane::render) struct CockpitBadges {
-    pub unread_agents: usize,
+    pub unread_worktrees: usize,
     pub unread_picked: bool,
     pub open_prs: usize,
     pub open_pr_ci: Option<crate::store::snapshot::WorktreeCi>,
@@ -63,7 +63,7 @@ pub(in crate::sidebar_pane::render) struct CockpitChipHits {
     pub open_pr: Option<(u16, u16)>,
 }
 
-/// The cockpit's second summary line: `¤ {live} ({unread}) {⑃ open-PRs}` — the
+/// The cockpit's second summary line: `¤ {live} ({unread worktrees}) {⑃ open-PRs}` — the
 /// agents in the room right now, the glyph in the agents' own working clay —
 /// on the left, with headline fleet spend pinned to the right edge, counting up
 /// as a turn lands. The steady unread count and open-PR count are
@@ -112,13 +112,13 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     );
     let mut unread_range = None;
     let CockpitBadges {
-        unread_agents,
+        unread_worktrees,
         unread_picked,
         open_prs,
         open_pr_ci,
         pr_picked,
     } = badges;
-    if unread_agents > 0 {
+    if unread_worktrees > 0 {
         // A steady tally, not a blink — the attention blink lives on the cards
         // and the make-up buckets; the cockpit count holds its attention tone.
         let waiting = theme.animations.status(AgentStatus::Waiting).color();
@@ -129,7 +129,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         };
         left.push(Span::styled(" ".to_owned(), theme.body()));
         let start = spans_width(&left);
-        left.push(Span::styled(format!("({unread_agents})"), style));
+        left.push(Span::styled(format!("({unread_worktrees})"), style));
         let end = spans_width(&left);
         let left_budget = width.saturating_sub(right_width + 1);
         unread_range = (end <= left_budget).then_some((start as u16, end as u16));

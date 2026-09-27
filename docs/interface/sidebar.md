@@ -165,7 +165,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `⌘ name` | the workspace |
 | `◎ N` | sessions that ran in the spend window |
 | `¤ N` | agents alive right now |
-| `(2)` | unread cards |
+| `(2)` | worktrees holding unread cards |
 | `⑃ N` | open pull requests on the agents' branches |
 | `↑ 2 need you` | the card that most needs you is scrolled out of view |
 | `▌` ... `▐` | the selected card's left and right spines |
@@ -201,7 +201,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 |------|-------|
 | 1 | `⌘` and the workspace name in green. The project path sits on the right with your home directory as `~`; when space runs out the path loses its left end behind `…`. |
 | 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
-| 3 | `¤` live agents, `(N)` unread cards when there are any, `⑃ N` open pull requests when there are any, and the room's spend for the window on the right. |
+| 3 | `¤` live agents, `(N)` worktrees holding unread cards when there are any (a team lane with four unread agents counts once), `⑃ N` open pull requests when there are any, and the room's spend for the window on the right. |
 | 4 | the make-up line: agents by status. |
 | 5 | the `↑ N need you` banner, only while it applies. |
 
