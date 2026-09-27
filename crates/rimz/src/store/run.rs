@@ -1,4 +1,4 @@
-//! Durable per-run records for supervised `rimz agents -p` turns: schema, codec, and the terminal wake sender.
+//! Durable records for supervised and launcher-opened peer turns: schema, codec, and the terminal wake sender.
 //!
 //! Run records are cold-path durable state: a waiting CLI may exit, a user may
 //! inspect the result later with `rimz agents show`, and the final assistant text
@@ -113,6 +113,13 @@ pub struct RunVerify {
     pub output: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerRun {
+    pub launch_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opened_by: Vec<crate::ids::MessageId>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: RunId,
@@ -149,6 +156,8 @@ pub struct RunRecord {
     /// Pane-backed child launched through `rimz subagents`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer: Option<PeerRun>,
     /// Time at which the caller claimed the settled result, either by printing
     /// it during an open agent turn (or to a human shell) or discarding it
     /// through `rimz subagents stop`; joined runs are
@@ -215,11 +224,30 @@ pub enum RunPromptOrigin {
 
 impl RunRecord {
     pub fn prompt_origin(&self) -> RunPromptOrigin {
-        match (self.subagent, self.loop_task.as_ref()) {
+        match (
+            self.subagent || self.peer.is_some(),
+            self.loop_task.as_ref(),
+        ) {
             (true, _) => RunPromptOrigin::Parent,
             (false, Some(_)) => RunPromptOrigin::Harness,
             (false, None) => RunPromptOrigin::Human,
         }
+    }
+
+    pub fn matches_agent(&self, agent: &crate::agents::AgentState) -> bool {
+        if self.kind != agent.kind {
+            return false;
+        }
+        if let Some(peer) = &self.peer {
+            return agent.launch_id.as_ref() == Some(&peer.launch_id)
+                || agent.agent_id == peer.launch_id
+                || self.agent_id.as_ref() == Some(&agent.agent_id);
+        }
+        self.agent_id.as_ref() == Some(&agent.agent_id)
+            || agent
+                .name
+                .as_ref()
+                .is_some_and(|name| self.agent_name.as_ref() == Some(name))
     }
 
     pub fn new(
@@ -248,6 +276,7 @@ impl RunRecord {
             permission_mode,
             keep: false,
             subagent: false,
+            peer: None,
             joined_at: None,
             report_message_id: None,
             budget: None,
@@ -413,6 +442,28 @@ mod tests {
     use crate::agents::PermissionMode;
     use crate::ids::{AgentKind, WorkspaceId};
     use tempfile::tempdir;
+
+    #[test]
+    fn peer_run_codec_and_prompt_origin() {
+        let record = RunRecord::new(
+            WorkspaceId::from_project_root(Path::new("/repo")),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "task".into(),
+            "/repo".into(),
+        );
+        let mut value = serde_json::to_value(&record).unwrap();
+        assert!(value.get("peer").is_none());
+        let old: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(old.prompt_origin(), RunPromptOrigin::Human);
+        value["peer"] = serde_json::json!({"launch_id": "peer-launch"});
+        let peer: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(peer.prompt_origin(), RunPromptOrigin::Parent);
+        assert_eq!(serde_json::to_value(&peer).unwrap(), value);
+        value["peer"]["opened_by"] = serde_json::json!([crate::ids::MessageId::new()]);
+        let peer: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(peer).unwrap(), value);
+    }
 
     #[test]
     fn waiter_liveness_distinguishes_bound_stale_and_absent_socket() {

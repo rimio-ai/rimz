@@ -35,6 +35,8 @@ The rule that resolves this: **the durable run record is the run; the pane, the 
 
 ## The record
 
+The record schema also supports launcher-opened persistent peer turns through optional `RunRecord.peer`; their per-turn identity, response files, and fleet selection are owned by [subagents.md](./subagents.md#the-lifecycle-end-to-end). An absent `peer` preserves the supervised record shape.
+
 `RunRecord` carries the run's identity, its launch choices, and everything an inspection surface needs after the pane is gone.
 
 | Group | Fields |
