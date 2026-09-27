@@ -8,7 +8,7 @@ Survey at `c5edd6ff8` (2026-09-28, pass 26c), rebased onto pass 26a (`17cc18ca6`
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
-- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `message`, `store/writer`.
+- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `store/writer`.
 - **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
 - **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
 - **Unjudged families:** the install shape family `PendingWrite::optional+report_files+settings_json::commit_pair+…` (`agents/adapters/{copilot,cursor}/install.rs`), newly over the finding gate; guard families `RunStatus::Completed` (four sites), `wait_for_required` (lsp, with 26a), `Isolation::Host`, and `degraded`.
@@ -152,7 +152,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
 | `lsp` | holds; landed pass-26a | `17cc18ca6` | 30 | one sweep, memory measure, parsed target and lease list; domain presentation and broker RAII hold. |
-| `message` | holds; landed pass-13 | `efe38f50c` | 30 | one System queue shape; settle owned by `message deliver`; reply machine holds. |
+| `message` | holds; landed pass-27c | `0ee03524e` | 30 | timing-only DispatchMode; one interrupt-key and delivery-kind owner; reply machine holds. |
 | `mux` | holds; landed pass-18c | `9ba3585b9` | 30 | planner verdicts private; `SplitPaneOptions::from_command` owns the pane-command projection. |
 | `mux/(root)` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
 | `mux/tmux` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
@@ -297,7 +297,7 @@ Candidates a pass judged real but could not land, each with what unblocks it.
 - `pane::pane_is_host` → `pub(crate)` once `store/snapshot` public rustdoc stops linking it. Belongs to a `store` pass.
 - `harness/launch`: three relaunch sites in `cli/agents_cmd/{fork,restart}.rs` repeat posture prompt fields; needs a posture-aware seam `launch` may not import.
 - `harness/schedule/runner.rs`: `run_command`/`prepare_check` carry the cx; `fire_due_tasks` and `parse_signal_selector` are the seams. Waits for pace to settle.
-- `message`: `ReplyWait::run` three methods → one plus `ReplyEvent` (timing pinned by `27077a848`, `cfe1240a3`); `compact_idle` absorbing idle preflight needs `send_compact` to return the id.
+- `message`: `compact_idle` absorbing idle preflight needs `CompactErr` to separate a pre-queue refusal-check failure from a publication failure (dropping the preflight today changes assist records on a raced refusal and on a store read failure).
 - `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
 - `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Waits for its `fix(attribution)` churn to settle.
 - `disk`: the `StatePaths`/`RuntimePaths` constructor family (5 + 8, ~460 test sites on `under`/`under_named`) → `for_project_root(root, home)`, `for_workspace(id, home)`, `RuntimePaths::for_state(state, runtime_root)`. Waits for a round with no concurrent passes.
