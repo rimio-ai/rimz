@@ -115,6 +115,8 @@ A launch that fails partway stops the remaining launches. The error names the ch
 
 ## The fleet report
 
+Launcher-opened turns of persistent interactive peers also join this fleet. Every unreported turn retains its own response at `rimz-subagents/<name>.<run_id>.output`, with that turn's prompt as its task and its own elapsed time. Two rows can name the same peer. An open peer run delays the whole fleet report; a user-typed turn without an open peer run does not. These rows use the `background agent` heading and never close the peer's pane.
+
 A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled. A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet. The message is parked and delivered at the parent's next turn boundary:
 
 ```text
@@ -131,12 +133,12 @@ The report lists status and where each answer is, and asks for nothing: reading 
 
 | Part | Format |
 | --- | --- |
-| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; `background agent` replaces `subagent` when any row is a `-p --bg` run |
+| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; `background agent` replaces `subagent` when any row is a `-p --bg` run or a peer turn |
 | Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({size})`; `partial response:` for a timed-out child with text, or ending `, no response` |
 | Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled` |
 | `in` / `after` | `after` for a timed-out child, `in` for every other status; elapsed time is compact (`4m12s`) |
 | Reason | The last non-empty line of the run's failure tail, for a status other than completed |
-| Task | The launch `--description`, else a shortened first line of the prompt, omitted when empty |
+| Task | For peer turns, the shortened first line of that turn's prompt; otherwise the launch `--description`, falling back to the prompt, omitted when empty |
 | Response | The child's final message in `rimz-subagents/<name>.output` under room tmp, available when that child settles; `no response` when the message is empty or absent, and no file remains |
 | Size | `{tokens} tokens, {lines}`: an estimated token count (`<1k`, `~1.2k`, `~22k`, `~1.2M`) from OpenAI's public `o200k_base` tokenizer, which only approximates Claude's, then the line count (`1 line`, `{N} lines`, blank lines included) |
 

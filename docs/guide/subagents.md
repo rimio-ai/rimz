@@ -91,6 +91,8 @@ A child runs one prompt and is not built to read messages mid-run. To change wha
 
 ## How results come back
 
+An [interactive peer launched by an agent](./fleet.md#manage-a-running-room) reports through the same fleet message, but keeps its pane afterward. Only its launcher's requested turns join the fleet. An open requested turn delays sibling results; a turn you type in an otherwise idle peer does not.
+
 Each child's response file is available when that child settles, including when the parent joins it with `rimz subagents wait`. The parent does not need to poll for a report: once every child it launched has settled, RimZ parks one message for its next turn boundary:
 
 ```text

@@ -95,6 +95,8 @@ The optional `PROMPT` goes to exactly one leader: the team's configured `leader`
 
 A launch that opens a new pane or tab prints a receipt: the checkout path, then each member's handle, provider, and resolved model (`-` when unset). When you gave a prompt, a shortened echo names its recipient, and non-team launches add copy-ready `Reach` and `Wait` commands for the leader. The receipt records what was launched; the agents start asynchronously. A named team prints the [team receipt](./teams.md#launch-a-team) instead, and a launch that takes over the current pane prints none.
 
+An agent-launched interactive peer with a nonempty prompt also gets a per-turn run before its pane opens. Only the prompt recipient gets that run in a layout or team. Its receipt names the launcher-visible response file, the `SUBAGENT_REPORT` that returns when the launcher's fleet settles, and `rimz agents wait <RUN_ID>`. Later launcher messages can open new reportable turns; user-typed turns do not. User launches, promptless launches, and `--resume` create no launch-prompt run. An adapter without native root turn-start and turn-end hooks creates none and its receipt says it will not report back. The peer stays interactive after reporting.
+
 Launches refuse before they create any pane or record when:
 
 - the final prompt exceeds 120 KiB (122880 bytes), counting `--stdin` content and any reminder text appended to it, because the provider receives the prompt as one argument (move detail into a file the agent reads);
@@ -645,6 +647,8 @@ The fork always opens in the source agent's worktree. By default it takes over t
 Other kinds, including plugins, cannot fork.
 
 #### `wait`
+
+Immediately after a prompted peer launch, `rimz agents wait @peer` resolves the pending launch run even before provider registration. After a later launcher message, it retains the ordinary turn wait until a prompt-correlated turn-start hook enrolls the new run. Use `rimz message --wait @peer '<text>'` for a message-correlated reply wait. A turn-start hook without prompt text acknowledges delivery but opens no reportable turn.
 
 `rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. A sleeping agent (one with an armed one-shot wait) and a freshly registered agent that never opened a turn keep the wait blocked. A reference is a run id, a pet name, or any address.
 
