@@ -3,10 +3,10 @@ use crate::diag::record::GateRule;
 use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::view::BodyFilter;
+use crate::sidebar_pane::view::{BodyFilter, VisibleRoster};
 use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::theme::Theme;
@@ -163,8 +163,16 @@ impl UiState {
         (cached_config == config).then(|| Rc::clone(theme))
     }
 
-    pub(in crate::sidebar_pane) fn held_visible(&self) -> Option<&HashSet<String>> {
-        self.order_hold.as_ref().map(|hold| &hold.frozen.visible)
+    pub(in crate::sidebar_pane) fn visible_roster<'a>(
+        &self,
+        snapshot: &'a SidebarSnapshot,
+    ) -> VisibleRoster<'a> {
+        VisibleRoster::new(
+            snapshot,
+            self.make_up_filter,
+            &self.expanded_groups,
+            self.order_hold.as_ref().map(|hold| &hold.frozen.visible),
+        )
     }
 }
 
