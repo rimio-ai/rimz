@@ -83,7 +83,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 
 ## Implementation rules
 
-- `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink; an edit to either lands in both.
+- `AGENTS.md` and `CLAUDE.md` are one file per directory, joined by symlink; an edit to either lands in both. Edit `AGENTS.md`: tools refuse to write through the `CLAUDE.md` link.
 - Write Rust unless the task targets docs, tests, scripts, examples, or build glue. Use `uv` for Python helpers.
 - Root docs stay short and authoritative; detail lives in `docs/` and is linked. Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request. It is written as a standalone change once the work merges and before the version release, so concurrent branches never contend over the same lines.
