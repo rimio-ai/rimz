@@ -1,4 +1,4 @@
-//! Supervised-run requests, transitions, and cancellation.
+//! Supervised and launcher-opened peer run transitions, responses, and cancellation.
 
 pub mod report;
 
@@ -44,6 +44,12 @@ pub fn response_path(paths: &StatePaths, agent_name: &str) -> PathBuf {
     paths.subagents_dir.join(format!("{agent_name}.output"))
 }
 
+pub fn peer_response_path(paths: &StatePaths, agent_name: &str, run_id: &RunId) -> PathBuf {
+    paths
+        .subagents_dir
+        .join(format!("{agent_name}.{run_id}.output"))
+}
+
 /// Ensure the captured response, leaving identical files untouched and removing stale empty answers.
 pub fn publish_response(
     paths: &StatePaths,
@@ -53,7 +59,11 @@ pub fn publish_response(
     let Some(name) = record.agent_name.as_deref() else {
         return Ok(None);
     };
-    let path = response_path(paths, name);
+    let path = if record.peer.is_some() {
+        peer_response_path(paths, name, &record.run_id)
+    } else {
+        response_path(paths, name)
+    };
     let io_error = |source| ResponsePublishErr::Io {
         path: path.clone(),
         source,
@@ -337,7 +347,7 @@ fn update_record<T>(
             // Waiters read the record unlocked, so a terminal record must imply its file.
             if !was_terminal
                 && record.status.is_terminal()
-                && record.subagent
+                && (record.subagent || record.peer.is_some())
                 && let Err(err) = publish_response(paths, &record)
             {
                 tracing::warn!(run_id = %record.run_id, error = %err, "publishing subagent response failed");

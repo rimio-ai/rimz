@@ -28,6 +28,41 @@ fn setup_for(kind: &str) -> (tempfile::TempDir, StatePaths, RunRecord) {
 }
 
 #[test]
+fn peer_responses_preserve_each_turn() {
+    let (_dir, paths, mut first) = setup();
+    first.agent_name = Some("peer".into());
+    first.last_message = Some("first answer".into());
+    let mut value = serde_json::to_value(&first).unwrap();
+    value["peer"] = serde_json::json!({"launch_id": "peer-launch"});
+    let first: RunRecord = serde_json::from_value(value).unwrap();
+    let mut second = first.clone();
+    second.run_id = RunId::new();
+    second.last_message = Some("second answer".into());
+    for record in [&first, &second] {
+        create(&paths, record).unwrap();
+        cancel(&paths, &record.run_id).unwrap();
+        let path = paths
+            .subagents_dir
+            .join(format!("peer.{}.output", record.run_id));
+        assert!(
+            path.exists(),
+            "terminal peer run publishes its own response"
+        );
+        assert_eq!(publish_response(&paths, record).unwrap(), Some(path));
+    }
+    for record in [&first, &second] {
+        let path = paths
+            .subagents_dir
+            .join(format!("peer.{}.output", record.run_id));
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            format!("{}\n", record.last_message.as_ref().unwrap())
+        );
+    }
+    assert!(!paths.subagents_dir.join("peer.output").exists());
+}
+
+#[test]
 fn responses_follow_each_terminal_transition() {
     for subagent in [true, false] {
         for ending in ["lifecycle", "cancel", "timeout"] {

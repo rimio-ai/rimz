@@ -312,7 +312,7 @@ fn compose_digest_row(
     if let Some(task) = child
         .description
         .as_deref()
-        .filter(|value| !value.is_empty())
+        .filter(|value| run.peer.is_none() && !value.is_empty())
         .map(std::borrow::Cow::Borrowed)
         .or_else(|| {
             run.prompt
@@ -422,6 +422,25 @@ mod tests {
         run.completed_at = Some(Timestamp::from_second(1_252).unwrap());
         run.updated_at = run.completed_at.unwrap();
         run
+    }
+
+    #[test]
+    fn peer_digest_uses_each_turn_task() {
+        let child = child("peer", Some("stale launch description"));
+        let mut first = run(RunStatus::Completed);
+        first.subagent = false;
+        first.prompt = "first task\nextra context".into();
+        let mut value = serde_json::to_value(first).unwrap();
+        value["peer"] = serde_json::json!({"launch_id": "peer"});
+        let first: RunRecord = serde_json::from_value(value).unwrap();
+        let mut second = first.clone();
+        second.run_id = rimz::ids::RunId::new();
+        second.prompt = "second task".into();
+        let digest = compose_digest(&[(&child, &first, None), (&child, &second, None)]);
+        assert!(digest.contains("task: \"first task\""), "{digest}");
+        assert!(digest.contains("task: \"second task\""), "{digest}");
+        assert!(!digest.contains("stale launch description"));
+        assert!(digest.contains("2 background agents"), "{digest}");
     }
 
     #[test]

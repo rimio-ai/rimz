@@ -1,4 +1,4 @@
-//! Shared settlement rules for a launcher's newest fleet runs.
+//! Shared settlement rules for a launcher's fleet runs.
 
 use std::collections::HashSet;
 
@@ -8,14 +8,7 @@ use crate::store::run::RunRecord;
 /// Newest run of one launched child.
 pub(super) fn newest_run<'a>(child: &AgentState, runs: &'a [RunRecord]) -> Option<&'a RunRecord> {
     runs.iter()
-        .filter(|run| {
-            run.kind == child.kind
-                && (run.agent_id.as_ref() == Some(&child.agent_id)
-                    || child
-                        .name
-                        .as_ref()
-                        .is_some_and(|name| run.agent_name.as_ref() == Some(name)))
-        })
+        .filter(|run| run.matches_agent(child))
         .max_by_key(|run| run.started_at)
 }
 
@@ -25,8 +18,7 @@ pub(super) fn has_members(agents: &[AgentState], launcher: &AgentState) -> bool 
     !crate::address::launched_fleet(agents, launcher).is_empty()
 }
 
-/// Newest run per member of `launcher`'s fleet, deduplicated by run id and
-/// ordered as `address::launched_fleet` orders its members.
+/// Newest non-peer run and all open or unclaimed peer turns per member, deduplicated by run id and ordered as `address::launched_fleet` orders its members.
 pub struct FleetRuns<'a>(Vec<(&'a AgentState, &'a RunRecord)>);
 
 impl<'a> FleetRuns<'a> {
@@ -35,10 +27,22 @@ impl<'a> FleetRuns<'a> {
         Self(
             crate::address::launched_fleet(agents, launcher)
                 .into_iter()
-                .filter_map(|child| {
-                    let run = newest_run(child, runs)?;
-                    seen.insert(&run.run_id).then_some((child, run))
+                .flat_map(|child| {
+                    let newest = runs
+                        .iter()
+                        .filter(|run| run.peer.is_none() && run.matches_agent(child))
+                        .max_by_key(|run| run.started_at);
+                    newest
+                        .into_iter()
+                        .chain(runs.iter().filter(move |run| {
+                            run.peer.is_some()
+                                && run.matches_agent(child)
+                                && (!run.status.is_terminal()
+                                    || (run.report_message_id.is_none() && run.joined_at.is_none()))
+                        }))
+                        .map(move |run| (child, run))
                 })
+                .filter(|(_, run)| seen.insert(&run.run_id))
                 .collect(),
         )
     }
@@ -51,7 +55,7 @@ impl<'a> FleetRuns<'a> {
         self.0.iter().any(|(_, run)| !run.status.is_terminal())
     }
 
-    /// All terminal rows, including joined and reported members, in member order.
+    /// Terminal rows in member order; claimed peer turns have left the fleet.
     pub fn settled(&self) -> Vec<(&'a AgentState, &'a RunRecord)> {
         self.0
             .iter()
@@ -80,6 +84,49 @@ mod tests {
     use crate::agents::{AgentStatus, PermissionMode};
     use crate::ids::{AgentKind, WorkspaceId};
     use jiff::Timestamp;
+
+    #[test]
+    fn peer_fleet_keeps_each_unclaimed_turn_and_rejects_reused_names() {
+        let parent = AgentState::stub("codex", "parent", AgentStatus::Idle);
+        let mut child = AgentState::stub("codex", "session", AgentStatus::Idle);
+        child.name = Some("peer".into());
+        child.launch_id = Some("launch".into());
+        child.launched_by = Some(crate::agents::LaunchedBy {
+            kind: parent.kind.clone(),
+            agent_id: parent.agent_id.clone(),
+        });
+        let mut record = RunRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            child.kind.clone(),
+            PermissionMode::Auto,
+            "task".into(),
+            "/repo".into(),
+        );
+        record.agent_name = child.name.clone();
+        record.status = crate::store::run::RunStatus::Completed;
+        let mut value = serde_json::to_value(record).unwrap();
+        value["peer"] = serde_json::json!({"launch_id": "launch"});
+        let first: RunRecord = serde_json::from_value(value.clone()).unwrap();
+        let mut second = first.clone();
+        second.run_id = crate::ids::RunId::new();
+        let mut runs = vec![first, second];
+        let agents = [parent.clone(), child.clone()];
+        assert_eq!(FleetRuns::of(&agents, &runs, &parent).unreported().len(), 2);
+        runs[0].joined_at = Some(Timestamp::UNIX_EPOCH);
+        runs[1].report_message_id = Some(crate::MessageId::new());
+        assert!(FleetRuns::of(&agents, &runs, &parent).settled().is_empty());
+        runs[0].status = crate::store::run::RunStatus::Running;
+        assert!(FleetRuns::of(&agents, &runs, &parent).any_running());
+        value["peer"]["launch_id"] = serde_json::json!("old-launch");
+        let old: RunRecord = serde_json::from_value(value).unwrap();
+        assert!(newest_run(&child, std::slice::from_ref(&old)).is_none());
+        assert!(FleetRuns::of(&agents, &[old], &parent).is_empty());
+        child.launch_id = None;
+        child.agent_id = "launch".into();
+        assert!(newest_run(&child, &runs).is_some());
+        child.kind = AgentKind::new_unchecked("claude");
+        assert!(newest_run(&child, &runs).is_none());
+    }
 
     #[test]
     fn newest_run_requires_kind_and_positive_identity_and_uses_latest() {
