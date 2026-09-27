@@ -153,6 +153,10 @@ fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()
 
 /// Finish a stdout emission, treating a consumer that stopped reading as a
 /// clean end rather than a fault. Any other write error propagates.
+///
+/// A broken pipe calls `std::process::exit(0)` on the spot, so call this
+/// after every side effect the command owes, never inside a loop that still
+/// has work to do.
 pub(crate) fn finish(write: std::io::Result<()>) -> anyhow::Result<()> {
     match write {
         Ok(()) => Ok(()),
