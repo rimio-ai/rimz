@@ -445,10 +445,10 @@ impl Leg {
                 Some(ReplyFailure::WaitingForInput),
             ),
         };
-        let cursor = (message_status == MessageStatus::Sent)
-            .then(|| target.cursor.take())
-            .flatten();
-        target.cursor = None;
+        let cursor = target
+            .cursor
+            .take()
+            .filter(|_| message_status == MessageStatus::Sent);
         let transcript_path = target.transcript_path.clone();
         Self {
             target,
