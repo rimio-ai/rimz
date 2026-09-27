@@ -257,8 +257,7 @@ fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {
     let Some(access_token) = oauth.access_token.as_deref().and_then(non_empty_trimmed) else {
         return Err(ClaudeOauthUsageErr::NoCredentials);
     };
-    let refresh_token = oauth.refresh_token.as_deref().and_then(non_empty_trimmed);
-    let scopes = oauth.scopes.unwrap_or_default();
+    let scopes = oauth.scopes.as_deref().unwrap_or_default();
     if !scopes.iter().any(|scope| scope == "user:profile") {
         return Err(ClaudeOauthUsageErr::MissingScope);
     }
@@ -268,15 +267,9 @@ fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {
     if expires_at <= unix_now_ms() as i64 {
         return Err(ClaudeOauthUsageErr::TokenExpired);
     }
-    let account_key_source = refresh_token
-        .as_deref()
-        .map_or(("access-token", access_token.as_str()), |token| {
-            ("refresh-token", token)
-        });
-    let account_key = account_key(account_key_source.0, account_key_source.1);
     Ok(ClaudeOauthCredentials {
         access_token,
-        account_key,
+        account_key: oauth_account_key(&oauth).ok_or(ClaudeOauthUsageErr::NoCredentials)?,
     })
 }
 
@@ -285,13 +278,15 @@ fn parse_account_key(bytes: &[u8]) -> Result<String> {
     let Some(oauth) = parsed.claude_ai_oauth else {
         return Err(ClaudeOauthUsageErr::NoCredentials);
     };
+    oauth_account_key(&oauth).ok_or(ClaudeOauthUsageErr::NoCredentials)
+}
+
+fn oauth_account_key(oauth: &ClaudeAiOauth) -> Option<String> {
     if let Some(refresh_token) = oauth.refresh_token.as_deref().and_then(non_empty_trimmed) {
-        return Ok(account_key("refresh-token", &refresh_token));
+        return Some(account_key("refresh-token", &refresh_token));
     }
-    let Some(access_token) = oauth.access_token.as_deref().and_then(non_empty_trimmed) else {
-        return Err(ClaudeOauthUsageErr::NoCredentials);
-    };
-    Ok(account_key("access-token", &access_token))
+    let access_token = oauth.access_token.as_deref().and_then(non_empty_trimmed)?;
+    Some(account_key("access-token", &access_token))
 }
 
 fn fetch_usage_with_url(url: &str, access_token: &str) -> Result<AccountUsageSnapshot> {
