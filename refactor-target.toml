@@ -1029,6 +1029,26 @@ reason = "Settings and launch argv, consent seeding, and bridge-pointer liveness
 
 [[verdict]]
 kind = "item"
+key = "agents::adapters::claude::spend::claude_config_dirs_from"
+reason = "Claude's config home (ClaudeAdapter::config_home, first CLAUDE_CONFIG_DIR entry), .claude.json base (remote_consent::config_base, $HOME) and transcript data roots (every entry, ~ expansion, XDG and ~/.claude fallback filtered to projects/, pinned by 607727c81) are three rules, not one resolver (pass 27a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::subagent_cost::advance_cursor"
+reason = "The child fold keeps the stored SubagentUsageCursor shape, filters by agent_id, hides cost on any unpriced request and records last_call on unpriceable ones; 1060e82e8 shared the only common pieces with parse_claude_spend (pass 27a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::ask::answer_plan"
+reason = "Claude's question menu (number keys, multi-select, free-text Other, review Enter; Shift-Tab plan approval) is a different TUI from Codex's Down×n + Enter; the answer planners are provider policy (pass 27a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::statusline::detect_turn_interrupted"
+reason = "Mirrors codex::transcript's detect_turn_error/detect_turn_interrupted pair over one resting-outcome scan; collapsing Claude's alone diverges from the family for about 6 lines (pass 27a)."
+
+[[verdict]]
+kind = "item"
 key = "agents::adapters::codex::local_sessions::discover"
 reason = "Codex and Claude discovery use different roots, budgets, and date windows; separate walks preserve provider policy."
 
