@@ -77,7 +77,8 @@ path = "crates/rimz/src/lsp"
 # query::outcome_json (multi-target JSON) and query::ListOptions (list caps)
 # landed on separate branches; together they reopen this by one.
 # Launch and doctor share per-server validation and marker selection.
-surface-budget = 98
+# CrashCause, shared spawn/ownership, and initialization parameters serve doctor probes.
+surface-budget = 103
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"

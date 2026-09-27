@@ -107,7 +107,7 @@ pub enum UnavailableReason {
     MemoryShort,
     #[error("stopped: memory pressure")]
     MemoryPressure,
-    #[error("stopped: crashed")]
+    #[error("stopped: crashed; see rimz lsp status")]
     Crashed,
     #[error("stopped: checkout removed")]
     CheckoutRemoved,

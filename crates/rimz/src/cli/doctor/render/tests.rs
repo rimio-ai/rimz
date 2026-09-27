@@ -76,6 +76,7 @@ fn shared_language_servers_read_like_lsp_list() {
             last_request_at_ms: None,
             peak_rss_kb: 0,
             restarts: 0,
+            last_crash: None,
             leases: vec![],
             attached: vec![],
         },

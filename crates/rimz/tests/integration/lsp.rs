@@ -1205,9 +1205,19 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         nix::sys::signal::Signal::SIGKILL,
     )
     .unwrap();
-    wait_dormant("crashed", Duration::from_secs(1));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let status = wait_dormant("crashed", Duration::from_secs(1));
+        if !status["last_crash"].is_null() || Instant::now() >= deadline {
+            assert_eq!(status["last_crash"]["signal"], 9);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(query("ready")["result"], json!([]));
-    assert_eq!(rpc(json!({"op": "status"}))["restarts"], 2);
+    let restarted = rpc(json!({"op": "status"}));
+    assert_eq!(restarted["restarts"], 2);
+    assert!(restarted["last_crash"].is_null());
     assert_eq!(
         rpc(json!({"op": "stop", "reason": "checkout removed"}))["ok"],
         true
@@ -1367,6 +1377,74 @@ fn start_stub_broker(
     (broker, directory, request)
 }
 
+#[test]
+fn lsp_crash_preserves_exit_and_stderr_in_status_and_diagnostics() {
+    use predicates::prelude::*;
+    let env = Env::new();
+    let request = rimz::lsp::admission::ServeRequest {
+        root: env.project_root.canonicalize().unwrap(),
+        project: env.project_root.clone(),
+        server: "rust".into(),
+        settings_hash: "crash-test".into(),
+        config: serde_json::from_value(json!({
+            "command": ["sh", "-c", "read -r header; printf 'initialize failed\\n' >&2; exit 1"],
+            "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"
+        }))
+        .unwrap(),
+        policy: rimz::config::LspConfig {
+            kill_floor_percent: 0,
+            reserve_percent: 0,
+            reserve_min: "0".into(),
+            ..Default::default()
+        },
+        eager: false,
+    };
+    let (mut broker, directory) = spawn_test_broker(&env, &request);
+    editor_query(&directory, "anything");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let entry = loop {
+        let entry = editor_rpc(&directory, json!({"op": "status"}));
+        if !entry["last_crash"].is_null() || Instant::now() >= deadline {
+            break entry;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(entry["last_crash"]["exit_code"], 1);
+    assert_eq!(entry["last_crash"]["stderr_tail"], "initialize failed\n");
+    assert!(entry["last_crash"]["signal"].is_null());
+    let output = env
+        .rimz()
+        .args(["lsp", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["last_crash"], entry["last_crash"]);
+    env.rimz()
+        .args(["lsp", "status"])
+        .assert()
+        .success()
+        .stdout(
+            predicates::str::contains("last crash")
+                .and(predicates::str::contains("exit code 1"))
+                .and(predicates::str::contains("initialize failed")),
+        );
+    let log = std::fs::read_to_string(env.rimz_home().join("logs/lsp.log.jsonl")).unwrap();
+    let record = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|record| record["event"] == "crashed")
+        .unwrap();
+    for field in ["at_ms", "exit_code", "signal", "stderr_tail", "error"] {
+        assert_eq!(record["details"][field], entry["last_crash"][field]);
+    }
+    editor_rpc(
+        &directory,
+        json!({"op": "stop", "reason": "checkout removed"}),
+    );
+    assert!(broker.wait().unwrap().success());
+}
+
 pub(super) fn spawn_test_broker(
     env: &Env,
     request: &rimz::lsp::admission::ServeRequest,
@@ -1448,6 +1526,7 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_broker() {
         last_request_at_ms: None,
         peak_rss_kb: 5,
         restarts: 0,
+        last_crash: None,
         leases: Vec::new(),
         attached: Vec::new(),
     };
