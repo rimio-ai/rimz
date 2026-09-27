@@ -19,13 +19,14 @@ Install `sccache` to reuse compiler outputs across checkouts and worktrees:
 cargo install sccache --locked
 ```
 
-The xtask commands detect it automatically. To cover direct Cargo commands too, add these keys to the `[build]` table in `~/.cargo/config.toml`:
+The xtask commands detect it automatically. To cover direct Cargo commands too, add this key to the `[build]` table in `~/.cargo/config.toml`:
 
 ```toml
 [build]
 rustc-wrapper = "sccache"
-incremental = false
 ```
+
+Leave `incremental` unset. sccache caches the registry dependencies every worktree shares, while Cargo rebuilds the workspace crates incrementally; the large `rimz` crate rarely hits the shared cache across branches, so incremental rebuilds are where its time is saved. Incremental state costs roughly 5-10 GB per active worktree `target/`.
 
 Keep each Git worktree's Cargo `target/` directory local to that worktree. Share compiler work through sccache; do not list `target` in `.worktreelink`, because Cargo fingerprints and final executables from divergent branches can overwrite one another. See the [toolchain and cache guide](./docs/contributing/rust-conventions.md#toolchain) and the [worktree seeding guide](./docs/guide/worktrees.md#seed-the-tree) for details.
 
