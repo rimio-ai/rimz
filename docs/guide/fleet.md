@@ -69,6 +69,8 @@ Add `-w` and the whole layout lands in an isolated Git worktree, the pattern for
 
 ## Manage a running room
 
+When an agent launches a peer with a prompt, it need not poll for the answer. RimZ sends the launcher a `SUBAGENT_REPORT` with the final response file when its launched work settles, and again after each turn opened by a message from that launcher. The peer keeps its pane and remains available to you; turns you type there do not report back. The launch receipt names the response file and a wait command. Providers without the needed turn hooks say in the receipt that no report will come. Use `rimz agents stop @peer` when you are finished with the peer.
+
 Once a few agents are working, the same `rimz agents` command reads the room and drives it: inspect, focus, stop, restart, or compact one agent. Every verb below takes a [handle](#reach-an-agent-by-handle), and they all run from any pane in the room, or from a script anywhere that resolves to the same workspace.
 
 **See the whole room at a glance.** Bare `rimz agents` lists the current channel's cards; `--all` includes every channel. Cards group by the worktree each lives in and put whoever needs you on top:

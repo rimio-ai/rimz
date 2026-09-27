@@ -1,4 +1,4 @@
-//! Integration coverage for the supervised agent launch shell wrapper.
+//! Integration coverage for interactive peer launches and the supervised agent launch shell wrapper.
 
 #[cfg(unix)]
 use assert_cmd::assert::OutputAssertExt;
@@ -73,6 +73,313 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
         subagent: false,
         identity: ExecIdentity::default(),
     }
+}
+
+#[test]
+fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
+    let env = Env::new();
+    crate::common::wait::register_calling_agent(&env);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    env.rimz()
+        .args(["agents", "register", "testbot"])
+        .assert()
+        .success();
+    let shim = write_env_dump_shim(&env, "testbot");
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let out = env
+        .rimz()
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "testbot",
+            "--bg",
+            "--new-pane",
+            "task",
+        ])
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "launch-session")
+        .env("PATH", path_with_front(&shim))
+        .env(
+            "RIMZ_ZELLIJ_BIN",
+            crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let receipt = String::from_utf8_lossy(&out.stdout);
+    assert!(receipt.contains("will not report back"), "{receipt}");
+    assert!(
+        rimz::harness::run::list(env.store().paths())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn peer_launch_reports_only_launcher_opened_turns() {
+    use rimz::harness::run;
+    use rimz::store::run::RunStatus;
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    let env = Env::new();
+    crate::common::wait::register_calling_agent(&env);
+    let store = env.store();
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let shim = write_env_dump_shim(&env, "claude");
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let out = env
+        .rimz()
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "claude",
+            "--bg",
+            "--new-pane",
+            "--name",
+            "peer",
+            "first task",
+        ])
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "launch-session")
+        .env("PATH", path_with_front(&shim))
+        .env(
+            "RIMZ_ZELLIJ_BIN",
+            crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let runs = run::list(store.paths()).unwrap();
+    assert_eq!(
+        runs.len(),
+        1,
+        "prompted peer launch must create its run before a provider hook"
+    );
+    let first = &runs[0];
+    assert_eq!(first.status, RunStatus::Pending);
+    let pending_wait = env
+        .rimz()
+        .args(["agents", "wait", "@peer", "--timeout", "1s"])
+        .bounded_output()
+        .unwrap();
+    assert_eq!(
+        pending_wait.status.code(),
+        Some(RunStatus::TimedOut.exit_code()),
+        "wait must find the pending run before registration: {}",
+        String::from_utf8_lossy(&pending_wait.stderr)
+    );
+    let receipt = String::from_utf8_lossy(&out.stdout);
+    assert!(receipt.contains("SUBAGENT_REPORT"), "{receipt}");
+    assert!(
+        receipt.contains(&format!("rimz agents wait {}", first.run_id)),
+        "{receipt}"
+    );
+    let launch_id = &first.peer.as_ref().unwrap().launch_id;
+    // The mux shim does not execute its pane command. Bind the pane as the exec wrapper does.
+    store
+        .bind_agent_launch(
+            &rimz::store::writer::AgentLaunchIdentity {
+                kind: first.kind.clone(),
+                agent_id: launch_id.clone(),
+                name: "peer".into(),
+                name_explicit: true,
+                launch: LaunchParams {
+                    launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+                        kind: AgentKind::new_unchecked("claude"),
+                        agent_id: "launch-session".into(),
+                    })),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: Some("first task".into()),
+            },
+            &workspace.session_name,
+            &env.project_root,
+            &rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_2"),
+        )
+        .unwrap();
+    let hook =
+        |event: &str, prompt: &str, answer: &str| {
+            let mut command = env.hook_command("claude");
+            command
+                .env("RIMZ_BIN", env.rimz_bin())
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("ZELLIJ_PANE_ID", "2")
+                .env("RIMZ_AGENT_ID", launch_id.as_str());
+            let out = env.spawn_payload(command, &json!({
+            "hook_event_name": event, "session_id": "peer-session", "cwd": env.project_root,
+            "prompt": prompt, "last_assistant_message": answer,
+        }).to_string()).wait_with_output().unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(out.stdout.is_empty(), "hook stdout stays neutral");
+        };
+    let mut waiter = env
+        .rimz()
+        .args(["agents", "wait", first.run_id.as_str(), "--timeout", "10s"])
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "launch-session")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    hook("SessionStart", "", "");
+    hook("UserPromptSubmit", "first task", "");
+    let running = run::load(store.paths(), &first.run_id).unwrap();
+    assert_eq!(running.status, RunStatus::Running);
+    assert_eq!(
+        running.agent_id.as_ref().map(AgentSessionId::as_str),
+        Some("peer-session")
+    );
+    assert!(waiter.try_wait().unwrap().is_none());
+    hook("Stop", "", "first answer");
+    let wait_output = waiter.wait_with_output().unwrap();
+    assert!(
+        wait_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&wait_output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&wait_output.stdout).contains("first answer"));
+    assert!(
+        run::load(store.paths(), &first.run_id)
+            .unwrap()
+            .joined_at
+            .is_none(),
+        "a wait outside the launcher's turn leaves its report owed"
+    );
+    let wait_reports = |count| {
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            let reports = store
+                .list_messages()
+                .unwrap()
+                .into_iter()
+                .filter(|message| {
+                    matches!(
+                        message.sender,
+                        rimz::store::message::MessageSender::Harness {
+                            notice: rimz::store::message::HarnessNotice::SubagentReport
+                        }
+                    )
+                })
+                .collect::<Vec<_>>();
+            if reports.len() == count {
+                return reports;
+            }
+            assert!(
+                Instant::now() < until,
+                "expected {count} reports, got {}",
+                reports.len()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let reports = wait_reports(1);
+    let first_path = run::peer_response_path(store.paths(), "peer", &first.run_id);
+    let first_bytes = std::fs::read(&first_path).unwrap();
+    assert!(reports[0].text.contains("first task"));
+    assert!(reports[0].text.contains(&first_path.display().to_string()));
+    assert!(reports[0].text.contains(" in "));
+    assert!(reports[0].text.contains("tokens"), "{}", reports[0].text);
+    hook("UserPromptSubmit", "human task", "");
+    hook("Stop", "", "human answer");
+    assert_eq!(run::list(store.paths()).unwrap().len(), 1);
+    assert_eq!(std::fs::read(&first_path).unwrap(), first_bytes);
+    assert_eq!(wait_reports(1).len(), 1);
+
+    let peer = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|agent| agent.agent_id.as_str() == "peer-session")
+        .unwrap();
+    let mut message = rimz::store::message::MessageRecord::new(
+        env.workspace_id.clone(),
+        &peer,
+        "second task".into(),
+        rimz::store::message::DeliveryGate::Any,
+    );
+    message.sender = rimz::store::message::MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: Some("launch-session".into()),
+        name: Some("planner".into()),
+        profile: None,
+        role: None,
+        channel: None,
+    };
+    store
+        .record_sent_batch(&[message], "test fake provider delivery")
+        .unwrap();
+    hook(
+        "UserPromptSubmit",
+        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nsecond task",
+        "",
+    );
+    hook("Stop", "", "second answer");
+    let reports = wait_reports(2);
+    assert_eq!(
+        reports
+            .iter()
+            .filter(|report| report.text.contains("second task"))
+            .count(),
+        1
+    );
+    let second = run::list(store.paths())
+        .unwrap()
+        .into_iter()
+        .find(|run| run.run_id != first.run_id)
+        .unwrap();
+    let second_path = run::peer_response_path(store.paths(), "peer", &second.run_id);
+    assert_ne!(first_path, second_path);
+    assert_eq!(std::fs::read(&first_path).unwrap(), first_bytes);
+    assert_eq!(
+        std::fs::read_to_string(second_path).unwrap().trim(),
+        "second answer"
+    );
+    assert!(
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id.as_str() == "peer-session" && agent.ended_at.is_none()),
+        "peer remains open after reporting"
+    );
 }
 
 #[cfg(unix)]

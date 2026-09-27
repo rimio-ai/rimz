@@ -341,6 +341,26 @@ pub(super) fn launch_layout(
             description: args.launch.cohort.description.clone(),
         },
     )?;
+    let peer_prompt = prepare_peer_prompt(store, launch_batch.identities(), &launch.cwd)
+        .inspect_err(|_| {
+            let _ = store.fail_agent_launch_batch(&launch_batch);
+        })?;
+    let fail_peer_prompt = || {
+        if let Some((peer, _)) = &peer_prompt {
+            match rimz::harness::run::fail_peer_run(store, peer, "peer launch failed") {
+                Ok(Some(_)) => {
+                    if let Some((_, launcher)) = peer.launcher() {
+                        rimz::harness::orphan_sweep::spawn_digest_helper(
+                            store.runtime_paths(),
+                            launcher.clone(),
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, "could not fail peer launch run"),
+            }
+        }
+    };
     let cleanup_worktree = launch.owns_checkout_lifecycle();
     let worktree_name = launch.worktree_name.clone();
     let cwd = launch.cwd;
@@ -369,6 +389,7 @@ pub(super) fn launch_layout(
     )
     .inspect_err(|_| {
         let _ = store.fail_agent_launch_batch(&launch_batch);
+        fail_peer_prompt();
     })?;
     panes.focused_pane = team_leader_pane(
         &layout,
@@ -398,7 +419,8 @@ pub(super) fn launch_layout(
                 same_pane: "running the agent in the current pane",
             },
         },
-    )?;
+    )
+    .inspect_err(|_| fail_peer_prompt())?;
     if !in_place {
         write_launch_receipt(
             &mut render::out(),
@@ -413,6 +435,117 @@ pub(super) fn launch_layout(
                 terminal_width: render::terminal_columns(100),
             },
         )?;
+        write_placed_peer_receipt(
+            &mut render::out(),
+            launch_batch.identities(),
+            peer_prompt.as_ref(),
+            &projection.agents,
+            machine_config.agents.isolation,
+            store.paths(),
+        )?;
+    }
+    Ok(())
+}
+
+fn prepare_peer_prompt(
+    store: &rimz::Store,
+    identities: &[AgentLaunchIdentity],
+    cwd: &Path,
+) -> Result<Option<(AgentState, rimz::store::run::RunRecord)>> {
+    let Some(identity) = identities.iter().find(|identity| {
+        identity.launch.launched_by.is_some()
+            && identity
+                .prompt
+                .as_deref()
+                .is_some_and(|prompt| !prompt.trim().is_empty())
+    }) else {
+        return Ok(None);
+    };
+    let adapter = rimz::agents::find_definition(identity.kind.as_str())
+        .context("launched peer has no adapter")?;
+    if !rimz::harness::run::peer_can_report(adapter) {
+        return Ok(None);
+    }
+    let peer = store
+        .runtime_projection(rimz::RuntimeScope::Audit)?
+        .agents
+        .into_iter()
+        .find(|peer| {
+            peer.kind == identity.kind && peer.launch_id.as_ref() == Some(&identity.agent_id)
+        })
+        .context("launched peer has no provisional row")?;
+    let run = rimz::harness::run::create_peer_prompt(
+        store.paths(),
+        &peer,
+        adapter,
+        identity.prompt.as_deref().unwrap_or_default(),
+        cwd,
+    )?;
+    Ok(run.map(|run| (peer, run)))
+}
+
+fn write_placed_peer_receipt(
+    w: &mut impl Write,
+    identities: &[AgentLaunchIdentity],
+    peer_prompt: Option<&(AgentState, rimz::store::run::RunRecord)>,
+    agents: &[AgentState],
+    isolation: rimz::config::Isolation,
+    paths: &rimz::StatePaths,
+) -> Result<()> {
+    let launcher = peer_prompt.and_then(|(peer, _)| {
+        let launcher = peer
+            .launcher()
+            .and_then(|(kind, id)| rimz::address::launch_row(agents, kind, id));
+        if launcher.is_none() {
+            tracing::warn!("agent launched, but its launcher could not be resolved; response path uses the host view");
+        }
+        launcher
+    });
+    let view = rimz::sandbox::TmpView::current(
+        Some(launcher.map_or(rimz::config::Isolation::Host, |agent| {
+            agent.runs_in(isolation)
+        })),
+        launcher.and_then(|agent| agent.name.as_deref()),
+        paths,
+    );
+    write_peer_receipt(w, identities, peer_prompt.map(|(_, run)| run), &view, paths)
+}
+
+fn write_peer_receipt(
+    w: &mut impl Write,
+    identities: &[AgentLaunchIdentity],
+    run: Option<&rimz::store::run::RunRecord>,
+    view: &rimz::sandbox::TmpView,
+    paths: &rimz::StatePaths,
+) -> Result<()> {
+    if let Some(run) = run
+        && let Some(name) = run.agent_name.as_deref()
+    {
+        let response = view.agent_path(&rimz::harness::run::peer_response_path(
+            paths,
+            name,
+            &run.run_id,
+        ));
+        writeln!(
+            w,
+            "@{name}'s response lands at {} when this turn settles. A SUBAGENT_REPORT from @rimz arrives at your next turn boundary when your fleet settles, and again after each turn your message opens. The peer keeps its pane. To block instead: rimz agents wait {}",
+            response.display(),
+            run.run_id
+        )?;
+    }
+    for identity in identities
+        .iter()
+        .filter(|identity| identity.launch.launched_by.is_some())
+    {
+        if let Some(adapter) = rimz::agents::find_definition(identity.kind.as_str())
+            && !rimz::harness::run::peer_can_report(adapter)
+        {
+            writeln!(
+                w,
+                "@{} will not report back: {} does not provide the turn hooks needed for reports.",
+                identity.name, identity.kind
+            )?;
+        }
     }
     Ok(())
 }
@@ -1008,489 +1141,4 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn team_launch_receipt_is_compact() {
-        let mut identities = [
-            launch_identity("claude", "planner"),
-            launch_identity("codex", "coder"),
-        ];
-        identities[0].launch.role = Some("planner".to_owned());
-        identities[1].launch.role = Some("coder".to_owned());
-        identities[0].launch.model = Some("fable".to_owned());
-        identities[1].launch.model = Some("gpt-6-astra".to_owned());
-        identities[0].prompt = Some("Read the handoff at /tmp/handoff-feat-x.md.".to_owned());
-        let team = rimz::config::Team {
-            leader: Some("planner".to_owned()),
-            stages: vec![
-                "Explore".to_owned(),
-                "Plan".to_owned(),
-                "Implement".to_owned(),
-            ],
-            ..Default::default()
-        };
-        let mut output = anstream::StripStream::new(Vec::new());
-
-        write_launch_receipt(
-            &mut output,
-            &LaunchReceipt {
-                team: Some(("forge", &team)),
-                channel: Some("feat-x"),
-                cwd: Path::new("/repo-worktrees/feat-x"),
-                identities: &identities,
-                leader_index: Some(0),
-                terminal_width: 100,
-            },
-        )
-        .unwrap();
-
-        insta::assert_snapshot!(String::from_utf8(output.into_inner()).unwrap());
-
-        let mut output = anstream::StripStream::new(Vec::new());
-        write_launch_receipt(
-            &mut output,
-            &LaunchReceipt {
-                team: Some((
-                    "forge",
-                    &rimz::config::Team {
-                        roles: vec![rimz::config::RoleBinding {
-                            owns: Vec::new(),
-                            flip_compact: None,
-                            idle_compact: None,
-                            role: "coder".to_owned(),
-                            profile: "codex".to_owned(),
-                            mode: None,
-                            model: None,
-                            effort: None,
-                            budget: None,
-                            auto_compact: None,
-                            system_prompt_file: None,
-                            append_system_prompt_files: Vec::new(),
-                            args: None,
-                            signals: vec![rimz::config::TeamSignalBinding {
-                                signal: "ci.failed".to_owned(),
-                                matches: Default::default(),
-                                prompt: None,
-                            }],
-                        }],
-                        ..Default::default()
-                    },
-                )),
-                channel: Some("feat-x"),
-                cwd: Path::new("/repo-worktrees/feat-x"),
-                identities: &identities,
-                leader_index: None,
-                terminal_width: 100,
-            },
-        )
-        .unwrap();
-        assert!(
-            String::from_utf8(output.into_inner())
-                .unwrap()
-                .contains("  signals   ci.failed → @coder\n")
-        );
-    }
-
-    #[test]
-    fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
-        let mut identities = [launch_identity("codex", "worker")];
-        identities[0].prompt = Some("Read  the\n handoff.".to_owned());
-        let mut output = anstream::StripStream::new(Vec::new());
-
-        write_launch_receipt(
-            &mut output,
-            &LaunchReceipt {
-                team: None,
-                channel: None,
-                cwd: Path::new("/repo"),
-                identities: &identities,
-                leader_index: Some(0),
-                terminal_width: 100,
-            },
-        )
-        .unwrap();
-
-        let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("launched @worker (/repo)"));
-        assert!(!output.contains("Check:"));
-        assert!(!output.contains("leader"));
-        assert!(!output.contains("starting"));
-        assert!(!output.contains("board"));
-        assert!(output.contains("  @worker   codex  -"));
-        assert!(output.contains("  prompt    → @worker  \"Read the handoff.\""));
-        assert!(output.contains("Reach: rimz message @worker '<text>'"));
-        assert!(output.contains("Wait:  rimz agents wait @worker\n"));
-
-        let layout = rimz::harness::spec::parse_layout_spec(
-            "claude,claude",
-            &Default::default(),
-            &Default::default(),
-        )
-        .unwrap();
-        let leader_index = rimz::harness::spec::prompt_leader(&layout, None).ok();
-        assert!(leader_index.is_none());
-        let identities = [
-            launch_identity("claude", "first-peer"),
-            launch_identity("claude", "second-peer"),
-        ];
-        let mut output = anstream::StripStream::new(Vec::new());
-        write_launch_receipt(
-            &mut output,
-            &LaunchReceipt {
-                team: None,
-                channel: Some("parallel"),
-                cwd: Path::new("/repo"),
-                identities: &identities,
-                leader_index,
-                terminal_width: 100,
-            },
-        )
-        .unwrap();
-        let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains("Reach: rimz message @first-peer#parallel '<text>'"));
-        let wait = output
-            .lines()
-            .find_map(|line| line.strip_prefix("Wait:  "))
-            .unwrap();
-        assert_eq!(wait, "rimz agents wait @first-peer#parallel");
-        <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
-        assert!(!output.contains("leader"));
-        assert!(!output.contains("prompt"));
-    }
-
-    #[test]
-    fn team_tab_focuses_the_leader_pane_past_command_cells() {
-        let team = toml::from_str::<rimz::config::Team>(
-            r#"leader = "planner"
-roles = [{role = "coder", profile = "codex"}, {role = "planner", profile = "claude"}]"#,
-        )
-        .unwrap();
-        let layout = rimz::harness::spec::parse_layout_spec(
-            "codex:coder+term,claude:planner",
-            &Default::default(),
-            &Default::default(),
-        )
-        .unwrap();
-        assert_eq!(team_leader_pane(&layout, Some(&team)), 2);
-        assert_eq!(team_leader_pane(&layout, None), 0);
-    }
-
-    #[test]
-    fn team_launch_receipt_marks_the_implicit_leader() {
-        let mut identities = [
-            launch_identity("codex", "coder"),
-            launch_identity("claude", "planner"),
-        ];
-        identities[0].launch.role = Some("coder".to_owned());
-        identities[1].launch.role = Some("planner".to_owned());
-        let team = toml::from_str::<rimz::config::Team>(
-            r#"roles = [{role = "planner", profile = "claude"}, {role = "coder", profile = "codex"}]"#,
-        )
-        .unwrap();
-        let layout = rimz::harness::spec::parse_layout_spec(
-            "codex:coder,claude:planner",
-            &Default::default(),
-            &Default::default(),
-        )
-        .unwrap();
-        let leader_index = rimz::harness::spec::prompt_leader(&layout, Some(&team)).unwrap();
-        assert_eq!(leader_index, 1);
-        let mut output = anstream::StripStream::new(Vec::new());
-
-        write_launch_receipt(
-            &mut output,
-            &LaunchReceipt {
-                team: Some(("forge", &team)),
-                channel: Some("feat-x"),
-                cwd: Path::new("/repo-worktrees/feat-x"),
-                identities: &identities,
-                leader_index: Some(leader_index),
-                terminal_width: 100,
-            },
-        )
-        .unwrap();
-
-        let output = String::from_utf8(output.into_inner()).unwrap();
-        let planner = output
-            .lines()
-            .find(|line| line.contains("@planner"))
-            .unwrap();
-        let coder = output.lines().find(|line| line.contains("@coder")).unwrap();
-        assert!(planner.contains("<- leader"));
-        assert!(!coder.contains("leader"));
-        assert!(!output.contains("stages"));
-        assert!(!output.contains("prompt"));
-        assert!(!output.contains("branch"));
-        assert!(output.contains("  board     blackboard.md"));
-        assert!(!output.contains("Reach:"));
-    }
-
-    #[test]
-    fn team_launch_receipt_uses_prompt_leader_and_clips_the_prompt() {
-        let layout = rimz::harness::spec::parse_layout_spec(
-            "codex,claude",
-            &Default::default(),
-            &Default::default(),
-        )
-        .unwrap();
-        let team = rimz::config::Team {
-            leader: Some("claude".to_owned()),
-            ..Default::default()
-        };
-        let leader_index = rimz::harness::spec::prompt_leader(&layout, Some(&team)).unwrap();
-        assert_eq!(leader_index, 1);
-        let mut identities = [
-            launch_identity("codex", "worker"),
-            launch_identity("claude", "stable-haven"),
-        ];
-        identities[1].launch.role = Some("planner".to_owned());
-        identities[1].prompt =
-            Some("Read  \"the handoff\"\nthen design a fix for the team.".to_owned());
-        let receipt = LaunchReceipt {
-            team: Some(("forge", &team)),
-            channel: Some("feat-x"),
-            cwd: Path::new("/repo-worktrees/feat-x"),
-            identities: &identities,
-            leader_index: Some(leader_index),
-            terminal_width: 52,
-        };
-        let mut output = anstream::StripStream::new(Vec::new());
-        write_launch_receipt(&mut output, &receipt).unwrap();
-        let output = String::from_utf8(output.into_inner()).unwrap();
-        let prompt = output
-            .lines()
-            .find(|line| line.starts_with("  prompt"))
-            .unwrap();
-        assert!(prompt.starts_with("  prompt    → @planner  \"Read \\\"the handoff\\\" then"));
-        assert!(prompt.ends_with('…'));
-        assert_eq!(prompt.chars().count(), 52);
-        assert!(
-            output
-                .lines()
-                .any(|line| line.starts_with("  @planner") && line.ends_with("leader"))
-        );
-        assert!(
-            !output
-                .lines()
-                .any(|line| line.starts_with("  @worker") && line.contains("leader"))
-        );
-        assert!(!output.contains("Check:"));
-        assert!(!output.contains("Reach:"));
-        assert!(!output.contains("Wait:"));
-        assert!(!output.contains("starting"));
-
-        let mut output = anstream::StripStream::new(Vec::new());
-        write_launch_receipt(
-            &mut output,
-            &LaunchReceipt {
-                terminal_width: 100,
-                ..receipt
-            },
-        )
-        .unwrap();
-        let output = String::from_utf8(output.into_inner()).unwrap();
-        assert!(output.contains(
-            "  prompt    → @planner  \"Read \\\"the handoff\\\" then design a fix for the team.\""
-        ));
-    }
-
-    #[test]
-    fn resume_hint_uses_the_first_resumed_member_without_fresh_identities() {
-        let mut agent = test_agent("sess-planner");
-        agent.name = Some("stable-haven".to_owned());
-        agent.role = Some("planner".to_owned());
-        let plan = rimz::harness::plan::CohortResumePlan {
-            seeds: vec![rimz::harness::plan::CohortSeed::Resume(Box::new(agent))],
-            cwd: Some(PathBuf::from("/repo")),
-            channel: Some("feat-x".to_owned()),
-            fresh: Vec::new(),
-            launch_group: None,
-        };
-
-        assert_eq!(resume_hint_handle(&plan, &[]), Some("planner"));
-        let mut output = Vec::new();
-        write_resume_receipt(&mut output, &plan, Some("forge"), Some("feat-x"), &[], None).unwrap();
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("\n\nCheck: rimz teams show forge#feat-x"));
-        assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
-        assert!(
-            output.contains("Wait:  rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-x --once")
-        );
-        let wait = output
-            .lines()
-            .find_map(|line| line.strip_prefix("Wait:  "))
-            .unwrap();
-        <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
-    }
-
-    #[test]
-    fn resume_in_the_lane_directory_stays_in_the_origin_pane() {
-        let project = Path::new("/repo");
-        let worktree = Path::new("/repo-worktrees/single-card");
-
-        // The dropped-to-shell origin pane: launch dir is the cohort cwd, so
-        // in-place placement stays available despite the lane channel.
-        assert!(!resume_outside_launch_dir(
-            Some("single-card"),
-            worktree,
-            project,
-            worktree,
-            Some(worktree),
-        ));
-
-        // From anywhere else the lane resume still opens its own tab.
-        assert!(resume_outside_launch_dir(
-            Some("single-card"),
-            worktree,
-            project,
-            project,
-            Some(project),
-        ));
-        assert!(resume_outside_launch_dir(
-            Some("single-card"),
-            worktree,
-            project,
-            worktree,
-            None,
-        ));
-    }
-
-    #[test]
-    fn resume_launch_dir_comparison_is_lexically_normalized() {
-        let project = Path::new("/repo");
-        let worktree = Path::new("/repo-worktrees/single-card");
-        let launch_dir = Path::new("/repo-worktrees/../repo-worktrees/single-card");
-
-        assert!(!resume_outside_launch_dir(
-            Some("single-card"),
-            worktree,
-            project,
-            worktree,
-            Some(launch_dir),
-        ));
-    }
-
-    #[test]
-    fn worktree_filter_matches_normalized_agent_paths() {
-        let target = rimz::utils::path::normalize_path_lexical(Path::new("/repo-worktrees/demo"));
-        let mut agent = test_agent("sess-demo");
-        agent.worktree_path = Some("/repo/../repo-worktrees/demo".to_owned());
-
-        assert!(agent_matches_worktree_filter(&agent, &target));
-
-        agent.worktree_path = Some("/repo-worktrees/other".to_owned());
-        assert!(!agent_matches_worktree_filter(&agent, &target));
-
-        agent.worktree_path = None;
-        assert!(!agent_matches_worktree_filter(&agent, &target));
-    }
-
-    #[test]
-    fn resume_worktree_scope_resolves_named_worktree() {
-        let expected = PathBuf::from("/repo-worktrees/restore-living-team");
-        let called = std::cell::Cell::new(false);
-
-        let scope = resume_worktree_scope_with(
-            Some(" restore-living-team "),
-            Path::new("/repo"),
-            Path::new("/repo"),
-            |name| {
-                called.set(true);
-                assert_eq!(name, "restore-living-team");
-                Ok(expected.clone())
-            },
-        )
-        .expect("named worktree scope");
-
-        assert_eq!(scope, Some(expected));
-        assert!(called.get());
-    }
-
-    #[test]
-    fn resume_named_worktree_uses_the_launch_repo_root() {
-        let project_root = PathBuf::from("/rooms/marker");
-        let workspace = rimz::ResolvedWorkspace {
-            workspace_id: rimz::WorkspaceId::from_project_root(&project_root),
-            project_root: project_root.clone(),
-            cwd_project_root: Some(PathBuf::from("/repos/current")),
-            root_class: rimz::workspace::RootClass::Marker,
-            worktree_root: PathBuf::from("/repos/current"),
-            worktree_branch: Some("main".to_owned()),
-            session_name: "rimz-room".to_owned(),
-            mux_hint: None,
-        };
-
-        let scope = resume_worktree_scope(
-            Some("feat-x"),
-            &workspace,
-            &rimz::config::MachineConfig::default(),
-        )
-        .expect("named resume scope");
-
-        assert_eq!(
-            scope,
-            Some(PathBuf::from("/repos/current/../current-worktrees/feat-x"))
-        );
-    }
-
-    #[test]
-    fn resume_worktree_scope_uses_cwd_worktree_when_unnamed() {
-        let worktree = Path::new("/repo-worktrees/restore-living-team");
-
-        let scope = resume_worktree_scope_with(
-            None,
-            worktree,
-            Path::new("/repo"),
-            |_| -> Result<PathBuf> { panic!("unnamed scope must not resolve a worktree name") },
-        )
-        .expect("cwd worktree scope");
-
-        assert_eq!(scope.as_deref(), Some(worktree));
-    }
-
-    #[test]
-    fn resume_worktree_scope_keeps_repo_root_global_when_unnamed() {
-        let scope = resume_worktree_scope_with(
-            None,
-            Path::new("/repo"),
-            Path::new("/repo"),
-            |_| -> Result<PathBuf> { panic!("repo-root scope must stay global") },
-        )
-        .expect("global resume scope");
-
-        assert_eq!(scope, None);
-    }
-
-    #[test]
-    fn resume_worktree_scope_treats_bare_worktree_flag_as_unnamed() {
-        let worktree = Path::new("/repo-worktrees/restore-living-team");
-
-        let scope = resume_worktree_scope_with(
-            Some("  "),
-            worktree,
-            Path::new("/repo"),
-            |_| -> Result<PathBuf> { panic!("bare -w must not resolve a generated worktree name") },
-        )
-        .expect("bare worktree flag scope");
-
-        assert_eq!(scope.as_deref(), Some(worktree));
-    }
-
-    fn test_agent(id: &str) -> AgentState {
-        rimz::testkit::agent_state("codex", id, jiff::Timestamp::UNIX_EPOCH)
-    }
-
-    fn launch_identity(kind: &str, name: &str) -> AgentLaunchIdentity {
-        AgentLaunchIdentity {
-            kind: AgentKind::new_unchecked(kind),
-            agent_id: AgentSessionId::from(format!("launch-{name}")),
-            name: name.to_owned(),
-            name_explicit: false,
-            launch: rimz::agents::LaunchParams::default(),
-            run_id: None,
-            prompt: None,
-        }
-    }
-}
+mod tests;

@@ -16,6 +16,8 @@ rimz message @all "freeze new work; I'm cutting a release"        # everyone in 
 
 The same command serves you, your scripts, and the agents themselves: a running agent hands work to a teammate with the line you would have typed. `rimz msg` is a shorter spelling of it, and of every subcommand below.
 
+When an agent messages a [peer it launched](./fleet.md#manage-a-running-room), the new turn reports its result back automatically. A steer into an already-running turn opens no separate report. Text you type during a launcher-requested turn becomes part of that turn's final answer; if the peer was waiting for its own children, your turn can finish that pending request too. A provider that omits prompt text from its turn-start hook cannot start a new report from that message; use `--wait` for a message-correlated reply instead.
+
 ## Address an agent
 
 An address is `@handle[#channel]`. The handle names who; the optional `#channel` names which group of agents. Leave the channel off and RimZ uses the one your pane sits in.
