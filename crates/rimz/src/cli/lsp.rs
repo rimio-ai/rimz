@@ -421,24 +421,13 @@ fn status(
     json: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let entries = registry::sweep()?;
-    let cwd = std::fs::canonicalize(
-        path.or_else(|| globals.root.clone())
-            .unwrap_or(std::env::current_dir()?),
-    )?;
-    let root = registry::enclosing_checkout(&cwd, &entries).unwrap_or(&cwd);
-    let mut selected = entries.iter().filter(|entry| {
-        entry.root == root && server.as_ref().is_none_or(|server| server == &entry.server)
-    });
-    let Some(entry) = selected.next() else {
+    let (root, entries) = checkout_entries(path, server, false, globals)?;
+    let Some(entry) = entries.first() else {
         return query_error(QueryErr::Unavailable {
-            root: root.to_owned(),
+            root,
             reason: query::UnavailableReason::NotRunning,
         });
     };
-    if selected.next().is_some() {
-        anyhow::bail!("multiple language servers; choose --server NAME");
-    }
     let entry: registry::Entry = serde_json::from_value(registry::request(
         entry,
         &serde_json::json!({"op":"status"}),
@@ -642,31 +631,39 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
+fn checkout_entries(
+    path: Option<PathBuf>,
+    server: Option<String>,
+    all: bool,
+    globals: &GlobalFlags,
+) -> Result<(PathBuf, Vec<registry::Entry>)> {
+    let mut entries = registry::sweep()?;
+    let cwd = std::fs::canonicalize(
+        path.or_else(|| globals.root.clone())
+            .unwrap_or(std::env::current_dir()?),
+    )?;
+    let root = registry::enclosing_checkout(&cwd, &entries)
+        .unwrap_or(&cwd)
+        .to_owned();
+    entries.retain(|entry| {
+        all || (entry.root == root && server.as_ref().is_none_or(|server| server == &entry.server))
+    });
+    if !all && entries.len() > 1 {
+        anyhow::bail!("multiple language servers; choose --server NAME");
+    }
+    Ok((root, entries))
+}
+
 fn stop(
     path: Option<PathBuf>,
     server: Option<String>,
     all: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let entries = registry::sweep()?;
-    let cwd = std::fs::canonicalize(
-        path.or_else(|| globals.root.clone())
-            .unwrap_or(std::env::current_dir()?),
-    )?;
-    let root = registry::enclosing_checkout(&cwd, &entries).unwrap_or(&cwd);
-    let entries: Vec<_> = entries
-        .iter()
-        .filter(|entry| {
-            all || (entry.root == root
-                && server.as_ref().is_none_or(|server| server == &entry.server))
-        })
-        .collect();
-    if !all && entries.len() > 1 {
-        anyhow::bail!("multiple language servers; choose --server NAME");
-    }
+    let (_, entries) = checkout_entries(path, server, all, globals)?;
     let mut errors = Vec::new();
     let mut stopped = String::new();
-    for entry in entries {
+    for entry in &entries {
         let response = registry::request(
             entry,
             &serde_json::json!({"op": "stop", "reason": rimz::lsp::registry::StopReason::StoppedByHand}),
