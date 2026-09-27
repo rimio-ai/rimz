@@ -3063,7 +3063,7 @@ rimz update
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz wait
-    <command>  [action=append takes=1..=inf]
+    <command>  [action=append takes=1..=inf hidden]
     --check <COMMAND>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --every <DURATION>  [action=set takes=1..=1]
@@ -3076,6 +3076,7 @@ rimz wait
     --on <fail|success|any>  [action=set takes=1..=1 values=fail|success|any]
     --pid <PID>  [action=set takes=1..=1]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --run <COMMAND>  [action=set takes=1..=1]
     --timeout <DURATION>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]

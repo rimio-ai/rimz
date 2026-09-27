@@ -247,7 +247,7 @@ case "$RIMZ_AGENT_ROLE" in
         "$rimz" --mux tmux message @other "sandbox-handoff:$child_text" > /tmp/message-send 2>&1
         while [ ! -s /tmp/other-consumed ]; do sleep 0.1; done
         test "$(cat /tmp/other-consumed)" = "$child_text"
-        "$rimz" --mux tmux wait -- sh -c "printf 'wait-file\n'" > /tmp/wait-launch 2>&1
+        "$rimz" --mux tmux wait --run "printf 'wait-file\n'" > /tmp/wait-launch 2>&1
         while IFS= read -r line; do
             case "$line" in
                 *'response: /tmp/rimz-subagents/'*)

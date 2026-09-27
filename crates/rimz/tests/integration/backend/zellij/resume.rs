@@ -121,9 +121,8 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
                 "--mux",
                 "zellij",
                 "wait",
-                "--",
-                "printf",
-                "self-wait-marker",
+                "--run",
+                "printf self-wait-marker",
             ])
             .bounded_output()
             .expect("arm self wait");

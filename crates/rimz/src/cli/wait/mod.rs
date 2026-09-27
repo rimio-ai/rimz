@@ -60,6 +60,9 @@ struct WaitArgs {
     /// Run this shell command repeatedly until it succeeds (or fails, with --on fail).
     #[arg(long, value_name = "COMMAND")]
     check: Option<String>,
+    /// Run this shell command once through sh -c and wake with its outcome.
+    #[arg(long, value_name = "COMMAND")]
+    run: Option<String>,
     /// Sleep this long between --check runs (default: 1s).
     #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     every: Option<Duration>,
@@ -77,8 +80,7 @@ struct WaitArgs {
     timeout: Option<Duration>,
     #[arg(long)]
     json: bool,
-    /// Command to watch.
-    #[arg(last = true, value_name = "COMMAND")]
+    #[arg(last = true, hide = true, value_name = "COMMAND")]
     command: Vec<String>,
 }
 
@@ -97,6 +99,7 @@ impl WaitArgs {
         self.in_after.is_none()
             && self.pid.is_none()
             && self.check.is_none()
+            && self.run.is_none()
             && self.every.is_none()
             && self.file.is_none()
             && self.grep.is_none()

@@ -11,6 +11,79 @@ use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSe
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
+fn wait_run_preserves_shell_string_and_runs_both_commands() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let command = "printf 'one\\n' && printf 'two\\n'";
+    let receipt = wait_ok(&env, &["wait", "--json", "--run", command]);
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    assert_eq!(receipt["trigger"], format!("watch: {command}"));
+    let records = wait_for_wait_records(&env, 1);
+    let check = records[0].check.as_ref().unwrap();
+    assert_eq!(check.code, Some(0));
+    assert_eq!(
+        std::fs::read_to_string(check.output_path.as_ref().unwrap()).unwrap(),
+        "one\ntwo\n"
+    );
+    let message = wait_ok(
+        &env,
+        &[
+            "message",
+            "show",
+            records[0].message_id.as_ref().unwrap().as_str(),
+        ],
+    );
+    assert!(
+        message.contains(&format!("waited on `{command}`")),
+        "{message}"
+    );
+    wait_for_no_wait_instances(&env);
+}
+
+#[test]
+fn wait_run_rejects_empty_commands() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    for command in ["", "   "] {
+        let output = agent_wait(&env)
+            .args(["wait", "--run", command])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--run needs a command"), "{stderr}");
+        assert!(!loop_instances_path(&env).exists());
+    }
+}
+
+#[test]
+fn wait_rejects_legacy_commands_with_run_suggestion() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    for (args, suggestion) in [
+        (vec!["wait", "--", "cargo", "test"], "--run 'cargo test'"),
+        (vec!["wait", "--run", "true", "--", "false"], "--run false"),
+    ] {
+        let output = agent_wait(&env).args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(
+                "the command after `--` is no longer accepted; pass it as one quoted string:"
+            ),
+            "{stderr}"
+        );
+        assert!(stderr.contains(suggestion), "{stderr}");
+        assert!(
+            output.stdout.is_empty(),
+            "legacy commands must not list waits"
+        );
+        assert!(!loop_instances_path(&env).exists());
+    }
+}
+
+#[test]
 fn wait_delay_arms_instance_for_the_calling_agent() {
     let env = Env::new();
     register_calling_agent_with_launch(
@@ -227,7 +300,7 @@ fn wait_rejects_watch_checkins_at_or_above_24_hours() {
     register_calling_agent(&env);
     for timeout in ["24h", "25h"] {
         let output = agent_wait(&env)
-            .args(["wait", "--timeout", timeout, "--", "true"])
+            .args(["wait", "--timeout", timeout, "--run", "true"])
             .output()
             .expect("reject long watch check-in");
         assert!(!output.status.success(), "accepted --timeout {timeout}");
@@ -363,7 +436,7 @@ fn wait_pid_rejects_invalid_pids_and_conflicting_triggers() {
         vec!["wait", "--pid", "not-a-pid"],
         vec!["wait", "--pid", "123;true"],
         vec!["wait", "--pid", "123", "--in", "5m"],
-        vec!["wait", "--pid", "123", "--", "true"],
+        vec!["wait", "--pid", "123", "--run", "true"],
         vec!["wait", "--pid", "123", "--on", "success"],
     ] {
         let output = agent_wait(&env).args(&args).output().unwrap();
@@ -372,7 +445,7 @@ fn wait_pid_rejects_invalid_pids_and_conflicting_triggers() {
         assert!(
             stderr.contains("invalid value")
                 || stderr.contains("choose exactly one wait trigger")
-                || stderr.contains("--on requires --check or a command"),
+                || stderr.contains("--on requires --check or --run"),
             "{args:?}: {stderr}"
         );
     }
@@ -482,16 +555,16 @@ fn wait_check_rejects_shapes_without_a_meaning() {
             "--on any has no meaning with --check",
         ),
         (
-            vec!["wait", "--every", "5s", "--", "true"],
+            vec!["wait", "--every", "5s", "--run", "true"],
             "--every requires --check",
         ),
         (
             vec!["wait", "--check", "true", "--pid", "123"],
-            "choose exactly one wait trigger: --in, --pid, --check, --file, or a command after --",
+            "choose exactly one wait trigger: --in, --pid, --check, --file, or --run",
         ),
         (vec!["wait", "--check", " "], "--check needs a command"),
         (
-            vec!["wait", "--grep", "ready", "--", "true"],
+            vec!["wait", "--grep", "ready", "--run", "true"],
             "--grep requires --file",
         ),
         (
@@ -504,7 +577,7 @@ fn wait_check_rejects_shapes_without_a_meaning() {
         ),
         (
             vec!["wait", "--in", "5m", "--timeout", "1m"],
-            "--timeout requires --pid, --check, --file, or a command after --",
+            "--timeout requires --pid, --check, --file, or --run",
         ),
         (
             vec!["wait", "--check", "true", "--every", "24h"],
@@ -678,13 +751,12 @@ fn watched_wait_runs_in_the_arming_worktree() {
         .args([
             "wait",
             "--json",
-            "--",
-            "sh",
-            "-c",
-            "while [ ! -e \"$1\" ]; do sleep 0.025; done; pwd -P",
-            "watch-cwd",
+            "--run",
+            &format!(
+                "while [ ! -e {} ]; do sleep 0.025; done; pwd -P",
+                shlex::try_quote(release.to_str().unwrap()).unwrap()
+            ),
         ])
-        .arg(&release)
         .output()
         .expect("arm watched wait from linked worktree");
     assert!(
@@ -721,9 +793,7 @@ fn watched_failure_preserves_full_output_and_delivers_its_summary() {
         .args([
             "wait",
             "--json",
-            "--",
-            "sh",
-            "-c",
+            "--run",
             "sleep 1; seq 1 5000; printf watched; exit 3",
         ])
         .output()
@@ -799,14 +869,7 @@ fn watched_wait_survives_the_arming_process_group_exiting() {
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
     let child = agent_wait(&env)
-        .args([
-            "wait",
-            "--json",
-            "--",
-            "sh",
-            "-c",
-            "sleep 1; printf survived",
-        ])
+        .args(["wait", "--json", "--run", "sleep 1; printf survived"])
         .process_group(0)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -858,14 +921,7 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     register_calling_agent(&env);
     let receipt = wait_ok(
         &env,
-        &[
-            "wait",
-            "--json",
-            "--",
-            "sh",
-            "-c",
-            "printf started; exec sleep 30",
-        ],
+        &["wait", "--json", "--run", "printf started; exec sleep 30"],
     );
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
@@ -955,7 +1011,7 @@ fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
         let env = Env::new();
         env.install_agent_hooks("claude");
         register_calling_agent(&env);
-        wait_ok(&env, &["wait", "--on", on, "--", command]);
+        wait_ok(&env, &["wait", "--on", on, "--run", command]);
         let records = wait_for_wait_records(&env, 1);
         assert_eq!(records[0].result.label(), "skipped");
         assert!(records[0].message_id.is_none());
@@ -999,7 +1055,7 @@ fn self_wait_queues_with_any_gate_for_working_and_idle_targets() {
                 })
                 .unwrap();
         }
-        wait_ok(&env, &["wait", "--", "printf", "self-wait-marker"]);
+        wait_ok(&env, &["wait", "--run", "printf self-wait-marker"]);
         let messages = wait_for_wait_messages(&env, 1);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].agent_id.as_str(), "provider-session");
@@ -1043,14 +1099,12 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
                 on,
                 "--timeout",
                 "1s",
-                "--",
-                "sh",
-                "-c",
-                "printf '%s' \"$$\" > \"$1\"; printf checkin-marker; while [ ! -e \"$2\" ]; do sleep 0.05; done; printf final-marker; exit \"$3\"",
-                "checkin",
-                pid_path.to_str().unwrap(),
-                release.to_str().unwrap(),
-                exit,
+                "--run",
+                &format!(
+                    "printf '%s' \"$$\" > {}; printf checkin-marker; while [ ! -e {} ]; do sleep 0.05; done; printf final-marker; exit {exit}",
+                    shlex::try_quote(pid_path.to_str().unwrap()).unwrap(),
+                    shlex::try_quote(release.to_str().unwrap()).unwrap()
+                ),
             ],
         );
         let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
@@ -1193,12 +1247,11 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
             "--json",
             "--timeout",
             "1s",
-            "--",
-            "sh",
-            "-c",
-            "printf checkin-marker; while [ ! -e \"$1\" ]; do sleep 0.05; done; printf final-marker",
-            "checkin",
-            release.to_str().unwrap(),
+            "--run",
+            &format!(
+                "printf checkin-marker; while [ ! -e {} ]; do sleep 0.05; done; printf final-marker",
+                shlex::try_quote(release.to_str().unwrap()).unwrap()
+            ),
         ],
     );
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
@@ -1305,12 +1358,11 @@ fn watcher_survives_retiring_its_own_row_mid_fire() {
         &[
             "wait",
             "--json",
-            "--",
-            "sh",
-            "-c",
-            "while [ ! -e \"$1\" ]; do sleep 0.05; done",
-            "watched",
-            release.to_str().unwrap(),
+            "--run",
+            &format!(
+                "while [ ! -e {} ]; do sleep 0.05; done",
+                shlex::try_quote(release.to_str().unwrap()).unwrap()
+            ),
         ],
     );
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
@@ -1402,12 +1454,11 @@ fn wait_cancel_all_stops_command_groups_and_prints_pending() {
             &env,
             &[
                 "wait",
-                "--",
-                "sh",
-                "-c",
-                "sleep 30 & printf '%s %s' \"$$\" \"$!\" > \"$1\"; wait",
-                "cancel",
-                path.to_str().unwrap(),
+                "--run",
+                &format!(
+                    "sleep 30 & printf '%s %s' \"$$\" \"$!\" > {}; wait",
+                    shlex::try_quote(path.to_str().unwrap()).unwrap()
+                ),
             ],
         );
         wait_until("command group did not start", || {
@@ -1504,7 +1555,7 @@ fn wait_rejects_removed_target_prompt_and_signal_flags() {
         vec!["wait", "--in", "5m", "--prompt-file", "note.txt"],
         vec!["wait", "--signal", "deploy.failed"],
         vec!["wait", "--in", "5m", "--match", "branch=feature"],
-        vec!["wait", "--wait=5s", "--", "true"],
+        vec!["wait", "--wait=5s", "--run", "true"],
     ] {
         let output = agent_wait(&env).args(&args).output().unwrap();
         assert!(
