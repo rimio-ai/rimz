@@ -718,6 +718,34 @@ fn lsp_attach_bridge_resolves_admits_and_versions() {
 }
 
 #[test]
+fn lsp_attach_refuses_an_optional_server_that_never_starts() {
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), "[lsp.servers.rust]\ncommand = ['/bin/true']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\n").unwrap();
+    let mut child = env
+        .rimz()
+        .args(["lsp", "attach", "--server", "rust"])
+        .env("RIMZ_BIN", "/bin/true")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    rimz::lsp::protocol::write_frame(
+        child.stdin.as_mut().unwrap(),
+        &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "language server rust did not start within 5s; check the server command, or remove [lsp.servers.rust]\n"
+    );
+}
+
+#[test]
 fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
     let env = Env::new();
     crate::common::write_kind_base(&env, "claude");
