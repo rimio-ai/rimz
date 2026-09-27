@@ -833,7 +833,7 @@ fn validated_under_fails_fast_with_the_xdg_remedy() {
 
     let dir_name = WorkspaceDirName::fallback(&workspace_id);
     let err =
-        RuntimePaths::budgeted(workspace_id, dir_name, &deep_root).expect_err("overlong root");
+        RuntimePaths::validated(workspace_id, dir_name, &deep_root).expect_err("overlong root");
     let rendered = err.to_string();
 
     match err {
