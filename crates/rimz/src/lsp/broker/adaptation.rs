@@ -3,16 +3,22 @@
 use serde_json::{Value, json};
 
 pub(super) fn reply(value: &mut Value, method: &str, capabilities: &Value) {
-    if let Some(name @ ("definition" | "typeDefinition" | "implementation" | "declaration")) =
-        method.strip_prefix("textDocument/")
+    // rust-analyzer answers its module navigation through its definition response builder.
+    let links = match method {
+        "experimental/parentModule" | "experimental/childModules" => Some("definition"),
+        _ => method.strip_prefix("textDocument/").filter(|name| {
+            matches!(
+                *name,
+                "definition" | "typeDefinition" | "implementation" | "declaration"
+            )
+        }),
+    };
+    if let Some(name) = links
         && capabilities["textDocument"][name]["linkSupport"] != true
-        && let Some(locations) = value.as_array_mut()
     {
-        for location in locations {
-            if location.get("targetUri").is_some() {
-                *location =
-                    json!({"uri":location["targetUri"],"range":location["targetSelectionRange"]});
-            }
+        match value.as_array_mut() {
+            Some(locations) => locations.iter_mut().for_each(location),
+            None => location(value),
         }
     }
     if capabilities["textDocument"]["completion"]["completionItem"]["snippetSupport"] != true {
@@ -35,6 +41,12 @@ pub(super) fn reply(value: &mut Value, method: &str, capabilities: &Value) {
     }
     if capabilities["experimental"]["snippetTextEdit"] != true {
         snippet_edits(value);
+    }
+}
+
+fn location(link: &mut Value) {
+    if link.get("targetUri").is_some() {
+        *link = json!({"uri":link["targetUri"],"range":link["targetSelectionRange"]});
     }
 }
 
