@@ -1,5 +1,68 @@
 use super::*;
 use crate::ids::WorkspaceId;
+
+#[test]
+fn spending_service_names_differ_only_by_extension() {
+    let runtime = RuntimePaths::under(
+        WorkspaceId::from_project_root(Path::new("/tmp/project-a")),
+        Path::new("/tmp/rimz-runtime-test"),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.shared_spending_service_socket_path(1, 18, 10, 7, "0123456789abcdef01234567"),
+        runtime
+            .shared_root
+            .join("spending.v1.c18.p10.w7.n0123456789abcdef01234567.sock")
+    );
+    assert_eq!(
+        runtime.shared_spending_service_owner_lock(1, 18, 10, 7, "0123456789abcdef01234567"),
+        runtime
+            .shared_root
+            .join("spending.v1.c18.p10.w7.n0123456789abcdef01234567.lock")
+    );
+}
+
+#[test]
+fn room_tree_removal_tolerates_absence_and_names_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let state = StatePaths::under(id.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+    state.remove_tmp_dir().unwrap();
+    state.remove_root().unwrap();
+    runtime.remove_root().unwrap();
+
+    fs::create_dir_all(&state.scratchpad_dir).unwrap();
+    fs::create_dir_all(&runtime.live_dir).unwrap();
+    state.remove_tmp_dir().unwrap();
+    assert!(!state.tmp_dir.exists());
+    assert!(state.root.exists());
+    state.remove_root().unwrap();
+    assert!(!state.root.exists());
+    runtime.remove_root().unwrap();
+    assert!(!runtime.root.exists());
+
+    fs::create_dir_all(state.root.parent().unwrap()).unwrap();
+    fs::write(&state.root, b"blocker").unwrap();
+    assert!(matches!(state.remove_root(), Err(PathErr::Io { path, .. }) if path == state.root));
+}
+
+#[test]
+fn path_io_errors_name_the_path_that_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("blocker");
+    fs::write(&blocker, b"blocker").unwrap();
+    let runtime = blocker.join("runtime");
+    assert!(
+        matches!(ensure_private_runtime_dir(&runtime), Err(PathErr::Io { path, .. }) if path == runtime)
+    );
+    let id = WorkspaceId::from_project_root(dir.path());
+    let state = StatePaths::under_named(id.clone(), WorkspaceDirName::fallback(&id), &blocker);
+    assert!(
+        matches!(state.ensure_dirs(), Err(PathErr::Io { path, .. }) if path == state.snapshots_dir)
+    );
+}
+
 #[test]
 fn handleless_skills_are_outside_writable_tmp() {
     let dir = tempfile::tempdir().unwrap();

@@ -486,6 +486,38 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn io_errors_name_the_path_that_failed() {
+        let dir = tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"blocker").unwrap();
+        let io_path = |err: AtomicErr| match err {
+            AtomicErr::Io { path, .. } => path,
+            other => panic!("expected Io, got {other:?}"),
+        };
+        assert_eq!(
+            io_path(write_temp_then_rename(&blocker.join("a.json"), &json!({})).unwrap_err()),
+            blocker
+        );
+        assert_eq!(
+            io_path(write_bytes_atomically(&blocker.join("b"), b"x").unwrap_err()),
+            blocker
+        );
+        assert_eq!(
+            io_path(append_record_bytes(&blocker.join("c.jsonl"), b"x\n").unwrap_err()),
+            blocker
+        );
+        let missing = dir.path().join("missing");
+        assert_eq!(io_path(sync_file_data(&missing).unwrap_err()), missing);
+        assert_eq!(io_path(truncate_file(&missing, 0).unwrap_err()), missing);
+        assert_eq!(io_path(sync_dir(&missing).unwrap_err()), missing);
+        let absent_src = dir.path().join("absent");
+        assert_eq!(
+            io_path(link_executable_atomically(&absent_src, &dir.path().join("dst")).unwrap_err()),
+            absent_src
+        );
+    }
+
+    #[test]
     fn temp_rename_writes_pretty_json_with_trailing_newline() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("nested/file.json");
