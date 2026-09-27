@@ -53,6 +53,85 @@ fn frame_grid_advances_one_frame_or_snaps_past_missed_frames() {
 }
 
 #[test]
+fn animation_gate_uses_observed_phase_for_money_and_scrollbar() {
+    let ws = workspace();
+    let snapshot = snapshot(&ws);
+    let mut ui = UiState::default();
+    ui.theme(&snapshot.theme);
+    ui.tally.observe(1.0, 0);
+    ui.tally.observe(5.0, 1);
+    assert!(is_animating(&snapshot, &ui, 1, false));
+    assert!(!is_animating(&snapshot, &ui, 100, false));
+    ui.animation_phase = 100;
+    assert!(is_animating(&snapshot, &ui, 1, false));
+
+    ui.tally = Default::default();
+    ui.cost_rolls
+        .observe(std::iter::once(("agent".to_owned(), 1.0)), 0);
+    ui.cost_rolls
+        .observe(std::iter::once(("agent".to_owned(), 5.0)), 1);
+    assert!(is_animating(&snapshot, &ui, 1, false));
+    assert!(!is_animating(&snapshot, &ui, 100, false));
+
+    ui.cost_rolls = Default::default();
+    ui.scrollbar.observe(0, 0);
+    ui.scrollbar.observe(1, 1);
+    assert!(is_animating(&snapshot, &ui, 1, false));
+    assert!(!is_animating(&snapshot, &ui, 100, false));
+    ui.animation_phase = 0;
+    assert!(!is_animating(&snapshot, &ui, 100, false));
+}
+
+#[test]
+fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    snapshot.theme.pets.enabled = true;
+    snapshot.theme.animations.waiting =
+        Some(toml::from_str("effect = \"breathe\"\n").expect("animation spec"));
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    let mut ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            body: None,
+            caption: None,
+            frame_interval: Some(Duration::from_millis(625)),
+        }),
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+    assert_eq!(
+        frame_interval(&snapshot, &ui, false),
+        Duration::from_millis(625)
+    );
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Running;
+    assert_eq!(
+        frame_interval(&snapshot, &ui, false),
+        animation_frame(&snapshot)
+    );
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    ui.tally.observe(1.0, 0);
+    ui.tally.observe(5.0, 1);
+    ui.animation_phase = 1;
+    let money = crate::sidebar::timing::money_animation_frame(
+        snapshot.theme.display.resolved_refresh_ms(),
+        render::CLICK_PHASES,
+    );
+    for pet in [Duration::from_millis(625), Duration::from_millis(50)] {
+        ui.pet.as_mut().unwrap().frame_interval = Some(pet);
+        assert_eq!(frame_interval(&snapshot, &ui, false), pet.min(money));
+    }
+}
+
+#[test]
 fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     let ws = workspace();
     let mut slow = snapshot(&ws);
