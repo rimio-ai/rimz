@@ -221,6 +221,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `ACCOUNTS` | Conditional. Each named account's home and status, marking this room's account. |
 | `AGENT PLUGINS` | Conditional. Each plugin manifest, its validation result, and its probes. |
 | `LOOP TASKS` | Configured loop tasks with target, trigger, and root. |
+| `LSP` | Shared language servers with state, checkout, server, memory, and leases, in `rimz lsp list` order, and the last memory refusal or queue timeout. |
 | `REMOTE CONTROL` | Remote-control hosts and their readiness, or `off`. |
 | `STORAGE` | RimZ's disk use by area. |
 | `PROTOCOLS` | Conditional on a resolved workspace. Event and sidebar protocol versions, and build drift between writers. |

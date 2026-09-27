@@ -420,14 +420,9 @@ fn list_table(
     now_ms: u64,
     memory: impl Fn(u32) -> (u64, u64),
 ) -> render::Table {
-    use render::status::{self, StateRole};
-    let rank = |state| match status::lsp(state) {
-        StateRole::Success | StateRole::Working => 0,
-        StateRole::Failed | StateRole::Waiting | StateRole::Paused | StateRole::Unavailable => 1,
-        StateRole::Neutral => 2,
-    };
+    use render::status;
     let mut entries: Vec<_> = entries.iter().collect();
-    entries.sort_by_key(|entry| (rank(&entry.state), &entry.root, &entry.server));
+    entries.sort_by_key(|entry| status::lsp_order(entry));
     let mut table = render::Table::new([
         "STATE", "CHECKOUT", "SERVER", "RSS", "PEAK", "REQUESTS", "LAST", "RESTARTS", "LEASES",
     ])

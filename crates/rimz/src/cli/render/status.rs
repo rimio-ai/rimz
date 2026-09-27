@@ -36,6 +36,17 @@ pub(crate) fn lsp(state: &rimz::lsp::registry::State) -> StateRole {
     }
 }
 
+/// The row order both LSP tables share: running servers first, then those
+/// needing attention, then the rest, ties broken by checkout and server.
+pub(crate) fn lsp_order(entry: &rimz::lsp::registry::Entry) -> (u8, &std::path::Path, &str) {
+    let rank = match lsp(&entry.state) {
+        StateRole::Success | StateRole::Working => 0,
+        StateRole::Failed | StateRole::Waiting | StateRole::Paused | StateRole::Unavailable => 1,
+        StateRole::Neutral => 2,
+    };
+    (rank, &entry.root, &entry.server)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StateRole {
     Success,
