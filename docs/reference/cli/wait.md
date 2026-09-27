@@ -45,13 +45,13 @@ Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the works
 
 ```console
 $ rimz wait --run 'cargo test'
-armed wait-solid-pixel: watch: cargo test → @coder
-NAME              STATE               TARGET  AGE  TRIGGER
-wait-bold-comet   due 14:32           @coder  -    once at 14:32
-wait-solid-pixel  watching pid 48213  @coder  0s   watch: cargo test
+armed wait-solid-pixel: watch: cargo test → @coder (timeout 30m)
+NAME              TYPE   STATE     TARGET  ELAPSED  TIMEOUT  TRIGGER
+wait-bold-comet   timer  pending   @coder  2m       30m      once at 14:32
+wait-solid-pixel  watch  watching  @coder  0s       30m      cargo test
 ```
 
-The trigger text in the receipt is `in <DURATION>`, `pid <PID>`, `watch: <command>`, `check: <command>` (with ` every <DURATION>` for a non-default interval and ` on fail` for failure polarity), or `file: <absolute path>` (with ` grep: <pattern>` when supplied). `--json` prints `{"name", "trigger", "target", "pending"}`, where `trigger` carries the same text and `pending` is the array [`rimz wait list --json`](#list-pending-waits) prints.
+The trigger text in the receipt is `in <DURATION>`, `pid <PID>`, `watch: <command>`, `check: <command>` (with ` every <DURATION>` for a non-default interval and ` on fail` for failure polarity), or `file: <absolute path>` (with ` grep: <pattern>` when supplied). Watch receipt headers end with `(timeout <DURATION>)` when a check-in limit is recorded; timers, and watches armed without one under cache keepalive, have no suffix. `--json` prints `{"name", "trigger", "target", "pending"}`, where `trigger` carries the prefixed header text and `pending` is the array [`rimz wait list --json`](#list-pending-waits) prints, with separate types and bare trigger subjects.
 
 Arming is refused, exit 1, in these cases:
 
@@ -146,11 +146,11 @@ waited on `cargo test`
 exit 1 after 12m · output: /tmp/rimz-waits/wait-solid-pixel.output (~14k tokens, 1210 lines) [wait-solid-pixel]
 ```
 
-A check-in adds the two follow-up commands. `Another check-in` repeats the wait's `--timeout` value; running it arms a separate timer that neither restarts nor stops the command:
+A check-in adds `· still watching` immediately after the verdict and the follow-up commands. `Another check-in` repeats the wait's recorded `--timeout` value; running it arms a separate timer that neither restarts nor stops the command:
 
 ```text
 waited on `cargo build`
-still running after 30m · output: /tmp/rimz-waits/wait-solid-pixel.output (~3.4k tokens, 340 lines) [wait-solid-pixel]
+still running after 30m · still watching · output: /tmp/rimz-waits/wait-solid-pixel.output (~3.4k tokens, 340 lines) [wait-solid-pixel]
 
 Stop it: rimz wait cancel wait-solid-pixel
 Another check-in: rimz wait --in 30m
@@ -188,12 +188,14 @@ A sleeping agent still takes messages: a normal message starts a turn and leaves
 | Column | Values |
 | --- | --- |
 | `NAME` | The wait or task name. |
-| `STATE` | `due HH:MM` (or `due now`) for a clock row; `waiting`, or `waiting · <N> left` with a deadline, for a signal row; `watching pid <watcher PID>` or `watcher lost` for a command, PID, check, or file row; `disabled` or `paused · <time>` for a held row. |
+| `TYPE` | `timer`, `watch` (command), `check`, `pid`, `file`, `signal`, or `schedule` (loop clock). |
+| `STATE` | `pending` for a timer; `waiting` for a signal or loop clock; `watching` or `lost` for a command, PID, check, or file row; `disabled` or `paused` for a held row. A check-in leaves the state `watching`. |
 | `TARGET` | The target agent's handle. |
-| `AGE` | Time since arming for signal rows with an arm stamp, time since the watcher started for watch rows, otherwise `-`. |
-| `TRIGGER` | `once at HH:MM` for a timer, `pid <PID>`, `watch: <command>`, `check: <command>[ every <DURATION>][ on fail]`, `file: <path>[ grep: <pattern>]`, a loop schedule such as `every day at 09:00`, or `on <selector> [k=v]`. A watch row armed from a linked worktree adds `· in <dir>`. |
+| `ELAPSED` | Time since the self wait was armed, including lost watches; `-` for signal and loop clock rows. |
+| `TIMEOUT` | Requested delay for a timer; check-in limit for a watch, `-` when it recorded none; `-` for signal and loop clock rows. Timer firing rounds up to the minute, so elapsed time can reach the requested delay before firing. |
+| `TRIGGER` | `once at HH:MM` for a timer, `<PID>`, `<command>[ every <DURATION>][ on fail]`, `<path>[ grep: <pattern>]`, a loop schedule such as `every day at 09:00`, or `on <selector> [k=v]`. A watch row armed from a linked worktree adds `· in <dir>`. A paused row ends with `· resumes in <DURATION>`. |
 
-`--json` prints an array of `{"name", "trigger", "dir", "target", "age", "state"}`. `dir` appears only when the row recorded a linked worktree, as a home-relative path; timers and signal rows record it too, though only commands and checks run there.
+`--json` prints an array with keys in order: `name`, `type`, `state`, `target`, `trigger`, optional `dir`, `elapsed`, `elapsed_s`, `timeout`, `timeout_s`, and optional `watcher_pid`. Elapsed and timeout values are labels plus integer seconds, always present and `null` when not applicable. `watcher_pid` appears only while a live watcher holds the row's lock. There is no `age` field. `dir` appears only when the row recorded a linked worktree, as a home-relative path; timers and signal rows record it too, though only commands and checks run there.
 
 ## Cancel a wait
 

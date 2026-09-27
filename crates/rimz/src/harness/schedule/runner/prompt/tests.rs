@@ -159,7 +159,7 @@ fn polled_waits_name_their_spec_and_never_claim_no_output() {
                 WatchVerdict::NotMet {
                     elapsed_ms: 300_000,
                 },
-                "still not met after 5m",
+                "still not met after 5m · still watching",
                 "\n\nStop it: rimz wait cancel wait-test\nAnother check-in: rimz wait --in 5m",
             ),
         ] {
@@ -284,7 +284,7 @@ fn watch_checkin_keeps_nonempty_summary_path_and_next_actions() {
                     now()
                 ),
                 format!(
-                    "waited on `cargo test`\nstill running after 30m{path} [wait-test]\n\nStop it: rimz wait cancel wait-test{next}"
+                    "waited on `cargo test`\nstill running after 30m · still watching{path} [wait-test]\n\nStop it: rimz wait cancel wait-test{next}"
                 )
             );
         }
