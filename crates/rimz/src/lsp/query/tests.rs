@@ -656,7 +656,7 @@ fn aliases_collapse_to_definitions_without_guessing() {
 #[test]
 fn incomplete_position_requires_a_column() {
     assert!(
-        parse_target("src/lib.rs:12")
+        Target::parse(Verb::Def, "src/lib.rs:12")
             .unwrap_err()
             .to_string()
             .contains("path:line:col")
@@ -1138,7 +1138,15 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
 #[test]
 fn editor_positions_are_one_based_and_symbols_are_not_guessed() {
     assert_eq!(
-        parse_target("src/lib.rs:2:3").unwrap(),
+        Target::parse(Verb::Symbols, "src/lib.rs:2:3").unwrap(),
+        Target::File("src/lib.rs:2:3".into())
+    );
+    assert_eq!(
+        Target::parse(Verb::Find, "src/lib.rs:2:3").unwrap(),
+        Target::Find("src/lib.rs:2:3".into())
+    );
+    assert_eq!(
+        Target::parse(Verb::Def, "src/lib.rs:2:3").unwrap(),
         Target::Position {
             path: "src/lib.rs".into(),
             position: Position {
@@ -1148,12 +1156,12 @@ fn editor_positions_are_one_based_and_symbols_are_not_guessed() {
         }
     );
     assert_eq!(
-        parse_target("MuxBackend").unwrap(),
+        Target::parse(Verb::Def, "MuxBackend").unwrap(),
         Target::Symbol("MuxBackend".into())
     );
-    assert!(parse_target("src/lib.rs:0:1").is_err());
+    assert!(Target::parse(Verb::Def, "src/lib.rs:0:1").is_err());
     assert_eq!(
-        parse_target("Type::method").unwrap(),
+        Target::parse(Verb::Def, "Type::method").unwrap(),
         Target::Symbol("Type::method".into())
     );
 }
@@ -1196,5 +1204,31 @@ fn outline_members_find_a_container_whose_range_is_the_whole_declaration() {
         let members = outline_members(&container, "greet", &outline);
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].location.range.start.line, member_line);
+    }
+}
+
+#[test]
+fn execute_refuses_a_target_its_verb_cannot_answer() {
+    let entry: crate::lsp::registry::Entry = serde_json::from_value(json!({
+        "root": "/checkout", "project": null, "server": "rust", "nonce": "n",
+        "broker_pid": 0, "broker_start_token": "t", "server_pid": null,
+        "server_start_token": null, "state": crate::lsp::registry::State::Ready,
+        "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "h",
+        "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []
+    }))
+    .unwrap();
+    for (verb, target) in [
+        (Verb::Symbols, Target::Symbol("Type".into())),
+        (Verb::Find, Target::File("src/lib.rs".into())),
+        (Verb::Def, Target::Find("Type".into())),
+        (Verb::Refs, Target::File("src/lib.rs".into())),
+    ] {
+        let Err(error) = execute(&entry, verb, &target) else {
+            panic!("{verb:?} {target:?} answered");
+        };
+        assert!(
+            error.to_string().contains("cannot answer target"),
+            "{verb:?} {target:?}: {error}"
+        );
     }
 }

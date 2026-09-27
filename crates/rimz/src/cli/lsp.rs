@@ -192,23 +192,16 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
     let mut out = render::out();
     for (index, target) in args.targets.iter().enumerate() {
         let result = (|| {
-            let path = match verb {
-                Verb::Symbols => Some(PathBuf::from(target)),
-                Verb::Find => None,
-                _ => match query::parse_target(target)? {
-                    query::Target::Position { path, .. } => Some(path),
-                    _ => None,
-                },
-            };
+            let target = query::Target::parse(verb, target)?;
             let entry = query::select(
                 root,
                 context.entries.clone(),
                 &context.servers,
                 args.server.as_deref(),
-                path.as_deref(),
+                target.path(),
             )?;
             let output =
-                failures.execute(&entry.server, || query::execute(&entry, verb, target))?;
+                failures.execute(&entry.server, || query::execute(&entry, verb, &target))?;
             Ok::<_, QueryErr>((entry, output))
         })();
         let text = match result {

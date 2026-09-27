@@ -173,38 +173,47 @@ fn uri(root: &Path, path: &Path) -> Result<String> {
         .map_err(|()| LspErr::Protocol("invalid file URI".into()))
 }
 
-pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<Output, QueryErr> {
-    if verb == Verb::Find {
-        return Ok(Output::Answer {
-            result: rank_find(
-                &entry.root,
-                target,
-                request(entry, "workspace/symbol", json!({"query": target}))?,
-            )?,
-            document_uri: None,
-        });
-    }
-    if verb == Verb::Symbols {
-        let uri = uri(&entry.root, Path::new(target))?;
-        return Ok(Output::Answer {
-            result: request(
-                entry,
-                "textDocument/documentSymbol",
-                json!({"textDocument": {"uri": uri}}),
-            )?,
-            document_uri: Some(uri),
-        });
-    }
-    let (uri, position) = match parse_target(target)? {
-        Target::Position { path, position } => (uri(&entry.root, &path)?, position),
-        Target::Symbol(name) => {
+pub fn execute(
+    entry: &Entry,
+    verb: Verb,
+    target: &Target,
+) -> std::result::Result<Output, QueryErr> {
+    let (uri, position) = match (verb, target) {
+        (Verb::Find, Target::Find(target)) => {
+            return Ok(Output::Answer {
+                result: rank_find(
+                    &entry.root,
+                    target,
+                    request(entry, "workspace/symbol", json!({"query": target}))?,
+                )?,
+                document_uri: None,
+            });
+        }
+        (Verb::Symbols, Target::File(path)) => {
+            let uri = uri(&entry.root, path)?;
+            return Ok(Output::Answer {
+                result: request(
+                    entry,
+                    "textDocument/documentSymbol",
+                    json!({"textDocument": {"uri": uri}}),
+                )?,
+                document_uri: Some(uri),
+            });
+        }
+        (Verb::Find | Verb::Symbols, _) | (_, Target::Find(_) | Target::File(_)) => {
+            return Err(
+                LspErr::Protocol(format!("{verb:?} cannot answer target {target:?}")).into(),
+            );
+        }
+        (_, Target::Position { path, position }) => (uri(&entry.root, path)?, *position),
+        (_, Target::Symbol(name)) => {
             let resolution = resolve_symbol(
                 &entry.root,
-                &name,
+                name,
                 request(
                     entry,
                     "workspace/symbol",
-                    json!({"query": name_segments(&name).last().cloned().unwrap_or_default()}),
+                    json!({"query": name_segments(name).last().cloned().unwrap_or_default()}),
                 )?,
             )?;
             // At most COLLAPSE_CAP ranked candidates, or one unique match.
@@ -223,7 +232,7 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
             let mut unresolved = 0;
             let resolution = match resolution {
                 SymbolResolution::Missing { candidates } => {
-                    let mut qualifier = name_segments(&name);
+                    let mut qualifier = name_segments(name);
                     let member = qualifier.pop().unwrap_or_default();
                     let mut members = Vec::new();
                     if !qualifier.is_empty() {
@@ -271,7 +280,7 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                     }
                     if members.is_empty() {
                         let (resolution, unresolved) =
-                            collapse_ranked(&entry.root, &name, candidates, definition)?;
+                            collapse_ranked(&entry.root, name, candidates, definition)?;
                         let symbols = match resolution {
                             SymbolResolution::Unique(symbol) => vec![symbol],
                             SymbolResolution::Ambiguous(symbols)
@@ -280,7 +289,7 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                             } => symbols,
                         };
                         return Ok(Output::NotFound {
-                            name,
+                            name: name.clone(),
                             symbols,
                             unresolved,
                         });
@@ -294,7 +303,7 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                 SymbolResolution::Unique(symbol) => collapse_symbols(vec![symbol], definition)?,
                 SymbolResolution::Ambiguous(symbols) => {
                     let (resolution, remaining) =
-                        collapse_ranked(&entry.root, &name, symbols, definition)?;
+                        collapse_ranked(&entry.root, name, symbols, definition)?;
                     unresolved = remaining;
                     resolution
                 }
@@ -305,7 +314,7 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                 }
                 SymbolResolution::Ambiguous(symbols) => {
                     return Ok(Output::Ambiguous {
-                        name,
+                        name: name.clone(),
                         symbols,
                         unresolved,
                     });
@@ -326,7 +335,9 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
         Verb::Hover => "textDocument/hover",
         Verb::Impl => "textDocument/implementation",
         Verb::Callers | Verb::Callees => "textDocument/prepareCallHierarchy",
-        Verb::Symbols | Verb::Find => unreachable!("handled before position resolution"),
+        Verb::Symbols | Verb::Find => {
+            unreachable!("answered or refused before position resolution")
+        }
     };
     let mut result = request(entry, method, params)?;
     if matches!(verb, Verb::Callers | Verb::Callees) {
