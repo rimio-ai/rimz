@@ -272,6 +272,23 @@ pub fn resolve_symbol(root: &Path, name: &str, result: Value) -> Result<SymbolRe
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct DocumentKey(String);
+
+impl DocumentKey {
+    pub(super) fn new(uri: &str) -> Self {
+        let Ok(url) = url::Url::parse(uri) else {
+            return Self(uri.to_owned());
+        };
+        let canonical = url
+            .to_file_path()
+            .ok()
+            .and_then(|path| url::Url::from_file_path(path).ok())
+            .unwrap_or(url);
+        Self(canonical.into())
+    }
+}
+
 pub fn file_path(uri: &str) -> Result<PathBuf> {
     url::Url::parse(uri)
         .ok()
@@ -583,6 +600,7 @@ fn render_with_source(
     }
     match verb {
         Verb::Def | Verb::Refs | Verb::Impl => {
+            let dirty: BTreeSet<_> = dirty.iter().map(|uri| DocumentKey::new(uri)).collect();
             let mut sorted = BTreeMap::new();
             for location in locations(result)? {
                 let position = location.range.start;
@@ -596,7 +614,7 @@ fn render_with_source(
             let mut lines = Vec::new();
             for location in sorted.into_values() {
                 let mut line = position_text(root, &location.uri, location.range.start)?;
-                if dirty.contains(&location.uri) {
+                if dirty.contains(&DocumentKey::new(&location.uri)) {
                     line.push_str("  (unsaved in editor)");
                 } else if let Ok(text) = source(&location.uri, location.range.start.line) {
                     line.push_str("  ");

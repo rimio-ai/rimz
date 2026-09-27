@@ -86,6 +86,118 @@ fn diagnostics(c: &mut Clients, version: i64, empty: bool) -> Vec<Action> {
 }
 
 #[test]
+fn equivalent_uris_share_ownership_and_keep_wire_spellings() {
+    let mut c = ready();
+    let owner = "file:///a/b%40c/u.rs";
+    let other = "file:///a/b@c/u.rs";
+    for (id, uri) in [(A, owner), (B, other)] {
+        let sent = server(&frame(
+            &mut c,
+            id,
+            "textDocument/didOpen",
+            json!({"textDocument": {"uri": uri, "languageId": "rust", "version": 1, "text": "same"}}),
+        ));
+        assert_eq!(sent.len(), usize::from(id == A));
+        if id == A {
+            assert_eq!(sent[0]["params"]["textDocument"]["uri"], owner);
+        }
+    }
+    assert!(frame(&mut c, A, "textDocument/didOpen", json!({"textDocument": {"uri": other, "languageId": "rust", "version": 99, "text": "duplicate"}})).is_empty());
+    let changed = server(&frame(
+        &mut c,
+        A,
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": other, "version": 2}, "contentChanges": [{"text": "changed"}]}),
+    ));
+    assert_eq!(changed[0]["params"]["textDocument"]["uri"], owner);
+    assert_eq!(changed[0]["params"]["contentChanges"][0]["text"], "changed");
+    let saved = server(&frame(
+        &mut c,
+        A,
+        "textDocument/didSave",
+        json!({"textDocument": {"uri": other}}),
+    ));
+    assert_eq!(saved[0]["params"]["textDocument"]["uri"], owner);
+    let attached = c.attached();
+    assert_eq!(attached[0].open[0].uri, owner);
+    assert_eq!(attached[1].open[0].uri, other);
+    assert!(!attached[0].open[0].dirty);
+    assert!(!attached[1].open[0].owner);
+    let transfer = server(&frame(
+        &mut c,
+        A,
+        "textDocument/didClose",
+        json!({"textDocument": {"uri": other}}),
+    ));
+    assert_eq!(transfer.len(), 2);
+    assert_eq!(transfer[0]["method"], "textDocument/didClose");
+    assert_eq!(transfer[0]["params"]["textDocument"]["uri"], owner);
+    assert_eq!(transfer[1]["method"], "textDocument/didOpen");
+    assert_eq!(transfer[1]["params"]["textDocument"]["uri"], other);
+}
+
+#[test]
+fn diagnostics_use_holder_spellings_on_every_delivery_path() {
+    let mut c = ready();
+    let owner = "file:///a/b%40c/u.rs";
+    let other = "file:///a/b@c/u.rs";
+    let published = "file:///a/b@c/%75.rs";
+    frame(
+        &mut c,
+        A,
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": owner, "languageId": "rust", "version": 1, "text": "same"}}),
+    );
+    let publication = |version, empty| json!({"method": "textDocument/publishDiagnostics", "params": {"uri": published, "version": version, "diagnostics": if empty {json!([])} else {json!([{"message": "error"}])}}});
+    let out = c.event(Event::ServerMessage(publication(1, false)));
+    assert_eq!(recipient(&out, A)[0]["params"]["uri"], owner);
+    assert_eq!(recipient(&out, C)[0]["params"]["uri"], published);
+    let replay = frame(
+        &mut c,
+        B,
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": other, "languageId": "rust", "version": 8, "text": "same"}}),
+    );
+    assert_eq!(recipient(&replay, B)[0]["params"]["uri"], other);
+    assert_eq!(recipient(&replay, B)[0]["params"]["version"], 8);
+    let out = c.event(Event::ServerMessage(publication(1, false)));
+    assert_eq!(recipient(&out, B)[0]["params"]["uri"], other);
+    let mismatch = c.event(Event::ServerMessage(publication(99, false)));
+    assert_eq!(recipient(&mismatch, A)[0]["params"]["uri"], owner);
+    assert!(recipient(&mismatch, B).is_empty());
+    let diverged = frame(
+        &mut c,
+        B,
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": owner, "version": 9}, "contentChanges": [{"text": "different"}]}),
+    );
+    assert_eq!(recipient(&diverged, B)[0]["params"]["uri"], other);
+    assert_eq!(
+        recipient(&diverged, B)[0]["params"]["diagnostics"],
+        json!([])
+    );
+    let clear = c.event(Event::ServerMessage(publication(1, true)));
+    for (id, uri) in [(A, owner), (B, other), (C, published)] {
+        assert_eq!(recipient(&clear, id)[0]["params"]["uri"], uri);
+    }
+    for uri in ["untitled:x", "not a uri"] {
+        for id in [A, B] {
+            let sent = server(&frame(
+                &mut c,
+                id,
+                "textDocument/didOpen",
+                json!({"textDocument": {"uri": uri, "languageId": "rust", "version": 1, "text": "same"}}),
+            ));
+            assert_eq!(sent.len(), usize::from(id == A));
+        }
+        let out = c.event(Event::ServerMessage(json!({"method": "textDocument/publishDiagnostics", "params": {"uri": uri, "version": 1, "diagnostics": [{"message": "error"}]}})));
+        for id in [A, B] {
+            assert_eq!(recipient(&out, id)[0]["params"]["uri"], uri);
+        }
+    }
+}
+
+#[test]
 fn replies_and_cancellation_keep_client_identity() {
     let mut c = ready();
     for id in [A, B] {

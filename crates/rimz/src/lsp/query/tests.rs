@@ -63,6 +63,57 @@ fn dirty_locations_never_read_disk_source() {
 }
 
 #[test]
+fn document_keys_normalize_file_spellings() {
+    for (left, right) in [
+        ("file:///a/b%40c/u.rs", "file:///a/b@c/u.rs"),
+        ("file:///a/%c3%a9.rs", "file:///a/%C3%A9.rs"),
+        ("FILE:///a/u.rs", "file:///a/u.rs"),
+        ("file://localhost/a/u.rs", "file:///a/u.rs"),
+    ] {
+        assert_eq!(DocumentKey::new(left), DocumentKey::new(right));
+    }
+    let distinct = [
+        "file:///C:/u.rs",
+        "file:///c:/u.rs",
+        "untitled:x",
+        "not a uri",
+    ];
+    for left in distinct {
+        for right in distinct {
+            assert_eq!(
+                DocumentKey::new(left) == DocumentKey::new(right),
+                left == right
+            );
+        }
+    }
+}
+
+#[test]
+fn dirty_locations_match_equivalent_uri_spellings() {
+    for (dirty, location) in [
+        (
+            "file:///checkout/b%40c/lib.rs",
+            "file:///checkout/b@c/lib.rs",
+        ),
+        ("file:///checkout/%c3%a9.rs", "file:///checkout/%C3%A9.rs"),
+    ] {
+        for verb in [Verb::Def, Verb::Refs, Verb::Impl] {
+            let rendered = render_with_source(
+                verb,
+                Path::new("/checkout"),
+                None,
+                json!([{"uri": location, "range": range()}]),
+                Scope::Checkout,
+                &BTreeSet::from([dirty.to_owned()]),
+                |_, _| panic!("dirty location must not read disk"),
+            )
+            .unwrap();
+            assert!(rendered.contains("(unsaved in editor)"));
+        }
+    }
+}
+
+#[test]
 fn qualified_symbols_match_their_container() {
     let symbol = |container| json!({"name": "method", "containerName": container, "kind": 12, "location": {"uri": "file:///checkout/lib.rs", "range": range()}});
     assert!(matches!(
