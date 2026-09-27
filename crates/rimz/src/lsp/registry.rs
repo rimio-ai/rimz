@@ -12,6 +12,7 @@ use std::time::Duration;
 #[serde(transparent)]
 pub struct LaunchId(String);
 
+#[cfg(test)]
 impl From<String> for LaunchId {
     fn from(value: String) -> Self {
         Self(value)

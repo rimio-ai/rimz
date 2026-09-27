@@ -247,8 +247,7 @@ pub fn execute(
                         )?;
                         let mut containers = match containers {
                             SymbolResolution::Missing { .. } => Vec::new(),
-                            SymbolResolution::Unique(symbol) => vec![symbol],
-                            SymbolResolution::Ambiguous(symbols) => symbols,
+                            found => found.into_symbols(),
                         };
                         if containers.len() > MEMBER_CONTAINER_CAP {
                             containers.clear();
@@ -281,16 +280,9 @@ pub fn execute(
                     if members.is_empty() {
                         let (resolution, unresolved) =
                             collapse_ranked(&entry.root, name, candidates, definition)?;
-                        let symbols = match resolution {
-                            SymbolResolution::Unique(symbol) => vec![symbol],
-                            SymbolResolution::Ambiguous(symbols)
-                            | SymbolResolution::Missing {
-                                candidates: symbols,
-                            } => symbols,
-                        };
                         return Ok(Output::NotFound {
                             name: name.clone(),
-                            symbols,
+                            symbols: resolution.into_symbols(),
                             unresolved,
                         });
                     }

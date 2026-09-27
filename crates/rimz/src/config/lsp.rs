@@ -97,6 +97,22 @@ impl std::fmt::Display for LspServerKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LspPolicy {
+    #[default]
+    Optional,
+    Required,
+}
+
+fn default_wait_timeout() -> String {
+    "10m".to_owned()
+}
+
+fn default_memory_estimate() -> String {
+    "8G".to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,20 +170,4 @@ mod tests {
     fn unknown_server_kind_is_refused() {
         assert!(serde_json::from_value::<LspServerConfig>(json!({"kind":"typo","command":["ruff"],"extensions":["py"],"root-markers":["pyproject.toml"]})).is_err());
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum LspPolicy {
-    #[default]
-    Optional,
-    Required,
-}
-
-fn default_wait_timeout() -> String {
-    "10m".to_owned()
-}
-
-fn default_memory_estimate() -> String {
-    "8G".to_owned()
 }

@@ -223,12 +223,7 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
             Ok((entry, output)) => {
                 code = query_exit(code, output.exit_code());
                 if multiple && args.json {
-                    let mut value = match &output {
-                        query::Output::Answer { result, .. } => serde_json::json!({
-                            "outcome": "answer", "result": result,
-                        }),
-                        _ => query::outcome_json(root, &output)?,
-                    };
+                    let mut value = query::outcome_json(root, &output)?;
                     value["target"] = target.clone().into();
                     value["exit"] = output.exit_code().into();
                     values.push(value);
