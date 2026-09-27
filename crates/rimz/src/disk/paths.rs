@@ -231,8 +231,7 @@ impl StatePaths {
     /// Paths for a workspace known only by id: its existing dir, else the
     /// `ws-<24hex>` fallback name. Creates nothing.
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
-        let dir_name = workspace_dir_name(&workspaces_dir(), &workspace_id)?;
-        Ok(Self::under_named(workspace_id, dir_name, &rimz_home()))
+        Self::under(workspace_id, &rimz_home())
     }
 
     /// [`Self::for_workspace`] under an explicit home, for tests that should not
@@ -358,20 +357,12 @@ impl StatePaths {
     }
 
     pub fn remove_tmp_dir(&self) -> Result<()> {
-        match fs::remove_dir_all(&self.tmp_dir) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(PathErr::io(&self.tmp_dir)(source)),
-        }
+        remove_tree(&self.tmp_dir)
     }
 
     /// Remove the entire room state tree, including incompatible history.
     pub(crate) fn remove_root(&self) -> Result<()> {
-        match fs::remove_dir_all(&self.root) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(PathErr::io(&self.root)(source)),
-        }
+        remove_tree(&self.root)
     }
 }
 
@@ -550,11 +541,7 @@ pub(crate) fn is_workspace_spending_file(name: &str) -> bool {
 impl RuntimePaths {
     /// Remove the entire room runtime tree.
     pub(crate) fn remove_root(&self) -> Result<()> {
-        match fs::remove_dir_all(&self.root) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(PathErr::io(&self.root)(source)),
-        }
+        remove_tree(&self.root)
     }
 
     /// Runtime paths for a workspace known only by id, named after its state
@@ -675,18 +662,9 @@ impl RuntimePaths {
         dir_name: WorkspaceDirName,
         runtime_root: &Path,
     ) -> Result<Self> {
-        let mut paths = Self::budgeted(workspace_id, dir_name, runtime_root)?;
-        paths.persistent_shared_root = providers_cache_dir();
-        Ok(paths)
-    }
-
-    fn budgeted(
-        workspace_id: WorkspaceId,
-        dir_name: WorkspaceDirName,
-        runtime_root: &Path,
-    ) -> Result<Self> {
-        let paths = Self::under_named(workspace_id, dir_name, runtime_root);
+        let mut paths = Self::under_named(workspace_id, dir_name, runtime_root);
         SockBudget::for_sock_dir(&paths.sock_dir).validate()?;
+        paths.persistent_shared_root = providers_cache_dir();
         Ok(paths)
     }
 
@@ -906,7 +884,6 @@ impl RuntimePaths {
     /// walker. Both names discriminate every wire-visible cache version and the
     /// persistent/discovery namespace so incompatible clients elect independent
     /// owners.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shared_spending_service_socket_path(
         &self,
         protocol_version: u32,
@@ -920,7 +897,6 @@ impl RuntimePaths {
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shared_spending_service_owner_lock(
         &self,
         protocol_version: u32,
@@ -929,9 +905,14 @@ impl RuntimePaths {
         workspace_version: u32,
         namespace: &str,
     ) -> PathBuf {
-        self.shared_root.join(format!(
-            "spending.v{protocol_version}.c{cache_version}.p{provider_version}.w{workspace_version}.n{namespace}.lock"
-        ))
+        self.shared_spending_service_socket_path(
+            protocol_version,
+            cache_version,
+            provider_version,
+            workspace_version,
+            namespace,
+        )
+        .with_extension("lock")
     }
 
     pub fn shared_spending_cursor_path(&self) -> PathBuf {
@@ -1006,6 +987,14 @@ impl RuntimePaths {
         mkdir_p(&self.agent_activity_dir)?;
         mkdir_p(&self.active_time_dir)?;
         Ok(())
+    }
+}
+
+fn remove_tree(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(PathErr::io(path)(source)),
     }
 }
 

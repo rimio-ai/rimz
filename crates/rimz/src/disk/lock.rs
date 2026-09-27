@@ -48,11 +48,6 @@ impl WorkspaceLock {
         Self::acquire_with_timeout(path, LOCK_TIMEOUT)
     }
 
-    /// Acquire the lock within a caller-selected bound.
-    pub fn acquire_with_timeout(path: &Path, timeout: Duration) -> Result<Self> {
-        Self::acquire_with_deadline(path, timeout)
-    }
-
     /// Attempt acquisition without waiting for another holder.
     pub fn try_acquire(path: &Path) -> Result<Option<Self>> {
         let mut file = open_lock_file(path)?;
@@ -69,7 +64,8 @@ impl WorkspaceLock {
         }
     }
 
-    fn acquire_with_deadline(path: &Path, timeout: Duration) -> Result<Self> {
+    /// Acquire the lock within a caller-selected bound.
+    pub fn acquire_with_timeout(path: &Path, timeout: Duration) -> Result<Self> {
         let mut file = open_lock_file(path)?;
 
         let started = Instant::now();
