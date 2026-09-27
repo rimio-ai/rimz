@@ -42,25 +42,10 @@ pub struct ReplyRequest {
 
 #[derive(Clone, Debug)]
 pub enum DispatchMode {
-    Interrupt {
-        enter: bool,
-        force: bool,
-        auto_compact: Option<AutoCompact>,
-    },
-    Steer {
-        enter: bool,
-        force: bool,
-        /// An explicit threshold for this dispatch; `None` inherits the
-        /// `[harness] smart_compact` machine default in [`dispatch`].
-        auto_compact: Option<AutoCompact>,
-    },
+    Interrupt,
+    Steer,
     Boundary {
-        enter: bool,
         gate: DeliveryGate,
-        force: bool,
-        /// An explicit threshold for this dispatch; `None` inherits the
-        /// `[harness] smart_compact` machine default in [`dispatch`].
-        auto_compact: Option<AutoCompact>,
         not_before: Option<Timestamp>,
         after: Vec<String>,
         when: Vec<WhenRequest>,
@@ -71,45 +56,23 @@ impl DispatchMode {
     pub fn kind(&self) -> DeliveryKind {
         match self {
             Self::Boundary { .. } => DeliveryKind::Boundary,
-            Self::Steer { .. } => DeliveryKind::Steer,
-            Self::Interrupt { .. } => DeliveryKind::Interrupt,
+            Self::Steer => DeliveryKind::Steer,
+            Self::Interrupt => DeliveryKind::Interrupt,
         }
     }
 
     fn gate(&self) -> DeliveryGate {
         match self {
-            Self::Steer { .. } | Self::Interrupt { .. } => DeliveryGate::Any,
+            Self::Steer | Self::Interrupt => DeliveryGate::Any,
             Self::Boundary { gate, .. } => *gate,
         }
     }
 
-    fn force(&self) -> bool {
-        match self {
-            Self::Steer { force, .. }
-            | Self::Interrupt { force, .. }
-            | Self::Boundary { force, .. } => *force,
-        }
-    }
-
-    fn resolve_auto_compact(&mut self, default: Option<AutoCompact>) {
-        let auto_compact = match self {
-            Self::Steer { auto_compact, .. }
-            | Self::Interrupt { auto_compact, .. }
-            | Self::Boundary { auto_compact, .. } => auto_compact,
-        };
-        *auto_compact = (*auto_compact).or(default);
-    }
-
     fn needs_agent_context(&self) -> bool {
         match self {
-            Self::Interrupt { .. } => true,
-            Self::Steer { auto_compact, .. } => auto_compact.is_some(),
-            Self::Boundary {
-                auto_compact,
-                after,
-                when,
-                ..
-            } => auto_compact.is_some() || !after.is_empty() || !when.is_empty(),
+            Self::Interrupt => true,
+            Self::Steer => false,
+            Self::Boundary { after, when, .. } => !after.is_empty() || !when.is_empty(),
         }
     }
 }
@@ -125,6 +88,11 @@ pub struct DispatchRequest {
     pub allow_fanout: bool,
     pub reply: Option<ReplyRequest>,
     pub mux: Option<MuxName>,
+    pub enter: bool,
+    pub force: bool,
+    /// An explicit threshold for this dispatch; `None` inherits the
+    /// `[harness] smart_compact` machine default in [`dispatch`].
+    pub auto_compact: Option<AutoCompact>,
     pub mode: DispatchMode,
 }
 
@@ -257,18 +225,19 @@ pub fn dispatch(
     store: &Store,
     mut request: DispatchRequest,
 ) -> Result<DispatchResult> {
-    request.mode.resolve_auto_compact(
-        crate::config::MachineConfig::load_lenient()
+    request.auto_compact = request
+        .auto_compact
+        .or(crate::config::MachineConfig::load_lenient()
             .harness
-            .smart_compact,
-    );
+            .smart_compact);
     let boundary = request.mode.kind() == DeliveryKind::Boundary;
     let pending = if boundary {
         store.list_messages()?
     } else {
         Vec::new()
     };
-    let needs_context = request.mode.needs_agent_context()
+    let needs_context = request.auto_compact.is_some()
+        || request.mode.needs_agent_context()
         || matches!(request.sender, MessageSender::Agent { .. })
         || request.reply.is_some();
     let agent_context =
@@ -283,7 +252,7 @@ pub fn dispatch(
             request.current_channel.as_deref(),
             &pending,
             request.mode.gate(),
-            request.mode.force(),
+            request.force,
         )
     });
     let mut snapshot = if rollup_only {
@@ -329,14 +298,7 @@ pub fn dispatch(
         });
     }
 
-    let mode = prepare_mode(
-        request.mode,
-        &resolution,
-        &targets,
-        &pending,
-        &request.sender,
-        request.automated,
-    )?;
+    let mode = prepare_mode(&request, &resolution, &targets, &pending)?;
     let reply_join = request.reply.as_ref().map(|reply| reply.join);
     let reply_preparation = request
         .reply
@@ -631,14 +593,12 @@ impl ResolutionView<'_> {
 }
 
 fn prepare_mode(
-    mode: DispatchMode,
+    request: &DispatchRequest,
     resolution: &ResolutionView<'_>,
     recipients: &[ResolvedTarget],
     pending: &[MessageRecord],
-    sender: &MessageSender,
-    automated: bool,
 ) -> Result<PreparedMode> {
-    let kind = mode.kind();
+    let kind = request.mode.kind();
     if kind == DeliveryKind::Interrupt {
         for target in recipients {
             let label = target.label(resolution.snapshot);
@@ -659,60 +619,36 @@ fn prepare_mode(
             .ok_or_else(|| DispatchErr::NoDurableSession {
                 label: label.clone(),
             })?;
-            if !mode.force() && agent.effective_status() == AgentStatus::Waiting {
+            if !request.force && agent.effective_status() == AgentStatus::Waiting {
                 return Err(DispatchErr::WaitingOnInput { label });
             }
         }
     }
-    match mode {
-        DispatchMode::Steer {
-            enter,
-            force,
-            auto_compact,
-        }
-        | DispatchMode::Interrupt {
-            enter,
-            force,
-            auto_compact,
-        } => Ok(PreparedMode {
-            kind,
-            draft: MessageDraft {
-                body: MessageBody::Prompt,
-                enter,
-                gate: DeliveryGate::Any,
-                sender: sender.clone(),
-                automated,
-                force,
-                auto_compact,
-                not_before: None,
-                after: Vec::new(),
-                when: Vec::new(),
-            },
-        }),
+    let gate = request.mode.gate();
+    let (not_before, after, when) = match &request.mode {
         DispatchMode::Boundary {
-            enter,
-            gate,
-            force,
-            auto_compact,
             not_before,
             after,
             when,
-        } => Ok(PreparedMode {
-            kind: DeliveryKind::Boundary,
-            draft: MessageDraft {
-                body: MessageBody::Prompt,
-                enter,
-                gate,
-                sender: sender.clone(),
-                automated,
-                force,
-                auto_compact,
-                not_before,
-                after: resolve_after(resolution, recipients, &after, gate, pending)?,
-                when: resolve_when(resolution, &when)?,
-            },
-        }),
-    }
+            ..
+        } => (*not_before, after.as_slice(), when.as_slice()),
+        _ => (None, &[][..], &[][..]),
+    };
+    Ok(PreparedMode {
+        kind,
+        draft: MessageDraft {
+            body: MessageBody::Prompt,
+            enter: request.enter,
+            gate,
+            sender: request.sender.clone(),
+            automated: request.automated,
+            force: request.force,
+            auto_compact: request.auto_compact,
+            not_before,
+            after: resolve_after(resolution, recipients, after, gate, pending)?,
+            when: resolve_when(resolution, when)?,
+        },
+    })
 }
 
 fn resolve_after(

@@ -332,18 +332,10 @@ fn execute_prepared_delivery(
         "queueing loop wake-up"
     );
     let mode = if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWait {
-        rimz::message::dispatch::DispatchMode::Steer {
-            enter: true,
-            force: false,
-            auto_compact: None,
-        }
+        rimz::message::dispatch::DispatchMode::Steer
     } else {
         rimz::message::dispatch::DispatchMode::Boundary {
-            enter: true,
             gate: DeliveryGate::Done,
-            force: false,
-            // Domain dispatch resolves this from [harness] smart_compact.
-            auto_compact: None,
             not_before: None,
             after: Vec::new(),
             when: Vec::new(),
@@ -364,6 +356,10 @@ fn execute_prepared_delivery(
             allow_fanout: false,
             reply: None,
             mux: globals.mux,
+            enter: true,
+            force: false,
+            // Domain dispatch resolves this from [harness] smart_compact.
+            auto_compact: None,
             mode,
         },
     );

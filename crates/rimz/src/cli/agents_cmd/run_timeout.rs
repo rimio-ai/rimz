@@ -46,11 +46,10 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
                     allow_fanout: false,
                     reply: None,
                     mux: globals.mux,
-                    mode: rimz::message::dispatch::DispatchMode::Steer {
-                        enter: true,
-                        force: false,
-                        auto_compact: None,
-                    },
+                    enter: true,
+                    force: false,
+                    auto_compact: None,
+                    mode: rimz::message::dispatch::DispatchMode::Steer,
                 },
             );
             match outcome {
