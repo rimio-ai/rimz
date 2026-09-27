@@ -21,6 +21,32 @@ fn cursor_compatibility_hooks_are_quarantined() {
 }
 
 #[test]
+fn cursor_quarantine_keeps_blocking_tools_out_of_the_catalog_ask() {
+    let mut payload = json!({
+        "cursor_version": "1.7.0",
+        "session_id": "sess-1",
+        "tool_name": "AskUserQuestion",
+        "tool_use_id": "toolu_q"
+    });
+    let output = hook_output(&ClaudeAdapter, "PreToolUse", &payload);
+    assert_eq!(output.class(), AgentHookClass::Unknown);
+    assert_eq!(output.ask_kind(), None);
+    assert!(matches!(
+        output.lifecycle().map(|observation| &observation.signal),
+        Some(LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question,
+            native_key: Some(key),
+            ..
+        }) if key == "toolu_q"
+    ));
+
+    payload.as_object_mut().unwrap().remove("cursor_version");
+    let output = hook_output(&ClaudeAdapter, "PreToolUse", &payload);
+    assert_eq!(output.class(), AgentHookClass::AwaitingUser);
+    assert_eq!(output.ask_kind(), Some(AskKind::Question));
+}
+
+#[test]
 fn final_message_fallback_reads_only_at_output_checkpoints() {
     use std::cell::Cell;
 
