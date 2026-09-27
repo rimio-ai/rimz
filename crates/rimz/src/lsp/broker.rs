@@ -98,6 +98,20 @@ impl Shared {
 
 impl Model {
     fn stop(&mut self, reason: StopReason) {
+        // A hand stop acknowledges an alarm once serve has recorded the
+        // lifetime's end (it clears the transport under the lock it reads the
+        // reason with): only the reason changes, and nothing waiting on a stop
+        // is woken. During teardown it is a no-op, as for any dormant entry.
+        if let State::Dormant {
+            reason: Some(dormant @ (StopReason::Crashed | StopReason::MemoryPressure)),
+            ..
+        } = &mut self.entry.state
+            && reason == StopReason::StoppedByHand
+            && self.transport.is_none()
+        {
+            *dormant = reason;
+            return;
+        }
         if matches!(self.entry.state, State::Stopped { .. })
             || (!reason.is_terminal() && matches!(self.entry.state, State::Dormant { .. }))
         {
@@ -643,5 +657,83 @@ mod tests {
         }
         assert!(!crate::proc::process_is_live(pid, None));
         assert!(!crate::proc::process_is_live(child, Some(&token)));
+    }
+
+    fn dormant_model(reason: Option<StopReason>) -> Model {
+        let entry: Entry = serde_json::from_value(serde_json::json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": {"dormant": {"since_ms": 42, "reason": reason}}, "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
+        Model {
+            entry,
+            lifecycle: Lifecycle::default(),
+            readiness: Readiness::default(),
+            transport: None,
+            request_phase: RequestPhase::Serving,
+            start_requested: false,
+            refusal_epoch: 0,
+            stop_epoch: 0,
+            refusal: None,
+            lifetime_peak_kb: 0,
+            dormant_ms: None,
+        }
+    }
+
+    #[test]
+    fn hand_stop_acknowledges_a_dormant_crash_or_memory_pressure() {
+        for (dormant, stop, expected) in [
+            (
+                Some(StopReason::Crashed),
+                StopReason::StoppedByHand,
+                Some(StopReason::StoppedByHand),
+            ),
+            (
+                Some(StopReason::MemoryPressure),
+                StopReason::StoppedByHand,
+                Some(StopReason::StoppedByHand),
+            ),
+            (
+                Some(StopReason::Crashed),
+                StopReason::Idle,
+                Some(StopReason::Crashed),
+            ),
+            (
+                Some(StopReason::Idle),
+                StopReason::StoppedByHand,
+                Some(StopReason::Idle),
+            ),
+            (
+                Some(StopReason::Evicted),
+                StopReason::StoppedByHand,
+                Some(StopReason::Evicted),
+            ),
+            (None, StopReason::StoppedByHand, None),
+        ] {
+            let mut model = dormant_model(dormant);
+            model.stop(stop);
+            assert_eq!(
+                model.entry.state,
+                State::Dormant {
+                    since_ms: 42,
+                    reason: expected
+                },
+                "{stop} on dormant {dormant:?}"
+            );
+            assert_eq!(model.stop_epoch, 0, "a dormant entry has nothing to stop");
+        }
+        let mut tearing_down = dormant_model(Some(StopReason::Crashed));
+        tearing_down.transport = Some(Transport::start(
+            std::io::empty(),
+            Vec::<u8>::new(),
+            Value::Null,
+            Value::Null,
+            mpsc::channel().0,
+        ));
+        tearing_down.stop(StopReason::StoppedByHand);
+        assert_eq!(
+            tearing_down.entry.state,
+            State::Dormant {
+                since_ms: 42,
+                reason: Some(StopReason::Crashed)
+            },
+            "serve has yet to record the crash while the lifetime tears down"
+        );
     }
 }

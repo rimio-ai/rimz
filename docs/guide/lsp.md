@@ -117,7 +117,7 @@ A server can free its memory while agents remain:
 - **You stop it.** Run `rimz lsp stop --server rust` from the checkout, or `rimz lsp stop --all` for the machine. The server becomes `dormant: stopped by hand`; the next query can restart it.
 - **Another query needs the memory.** Admission can evict an older, idle server to make room, leaving it `dormant: evicted`.
 - **Memory runs short.** Every broker samples free memory every five seconds. Below 5% of RAM, one broker stops servers in least-recently-queried order until memory recovers, without the age protections used for admission. The victim's whole process group goes, including any `cargo` children, and a record lands in `~/.rimz/logs/lsp.log.jsonl`. Servers carry a high `oom_score_adj` so the kernel favors them over agents if it acts first.
-- **The server crashes.** The broker records the crash and becomes dormant, ready for a later query to retry.
+- **The server crashes.** The broker records the crash and becomes dormant, ready for a later query to retry. Until then `rimz lsp list` and `rimz doctor` show it as `dormant: crashed`; run `rimz lsp stop` to acknowledge it, which turns the entry into `dormant: stopped by hand`. A `dormant: memory pressure` entry clears the same way.
 
 Each restart checks memory again; `RESTARTS` counts starts after a stop, not the first lazy start. The entry remains available while agents or attached editors hold leases. Once the last one leaves, a 60-second grace lets a replacement rejoin before the broker exits, even if dormant. Removing the checkout ends its broker too. To turn sharing off for future launches, remove the `[lsp.servers.<name>]` table; Claude's native tool is then no longer denied. Existing agents keep their leases until they exit.
 
