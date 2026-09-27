@@ -203,13 +203,8 @@ impl Store {
 /// stamp when it did.
 fn claim_rotation(paths: &StatePaths, rotation_threshold: u64) -> bool {
     let stamp = paths.cache_dir.join(AUTO_ROTATE_STAMP);
-    let due = std::fs::metadata(&paths.events_log)
-        .is_ok_and(|metadata| metadata.len() >= rotation_threshold)
-        && debounce::stamp_due(&stamp, AUTO_ROTATE_DEBOUNCE);
-    if due {
-        debounce::touch_stamp(&stamp);
-    }
-    due
+    std::fs::metadata(&paths.events_log).is_ok_and(|metadata| metadata.len() >= rotation_threshold)
+        && debounce::claim(&stamp, AUTO_ROTATE_DEBOUNCE)
 }
 
 fn lifecycle_transition(
