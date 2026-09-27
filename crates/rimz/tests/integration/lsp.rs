@@ -905,7 +905,62 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
                 "src/deep/pathed.rs:1:1\n"
             });
     }
-    env.rimz().args(["lsp", "def", "wrong::pathed"]).assert().code(5).stderr("").stdout("not found: wrong::pathed; 1 symbol named pathed:\nfunction deep::pathed::pathed  src/deep/pathed.rs:1:1\n");
+    for (verb, method) in [
+        ("def", "textDocument/definition"),
+        ("refs", "textDocument/references"),
+        ("hover", "textDocument/hover"),
+        ("impl", "textDocument/implementation"),
+        ("callers", "textDocument/prepareCallHierarchy"),
+        ("callees", "textDocument/prepareCallHierarchy"),
+    ] {
+        env.rimz()
+            .args(["lsp", verb, "Type::field"])
+            .assert()
+            .success();
+        let trace = query("requests");
+        let requests = trace["result"]["requests"].as_array().unwrap();
+        let navigation = &requests[requests.len() - 2];
+        assert_eq!(navigation["method"], method);
+        assert_eq!(
+            navigation["params"]["position"],
+            json!({"line":1,"character":0})
+        );
+        assert_eq!(
+            navigation["params"]["textDocument"]["uri"],
+            format!("file://{}/lib.rs", env.project_root.display())
+        );
+    }
+    for name in ["Type::nosuch", "Type::method", "Wrong::field", "field"] {
+        env.rimz()
+            .args(["lsp", "def", name])
+            .assert()
+            .code(5)
+            .stdout(format!("not found: {name}\n"));
+    }
+    env.rimz().args(["lsp", "def", "TwinType::field"]).assert().code(6).stdout("ambiguous: 2 symbols named TwinType::field; rerun with one of these names or a position\nfield a::TwinType::field  a/lib.rs:2:1\nfield b::TwinType::field  b/lib.rs:2:1\n");
+    let outline_requests = || {
+        query("requests")["result"]["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|request| request["method"] == "textDocument/documentSymbol")
+            .count()
+    };
+    let outlines_before = outline_requests();
+    env.rimz()
+        .args(["lsp", "def", "BroadType::field"])
+        .assert()
+        .code(5)
+        .stdout("not found: BroadType::field\n");
+    assert_eq!(outline_requests(), outlines_before);
+    for name in [
+        "a::TwinType::field",
+        "b::TwinType::field",
+        "UniqueMember::field",
+    ] {
+        env.rimz().args(["lsp", "def", name]).assert().success();
+    }
+    env.rimz().args(["lsp", "def", "wrong::pathed"]).assert().code(5).stderr("").stdout("not found: wrong::pathed; 1 other symbol named pathed:\nfunction deep::pathed::pathed  src/deep/pathed.rs:1:1\n");
     env.rimz()
         .args(["lsp", "def", "nosuch"])
         .assert()

@@ -6,6 +6,89 @@ fn range() -> Value {
 }
 
 #[test]
+fn outline_members_use_selection_positions_and_direct_children() {
+    let node = |name, kind, line, children| json!({"name":name,"kind":kind,"range":range(),"selectionRange":{"start":{"line":line,"character":0},"end":{"line":line,"character":4}},"children":children});
+    let outline = json!([
+        node(
+            "Type",
+            23,
+            3,
+            json!([node(
+                "field",
+                8,
+                4,
+                json!([node("grandchild", 8, 5, json!([]))])
+            )])
+        ),
+        node("impl Type", 19, 6, json!([node("method", 6, 7, json!([]))])),
+        node(
+            "Enum",
+            10,
+            8,
+            json!([node(
+                "Variant",
+                22,
+                9,
+                json!([node("field", 8, 10, json!([]))])
+            )])
+        )
+    ]);
+    for (name, parent, line, member_line, qualified) in [
+        ("Type", None, 3, 4, "module::Type::field"),
+        (
+            "Variant",
+            Some("Enum"),
+            9,
+            10,
+            "module::Enum::Variant::field",
+        ),
+    ] {
+        let container: SymbolInformation = serde_json::from_value(json!({"name":name,"kind":23,"containerName":parent,"location":{"uri":"file:///checkout/src/module.rs","range":{"start":{"line":line,"character":0},"end":{"line":line,"character":4}}}})).unwrap();
+        let members = outline_members(
+            &container,
+            "field",
+            &serde_json::from_value(outline.clone()).unwrap(),
+        );
+        assert_eq!(members.len(), 1);
+        assert_eq!(
+            members[0].location.range.start,
+            Position {
+                line: member_line,
+                character: 0
+            }
+        );
+        assert!(
+            render_ambiguous(Path::new("/checkout"), "field", &members)
+                .unwrap()
+                .contains(&format!(
+                    "field {qualified}  src/module.rs:{}:1",
+                    member_line + 1
+                ))
+        );
+        assert!(matches!(
+            resolve_symbol(
+                Path::new("/checkout"),
+                qualified,
+                serde_json::to_value(&members).unwrap()
+            )
+            .unwrap(),
+            SymbolResolution::Unique(_)
+        ));
+        for missing in ["grandchild", "method", "nosuch"] {
+            assert!(
+                outline_members(
+                    &container,
+                    missing,
+                    &serde_json::from_value(outline.clone()).unwrap()
+                )
+                .is_empty()
+            );
+        }
+        assert!(outline_members(&container, "field", &Symbols::Flat(members)).is_empty());
+    }
+}
+
+#[test]
 fn configured_but_absent_server_has_neutral_reason() {
     let config = serde_json::from_value(serde_json::json!({"command": ["server"], "extensions": ["rs"], "root-markers": ["Cargo.toml"]})).unwrap();
     let error = select(
@@ -238,7 +321,7 @@ fn lookup_outcomes_render_qualified_reusable_candidates() {
         symbols: symbols.clone(),
     };
     insta::assert_snapshot!(render_outcome(root, &missing, false).unwrap(), @"
-    not found: launch_git::read; 2 symbols named read:
+    not found: launch_git::read; 2 other symbols named read:
     function Container::read  /outside/lib.rs:2:3
     function harness::launch_env::read  src/harness/launch_env.rs:2:3
     ");
@@ -343,7 +426,7 @@ fn not_found_candidates_collapse_re_exports_to_their_definition() {
         symbols,
     };
     insta::assert_snapshot!(render_outcome(Path::new("/checkout"), &missing, false).unwrap(), @"
-    not found: wrong::Store; 1 symbol named Store:
+    not found: wrong::Store; 1 other symbol named Store:
     struct store::Store  src/store/mod.rs:2:3
     ");
 }

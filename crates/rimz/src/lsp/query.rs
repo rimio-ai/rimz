@@ -135,6 +135,40 @@ pub enum SymbolResolution {
     Ambiguous(Vec<SymbolInformation>),
 }
 
+fn outline_members(
+    container: &SymbolInformation,
+    name: &str,
+    outline: &Symbols,
+) -> Vec<SymbolInformation> {
+    let Symbols::Tree(nodes) = outline else {
+        return Vec::new();
+    };
+    let mut pending: Vec<_> = nodes.iter().collect();
+    while let Some(node) = pending.pop() {
+        if node.selection_range.start == container.location.range.start {
+            let mut path = container_path(container);
+            path.push(container.name.clone());
+            let container_name = path.join("::");
+            return node
+                .children
+                .iter()
+                .filter(|child| child.name == name)
+                .map(|child| SymbolInformation {
+                    name: child.name.clone(),
+                    kind: child.kind,
+                    location: Location {
+                        uri: container.location.uri.clone(),
+                        range: child.selection_range,
+                    },
+                    container_name: Some(container_name.clone()),
+                })
+                .collect();
+        }
+        pending.extend(&node.children);
+    }
+    Vec::new()
+}
+
 fn collapse_symbols(
     symbols: Vec<SymbolInformation>,
     mut definition: impl FnMut(&Location) -> std::result::Result<Vec<Location>, QueryErr>,
@@ -458,7 +492,7 @@ pub fn render_outcome(root: &Path, output: &Output, json: bool) -> Result<String
             format!("not found: {name}")
         } else {
             format!(
-                "not found: {name}; {count} {} named {last}:",
+                "not found: {name}; {count} other {} named {last}:",
                 if count == 1 { "symbol" } else { "symbols" }
             )
         }

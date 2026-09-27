@@ -5,6 +5,10 @@ use crate::lsp::registry::{self, Entry, State};
 use serde_json::json;
 use std::time::Duration;
 
+/// A qualifier matching more symbols than this skips the member fallback: each match costs an
+/// outline request, and a broad qualifier like `tests` matches hundreds of modules.
+const MEMBER_CONTAINER_CAP: usize = 20;
+
 pub enum Output {
     Answer {
         result: Value,
@@ -167,17 +171,61 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                     }),
                 )?)?)
             };
-            let symbols = match resolution {
+            let resolution = match resolution {
                 SymbolResolution::Missing { candidates } => {
-                    return Ok(Output::NotFound {
-                        name,
-                        symbols: collapse_candidates(candidates, definition)?,
-                    });
+                    let mut qualifier = name_segments(&name);
+                    let member = qualifier.pop().unwrap_or_default();
+                    let mut members = Vec::new();
+                    if !qualifier.is_empty() {
+                        let containers = resolve_symbol(
+                            &entry.root,
+                            &qualifier.join("::"),
+                            request(
+                                entry,
+                                "workspace/symbol",
+                                json!({"query": qualifier.last()}),
+                            )?,
+                        )?;
+                        let mut containers = match containers {
+                            SymbolResolution::Missing { .. } => Vec::new(),
+                            SymbolResolution::Unique(symbol) => vec![symbol],
+                            SymbolResolution::Ambiguous(symbols) => symbols,
+                        };
+                        if containers.len() > MEMBER_CONTAINER_CAP {
+                            containers.clear();
+                        }
+                        containers.sort_by(|a, b| a.location.uri.cmp(&b.location.uri));
+                        for group in containers.chunk_by(|a, b| a.location.uri == b.location.uri) {
+                            let outline = request(
+                                entry,
+                                "textDocument/documentSymbol",
+                                json!({"textDocument": {"uri": group[0].location.uri}}),
+                            )?;
+                            if outline.is_null() {
+                                continue;
+                            }
+                            let outline: Symbols =
+                                serde_json::from_value(outline).map_err(LspErr::from)?;
+                            for container in group {
+                                members.extend(outline_members(container, &member, &outline));
+                            }
+                        }
+                    }
+                    if members.is_empty() {
+                        return Ok(Output::NotFound {
+                            name,
+                            symbols: collapse_candidates(candidates, definition)?,
+                        });
+                    }
+                    if members.len() == 1 {
+                        SymbolResolution::Unique(members.remove(0))
+                    } else {
+                        SymbolResolution::Ambiguous(members)
+                    }
                 }
-                SymbolResolution::Unique(symbol) => vec![symbol],
-                SymbolResolution::Ambiguous(symbols) => symbols,
+                SymbolResolution::Unique(symbol) => collapse_symbols(vec![symbol], definition)?,
+                SymbolResolution::Ambiguous(symbols) => collapse_symbols(symbols, definition)?,
             };
-            let resolution = collapse_symbols(symbols, definition)?;
             match resolution {
                 SymbolResolution::Missing { .. } => {
                     unreachable!("collapse_symbols receives a nonempty match set")
