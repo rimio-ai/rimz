@@ -81,8 +81,6 @@ rimz lsp find Mux                            # workspace symbol search
 
 A name that matches several symbols lists the candidates instead of guessing; rerun with one of the listed qualified names or its position. A wrong qualifier lists possible names the same way, so you can repair the query in one rerun. `refs`, `impl`, `callers`, `callees`, and `find` list only results inside the checkout and end with how many were left out, if any; `--external` shows them. Add `--json` for structured output (the raw LSP result on success, an outcome and candidates for not-found or ambiguous names), and `--server <name>` when a checkout has more than one server and the file's extension does not settle it. The checkout is the one enclosing your current directory (or `--root`). Everything about targets, output, and flags is in the [reference](../reference/cli/lsp.md#queries).
 
-With ty, target Python methods by position, for example `rimz lsp def src/app.py:12:22`: a name such as `Greeter::greet` lists every same-named method as a candidate instead of resolving the class.
-
 When tracing several symbols, pass them together to the same verb rather than making one call per name; each gets a `==> TARGET <==` block, even when another target fails.
 
 Broad queries can return hundreds of locations. Lists show the first 50, with the total and remaining count whenever there are more. Add `--limit N` for a larger head or `--all` for the complete list in the selected scope. References, implementations, callers, and callees group entries by file; `find` keeps its relevance order. Checkout results come before external ones. Source snippets stop at 100 characters with `…` when shortened. JSON stays complete and cannot be combined with either limit flag.

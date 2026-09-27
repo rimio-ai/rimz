@@ -144,30 +144,48 @@ fn outline_members(
     let Symbols::Tree(nodes) = outline else {
         return Vec::new();
     };
+    let mut all = Vec::new();
     let mut pending: Vec<_> = nodes.iter().collect();
     while let Some(node) = pending.pop() {
-        if node.selection_range.start == container.location.range.start {
-            let mut path = container_path(container);
-            path.push(container.name.clone());
-            let container_name = path.join("::");
-            return node
-                .children
-                .iter()
-                .filter(|child| child.name == name)
-                .map(|child| SymbolInformation {
-                    name: child.name.clone(),
-                    kind: child.kind,
-                    location: Location {
-                        uri: container.location.uri.clone(),
-                        range: child.selection_range,
-                    },
-                    container_name: Some(container_name.clone()),
-                })
-                .collect();
-        }
+        all.push(node);
         pending.extend(&node.children);
     }
-    Vec::new()
+    // rust-analyzer's `workspace/symbol` range is the container's name, so its
+    // start is the outline node's selection start. ty's range is the whole
+    // declaration: the node is then the first same-named one whose name falls
+    // inside it, which is the declaration's own name, not a nested namesake's.
+    let range = container.location.range;
+    let node = all
+        .iter()
+        .find(|node| node.selection_range.start == range.start)
+        .or_else(|| {
+            all.iter()
+                .filter(|node| {
+                    node.name == container.name
+                        && range.start <= node.selection_range.start
+                        && node.selection_range.start < range.end
+                })
+                .min_by_key(|node| node.selection_range.start)
+        });
+    let Some(node) = node else {
+        return Vec::new();
+    };
+    let mut path = container_path(container);
+    path.push(container.name.clone());
+    let container_name = path.join("::");
+    node.children
+        .iter()
+        .filter(|child| child.name == name)
+        .map(|child| SymbolInformation {
+            name: child.name.clone(),
+            kind: child.kind,
+            location: Location {
+                uri: container.location.uri.clone(),
+                range: child.selection_range,
+            },
+            container_name: Some(container_name.clone()),
+        })
+        .collect()
 }
 
 fn collapse_symbols(

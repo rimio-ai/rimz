@@ -1157,3 +1157,44 @@ fn editor_positions_are_one_based_and_symbols_are_not_guessed() {
         Target::Symbol("Type::method".into())
     );
 }
+
+#[test]
+fn outline_members_find_a_container_whose_range_is_the_whole_declaration() {
+    let span = |line, start, end| json!({"start":{"line":line,"character":start},"end":{"line":line,"character":end}});
+    let node = |name, kind, line, start, children| json!({"name":name,"kind":kind,"range":span(line, 0, 30),"selectionRange":span(line, start, start + 7),"children":children});
+    // class Greeter:          (line 0)
+    //     def greet(self)     (line 1)
+    //     class Greeter:      (line 3)
+    //         def greet(self) (line 4)
+    // class Other:            (line 6)
+    //     def greet(self)     (line 7)
+    let outline: Symbols = serde_json::from_value(json!([
+        node(
+            "Greeter",
+            5,
+            0,
+            6,
+            json!([
+                node("greet", 6, 1, 8, json!([])),
+                node(
+                    "Greeter",
+                    5,
+                    3,
+                    10,
+                    json!([node("greet", 6, 4, 12, json!([]))])
+                )
+            ])
+        ),
+        node("Other", 5, 6, 6, json!([node("greet", 6, 7, 8, json!([]))]))
+    ]))
+    .unwrap();
+    for (start, end, parent, member_line) in [
+        ((0, 0), (5, 0), None, 1),
+        ((3, 4), (5, 0), Some("Greeter"), 4),
+    ] {
+        let container: SymbolInformation = serde_json::from_value(json!({"name":"Greeter","kind":5,"containerName":parent,"location":{"uri":"file:///checkout/app.py","range":{"start":{"line":start.0,"character":start.1},"end":{"line":end.0,"character":end.1}}}})).unwrap();
+        let members = outline_members(&container, "greet", &outline);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].location.range.start.line, member_line);
+    }
+}
