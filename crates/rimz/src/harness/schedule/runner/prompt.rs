@@ -42,10 +42,10 @@ pub(super) fn compose_wait(
             .as_ref()
             .is_some_and(|watch| !watch.verdict.is_terminal())
     {
-        let delay = task.timeout.as_deref().unwrap_or("30m");
-        body.push_str(&format!(
-            "\n\nStop it: rimz wait cancel {name}\nAnother check-in: rimz wait --in {delay}"
-        ));
+        body.push_str(&format!("\n\nStop it: rimz wait cancel {name}"));
+        if let Some(delay) = &task.timeout {
+            body.push_str(&format!("\nAnother check-in: rimz wait --in {delay}"));
+        }
     }
     if !note.is_empty() {
         body.push_str("\n\n");

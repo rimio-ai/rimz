@@ -12,7 +12,7 @@ rimz wait --file build.log                  # any file change
 rimz wait --file build.log --grep 'READY'   # a new matching line
 rimz wait -- gh run watch --exit-status     # a watched command
 rimz wait --on fail -- cargo test           # deliver only if the command fails
-rimz wait --timeout 1h -- cargo build       # check in after 1h instead of 30m
+rimz wait --timeout 1h -- cargo build       # request a check-in after 1h
 rimz wait list                              # pending waits (bare `rimz wait` does the same)
 rimz wait cancel wait-bold-comet
 rimz wait cancel --all
@@ -34,12 +34,12 @@ Give exactly one trigger: `--in`, `--pid`, `--check`, `--file`, or a command aft
 | `--file <PATH>` | file | Wait for a change in existence, size, or modification time. |
 | `--grep <PATTERN>` | file only | Wait for a new newline-terminated line containing this literal, case-sensitive pattern. |
 | `--on fail\|success\|any` | check or command | Default `success` for a check, `any` for a command. A check refuses `any`. |
-| `--timeout <DURATION>` | every trigger except timer | When to send one check-in. Default `30m`, greater than zero and less than `24h`. The watch continues; commands are never killed. |
+| `--timeout <DURATION>` | every trigger except timer | When to send one check-in. No default check-in with cache keepalive enabled and a known provider TTL; otherwise `30m`. Explicit durations must be greater than zero and less than `24h`. The watch continues; commands are never killed. |
 | `--json` | all | Print the receipt as JSON. |
 
 Durations take `s`, `m`, `h`, or `d` units (`90s`, `30m`, `1h`).
 
-While an agent sleeps with waits pending, RimZ sends a neutral prompt-cache keepalive shortly before its provider TTL expires. One ping lists all pending waits, including timers, with their elapsed times when known. Pings recur after each completed ping turn, with no cap or instructions. The [configuration guide](../../guide/configuration.md) sets the switch and provider TTLs; delivery is best-effort and does not replace a wait's final wake.
+While an agent sleeps with waits pending, RimZ sends a neutral prompt-cache keepalive shortly before its provider TTL expires. One ping lists all pending waits, including timers, with their elapsed times when known. Pings recur after each completed ping turn, with no cap or instructions. The [configuration guide](../../guide/configuration.md) sets the switch and provider TTLs; delivery is best-effort and does not replace a wait's final wake. A ping missed in its window (no running sidebar, a suspended machine) is skipped, and no further pings come until the agent's next turn. With a known TTL and no `--timeout`, a wait on a command that never exits therefore stays silent; pass `--timeout` to get a check-in.
 
 Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the workspace (a collision appends `-<N>`). The receipt names the wait, its trigger, and its target, then lists every pending row for the caller:
 
@@ -124,7 +124,7 @@ An outcome `--on` filters out records `skipped` in the loop history and retires 
 
 ### Check-ins: `--timeout`
 
-`--timeout` sets when a pending process, command, check, or file watch checks in; it never kills anything. RimZ sends one check-in message, including the output file's summary when non-empty, keeps watching, and delivers the final verdict later. The check-in ignores `--on`, happens once per wait, and leaves the wait pending. Polled watches evaluate it between probes. The default is `30m` and does not follow `loop.default-timeout`.
+`--timeout` sets when a pending process, command, check, or file watch checks in; it never kills anything. RimZ sends one check-in message, including the output file's summary when non-empty, keeps watching, and delivers the final verdict later. The check-in ignores `--on`, happens once per wait, and leaves the wait pending. Polled watches evaluate it between probes. At arm time, a known provider TTL with `harness.cache_keepalive = true` suppresses the default check-in because keepalive pings replace it. An explicit `--timeout` always wins. With no TTL or with keepalive disabled, the default remains `30m`, independent of `loop.default-timeout`. Changing the configuration does not change check-ins already armed.
 
 ## The delivered message
 

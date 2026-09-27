@@ -53,7 +53,7 @@ pub enum DeliveryTrigger {
     Watch {
         spec: WatchSpec,
         on: CheckOn,
-        timeout: Duration,
+        timeout: Option<Duration>,
     },
     Signal {
         selector: SignalSelector,
@@ -442,7 +442,7 @@ fn build_entry(
         DeliveryTrigger::Watch { spec, on, timeout } => {
             entry.watch = Some(spec);
             entry.on = Some(on);
-            entry.timeout = Some(duration_label(timeout));
+            entry.timeout = timeout.map(duration_label);
             None
         }
         DeliveryTrigger::Signal {

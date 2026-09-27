@@ -328,7 +328,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     let Some(spec) = &task.entry().watch else {
         anyhow::bail!("wait {name} has no watch");
     };
-    let timeout = task_timeout(task.entry())?.unwrap_or(std::time::Duration::from_secs(30 * 60));
+    let timeout = task_timeout(task.entry())?;
     let output_path = wait_output_path(store.paths(), name);
     let view = TmpView::current(None, None, store.paths());
     let file = OpenOptions::new()
@@ -363,7 +363,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     let outcome = run_command(
         &task.entry().run_dir(),
         command,
-        WatchDeadline::CheckInOnce(timeout),
+        timeout.map_or(WatchDeadline::None, WatchDeadline::CheckInOnce),
         CheckEcho::Tee { file },
         &std::collections::BTreeMap::new(),
         |elapsed_ms, output| emit(WatchVerdict::Running { elapsed_ms }, output),
@@ -398,7 +398,7 @@ fn poll_watch(
     spec: &WatchSpec,
     run_dir: &Path,
     file: &File,
-    timeout: std::time::Duration,
+    timeout: Option<std::time::Duration>,
     started: std::time::Instant,
     emit: impl Fn(WatchVerdict, String),
 ) -> anyhow::Result<()> {
@@ -466,7 +466,7 @@ fn poll_watch(
                 return Ok(());
             }
         }
-        if !checked_in && started.elapsed() >= timeout {
+        if !checked_in && timeout.is_some_and(|timeout| started.elapsed() >= timeout) {
             checked_in = true;
             emit(WatchVerdict::NotMet { elapsed_ms }, output.clone());
         }
