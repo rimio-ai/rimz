@@ -77,7 +77,10 @@ impl Store {
                 .agent_id
                 .as_ref()
                 .is_some_and(|agent_id| cache.agent_identity.is_side_session(agent_id));
-            if known_side || intent.observation.origin == Some(SessionOrigin::SideConversation) {
+            let mut staged = Vec::new();
+            let mut receipt = if known_side
+                || intent.observation.origin == Some(SessionOrigin::SideConversation)
+            {
                 let host = session_death::side_conversation_host(
                     &agents,
                     &intent.agent_kind,
@@ -98,116 +101,100 @@ impl Store {
                 if known_side {
                     return Ok(receipt);
                 }
-                let envelope = EventEnvelope::agent_lifecycle(
-                    self.inner.paths.workspace_id.clone(),
-                    intent.session_name,
-                    intent.agent_kind.as_str(),
+                receipt.primary_event_id = Some(stage(
+                    &self.inner.paths.workspace_id,
+                    &intent,
                     intent.event_name,
                     &event::observation_for_event(intent.observation),
-                );
-                receipt.primary_event_id = Some(envelope.event_id.clone());
-                txn.append_batch(&[envelope])?;
-                receipt.rotation_due = claim_rotation(txn.paths, rotation_threshold);
-                return Ok(receipt);
-            }
-            let prior_status = intent
-                .observation
-                .agent_id
-                .as_ref()
-                .and_then(|agent_id| find_agent(&agents, &intent.agent_kind, agent_id))
-                .map(|agent| agent.status);
-            let transition = lifecycle_transition(&agents, &intent.agent_kind, intent.observation);
-            // A row this ingress creates carries the room's account, as a launch batch stamps it.
-            let creates_row = |agent_id: &AgentSessionId| {
-                find_agent(&agents, &intent.agent_kind, agent_id).is_none()
-            };
-            let login = if intent
-                .observation
-                .agent_id
-                .as_ref()
-                .is_some_and(creates_row)
-                || intent
-                    .spawned_subagents
-                    .iter()
-                    .any(|child| creates_row(&child.child_agent_id))
-            {
-                record::read_optional(&txn.paths.workspace_record)?
-                    .and_then(|record| record.logins)
-                    .and_then(|mut logins| logins.remove(&intent.agent_kind))
-                    .filter(|name| !name.is_default())
+                    None,
+                    None,
+                    &mut staged,
+                ));
+                receipt
             } else {
-                None
-            };
-            let append_primary = append_lifecycle_event(
-                &intent.observation.signal,
-                transition,
-                intent.observation.parent_agent_id.is_some(),
-            );
-            let mut staged = Vec::new();
-            let primary_event_id = if append_primary {
-                let mut observation = event::observation_for_event(intent.observation);
-                if prior_status.is_none() {
-                    observation.launch.login.clone_from(&login);
+                let prior_status = intent
+                    .observation
+                    .agent_id
+                    .as_ref()
+                    .and_then(|agent_id| find_agent(&agents, &intent.agent_kind, agent_id))
+                    .map(|agent| agent.status);
+                let transition =
+                    lifecycle_transition(&agents, &intent.agent_kind, intent.observation);
+                // A row this ingress creates carries the room's account, as a launch batch stamps it.
+                let creates_row = |agent_id: &AgentSessionId| {
+                    find_agent(&agents, &intent.agent_kind, agent_id).is_none()
+                };
+                let login = if intent
+                    .observation
+                    .agent_id
+                    .as_ref()
+                    .is_some_and(creates_row)
+                    || intent
+                        .spawned_subagents
+                        .iter()
+                        .any(|child| creates_row(&child.child_agent_id))
+                {
+                    record::read_optional(&txn.paths.workspace_record)?
+                        .and_then(|record| record.logins)
+                        .and_then(|mut logins| logins.remove(&intent.agent_kind))
+                        .filter(|name| !name.is_default())
+                } else {
+                    None
+                };
+                let append_primary = append_lifecycle_event(
+                    &intent.observation.signal,
+                    transition,
+                    intent.observation.parent_agent_id.is_some(),
+                );
+                let primary_event_id = if append_primary {
+                    let mut observation = event::observation_for_event(intent.observation);
+                    if prior_status.is_none() {
+                        observation.launch.login.clone_from(&login);
+                    }
+                    Some(stage(
+                        &self.inner.paths.workspace_id,
+                        &intent,
+                        intent.event_name,
+                        &observation,
+                        prior_status,
+                        transition,
+                        &mut staged,
+                    ))
+                } else {
+                    None
+                };
+                derive_lifecycle_events(
+                    &self.inner.paths.workspace_id,
+                    &intent,
+                    &agents,
+                    transition,
+                    login.as_ref(),
+                    &mut staged,
+                );
+                AgentLifecycleReceipt {
+                    prior_status,
+                    transition,
+                    waiting_cleared: transition
+                        .is_some_and(|transition| transition.waiting_cleared),
+                    primary_event_id,
+                    events: Vec::new(),
+                    rotation_due: false,
+                    side_conversation: None,
                 }
-                let envelope = EventEnvelope::agent_lifecycle(
-                    self.inner.paths.workspace_id.clone(),
-                    intent.session_name,
-                    intent.agent_kind.as_str(),
-                    intent.event_name,
-                    &observation,
-                );
-                let event_id = envelope.event_id.clone();
-                let event = intent.observation.agent_id.as_ref().zip(transition).map(
-                    |(agent_id, transition)| {
-                        LifecycleEvent::new(
-                            event_id.clone(),
-                            envelope.timestamp,
-                            envelope.workspace_id.clone(),
-                            intent.agent_kind.clone(),
-                            agent_id.clone(),
-                            intent.observation.agent_name.clone(),
-                            intent.observation.parent_agent_id.clone(),
-                            intent.observation.signal.clone(),
-                            prior_status,
-                            transition,
-                        )
-                    },
-                );
-                staged.push(StagedLifecycleEvent { envelope, event });
-                Some(event_id)
-            } else {
-                None
             };
-            derive_lifecycle_events(
-                &self.inner.paths.workspace_id,
-                &intent,
-                &agents,
-                transition,
-                login.as_ref(),
-                &mut staged,
-            );
             let envelopes = staged
                 .iter()
                 .map(|staged| staged.envelope.clone())
                 .collect::<Vec<_>>();
             txn.append_batch(&envelopes)?;
-            let events = staged
+            receipt.rotation_due =
+                !staged.is_empty() && claim_rotation(txn.paths, rotation_threshold);
+            receipt.events = staged
                 .into_iter()
                 .filter_map(|staged| staged.event)
                 .collect();
 
-            let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
-            let rotation_due =
-                !envelopes.is_empty() && claim_rotation(txn.paths, rotation_threshold);
-            Ok(AgentLifecycleReceipt {
-                prior_status,
-                transition,
-                waiting_cleared,
-                primary_event_id,
-                events,
-                rotation_due,
-                side_conversation: None,
-            })
+            Ok(receipt)
         })
     }
 }
@@ -231,9 +218,7 @@ fn lifecycle_transition(
     observation: &AgentLifecycleObservation,
 ) -> Option<Transition> {
     let agent_id = observation.agent_id.as_ref()?;
-    let prior = agents
-        .iter()
-        .find(|agent| agent.kind == *kind && agent.agent_id == *agent_id);
+    let prior = find_agent(agents, kind, agent_id);
     let previous = prior.map(AgentState::lifecycle);
     Some(lifecycle::step(
         previous.as_ref(),
@@ -309,13 +294,13 @@ fn derive_lifecycle_events(
         );
         let transition = lifecycle_transition(agents, &intent.agent_kind, &observation)
             .expect("derived answer has parent identity");
-        push_derived(
+        stage(
             workspace_id,
             intent,
             "SubagentAskAnswered",
-            observation,
+            &observation,
             Some(parent.status),
-            transition,
+            Some(transition),
             staged,
         );
     }
@@ -370,24 +355,20 @@ fn find_agent<'a>(
         .find(|state| state.kind == *kind && state.agent_id == *agent_id)
 }
 
-fn root_parent_id(
+fn root_parent(
     agents: &[AgentState],
     kind: &AgentKind,
     parent_id: &AgentSessionId,
-) -> AgentSessionId {
-    find_agent(agents, kind, parent_id)
-        .and_then(|state| state.parent_agent_id.clone())
-        .unwrap_or_else(|| parent_id.clone())
-}
-
-fn root_parent_kind(
-    agents: &[AgentState],
-    kind: &AgentKind,
-    parent_id: &AgentSessionId,
-) -> AgentKind {
-    find_agent(agents, kind, parent_id)
-        .and_then(|state| state.parent_agent_kind.clone())
-        .unwrap_or_else(|| kind.clone())
+) -> (AgentSessionId, AgentKind) {
+    let parent = find_agent(agents, kind, parent_id);
+    (
+        parent
+            .and_then(|state| state.parent_agent_id.clone())
+            .unwrap_or_else(|| parent_id.clone()),
+        parent
+            .and_then(|state| state.parent_agent_kind.clone())
+            .unwrap_or_else(|| kind.clone()),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -420,8 +401,8 @@ fn append_adoption(
     if child_state.is_none() {
         observation.launch.login = login.cloned();
     }
-    let parent_kind = root_parent_kind(agents, &intent.agent_kind, parent_id);
-    observation.parent_agent_id = Some(root_parent_id(agents, &intent.agent_kind, parent_id));
+    let (parent_id, parent_kind) = root_parent(agents, &intent.agent_kind, parent_id);
+    observation.parent_agent_id = Some(parent_id);
     if parent_kind != intent.agent_kind {
         observation.launch.parent_agent_kind = Some(parent_kind);
     }
@@ -442,13 +423,13 @@ fn append_adoption(
     let prior_status = primary_transition
         .map(|primary| primary.next.status)
         .or_else(|| child_state.map(|state| state.status));
-    push_derived(
+    stage(
         workspace_id,
         intent,
         "SubagentAdopted",
-        observation,
+        &observation,
         prior_status,
-        transition,
+        Some(transition),
         staged,
     );
 }
@@ -464,7 +445,7 @@ fn append_reconciliation(
     let Some(child_id) = observation.agent_id.clone() else {
         return;
     };
-    let root_parent_id = root_parent_id(agents, &intent.agent_kind, parent_id);
+    let (root_parent_id, parent_kind) = root_parent(agents, &intent.agent_kind, parent_id);
     let Some(child_state) = find_agent(agents, &intent.agent_kind, &child_id) else {
         return;
     };
@@ -496,7 +477,6 @@ fn append_reconciliation(
     observation.task = None;
     observation.prompt = None;
     observation.parent_agent_id = Some(root_parent_id);
-    let parent_kind = root_parent_kind(agents, &intent.agent_kind, parent_id);
     if parent_kind != intent.agent_kind {
         observation.launch.parent_agent_kind = Some(parent_kind);
     }
@@ -505,57 +485,54 @@ fn append_reconciliation(
     let transition = lifecycle_transition(agents, &intent.agent_kind, &observation)
         .expect("derived reconciliation has child identity");
     let prior_status = Some(child_state.status);
-    push_derived(
+    stage(
         workspace_id,
         intent,
         "SubagentReconciled",
-        observation,
+        &observation,
         prior_status,
-        transition,
+        Some(transition),
         staged,
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_derived(
+fn stage(
     workspace_id: &WorkspaceId,
     intent: &AgentLifecycleIntent<'_>,
-    event_name: &'static str,
-    observation: AgentLifecycleObservation,
+    event_name: &str,
+    observation: &AgentLifecycleObservation,
     prior_status: Option<AgentStatus>,
-    transition: Transition,
+    transition: Option<Transition>,
     staged: &mut Vec<StagedLifecycleEvent>,
-) {
-    let agent_id = observation
-        .agent_id
-        .clone()
-        .expect("derived lifecycle event has child identity");
-    let parent_agent_id = observation.parent_agent_id.clone();
-    let agent_name = observation.agent_name.clone();
-    let signal = observation.signal.clone();
+) -> EventId {
     let envelope = EventEnvelope::agent_lifecycle(
         workspace_id.clone(),
         intent.session_name,
         intent.agent_kind.as_str(),
         event_name,
-        &observation,
+        observation,
     );
-    let event = LifecycleEvent::new(
-        envelope.event_id.clone(),
-        envelope.timestamp,
-        envelope.workspace_id.clone(),
-        intent.agent_kind.clone(),
-        agent_id,
-        agent_name,
-        parent_agent_id,
-        signal,
-        prior_status,
-        transition,
-    );
-    staged.push(StagedLifecycleEvent {
-        envelope,
-        event: Some(event),
-    });
+    let event_id = envelope.event_id.clone();
+    let event = observation
+        .agent_id
+        .as_ref()
+        .zip(transition)
+        .map(|(agent_id, transition)| {
+            LifecycleEvent::new(
+                event_id.clone(),
+                envelope.timestamp,
+                envelope.workspace_id.clone(),
+                intent.agent_kind.clone(),
+                agent_id.clone(),
+                observation.agent_name.clone(),
+                observation.parent_agent_id.clone(),
+                observation.signal.clone(),
+                prior_status,
+                transition,
+            )
+        });
+    staged.push(StagedLifecycleEvent { envelope, event });
+    event_id
 }
 
 fn proof_of_work_tool(signal: &LifecycleSignal) -> bool {
