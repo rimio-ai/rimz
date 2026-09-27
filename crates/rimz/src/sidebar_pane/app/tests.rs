@@ -867,7 +867,12 @@ fn disabled_terminal_notifications_write_nothing_and_trace_suppression() {
     );
     drop(terminal);
     assert!(output.is_empty());
-    let trace = std::fs::read_to_string(dir.path().join("notify.log.jsonl")).unwrap();
+    let trace = std::fs::read_to_string(crate::StatePaths::class_path(
+        dir.path(),
+        crate::disk::paths::Class::Audit,
+        "notify.log.jsonl",
+    ))
+    .unwrap();
     let record: serde_json::Value = serde_json::from_str(&trace).unwrap();
     assert_eq!(record["event"]["fired"], false);
     assert_eq!(record["event"]["suppressed"], "notifications_disabled");
