@@ -116,7 +116,7 @@ fn missing_source_does_not_discard_locations() {
         &BTreeSet::new(),
         |_, _| Err(LspErr::Protocol("missing line".into())),
     );
-    assert_eq!(result.unwrap(), "gone.rs:2:3\n");
+    assert_eq!(result.unwrap(), "gone.rs\n  2:3\n");
 }
 
 #[test]
@@ -139,7 +139,11 @@ fn dirty_locations_never_read_disk_source() {
         .unwrap();
         assert_eq!(
             rendered,
-            "clean.rs:2:3  disk source\ngone.rs:2:3  (unsaved in editor)\n"
+            if verb == Verb::Def {
+                "clean.rs:2:3  disk source\ngone.rs:2:3  (unsaved in editor)\n"
+            } else {
+                "clean.rs\n  2:3  disk source\ngone.rs\n  2:3  (unsaved in editor)\n"
+            }
         );
         assert_eq!(consulted, ["file:///checkout/clean.rs"]);
     }
@@ -693,6 +697,31 @@ fn collapsed_candidates_keep_names_accepted_by_workspace_search() {
 }
 
 #[test]
+fn grouped_locations_trim_unicode_snippets_and_sort_positions() {
+    let location = |uri, line| json!({"uri":uri,"range":{"start":{"line":line,"character":2},"end":{"line":line,"character":3}}});
+    let text = format!("  {}é{}  ", "a".repeat(98), "z".repeat(51));
+    let rendered = render_with_source(
+        Verb::Refs,
+        Path::new("/checkout"),
+        None,
+        json!([
+            location("file:///outside/a.rs", 0),
+            location("file:///checkout/z.rs", 3),
+            location("file:///checkout/z.rs", 1)
+        ]),
+        Scope::External,
+        &BTreeSet::new(),
+        |_, _| Ok(text.clone()),
+    )
+    .unwrap();
+    let snippet = format!("{}é…", "a".repeat(98));
+    assert_eq!(
+        rendered,
+        format!("z.rs\n  2:3  {snippet}\n  4:3  {snippet}\n/outside/a.rs\n  1:3  {snippet}\n")
+    );
+}
+
+#[test]
 fn verb_text_renderers() {
     let root = Path::new("/checkout");
     let uri = "file:///checkout/src/lib.rs";
@@ -710,8 +739,14 @@ fn verb_text_renderers() {
         .unwrap()
     };
     insta::assert_snapshot!(show(Verb::Def, location.clone()), @"src/lib.rs:2:3  fn work() {}");
-    insta::assert_snapshot!(show(Verb::Refs, json!([location, location])), @"src/lib.rs:2:3  fn work() {}");
-    insta::assert_snapshot!(show(Verb::Impl, json!([{"targetUri": uri, "targetSelectionRange": range()}])), @"src/lib.rs:2:3  fn work() {}");
+    insta::assert_snapshot!(show(Verb::Refs, json!([location, location])), @"
+    src/lib.rs
+      2:3  fn work() {}
+    ");
+    insta::assert_snapshot!(show(Verb::Impl, json!([{"targetUri": uri, "targetSelectionRange": range()}])), @"
+    src/lib.rs
+      2:3  fn work() {}
+    ");
     insta::assert_snapshot!(show(Verb::Hover, json!({"contents": [{"language": "rust", "value": "fn work()"}, "Does work."]})), @"
     ```rust
     fn work()
@@ -728,8 +763,14 @@ fn verb_text_renderers() {
         json!({"name": "work", "kind": 12, "location": location, "containerName": "Engine"});
     insta::assert_snapshot!(show(Verb::Find, json!([symbol])), @"function Engine::work  src/lib.rs:2:3");
     let item = json!({"name": "work", "kind": 12, "uri": uri, "range": range(), "selectionRange": range()});
-    insta::assert_snapshot!(show(Verb::Callers, json!([{"from": item}, {"from": item}])), @"work  src/lib.rs:2:3");
-    insta::assert_snapshot!(show(Verb::Callees, json!([{"to": item}])), @"work  src/lib.rs:2:3");
+    insta::assert_snapshot!(show(Verb::Callers, json!([{"from": item}, {"from": item}])), @"
+    src/lib.rs
+      2:3  work
+    ");
+    insta::assert_snapshot!(show(Verb::Callees, json!([{"to": item}])), @"
+    src/lib.rs
+      2:3  work
+    ");
     assert_eq!(show(Verb::Refs, json!([])), "no results\n");
     assert_eq!(
         show(
@@ -768,10 +809,10 @@ fn list_verbs_hide_external_items() {
         let outside = item("file:///other/lib.rs");
         let other = item("file:///sdk/lib.rs");
         let calls = json!([inside, outside, other, outside]);
-        let prefix = match verb {
-            Verb::Refs | Verb::Impl => "",
-            Verb::Find => "function work  ",
-            _ => "work  ",
+        let entry = |path| match verb {
+            Verb::Refs | Verb::Impl => format!("{path}\n  2:3\n"),
+            Verb::Find => format!("function work  {path}:2:3\n"),
+            _ => format!("{path}\n  2:3  work\n"),
         };
         let hidden = if verb == Verb::Find { 3 } else { 2 };
         assert_eq!(
@@ -785,7 +826,8 @@ fn list_verbs_hide_external_items() {
             )
             .unwrap(),
             format!(
-                "{prefix}lib.rs:2:3\n{hidden} outside the checkout hidden; add --external to show them\n"
+                "{}{hidden} outside the checkout hidden; add --external to show them\n",
+                entry("lib.rs")
             )
         );
         assert_eq!(
@@ -800,10 +842,19 @@ fn list_verbs_hide_external_items() {
             .unwrap(),
             if verb == Verb::Find {
                 format!(
-                    "{prefix}lib.rs:2:3\n{prefix}/other/lib.rs:2:3\n{prefix}/sdk/lib.rs:2:3\n{prefix}/other/lib.rs:2:3\n"
+                    "{}{}{}{}",
+                    entry("lib.rs"),
+                    entry("/other/lib.rs"),
+                    entry("/sdk/lib.rs"),
+                    entry("/other/lib.rs")
                 )
             } else {
-                format!("{prefix}/other/lib.rs:2:3\n{prefix}/sdk/lib.rs:2:3\n{prefix}lib.rs:2:3\n")
+                format!(
+                    "{}{}{}",
+                    entry("lib.rs"),
+                    entry("/other/lib.rs"),
+                    entry("/sdk/lib.rs")
+                )
             }
         );
         assert_eq!(
@@ -837,6 +888,18 @@ fn find_scope_preserves_ranked_order() {
         ]),
     )
     .unwrap();
+    assert_eq!(
+        render(
+            Verb::Find,
+            root,
+            None,
+            ranked.clone(),
+            Scope::External,
+            &BTreeSet::new()
+        )
+        .unwrap(),
+        "function work  lib.rs:2:3\nfunction worker  lib.rs:2:3\nfunction rework  lib.rs:2:3\nfunction work  /outside/lib.rs:2:3\n"
+    );
     assert_eq!(
         render(
             Verb::Find,
