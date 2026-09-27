@@ -4,14 +4,14 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-Survey at `cf8ed681b` (2026-09-27), updated for pass 26a at `17cc18ca6`. Rewrite this section whenever a pass ends.
+Survey at `c5edd6ff8` (2026-09-28, pass 26c), rebased onto pass 26a (`17cc18ca6`). Rewrite this section whenever a pass ends.
 
 - **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
-- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `message`, `store/writer`, `disk`. The last two surfaced once sixteen rows from passes 18 and 19 were re-stamped from pre-rebase SHAs to their record commits' parents on trunk.
-- **Never reviewed:** `agents/skills`, `harness/{board,cache_keepalive,deadline,launch_env}`.
-- **Unreviewed admission:** `config` → `harness::idle_compact` (1 site).
-- **Unjudged families:** the skills `read_dir` shape family (`agents/skills.rs`, `sandbox/skills.rs`, `room/session.rs`, `workspace.rs`).
+- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `message`, `store/writer`, `disk`.
+- **Never reviewed:** none; pass 26a reviewed `lsp` and `config/lsp`, pass 26c the leaves.
+- **Unreviewed admissions:** none; pass 26c closed `config` → `harness::idle_compact`.
+- **Unjudged families:** the install shape family `PendingWrite::optional+report_files+settings_json::commit_pair+…` (`agents/adapters/{copilot,cursor}/install.rs`), newly over the finding gate; guard families `RunStatus::Completed` (four sites), `wait_for_required` (lsp, with 26a), `Isolation::Host`, and `degraded`.
 
 ## Module verdicts
 
@@ -75,6 +75,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `agents/transcript` | holds | `92d2bdb59` | 30 | root-re-exported types imported by adapters; `TranscriptPosition::new` pinned by `417721973`. |
 | `agents/turns` | holds | `92d2bdb59` | 30 | the binary's history command reads `TurnOutcome`. |
 | `agents/skill_links` | holds | `92d2bdb59` | 30 | plan/apply types public; host-mode symlink ownership unchanged. |
+| `agents/skills` | holds; landed pass-26c | `c5edd6ff8` | 30 | key constructor and reader `pub(super)`; `SkillDir`, `ProviderSkillKey` and `HostSkillArgErr` floored by signature. |
 | `agents/emblems` | holds | `92d2bdb59` | 30 | `EmblemTint` floored by `Emblem`. |
 | `agents/open_ask` | holds | `92d2bdb59` | 30 | the record the binary and sidebar read. |
 | `agents/plugins` | holds; landed pass-21c | `e237f2db5` | 30 | with `agents/adapters/plugin`. |
@@ -97,7 +98,7 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `config/effective` | holds; landed pass-24a | `4e445b73d` | 30 | project-task parse and error types floored by `load`. |
 | `config/gc` | holds | `4e445b73d` | 30 | `MachineConfig` field type. |
 | `config/glyphs` | holds; landed pass-24a | `4e445b73d` | 30 | `GlyphRole` names stay `pub` for `theme/glyphs.rs`. |
-| `config/harness` | holds; landed pass-24a | `4e445b73d` | 30 | `DayCap`/`TurnCap` verdicts hold. |
+| `config/harness` | holds; landed pass-26c | `c5edd6ff8` | 30 | `DayCap`/`TurnCap` verdicts hold; owns the prompt-cache margin its TTL parse validates against. |
 | `config/loop_` | holds; landed pass-24a | `4e445b73d` | 30 | `Tasks` and `LoopConfig` stay `pub` for the integration crate. |
 | `config/lsp` | holds; landed pass-26a | `17cc18ca6` | 30 | one root-marker predicate on the server config; façade controls reach. |
 | `config/mux` | holds | `4e445b73d` | 30 | backend option records test-gated at the façade. |
@@ -142,7 +143,11 @@ One row per module at the granularity `survey` ranks. `holds` carries the review
 | `harness/run_wake` | holds; landed pass-23b | `5a052d17b` | 30 | verdicted under `harness/run`. |
 | `harness/auto_gc` | holds; landed pass-23b | `5a052d17b` | 30 | reached from the binary. |
 | `harness/fleet` | holds; landed pass-23b | `5a052d17b` | 30 | reached from the binary. |
-| `harness/idle_compact` | holds; landed pass-23b | `5a052d17b` | 30 | reached from the binary. |
+| `harness/idle_compact` | holds; landed pass-26c | `c5edd6ff8` | 30 | reached from the binary; reads the cache margin from `config`. |
+| `harness/board` | holds | `c5edd6ff8` | 30 | `BoardErr`, `BoardSection` and `RecordReceipt` floored by `record`, which the teams CLI calls. |
+| `harness/cache_keepalive` | holds | `c5edd6ff8` | 30 | request type stays `pub` for the integration crate. |
+| `harness/deadline` | holds; landed pass-26c | `c5edd6ff8` | 30 | rung selection `pub(super)` for `run`; stop channel private. |
+| `harness/launch_env` | holds | `c5edd6ff8` | 30 | already `pub(super)`; `GitState` floored by the `LaunchEnv` launch reminders render. |
 | `harness/launch_plan` | holds; landed pass-24c | `e083557ba` | 30 | error and warning types floor `compile`/`apply`. |
 | `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
 | `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
