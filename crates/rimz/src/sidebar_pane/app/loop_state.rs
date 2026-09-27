@@ -58,8 +58,8 @@ use super::state::{
     set_rows_unread,
 };
 use super::timing::{
-    FOCUS_RESUME_WATCH_WINDOW, FRAME_MIN_TIMEOUT, animation_frame, duration_millis, frame_interval,
-    is_animating, next_frame_after, tick_for, wall_clock_phase,
+    FOCUS_RESUME_WATCH_WINDOW, FRAME_MIN_TIMEOUT, animation_frame, duration_millis,
+    next_frame_after, tick_for, wall_clock_phase,
 };
 use super::width_control::WidthController;
 use super::{Result, ServeConfig};
@@ -317,7 +317,8 @@ impl LoopState {
         );
         let alert_active = self.alert_active();
         let watched = self.watched();
-        let animating = is_animating(&self.current, &self.ui, phase, alert_active);
+        let animating =
+            render::animation_interval(&self.current, &self.ui, phase, alert_active).is_some();
         let active = !self.self_close.confirming_empty()
             && ((watched && animating) || (self.dirty && self.dirty_paintable(watched)));
         let mut timeout = if active {
@@ -1289,12 +1290,13 @@ impl LoopState {
             self.current.theme.display.resolved_refresh_ms(),
         );
         let alert_active = self.alert_active();
-        let animating = is_animating(
+        let animating = render::animation_interval(
             &self.current,
             &self.ui,
             self.ui.animation_phase,
             alert_active,
-        );
+        )
+        .is_some();
         if self.dirty || animating {
             let was_dirty = self.dirty;
             self.paint
@@ -1320,7 +1322,13 @@ impl LoopState {
         self.next_frame = next_frame_after(
             self.next_frame,
             now,
-            frame_interval(&self.current, &self.ui, alert_active),
+            render::animation_interval(
+                &self.current,
+                &self.ui,
+                self.ui.animation_phase,
+                alert_active,
+            )
+            .unwrap_or(animation_frame(&self.current)),
         );
         Ok(())
     }

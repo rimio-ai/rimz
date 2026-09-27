@@ -26,7 +26,7 @@ mod sections;
 mod theme;
 mod ui_state;
 
-pub(in crate::sidebar_pane) use self::animation::{AnimationCadence, animation_cadence};
+use self::animation::{AnimationCadence, animation_cadence};
 use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::{hairline_rule, help_lines};
 #[cfg(test)]
@@ -47,12 +47,13 @@ pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
 };
 pub(in crate::sidebar_pane) use crate::sidebar_pane::view::BodyFilter;
-pub(in crate::sidebar_pane) use odometer::CLICK_PHASES;
+use odometer::CLICK_PHASES;
 pub(in crate::sidebar_pane) use odometer::{CostRolls, TallyAnim};
 pub(in crate::sidebar_pane) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
 use std::num::NonZeroU16;
+use std::time::Duration;
 
 use crate::agents::{AgentStatus, TurnPhase};
 use crate::config::{AnimationRole, CardDensityMode, GlyphRole};
@@ -342,7 +343,7 @@ fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a S
 /// Selection expands a bare, not-yet-prompted idle card whose compose
 /// affordance needs the breath animation grid. This can be the selected row
 /// itself or a visible named teammate expanded alongside it.
-pub(crate) fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
     let roster = ui.visible_roster(snapshot);
     roster.groups().iter().any(|group| {
         group
@@ -359,10 +360,7 @@ pub(crate) fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui:
 /// a live child's head or a running shell job's working animation. Either
 /// needs the fast grid whatever the parent's own status, so a sleeping parent
 /// waiting on its children still animates them.
-pub(in crate::sidebar_pane) fn visible_delegation_motion(
-    snapshot: &SidebarSnapshot,
-    ui: &UiState,
-) -> bool {
+fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
     let roster = ui.visible_roster(snapshot);
     let density = snapshot.theme.display.card_density;
     roster.groups().iter().any(|group| {
@@ -529,6 +527,61 @@ pub(crate) fn pet_motion_enabled(animations: &ResolvedAnimations, action: PetAct
         PetAction::Failed => AnimationRole::Failed,
     };
     !animations.role(role).motion_quieted()
+}
+
+/// The repaint grid while something on screen moves, `None` when nothing does.
+/// `phase` is the observed animation phase, which the serve loop may take from
+/// the wall clock ahead of `ui.animation_phase`.
+pub(in crate::sidebar_pane) fn animation_interval(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+    phase: u64,
+    alert_active: bool,
+) -> Option<Duration> {
+    let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
+    let base = crate::sidebar::timing::animation_frame(refresh_ms);
+    let Some(theme) = ui.cached_theme(&snapshot.theme) else {
+        return Some(base);
+    };
+    // A scrollbar fade needs the fast grid to read as motion; it is brief and
+    // self-terminating, so the cost is bounded to the settle window. Continuous
+    // row pulse rides the breath cadence below.
+    if ui.help_visible || ui.scrollbar.fading(phase) {
+        return Some(base);
+    }
+    let cadence = animation_cadence(snapshot, &theme.animations);
+    if visible_delegation_motion(snapshot, ui) || cadence == AnimationCadence::Fast {
+        return Some(base);
+    }
+    // The money rolls click once per `CLICK_PHASES` phases, so a rolling room
+    // samples on the matching money grid — one paint per distinct click, and
+    // the one-click settle flash can never fall between samples. A fast room
+    // (a working spinner) keeps the fast grid; the roll's painted value simply
+    // holds across the extra frames. A slow-cadence room drops to the money
+    // grid while a climb is in flight — the cosmetic breath repaints
+    // idempotently, and the climb window bounds the extra paints.
+    let money_rolling = ui.tally.any_rolling(phase) || ui.cost_rolls.any_rolling(phase);
+    let money_grid = || crate::sidebar::timing::money_animation_frame(refresh_ms, CLICK_PHASES);
+    // The dashboard pet paints on its track cadence, but a money climb in the
+    // still-visible cockpit must keep sampling on the money grid, so a rolling
+    // room takes the faster of the two.
+    if snapshot.theme.pets.enabled
+        && dashboard_present(snapshot, alert_active)
+        && let Some(pet_interval) = ui.pet.as_ref().and_then(|pet| pet.frame_interval)
+    {
+        return Some(if money_rolling {
+            pet_interval.min(money_grid())
+        } else {
+            pet_interval
+        });
+    }
+    if money_rolling {
+        return Some(money_grid());
+    }
+    if cadence == AnimationCadence::Breath || expanded_row_awaiting_first_prompt(snapshot, ui) {
+        return Some(crate::sidebar::timing::breath_animation_frame(refresh_ms));
+    }
+    None
 }
 
 pub fn draw_to_terminal<B: Backend>(

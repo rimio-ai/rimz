@@ -1,39 +1,8 @@
-//! Renderer animation eligibility, frame cadence, and wall-clock phase helpers, with receive and focus-resume timing bounds.
+//! Wall-clock phase and frame-grid helpers, with receive and focus-resume timing bounds.
 
 use std::time::{Duration, Instant};
 
-use crate::sidebar_pane::render::{self, UiState};
 use crate::store::snapshot::SidebarSnapshot;
-
-pub(super) fn is_animating(
-    snapshot: &SidebarSnapshot,
-    ui: &UiState,
-    phase: u64,
-    alert_active: bool,
-) -> bool {
-    let Some(theme) = ui.cached_theme(&snapshot.theme) else {
-        return true;
-    };
-    render::animation_cadence(snapshot, &theme.animations) != render::AnimationCadence::None
-        || render::expanded_row_awaiting_first_prompt(snapshot, ui)
-        || render::visible_delegation_motion(snapshot, ui)
-        || ui.help_visible
-        || pet_frame_interval(snapshot, ui, alert_active).is_some()
-        || ui.tally.any_rolling(phase)
-        || ui.cost_rolls.any_rolling(phase)
-        || ui.scrollbar.fading(phase)
-}
-
-fn pet_frame_interval(
-    snapshot: &SidebarSnapshot,
-    ui: &UiState,
-    alert_active: bool,
-) -> Option<Duration> {
-    if !snapshot.theme.pets.enabled || !render::dashboard_present(snapshot, alert_active) {
-        return None;
-    }
-    ui.pet.as_ref()?.frame_interval
-}
 
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
 /// next frame boundary, the time-to-boundary is zero; a 1ms floor lets an
@@ -52,71 +21,6 @@ pub(super) const FOCUS_RESUME_WATCH_WINDOW: Duration = Duration::from_secs(3);
 /// without a per-tick counter that a break-and-refetch could reset.
 pub(super) fn wall_clock_phase(start: Instant, refresh_ms: u16) -> u64 {
     (start.elapsed().as_millis() / u128::from(refresh_ms)) as u64
-}
-
-pub(super) fn frame_interval(
-    snapshot: &SidebarSnapshot,
-    ui: &UiState,
-    alert_active: bool,
-) -> Duration {
-    let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
-    let base = crate::sidebar::timing::animation_frame(refresh_ms);
-    let Some(theme) = ui.cached_theme(&snapshot.theme) else {
-        return base;
-    };
-    if ui.help_visible {
-        return base;
-    }
-    // A scrollbar fade needs the fast grid to read as motion; it is brief and
-    // self-terminating, so the cost is bounded to the settle window. Continuous
-    // row pulse rides the breath cadence below.
-    if ui.scrollbar.fading(ui.animation_phase) {
-        return base;
-    }
-    let cadence = if render::visible_delegation_motion(snapshot, ui) {
-        render::AnimationCadence::Fast
-    } else {
-        render::animation_cadence(snapshot, &theme.animations)
-    };
-    let cadence = if cadence == render::AnimationCadence::None
-        && render::expanded_row_awaiting_first_prompt(snapshot, ui)
-    {
-        render::AnimationCadence::Breath
-    } else {
-        cadence
-    };
-    if cadence == render::AnimationCadence::Fast {
-        return base;
-    }
-    // The money rolls click once per `CLICK_PHASES` phases, so a rolling room
-    // samples on the matching money grid — one paint per distinct click, and
-    // the one-click settle flash can never fall between samples. A fast room
-    // (a working spinner) keeps the fast grid; the roll's painted value simply
-    // holds across the extra frames. A slow-cadence room drops to the money
-    // grid while a climb is in flight — the cosmetic breath repaints
-    // idempotently, and the climb window bounds the extra paints.
-    let money_rolling =
-        ui.tally.any_rolling(ui.animation_phase) || ui.cost_rolls.any_rolling(ui.animation_phase);
-    let money_grid =
-        || crate::sidebar::timing::money_animation_frame(refresh_ms, render::CLICK_PHASES);
-    // The dashboard pet paints on its track cadence, but a money climb in the
-    // still-visible cockpit must keep sampling on the money grid, so a rolling
-    // room takes the faster of the two.
-    if let Some(pet_interval) = pet_frame_interval(snapshot, ui, alert_active) {
-        return if money_rolling {
-            pet_interval.min(money_grid())
-        } else {
-            pet_interval
-        };
-    }
-    match cadence {
-        render::AnimationCadence::Fast => base,
-        _ if money_rolling => money_grid(),
-        render::AnimationCadence::Breath => {
-            crate::sidebar::timing::breath_animation_frame(refresh_ms)
-        }
-        render::AnimationCadence::None => base,
-    }
 }
 
 /// Animation tick: how often an animated row advances a spin frame - a running

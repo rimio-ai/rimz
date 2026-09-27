@@ -25,7 +25,7 @@ mod cache_refresh;
 mod demo;
 mod fetch;
 #[cfg(test)]
-mod fixtures;
+pub(super) mod fixtures;
 mod gate;
 mod health;
 mod input;
