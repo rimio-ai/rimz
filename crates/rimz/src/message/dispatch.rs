@@ -1006,15 +1006,6 @@ fn dispatch_one(
     let bound = target.bound(state.snapshot);
     let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
     let message_id = message.message_id.clone();
-    let policy = match mode.kind {
-        DeliveryKind::Steer => deliver::DeliveryPolicy::Steer {
-            force: mode.draft.force,
-        },
-        DeliveryKind::Interrupt => deliver::DeliveryPolicy::Interrupt {
-            force: mode.draft.force,
-        },
-        DeliveryKind::Boundary => deliver::DeliveryPolicy::Boundary,
-    };
     match deliver::execute_attempt(
         deliver::Attempt {
             workspace: state.workspace,
@@ -1026,7 +1017,6 @@ fn dispatch_one(
             source: deliver::AttemptSource::Fresh {
                 durable_receiver: target.agent.is_some(),
             },
-            policy,
         },
         live_send,
     )? {

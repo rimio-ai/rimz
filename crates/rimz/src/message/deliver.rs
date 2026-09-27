@@ -112,7 +112,6 @@ pub(super) struct Attempt<'a> {
     pub bound: Option<&'a crate::agents::AgentState>,
     pub records: &'a [MessageRecord],
     pub source: AttemptSource,
-    pub policy: DeliveryPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -362,7 +361,6 @@ fn attempt_delivery(
             bound: candidate.bound,
             records: &send_messages,
             source: AttemptSource::Claimed,
-            policy,
         },
         &mut live_send,
     )?;
@@ -408,7 +406,6 @@ pub(super) fn execute_attempt(
         bound,
         records,
         source,
-        policy,
     } = attempt;
     let head = records
         .first()
@@ -450,10 +447,7 @@ pub(super) fn execute_attempt(
         Ok(send::Receipt::SkippedWaiting) => {
             const WAITING: &str = "agent is waiting on input in its pane";
             if matches!(source, AttemptSource::Fresh { .. })
-                && matches!(
-                    policy,
-                    DeliveryPolicy::Steer { .. } | DeliveryPolicy::Interrupt { .. }
-                )
+                && live_send.kind != DeliveryKind::Boundary
             {
                 store.record_send_error(head, WAITING, &workspace.session_name)?;
                 return Ok(AttemptOutcome::SkippedWaiting);

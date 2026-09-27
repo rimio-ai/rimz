@@ -43,7 +43,7 @@ pub(super) enum Receipt {
 /// state.
 pub(super) struct LiveSend {
     force: bool,
-    kind: DeliveryKind,
+    pub(super) kind: DeliveryKind,
     pacer: Pacer,
     command_submit_delay: Duration,
 }
