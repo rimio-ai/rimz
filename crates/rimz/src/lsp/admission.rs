@@ -441,6 +441,55 @@ fn committed_growth(estimate: u64, rss: u64) -> u64 {
     estimate.saturating_sub(rss)
 }
 
+/// Validate one configuration and select it when a checkout marker exists.
+pub(crate) fn select_server(
+    root: &Path,
+    server: &str,
+    config: &crate::config::LspServerConfig,
+) -> Result<bool> {
+    registry::directory(root, server).map_err(|error| match error {
+        LspErr::Configuration(message) => LspErr::Configuration(format!(
+            "language server {server}: {message}; rename [lsp.servers.{server}]"
+        )),
+        error => error,
+    })?;
+    if config.root_markers.is_empty()
+        || config.extensions.is_empty()
+        || config.command.first().is_none_or(String::is_empty)
+    {
+        return Err(LspErr::Configuration(format!(
+            "language server {server} needs command, extensions, and root-markers"
+        )));
+    }
+    for marker in &config.root_markers {
+        if Path::new(marker)
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(LspErr::Configuration(format!(
+                "language server {server}: root-markers must be relative to the checkout"
+            )));
+        }
+    }
+    if !config
+        .root_markers
+        .iter()
+        .any(|marker| root.join(marker).exists())
+    {
+        return Ok(false);
+    }
+    if config
+        .init_options
+        .as_ref()
+        .is_some_and(|options| !options.is_object())
+    {
+        return Err(LspErr::Configuration(format!(
+            "language server {server}: init-options must be a table"
+        )));
+    }
+    Ok(true)
+}
+
 /// One bounded admission pass. The CLI prints outcomes and polls required waits every five seconds.
 pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Result<Admitted> {
     let root = std::fs::canonicalize(request.root)?;
@@ -616,45 +665,8 @@ fn validate_server(
     server: &str,
     config: &crate::config::LspServerConfig,
 ) -> Result<Option<(u64, Duration)>> {
-    registry::directory(root, server).map_err(|error| match error {
-        LspErr::Configuration(message) => LspErr::Configuration(format!(
-            "language server {server}: {message}; rename [lsp.servers.{server}]"
-        )),
-        error => error,
-    })?;
-    if config.root_markers.is_empty()
-        || config.extensions.is_empty()
-        || config.command.first().is_none_or(String::is_empty)
-    {
-        return Err(LspErr::Configuration(format!(
-            "language server {server} needs command, extensions, and root-markers"
-        )));
-    }
-    for marker in &config.root_markers {
-        if Path::new(marker)
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-        {
-            return Err(LspErr::Configuration(format!(
-                "language server {server}: root-markers must be relative to the checkout"
-            )));
-        }
-    }
-    if !config
-        .root_markers
-        .iter()
-        .any(|marker| root.join(marker).exists())
-    {
+    if !select_server(root, server, config)? {
         return Ok(None);
-    }
-    if config
-        .init_options
-        .as_ref()
-        .is_some_and(|options| !options.is_object())
-    {
-        return Err(LspErr::Configuration(format!(
-            "language server {server}: init-options must be a table"
-        )));
     }
     if which::which_in(&config.command[0], std::env::var_os("PATH"), root).is_err() {
         return Err(LspErr::Configuration(format!(
