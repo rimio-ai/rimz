@@ -2184,32 +2184,7 @@ fn spawn_retrying_print(
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
-    let runtime = env.runtime_paths();
-    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
-        &runtime,
-        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
-            session_name: workspace.session_name.clone(),
-            produced_at_ms: rimz::utils::time::unix_now_ms(),
-            writer: None,
-            focused_pane: None,
-            clients: None,
-            panes: Vec::new(),
-        },
-    )
-    .expect("write pane topology");
-    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
-        env.workspace_id.clone(),
-        rimz::ids::SidebarInstanceId::new(),
-        MuxName::Zellij,
-        &workspace.session_name,
-        runtime.sock_dir.join("sidebar.sock"),
-        None,
-    );
-    std::fs::write(
-        runtime.heartbeat_dir.join("sidebar.retry.json"),
-        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
-    )
-    .expect("write heartbeat");
+    seed_live_zellij_room(env, &workspace.session_name);
     let mut command = env.rimz();
     command
         .args([
@@ -2243,6 +2218,39 @@ fn spawn_retrying_print(
     command.spawn().expect("spawn retrying print")
 }
 
+/// The trace shim lists the room as live but runs no presence plugin, so a
+/// launch that finds no fresh topology or sidebar heartbeat spends the whole
+/// Zellij health-probe budget inspecting it. Seed both, as a live room has.
+#[cfg(unix)]
+fn seed_live_zellij_room(env: &Env, session_name: &str) {
+    let runtime = env.runtime_paths();
+    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
+        &runtime,
+        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
+            session_name: session_name.to_owned(),
+            produced_at_ms: rimz::utils::time::unix_now_ms(),
+            writer: None,
+            focused_pane: None,
+            clients: None,
+            panes: Vec::new(),
+        },
+    )
+    .expect("write pane topology");
+    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        rimz::ids::SidebarInstanceId::new(),
+        MuxName::Zellij,
+        session_name,
+        runtime.sock_dir.join("sidebar.sock"),
+        None,
+    );
+    std::fs::write(
+        runtime.heartbeat_dir.join("sidebar.seeded.json"),
+        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
+    )
+    .expect("write heartbeat");
+}
+
 #[cfg(unix)]
 fn spawn_verifying_print(
     env: &Env,
@@ -2258,6 +2266,7 @@ fn spawn_verifying_print(
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    seed_live_zellij_room(env, &workspace.session_name);
     let mut command = env.rimz();
     command
         .args([
