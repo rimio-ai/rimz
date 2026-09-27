@@ -37,7 +37,7 @@ use self::interaction::RenderedBlock;
 pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion, HitTarget};
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
-pub use self::ui_state::{Alert, UiState};
+pub(in crate::sidebar_pane) use self::ui_state::{Alert, UiState};
 pub(in crate::sidebar_pane) use self::ui_state::{
     Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
 };
@@ -51,7 +51,9 @@ use std::num::NonZeroU16;
 use std::time::Duration;
 
 use crate::agents::{AgentStatus, TurnPhase};
-use crate::config::{AnimationRole, CardDensityMode, GlyphRole};
+#[cfg(any(test, feature = "testkit"))]
+use crate::config::GlyphRole;
+use crate::config::{AnimationRole, CardDensityMode};
 use crate::sidebar_pane::pets::PetAction;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{ProcessState, SidebarRow, SidebarSnapshot};
@@ -63,7 +65,7 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
 use self::animation::ResolvedAnimations;
-pub(crate) use self::sections::DashboardMode;
+use self::sections::DashboardMode;
 use self::theme::Theme;
 
 #[cfg(test)]
@@ -221,16 +223,19 @@ fn draw_help_overlay(
     frame.render_widget(Paragraph::new(Text::from(lines)), rect);
 }
 
-pub struct GalleryColumn<'a> {
-    pub snapshot: &'a SidebarSnapshot,
-    pub ui: &'a mut UiState,
+#[cfg(any(test, feature = "testkit"))]
+pub(in crate::sidebar_pane) struct GalleryColumn<'a> {
+    pub(in crate::sidebar_pane) snapshot: &'a SidebarSnapshot,
+    pub(in crate::sidebar_pane) ui: &'a mut UiState,
 }
 
 /// Terminal width above which the gallery packs a fourth fixture column.
+#[cfg(any(test, feature = "testkit"))]
 const GALLERY_FOUR_COLUMN_MIN_WIDTH: u16 = 240;
 
 /// Returns the number of gallery columns that fit at the launch width.
-pub fn gallery_column_cap(width: u16) -> usize {
+#[cfg(any(test, feature = "testkit"))]
+pub(in crate::sidebar_pane) fn gallery_column_cap(width: u16) -> usize {
     if width > GALLERY_FOUR_COLUMN_MIN_WIDTH {
         4
     } else {
@@ -238,7 +243,8 @@ pub fn gallery_column_cap(width: u16) -> usize {
     }
 }
 
-pub fn draw_gallery_to_terminal<B: Backend>(
+#[cfg(any(test, feature = "testkit"))]
+pub(in crate::sidebar_pane) fn draw_gallery_to_terminal<B: Backend>(
     terminal: &mut Terminal<B>,
     columns: &mut [GalleryColumn<'_>],
 ) -> Result<(), B::Error> {
@@ -247,6 +253,7 @@ pub fn draw_gallery_to_terminal<B: Backend>(
         .map(|_| ())
 }
 
+#[cfg(any(test, feature = "testkit"))]
 fn draw_gallery(frame: &mut Frame<'_>, columns: &mut [GalleryColumn<'_>]) {
     let area = frame.area();
     let (column_areas, delimiter_xs) = gallery_layout(area, columns.len());
@@ -267,6 +274,7 @@ fn draw_gallery(frame: &mut Frame<'_>, columns: &mut [GalleryColumn<'_>]) {
     }
 }
 
+#[cfg(any(test, feature = "testkit"))]
 fn gallery_layout(area: Rect, column_count: usize) -> (Vec<Rect>, Vec<u16>) {
     if column_count == 0 || area.width == 0 {
         return (Vec::new(), Vec::new());
@@ -377,13 +385,19 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
 /// first tab. Reads the same filtered universe `selected_index` is an ordinal
 /// of, so the dashboard's follow-the-selection stays honest under a make-up
 /// filter.
-pub(crate) fn selected_agent_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
+pub(in crate::sidebar_pane) fn selected_agent_kind(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+) -> Option<String> {
     selected_row(snapshot, ui)
         .filter(|row| row.is_agent())
         .map(|row| row.name.clone())
 }
 
-pub(crate) fn selected_pet_action(snapshot: &SidebarSnapshot, ui: &UiState) -> PetAction {
+pub(in crate::sidebar_pane) fn selected_pet_action(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+) -> PetAction {
     selected_row(snapshot, ui).map_or(PetAction::Idle, row_pet_action)
 }
 
@@ -428,7 +442,9 @@ fn row_pet_action(row: &SidebarRow) -> PetAction {
     }
 }
 
-pub(crate) fn unread_pet_row_ids(snapshot: &SidebarSnapshot) -> impl Iterator<Item = String> + '_ {
+pub(in crate::sidebar_pane) fn unread_pet_row_ids(
+    snapshot: &SidebarSnapshot,
+) -> impl Iterator<Item = String> + '_ {
     snapshot
         .worktree_groups
         .iter()
@@ -442,28 +458,30 @@ pub(crate) fn unread_pet_row_ids(snapshot: &SidebarSnapshot) -> impl Iterator<It
 /// ([`selected_agent_kind`]) when a panel exists for it, else the last agent
 /// kind the dashboard followed while its panel is still present, else the
 /// first panel. `None` only when the dashboard is empty.
-pub(crate) fn active_dashboard_tab(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
+pub(in crate::sidebar_pane) fn active_dashboard_tab(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+) -> Option<String> {
     let panels = &snapshot.providers;
-    let has_panel = |kind: &str| panels.iter().any(|panel| panel.kind == kind);
     if let Some(tab) = &ui.dashboard_tab
         && dashboard_has_tab(snapshot, &tab.kind)
     {
         return Some(tab.kind.clone());
     }
     if let Some(kind) = selected_agent_kind(snapshot, ui)
-        && has_panel(&kind)
+        && dashboard_has_tab(snapshot, &kind)
     {
         return Some(kind);
     }
     if let Some(kind) = &ui.last_agent_kind
-        && has_panel(kind)
+        && dashboard_has_tab(snapshot, kind)
     {
         return Some(kind.clone());
     }
     panels.first().map(|panel| panel.kind.clone())
 }
 
-pub(crate) fn dashboard_tabs(snapshot: &SidebarSnapshot) -> Vec<String> {
+pub(in crate::sidebar_pane) fn dashboard_tabs(snapshot: &SidebarSnapshot) -> Vec<String> {
     snapshot
         .providers
         .iter()
@@ -478,11 +496,11 @@ fn dashboard_has_tab(snapshot: &SidebarSnapshot, kind: &str) -> bool {
 /// Whether the dashboard paints a tab rail. Pets keep the dashboard tabbed so
 /// the pet overlay rides one provider block at a time; without pets, a single
 /// provider keeps the historical bare block.
-pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
+pub(in crate::sidebar_pane) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
     dashboard_mode(snapshot) != DashboardMode::Stacked
 }
 
-pub(crate) fn dashboard_mode(snapshot: &SidebarSnapshot) -> DashboardMode {
+fn dashboard_mode(snapshot: &SidebarSnapshot) -> DashboardMode {
     if snapshot.theme.pets.enabled {
         return DashboardMode::Pet;
     }
@@ -498,11 +516,17 @@ pub(crate) fn dashboard_mode(snapshot: &SidebarSnapshot) -> DashboardMode {
     }
 }
 
-pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) -> bool {
+pub(in crate::sidebar_pane) fn dashboard_present(
+    snapshot: &SidebarSnapshot,
+    alert_active: bool,
+) -> bool {
     !alert_active && (!snapshot.providers.is_empty() || snapshot.theme.pets.enabled)
 }
 
-pub(crate) fn pet_motion_enabled(animations: &ResolvedAnimations, action: PetAction) -> bool {
+pub(in crate::sidebar_pane) fn pet_motion_enabled(
+    animations: &ResolvedAnimations,
+    action: PetAction,
+) -> bool {
     let role = match action {
         PetAction::Idle => AnimationRole::Idle,
         PetAction::Thinking => AnimationRole::Thinking,

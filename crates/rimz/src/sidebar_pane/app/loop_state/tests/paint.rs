@@ -346,8 +346,11 @@ fn stale_tmux_caps_reprobe_is_bounded_and_adopts_changes() {
 
 #[test]
 fn zellij_capability_probe_does_not_enable_unimplemented_pixel_rendering() {
-    let caps =
-        crate::sidebar_pane::app::initial_pet_render_caps(crate::MuxName::Zellij, "rimz-test");
+    let caps = crate::sidebar_pane::pixel::detect_pixel_render_caps(
+        crate::MuxName::Zellij,
+        "rimz-test",
+        PixelRenderCaps::default(),
+    );
     assert_eq!(caps, PixelRenderCaps::default());
 
     for glyphs in [

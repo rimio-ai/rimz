@@ -35,11 +35,7 @@ pub(super) fn next_health(previous: &Health, failure: Option<String>) -> Health 
                     .filter(|alert| alert.is_active())
                     .map(|alert| alert.since)
                     .unwrap_or_else(Timestamp::now);
-                Some(Alert {
-                    reason,
-                    since,
-                    recovered_at: None,
-                })
+                Some(Alert::active(reason, since))
             } else {
                 // Below the threshold: absorb the blip, but keep any lingering
                 // recovered alert from a previous episode.
