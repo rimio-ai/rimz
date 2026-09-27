@@ -73,6 +73,15 @@ pub enum PathErr {
     RuntimeDirInsecure { path: PathBuf, mode: u32 },
 }
 
+impl PathErr {
+    fn io(path: &Path) -> impl FnOnce(io::Error) -> Self + '_ {
+        move |source| Self::Io {
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+}
+
 type Result<T> = std::result::Result<T, PathErr>;
 
 pub(crate) const WORKSPACE_LAYOUT: u32 = 2;
@@ -101,15 +110,14 @@ pub(crate) fn check_workspace_layout(root: &Path) -> Result<bool> {
     let path = root.join("workspace.json");
     match fs::read(&path) {
         Ok(bytes) => {
-            let record: Layout = serde_json::from_slice(&bytes).map_err(|source| PathErr::Io {
-                path: path.clone(),
-                source: io::Error::new(io::ErrorKind::InvalidData, source),
+            let record: Layout = serde_json::from_slice(&bytes).map_err(|source| {
+                PathErr::io(&path)(io::Error::new(io::ErrorKind::InvalidData, source))
             })?;
             require_layout(&path, record.layout)?;
             Ok(true)
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(source) => Err(PathErr::Io { path, source }),
+        Err(source) => Err(PathErr::io(&path)(source)),
     }
 }
 
@@ -353,10 +361,7 @@ impl StatePaths {
         match fs::remove_dir_all(&self.tmp_dir) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(PathErr::Io {
-                path: self.tmp_dir.clone(),
-                source,
-            }),
+            Err(source) => Err(PathErr::io(&self.tmp_dir)(source)),
         }
     }
 
@@ -365,10 +370,7 @@ impl StatePaths {
         match fs::remove_dir_all(&self.root) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(PathErr::Io {
-                path: self.root.clone(),
-                source,
-            }),
+            Err(source) => Err(PathErr::io(&self.root)(source)),
         }
     }
 }
@@ -419,12 +421,7 @@ fn workspace_dir_names(ws_dir: &Path) -> Result<impl Iterator<Item = WorkspaceDi
     let entries = match fs::read_dir(ws_dir) {
         Ok(entries) => Some(entries),
         Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-        Err(source) => {
-            return Err(PathErr::Io {
-                path: ws_dir.to_path_buf(),
-                source,
-            });
-        }
+        Err(source) => return Err(PathErr::io(ws_dir)(source)),
     };
     Ok(entries
         .into_iter()
@@ -556,10 +553,7 @@ impl RuntimePaths {
         match fs::remove_dir_all(&self.root) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(PathErr::Io {
-                path: self.root.clone(),
-                source,
-            }),
+            Err(source) => Err(PathErr::io(&self.root)(source)),
         }
     }
 
@@ -731,10 +725,7 @@ impl RuntimePaths {
         let mut removed = false;
         for path in [&self.sock_dir, &self.live_dir, &self.lanes_dir] {
             removed |= remove_runtime_dir_with(path, |detached| {
-                fs::remove_dir_all(detached).map_err(|source| PathErr::Io {
-                    path: detached.to_path_buf(),
-                    source,
-                })?;
+                fs::remove_dir_all(detached).map_err(PathErr::io(detached))?;
                 Ok(true)
             })?;
         }
@@ -1029,18 +1020,12 @@ fn remove_runtime_dir_with(
             Ok(true)
         }
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(source) => Err(PathErr::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
+        Err(source) => Err(PathErr::io(path)(source)),
     }
 }
 
 fn mkdir_p(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).map_err(|e| PathErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
+    fs::create_dir_all(path).map_err(PathErr::io(path))
 }
 
 #[cfg(unix)]
@@ -1051,10 +1036,7 @@ pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
         .recursive(true)
         .mode(0o700)
         .create(path)
-        .map_err(|e| PathErr::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        .map_err(PathErr::io(path))?;
     let mut metadata = runtime_dir_metadata(path)?;
     let current = nix::unistd::Uid::current().as_raw();
     if metadata.uid() != current {
@@ -1065,10 +1047,7 @@ pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
         });
     }
     if metadata.permissions().mode() & 0o077 != 0 {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|e| PathErr::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(PathErr::io(path))?;
         metadata = runtime_dir_metadata(path)?;
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(PathErr::RuntimeDirInsecure {
@@ -1082,10 +1061,7 @@ pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
 
 #[cfg(unix)]
 fn runtime_dir_metadata(path: &Path) -> Result<fs::Metadata> {
-    let metadata = fs::symlink_metadata(path).map_err(|e| PathErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    let metadata = fs::symlink_metadata(path).map_err(PathErr::io(path))?;
     if metadata.file_type().is_symlink() {
         return Err(PathErr::RuntimeDirSymlink {
             path: path.to_path_buf(),
@@ -1102,10 +1078,7 @@ fn runtime_dir_metadata(path: &Path) -> Result<fs::Metadata> {
 #[cfg(not(unix))]
 pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
     mkdir_p(path)?;
-    let metadata = fs::metadata(path).map_err(|e| PathErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    let metadata = fs::metadata(path).map_err(PathErr::io(path))?;
     if !metadata.is_dir() {
         return Err(PathErr::RuntimePathNotDirectory {
             path: path.to_path_buf(),
