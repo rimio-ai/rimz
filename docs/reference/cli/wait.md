@@ -5,15 +5,15 @@
 Only an agent RimZ can identify (from its launch environment or process ancestry) can arm or cancel a wait, and every wait targets that agent's own live session. To wake another agent, attach a prompt, repeat on a schedule, or subscribe to a signal, use [`rimz loop add --wait`](./loop.md#waits-and-checks). The [loops guide](../../guide/loops.md#wake-a-running-agent) teaches the workflow.
 
 ```sh
-rimz wait --in 30m                          # timer
-rimz wait --pid 16776                       # an existing process
-rimz wait --check 'nc -z localhost 3000'    # poll until the port opens
-rimz wait --file build.log                  # any file change
-rimz wait --file build.log --grep 'READY'   # a new matching line
+rimz wait --in 30m                           # timer
+rimz wait --pid 16776                        # an existing process
+rimz wait --check 'nc -z localhost 3000'     # poll until the port opens
+rimz wait --file build.log                   # any file change
+rimz wait --file build.log --grep 'READY'    # a new matching line
 rimz wait --run 'gh run watch --exit-status' # a watched command
-rimz wait --on fail --run 'cargo test'      # deliver only if the command fails
-rimz wait --timeout 1h --run 'cargo build'  # request a check-in after 1h
-rimz wait list                              # pending waits (bare `rimz wait` does the same)
+rimz wait --on fail --run 'cargo test'       # deliver only if the command fails
+rimz wait --timeout 1h --run 'cargo build'   # request a check-in after 1h
+rimz wait list                               # pending waits (bare `rimz wait` does the same)
 rimz wait cancel wait-bold-comet
 rimz wait cancel --all
 ```
