@@ -231,9 +231,6 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         reason: Option<&str>,
         now: Timestamp,
     ) -> MessageRecord {
-        let message = normalize_terminal(message, status, now, reason);
-        let method = MessageEventMethod::for_terminal_status(status)
-            .expect("terminal message statuses have an event method");
         if let Some(index) = self
             .live
             .iter()
@@ -242,6 +239,20 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
             self.live.remove(index);
             self.live_changed = true;
         }
+        self.close(message, status, session_name, reason, now)
+    }
+
+    fn close(
+        &mut self,
+        message: MessageRecord,
+        status: MessageStatus,
+        session_name: &str,
+        reason: Option<&str>,
+        now: Timestamp,
+    ) -> MessageRecord {
+        let message = normalize_terminal(message, status, now, reason);
+        let method = MessageEventMethod::for_terminal_status(status)
+            .expect("terminal message statuses have an event method");
         self.history.push(message.clone());
         self.events.push(EventEnvelope::message_event(
             &message,
@@ -281,17 +292,7 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
                 }
                 MessageUpdate::Finalize { status, reason } => {
                     self.live_changed = true;
-                    let message = normalize_terminal(message, status, now, reason.as_deref());
-                    let method = MessageEventMethod::for_terminal_status(status)
-                        .expect("terminal message statuses have an event method");
-                    self.history.push(message.clone());
-                    self.events.push(EventEnvelope::message_event(
-                        &message,
-                        session_name,
-                        method,
-                        reason.as_deref(),
-                    ));
-                    updated.push(message);
+                    updated.push(self.close(message, status, session_name, reason.as_deref(), now));
                 }
             }
         }
@@ -1129,7 +1130,6 @@ impl Store {
                 let Some(reason) = reason else {
                     return MessageUpdate::Keep;
                 };
-                message.last_error = Some(reason.clone());
                 MessageUpdate::Finalize {
                     status: MessageStatus::Archived,
                     reason: Some(reason),
@@ -1183,7 +1183,6 @@ impl Store {
                     return MessageUpdate::Keep;
                 };
                 let reason = condition.expiry_reason();
-                message.last_error = Some(reason.clone());
                 MessageUpdate::Finalize {
                     status: MessageStatus::Archived,
                     reason: Some(reason),
