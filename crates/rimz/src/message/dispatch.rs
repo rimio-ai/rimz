@@ -246,10 +246,6 @@ pub enum DispatchErr {
     },
     #[error("`{label}` cannot receive now and has no durable session to park")]
     NoDurableSession { label: String },
-    #[error(
-        "{label} runs {kind}, which has no interrupt key; use --steer to write into the live turn, or park it"
-    )]
-    NoInterruptKey { label: String, kind: AgentKind },
     #[error("{label} is waiting on your input in its pane; answer it or pass --force")]
     WaitingOnInput { label: String },
     #[error(transparent)]
@@ -654,15 +650,7 @@ fn prepare_mode(
                 .ok_or_else(|| DispatchErr::NoDurableSession {
                     label: label.clone(),
                 })?;
-            if crate::agents::spec_by_kind(target_kind.as_str())
-                .and_then(|spec| spec.launch.interrupt_key)
-                .is_none()
-            {
-                return Err(DispatchErr::NoInterruptKey {
-                    label,
-                    kind: target_kind.clone(),
-                });
-            }
+            send::interrupt_key(target_kind, &label).map_err(deliver::DeliverErr::from)?;
             let agent = if target.pane.is_some() {
                 target.bound(resolution.snapshot)
             } else {
