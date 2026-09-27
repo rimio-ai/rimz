@@ -177,7 +177,7 @@ impl SidebarSnapshot {
     /// view — i.e. the user has nothing left but the managed daemon dashboard. A
     /// view is a *daemon* view iff, after dropping its sidebar pane, it is
     /// non-empty and every remaining pane is daemon-dashboard infrastructure
-    /// ([`crate::pane::pane_is_host`]); a *working* view iff it holds
+    /// (`pane_is_host`); a *working* view iff it holds
     /// any non-sidebar, non-dashboard pane. A sidebar-only view (a working tab
     /// mid-self-close) counts as neither, so it neither trips nor blocks the
     /// signal. Returns `false` for an empty or not-yet-born session.

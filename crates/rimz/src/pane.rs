@@ -79,7 +79,7 @@ pub(crate) fn pane_runs_daemon_host(pane: &PaneRef) -> bool {
 }
 
 /// Whether `pane` belongs to the daemon dashboard: view-level classification, not card admission.
-pub fn pane_is_host(pane: &PaneRef) -> bool {
+pub(crate) fn pane_is_host(pane: &PaneRef) -> bool {
     pane_runs_daemon_host(pane) || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
