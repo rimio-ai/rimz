@@ -677,7 +677,7 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn defer_message_wake(
+    pub(crate) fn defer_message_wake(
         &self,
         message_id: &MessageId,
         until: Timestamp,

@@ -31,8 +31,8 @@ mod signal;
 pub use lifecycle::{
     AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES, SideConversation,
 };
-pub(crate) use queue::DeliverySweepUpdate;
-pub use queue::{BlockerUpdate, DeliveryAck, DeliveryFailureDisposition, EditOutcome, MessageEdit};
+pub(crate) use queue::{BlockerUpdate, DeliverySweepUpdate};
+pub use queue::{DeliveryAck, DeliveryFailureDisposition, EditOutcome, MessageEdit};
 
 /// Terminal audit-only message outcome for a target that never resolved to a
 /// durable receiver card.
@@ -258,7 +258,7 @@ impl Store {
     /// a later birth with the same selection is a no-op, and one that differs
     /// is refused, because sessions are already stamped with the first.
     #[must_use = "durability barrier; check the result"]
-    pub fn record_room_logins(
+    pub(crate) fn record_room_logins(
         &self,
         workspace: &ResolvedWorkspace,
         logins: &crate::ids::RoomLogins,
