@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
+use rimz::message::DeliveryKind;
 use rimz::message::dispatch::{DispatchOutcome, ParkReason};
 use rimz::store::message::{AutoCompact, MessageSender};
 use rimz::utils::time::{DurationUnit, parse_duration_units};
@@ -266,23 +267,6 @@ pub(crate) fn validate_reply_wait(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum ReportMode {
-    Steer,
-    Interrupt,
-    Boundary,
-}
-
-impl From<rimz::message::DeliveryKind> for ReportMode {
-    fn from(kind: rimz::message::DeliveryKind) -> Self {
-        match kind {
-            rimz::message::DeliveryKind::Boundary => Self::Boundary,
-            rimz::message::DeliveryKind::Steer => Self::Steer,
-            rimz::message::DeliveryKind::Interrupt => Self::Interrupt,
-        }
-    }
-}
-
 pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
     match outcome {
         DispatchOutcome::Sent { label, message_id } => {
@@ -311,15 +295,15 @@ pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<Strin
 
 /// Present dispatch outcomes shared by direct messages and loop delivery.
 pub(crate) fn report_dispatch(
-    mode: ReportMode,
+    kind: DeliveryKind,
     target: &str,
     outcomes: &[DispatchOutcome],
     compacted: &[String],
 ) -> Result<()> {
-    match mode {
-        ReportMode::Boundary => report_boundary(outcomes, compacted),
-        ReportMode::Steer => report_steer(target, outcomes, compacted),
-        ReportMode::Interrupt => report_interrupt(outcomes, compacted),
+    match kind {
+        DeliveryKind::Boundary => report_boundary(outcomes, compacted),
+        DeliveryKind::Steer => report_steer(target, outcomes, compacted),
+        DeliveryKind::Interrupt => report_interrupt(outcomes, compacted),
     }
 }
 

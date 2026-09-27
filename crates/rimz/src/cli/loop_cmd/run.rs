@@ -341,7 +341,7 @@ fn execute_prepared_delivery(
             when: Vec::new(),
         }
     };
-    let report_mode = crate::cli::send::ReportMode::from(mode.kind());
+    let kind = mode.kind();
     let dispatched = rimz::message::dispatch::dispatch(
         &workspace,
         &store,
@@ -381,7 +381,7 @@ fn execute_prepared_delivery(
                 })
                 .context("loop wait dispatch returned no outcome")?;
             crate::cli::send::report_dispatch(
-                report_mode,
+                kind,
                 &prepared.target.handle,
                 &result.outcomes,
                 &result.compacted,
