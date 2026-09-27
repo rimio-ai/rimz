@@ -8,8 +8,7 @@ use jiff::Timestamp;
 use super::*;
 use rimz::address::TargetErr;
 use rimz::message::dispatch::{
-    ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchRequest, ReplyRequest,
-    WhenRequest,
+    ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchRequest, WhenRequest,
 };
 use rimz::message::reply::{ReplyJoin, ReplyPrepareErr};
 
@@ -88,13 +87,10 @@ pub(super) fn send_message(
         sender: sender.clone(),
         automated: false,
         allow_fanout: all,
-        reply: wait.is_on().then(|| ReplyRequest {
-            join: if wait.any {
-                ReplyJoin::Any
-            } else {
-                ReplyJoin::All
-            },
-            caller_identity: send::caller_identity(caller.as_ref()),
+        reply: wait.is_on().then_some(if wait.any {
+            ReplyJoin::Any
+        } else {
+            ReplyJoin::All
         }),
         mux: globals.mux,
         enter: !no_enter,
