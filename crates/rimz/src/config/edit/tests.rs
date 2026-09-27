@@ -907,6 +907,77 @@ fn merge_keeps_lsp_server_entry_whole() {
     }
 }
 
+#[test]
+fn merge_keeps_empty_named_account() {
+    let claude = crate::ids::AgentKind::new_unchecked("claude");
+    let personal = "personal".parse::<crate::ids::LoginName>().unwrap();
+    for seed in [
+        "[accounts.claude.personal]\n",
+        "[accounts.claude]\npersonal = {}\n",
+        "accounts = { claude = { personal = {} } }\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, seed).unwrap();
+        let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+            &path,
+            dir.path().join("agents-home"),
+        ));
+        let report = editor.merge_defaults().unwrap();
+        assert!(report.files[0].skipped.is_empty(), "{seed}: {report:?}");
+        assert!(
+            matches!(report.files[0].action, MergeAction::Merged { kept: 1 }),
+            "{seed}: {report:?}"
+        );
+        let config = MachineConfig::load_from(&path, editor.files.agents_home()).unwrap();
+        assert_eq!(config.accounts.claude[&personal].home, None, "{seed}");
+        let merged = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            merged.matches("\n[accounts.claude.personal]\n").count(),
+            1,
+            "{seed}: {merged}"
+        );
+
+        editor.merge_defaults().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), merged, "{seed}");
+        editor
+            .upsert_named_account(&claude, &personal, None)
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), merged, "{seed}");
+    }
+}
+
+#[test]
+fn merge_keeps_empty_and_homed_named_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[accounts.claude.work]\nhome = \"/srv/homes/work\"\n\n[accounts.codex.personal]\n",
+    )
+    .unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    let report = editor.merge_defaults().unwrap();
+    assert!(report.files[0].skipped.is_empty(), "{report:?}");
+    assert!(
+        matches!(report.files[0].action, MergeAction::Merged { kept: 2 }),
+        "{report:?}"
+    );
+    let accounts = MachineConfig::load_from(&path, editor.files.agents_home())
+        .unwrap()
+        .accounts;
+    let work = "work".parse::<crate::ids::LoginName>().unwrap();
+    let personal = "personal".parse::<crate::ids::LoginName>().unwrap();
+    assert_eq!(
+        accounts.claude[&work].home.as_deref(),
+        Some(Path::new("/srv/homes/work"))
+    );
+    assert_eq!(accounts.codex[&personal].home, None);
+}
+
 const LSP_SERVER_FIELDS: &str = r#"command = ["rust-analyzer"]
 extensions = ["rs"]
 root-markers = ["Cargo.toml"]

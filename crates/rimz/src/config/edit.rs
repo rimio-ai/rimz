@@ -511,7 +511,8 @@ fn walk_table(
         let mut doc_path = doc_prefix.to_vec();
         doc_path.push(key.to_string());
         let logical = to_logical(kind, &doc_path);
-        if is_whole_struct_table(&logical) {
+        let empty = item.as_table_like().is_some_and(|table| table.is_empty());
+        if is_whole_struct_table(&logical) || is_empty_named_account(&logical, empty) {
             if let Some(value) = item_to_value(item) {
                 out.push(PendingKey { logical, value });
             }
@@ -537,7 +538,8 @@ fn walk_inline_table(
         let mut doc_path = doc_prefix.to_vec();
         doc_path.push(key.to_string());
         let logical = to_logical(kind, &doc_path);
-        if is_whole_struct_table(&logical) {
+        let empty = value.as_inline_table().is_some_and(InlineTable::is_empty);
+        if is_whole_struct_table(&logical) || is_empty_named_account(&logical, empty) {
             out.push(PendingKey {
                 logical,
                 value: value.clone(),
@@ -579,6 +581,11 @@ fn is_whole_struct_table(path: &[String]) -> bool {
                 && meter == "context_meter"
                 && CONTEXT_METER_BANDS.contains(&band.as_str())
     ) || matches!(path, [root, servers, _] if root == "lsp" && servers == "servers")
+}
+
+/// An empty `[accounts.<kind>.<name>]` declares the account at its default home, so the table itself is the setting.
+fn is_empty_named_account(path: &[String], empty: bool) -> bool {
+    empty && matches!(path, [root, kind, _] if root == "accounts" && is_named_account_kind(kind))
 }
 
 fn item_to_value(item: &Item) -> Option<Value> {
