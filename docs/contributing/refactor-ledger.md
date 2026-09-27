@@ -1,256 +1,258 @@
 # Refactor ledger
 
-The memory between passes of the [refactor program](./refactor-program.md): what has been reviewed, what holds, and which upward edges are intended. A pass reads it first and edits it last. Commits and code are the record of what each pass changed; this file keeps only what the next pass needs. `cargo xtask atlas survey` parses the two tables under `## Module verdicts` and `## Admission intents` (`xtask/src/atlas/ledger.rs`), so their column shapes are a contract; the other sections are prose.
+The memory between passes of the [refactor program](./refactor-program.md): where the program stands, what has been reviewed, and which upward edges are intended. A pass reads it first and edits it last. `cargo xtask atlas survey` parses the tables under `## Module verdicts` and `## Admission intents` (`xtask/src/atlas/ledger.rs`), so their column shapes are a contract; the other sections are prose. Keep every note to one clause: the code is the result, and commits and PRs are the history.
 
-## Seam queue
+## Status
 
-Ordered survey findings awaiting a seam review; a queued seam is proposed before any module pass. Status is `queued`, `in flight <branch>`, or `rejected <reason>`; a landed seam is deleted from the queue, since the closed direction lives in `refactor-target.toml` layers and admissions and in the module's `AGENTS.md`.
+Survey at `cf8ed681b` (2026-09-27). Rewrite this section whenever a pass ends.
 
-| # | seam | evidence | status |
-| --- | --- | --- | --- |
-
-Empty. Eleven seams landed in passes 1–25 (store ⇄ agents/message, adapter sibling families, mux ↔ sidebar, daemon_view ↔ mux, `wakeup` below `store`, store → harness, store edges, message → `address`, diag at L3, `harness` below `sidebar`). The cycles that remain are held by intent: `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `config ↔ harness`, `harness ↔ message`; `sidebar_pane ↔ web`; `config ↔ trust`, since `trust` hashes the command-executing config fields as a product invariant while effective config reads trust state to gate project profiles; `pane ↔ proc`, since pane classification needs process labels and `ProcInfo` while the pane probe reports `pane::ElevatedAgent` in pane vocabulary.
+- **Seam queue: empty.** Eleven seams landed in passes 1 to 25. A seam a survey surfaces is added here as `queued` and proposed before any module pass; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
+- **Cycles held by intent:** `daemon_view ↔ remote_control`, `daemon_view ↔ sidebar`, `agents ↔ proc`, `pane ↔ proc`, `config ↔ harness`, `config ↔ trust` (trust hashes the command-executing fields; effective config reads trust), `harness ↔ message`, `sidebar_pane ↔ web` (see deferrals). Also listed by the survey and each backed by `keep` admissions: `agents ↔ config`, `agents ↔ theme`, `address ↔ agents`, `config ↔ store`, `config ↔ theme`, and the crate-root re-export cycles.
+- **Reopened** (churn past the row's count): `sidebar_pane/app`, `sidebar_pane/render/sections` (cx 41, `t/c` 0.08), `agents/adapters/claude`, `message`, `store/writer`, `disk`. The last two surfaced once sixteen rows from passes 18 and 19 were re-stamped from pre-rebase SHAs to their record commits' parents on trunk.
+- **Never reviewed:** `lsp` (6.6k SLOC, cx 138.6, the crate's highest; born 2026-09-26 and `hot`, so it waits for its pace to settle), `config/lsp`, `agents/skills`, `harness/{board,cache_keepalive,deadline,launch_env}`.
+- **Unreviewed admission:** `config` → `harness::idle_compact` (1 site).
+- **Unjudged families:** the skills `read_dir` shape family (`agents/skills.rs`, `sandbox/skills.rs`, `room/session.rs`, `workspace.rs`).
 
 ## Module verdicts
 
-One row per module at the granularity `survey` ranks (`store/snapshot`, `agents/(root)`, `mux/tmux`). `holds` names the SHA reviewed and the scoped-commit count that reopens it (`git rev-list --count <sha>..HEAD -- <path>`); `survey` reads those two cells and flags the module `held` until the count is reached, then `reopen`. A module pass that landed writes `holds; landed pass-N` with the record commit's parent as the SHA, since only a `holds` status demotes the module; a bare `landed` marks a seam pass that reviewed the module's edges and left its interior a candidate. A module reviewed as part of a parent's pass gets its own row at the parent's SHA. The note names what holds by verdict so the next reader does not re-litigate it.
+One row per module at the granularity `survey` ranks. `holds` carries the reviewed SHA (the record commit's parent) and the scoped-commit count that reopens it; `survey` flags the module `held` until the count is reached, then `reopen`. A landed module pass writes `holds; landed pass-N`; a bare `landed` marks a module whose edges a seam pass reviewed. A module reviewed under a parent's pass gets its own row at the parent's SHA.
 
 | module | status | sha | reopen at | note |
 | --- | --- | --- | --- | --- |
-| `address` | holds; landed pass-14 | `0a9330ef1` | 30 | grammar, renderer, pane binding and launch lineage at L4; one channel reconciler; message-only items narrowed. |
-| `agents` | holds; landed pass-18a | `a3d0b8851` | 30 | root exports only outside-spelled names; hook representation private to `hook_types`; test helpers gated; the six never-overridden install defaults stay trait defaults; schema types hold. Adapters, spending and petname keep their own rows. |
-| `agents/(root)` | holds; landed pass-18a | `a3d0b8851` | 30 | reviewed with the `agents` row. |
-| `agents/state` | holds; landed pass-18a | `a3d0b8851` | 30 | reviewed with the `agents` row; owns `BudgetWindow`/`BudgetScope`/`BudgetPark` and `AgentState::channel()`. |
-| `agents/context` | holds; landed pass-18a | `a3d0b8851` | 30 | reviewed with the `agents` row. |
-| `agents/definition` | holds; landed pass-18a | `a3d0b8851` | 30 | reviewed with the `agents` row. |
-| `agents/adapters` | landed pass-2 | — | — | sibling families hold: hook decode, spend cache, lifecycle classification, answer plan, paired settings install are provider policy over shared helpers; interiors are per-adapter rows. |
-| `agents/adapters/(root)` | holds | `358688a13` | 30 | fourteen `pub(super) mod` declarations and the registry; nothing escapes beyond `agents`. |
-| `agents/adapters/install_report` | holds | `358688a13` | 30 | `report_files` is `pub(super)` and read only by the sibling installers. |
-| `agents/adapters/claude` | holds; landed pass-9 | `7af6d9f74` | 30 | neutral control outcomes, shared priced-record gate; remote-control trio, typed Stop validation and discovery stay separate. |
-| `agents/adapters/codex` | holds; landed pass-9 | `7af6d9f74` | 30 | one framed transport and handshake for enrichment and broker; rollout presence semantics and pane-confirmation seam hold. |
-| `agents/adapters/kimi` | holds; landed pass-19c | `11e3d305a` | 30 | registry adapter is the sole escaping item; interiors provider-local. |
-| `agents/adapters/qwen` | holds; landed pass-19c | `11e3d305a` | 30 | registry adapter is the sole escaping item; regional quota, statusline, rewind spend and managed install provider-local. |
-| `agents/adapters/copilot` | holds; landed pass-20c | `e26f986a1` | 30 | registry adapter is the sole escaping item; multi-file report rows through `adapters/install_report.rs`; `CopilotHookPayload`/`NormalizedToolCall(s)` stay `pub(super)` (caveat 13). |
-| `agents/adapters/cursor` | holds; landed pass-25 | `358688a13` | 30 | registry adapter is the sole escaping item; statusline serde forwarders collapsed onto the generic lossy helper; `RETAINED_RENDERING_KEYS` behaviour pinned by `0c5284908`. The statusline's own lossy-object reader holds by verdict: it swallows inner errors where `transcript_fs`'s visitor propagates them. |
-| `agents/adapters/antigravity` | holds; landed pass-20c | `e26f986a1` | 30 | registry adapter is the sole escaping item; reports through the shared builder. |
-| `agents/adapters/pi` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item; ask mapping, payloads, account probes and spend provider-local; spend parser named `spend::parse` like its siblings. |
-| `agents/adapters/opencode` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item; `OpencodeHookPayload` stays `pub(super)` (caveat 13); the tolerant `parse_payload` and the `sqlite_io` error adapter hold by verdict. |
-| `agents/adapters/plugin` | holds; landed pass-21c | `e237f2db5` | 30 | `agents::plugins` façade re-exports stay `pub` for the binary crate; `PluginAdapter` private, reached through `loaded()`. |
-| `agents/adapters/grok` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item; hook catalog constants and context refresh private to the adapter. |
-| `agents/adapters/droid` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item; interiors provider-local. |
-| `agents/adapters/kiro` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item; install and session store provider-local. |
-| `agents/adapters/amp` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item; session-file forwarder collapsed; `AmpHookPayload` stays `pub(super)` (caveat 13) and the tolerant `parse_payload` holds by verdict. |
-| `agents/attribution` | holds | `5fe85089d` | 30 | every atlas narrowing is refuted by the binary's attribution-command tests, which build `MessageCounts`, `SubagentStat`, `Presence`, `TeamRef`, `LaneLifetime` and `LaneLifetimes::new` directly; the report model and `build` hold. |
-| `agents/lifecycle` | holds; landed pass-22c | `5fe85089d` | 30 | `step` and the turn-id bookkeeping are crate-private; `LifecycleState` (a `Transition` field and `AgentState::lifecycle` return), `LifecycleSignal::tag`, `TerminalDisposition` and `LIFECYCLE_EVENT_VERSION` stay public by verdict; the signal vocabulary holds. |
-| `agents/pricing` | holds; landed pass-22c | `5fe85089d` | 30 | the rate model and book lookups are private to `agents`; `PriceBook` and `cached_book*` stay public for binary, bench and integration callers, and `TokenSplit` (named by `CachedEntry::new`), `from_litellm_json` and the `source` refresh surface by verdict. |
-| `agents/spending` | holds; landed pass-13 | `3c7dcbb18` | 30 | one writer per cache, version predicates, shared readers, one engine election path; parser wire, walker, fold, discovery and cache records hold. |
-| `agents/capabilities` | holds | `92d2bdb59` | 30 | all 54 atlas candidates refuted in one stroke: a trait method has no visibility of its own, and public `AgentDefinition::new`/`Deref` hand out `dyn AgentIntegration`, so the ten capability traits and the bundle stay `pub`; the pass-18a install-default verdict still holds. |
-| `agents/hook_types` | holds; landed pass-24b | `92d2bdb59` | 30 | 33 narrowings put the whole hook representation at `pub(super)`: `HookEventSpec` and its const builders, the three catalog helpers, `decode_catalog_hook`, every `HookOutput` setter and its `observed_context` reader, `SessionSource`, `CompactTrigger` and `HookEventCommon`. `HookRouting` stays public by the pass-18a verdict; `context_agent_id` and `worktree_path` stay `pub` because the binary's lifecycle hooks call them on the re-exported `HookOutput`. |
-| `agents/account` | holds; landed pass-24b | `92d2bdb59` | 30 | eight narrowings: `INFORMATIONAL_PROBE_TIMEOUT`, `AccountUsageIdentity::{new,binding}` and `file_mtime_ms` to `pub(super)`, `display_label` and `spent_window` private, `capacity` and `exact_account_applies` to the crate. The cache schema (`RateLimitsCache`, `RateLimitCacheEntry`, `PendingRefill`) and the reset-credit contract types stay `pub` for the integration crate, and `ProviderCapacity::from_windows` took `pub(crate)` rather than strand held-module tests, so the account-cache writer lift is no harder. |
-| `agents/credits` | holds; landed pass-24b | `92d2bdb59` | 30 | 19 narrowings: the OAuth transport (`oauth_http_get`/`post_json`, its two bounds, `HttpErrKind`, `url_host`, `trusted_usage_url`), `AccountUsageReportable` and `map_account_usage_probe` to `pub(super)`; the `ExtraCredits` presentation accessors to the crate, `is_exhausted` private. `AccountUsageProbe`/`AccountUsageSnapshot` are public signature types and `ExtraCredits::known` is built by the binary's sidebar fixture. |
-| `agents/managed_json_hooks` | holds; landed pass-24b | `92d2bdb59` | 30 | nine narrowings: `ManagedJsonHookSpec`, `SyncEncoding` and the install/preview/uninstall/read surface to `pub(super)`, `render_json` private. The whole JSON hook merge backend is now reachable only from `agents`; `managed_source` is its one caller. |
-| `agents/managed_statusline` | holds; landed pass-24b | `92d2bdb59` | 30 | nine narrowings: the spec, `RenderingOptions`, `WrapPolicy` and the six merge functions to `pub(super)`; both marker keys private. The module escapes nothing. |
-| `agents/settings_json` | holds; landed pass-24b | `92d2bdb59` | 30 | nine narrowings: the strict JSON primitives and `PendingWrite` to `pub(super)`. Strict parsing on the install path stays the rule; the tolerant read is `jsonc`. |
-| `agents/managed_source` | holds | `92d2bdb59` | 30 | nothing landed: the `ManagedSource` inherent methods are the seam held adapters call, and the `ManagedIntegration` impl forwarders are pinned by `417721973` and `e566d6b44`. The `_rimz_managed` literal is spelled here, in `managed_json_hooks` and in `managed_statusline`; a single owner measured line-neutral and is deferred below. |
-| `agents/question` | holds; landed pass-24b | `92d2bdb59` | 30 | eight narrowings: `PreviewPolicy`, `NormalizedQuestion` and the six entry points to `pub(super)`. `NormalizedQuestion` cannot go private — it is the return type of `decode`, which held adapters call (caveat 13). |
-| `agents/transcript_fs` | holds; landed pass-25 | `358688a13` | 30 | the tail readers and their helpers keep `agents` reach and left the root's `pub use`; the lossy-object visitor propagates inner errors, a different rule from Cursor's statusline reader, so neither collapses onto the other. |
-| `agents/registry` | holds; landed pass-24b | `92d2bdb59` | 30 | five narrowings: `BUILTINS` to `pub(super)`, `command_agent_kind`, `room_env` and the two resume-session lookups to the crate. `all_definitions`, `find_definition`, `known_kinds`, `spec_by_kind`, `definition_by_kind` and `compact_command` stay `pub` for the binary. |
-| `agents/runtime_control` | holds; landed pass-24b | `92d2bdb59` | 30 | seven narrowings: the neutral façade (`readiness`, `ensure`, `prepare`, `reconcile`, `updater_advisory`, `wiring_input_path`) and `RuntimeControlLiveness::is_down` to the crate. The forwarders stay — they are the `agents` boundary. `RuntimeControlIssue`/`RuntimeControlError` are public signature types and their `new` took `pub(crate)` for `remote_control/tests.rs`. |
-| `agents/login` | holds; landed pass-24b | `92d2bdb59` | 30 | one narrowing: `LoginCatalog::names` is file-private. Everything else is floored by a public signature — `LoginErr`, `LoginMismatch`, `RoomLoginErr`, `session_login_env`, `birth_selection`, `between`, `room`, `default_named_home` — and `ProviderLogin::named` is called by the binary's provider tests. |
-| `agents/delegated_account` | holds; landed pass-24b | `92d2bdb59` | 30 | five narrowings: `Adapter`, `Config` and the two probes to `pub(super)`, `Error` private. Delegated OAuth usage is an `agents` interior. |
-| `agents/identity` | holds; landed pass-24b | `92d2bdb59` | 30 | five narrowings: `RootIdentity`, `SubagentIdentity` and the three resolvers to `pub(super)`; the root alias is private, which still reaches every adapter. |
-| `agents/locate` | holds; landed pass-24b | `92d2bdb59` | 30 | three narrowings: `agent_config_path`, `probe_descriptor_version` and `read_optional_file` to `pub(super)`. Install-file discovery no longer escapes. |
-| `agents/payload` | holds; landed pass-24b | `92d2bdb59` | 30 | three narrowings: `optional_payload_string`, `stop_payload_errored` and `CONTROL_TAG_PREFIXES` to `pub(super)`. `sanitize_user_prompt` and `non_empty_trimmed` keep crate reach: `store/message/tests.rs:66` names the first and this pass may not edit `store`. |
-| `agents/tools` | holds; landed pass-24b | `92d2bdb59` | 30 | `ToolSet::without` deleted — introduced by `83d9eddee`, it never gained a production caller and its two assertions only exercised itself. `ToolSet`, `ToolErr`, `DefinitionDefaults` and the render/alias/defaults functions took crate reach, and the last two left the root's `pub use`; `definition_model_kind` is the module's one escaping name, kept `pub` for the integration crate (`tests/integration/common/mod.rs:59`). |
-| `agents/session` | holds; landed pass-24b | `92d2bdb59` | 30 | three narrowings to the crate: `daemon_session_evidence` and the two turn-death refinements. `DaemonSessionEvidence` itself stays `pub` — the public `SessionCapability` method names it. |
-| `agents/observation` | holds; landed pass-24b | `92d2bdb59` | 30 | four narrowings: the three context-window accessors private, `merge` to the crate. `SessionOrigin`, `AgentUsageSummary` and `LaunchedBy` are public fields or signature types of `AgentLifecycleObservation`/`LaunchParams`, and the binary's hook tests build `SpawnedSubagent`. |
-| `agents/petname` | holds; landed pass-24b | `92d2bdb59` | 30 | two narrowings: `mint` and `HEADER_PSEUDO_HANDLES` to the crate. `RESERVED_AGENT_WORDS` and `valid_agent_name` both stay `pub` because the binary crate calls them (`cli/agents_cmd/tests.rs:362`; `cli/paths.rs:66` and `cli/hooks/lifecycle/identity.rs:57`). |
-| `agents/local_session_cache` | holds; landed pass-24b | `92d2bdb59` | 30 | one narrowing: the stability gate is file-private. `CatalogRefresh` and `ValueRefresh` are return types of more-visible items held adapters call, so `pub(super)` is their floor (caveat 13). |
-| `agents/jsonc` | holds; landed pass-24b | `92d2bdb59` | 30 | one narrowing: `from_slice` to `pub(super)`. The tolerant reader stays the only JSONC entry point and the install path keeps strict parsing. |
-| `agents/version` | holds; landed pass-24b | `92d2bdb59` | 30 | six narrowings to `pub(super)`, `VersionParseErr` included: `CliVersion` went `pub(super)` in the same pass, so the `FromStr` impl floors nothing and no one outside the module names the error. The whole module now escapes nothing. |
-| `agents/model_display` | holds; landed pass-24b | `92d2bdb59` | 30 | one narrowing: `display_factory_custom_selector` to the crate. |
-| `agents/background_shell` | holds; landed pass-24b | `92d2bdb59` | 30 | one narrowing: the report fold `apply` to the crate. |
-| `agents/transcript` | holds | `92d2bdb59` | 30 | nothing landed: the four transcript types are root-re-exported and imported directly by held adapters, and `TranscriptPosition::new` is a pass-through pinned by `417721973`. |
-| `agents/turns` | holds | `92d2bdb59` | 30 | nothing landed: `TurnRecord::outcome` is a public field and the binary's history command reads `TurnOutcome`. |
-| `agents/skill_links` | holds | `92d2bdb59` | 30 | nothing landed: `SkillLinkErr` and `SkillLinkOutcome` are the return types of the public `plan`/`apply`, and the integration crate drives `SkillLinkPlan::is_empty`. The host-mode symlink ownership rule is unchanged. |
-| `agents/emblems` | holds | `92d2bdb59` | 30 | nothing landed: `EmblemTint` is a public `Emblem` field type and `emblem_for` is read by the binary's sidebar fixture. |
-| `agents/open_ask` | holds | `92d2bdb59` | 30 | nothing landed: the open-ask record and its read error are the public surface the binary and sidebar read. |
-| `agents/plugins` | holds; landed pass-21c | `e237f2db5` | 30 | reviewed with `agents/adapters/plugin`; the façade re-exports stay `pub` for the binary crate. |
-| `agents/conformance` | holds | `92d2bdb59` | 30 | `#[cfg(test)]`, so it carries no production surface; `pub(crate)` is what the adapter suites need. |
-| `agents/testkit` | holds | `92d2bdb59` | 30 | `#[cfg(test)]`, so it carries no production surface; the five fixtures stay at crate reach for every adapter suite. |
-| `agent_activity` | holds | `4e445b73d` | 30 | nothing landed: `read_all` and `read_for_keys` are named by `tests/integration/hooks.rs`, and `AgentActivity` is the type both return. |
-| `child_process` | holds; landed pass-24a | `4e445b73d` | 30 | `SupervisedChild::id` deleted as unreferenced; the `pid` field keeps its readers in `signal_term` and `signal_kill`. `agent_helper_argv` stays `pub` for the integration suite. |
-| `config` | holds; landed pass-24a | `4e445b73d` | 30 | the façade is the one decision point for reach: 55 names stay `pub use` for the binary, integration and bench crates, 50 are `pub(crate) use` (nine of them `#[cfg(test)]`, their only readers being other modules' unit tests), and 19 left the façade entirely. Child declarations keep their `pub` spelling, which means "offered to the façade": narrowing them moves no budget once the façade has narrowed, since `pub(crate)` still reaches the crate root. Every interior has its own row below. The same-layer cycle with `trust` holds by intent. |
-| `config/(root)` | holds; landed pass-24a | `4e445b73d` | 30 | reviewed with the `config` row; owns the façade, the loaders, the notices and the file registry. `MachineConfig::definition_failure` and `is_definition_source` deleted as unreferenced. |
-| `config/accounts` | holds; landed pass-24a | `4e445b73d` | 30 | named-account and budget records; `usage_limit` at crate reach and `UsageLimitUsd::as_usd` file-private. |
-| `config/agents` | holds; landed pass-24a | `4e445b73d` | 30 | profile, team and subagent records; `Team::{owner_of,owned_stages}` at crate reach. `PromptSource::file` stays `pub` for `cli/agents_cmd/fork.rs`. |
-| `config/animation` | holds | `4e445b73d` | 30 | the façade decides reach and the declaration stays `pub` as a field type of `MachineConfig`; `AnimationRole::is_unset` is a live serde predicate, not vestigial. |
-| `config/attention` | holds | `4e445b73d` | 30 | the façade decides reach and the declaration stays `pub` as a field type of `MachineConfig`. |
-| `config/color` | holds; landed pass-24a | `4e445b73d` | 30 | palette roles and semantic tones; `Semantic::DEFAULT` is test-gated, since production resolves the default tones from the embedded catalog and only the drift test reads the baked-in mirror. |
-| `config/daemon` | holds | `4e445b73d` | 30 | the façade decides reach and the declaration stays `pub` as a field type of `MachineConfig`. |
-| `config/definitions` | holds; landed pass-24a | `4e445b73d` | 30 | `source_paths` is `pub(super)`; the rest of the Markdown definition loader is already `pub(super)`. The constructor deepen is an open deferral: the module is five days old. |
-| `config/diagnosis` | holds; landed pass-24a | `4e445b73d` | 30 | `ConfigFileDiagnosis::{line,problem}` are `#[cfg(test)] pub(crate)` — no production reader, but they pin `1862840`. |
-| `config/display` | holds; landed pass-24a | `4e445b73d` | 30 | section record; `ProviderTabsMode::tabs` at crate reach. `DisplayConfig::is_unset` is a live serde predicate. |
-| `config/edit` | holds; landed pass-24a | `4e445b73d` | 30 | comment-preserving writer and template merge hold; the `TurnCap` parse names its defining child now that the façade dropped the name. |
-| `config/effective` | holds; landed pass-24a | `4e445b73d` | 30 | `project_tasks_from_value` stays `pub` for `harness/schedule/config_edit.rs`, and `ProjectTasksErr` and the `Result` alias are carried by the public `EffectiveConfigErr` and `load` signatures. |
-| `config/gc` | holds | `4e445b73d` | 30 | the façade decides reach and the declaration stays `pub` as a field type of `MachineConfig`. |
-| `config/glyphs` | holds; landed pass-24a | `4e445b73d` | 30 | `ThemeGlyphsConfig::glyph` at crate reach, `GlyphOverrides::glyph` file-private; `GlyphRole::{name,namespace,namespaced_name}` stay `pub` for `theme/glyphs.rs`. |
-| `config/harness` | holds; landed pass-24a | `4e445b73d` | 30 | `DayCap::as_usd` at crate reach; `compact_instruction` stays `pub` for the integration suite, and the pass-12 `DayCap`/`TurnCap` verdicts hold. |
-| `config/loop_` | holds; landed pass-24a | `4e445b73d` | 30 | `WatchSpec::headline` at crate reach; `Tasks` and `LoopConfig` stay `pub use` for the integration crate. `LoopConfig::is_empty` is a live serde predicate. |
-| `config/mux` | holds | `4e445b73d` | 30 | the façade decides reach and the declaration stays `pub` as a field type of `MachineConfig`; the Zellij and tmux option records are read only by `mux`'s own unit tests, so their façade names are `#[cfg(test)] pub(crate)`. |
-| `config/notifications` | holds; landed pass-24a | `4e445b73d` | 30 | `NotificationTrigger::as_str` deleted as unreferenced; `effective_handlers`, `triggers_status` and `NotificationKind::as_str` at crate reach, `NotificationTrigger::from_status` file-private. `NotificationsPrefs::command` stays `pub`, and `NotificationKind` stays `pub use` because `sidebar/notify.rs:21` re-exports it. |
-| `config/pets` | holds; landed pass-24a | `4e445b73d` | 30 | `CellAspect::{ratio,from_ratio}` at crate reach; `PetsConfig::is_default` is a live serde predicate. |
-| `config/remote_control` | holds | `4e445b73d` | 30 | the façade decides reach and the declaration stays `pub` as a field type of `MachineConfig`. |
-| `config/resume` | holds; landed pass-25 | `358688a13` | 30 | `auto_redeem_min_gain` and `auto_continue_backoff` at crate reach; the config reads its own backoff ramp, empty-ramp fallback included, and the default ramp is private; the pass-12 duration-parser verdict holds. |
-| `config/scheme` | holds | `4e445b73d` | 30 | selectable scheme lookup and validation hold; the façade decides reach. |
-| `config/sentry` | holds | `4e445b73d` | 30 | the façade decides reach and the declaration stays `pub` as a field type of `MachineConfig`. |
-| `config/sidebar` | holds; landed pass-24a | `4e445b73d` | 30 | `afk_after_ms` at crate reach; `key_label` was already crate-visible. |
-| `config/skills` | holds; landed pass-24a | `4e445b73d` | 30 | `SkillName::as_str` at crate reach; the skill-list validator and its deserializer stay at crate reach for the sandbox and agents seams. |
-| `config/theme` | holds | `4e445b73d` | 30 | the façade decides reach and the declaration stays `pub` as a field type of `MachineConfig`; `ThemeConfig::is_unset` and the inline palette predicates are live serde predicates. |
-| `config/web` | holds | `4e445b73d` | 30 | the façade decides reach; `WebPrefs` left the façade entirely and `config.rs` names the child directly. |
-| `config/worktree` | holds; landed pass-24a | `4e445b73d` | 30 | `WorktreeBase::as_refspec` at crate reach; the base parse errors left the façade. |
-| `daemon_view` | holds; landed pass-15c | `0175c3c6b` | 30 | loop-panel acquisition is one operation; spec, identity, repair machine and elder tracker hold; both cycles hold by intent. |
-| `diag` | holds; landed pass-16 | `6fccc2b04` | 30 | evidence vocabulary and append mechanics at L3 below store; one sink admission point; shared rotated read; wire and per-surface logs hold. |
-| `disk` | holds; landed pass-19b | `ecb57065f` | 30 | file mechanics over `ids` and `sock`; durability classes, filenames, locking, and the three distinct file identities (walk dedupe, parse stamp, temp-sweep nlink) hold. |
-| `harness` | landed pass-5; pass-7; pass-8; pass-14; pass-20a; pass-23b; pass-25 | — | — | policy over agent and store records, reaching down; every interior has its own row below, the flat root files included since pass 23b. `harness` never reaches `sidebar`: a helper that refreshes provider usage returns it, and its CLI entry publishes through `sidebar::refresh`. |
-| `harness/schedule` | holds; landed pass-14; pass-23b | `5a052d17b` | 30 | one arming rule, compiled armed receipt, exit codes from `RunStatus`; `RunLockInfo`, `SignalSelector`, `LoopRunRecord::new` public by verdict. Pass 23b re-reviewed the interior after 179 escaping items: six narrowed (`LOOP_TASK_ENV` and the pending-wait scan to the crate, `SignalSelector::family` to the harness, `watch_interval`, `StrikesError` and `CheckOutcome::new` inside their own tree), and the pass-14 `ArmingError` verdict still holds on `pub fn pause`/`disable`. The catalog, arm, team and signal error and outcome types are all signature floors. |
-| `harness/resume` | holds; landed pass-19a | `4aed3e793` | 30 | posture composes `plan::ResumeLaunchPosture`; recovery interior `pub(super)`; `plan_resume`/`ResumeContext` stay `pub` for the integration crate. |
-| `harness/plan` | holds; landed pass-19a | `4aed3e793` | 30 | owns the resume-argv DTOs; three phase-wide validation loops held by `92b6fbeab`; `launch_identity_requests` keeps nine positional args. |
-| `harness/launch` | holds; landed pass-20a | `5350d68e3` | 30 | one private `LAUNCH_FIELDS` key table encodes and decodes the pane identity env; relaunch requests over `ExecRequest::bare_launch`; `ENV_*` keys the integration crate sets stay `pub`. |
-| `harness/spec` | holds; landed pass-20a | `5350d68e3` | 30 | config-reached validators `pub(crate)`; `LayoutErr`, `parse_layout_spec` and the `Column`/`RawLayout`/`RawColumn` family stay `pub`. |
-| `harness/budget` | holds; landed pass-20a | `5350d68e3` | 30 | `evaluate`/`BudgetVerdict` private; ledger and scope-state types stay `pub` as signature types. |
-| `harness/run` | holds; landed pass-20a | `5350d68e3` | 30 | `RunCancellation::new` beside `Default` holds (integration callers); `RunWakeErr` and `socket_path` stay `pub`. |
-| `harness/rebirth` | holds; landed pass-23b | `5a052d17b` | 30 | `RebirthOutcome` deleted: it wrapped a `ResumePlan` beside a death marker no caller read, so `materialize` returns the plan and stamps the marker in place. The three entry points and `record_boundary` are `pub(crate)`; `RebirthPlan` and `RebirthErr` are floored by the held `room::RoomContext::inspect_rebirth`. |
-| `harness/auto_continue` | holds; landed pass-25 | `358688a13` | 30 | `ResumeArm` and `resume_park` file-private, `arm_budget_park` at harness reach; the `message` admission on `ResumeUnrecovered` holds by intent. `nudge_due` asks `ResumeConfig` for the ramp step. |
-| `harness/auto_redeem` | holds; landed pass-25 | `358688a13` | 30 | eight items private: the six policy constants, `RedeemReason::as_str` and `redeem_verdict`. `AutoRedeemErr` and `Redeemed` stay `pub` as the error and return of `execute_auto_redeem`, the detached helper's CLI entry, which publishes the returned usage. |
-| `harness/prompt_compose` | holds; landed pass-23b | `5a052d17b` | 30 | `materialize_system_prompt` deleted — the plan/apply split left it with no production caller, and its six per-provider rendering tests keep a test-module copy. The five composition helpers sit at harness reach; the four prompt types stay `pub` because `LaunchPlan.prompt` is a pub field the binary's `agents explain` reads. |
-| `harness/scratch` | holds; landed pass-23b | `5a052d17b` | 30 | `BoardRun` and `board_run` at crate reach for the sidebar pipeline lane; `ScratchScan` and `ScratchFile` floored by the `pub` `scan` the teams CLI calls. |
-| `harness/subagent_policy` | holds; landed pass-23b | `5a052d17b` | 30 | `reminder` at harness reach and `allowed_specs` private; `catalog` stays `pub` as the launch-time entry. |
-| `harness/team_prompt` | holds; landed pass-23b | `5a052d17b` | 30 | `for_role` and `declared` at harness reach. `BUILT_IN_CONSENSUS` and `consensus_copy_path` stay `pub` for the `config` admission, which now carries its intent row. |
-| `harness/orphan_sweep` | holds; landed pass-23b | `5a052d17b` | 30 | `enforce` at crate reach for the sidebar refresh lane; `OrphanedSubagent` and `OrphanSweepErr` floored by the `pub` `resolve`. |
-| `harness/run_timeout` | holds; landed pass-23b | `5a052d17b` | 30 | `enforce` at crate reach; `RunTimeoutRequest` stays `pub` for the integration crate. |
-| `harness/launch_reminders` | holds; landed pass-23b | `5a052d17b` | 30 | `LaunchReminders` at harness reach. `wrap` stays wider: private reach strands the held `harness/launch` reminder-composition test, which this pass may not edit. |
-| `harness/launch_context` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: atlas proposes `TeamLaunchContext` private, but `launch_reminders.rs:73-81` names it and two signatures carry it, so rustc refuses. Everything else is `keep`. |
-| `harness/assist_log` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: `log_path` is the scope the binary's stats test uses, and the binary sees only `pub`. |
-| `harness/owed` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: the binary's parked-monitor test names `OwedWake`'s variants directly. |
-| `harness/team_stage` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: `FlipErr` and `FlipReceipt` are floored by the `pub` `flip` and `rewake`. |
-| `harness/ancestry` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: `LaunchAncestryError` is floored by the `pub` `resolve_launch_ancestry`; the `message` admission holds by intent. |
-| `harness/parent_watch` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: every escaping item is reached from the binary's exec command. |
-| `harness/run_wake` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: its only two candidates, `RunWakeErr` and `socket_path`, are already verdicted `pub` under the `harness/run` row at pass-20a. |
-| `harness/auto_gc` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: all three escaping items are reached from the binary. |
-| `harness/fleet` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: the shared newest-run match and launched-fleet settlement are all reached from the binary. |
-| `harness/idle_compact` | holds; landed pass-23b | `5a052d17b` | 30 | nothing landed: the request, the token floor and the entry point are all reached from the binary. |
-| `harness/launch_plan` | holds; landed pass-24c | `e083557ba` | 30 | `LaunchPlan::argv` deleted: the plan/apply split left it reading the stage its own `process()` already returns, and its one test site reads that instead. `LaunchPlanErr` and `LaunchPlanWarning` are signature floors on the `pub` `compile`/`apply` and the `warnings` field the binary's exec and `agents explain` read. The rule's `workspace::record` admission was dropped as stale, not closed: the file's one `workspace` reference (`launch_plan.rs:103`) is a field read on an already-typed value, which is no dependency site, and it is unchanged by this pass. |
-| `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: the root file is module declarations and re-exports of interiors that carry their own rows. |
-| `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | the interior reviewed: `LoginKey::new` and `compose_channel` are crate-internal and `LoginKey::is_default` is deleted. Everything else is floored twice over — the nine parse error types are `FromStr::Err` or public-parser signatures, and `PaneId::{raw,creation_ordinal}`, `WorkspaceId::parse`, `MessageId::parse`, `ViewId`, `ViewKind`, `WorkspaceDirName`, `LinkTier`, `FocusNonce` and `LoginName::default_login` are read by the integration crate, the fixtures or `cli`. The twelve `FromStr`/`TryFrom`/`From` wrappers are trait boundaries, not forwarders. |
-| `message` | holds; landed pass-13 | `efe38f50c` | 30 | one System queue shape with auto-continue through `nudge_now`; settle owned by `message deliver`; dispatch wire, ordered check family and reply machine hold. |
-| `mux` | holds; landed pass-18c | `c037d47f8` | 30 | planner verdicts private; `TmuxBackend` by `Default`; `SplitPaneOptions::from_command` owns the pane-command projection; `MuxErr` and `PaneListOptions` fully live; records the integration crate, bench or CLI reach hold. |
-| `mux/(root)` | holds; landed pass-18c | `c037d47f8` | 30 | reviewed with the `mux` row; pass 24c split the `capabilities` re-export so only `drops_desktop_osc` stays public. |
-| `mux/tmux` | holds; landed pass-18c | `c037d47f8` | 30 | reviewed with the `mux` row. |
-| `mux/zellij` | holds; landed pass-10 | `173682d90` | 30 | presence lifecycle deepened; topology schema is the public wire; socket, pane_pid, parse and reap interiors hold. |
-| `mux/capabilities` | holds; landed pass-24c | `e083557ba` | 30 | `view_kind`, `lists_full_cmdline` and `wraps_osc_passthrough` are crate-internal backend facts; `drops_desktop_osc` stays `pub` by its pass-18c verdict, so the root re-export is split in two. |
-| `mux/width` | holds; landed pass-24c | `e083557ba` | 30 | the rounding and column-cap arithmetic is file-private and the percent accessor and zellij resize step are mux-internal; `SidebarTarget`, `WidthPermille`, `WidthPermille::{from_cols,from_percent}` and `WidthPercent::resolve` stay `pub` because the integration crate and `cli/agents_cmd/placement.rs` name them. |
-| `mux/focus_key` | holds; landed pass-24c | `e083557ba` | 30 | chord parsing is file-private and room-key resolution crate-internal; `RoomKeyBinding` is floored by the `pub` `MuxBackend::register_room_key` and `FocusChord` by its `chord` accessor. |
-| `mux/focus_anchor` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: `store` and `FOCUS_ANCHOR_FRESH` keep crate reach for the held loop-state focus tests, and the rest holds by the pass-18c verdicts on `load`, `FocusAnchor`, `FocusIntentState`, `FocusPresentation`, `FocusDispatchRetries` and `FocusActionError`. |
-| `mux/reconcile` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: `SidebarLiveness` and `SidebarRecovery` are driven by the integration crate and carried by the `pub` `MuxBackend::reconcile_sidebars`, and `ViewSidebars`, `ReconcilePlan` and `ReconcileFailure` are signature floors on the three mux-internal planner entries. |
-| `mux/recovery` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: the orphan sweep, its grace, the kill outcome and the dashboard reload are already at the reach their readers need. |
-| `mux/command` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: `env_remove` and `output_raw_with_timeout` already sit at crate reach, and `CommandSpec` with `new`/`arg`/`args`/`run` holds by the pass-18c verdict for the integration crate and the CLI. |
-| `mux/selection` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: `LiveSessions` and its two probes already sit at crate reach, and `auto_detect_backend` is the CLI's backend choice. |
-| `mux/domain` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: `ProcessDomain`, `current` and the two endpoint predicates are driven by `tests/integration/proc.rs`, which sees only `pub`. |
-| `mux/companion_layout` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: the grid split is a signature floor on the mux-internal `plan_append`, and the pane limit and balance are the layout's vocabulary. |
-| `mux/binaries` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: `cli/doctor/runtime.rs` reads `BinaryScan` and `ServerBinary` through the `pub` `scan`, and the tmux-server cmdline predicate is already mux-internal. |
-| `mux/width_target` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: the pin, adopt, clear and resolve quartet is the room's width intent, read from the backends and the pane. |
-| `mux/tab_name` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: the intent type is the CLI's and the two label helpers are already crate-internal. |
-| `mux/mount_proof` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: both items are the mount proof the backends call. |
-| `mux/pane_writer` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: the per-pane write lock and its four verbs are the mux-internal seam `pane send` runs through. |
-| `pane` | holds; landed pass-24a | `4e445b73d` | 30 | owns `ClientPaneView`; `RuntimeOwnerKind::as_str` deleted as unreferenced, `command_is_host` and `NamedKey::tmux_name` at crate reach. `pane_is_host` stays `pub` because public rustdoc in `store/snapshot` links to it; `SocketEndpoint` types `SshConn`'s fields and `UnknownKey` is `NamedKey`'s `FromStr::Err`; `ElevatedAgent`, `RuntimeOwner` and `RuntimeOwnerKind` are floored by the `lib.rs:76` re-export, and the pane constants by the integration suite. The same-layer cycle with `proc` holds by intent. |
-| `proc` | holds; landed pass-25 | `358688a13` | 30 | process/platform facts and shell selection; platform seams, bounded execution, spawn accounting and pane-probe abstention hold. |
-| `reload` | holds; landed pass-23c | `bc333aa67` | 30 | one durable staged-build path at crate reach for `room` and renderer supervision; `StageBuildErr` stays `pub` as the public reload's error and `resolve_reexec_target` is private. |
-| `remote` | holds; landed pass-21a | `d9d30b10b` | 30 | pure transitions here, drivers in `cli/remote`: rehoming the supervisor machines (`MasterState`, `RetryCause`, `OutageState`, `LinkSupervisor`) is a testability move with a flat escaping surface, not a candidate; `LinkStats`, `SessionLinkUpdate`, `AckOutcome`, `AliasErr` floored by signature; renderer/sidebar-only link helpers `pub(crate)`. |
-| `remote_control` | holds; landed pass-15c | `0175c3c6b` | 30 | one enable preflight; typed snapshot, batch toggle and advisories hold. |
-| `room` | holds; landed pass-15c | `0175c3c6b` | 30 | constructors, birth, ordered teardown (session kill, resurrection purge, runtime sweep, process sweep) and seven liveness policies hold. |
-| `sandbox` | holds; landed pass-23b | `5a052d17b` | 30 | only `ENV_SCRATCH` and `ENV_SHARED` could narrow, both to the crate. Everything else is floored twice over: `tests/integration/sandbox.rs` is a separate crate that sees only `pub` and drives `plan`, `apply`, `bwrap_argv` and `prepare` at 30-odd sites, and `ProviderHome`, `MountPlan` and `PlannedCopy` are pub fields of `SandboxInputs`/`SandboxPlan`. `prepare` is a pass-through kept for that crate. |
-| `sidebar` | landed pass-4 | — | — | producer election, fusion, refresh lanes, own cadences; interiors have their own rows. |
-| `sidebar/(root)` | holds; landed pass-23c | `bc333aa67` | 30 | the flat files are one data plane at sidebar or crate reach: election, unread/read marks, projections, runtime cache reads and the 60 cadences. What stays `pub` is reached from the binary crate (`cli`, which sits outside the library and so cannot take `pub(crate)` — about fifteen items, the largest group: `live_sidebars`, `session_build_drift`, `UnreadEpisodes`, `mark_rows_unread`, `write_manual_read_marks`, `read_presence_stamp`, `consumer::read` among them), bench-reached (`EventStore`/`append`, `fuse`/`fuse_owned`, `WorkspaceProjectionPublisher`/`publish`), integration-reached (`launch_sidebar_if_needed`, `presence_stamp_path`), or a signature floor (`OpenedUnread`, `AgentProjection`, `SidebarLaunchOutcome`); three cadences stay `pub` only for rustdoc links in held modules. The private `SidebarMux` forwarders are the launch tests' fake backend. |
-| `sidebar/refresh` | holds; landed pass-25 | `358688a13` | 30 | pass 15b's shape holds after 38 reopening commits: one provider refresh entry, one rate-limit cache transaction, PR name/payload pairs. `project_rate_limits` holds as four delegating phases. The two `read_*_cache` wrappers pin `T` for the generic cache read and are not forwarders; `DiffStatsCache` and `ProducerRefreshState` stay `pub` for the performance tier. Account-cache publication has one `pub` entry, `publish_account_usage_snapshot`, and its two writers are `pub(super)`. |
-| `sidebar/consumer` | holds; landed pass-23c | `bc333aa67` | 30 | `read_published_snapshot` is a producer path at sidebar reach; `rollup_snapshot` and `read_adopting` stay `pub` for the hotpath bench. |
-| `sidebar/frame` | holds; landed pass-23c | `bc333aa67` | 30 | the published `PaneFrame` wire stays `pub` field by field down to `PaneMetrics` (bench, integration crate and `daemon_view` read it) with `assemble_frame` as its entry; the assembly and rotation helpers narrowed to the sidebar. |
-| `sidebar/produce` | holds; landed pass-17a | `39b72afea` | 30 | named entries kept (no fold-mode core); metrics and git one file each. |
-| `sidebar/enrich` | holds; landed pass-20b | `e3785a2be` | 30 | ordered fold spine holds (fold order is an invariant); bench-reached `FoldOpts`/`enrich`/`enrich_workspace`/`WorkspaceSnapshot` keep. |
-| `sidebar/observe` | holds; landed pass-20b | `e3785a2be` | 30 | exposes the five names the renderer spells; `Observer::observe_into` owns detection, send and drop accounting. |
-| `sidebar/presence` | holds; landed pass-20b | `e3785a2be` | 30 | `ingest_zellij_wake` is one accept/reject transaction; CLI-reached wake and telemetry types keep `pub`. |
-| `sidebar/notify` | holds; landed pass-20b | `e3785a2be` | 30 | debounce/coalesce, link-health episodes and handler delivery are distinct policies. |
-| `sidebar/timing` | holds; landed pass-23c; pass-24c | `e083557ba` | 30 | pass 23c's cadence deferral landed: `SNAPSHOT_CACHE_TTL` and `SESSION_REFRESH_INTERVAL` sit at sidebar reach and `EVENT_PANE_TTL` at crate reach for the elder's event-mode read, once the five rustdoc links that named them from public docs in `mux`, `store::gc` and `sidebar::cache` became plain backticks. The remaining 60 cadences hold with the `sidebar/(root)` row. |
-| `sidebar/cache` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c, which also unlinked the two `timing` cadences `PresenceStamp`'s public docs named. |
-| `sidebar/unread` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c. |
-| `sidebar/read_marks` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c. |
-| `sidebar/fuse` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c. |
-| `sidebar/meter` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c. |
-| `sidebar/event_store` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c. |
-| `sidebar/body_filter` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c. |
-| `sidebar/agent_projection` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c. |
-| `sidebar/workspace_projection` | holds; landed pass-23c | `bc333aa67` | 30 | reviewed with the `sidebar/(root)` row; row added by pass 24c. |
-| `sidebar_pane/app` | holds; landed pass-11 | `f0d27f230` | 30 | loop transitions, dispatch, folds, focus repair and input reviewed; width control and the three elder-gated workers hold. |
-| `sidebar_pane/pets` | holds; landed pass-22a | `b8e4115e3` | 30 | serve-loop types narrowed to the pane; `PetView`/`PetBody`/`PetPixelView` followed `UiState::pet` to pane reach in pass 24c; preview types stay `pub` for the CLI; load machine, track selection and voice hold. |
-| `sidebar_pane/pixel` | holds; landed pass-22a | `b8e4115e3` | 30 | transport narrowed to the pane; `PLACEHOLDER`/`ROW_COLUMN_DIACRITICS` stay `pub(crate)` for ttyd and testkit; `PixelRenderCaps` and the CLI-reached encoders stay `pub`; `MeterPixels` followed `UiState::meter_pixels` to pane reach in pass 24c; the resend gate (`30108e572`) and `ZellijKittySupport`'s five variants (`3718d6f34`) hold. |
-| `sidebar_pane/supervise` | holds; landed pass-22a | `b8e4115e3` | 30 | reload and respawn codes pane-private; `run`, its error type, `run_worker`, `is_worker`, `instance_id` and `SELF_CLOSE_EXIT_CODE` stay `pub` for the CLI. |
-| `sidebar_pane/render/chrome` | holds; landed pass-22a | `b8e4115e3` | 30 | home abbreviation private with its test; the nine bottom-chrome builders are `compose`'s vocabulary. |
-| `sidebar_pane/render/labels` | holds; landed pass-22a | `b8e4115e3` | 30 | glyph and meter vocabulary already at render reach; four style helpers stay inside labels. |
-| `sidebar_pane/render/theme` | holds; landed pass-22a | `b8e4115e3` | 30 | the Layer-3/4 carrier `docs/internals/theme.md` names and the color invariant exempts; file-local tones private. |
-| `sidebar_pane/render/animation` | holds; landed pass-23c | `bc333aa67` | 30 | the cadence enum and its resolver are the pane's, the breath/blink math the renderer's; `Animation` and `ShimmerWave` floored by `ResolvedAnimations` and `UnreadAnim`, and three helpers stay at render reach for label and theme tests. |
-| `sidebar_pane/render/(root)` | holds; landed pass-18b | `134e4e8db` | 30 | reviewed as the render bundle (root, compose, layout, sections). |
-| `sidebar_pane/render/compose` | holds; landed pass-18b | `134e4e8db` | 30 | reviewed as the render bundle; `ComposedFrame`, its fields and the two line composers followed the frame interactions to pane reach in pass 24c, which is what `private_interfaces` demanded. |
-| `sidebar_pane/render/sections` | holds; landed pass-18b | `134e4e8db` | 30 | the full-frame snapshot suite pins root → compose → chrome/sections; width budgets are distinct rules; `text_width`/`clip` are the layout vocabulary. |
-| `sidebar_pane/(root)` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: the root file is module declarations and re-exports of interiors that carry their own rows. |
-| `sidebar_pane/view` | holds; landed pass-24c | `e083557ba` | 30 | `VisibleRoster`, `VisibleGroup` and their eighteen accessors are the pane's own body projection, shared by app and renderer alike. `WORKTREE_ROW_CAP` and `capped_visible_rows` stay `pub` because the CLI's sidebar fixture reads both. |
-| `sidebar_pane/render/ui_state` | holds; landed pass-24c | `e083557ba` | 30 | every `UiState` field, the six state types beside them and the theme cache, hold set, cockpit spend target, spend ratchet fold and alert predicate are at pane reach, which is what let the pets and pixel view types follow `UiState::{pet,meter_pixels}` (pass 23c's deferral). `UiState` and `Alert` stay `pub`: the held render root's `draw_with_ui` and `GalleryColumn` floor them, so they are deferred below with the root's own items. `Alert::active` has no production reader but `dead_code` blocks narrowing it and its assertions live in the held app tests. |
-| `sidebar_pane/render/interaction` | holds; landed pass-24c | `e083557ba` | 30 | hit lookup, the visible-row span, the hit target, region and frame map are pane-internal and the two block builders file-private; `RenderedBlock` and the row map drop further to render reach, where their only readers are. |
-| `sidebar_pane/render/odometer` | holds; landed pass-24c | `e083557ba` | 30 | the click grid, the two roll folds and the three animation records are pane-internal; `Roll` stays a `TallyAnim` field floor, so it follows the field rather than going private. |
-| `sidebar_pane/render/scrollbar` | holds; landed pass-24c | `e083557ba` | 30 | the fade record, its predicate, observe, visible and the move accessor are all pane-internal. |
-| `sidebar_pane/render/fmt` | holds; landed pass-24c | `e083557ba` | 30 | `activity_label` is file-private and the remaining label formatters are the render bundle's vocabulary; the reset-countdown assertions moved to `theme::fmt` with the core they cover. |
-| `sidebar_pane/render/layout` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: `text_width` holds by its pass-18b verdict and the seven clip, pad and trim helpers are the same width vocabulary at render reach. |
-| `sidebar_pane/render/ansi` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: both items are the render bundle's one ANSI writer. |
-| `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b | — | — | owns every record it persists, imports nothing above it; every interior has its own row below. |
-| `store/(root)` | holds; landed pass-24c | `e083557ba` | 30 | the root `Result` alias and `wait_fold_base` are crate-internal; `snapshot` stays `pub` because the integration crate reads it at nineteen sites, and the rest of the root is the `Store` handle's own surface. |
-| `store/snapshot` | holds; landed pass-23a | `7c2fb3b70` | 30 | reopened and re-reviewed: the fold, rebuild and carryover adapters are store-internal, the pane classifier's re-export is test-only; the view model stays crate-wide because the renderer decodes it, the pipeline and resume types by verdict. Pass 15a's projection, grouping and reducer findings still hold. |
-| `store/writer` | holds; landed pass-17b | `793e3fd0a` | 30 | one log boundary with four cache policies; one publish tail; launch vocabulary, queue method pairs, reap and outcome types hold. |
-| `store/event` | holds; landed pass-21b | `19c872874` | 30 | launch/attach payloads and `MessageEventMethod` stay `pub` (binary crate, integration crate, or `EventKind` signature reach); `message_event` keeps dynamic method/reason for the queue writer; legacy `message.removed` parse holds; `params_value` is test-only. |
-| `store/message` | holds; landed pass-21b | `19c872874` | 30 | builders, `gate_open`, `new_for_card`, `MAX_DELIVERY_ATTEMPTS` and `sent_reconcile_deadline` stay `pub` for the integration crate; `pending`/`removed` status aliases hold for mixed-binary workspaces; header grammar and codec hold. |
-| `store/gc` | holds; landed pass-21b | `19c872874` | 30 | probe-marker lifetimes stay `pub` in `store::gc` (sidebar reader, integration crate); live-room exporter check pinned by `b58b6594c`; the three `rimz gc` wrappers hold. |
-| `store/event_log` | holds; landed pass-25 | `358688a13` | 30 | rotation, pruning, archive listing, repair, batch append and replace are the store's own write path; the two archive facades collapsed onto their implementations; `LogExtent`, `EventLogErr`, `append` and the always-on byte counters stay `pub` by verdict, and the incremental read stays `pub(crate)` for the message reply poll. `prune_archive` reports I/O as `EventLogErr::Io` like `rotate` and `newest_archives`. |
-| `store/sidecar` | holds; landed pass-23a | `7c2fb3b70` | 30 | the latest-wins sidecar mechanics serve store records only, so the record trait, parse cache, path helper and read/write entry points are store-internal; the file-name digest stays `pub(crate)` for the harness. |
-| `store/session_death` | holds; landed pass-23a | `7c2fb3b70` | 30 | supersession, the pidless-ghost TTL, owner pid and session age are store-internal; `same_agent_instance` stays `pub(crate)` for the address resolver. |
-| `store/runtime` | holds; landed pass-23a | `7c2fb3b70` | 30 | `owner_is_live` and `RuntimeProjection::from_parts` store-internal, the audit projection `pub(crate)`; `AgentLiveness` and `RuntimeProjection` stay `pub` by verdict, and the two owner constructors serve distinct launch and pane paths. |
-| `store/live_roster` | holds; landed pass-23a | `7c2fb3b70` | 30 | `read` and the roster record are `pub(crate)` for the harness rebirth path and the writer reap; `publish` stays `pub` for two integration suites. |
-| `store/follow` | holds | `7c2fb3b70` | 30 | nothing landed: the batch, its error and the signal payload are all floored by the `pub` follower signatures the binary's event stream calls. |
-| `store/agent_context` | holds; landed pass-25 | `358688a13` | 30 | nothing to narrow: all twelve escaping items are read by the binary, the sidebar or the message layer. The rest-certificate guard is store-owned and `pub`, and the binary calls it rather than copying it. |
-| `store/subagent_context` | holds | `7c2fb3b70` | 30 | nothing landed: the record and `read_all` are reached by the integration crate's env helper and the sidebar enrichment. |
-| `store/run` | holds | `7c2fb3b70` | 30 | nothing landed: `WakeupFrame` is the pinned run-wake wire, and `mark_terminal`'s four callers pass four distinct statuses. |
-| `store/active_time` | holds | `7c2fb3b70` | 30 | nothing landed: the record is floored by the `pub` `read_for_keys` and `SidebarSnapshot::with_active_time`. |
-| `theme` | holds; landed pass-22b | `6e04c3c5b` | 30 | every `pub use` re-export has an outside reader; `BrandColor` floored by `resolve_provider_brand`/`ResolvedProviderIdentity` for the binary crate; OKLab blends private to theme; renderer-only helpers `pub(crate)`. Pass 24c made `fmt::reset_secs` private and brought its boundary assertions into theme's own test module. |
-| `transcript` | holds; landed pass-24a | `4e445b73d` | 30 | `answer_text` deleted as unreferenced — its consumer went with `46a127b5f` — and its private `text_value` helper with it. `TranscriptLogErr` stays `pub`, carried by the public `Result` alias and the `append`/`read_all` signatures. |
-| `trust` | holds; landed pass-22b | `6e04c3c5b` | 30 | `TrustErr`, `trust::Result`, `SurfaceSummary` and `ProjectConfig` with its field types stay `pub` by signature or integration reach; `executable_surface_hash` is the integration crate's hash probe; `_with_roots` seams private except `grant_with_roots`, which other modules' unit tests call. |
-| `wakeup` | holds; landed pass-24a | `4e445b73d` | 30 | the sidebar wire at L2 below `store`. `SidebarEventEnvelope` with its `new` and `is_current_version`, `SUPERVISOR_HANDOFF_CONTROL_WORD` and `reload_one` at crate reach; the envelope takes `pub(crate)` rather than `pub(super)` because its tests live in `sidebar_pane`. `WakeupErr` and `HeartbeatWriteErr` are named by the integration suite and by CLI consumers, `PaneFramePublicationKind` types a public `SidebarEvent` field, and every heartbeat helper is floored by the integration suite. |
-| `web` | holds | `bc333aa67` | 30 | nothing landed: every payload and outcome type is returned by a public entry point, and the six delegating entries are the domain facade over the ttyd and gate interiors. The same-layer cycle with `sidebar_pane` is four sites and holds by intent. |
-| `workspace` | holds; landed pass-22b | `6e04c3c5b` | 30 | owns the room identity pin env keys, channel shell argv and the `workspace.json` record; `WorkspaceErr`, `record::WorkspaceRecordErr` and their `Result` aliases floored by the pub resolver and record readers; `record::write`, `pin_env` and `known_workspaces_under` stay `pub` for the integration crate; `PinScan` private. |
-| `worktree` | holds; landed pass-8; pass-23b | `5a052d17b` | 30 | the interior reviewed: `content_landed` and `on_trunk_first_parent` are the landed proof at crate reach for the sidebar group and removal. `RequestedName`, `WorktreeMerge` and `RemovalRetirement` stay `pub` because `cli/worktree.rs` names all three, and `PushDestination` is a pub field of the `CreatedWorktree` that command renders. |
-| `forge` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | the interior reviewed: five URL forwarders and `ForgeCli::key` are deleted, their assertions repointed onto the `RemoteRepo` methods they wrapped, and the CLI selection, tea parsers, PR head/candidate records and the state cache sit at crate reach. `Forge` is a `PrTarget` field floor, `PrLink` is floored by `RefreshedLanes::pr_states` (`private_interfaces`), and `GhBulkPr` keeps crate reach for the held refresh tests. |
-| `osc` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | both notification encoders are crate-internal; `local_terminal_notification_bytes` stays `pub` for the CLI and `osc_text` is the module's one escape writer. |
-| `build_id` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | nothing landed: `warm` is called from `main.rs` and the binary sees only `pub` (E0603), and `current_if_ready`'s only reader is the Sentry path behind a non-default feature, so crate reach trips `dead_code` in the default build. |
-| `(root)` | holds; landed pass-24c | `e083557ba` | 30 | nothing landed: `lib.rs` is module declarations and the crate's public re-exports of interiors that carry their own rows. |
-| `channel` | holds; landed pass-24c | `e083557ba` | 30 | the record read, the name validator and the record fold are file-private; `Result`, `ChannelErr`, `ChannelRecord` and `Channels` are named by `cli/channel.rs` and `cli/complete.rs`, and the `valid_name`/`validate_name` pair is a predicate beside a validator on purpose. |
-| `daemon_content` | holds; landed pass-24c | `e083557ba` | 30 | slot and pane resolution, the stats token and its argv are file-private, with the token now spelled once; `resolve_content` keeps crate reach for the elder's admitted read and `ResolvedPane` is its return floor. |
-| `lane` | holds; landed pass-24c | `e083557ba` | 30 | `WorkLane` is crate-internal; the eight counters are the observability lane's own vocabulary. |
-| `observability` | holds; landed pass-24c | `e083557ba` | 30 | both log targets are crate-internal, with the three rustdoc links that named them rewritten as plain backticks; `init`, `Reporting`, `ScopeFacts` and `sentry_tracing_layer` are reached from `main.rs`. |
-| `sock` | holds; landed pass-24c | `e083557ba` | 30 | the AF_UNIX limit, path measurement and the two validators are crate-internal, the longest-name constant and its path builder file-private, and `LONGEST_SOCKET_TAIL_LEN` is deleted with its one boundary test computing the same number from the filename. `SocketPathTooLong` is a `disk::paths` public error variant. |
-| `tui` | holds; landed pass-24c | `e083557ba` | 30 | the re-exec handoff is crate-internal; `TuiLogWriter` is constructed in `main.rs` and the binary sees only `pub` (E0603), which also holds its capture cap and buffer. |
-| `uninstall` | holds; landed pass-24c | `e083557ba` | 30 | the three outcome constructors and the two root removers are file-private; the machine-wide entry points and `Removed` stay `pub` for the CLI. |
-| `update` | holds; landed pass-24c | `e083557ba` | 30 | the three release archive names are crate-internal; `Result`, `DownloadedRelease` and `UpdateError` are floored by the public download and install entry points the CLI drives. |
-| `utils` | holds; landed pass-24c | `e083557ba` | 30 | the validated `ClockTime` and its two accessors are crate-internal; `tokens::estimate` is the integration crate's output-size probe and `time::{Result,TimeInputErr}` are the public duration parser's error. |
+| `address` | holds; landed pass-14 | `0a9330ef1` | 30 | grammar, renderer, pane binding and launch lineage at L4; one channel reconciler. |
+| `agents` | holds; landed pass-18a | `045e858e8` | 30 | root exports only outside-spelled names; hook representation private; install defaults stay trait defaults. |
+| `agents/(root)` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
+| `agents/state` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`; owns the budget window/scope/park types. |
+| `agents/context` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
+| `agents/definition` | holds; landed pass-18a | `045e858e8` | 30 | with `agents`. |
+| `agents/adapters` | landed pass-2 | — | — | sibling families are provider policy over shared helpers; interiors are per-adapter rows. |
+| `agents/adapters/(root)` | holds | `358688a13` | 30 | module declarations and the registry; nothing escapes `agents`. |
+| `agents/adapters/install_report` | holds | `358688a13` | 30 | `report_files` is `pub(super)` for the sibling installers. |
+| `agents/adapters/claude` | holds; landed pass-9 | `7af6d9f74` | 30 | neutral control outcomes, shared priced-record gate; remote-control trio, Stop validation and discovery stay separate. |
+| `agents/adapters/codex` | holds; landed pass-9 | `7af6d9f74` | 30 | one framed transport and handshake; rollout presence and pane-confirmation seam hold. |
+| `agents/adapters/kimi` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
+| `agents/adapters/qwen` | holds; landed pass-19c | `d3a951a73` | 30 | registry adapter is the sole escaping item. |
+| `agents/adapters/copilot` | holds; landed pass-20c | `e26f986a1` | 30 | registry adapter is the sole escaping item; payload types floored (caveat 13). |
+| `agents/adapters/cursor` | holds; landed pass-25 | `358688a13` | 30 | registry adapter only; its statusline lossy reader swallows inner errors, unlike `transcript_fs`, so they stay apart. |
+| `agents/adapters/antigravity` | holds; landed pass-20c | `e26f986a1` | 30 | registry adapter is the sole escaping item. |
+| `agents/adapters/pi` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item. |
+| `agents/adapters/opencode` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter only; tolerant `parse_payload` and `sqlite_io` adapter hold. |
+| `agents/adapters/plugin` | holds; landed pass-21c | `e237f2db5` | 30 | `agents::plugins` re-exports stay `pub` for the binary; `PluginAdapter` private. |
+| `agents/adapters/grok` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item. |
+| `agents/adapters/droid` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item. |
+| `agents/adapters/kiro` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter is the sole escaping item. |
+| `agents/adapters/amp` | holds; landed pass-21c | `e237f2db5` | 30 | registry adapter only; tolerant `parse_payload` holds. |
+| `agents/attribution` | holds | `5fe85089d` | 30 | binary attribution tests build the report types directly (see deferrals). |
+| `agents/lifecycle` | holds; landed pass-22c | `5fe85089d` | 30 | `step` crate-private; signal vocabulary and state types public by signature. |
+| `agents/pricing` | holds; landed pass-22c | `5fe85089d` | 30 | rate model private; `PriceBook` and cached-book entries public for binary, bench and integration. |
+| `agents/spending` | holds; landed pass-13 | `3c7dcbb18` | 30 | one writer per cache, one engine election; wire, walker, fold and cache records hold. |
+| `agents/capabilities` | holds | `92d2bdb59` | 30 | trait methods have no own visibility and `AgentDefinition` hands out `dyn AgentIntegration`: all ten traits stay `pub`. |
+| `agents/hook_types` | holds; landed pass-24b | `92d2bdb59` | 30 | hook representation at `pub(super)`; `HookRouting` and two binary-called `HookOutput` readers stay `pub`. |
+| `agents/account` | holds; landed pass-24b | `92d2bdb59` | 30 | cache schema and reset-credit types stay `pub` for the integration crate. |
+| `agents/credits` | holds; landed pass-24b | `92d2bdb59` | 30 | OAuth transport `pub(super)`; probe and snapshot types floored by signature. |
+| `agents/managed_json_hooks` | holds; landed pass-24b | `92d2bdb59` | 30 | JSON hook merge backend reachable only from `agents`. |
+| `agents/managed_statusline` | holds; landed pass-24b | `92d2bdb59` | 30 | escapes nothing. |
+| `agents/settings_json` | holds; landed pass-24b | `92d2bdb59` | 30 | strict JSON primitives `pub(super)`; install path stays strict, tolerant read is `jsonc`. |
+| `agents/managed_source` | holds | `92d2bdb59` | 30 | inherent methods are the adapters' seam; forwarders pinned by `417721973`, `e566d6b44`. |
+| `agents/question` | holds; landed pass-24b | `92d2bdb59` | 30 | `NormalizedQuestion` floored by `decode` (caveat 13). |
+| `agents/transcript_fs` | holds; landed pass-25 | `358688a13` | 30 | tail readers at `agents` reach; its lossy visitor propagates inner errors, unlike Cursor's. |
+| `agents/registry` | holds; landed pass-24b | `92d2bdb59` | 30 | catalog lookups stay `pub` for the binary. |
+| `agents/runtime_control` | holds; landed pass-24b | `92d2bdb59` | 30 | forwarders are the `agents` boundary; issue and error types floored by signature. |
+| `agents/login` | holds; landed pass-24b | `92d2bdb59` | 30 | everything but `LoginCatalog::names` floored by a public signature or binary test. |
+| `agents/delegated_account` | holds; landed pass-24b | `92d2bdb59` | 30 | delegated OAuth usage is an `agents` interior. |
+| `agents/identity` | holds; landed pass-24b | `92d2bdb59` | 30 | resolvers `pub(super)`. |
+| `agents/locate` | holds; landed pass-24b | `92d2bdb59` | 30 | install-file discovery no longer escapes. |
+| `agents/payload` | holds; landed pass-24b | `92d2bdb59` | 30 | `sanitize_user_prompt` and `non_empty_trimmed` keep crate reach for `store/message` tests. |
+| `agents/tools` | holds; landed pass-24b | `92d2bdb59` | 30 | `definition_model_kind` is the one escaping name, for the integration crate. |
+| `agents/session` | holds; landed pass-24b | `92d2bdb59` | 30 | `DaemonSessionEvidence` floored by `SessionCapability`. |
+| `agents/observation` | holds; landed pass-24b | `92d2bdb59` | 30 | observation field and signature types stay `pub`. |
+| `agents/petname` | holds; landed pass-24b | `92d2bdb59` | 30 | reserved words and `valid_agent_name` stay `pub` for the binary. |
+| `agents/local_session_cache` | holds; landed pass-24b | `92d2bdb59` | 30 | refresh types floored at `pub(super)` (caveat 13). |
+| `agents/jsonc` | holds; landed pass-24b | `92d2bdb59` | 30 | the only JSONC entry point. |
+| `agents/version` | holds; landed pass-24b | `92d2bdb59` | 30 | escapes nothing. |
+| `agents/model_display` | holds; landed pass-24b | `92d2bdb59` | 30 | one crate-reach selector. |
+| `agents/background_shell` | holds; landed pass-24b | `92d2bdb59` | 30 | report fold at crate reach. |
+| `agents/transcript` | holds | `92d2bdb59` | 30 | root-re-exported types imported by adapters; `TranscriptPosition::new` pinned by `417721973`. |
+| `agents/turns` | holds | `92d2bdb59` | 30 | the binary's history command reads `TurnOutcome`. |
+| `agents/skill_links` | holds | `92d2bdb59` | 30 | plan/apply types public; host-mode symlink ownership unchanged. |
+| `agents/emblems` | holds | `92d2bdb59` | 30 | `EmblemTint` floored by `Emblem`. |
+| `agents/open_ask` | holds | `92d2bdb59` | 30 | the record the binary and sidebar read. |
+| `agents/plugins` | holds; landed pass-21c | `e237f2db5` | 30 | with `agents/adapters/plugin`. |
+| `agents/conformance` | holds | `92d2bdb59` | 30 | `#[cfg(test)]`, no production surface. |
+| `agents/testkit` | holds | `92d2bdb59` | 30 | `#[cfg(test)]`, no production surface. |
+| `agent_activity` | holds | `4e445b73d` | 30 | readers named by the integration hooks suite. |
+| `child_process` | holds; landed pass-24a | `4e445b73d` | 30 | `agent_helper_argv` stays `pub` for the integration suite. |
+| `config` | holds; landed pass-24a | `4e445b73d` | 30 | the façade alone decides reach; child declarations keep `pub` as "offered to the façade". |
+| `config/(root)` | holds; landed pass-24a | `4e445b73d` | 30 | with `config`; owns façade, loaders, notices and file registry. |
+| `config/accounts` | holds; landed pass-24a | `4e445b73d` | 30 | named-account and budget records. |
+| `config/agents` | holds; landed pass-24a | `4e445b73d` | 30 | profile, team and subagent records. |
+| `config/animation` | holds | `4e445b73d` | 30 | `MachineConfig` field type; `is_unset` is a live serde predicate. |
+| `config/attention` | holds | `4e445b73d` | 30 | `MachineConfig` field type. |
+| `config/color` | holds; landed pass-24a | `4e445b73d` | 30 | `Semantic::DEFAULT` test-gated; production reads the embedded catalog. |
+| `config/daemon` | holds | `4e445b73d` | 30 | `MachineConfig` field type. |
+| `config/definitions` | holds; landed pass-24a | `4e445b73d` | 30 | loader already `pub(super)`; constructor deepen deferred. |
+| `config/diagnosis` | holds; landed pass-24a | `4e445b73d` | 30 | two test-gated accessors pin `1862840`. |
+| `config/display` | holds; landed pass-24a | `4e445b73d` | 30 | section record; `is_unset` is a live serde predicate. |
+| `config/edit` | holds; landed pass-24a | `4e445b73d` | 30 | comment-preserving writer and template merge hold. |
+| `config/effective` | holds; landed pass-24a | `4e445b73d` | 30 | project-task parse and error types floored by `load`. |
+| `config/gc` | holds | `4e445b73d` | 30 | `MachineConfig` field type. |
+| `config/glyphs` | holds; landed pass-24a | `4e445b73d` | 30 | `GlyphRole` names stay `pub` for `theme/glyphs.rs`. |
+| `config/harness` | holds; landed pass-24a | `4e445b73d` | 30 | `DayCap`/`TurnCap` verdicts hold. |
+| `config/loop_` | holds; landed pass-24a | `4e445b73d` | 30 | `Tasks` and `LoopConfig` stay `pub` for the integration crate. |
+| `config/mux` | holds | `4e445b73d` | 30 | backend option records test-gated at the façade. |
+| `config/notifications` | holds; landed pass-24a | `4e445b73d` | 30 | `NotificationKind` re-exported by `sidebar/notify.rs`. |
+| `config/pets` | holds; landed pass-24a | `4e445b73d` | 30 | `is_default` is a live serde predicate. |
+| `config/remote_control` | holds | `4e445b73d` | 30 | `MachineConfig` field type. |
+| `config/resume` | holds; landed pass-25 | `358688a13` | 30 | config reads its own backoff ramp; duration-parser verdict holds. |
+| `config/scheme` | holds | `4e445b73d` | 30 | scheme lookup and validation hold. |
+| `config/sentry` | holds | `4e445b73d` | 30 | `MachineConfig` field type. |
+| `config/sidebar` | holds; landed pass-24a | `4e445b73d` | 30 | section record. |
+| `config/skills` | holds; landed pass-24a | `4e445b73d` | 30 | skill-list validator at crate reach for sandbox and agents. |
+| `config/theme` | holds | `4e445b73d` | 30 | `MachineConfig` field type; predicates are live serde predicates. |
+| `config/web` | holds | `4e445b73d` | 30 | `WebPrefs` left the façade. |
+| `config/worktree` | holds; landed pass-24a | `4e445b73d` | 30 | base parse errors left the façade. |
+| `daemon_view` | holds; landed pass-15c | `0175c3c6b` | 30 | loop-panel acquisition is one operation; both cycles held by intent. |
+| `diag` | holds; landed pass-16 | `6fccc2b04` | 30 | evidence vocabulary and append mechanics at L3 below store; one sink admission point. |
+| `disk` | holds; landed pass-19b | `aad546d17` | 30 | durability classes, filenames, locking and three distinct file identities hold. |
+| `harness` | landed pass-5; pass-7; pass-8; pass-14; pass-20a; pass-23b; pass-25 | — | — | policy reaching down; never reaches `sidebar`: usage refresh returns, its CLI entry publishes. |
+| `harness/schedule` | holds; landed pass-14; pass-23b | `5a052d17b` | 30 | one arming rule; catalog, arm, team and signal error types are signature floors. |
+| `harness/resume` | holds; landed pass-19a | `bdaedf434` | 30 | posture composes `plan::ResumeLaunchPosture`; recovery interior `pub(super)`. |
+| `harness/plan` | holds; landed pass-19a | `bdaedf434` | 30 | owns resume-argv DTOs; validation loops held by `92b6fbeab`. |
+| `harness/launch` | holds; landed pass-20a | `5350d68e3` | 30 | one private `LAUNCH_FIELDS` key table encodes and decodes the pane identity env. |
+| `harness/spec` | holds; landed pass-20a | `5350d68e3` | 30 | layout parse family stays `pub`. |
+| `harness/budget` | holds; landed pass-20a | `5350d68e3` | 30 | evaluation private; ledger types are signature types. |
+| `harness/run` | holds; landed pass-20a | `5350d68e3` | 30 | `RunWakeErr` and `socket_path` stay `pub`. |
+| `harness/rebirth` | holds; landed pass-23b | `5a052d17b` | 30 | `materialize` returns the plan; types floored by `room::RoomContext::inspect_rebirth`. |
+| `harness/auto_continue` | holds; landed pass-25 | `358688a13` | 30 | `message` admission on `ResumeUnrecovered` held by intent. |
+| `harness/auto_redeem` | holds; landed pass-25 | `358688a13` | 30 | `AutoRedeemErr`/`Redeemed` are the CLI entry's error and return. |
+| `harness/prompt_compose` | holds; landed pass-23b | `5a052d17b` | 30 | prompt types stay `pub` via `LaunchPlan.prompt`. |
+| `harness/scratch` | holds; landed pass-23b | `5a052d17b` | 30 | scan types floored by the teams CLI. |
+| `harness/subagent_policy` | holds; landed pass-23b | `5a052d17b` | 30 | `catalog` is the launch-time entry. |
+| `harness/team_prompt` | holds; landed pass-23b | `5a052d17b` | 30 | consensus text and copy path stay `pub` for `config`. |
+| `harness/orphan_sweep` | holds; landed pass-23b | `5a052d17b` | 30 | types floored by `resolve`. |
+| `harness/run_timeout` | holds; landed pass-23b | `5a052d17b` | 30 | request type stays `pub` for the integration crate. |
+| `harness/launch_reminders` | holds; landed pass-23b | `5a052d17b` | 30 | `wrap` held by a `harness/launch` test. |
+| `harness/launch_context` | holds; landed pass-23b | `5a052d17b` | 30 | `TeamLaunchContext` floored by signatures. |
+| `harness/assist_log` | holds; landed pass-23b | `5a052d17b` | 30 | `log_path` read by the binary's stats test. |
+| `harness/owed` | holds; landed pass-23b | `5a052d17b` | 30 | binary test names `OwedWake` variants. |
+| `harness/team_stage` | holds; landed pass-23b | `5a052d17b` | 30 | types floored by `flip`/`rewake`. |
+| `harness/ancestry` | holds; landed pass-23b | `5a052d17b` | 30 | error floored by the resolver. |
+| `harness/parent_watch` | holds; landed pass-23b | `5a052d17b` | 30 | reached from the exec command. |
+| `harness/run_wake` | holds; landed pass-23b | `5a052d17b` | 30 | verdicted under `harness/run`. |
+| `harness/auto_gc` | holds; landed pass-23b | `5a052d17b` | 30 | reached from the binary. |
+| `harness/fleet` | holds; landed pass-23b | `5a052d17b` | 30 | reached from the binary. |
+| `harness/idle_compact` | holds; landed pass-23b | `5a052d17b` | 30 | reached from the binary. |
+| `harness/launch_plan` | holds; landed pass-24c | `e083557ba` | 30 | error and warning types floor `compile`/`apply`. |
+| `harness/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
+| `ids` | holds; landed pass-5; pass-16; pass-24c | `e083557ba` | 30 | parse errors are `FromStr::Err`; conversion impls are trait boundaries, not forwarders. |
+| `message` | holds; landed pass-13 | `efe38f50c` | 30 | one System queue shape; settle owned by `message deliver`; reply machine holds. |
+| `mux` | holds; landed pass-18c | `9ba3585b9` | 30 | planner verdicts private; `SplitPaneOptions::from_command` owns the pane-command projection. |
+| `mux/(root)` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
+| `mux/tmux` | holds; landed pass-18c | `9ba3585b9` | 30 | with `mux`. |
+| `mux/zellij` | holds; landed pass-10 | `173682d90` | 30 | presence lifecycle deepened; topology schema is the public wire. |
+| `mux/capabilities` | holds; landed pass-24c | `e083557ba` | 30 | only `drops_desktop_osc` public. |
+| `mux/width` | holds; landed pass-24c | `e083557ba` | 30 | width types named by integration and `cli`. |
+| `mux/focus_key` | holds; landed pass-24c | `e083557ba` | 30 | floored by `MuxBackend::register_room_key`. |
+| `mux/focus_anchor` | holds; landed pass-24c | `e083557ba` | 30 | pass-18c verdicts hold. |
+| `mux/reconcile` | holds; landed pass-24c | `e083557ba` | 30 | liveness and recovery driven by the integration crate. |
+| `mux/recovery` | holds; landed pass-24c | `e083557ba` | 30 | at the reach its readers need. |
+| `mux/command` | holds; landed pass-24c | `e083557ba` | 30 | `CommandSpec` verbs public for integration and `cli`. |
+| `mux/selection` | holds; landed pass-24c | `e083557ba` | 30 | backend choice is the CLI's. |
+| `mux/domain` | holds; landed pass-24c | `e083557ba` | 30 | driven by the integration proc suite. |
+| `mux/companion_layout` | holds; landed pass-24c | `e083557ba` | 30 | the layout's vocabulary. |
+| `mux/binaries` | holds; landed pass-24c | `e083557ba` | 30 | read by `cli/doctor`. |
+| `mux/width_target` | holds; landed pass-24c | `e083557ba` | 30 | the room's width intent. |
+| `mux/tab_name` | holds; landed pass-24c | `e083557ba` | 30 | already crate-internal. |
+| `mux/mount_proof` | holds; landed pass-24c | `e083557ba` | 30 | the backends' mount proof. |
+| `mux/pane_writer` | holds; landed pass-24c | `e083557ba` | 30 | the per-pane write lock `pane send` runs through. |
+| `pane` | holds; landed pass-24a | `4e445b73d` | 30 | owns `ClientPaneView`; `pane_is_host` linked from `store/snapshot` docs (deferred); `proc` cycle by intent. |
+| `proc` | holds; landed pass-25 | `358688a13` | 30 | platform seams, bounded execution and pane-probe abstention hold. |
+| `reload` | holds; landed pass-23c | `bc333aa67` | 30 | one durable staged-build path. |
+| `remote` | holds; landed pass-21a | `d9d30b10b` | 30 | pure transitions here, drivers in `cli/remote`. |
+| `remote_control` | holds; landed pass-15c | `0175c3c6b` | 30 | one enable preflight; typed snapshot and batch toggle. |
+| `room` | holds; landed pass-15c | `0175c3c6b` | 30 | birth, ordered teardown and seven liveness policies hold. |
+| `sandbox` | holds; landed pass-23b | `5a052d17b` | 30 | the integration sandbox suite drives plan/apply/argv; `prepare` kept for it. |
+| `sidebar` | landed pass-4 | — | — | election, fusion, refresh lanes, own cadences; interiors have rows. |
+| `sidebar/(root)` | holds; landed pass-23c | `bc333aa67` | 30 | one data plane; `pub` items are binary, bench or integration reached, or signature floors. |
+| `sidebar/refresh` | holds; landed pass-25 | `358688a13` | 30 | one refresh entry, one rate-limit transaction; one `pub` account-cache publish entry. |
+| `sidebar/consumer` | holds; landed pass-23c | `bc333aa67` | 30 | two readers `pub` for the hotpath bench. |
+| `sidebar/frame` | holds; landed pass-23c | `bc333aa67` | 30 | `PaneFrame` wire public field by field. |
+| `sidebar/produce` | holds; landed pass-17a | `39b72afea` | 30 | named entries, no fold-mode core. |
+| `sidebar/enrich` | holds; landed pass-20b | `e3785a2be` | 30 | ordered fold spine (fold order is an invariant). |
+| `sidebar/observe` | holds; landed pass-20b | `e3785a2be` | 30 | `observe_into` owns detection, send and drop accounting. |
+| `sidebar/presence` | holds; landed pass-20b | `e3785a2be` | 30 | `ingest_zellij_wake` is one transaction. |
+| `sidebar/notify` | holds; landed pass-20b | `e3785a2be` | 30 | debounce, link-health episodes and delivery are distinct policies. |
+| `sidebar/timing` | holds; landed pass-23c; pass-24c | `e083557ba` | 30 | three cadences narrowed; the rest hold with `sidebar/(root)`. |
+| `sidebar/cache` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar/unread` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar/read_marks` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar/fuse` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar/meter` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar/event_store` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar/body_filter` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar/agent_projection` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar/workspace_projection` | holds; landed pass-23c | `bc333aa67` | 30 | with `sidebar/(root)`. |
+| `sidebar_pane/app` | holds; landed pass-11 | `f0d27f230` | 30 | loop, dispatch, folds, focus repair and input; width control and elder-gated workers hold. |
+| `sidebar_pane/pets` | holds; landed pass-22a | `b8e4115e3` | 30 | preview types `pub` for the CLI. |
+| `sidebar_pane/pixel` | holds; landed pass-22a | `b8e4115e3` | 30 | resend gate (`30108e572`) and Kitty support variants (`3718d6f34`) hold. |
+| `sidebar_pane/supervise` | holds; landed pass-22a | `b8e4115e3` | 30 | worker entry points `pub` for the CLI. |
+| `sidebar_pane/render/chrome` | holds; landed pass-22a | `b8e4115e3` | 30 | bottom-chrome builders are `compose`'s vocabulary. |
+| `sidebar_pane/render/labels` | holds; landed pass-22a | `b8e4115e3` | 30 | glyph and meter vocabulary at render reach. |
+| `sidebar_pane/render/theme` | holds; landed pass-22a | `b8e4115e3` | 30 | the Layer-3/4 carrier the color invariant exempts. |
+| `sidebar_pane/render/animation` | holds; landed pass-23c | `bc333aa67` | 30 | cadence enum is the pane's, breath math the renderer's. |
+| `sidebar_pane/render/(root)` | holds; landed pass-18b | `045f8bfe6` | 30 | render bundle; root items deferred. |
+| `sidebar_pane/render/compose` | holds; landed pass-18b | `045f8bfe6` | 30 | render bundle; frame types at pane reach. |
+| `sidebar_pane/render/sections` | holds; landed pass-18b | `045f8bfe6` | 30 | full-frame snapshots pin root → compose → sections; width budgets are distinct rules. |
+| `sidebar_pane/(root)` | holds; landed pass-24c | `e083557ba` | 30 | declarations and re-exports. |
+| `sidebar_pane/view` | holds; landed pass-24c | `e083557ba` | 30 | the pane's body projection; row cap read by the CLI fixture. |
+| `sidebar_pane/render/ui_state` | holds; landed pass-24c | `e083557ba` | 30 | fields at pane reach; `UiState`/`Alert` floored by the render root (deferred). |
+| `sidebar_pane/render/interaction` | holds; landed pass-24c | `e083557ba` | 30 | hit map pane-internal. |
+| `sidebar_pane/render/odometer` | holds; landed pass-24c | `e083557ba` | 30 | `Roll` floored by `TallyAnim`. |
+| `sidebar_pane/render/scrollbar` | holds; landed pass-24c | `e083557ba` | 30 | pane-internal. |
+| `sidebar_pane/render/fmt` | holds; landed pass-24c | `e083557ba` | 30 | label formatters are the render vocabulary. |
+| `sidebar_pane/render/layout` | holds; landed pass-24c | `e083557ba` | 30 | width vocabulary at render reach. |
+| `sidebar_pane/render/ansi` | holds; landed pass-24c | `e083557ba` | 30 | the one ANSI writer. |
+| `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16; pass-17b; pass-21b | — | — | owns every record it persists, imports nothing above it. |
+| `store/(root)` | holds; landed pass-24c | `e083557ba` | 30 | `snapshot` `pub` for the integration crate. |
+| `store/snapshot` | holds; landed pass-23a | `7c2fb3b70` | 30 | view model crate-wide because the renderer decodes it. |
+| `store/writer` | holds; landed pass-17b | `793e3fd0a` | 30 | one log boundary with four cache policies; one publish tail. |
+| `store/event` | holds; landed pass-21b | `19c872874` | 30 | legacy `message.removed` parse holds. |
+| `store/message` | holds; landed pass-21b | `19c872874` | 30 | status aliases hold for mixed-binary workspaces; header grammar and codec hold. |
+| `store/gc` | holds; landed pass-21b | `19c872874` | 30 | exporter check pinned by `b58b6594c`. |
+| `store/event_log` | holds; landed pass-25 | `358688a13` | 30 | the store's own write path; incremental read `pub(crate)` for the reply poll. |
+| `store/sidecar` | holds; landed pass-23a | `7c2fb3b70` | 30 | store-internal; digest `pub(crate)` for the harness. |
+| `store/session_death` | holds; landed pass-23a | `7c2fb3b70` | 30 | `same_agent_instance` `pub(crate)` for the address resolver. |
+| `store/runtime` | holds; landed pass-23a | `7c2fb3b70` | 30 | two owner constructors serve distinct paths. |
+| `store/live_roster` | holds; landed pass-23a | `7c2fb3b70` | 30 | `publish` `pub` for two integration suites. |
+| `store/follow` | holds | `7c2fb3b70` | 30 | floored by the follower signatures. |
+| `store/agent_context` | holds; landed pass-25 | `358688a13` | 30 | rest-certificate guard is store-owned and `pub`. |
+| `store/subagent_context` | holds | `7c2fb3b70` | 30 | reached by integration and sidebar enrichment. |
+| `store/run` | holds | `7c2fb3b70` | 30 | `WakeupFrame` is the pinned run-wake wire. |
+| `store/active_time` | holds | `7c2fb3b70` | 30 | floored by `read_for_keys`. |
+| `theme` | holds; landed pass-22b | `6e04c3c5b` | 30 | every re-export has an outside reader; OKLab blends private. |
+| `transcript` | holds; landed pass-24a | `4e445b73d` | 30 | `TranscriptLogErr` carried by the public signatures. |
+| `trust` | holds; landed pass-22b | `6e04c3c5b` | 30 | `_with_roots` seams private except `grant_with_roots`. |
+| `wakeup` | holds; landed pass-24a | `4e445b73d` | 30 | the sidebar wire at L2 below `store`. |
+| `web` | holds | `bc333aa67` | 30 | domain façade over ttyd and gate interiors; `sidebar_pane` cycle by intent. |
+| `workspace` | holds; landed pass-22b | `6e04c3c5b` | 30 | owns the room identity pin keys and `workspace.json`. |
+| `worktree` | holds; landed pass-8; pass-23b | `5a052d17b` | 30 | landed proof at crate reach; request types named by `cli/worktree.rs`. |
+| `forge` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | URL forwarders deleted; `PrLink` floored by `RefreshedLanes::pr_states`. |
+| `osc` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | one escape writer. |
+| `build_id` | holds; landed pass-8; pass-24c | `e083557ba` | 30 | `current_if_ready` deferred. |
+| `(root)` | holds; landed pass-24c | `e083557ba` | 30 | `lib.rs` declarations and public re-exports. |
+| `channel` | holds; landed pass-24c | `e083557ba` | 30 | record types named by `cli/channel.rs`. |
+| `daemon_content` | holds; landed pass-24c | `e083557ba` | 30 | `resolve_content` at crate reach for the elder. |
+| `lane` | holds; landed pass-24c | `e083557ba` | 30 | counters are the observability lane's vocabulary. |
+| `observability` | holds; landed pass-24c | `e083557ba` | 30 | entry points reached from `main.rs`. |
+| `sock` | holds; landed pass-24c | `e083557ba` | 30 | `SocketPathTooLong` is a `disk::paths` error variant. |
+| `tui` | holds; landed pass-24c | `e083557ba` | 30 | `TuiLogWriter` built in `main.rs`. |
+| `uninstall` | holds; landed pass-24c | `e083557ba` | 30 | machine-wide entry points `pub` for the CLI. |
+| `update` | holds; landed pass-24c | `e083557ba` | 30 | error and release types floor the CLI's entry points. |
+| `utils` | holds; landed pass-24c | `e083557ba` | 30 | `tokens::estimate` is the integration crate's probe. |
 
 ## Admission intents
 
-One row per upward dependency edge that is the intended shape, spelled `` `from` → `to` `` with an optional `to::{a,b}` group and the reason. `survey` lists every admitted edge with no row as `unreviewed`; that column is the review backlog. An edge a pass closes loses its admission in `refactor-target.toml` and its row here; a `close` intent names the pass that will close it.
+One row per intended upward edge, `` `from` → `to` `` with an optional `to::{a,b}` group. `survey` lists an admitted edge with no row as `unreviewed`. An edge a pass closes loses its admission and its row; a `close` intent names the pass that will close it.
 
 | from → to | sites | intent | reason / seam |
 | --- | ---: | --- | --- |
@@ -258,44 +260,42 @@ One row per upward dependency edge that is the intended shape, spelled `` `from`
 | `config` → `agents` | 17 | keep | catalog and spec vocabulary are the shared language below the store |
 | `theme` → `agents` | 5 | keep | same |
 | `trust` → `agents` | 1 | keep | same |
-| `proc` → `agents` | 4 | keep | same; pane-probe classification needs the catalog, moving provider policy into proc duplicates it |
-| `config` → `store::message` | 3 | keep | `AutoCompact` is config vocabulary and persisted record data; the persisted home wins |
-| `config` → `harness::spec` | 9 | keep | the loader holds the ordered fragment set; harness owns layout validation and resolution |
-| `config` → `harness::budget` | 4 | keep | `BudgetSpec`/`BudgetParseError` parsing is harness policy |
+| `proc` → `agents` | 4 | keep | same; pane-probe classification needs the catalog |
+| `config` → `store::message` | 3 | keep | `AutoCompact` is persisted record data; the persisted home wins |
+| `config` → `harness::spec` | 9 | keep | harness owns layout validation and resolution |
+| `config` → `harness::budget` | 4 | keep | budget parsing is harness policy |
 | `config` → `harness::schedule` | 4 | keep | trigger and surplus grammar are harness policy |
-| `agents` → `address` | 1 | keep | `agent_handle` is the canonical routable address; its renderer needs target resolution and launch occupancy |
-| `daemon_view` → `sidebar::timing` | 1 | keep | `EVENT_PANE_TTL` is the sidebar's event-mode cadence, reached up deliberately |
-| `daemon_view` → `daemon_content` | 1 | keep | `resolve_content` keeps layout slot cardinality and the supervisor's pane policy one decision |
-| `daemon_view` → `sidebar::frame` | 1 | keep | the elder reads the published `PaneFrame` as disposable topology truth and falls back to repair |
-| `daemon_view` → `sidebar::cache` | 2 | keep | freshness verdict and zero-child cache read; a stale frame never suppresses repair |
-| `room` → `sidebar` | 3 | keep | birth purges rebirth heartbeats after proving the session absent; teardown orders the orphan sweep between session death and the process sweep |
+| `config` → `harness::team_prompt` | 2 | keep | the harness owns the built-in consensus text and its copy path |
+| `agents` → `address` | 1 | keep | `agent_handle` is the canonical routable address |
+| `daemon_view` → `sidebar::timing` | 1 | keep | `EVENT_PANE_TTL` is the sidebar's event-mode cadence |
+| `daemon_view` → `daemon_content` | 1 | keep | slot cardinality and pane policy stay one decision |
+| `daemon_view` → `sidebar::frame` | 1 | keep | the elder reads the published `PaneFrame` as disposable topology truth |
+| `daemon_view` → `sidebar::cache` | 2 | keep | a stale frame never suppresses repair |
+| `room` → `sidebar` | 3 | keep | birth purges rebirth heartbeats; teardown orders the orphan sweep |
 | `room` → `sidebar::body_filter` | 1 | keep | pristine birth resets presentation state (`0e3b80c55`) |
-| `room` → `reload` | 1 | keep | ownership stages through reload's one durable-build path (`f7e1b4153`, `28c3552ba`) |
-| `message` → `harness::ancestry` | 2 | keep | sender exclusion from `@all` needs durable launch identity after resolution |
-| `message` → `sidebar::produce` | 4 | keep | dispatch chooses a rollup-only or fresh frame+rollup fold after inspecting pending records |
-| `message` → `harness::auto_continue` | 1 | keep | `ResumeUnrecovered` re-verifies a `Resume` park at delivery time |
-| `message` → `harness::run` | 1 | keep | `report::digest_fully_joined` is the subagent-digest join guard |
-| `message` → `harness::assist_log` | 3 | keep | the auto-compact assist is observable only where the synthesized command reaches `Sent` |
-| `message` → `harness::schedule::pending` | 1 | keep | `TurnWaitView::load` attaches the scheduler-owned turn-completion waits to the reply view (`4f3adcd90`) |
-| `config` → `harness::team_prompt` | 2 | keep | the harness owns the built-in consensus text and the path of its read-only copy; team definitions validate against both, and moving either into config would split ownership of a published artifact |
+| `room` → `reload` | 1 | keep | ownership stages through reload's durable-build path (`f7e1b4153`) |
+| `message` → `harness::ancestry` | 2 | keep | `@all` sender exclusion needs durable launch identity |
+| `message` → `sidebar::produce` | 4 | keep | dispatch picks a rollup-only or full fold after inspecting pending records |
+| `message` → `harness::auto_continue` | 1 | keep | `ResumeUnrecovered` re-verifies a `Resume` park at delivery |
+| `message` → `harness::run` | 1 | keep | the subagent-digest join guard |
+| `message` → `harness::assist_log` | 3 | keep | the auto-compact assist is observable only where the command reaches `Sent` |
+| `message` → `harness::schedule::pending` | 1 | keep | the reply view attaches scheduler-owned turn waits (`4f3adcd90`) |
 
 ## Open deferrals
 
-Candidates a pass judged real but could not land, each with the condition that unblocks it. A future pass on the module weighs them before its own survey; everything else a pass deferred is re-derived by `atlas inspect` on the current code.
+Candidates a pass judged real but could not land, each with what unblocks it.
 
-- `agents`: the `_rimz_managed` literal is spelled three times — `managed_source.rs:17` `RIMZ_MANAGED_MARKER` (a shell-comment marker, also read by `adapters/kiro/install.rs:13`), `managed_json_hooks.rs:16` and `managed_statusline.rs:9` (both `RIMZ_MANAGED_KEY`, a JSON entry marker). One owner is right and the drift hazard is real, but pass 24b measured it line-neutral: the three modules import strictly downward, so a single owner costs two `use` lines for the two declarations it removes. It waits for a pass that changes the marker on purpose or relayers the managed trio.
-- `config/definitions`: one load context replacing the seven-argument `Resolver::new` (`definitions/agent.rs:61`, called at `definitions/mod.rs:244,263` and `definitions/team.rs:330`) and the `SeatLoader` repack (`team.rs:16-41`), plus one safe-name predicate for the two sites that spell it twice with different diagnostic text (`mod.rs:183-187`, `team.rs:63-66`). About −20 SLOC, all behind `pub(super)`. Pass 24a deferred it because the module was five days old with 13 commits and its constructor shape was chosen on 2026-09-16 (`ffb6ae5aa`); unblocked when the module's pace drops below hot.
-- `pane::pane_is_host` can go to `pub(crate)` once `store::snapshot::panes::own_view_is_daemon` (`panes.rs:352`) and `store::snapshot::view::reap::only_daemon_view` (`reap.rs:180`) stop linking to it from public rustdoc, since `cargo xtask doc` is a gate. The same shape as the `sidebar::timing` deferral below; it belongs to a pass on `store`.
-- `harness/launch`: three relaunch sites (`cli/agents_cmd/fork.rs` twice, `cli/agents_cmd/restart.rs` once) repeat the posture prompt fields; a posture-aware seam that `launch` may not import.
-- `harness/schedule/runner.rs`: `run_command` and `prepare_check` carry the module's `cx`; `fire_due_tasks` and `parse_signal_selector` are the visible seams. A deepen that needs the module's `hot` pace to settle, since pass 23b reopened it at 179 escaping items and narrowed six.
-- `message`: `ReplyWait::run` three methods → one plus `ReplyEvent` (timing pinned by `27077a848`/`cfe1240a3`); `compact_idle` absorbing idle preflight needs `send_compact` to return the id.
-- `store/message` ↔ `address`: `address::message_header` respells the `Type:`/`From:`/`Content:` literals `store::message` parses; a store-owned `compose_header` measured line-neutral (pass 21b), so it waits for a header grammar change that edits both sides.
-- `agents/attribution`: a `testkit`-gated fixture builder would let the binary's attribution-command tests stop naming `MessageCounts`, `SubagentStat`, `Presence`, `TeamRef` and `LaneLifetime`, so those could narrow; a deepen that waits for the module's `fix(attribution)` churn to settle.
-- `agents/adapters/codex`: transcript lookup ignores `CODEX_HOME` (`codex/transcript.rs`), substring daemon classification (`codex/process.rs`), per-attempt refresh budget (`codex/app_server.rs`); reported, not fixed.
-- `sidebar_pane/render/sections/provider.rs`: the tab rail measures `chars().count()`, mis-sizing a non-ASCII product name; reported, not fixed.
-- `ids::ViewId::as_str` has no production reader: crate reach trips `dead_code`, and deleting it means rewriting the held assertion at `sidebar/produce/panes/carry.rs:783`. Waits for a pass whose paths include `sidebar/produce`.
-- `sidebar_pane::render::ui_state::Alert::active` has no production reader either: pane reach trips `dead_code`, and deleting it means rewriting the held assertions at `sidebar_pane/app/state/tests.rs:18,462` and `sidebar_pane/app/tests.rs:464`. Waits for a pass on `sidebar_pane/app`.
-- `sidebar_pane/render/(root)`: `UiState` and `Alert` stay `pub` because `draw_with_ui` and `GalleryColumn::ui` are `pub` in the held render root, whose only readers are `render/tests/gallery.rs:23,27,31` and `app/demo.rs:137`; ten more root items (`DashboardMode`, `expanded_row_awaiting_first_prompt`, `selected_agent_kind`, `selected_pet_action`, `unread_pet_row_ids`, `active_dashboard_tab`, `dashboard_tabs`, `dashboard_tabbed`, `dashboard_present`, `dashboard_mode`) have no reader outside `sidebar_pane` and would follow to pane reach. Pass 24c reviewed the render leaves, not the root: waits for a pass whose paths own `render/mod.rs` bodies.
-- `build_id::current_if_ready` is read only by the Sentry path behind a non-default feature (`observability/reporting.rs:285`), so crate reach trips `dead_code` in the default build, and gating the item like its reader hides it from atlas's default-feature SCIP index, which `diff --expect` reports as a newly unresolved definition (pass 25 dropped the gate for that reason). It waits for atlas to index feature-gated items or for that reader to be always built.
-- `sidebar_pane ↔ web`: four sites — the pane's pixel probe reads web's daemon records, and web's browser bootstrap reads the pane's diacritic table. Closing either direction needs a neutral pixel-wire or daemon-probe module below both, which is a seam pass, not an interior one.
-- Compiler-refused narrowings (E0446 / `private_interfaces`, atlas caveat 13) stay at their current visibility everywhere; do not re-plan them from `inspect`'s `narrow to` column without checking the signature that floors them.
+- `agents`: `_rimz_managed` spelled in `managed_source`, `managed_json_hooks`, `managed_statusline`; one owner measured line-neutral. Waits for a marker change or a relayer of the managed trio.
+- `config/definitions`: one load context for the seven-argument `Resolver::new` and the `SeatLoader` repack, plus one safe-name predicate (about −20 SLOC). Waits for the module's pace to drop below hot.
+- `pane::pane_is_host` → `pub(crate)` once `store/snapshot` public rustdoc stops linking it. Belongs to a `store` pass.
+- `harness/launch`: three relaunch sites in `cli/agents_cmd/{fork,restart}.rs` repeat posture prompt fields; needs a posture-aware seam `launch` may not import.
+- `harness/schedule/runner.rs`: `run_command`/`prepare_check` carry the cx; `fire_due_tasks` and `parse_signal_selector` are the seams. Waits for pace to settle.
+- `message`: `ReplyWait::run` three methods → one plus `ReplyEvent` (timing pinned by `27077a848`, `cfe1240a3`); `compact_idle` absorbing idle preflight needs `send_compact` to return the id.
+- `store/message` ↔ `address`: header literals spelled on both sides; a store-owned composer measured line-neutral. Waits for a header grammar change.
+- `agents/attribution`: a `testkit` fixture builder would let five report types narrow. Waits for its `fix(attribution)` churn to settle.
+- `ids::ViewId::as_str` and `sidebar_pane::render::ui_state::Alert::active`: no production reader, `dead_code` blocks narrowing, tests hold them. Wait for passes on `sidebar/produce` and `sidebar_pane/app`.
+- `sidebar_pane/render/(root)`: `UiState`, `Alert` and ten root items could go to pane reach once a pass owns `render/mod.rs` bodies.
+- `build_id::current_if_ready`: its only reader is behind a non-default feature. Waits for atlas to index feature-gated items.
+- `sidebar_pane ↔ web`: four sites; closing either side needs a neutral pixel-wire module below both (a seam pass).
+- Reported, not fixed: Codex transcript lookup ignores `CODEX_HOME`, substring daemon classification, per-attempt refresh budget; the provider tab rail measures `chars().count()`.
+- Compiler-refused narrowings (atlas caveat 13) are never deferrals; do not re-plan them from `inspect`'s `narrow to` column.
