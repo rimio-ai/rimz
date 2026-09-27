@@ -539,6 +539,8 @@ impl TmuxBackend {
             "split-window".to_owned(),
             "-d".to_owned(),
             "-h".to_owned(),
+            "-c".to_owned(),
+            "#{session_path}".to_owned(),
             "-P".to_owned(),
             "-F".to_owned(),
             "#{pane_id}".to_owned(),
