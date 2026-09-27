@@ -247,6 +247,44 @@ In the recorded run (2026-09-26, tmux) that sum was `2 + 118420 + 2589 = 121011`
 
 The replay proves the adapter and renderer path from hook to frame. It does not prove that Claude sends these payloads in this order or shape; that contract lives in [claude-reference.md](../externals/agent-adapter/claude-reference.md). It has run on tmux only.
 
+The `x()` helper is enough for hooks, but not for a command that acts as the calling agent: for that, see [Run a command as an agent](#run-a-command-as-an-agent).
+
+## Run a command as an agent
+
+`rimz wait`, and any other command that acts as its caller, identifies that caller from the launch environment (`CallerIdentity::from_env` in `harness/ancestry.rs`). It needs `RIMZ_AGENT_KIND` and reads the other `RIMZ_AGENT_*` launch keys, and never reads `RIMZ_AGENT_PID`. Its fallback walks the caller's process ancestors, and a `sandbox in` process does not descend from the pane. So the replay's `x()` identifies nobody:
+
+```console
+error: arming a wait is only available to an agent RimZ can identify; run this command from an agent pane
+```
+
+The launch keys live on the pane's child (the stub's `sleep`), not on the pane process, which carries only `TMUX_PANE`. With them passed but no session registered, `wait` stops one step later (`cli/wait/add.rs` rejects a provisional agent ID), because the stub never sends a SessionStart:
+
+```console
+error: the calling agent has not registered a real session yet
+```
+
+**Recipe.** Run it in zsh from the worktree root. Take `ROOT` and the `@coder#probe` Role pane and pid from your card (`%6` and `pid 284191` in the recorded run). `cargo metadata` resolves the same absolute `rimz` path the card prints, and does not wait on the held room's build lock. Copy the child's `RIMZ_AGENT_*` into an array, feed one SessionStart as that agent, then run the command:
+
+```sh
+PANE=%6 PID=284191
+RIMZ_BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/rimz"
+AENV=(${(f)"$(tr '\0' '\n' < /proc/$(pgrep -P "$PID")/environ | rg '^RIMZ_AGENT_')"})
+a() { target/debug/xtask sandbox in "$ROOT" -- env RIMZ_AGENT_PID="$PID" TMUX_PANE="$PANE" $AENV "$RIMZ_BIN" --tmux "$@"; }
+print -r -- "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"cwd\":\"$ROOT/home/room-worktrees/probe\",\"source\":\"startup\"}" > "$ROOT/tmp/session-start.json"
+a hooks feed --source claude < "$ROOT/tmp/session-start.json"
+a wait --check true
+```
+
+The feed exits 0 with no output. In the recorded run (2026-09-27, tmux) the wait armed against the Role:
+
+```console
+armed wait-patient-meter: check: true → @coder#probe
+NAME                STATE                TARGET        AGE  TRIGGER
+wait-patient-meter  watching pid 290923  @coder#probe  0s   check: true · in ~/room-worktrees/probe
+```
+
+The listing that follows `armed` can read `watcher lost` with AGE `-` right after arming; `wait list` two seconds later reads `watching pid`, so treat it as a listing race, not a failed arm. The feed only needs to run once per room; later `a` calls reuse the registered session. The run proved arming only, not delivery of the wait's result to the agent, and it has run on tmux only.
+
 ## Traps
 
 - A live check of anything the elder, a hook, or a loop fire spawns must run in a disposable room built from the worktree. In the real room those children are the installed `rimz`, so the check silently exercises the released binary instead of your change and passes either way. The held room also replaces `HOME`, so no provider login is reachable inside it and a real provider turn cannot be part of such a check.
@@ -256,5 +294,6 @@ The replay proves the adapter and renderer path from hook to frame. It does not 
 - The pipeline line renders no owner name; the click's focus target is the evidence for ownership.
 - Read focus from the mux using the card's Focus command, not `rimz pane list`, which reports no focus on Zellij. Zellij's `is_focused` is per-tab and non-unique ([zellij-reference.md](../externals/mux-adapter/zellij-reference.md#types)): the check reads focus among the team tab's panes, so it proves pane focus inside that tab and not which tab the client is viewing.
 - A command inside `sandbox in` does not resolve a relative binary path against your worktree: `target/debug/rimz` fails with `env: 'target/debug/rimz': No such file or directory` and exit 127. Pass the binary by absolute path.
+- zsh does not word-split an unquoted `$VAR`, so launch keys joined into one string reach `env` as a single `RIMZ_AGENT_ROLE="coder RIMZ_AGENT_NAME=..."`. The hook feed still exits 0 and stores that role, which then shows in handles (`@coder RIMZ_AGENT_NAME=...#probe`). Keep the keys in an array, as in [Run a command as an agent](#run-a-command-as-an-agent) (bash: `mapfile`).
 - Wrapping `sandbox room` in your own `bwrap` (to keep its files in a scratch directory) needs `--dev-bind /dev /dev`; without it the room exits before starting with `starting sandbox cleanup reaper` / `Permission denied (os error 13)`.
 - Stop the room by letting `--for` expire or killing the `xtask sandbox room` PID itself. Killing a wrapper shell leaves the room running. Kill by PID from `pgrep`, not with `pkill -f <pattern>`: the pattern matches the invoking shell's own command line, so `pkill` kills the shell that ran it.
