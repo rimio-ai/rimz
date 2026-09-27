@@ -163,7 +163,6 @@ fn pending_waits_line_counts_armed_waits() {
             name: "signal".to_owned(),
             trigger: PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
-                deadline: None,
             },
             armed_at: Some(fixed_now()),
         });
@@ -241,7 +240,6 @@ fn wait_entries_show_trigger_program_and_command() {
             name: "signal".to_owned(),
             trigger: PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
-                deadline: Some(fixed_now() + Duration::from_secs(7200)),
             },
             armed_at: Some(fixed_now() - Duration::from_secs(3600)),
         },
@@ -282,13 +280,8 @@ fn wait_entries_show_trigger_program_and_command() {
             theme.muted().fg
         );
     }
-    assert_eq!(
-        rows.len(),
-        start + 6,
-        "command and deadline signal take two lines"
-    );
+    assert_eq!(rows.len(), start + 5, "only the command takes two lines");
     assert!(rows[start + 3].contains("      cargo xtask gate --name foo_test"));
-    assert!(rows[start + 5].contains("      2h left"));
     assert!(!rows.iter().any(|line| line.contains("kill -0")));
     assert!(!rows[start + 2].contains("/usr/bin"));
     assert_snapshot("wait_entries", snapshot_to_screen(&snapshot, 54, 25));
@@ -321,7 +314,7 @@ fn wait_entries_show_trigger_program_and_command() {
     assert!(narrow_text[start + 2].contains(&shell_lead(&theme, "command")));
     assert!(!narrow_text[start + 2].contains("foo_test"));
     assert!(
-        narrow[start..=start + 5]
+        narrow[start..=start + 4]
             .iter()
             .all(|line| line.width() == 24)
     );
@@ -331,7 +324,6 @@ fn wait_entries_show_trigger_program_and_command() {
     assert!(advanced[start].contains("◷ timer · due"));
     assert!(advanced[start].ends_with("30m▐"));
     assert!(advanced[start + 1].ends_with("15m▐"));
-    assert!(advanced[start + 5].contains("108m left"));
     assert!(advanced[start + 4].ends_with("1h▐"));
     assert!(advanced[start + 2].ends_with("16m▐"));
     snapshot.worktree_groups[0].rows[0]
@@ -343,9 +335,6 @@ fn wait_entries_show_trigger_program_and_command() {
         delay: None,
     };
     assert!(line_texts(&group_lines(&snapshot, &theme, 0))[start].contains("◷ timer · due"));
-    snapshot.now += Duration::from_secs(6480);
-    let expired = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert!(expired[start + 5].contains("0m left"));
     for (command, detail) in [
         ("env A=b /usr/bin/cargo build", "env A=b cargo build"),
         ("sh -c '/usr/bin/cargo build'", "sh -c 'cargo build'"),
@@ -376,7 +365,6 @@ fn wait_entry_without_armed_at_has_no_clock() {
         name: "signal".to_owned(),
         trigger: PendingWaitTrigger::Signal {
             selector: "pr.merged".to_owned(),
-            deadline: None,
         },
         armed_at: None,
     });
@@ -541,7 +529,6 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
             name: "signal".to_owned(),
             trigger: PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
-                deadline: None,
             },
             armed_at: Some(fixed_now()),
         },

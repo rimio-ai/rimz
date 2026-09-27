@@ -175,7 +175,7 @@ Closing the room removes the file. In a long-lived room, `rimz gc` removes it on
 
 ## While a wait is pending
 
-An agent at rest with a pending one-shot wait shows the status `sleeping` (`☾` in the sidebar) instead of `idle` or `success`; the [status table](./agents.md#list) gives the precedence. Timers, PID waits, watched commands, polled checks, file watches, and one-shot or deadline signal deliveries count. Standing signal subscriptions do not.
+An agent at rest with a pending one-shot wait shows the status `sleeping` (`☾` in the sidebar) instead of `idle` or `success`; the [status table](./agents.md#list) gives the precedence. Timers, PID waits, watched commands, polled checks, file watches, and one-shot signal deliveries count. Standing signal subscriptions do not.
 
 In a supervised run, arming a wait and ending the turn does not finish the run: it stays `running` and keeps its pane until the work ends. The wake starts the next turn in that same run. If the wake is lost and nothing else remains to wake the parked run, it fails with exit `1` and a reason beginning `parked on a wake that never arrived`. The run's timeout still applies ([supervised runs](./agents.md#supervised-runs--p)).
 

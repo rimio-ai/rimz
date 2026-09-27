@@ -65,7 +65,6 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
         },
         Trigger::Signal { selector, .. } => PendingWaitTrigger::Signal {
             selector: selector.to_string(),
-            deadline: task.entry().deadline,
         },
     };
     Some(PendingWait {
@@ -190,7 +189,7 @@ mod tests {
             "signal",
             TaskEntry {
                 signal: Some("pr.merged".into()),
-                deadline: Some(deadline),
+                once: Some(true),
                 ..TaskEntry::default()
             },
             TaskSource::Instance,
@@ -199,7 +198,6 @@ mod tests {
             pending_wait("signal", &task, &now).unwrap().trigger,
             PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
-                deadline: Some(deadline),
             }
         );
     }

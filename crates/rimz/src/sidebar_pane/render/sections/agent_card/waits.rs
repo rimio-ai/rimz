@@ -52,7 +52,7 @@ fn wait_entry(ctx: &RowCtx<'_>, wait: &PendingWait) -> Entry {
         lead,
         wait.trigger.kind_word(),
         Some(wait.trigger.headline(ctx.now)),
-        wait.trigger.detail(ctx.now),
+        wait.trigger.detail(),
         wait.armed_at,
     )
 }

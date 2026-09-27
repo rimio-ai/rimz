@@ -313,47 +313,16 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
         (
             PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
-                deadline: None,
             },
             "signal",
             "pr.merged",
             None,
             "wakes on pr.merged",
         ),
-        (
-            PendingWaitTrigger::Signal {
-                selector: "pr.merged".into(),
-                deadline: Some(due),
-            },
-            "signal",
-            "pr.merged",
-            Some("12m left"),
-            "wakes on pr.merged",
-        ),
-        (
-            PendingWaitTrigger::Signal {
-                selector: "pr.merged".into(),
-                deadline: Some(now),
-            },
-            "signal",
-            "pr.merged",
-            Some("0m left"),
-            "wakes on pr.merged",
-        ),
-        (
-            PendingWaitTrigger::Signal {
-                selector: "pr.merged".into(),
-                deadline: Some(Timestamp::from_second(999).unwrap()),
-            },
-            "signal",
-            "pr.merged",
-            Some("0m left"),
-            "wakes on pr.merged",
-        ),
     ] {
         assert_eq!(trigger.kind_word(), kind);
         assert_eq!(trigger.headline(now), headline);
-        assert_eq!(trigger.detail(now).as_deref(), detail);
+        assert_eq!(trigger.detail().as_deref(), detail);
         if matches!(trigger, PendingWaitTrigger::Pid { .. }) {
             assert_eq!(
                 serde_json::to_value(&trigger).unwrap(),

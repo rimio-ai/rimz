@@ -48,7 +48,7 @@ pub fn prompt(agent: &AgentState, now: Timestamp) -> String {
         let trigger = &wait.trigger;
         let detail = match trigger {
             PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Check { .. } => {
-                trigger.detail(now).unwrap_or_default()
+                trigger.detail().unwrap_or_default()
             }
             _ => trigger.headline(now),
         };
@@ -255,7 +255,6 @@ mod tests {
             name: "ci".into(),
             trigger: PendingWaitTrigger::Signal {
                 selector: "pr.checks".into(),
-                deadline: None,
             },
             armed_at: None,
         });

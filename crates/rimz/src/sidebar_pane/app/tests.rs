@@ -209,7 +209,6 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         (
             crate::agents::PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
-                deadline: None,
             },
             false,
         ),
