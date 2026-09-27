@@ -294,6 +294,7 @@ fn render_ambiguous(root: &Path, name: &str, symbols: &[SymbolInformation]) -> R
     render_outcome(
         root,
         &Output::Ambiguous {
+            unresolved: 0,
             name: name.into(),
             symbols: symbols.to_vec(),
         },
@@ -305,6 +306,7 @@ fn render_ambiguous(root: &Path, name: &str, symbols: &[SymbolInformation]) -> R
 fn lookup_outcomes_render_qualified_reusable_candidates() {
     let root = Path::new("/checkout");
     let missing = Output::NotFound {
+        unresolved: 0,
         name: "nosuch".into(),
         symbols: vec![],
     };
@@ -317,6 +319,7 @@ fn lookup_outcomes_render_qualified_reusable_candidates() {
         {"name": "read", "kind": 12, "containerName": "Container<'a>", "location": {"uri": "file:///outside/lib.rs", "range": range()}}
     ])).unwrap();
     let missing = Output::NotFound {
+        unresolved: 0,
         name: "launch_git::read".into(),
         symbols: symbols.clone(),
     };
@@ -344,10 +347,12 @@ fn lookup_outcomes_render_qualified_reusable_candidates() {
     }
     for output in [
         Output::NotFound {
+            unresolved: 0,
             name: "wrong::read".into(),
             symbols: vec![symbols[0].clone(); 21],
         },
         Output::Ambiguous {
+            unresolved: 0,
             name: "read".into(),
             symbols: vec![symbols[0].clone(); 21],
         },
@@ -420,8 +425,12 @@ fn not_found_candidates_collapse_re_exports_to_their_definition() {
     ]))
     .unwrap();
     let definition = symbols[1].location.clone();
-    let symbols = collapse_candidates(symbols, |_| Ok(vec![definition.clone()])).unwrap();
+    let symbols = collapse_candidates(symbols, |symbols| {
+        Ok(vec![vec![definition.clone()]; symbols.len()])
+    })
+    .unwrap();
     let missing = Output::NotFound {
+        unresolved: 0,
         name: "wrong::Store".into(),
         symbols,
     };
@@ -429,6 +438,163 @@ fn not_found_candidates_collapse_re_exports_to_their_definition() {
     not found: wrong::Store; 1 other symbol named Store:
     struct store::Store  src/store/mod.rs:2:3
     ");
+}
+
+fn broad_candidates(count: usize) -> Vec<SymbolInformation> {
+    serde_json::from_value(json!(
+        (0..count)
+            .rev()
+            .map(|n| json!({
+                "name": "new", "kind": 12,
+                "location": {"uri": format!("file:///checkout/src/c{n:02}.rs"), "range": range()}
+            }))
+            .collect::<Vec<_>>()
+    ))
+    .unwrap()
+}
+
+#[test]
+fn collapse_resolves_only_the_ranked_head_and_collapses_its_aliases() {
+    let mut requested = Vec::new();
+    let (resolution, unresolved) = collapse_ranked(
+        Path::new("/checkout"),
+        "c44::new",
+        broad_candidates(45),
+        |symbols| {
+            requested = symbols
+                .iter()
+                .map(|symbol| symbol.location.uri.clone())
+                .collect();
+            Ok(symbols
+                .iter()
+                .map(|symbol| {
+                    let mut location = symbol.location.clone();
+                    location.uri = location.uri.replace("c00.rs", "c01.rs");
+                    vec![location]
+                })
+                .collect())
+        },
+    )
+    .unwrap();
+    let expected: Vec<_> = std::iter::once(44)
+        .chain(0..29)
+        .map(|n| format!("file:///checkout/src/c{n:02}.rs"))
+        .collect();
+    assert_eq!(
+        requested, expected,
+        "only the ranked top 30 get definition requests"
+    );
+    assert_eq!(unresolved, 15);
+    let SymbolResolution::Ambiguous(symbols) = resolution else {
+        panic!("unresolved candidates stay ambiguous")
+    };
+    assert_eq!(symbols.len(), 29);
+    assert!(
+        !symbols
+            .iter()
+            .any(|symbol| symbol.location.uri.ends_with("c00.rs"))
+    );
+    let output = Output::Ambiguous {
+        name: "c44::new".into(),
+        symbols,
+        unresolved,
+    };
+    let json: Value =
+        serde_json::from_str(&render_outcome(Path::new("/checkout"), &output, true).unwrap())
+            .unwrap();
+    assert_eq!(json["total"], 44);
+    assert_eq!(json["truncated"], true);
+    assert_eq!(json["candidates"].as_array().unwrap().len(), 29);
+}
+
+#[test]
+fn complete_collapse_can_be_unique_but_an_unresolved_tail_cannot() {
+    for count in [25, 45] {
+        let mut requests = 0;
+        let definition = broad_candidates(1).remove(0).location;
+        let (resolution, unresolved) = collapse_ranked(
+            Path::new("/checkout"),
+            "new",
+            broad_candidates(count),
+            |symbols| {
+                requests = symbols.len();
+                Ok(vec![vec![definition.clone()]; symbols.len()])
+            },
+        )
+        .unwrap();
+        assert_eq!(requests, count.min(30));
+        if count == 25 {
+            assert_eq!(unresolved, 0);
+            assert!(
+                matches!(resolution, SymbolResolution::Unique(symbol) if symbol.location == definition)
+            );
+        } else {
+            assert_eq!(unresolved, 15);
+            assert!(
+                matches!(resolution, SymbolResolution::Ambiguous(symbols) if symbols.len() == 1)
+            );
+        }
+    }
+}
+
+#[test]
+fn ranked_requests_keep_the_original_alias_representative() {
+    let symbols = broad_candidates(3);
+    let definition = broad_candidates(4).remove(0).location;
+    let (resolution, unresolved) =
+        collapse_ranked(Path::new("/checkout"), "new", symbols, |symbols| {
+            Ok(symbols
+                .iter()
+                .map(|symbol| {
+                    vec![if symbol.location.uri.ends_with("c00.rs") {
+                        symbol.location.clone()
+                    } else {
+                        definition.clone()
+                    }]
+                })
+                .collect())
+        })
+        .unwrap();
+    assert_eq!(unresolved, 0);
+    let SymbolResolution::Ambiguous(symbols) = resolution else {
+        panic!("two definitions")
+    };
+    assert!(
+        symbols
+            .iter()
+            .any(|symbol| symbol.location.uri.ends_with("c02.rs")),
+        "keep the first indexed alias, not the first ranked alias"
+    );
+    assert!(
+        !symbols
+            .iter()
+            .any(|symbol| symbol.location.uri.ends_with("c01.rs"))
+    );
+}
+
+#[test]
+fn unresolved_candidate_counts_are_explicit_even_when_the_head_collapses() {
+    let root = Path::new("/checkout");
+    for output in [
+        Output::NotFound {
+            name: "Wrong::new".into(),
+            symbols: broad_candidates(1),
+            unresolved: 15,
+        },
+        Output::Ambiguous {
+            name: "new".into(),
+            symbols: broad_candidates(1),
+            unresolved: 15,
+        },
+    ] {
+        let text = render_outcome(root, &output, false).unwrap();
+        assert!(text.contains("up to 16"), "{text}");
+        assert!(text.ends_with("15 more; narrow with a qualifier or use find\n"));
+        let json: Value =
+            serde_json::from_str(&render_outcome(root, &output, true).unwrap()).unwrap();
+        assert_eq!(json["total"], 16);
+        assert_eq!(json["truncated"], true);
+    }
 }
 
 #[test]
@@ -449,17 +615,25 @@ fn aliases_collapse_to_definitions_without_guessing() {
             })
             .to_vec()
     };
-    let resolved = collapse_symbols(symbols(), |_| Ok(vec![location("definition")])).unwrap();
+    let resolved = collapse_symbols(symbols(), |symbols| {
+        Ok(vec![vec![location("definition")]; symbols.len()])
+    })
+    .unwrap();
     assert!(
         matches!(resolved, SymbolResolution::Unique(found) if found.location == location("definition"))
     );
     for unresolved in [vec![], vec![location("one"), location("two")]] {
-        let resolved = collapse_symbols(symbols(), |candidate| {
-            Ok(if candidate.uri.ends_with("alias.rs") {
-                unresolved.clone()
-            } else {
-                vec![location("definition")]
-            })
+        let resolved = collapse_symbols(symbols(), |symbols| {
+            Ok(symbols
+                .iter()
+                .map(|candidate| {
+                    if candidate.location.uri.ends_with("alias.rs") {
+                        unresolved.clone()
+                    } else {
+                        vec![location("definition")]
+                    }
+                })
+                .collect())
         })
         .unwrap();
         let SymbolResolution::Ambiguous(symbols) = resolved else {
@@ -490,12 +664,17 @@ fn collapsed_candidates_keep_names_accepted_by_workspace_search() {
     let root = Path::new("/checkout");
     let indexed = json!(["alias", "other"].map(|file| json!({"name": "work", "kind": 12, "location": {"uri": format!("file:///checkout/src/{file}.rs"), "range": range()}})));
     let symbols = serde_json::from_value(indexed.clone()).unwrap();
-    let SymbolResolution::Ambiguous(symbols) = collapse_symbols(symbols, |location| {
-        let mut resolved = location.clone();
-        if resolved.uri.ends_with("/alias.rs") {
-            resolved.uri = "file:///checkout/src/definition.rs".into();
-        }
-        Ok(vec![resolved])
+    let SymbolResolution::Ambiguous(symbols) = collapse_symbols(symbols, |symbols| {
+        Ok(symbols
+            .iter()
+            .map(|symbol| {
+                let mut resolved = symbol.location.clone();
+                if resolved.uri.ends_with("/alias.rs") {
+                    resolved.uri = "file:///checkout/src/definition.rs".into();
+                }
+                vec![resolved]
+            })
+            .collect())
     })
     .unwrap() else {
         panic!("two distinct definitions")
@@ -744,6 +923,7 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
     );
     assert_eq!(
         Output::NotFound {
+            unresolved: 0,
             name: "missing".into(),
             symbols: vec![]
         }
@@ -752,6 +932,7 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
     );
     assert_eq!(
         Output::Ambiguous {
+            unresolved: 0,
             name: "work".into(),
             symbols: vec![]
         }

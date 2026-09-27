@@ -114,6 +114,8 @@ fn main() {
                         _ => vec!["lib.rs".to_owned()],
                     };
                     json!(files.into_iter().map(|file| json!({"name":name,"kind":23,"location":{"uri":format!("{}/{file}", root.trim_end_matches('/')),"range":alias_location("alias")["range"]}})).collect::<Vec<_>>())
+                } else if message["params"]["query"] == "Many" {
+                    json!((0..45).rev().map(|n| json!({"name":"Many","kind":12,"location":{"uri":format!("{root}/src/c{n:02}.rs"),"range":alias_location("alias")["range"]}})).collect::<Vec<_>>())
                 } else if message["params"]["query"] == "alias" {
                     json!([{"name": "alias", "kind": 12, "location": alias_location("alias")}, {"name": "alias", "kind": 12, "location": alias_location("definition")}])
                 } else if let Some(name @ ("pathed" | "twin" | "work")) =

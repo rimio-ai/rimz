@@ -55,10 +55,12 @@ pub enum Output {
     Ambiguous {
         name: String,
         symbols: Vec<SymbolInformation>,
+        unresolved: usize,
     },
     NotFound {
         name: String,
         symbols: Vec<SymbolInformation>,
+        unresolved: usize,
     },
 }
 
@@ -199,16 +201,20 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                     json!({"query": name_segments(&name).last().cloned().unwrap_or_default()}),
                 )?,
             )?;
-            let definition = |location: &Location| {
-                Ok(locations(request(
-                    entry,
-                    "textDocument/definition",
-                    json!({
-                        "textDocument": {"uri": location.uri},
-                        "position": location.range.start,
-                    }),
-                )?)?)
+            // At most COLLAPSE_CAP ranked candidates, or one unique match.
+            let definition = |symbols: &[SymbolInformation]| {
+                bounded_map(symbols, |symbol| {
+                    Ok::<_, QueryErr>(locations(request(
+                        entry,
+                        "textDocument/definition",
+                        json!({
+                            "textDocument": {"uri": symbol.location.uri},
+                            "position": symbol.location.range.start,
+                        }),
+                    )?)?)
+                })
             };
+            let mut unresolved = 0;
             let resolution = match resolution {
                 SymbolResolution::Missing { candidates } => {
                     let mut qualifier = name_segments(&name);
@@ -258,9 +264,19 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                         }
                     }
                     if members.is_empty() {
+                        let (resolution, unresolved) =
+                            collapse_ranked(&entry.root, &name, candidates, definition)?;
+                        let symbols = match resolution {
+                            SymbolResolution::Unique(symbol) => vec![symbol],
+                            SymbolResolution::Ambiguous(symbols)
+                            | SymbolResolution::Missing {
+                                candidates: symbols,
+                            } => symbols,
+                        };
                         return Ok(Output::NotFound {
                             name,
-                            symbols: collapse_candidates(candidates, definition)?,
+                            symbols,
+                            unresolved,
                         });
                     }
                     if members.len() == 1 {
@@ -270,14 +286,23 @@ pub fn execute(entry: &Entry, verb: Verb, target: &str) -> std::result::Result<O
                     }
                 }
                 SymbolResolution::Unique(symbol) => collapse_symbols(vec![symbol], definition)?,
-                SymbolResolution::Ambiguous(symbols) => collapse_symbols(symbols, definition)?,
+                SymbolResolution::Ambiguous(symbols) => {
+                    let (resolution, remaining) =
+                        collapse_ranked(&entry.root, &name, symbols, definition)?;
+                    unresolved = remaining;
+                    resolution
+                }
             };
             match resolution {
                 SymbolResolution::Missing { .. } => {
                     unreachable!("collapse_symbols receives a nonempty match set")
                 }
                 SymbolResolution::Ambiguous(symbols) => {
-                    return Ok(Output::Ambiguous { name, symbols });
+                    return Ok(Output::Ambiguous {
+                        name,
+                        symbols,
+                        unresolved,
+                    });
                 }
                 SymbolResolution::Unique(symbol) => {
                     (symbol.location.uri, symbol.location.range.start)
