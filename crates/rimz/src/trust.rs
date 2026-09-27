@@ -712,6 +712,7 @@ struct ProjectLsp {
 struct ProjectLspServer {
     command: Vec<String>,
     init_options: Option<Value>,
+    editor_check_on_save: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -841,6 +842,8 @@ struct ExecutableLspServer<'a> {
     name: &'a str,
     command: &'a [String],
     init_options: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    editor_check_on_save: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -950,6 +953,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 .map(|(name, server)| ExecutableLspServer {
                     name,
                     command: &server.command,
+                    editor_check_on_save: server.editor_check_on_save,
                     init_options: server.init_options.as_ref().map(|value| {
                         // JSON values always serialize; recursively sorting also covers preserve_order builds.
                         let mut value = value.clone();

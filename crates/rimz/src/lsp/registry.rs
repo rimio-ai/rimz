@@ -124,6 +124,8 @@ impl CrashCause {
 pub struct Entry {
     #[serde(default)]
     pub kind: Option<crate::config::LspServerKind>,
+    #[serde(default)]
+    pub editor_check_on_save: Option<bool>,
     pub root: PathBuf,
     pub project: Option<PathBuf>,
     pub server: String,
@@ -477,6 +479,7 @@ mod tests {
     fn registry_round_trip_and_kill_order() {
         let entry = Entry {
             kind: Some(crate::config::LspServerKind::RustAnalyzer),
+            editor_check_on_save: Some(false),
             root: "/checkout".into(),
             project: Some("/project".into()),
             server: "rust".into(),
@@ -512,6 +515,10 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("last_crash");
         legacy.as_object_mut().unwrap().remove("attached");
         legacy.as_object_mut().unwrap().remove("kind");
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("editor_check_on_save");
         let parsed = serde_json::from_value::<Entry>(legacy);
         assert!(
             parsed.is_ok(),
@@ -520,6 +527,7 @@ mod tests {
         let parsed = parsed.unwrap();
         assert!(parsed.attached.is_empty());
         assert!(parsed.kind.is_none());
+        assert!(parsed.editor_check_on_save.is_none());
         let mut entries = vec![entry.clone(); 4];
         entries[0].server = "used-new".into();
         entries[0].request_count = 2;

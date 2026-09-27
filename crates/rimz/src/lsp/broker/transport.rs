@@ -130,7 +130,7 @@ impl Transport {
                             settings.kind,
                             method,
                             &message["params"],
-                            &settings.options,
+                            &settings.options(),
                             folders,
                         )
                     };
@@ -225,6 +225,7 @@ mod tests {
         Arc::new(Mutex::new(super::super::Settings {
             kind: crate::config::LspServerKind::RustAnalyzer,
             options: Value::Null,
+            editor_check_on_save: None,
         }))
     }
 
@@ -241,6 +242,48 @@ mod tests {
             options,
             folders,
         )
+    }
+
+    #[test]
+    fn editor_check_on_save_overrides_only_while_attached() {
+        for original in [
+            Value::Null,
+            json!({"checkOnSave":false,"cargo":{"targetDir":true}}),
+            json!({"checkOnSave":true}),
+        ] {
+            let mut settings = super::super::Settings {
+                kind: crate::config::LspServerKind::RustAnalyzer,
+                options: original.clone(),
+                editor_check_on_save: None,
+            };
+            assert_eq!(settings.options(), original);
+            settings.editor_check_on_save = Some(true);
+            let mut expected = if original.is_null() {
+                json!({})
+            } else {
+                original.clone()
+            };
+            expected["checkOnSave"] = json!(true);
+            assert_eq!(settings.options(), expected);
+            assert_eq!(
+                server_response(
+                    "workspace/configuration",
+                    &json!({"items":[{}, {"section":"rust-analyzer"}, {"section":"rust-analyzer.checkOnSave"}, {"section":"checkOnSave"}, {"section":"cargo"}, {"section":"absent"}]}),
+                    &settings.options(),
+                    &Value::Null
+                ),
+                Ok(json!([
+                    expected,
+                    expected,
+                    true,
+                    true,
+                    original["cargo"],
+                    null
+                ]))
+            );
+            settings.editor_check_on_save = Some(false);
+            assert_eq!(settings.options(), original);
+        }
     }
 
     #[test]

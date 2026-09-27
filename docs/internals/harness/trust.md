@@ -32,7 +32,7 @@ The pin is on the surface itself because agents in the room can write `.rimz/con
 | `[tasks.<name>]` | `agent`, `prompt`, `prompt-file`, `check`, `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`, `signal`, `match` |
 | `[[hooks]]` | `event`, `command` |
 | `[env]` | every key and value |
-| `[lsp.servers.<name>]` | server name, `command` argv, and canonical JSON `init-options` |
+| `[lsp.servers.<name>]` | server name, `command` argv, canonical JSON `init-options`, and `editor-check-on-save` when explicitly set |
 | `[accounts]` | every `<kind> = "<name>"` selection, because it redirects every agent's credentials |
 
 The hash input is canonical JSON, and the wire format is `sha256:<hex>`. Struct field order is fixed, `BTreeMap` keys sort, and an unset `Option` serializes as `null`, so the same config always hashes to the same bytes. A few fields are omitted instead of written empty, so that grants made before the field existed keep their hash: empty `subagent_profiles`, empty `accounts`, empty role `signals`, unset `skills` and `auto_compact` on profiles and roles, and a team's unset `consensus_file` and empty `append_system_prompt_files`. `append-system-prompt-files` serializes under the key `append_system_prompt_file` for the same reason.

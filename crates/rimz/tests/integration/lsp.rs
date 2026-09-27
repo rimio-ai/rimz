@@ -171,6 +171,138 @@ fn lsp_server_arms_deliver_settings_capabilities_and_status() {
     }
 }
 
+#[test]
+fn lsp_editor_check_on_save_tracks_first_attach_last_detach_and_restart() {
+    let env = Env::new();
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    let request = rimz::lsp::admission::ServeRequest {
+        root: env.project_root.canonicalize().unwrap(),
+        project: env.project_root.clone(),
+        server: "rust".into(),
+        settings_hash: "editor-checks".into(),
+        config: serde_json::from_value(json!({"kind":"rust-analyzer","command":[stub,"--reload-configuration"],"extensions":["rs"],"root-markers":["Cargo.toml"],"init-options":{"checkOnSave":false,"cargo":{"targetDir":true}},"editor-check-on-save":true,"memory-estimate":"1M"})).unwrap(),
+        policy: rimz::config::LspConfig { kill_floor_percent: 0, reserve_percent: 0, reserve_min: "0".into(), ..Default::default() },
+        eager: false,
+    };
+    let (mut broker, directory) = spawn_test_broker(&env, &request);
+    let pid = std::process::id();
+    assert_eq!(
+        editor_rpc(
+            &directory,
+            json!({"op":"lease","launch_id":"agent","pid":pid,"start_token":rimz::proc::process_start_token(pid).unwrap()})
+        )["ok"],
+        true
+    );
+    let initialized_options = |requests: &Value| {
+        requests["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["method"] == "initialize")
+            .unwrap()["params"]["initializationOptions"]
+            .clone()
+    };
+    assert_eq!(
+        initialized_options(&editor_query(&directory, "requests")),
+        json!({"checkOnSave":false,"cargo":{"targetDir":true}})
+    );
+    let wait_settings = |count: usize, enabled: bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let result = editor_query(&directory, "requests");
+            let answers: Vec<_> = result["requests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|f| {
+                    f["id"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("configuration-change:"))
+                })
+                .collect();
+            if answers.len() == count {
+                assert_eq!(
+                    answers.last().unwrap()["result"],
+                    json!([{"checkOnSave":enabled,"cargo":{"targetDir":true}}])
+                );
+                let changes: Vec<_> = result["requests"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|f| f["method"] == "workspace/didChangeConfiguration")
+                    .collect();
+                assert_eq!(changes.len(), count);
+                assert!(
+                    changes
+                        .iter()
+                        .all(|f| f["params"] == json!({"settings":null}))
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "settings transition missing: {result}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let a = Editor::attach(&directory, "first");
+    wait_settings(1, true);
+    let b = Editor::attach(&directory, "second");
+    wait_settings(1, true);
+    drop(a);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while editor_rpc(&directory, json!({"op":"status"}))["attached"]
+        .as_array()
+        .unwrap()
+        .len()
+        != 1
+    {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    wait_settings(1, true);
+    drop(b);
+    wait_settings(2, false);
+    let status = editor_rpc(&directory, json!({"op":"status"}));
+    assert_eq!(status["editor_check_on_save"], false);
+    assert_eq!(status["leases"].as_array().unwrap().len(), 1);
+    let _editor = Editor::attach(&directory, "restart");
+    wait_settings(3, true);
+    env.rimz()
+        .args(["lsp", "status", "--server", "rust", "--json"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("\"editor_check_on_save\": true"));
+    env.rimz()
+        .args(["lsp", "status", "--server", "rust"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("on (editor attached)"));
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"stopped by hand"}))["ok"],
+        true
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = editor_rpc(&directory, json!({"op":"status"}));
+        if status["state"].get("dormant").is_some() && status["server_pid"].is_null() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "not dormant: {status}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        initialized_options(&editor_query(&directory, "requests")),
+        json!({"checkOnSave":true,"cargo":{"targetDir":true}})
+    );
+    assert_eq!(
+        editor_rpc(&directory, json!({"op":"stop","reason":"checkout removed"}))["ok"],
+        true
+    );
+    broker.wait().unwrap();
+}
+
 struct Editor(BufReader<UnixStream>);
 
 impl Editor {
@@ -1709,6 +1841,7 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_broker() {
     let pid = std::process::id();
     let entry = Entry {
         kind: None,
+        editor_check_on_save: None,
         root: runtime.path().join("checkout"),
         project: Some(runtime.path().join("project")),
         server: "live".into(),

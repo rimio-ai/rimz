@@ -69,6 +69,17 @@ fn client_capabilities(kind: LspServerKind) -> Value {
 struct Settings {
     kind: LspServerKind,
     options: Value,
+    editor_check_on_save: Option<bool>,
+}
+
+impl Settings {
+    fn options(&self) -> Value {
+        let mut options = self.options.clone();
+        if self.editor_check_on_save == Some(true) {
+            options["checkOnSave"] = json!(true);
+        }
+        options
+    }
 }
 
 struct Shared {
@@ -161,6 +172,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     let kind = request.config.resolved_kind();
     let entry = Entry {
         kind: Some(kind),
+        editor_check_on_save: request.config.editor_check_on_save.then_some(false),
         root: root.clone(),
         project: Some(request.project.clone()),
         server: request.server.clone(),
@@ -202,6 +214,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         settings: Arc::new(Mutex::new(Settings {
             kind,
             options: request.config.init_options.clone().unwrap_or(Value::Null),
+            editor_check_on_save: request.config.editor_check_on_save.then_some(false),
         })),
         router: router_tx,
         model: Mutex::new(Model {
@@ -426,8 +439,9 @@ fn initialize_and_run(
     );
     // Initialize from the broker's settings, the same state the transport answers configuration from.
     let settings = shared.settings.lock().unwrap_or_else(|e| e.into_inner());
-    params["initializationOptions"] = settings.options.clone();
+    params["initializationOptions"] = settings.options();
     params["capabilities"] = client_capabilities(settings.kind);
+    let initial_check_on_save = settings.editor_check_on_save;
     drop(settings);
     let (_, initialized) = transport.request("initialize", params)?;
     shared
@@ -448,7 +462,7 @@ fn initialize_and_run(
         request,
         server,
         &transport,
-        initialized,
+        (initialized, initial_check_on_save),
         (&mut watcher, events),
     )
 }
@@ -458,13 +472,14 @@ fn run(
     request: &ServeRequest,
     server: &mut Server,
     transport: &Arc<Transport>,
-    initialized: mpsc::Receiver<Result<Value>>,
+    initialized: (mpsc::Receiver<Result<Value>>, Option<bool>),
     watch: (
         &mut impl notify::Watcher,
         mpsc::Receiver<notify::Result<notify::Event>>,
     ),
 ) -> Result<()> {
     let (watcher, events) = watch;
+    let (initialized, initial_check_on_save) = initialized;
     let mut initialized = Some(initialized);
     let mut replaying = None;
     let mut last_housekeeping = Instant::now();
@@ -479,6 +494,7 @@ fn run(
                         transport.clone(),
                         initialize_result,
                         replayed,
+                        initial_check_on_save,
                     ));
                     replaying = Some(replay);
                     initialized = None;
@@ -763,6 +779,7 @@ mod tests {
             Arc::new(Mutex::new(Settings {
                 kind: LspServerKind::RustAnalyzer,
                 options: Value::Null,
+                editor_check_on_save: None,
             })),
             Value::Null,
             mpsc::channel().0,
