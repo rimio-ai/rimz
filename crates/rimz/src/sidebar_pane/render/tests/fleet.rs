@@ -700,6 +700,93 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
     );
 }
 
+fn open_group(
+    snapshot: &SidebarSnapshot,
+    key: &str,
+    number: Option<u64>,
+) -> crate::store::snapshot::SidebarWorktreeGroup {
+    let mut group = snapshot.worktree_groups[0].clone();
+    group.key = key.to_owned();
+    group.label = key.to_owned();
+    group.pr_state = Some(crate::store::snapshot::WorktreePrState::Open);
+    group.pr_number = number;
+    group.pr_url = number.map(pr_url);
+    group
+}
+
+fn pr_url(number: u64) -> String {
+    format!("https://github.com/acme/app/pull/{number}")
+}
+
+fn stack_pr(number: u64) -> crate::store::snapshot::StackPr {
+    crate::store::snapshot::StackPr {
+        number,
+        url: Some(pr_url(number)),
+    }
+}
+
+#[test]
+fn render_cockpit_counts_stacked_prs() {
+    let mut snapshot = make_up_snapshot();
+    let mut phase2 = open_group(&snapshot, "lsp-phase2", Some(554));
+    phase2.pr_stack.below = vec![stack_pr(552), stack_pr(553)];
+    let docs = open_group(&snapshot, "docs", Some(569));
+    let cockpit = open_group(&snapshot, "cockpit", Some(559));
+    snapshot.worktree_groups = vec![phase2, docs, cockpit];
+
+    let screen = snapshot_to_screen(&snapshot, 38, 20);
+    let spend = screen
+        .lines()
+        .find(|line| line.contains('¤'))
+        .expect("cockpit spend line");
+    assert!(
+        spend.contains("⑃ 5"),
+        "stacked PRs count:
+{screen}"
+    );
+}
+
+#[test]
+fn open_pr_total_counts_distinct_open_prs() {
+    let snapshot = make_up_snapshot();
+    let mut base = open_group(&snapshot, "base", Some(10));
+    base.pr_stack.above = vec![vec![stack_pr(11)], vec![stack_pr(12), stack_pr(13)]];
+    let mut groups = vec![base];
+    assert_eq!(
+        open_pr_total(&groups),
+        4,
+        "every above level and fork counts"
+    );
+
+    groups.push(open_group(&snapshot, "fork", Some(12)));
+    assert_eq!(
+        open_pr_total(&groups),
+        4,
+        "a stacked PR with its own worktree counts once"
+    );
+
+    let mut other_repo = open_group(&snapshot, "other-repo", Some(12));
+    other_repo.pr_url = Some("https://github.com/acme/lib/pull/12".to_owned());
+    groups.push(other_repo);
+    assert_eq!(
+        open_pr_total(&groups),
+        5,
+        "same number in another repo counts"
+    );
+
+    groups.push(open_group(&snapshot, "unnumbered", None));
+    assert_eq!(
+        open_pr_total(&groups),
+        6,
+        "an unnumbered open PR counts once"
+    );
+
+    let mut merged = open_group(&snapshot, "merged", Some(20));
+    merged.pr_state = Some(crate::store::snapshot::WorktreePrState::Merged);
+    merged.pr_stack.below = vec![stack_pr(21)];
+    assert_eq!(open_pr_total(&[merged]), 0, "non-open groups add nothing");
+}
+
 #[test]
 fn cockpit_pr_ci_uses_worst_known_open_verdict() {
     let mut snapshot = make_up_snapshot();

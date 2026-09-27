@@ -1,5 +1,7 @@
 //! The fleet make-up line — the cockpit's status buckets.
 
+use std::collections::HashSet;
+
 use crate::agents::AgentStatus;
 use crate::store::snapshot::{SidebarWorktreeGroup, WorktreeCi, WorktreePrState};
 use jiff::Timestamp;
@@ -322,11 +324,29 @@ pub(in crate::sidebar_pane::render) fn unread_worktree_total(
         .count()
 }
 
+/// Distinct open PRs across the room: each Open group's own PR plus every
+/// member of its stack. A PR is keyed by `(url, number)`, so a stacked PR that
+/// also has its own worktree counts once while two repos' same number count
+/// twice. An Open group without a known number still counts its one PR.
 pub(in crate::sidebar_pane::render) fn open_pr_total(groups: &[SidebarWorktreeGroup]) -> usize {
-    groups
+    let mut unnumbered = 0;
+    let mut prs: HashSet<(Option<&str>, u64)> = HashSet::new();
+    for group in groups
         .iter()
         .filter(|group| group.pr_state == Some(WorktreePrState::Open))
-        .count()
+    {
+        match group.pr_number {
+            Some(number) => {
+                prs.insert((group.pr_url.as_deref(), number));
+            }
+            None => unnumbered += 1,
+        }
+        let stack = &group.pr_stack;
+        for member in stack.below.iter().chain(stack.above.iter().flatten()) {
+            prs.insert((member.url.as_deref(), member.number));
+        }
+    }
+    unnumbered + prs.len()
 }
 
 pub(in crate::sidebar_pane::render) fn open_pr_worst_ci(
