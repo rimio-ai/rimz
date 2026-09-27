@@ -13,7 +13,7 @@ pub enum Rung {
 }
 
 impl Rung {
-    pub(crate) fn at(&self) -> Timestamp {
+    pub(super) fn at(&self) -> Timestamp {
         match self {
             Self::Warn { at, .. } | Self::Stop { at } => *at,
         }
@@ -35,7 +35,7 @@ pub fn kill_at(record: &RunRecord) -> Option<Timestamp> {
 
 /// The latest crossed rung not yet claimed; `warn` is stored largest offset
 /// first, so its rungs come in time order and a missed one is skipped.
-pub(crate) fn due_rung(record: &RunRecord, now: Timestamp) -> Option<Rung> {
+pub(super) fn due_rung(record: &RunRecord, now: Timestamp) -> Option<Rung> {
     if !matches!(record.status, RunStatus::Pending | RunStatus::Running)
         || !kill_at(record).is_some_and(|kill| kill > now)
     {
@@ -84,12 +84,12 @@ fn warning_text(record: &RunRecord, remaining: Duration, last: bool) -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StopChannel {
+enum StopChannel {
     Hook,
     Pane,
 }
 
-pub fn stop_channel(kind: &str) -> StopChannel {
+fn stop_channel(kind: &str) -> StopChannel {
     if crate::agents::definition_by_kind(kind)
         .is_ok_and(|agent| agent.spec().capabilities.hook_context)
     {
