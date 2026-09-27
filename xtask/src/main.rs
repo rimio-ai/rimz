@@ -13,6 +13,7 @@ mod gates;
 mod hooks;
 mod invariants;
 mod pricing;
+mod prune;
 mod runner;
 mod sandbox;
 mod sccache;
@@ -85,6 +86,11 @@ const TASKS: &[TaskInfo] = &[
         name: "brew-formula",
         summary: "Render the Homebrew tap formula from the dist checksums.",
         runs: "read target/dist/SHA256SUMS plus the RIMZ_BREW_* env, write rimz.rb atomically",
+    },
+    TaskInfo {
+        name: "prune",
+        summary: "Reclaim stale Cargo output from this target directory.",
+        runs: "cargo xtask prune [--dry-run]: remove superseded units and inactive profiles, reporting files and bytes",
     },
     TaskInfo {
         name: "hooks",
@@ -287,6 +293,7 @@ fn task_accepts_args(task: &str) -> bool {
     matches!(
         task,
         "test"
+            | "prune"
             | "install-system"
             | "test-archive"
             | "sandbox"
@@ -314,6 +321,14 @@ const QUIET_PASS_TASKS: &[&str] = &[
 
 fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
     let result = dispatch(task, args, root);
+    if result.is_ok()
+        && matches!(
+            task,
+            "check" | "test" | "lint" | "gate" | "checks" | "ci" | "build" | "test-archive"
+        )
+    {
+        prune::automatic(root);
+    }
     if result.is_ok() && QUIET_PASS_TASKS.contains(&task) {
         gates::report_task_pass(task);
     }
@@ -333,6 +348,7 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "dist" => build::dist(root),
         "brew-formula" => brew::brew_formula(root),
         "hooks" => hooks::install(root),
+        "prune" => prune::run(root, args),
         "fmt" => gates::fmt(root),
         // Standalone `lint` is the per-commit signal, so it checks formatting
         // first, as the pre-commit hook does, and runs only the all-feature

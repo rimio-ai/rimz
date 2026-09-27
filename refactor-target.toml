@@ -58,6 +58,11 @@ layers = [
 ]
 
 [[module]]
+path = "xtask/src/prune.rs"
+# Only the manual task and best-effort automatic hook cross this module boundary.
+surface-budget = 2
+
+[[module]]
 path = "crates/rimz/src/address.rs"
 # The fleet digest and its orphan backstop share one launched-fleet selector.
 # `role_holders` reopened this by one: the harness takes the Role-tier
