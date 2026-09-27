@@ -35,6 +35,15 @@ pub enum AtomicErr {
     Json(#[from] serde_json::Error),
 }
 
+impl AtomicErr {
+    fn io(path: &Path) -> impl FnOnce(io::Error) -> Self + '_ {
+        move |source| Self::Io {
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+}
+
 pub(crate) type Result<T> = std::result::Result<T, AtomicErr>;
 
 /// Write raw bytes to `path` via a same-directory temp file followed by an
@@ -44,10 +53,7 @@ pub(crate) type Result<T> = std::result::Result<T, AtomicErr>;
 #[must_use = "durability barrier; check the result"]
 pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     replace_whole_file(path, Fsync::Durable, None, |writer, tmp| {
-        writer.write_all(bytes).map_err(|source| AtomicErr::Io {
-            path: tmp.to_path_buf(),
-            source,
-        })
+        writer.write_all(bytes).map_err(AtomicErr::io(tmp))
     })
 }
 
@@ -56,10 +62,7 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 /// reuse one serialization for content comparison and publication.
 pub(crate) fn write_cache_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     replace_whole_file(path, Fsync::Skip, None, |writer, tmp| {
-        writer.write_all(bytes).map_err(|source| AtomicErr::Io {
-            path: tmp.to_path_buf(),
-            source,
-        })
+        writer.write_all(bytes).map_err(AtomicErr::io(tmp))
     })
 }
 
@@ -69,10 +72,7 @@ pub(crate) fn write_cache_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<
 #[must_use = "durability barrier; check the result"]
 pub fn write_executable_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     replace_whole_file(path, Fsync::Durable, Some(0o755), |writer, tmp| {
-        writer.write_all(bytes).map_err(|source| AtomicErr::Io {
-            path: tmp.to_path_buf(),
-            source,
-        })
+        writer.write_all(bytes).map_err(AtomicErr::io(tmp))
     })
 }
 
@@ -82,15 +82,9 @@ pub fn write_executable_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()
 pub(crate) fn link_executable_atomically(src: &Path, dst: &Path) -> Result<()> {
     publish_temp(dst, Fsync::Durable, |tmp| {
         if std::fs::hard_link(src, tmp).is_err() {
-            let bytes = std::fs::read(src).map_err(|source| AtomicErr::Io {
-                path: src.to_path_buf(),
-                source,
-            })?;
+            let bytes = std::fs::read(src).map_err(AtomicErr::io(src))?;
             write_temp_file(tmp, Fsync::Durable, Some(0o755), |writer| {
-                writer.write_all(&bytes).map_err(|source| AtomicErr::Io {
-                    path: tmp.to_path_buf(),
-                    source,
-                })
+                writer.write_all(&bytes).map_err(AtomicErr::io(tmp))
             })?;
         }
         Ok(())
@@ -193,10 +187,7 @@ fn write_temp_then_rename_with<T: Serialize>(
             JsonStyle::Pretty => serde_json::to_writer_pretty(&mut *writer, value)?,
             JsonStyle::Compact => serde_json::to_writer(&mut *writer, value)?,
         }
-        writer.write_all(b"\n").map_err(|source| AtomicErr::Io {
-            path: tmp.to_path_buf(),
-            source,
-        })
+        writer.write_all(b"\n").map_err(AtomicErr::io(tmp))
     })
 }
 
@@ -217,22 +208,16 @@ fn write_temp_file(
     mode: Option<u32>,
     encode: impl FnOnce(&mut BufWriter<File>) -> Result<()>,
 ) -> Result<()> {
-    let file = create_temp_file(tmp, mode).map_err(|source| AtomicErr::Io {
-        path: tmp.to_path_buf(),
-        source,
-    })?;
+    let file = create_temp_file(tmp, mode).map_err(AtomicErr::io(tmp))?;
     let mut writer = BufWriter::new(file);
     encode(&mut writer)?;
-    let file = writer.into_inner().map_err(|source| AtomicErr::Io {
-        path: tmp.to_path_buf(),
-        source: source.into_error(),
-    })?;
+    let file = writer
+        .into_inner()
+        .map_err(io::IntoInnerError::into_error)
+        .map_err(AtomicErr::io(tmp))?;
     if fsync == Fsync::Durable {
         testkit::count_fsync();
-        file.sync_all().map_err(|source| AtomicErr::Io {
-            path: tmp.to_path_buf(),
-            source,
-        })?;
+        file.sync_all().map_err(AtomicErr::io(tmp))?;
     }
     Ok(())
 }
@@ -243,26 +228,18 @@ fn publish_temp(
     materialize: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| AtomicErr::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+        std::fs::create_dir_all(parent).map_err(AtomicErr::io(parent))?;
     }
     let tmp = temp_sibling(path);
     let mut temp_guard = TempFileGuard::new(tmp.clone());
     materialize(&tmp)?;
-    std::fs::rename(&tmp, path).map_err(|source| AtomicErr::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    std::fs::rename(&tmp, path).map_err(AtomicErr::io(path))?;
     // POSIX rename is a successful no-op when temp and destination are
     // hardlinks to the same inode. In the replacement case temp is absent.
     match std::fs::remove_file(&tmp) {
         Ok(()) => {}
         Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-        Err(source) => {
-            return Err(AtomicErr::Io { path: tmp, source });
-        }
+        Err(source) => return Err(AtomicErr::io(&tmp)(source)),
     }
     temp_guard.disarm();
     if fsync == Fsync::Durable {
@@ -301,24 +278,15 @@ fn create_temp_file(path: &Path, mode: Option<u32>) -> io::Result<File> {
 #[must_use = "durability barrier; check the result"]
 pub fn append_record_bytes(path: &Path, line: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AtomicErr::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
+        std::fs::create_dir_all(parent).map_err(AtomicErr::io(parent))?;
     }
     let first_create = !path.exists();
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
-        .map_err(|e| AtomicErr::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
-    file.write_all(line).map_err(|e| AtomicErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+        .map_err(AtomicErr::io(path))?;
+    file.write_all(line).map_err(AtomicErr::io(path))?;
     if first_create {
         sync_parent_dir(path)?;
     }
@@ -334,15 +302,9 @@ pub(crate) fn sync_file_data(path: &Path) -> Result<()> {
     let file = OpenOptions::new()
         .write(true)
         .open(path)
-        .map_err(|e| AtomicErr::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        .map_err(AtomicErr::io(path))?;
     testkit::count_fsync();
-    file.sync_data().map_err(|e| AtomicErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    file.sync_data().map_err(AtomicErr::io(path))?;
     Ok(())
 }
 
@@ -354,19 +316,10 @@ pub(crate) fn truncate_file(path: &Path, len: u64) -> Result<()> {
     let file = OpenOptions::new()
         .write(true)
         .open(path)
-        .map_err(|e| AtomicErr::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
-    file.set_len(len).map_err(|e| AtomicErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+        .map_err(AtomicErr::io(path))?;
+    file.set_len(len).map_err(AtomicErr::io(path))?;
     testkit::count_fsync();
-    file.sync_data().map_err(|e| AtomicErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    file.sync_data().map_err(AtomicErr::io(path))?;
     Ok(())
 }
 
@@ -433,15 +386,9 @@ pub(crate) fn is_orphan_temp_name(name: &str) -> bool {
 
 /// fsync a directory so its rename/unlink operations are durable.
 pub(crate) fn sync_dir(dir: &Path) -> Result<()> {
-    let handle = File::open(dir).map_err(|e| AtomicErr::Io {
-        path: dir.to_path_buf(),
-        source: e,
-    })?;
+    let handle = File::open(dir).map_err(AtomicErr::io(dir))?;
     testkit::count_fsync();
-    handle.sync_all().map_err(|e| AtomicErr::Io {
-        path: dir.to_path_buf(),
-        source: e,
-    })?;
+    handle.sync_all().map_err(AtomicErr::io(dir))?;
     Ok(())
 }
 
