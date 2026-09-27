@@ -166,7 +166,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `◎ N` | sessions that ran in the spend window |
 | `¤ N` | agents alive right now |
 | `(2)` | worktrees holding unread cards |
-| `⑃ N` | open pull requests on the agents' branches |
+| `⑃ N` | open pull requests on the agents' branches, stacked pull requests included |
 | `↑ 2 need you` | the card that most needs you is scrolled out of view |
 | `▌` ... `▐` | the selected card's left and right spines |
 | `▎` ... `🮇` | the selection lane: every row of the group that holds the selection |
@@ -201,7 +201,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 |------|-------|
 | 1 | `⌘` and the workspace name in green. The project path sits on the right with your home directory as `~`; when space runs out the path loses its left end behind `…`. |
 | 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
-| 3 | `¤` live agents, `(N)` worktrees holding unread cards when there are any (a team lane with four unread agents counts once), `⑃ N` open pull requests when there are any, and the room's spend for the window on the right. |
+| 3 | `¤` live agents, `(N)` worktrees holding unread cards when there are any (a team lane with four unread agents counts once), `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
 | 4 | the make-up line: agents by status. |
 | 5 | the `↑ N need you` banner, only while it applies. |
 
@@ -209,7 +209,7 @@ Before any spend arrives the token breakdown shows zeroes and the spend shows `$
 
 The room's scope is a path prefix: the project root and each grouped worktree root. A checkout you reach through a symlink spelled differently from the path in the agent's transcript can count as outside the room until the two paths agree.
 
-The `⑃ N` count is red when any of those pull requests fails CI, yellow while one is running, green when every known verdict passes, and blue when CI is unknown.
+The `⑃ N` colour reads each worktree's own pull request, since stacked pull requests carry no CI: red when any fails CI, yellow while one is running, green when every known verdict passes, and blue when CI is unknown.
 
 ### The make-up line
 
