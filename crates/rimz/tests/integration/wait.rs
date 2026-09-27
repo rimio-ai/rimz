@@ -58,32 +58,6 @@ fn wait_run_rejects_empty_commands() {
 }
 
 #[test]
-fn wait_rejects_legacy_commands_with_run_suggestion() {
-    let env = Env::new();
-    register_calling_agent(&env);
-    for (args, suggestion) in [
-        (vec!["wait", "--", "cargo", "test"], "--run 'cargo test'"),
-        (vec!["wait", "--run", "true", "--", "false"], "--run false"),
-    ] {
-        let output = agent_wait(&env).args(args).output().unwrap();
-        assert_eq!(output.status.code(), Some(1));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(
-                "the command after `--` is no longer accepted; pass it as one quoted string:"
-            ),
-            "{stderr}"
-        );
-        assert!(stderr.contains(suggestion), "{stderr}");
-        assert!(
-            output.stdout.is_empty(),
-            "legacy commands must not list waits"
-        );
-        assert!(!loop_instances_path(&env).exists());
-    }
-}
-
-#[test]
 fn wait_delay_arms_instance_for_the_calling_agent() {
     let env = Env::new();
     register_calling_agent_with_launch(
@@ -1549,13 +1523,35 @@ fn wait_receipts_and_list_share_pending_rows() {
 fn wait_rejects_removed_target_prompt_and_signal_flags() {
     let env = Env::new();
     register_calling_agent(&env);
-    for args in [
-        vec!["wait", "@planner", "--in", "5m"],
-        vec!["wait", "--in", "5m", "--prompt", "note"],
-        vec!["wait", "--in", "5m", "--prompt-file", "note.txt"],
-        vec!["wait", "--signal", "deploy.failed"],
-        vec!["wait", "--in", "5m", "--match", "branch=feature"],
-        vec!["wait", "--wait=5s", "--run", "true"],
+    for (args, refusal) in [
+        (
+            vec!["wait", "@planner", "--in", "5m"],
+            "unrecognized subcommand",
+        ),
+        (
+            vec!["wait", "--in", "5m", "--prompt", "note"],
+            "unexpected argument",
+        ),
+        (
+            vec!["wait", "--in", "5m", "--prompt-file", "note.txt"],
+            "unexpected argument",
+        ),
+        (
+            vec!["wait", "--signal", "deploy.failed"],
+            "unexpected argument",
+        ),
+        (
+            vec!["wait", "--in", "5m", "--match", "branch=feature"],
+            "unexpected argument",
+        ),
+        (
+            vec!["wait", "--wait=5s", "--run", "true"],
+            "unexpected argument",
+        ),
+        (
+            vec!["wait", "--", "cargo", "test"],
+            "unrecognized subcommand",
+        ),
     ] {
         let output = agent_wait(&env).args(&args).output().unwrap();
         assert!(
@@ -1563,7 +1559,7 @@ fn wait_rejects_removed_target_prompt_and_signal_flags() {
             "accepted removed arguments: {args:?}"
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("unexpected argument"), "{args:?}: {stderr}");
+        assert!(stderr.contains(refusal), "{args:?}: {stderr}");
     }
 }
 

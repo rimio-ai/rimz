@@ -131,13 +131,6 @@ fn watch_trigger(
 }
 
 fn validate_shape(args: &WaitArgs) -> Result<()> {
-    if !args.command.is_empty() {
-        let command = command_string(&args.command)?;
-        let quoted = shlex::try_quote(&command).context("quoting watched command suggestion")?;
-        bail!(
-            "the command after `--` is no longer accepted; pass it as one quoted string: --run {quoted}"
-        );
-    }
     if usize::from(args.in_after.is_some())
         + usize::from(args.pid.is_some())
         + usize::from(args.check.is_some())
