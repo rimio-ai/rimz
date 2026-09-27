@@ -6,15 +6,20 @@ use serde_json::{Value, json};
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut sections = Vec::<String>::new();
+    let mut adaptable = false;
+    let mut hold_index = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--configuration-section" => sections.push(args.next().expect("section argument")),
+            "--adaptable-replies" => adaptable = true,
+            "--hold-index-progress" => hold_index = true,
             _ => panic!("unknown stub argument: {arg}"),
         }
     }
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut indexed = false;
+    let mut capabilities = Value::Null;
     let mut changes = Value::Null;
     let mut root = String::new();
     let mut initialized = false;
@@ -46,6 +51,7 @@ fn main() {
                 continue;
             }
             "initialize" => {
+                capabilities = message["params"]["capabilities"].clone();
                 root = message["params"]["rootUri"].as_str().unwrap().to_owned();
                 assert!(!initialized, "one initialize per lifetime");
                 initialized = true;
@@ -56,8 +62,11 @@ fn main() {
                 if !sections.is_empty() {
                     write_frame(&mut output, &json!({"jsonrpc":"2.0","id":"configuration","method":"workspace/configuration","params":{"items":sections.iter().map(|section| json!({"section":section})).collect::<Vec<_>>()}})).unwrap();
                 }
-                for kind in ["begin", "end"] {
-                    write_frame(&mut output, &json!({"jsonrpc": "2.0", "method": "$/progress", "params": {"token": "index", "value": {"kind": kind}}})).unwrap();
+                if hold_index {
+                    write_frame(&mut output, &json!({"jsonrpc":"2.0","id":"index-create","method":"window/workDoneProgress/create","params":{"token":"index"}})).unwrap();
+                }
+                for kind in ["begin", if hold_index { "report" } else { "end" }] {
+                    write_frame(&mut output, &json!({"jsonrpc": "2.0", "method": "$/progress", "params": {"token": "index", "value": {"kind": kind,"title":"Indexing","percentage":50}}})).unwrap();
                 }
                 indexed = true;
                 write_frame(&mut output, &json!({"jsonrpc":"2.0", "method":"experimental/serverStatus", "params":{"health":"ok", "quiescent":true}})).unwrap();
@@ -96,6 +105,9 @@ fn main() {
             }
             "workspace/symbol" => {
                 assert!(indexed, "queries must wait for initialized");
+                if message["params"]["query"] == "release-index" {
+                    write_frame(&mut output, &json!({"jsonrpc":"2.0","method":"$/progress","params":{"token":"index","value":{"kind":"end"}}})).unwrap();
+                }
                 if message["params"]["query"] == "slow" {
                     std::thread::sleep(std::time::Duration::from_secs(8));
                 }
@@ -182,6 +194,21 @@ fn main() {
                     ),
                     symbol("saved", 12, 6, 6, json!([]))
                 ])
+            }
+            "textDocument/completion" if adaptable => {
+                let snippets = capabilities["textDocument"]["completion"]["completionItem"]["snippetSupport"]
+                    == true;
+                json!([{"label":"foo", "insertTextFormat":if snippets {2} else {1},"insertText":if snippets {"foo(${1:x})$0"} else {"foo(x)"}}])
+            }
+            "textDocument/definition" if adaptable => {
+                let uri = &message["params"]["textDocument"]["uri"];
+                let range =
+                    json!({"start":{"line":0,"character":0},"end":{"line":0,"character":3}});
+                if capabilities["textDocument"]["definition"]["linkSupport"] == true {
+                    json!([{"targetUri":uri,"targetRange":range,"targetSelectionRange":range}])
+                } else {
+                    json!([{"uri":uri,"range":range}])
+                }
             }
             "textDocument/definition"
                 if documents

@@ -7,6 +7,7 @@ use super::super::{
     query::{DocumentKey, QueryErr, UnavailableReason},
     registry::{AttachedEditor, OpenDocument, StopReason},
 };
+use super::adaptation;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -47,7 +48,14 @@ struct Client {
     ready: bool,
     shutdown: bool,
     queued: Vec<Value>,
-    pending: Vec<Value>,
+    pending: Vec<(Value, String)>,
+    capabilities: Value,
+}
+
+struct Progress {
+    token: Value,
+    begin: Option<Value>,
+    report: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -84,6 +92,7 @@ pub(super) struct Clients {
     initialized: Option<Value>,
     active: bool,
     status: Option<Value>,
+    progress: Vec<Progress>,
     next: u64,
 }
 
@@ -99,6 +108,7 @@ impl Clients {
             initialized: None,
             active: false,
             status: None,
+            progress: Vec::new(),
             next: 0,
         }
     }
@@ -147,6 +157,7 @@ impl Clients {
                         shutdown: false,
                         queued: vec![],
                         pending: vec![],
+                        capabilities: Value::Null,
                     },
                 );
                 out.push(Action::Publish);
@@ -159,13 +170,24 @@ impl Clients {
                     && let Some(index) = client
                         .pending
                         .iter()
-                        .position(|pending| *pending == original)
+                        .position(|(pending, _)| *pending == original)
                 {
-                    client.pending.remove(index);
+                    let (_, method) = client.pending.remove(index);
+                    if let Some(result) = frame.get_mut("result") {
+                        adaptation::reply(result, &method, &client.capabilities);
+                    }
+                    adaptation::uris(&mut frame, &|uri| {
+                        self.documents
+                            .get(&DocumentKey::new(uri))
+                            .and_then(|holders| holders.iter().find(|holder| holder.client == id))
+                            .map(|holder| holder.uri.clone())
+                    });
                     frame["id"] = original;
                     out.push(Action::ToClient(id, frame));
                 }
             }
+            // Progress is kept: the server can create it after `initialized` but before this
+            // event reaches the router, and the previous lifetime's end already cleared it.
             Event::LifetimeStarted { initialize_result } => {
                 self.active = true;
                 self.initialized = Some(initialize_result);
@@ -185,6 +207,7 @@ impl Clients {
                 }
             }
             Event::LifetimeEnded(reason) => {
+                self.progress.clear();
                 self.active = false;
                 self.snapshots.clear();
                 self.view.clear();
@@ -217,6 +240,7 @@ impl Clients {
             for request in client
                 .pending
                 .drain(..)
+                .map(|(id, _)| id)
                 .chain(client.queued.drain(..).map(|frame| frame["id"].clone()))
             {
                 out.push(error(*id, request, -32802, message));
@@ -263,6 +287,7 @@ impl Clients {
         }
         match method {
             "initialize" => {
+                client.capabilities = frame["params"]["capabilities"].clone();
                 if let Some(name) = frame["params"]["clientInfo"]["name"].as_str() {
                     client.name = Some(name.to_owned());
                     out.push(Action::Publish);
@@ -304,6 +329,13 @@ impl Clients {
                 if let Some(status) = &self.status {
                     out.push(Action::ToClient(id, status.clone()));
                 }
+                for progress in &self.progress {
+                    self.next += 1;
+                    out.push(Action::ToClient(id, json!({"jsonrpc":"2.0","id":format!("rimz:{}",self.next),"method":"window/workDoneProgress/create","params":{"token":progress.token}})));
+                    for frame in progress.begin.iter().chain(&progress.report) {
+                        out.push(Action::ToClient(id, frame.clone()));
+                    }
+                }
                 let keys = self
                     .documents
                     .iter()
@@ -330,7 +362,7 @@ impl Clients {
                 if let Some(index) = client.queued.iter().position(|v| v["id"] == *request) {
                     client.queued.remove(index);
                     out.push(error(id, request.clone(), -32800, "request cancelled"));
-                } else if client.pending.contains(request) {
+                } else if client.pending.iter().any(|(id, _)| id == request) {
                     out.push(Action::ToServer(id, frame));
                 }
             }
@@ -342,8 +374,14 @@ impl Clients {
             _ => {
                 if self.active {
                     if let Some(request) = request {
-                        client.pending.push(request);
+                        client.pending.push((request, method.to_owned()));
                     }
+                    let mut frame = frame;
+                    adaptation::uris(&mut frame, &|uri| {
+                        self.view
+                            .get(&DocumentKey::new(uri))
+                            .map(|view| view.uri.clone())
+                    });
                     out.push(Action::ToServer(id, frame));
                 } else if request.is_some() {
                     self.enqueue(id, frame, out);
@@ -509,12 +547,43 @@ impl Clients {
                 return;
             }
             "experimental/serverStatus" => self.status = Some(frame.clone()),
-            "$/progress" | "window/showMessage" | "window/logMessage" => {}
+            "$/progress" => {
+                let token = &frame["params"]["token"];
+                if let Some(index) = self
+                    .progress
+                    .iter()
+                    .position(|progress| progress.token == *token)
+                {
+                    match frame["params"]["value"]["kind"].as_str() {
+                        Some("begin") => self.progress[index].begin = Some(frame.clone()),
+                        Some("report") => self.progress[index].report = Some(frame.clone()),
+                        Some("end") => {
+                            self.progress.remove(index);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "window/showMessage" | "window/logMessage" => {}
             "window/workDoneProgress/create"
             | "workspace/semanticTokens/refresh"
             | "workspace/codeLens/refresh"
             | "workspace/inlayHint/refresh"
             | "workspace/diagnostic/refresh" => {
+                if method == "window/workDoneProgress/create" {
+                    let token = &frame["params"]["token"];
+                    if !self
+                        .progress
+                        .iter()
+                        .any(|progress| progress.token == *token)
+                    {
+                        self.progress.push(Progress {
+                            token: token.clone(),
+                            begin: None,
+                            report: None,
+                        });
+                    }
+                }
                 self.next += 1;
                 frame["id"] = json!(format!("rimz:{}", self.next));
             }

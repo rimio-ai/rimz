@@ -1,5 +1,6 @@
 //! One checkout's language server, shared through a nonce-checked local socket.
 
+mod adaptation;
 mod clients;
 mod lifecycle;
 pub mod probe;
@@ -25,7 +26,7 @@ fn client_capabilities(kind: LspServerKind) -> Value {
     let text_document = json!({
         "synchronization": {"didSave": true, "willSave": true, "willSaveWaitUntil": true},
         "publishDiagnostics": {"relatedInformation": true, "versionSupport": true, "tagSupport": {"valueSet": [1, 2]}, "codeDescriptionSupport": true, "dataSupport": true},
-        "completion": {"completionItem": {"documentationFormat": ["markdown", "plaintext"], "resolveSupport": {"properties": ["documentation", "detail", "additionalTextEdits"]}}},
+        "completion": {"completionItem": {"snippetSupport": true, "documentationFormat": ["markdown", "plaintext"], "resolveSupport": {"properties": ["documentation", "detail", "additionalTextEdits"]}}},
         "hover": {"contentFormat": ["markdown", "plaintext"]},
         "signatureHelp": {"signatureInformation": {"documentationFormat": ["markdown", "plaintext"], "parameterInformation": {"labelOffsetSupport": true}}},
         "references": {}, "documentHighlight": {},
@@ -39,7 +40,7 @@ fn client_capabilities(kind: LspServerKind) -> Value {
             "tokenModifiers": ["declaration", "definition", "readonly", "static", "deprecated", "abstract", "async", "modification", "documentation", "defaultLibrary"]
         },
         "inlayHint": {"resolveSupport": {"properties": ["tooltip", "textEdits", "label.tooltip", "label.location", "label.command"]}},
-        "callHierarchy": {}, "typeHierarchy": {}, "typeDefinition": {}, "implementation": {}, "declaration": {}
+        "callHierarchy": {}, "typeHierarchy": {}, "definition": {"linkSupport": true}, "typeDefinition": {"linkSupport": true}, "implementation": {"linkSupport": true}, "declaration": {"linkSupport": true}
     });
     let mut capabilities = json!({
         "textDocument": text_document,
@@ -51,7 +52,7 @@ fn client_capabilities(kind: LspServerKind) -> Value {
         },
         "window": {"workDoneProgress": true, "showMessage": {}},
         "experimental": {
-            "serverStatusNotification": true, "hoverActions": true, "codeActionGroup": true,
+            "serverStatusNotification": true, "hoverActions": true, "codeActionGroup": true, "snippetTextEdit": true,
             "commands": {"commands": ["rust-analyzer.runSingle", "rust-analyzer.debugSingle", "rust-analyzer.showReferences", "rust-analyzer.gotoLocation", "rust-analyzer.triggerParameterHints", "rust-analyzer.rename"]}
         }
     });
