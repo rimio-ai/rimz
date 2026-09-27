@@ -485,6 +485,21 @@ fn status(
     );
     facts.push("requests", render::cell(entry.request_count.to_string()));
     facts.push("leases", render::cell(entry.leases.len().to_string()));
+    if let Some(cause) = &entry.last_crash {
+        let age =
+            render::age_label(rimz::utils::time::unix_now_ms().saturating_sub(cause.at_ms) / 1000);
+        facts.push(
+            "last crash",
+            render::cell(format!("{}, {age} ago", cause.exit_summary())),
+        );
+        let lines: Vec<_> = cause.stderr_tail.lines().collect();
+        if !lines.is_empty() {
+            facts.push(
+                "stderr",
+                render::cell(lines[lines.len().saturating_sub(5)..].join("\n")),
+            );
+        }
+    }
     facts.render(&mut out)?;
     for editor in entry.attached {
         let mut details = render::KeyVals::new();
@@ -750,6 +765,7 @@ mod tests {
             last_request_at_ms: None,
             peak_rss_kb: 4,
             restarts: 2,
+            last_crash: None,
             leases: vec![],
             attached: vec![],
         }

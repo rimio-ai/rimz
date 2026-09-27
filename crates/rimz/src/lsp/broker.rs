@@ -8,14 +8,13 @@ mod transport;
 mod watch;
 pub(super) mod watchdog;
 
+use super::server::{self, Server};
 use super::{LspErr, Result, admission::ServeRequest, history, memory, registry};
 use lifecycle::{Lifecycle, Readiness};
 use registry::{Entry, State, StopReason};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
-use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use transport::Transport;
@@ -132,18 +131,6 @@ impl Model {
     }
 }
 
-struct Server(Child);
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(self.0.id() as i32),
-            nix::sys::signal::Signal::SIGKILL,
-        );
-        let _ = self.0.wait();
-    }
-}
-
 /// Run the detached broker. Initial publication deliberately does not take admission.lock.
 pub fn serve(mut request: ServeRequest) -> Result<()> {
     let root = std::fs::canonicalize(&request.root)?;
@@ -180,6 +167,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         last_request_at_ms: None,
         peak_rss_kb: 0,
         restarts: 0,
+        last_crash: None,
         leases: Vec::new(),
         attached: Vec::new(),
     };
@@ -267,12 +255,16 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         if matches!(result, Ok(false)) {
             continue;
         }
-        record_stop(
-            &model.entry,
-            model.lifetime_peak_kb,
-            model.dormant_ms,
-            result.as_ref().err().map(ToString::to_string).as_deref(),
-        );
+        if reason == StopReason::Crashed && model.entry.last_crash.is_none() {
+            model.entry.last_crash = Some(registry::CrashCause {
+                at_ms: crate::utils::time::unix_now_ms(),
+                exit_code: None,
+                signal: None,
+                stderr_tail: String::new(),
+                error: result.as_ref().err().map(ToString::to_string),
+            });
+        }
+        record_stop(&model.entry, model.lifetime_peak_kb, model.dormant_ms);
         registry::publish(&model.entry)?;
         shared.changed.notify_all();
     }
@@ -323,6 +315,7 @@ fn prepare_start(shared: &Shared, request: &ServeRequest, eager: bool) -> Result
     };
     model.start_requested = false;
     model.entry.state = State::Starting;
+    model.entry.last_crash = None;
     model.entry.started_at_ms = now;
     model.entry.ready_at_ms = None;
     model.entry.estimate_bytes = estimate;
@@ -339,27 +332,55 @@ fn lifetime(shared: &Shared, request: &ServeRequest, epoch: u64) -> Result<bool>
     if model.entry.state != State::Starting {
         return Ok(false);
     }
-    let mut server = Server(
-        Command::new(&request.config.command[0])
-            .args(&request.config.command[1..])
-            .current_dir(&request.root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()?,
-    );
-    model.entry.server_pid = Some(server.0.id());
-    model.entry.server_start_token = crate::proc::process_start_token(server.0.id());
-    model.lifetime_peak_kb = memory::tree_peak_kb(server.0.id());
+    let mut server = server::spawn(&request.root, &request.config)?;
+    model.entry.server_pid = Some(server.child.id());
+    model.entry.server_start_token = crate::proc::process_start_token(server.child.id());
+    model.lifetime_peak_kb = memory::tree_peak_kb(server.child.id());
     let published = registry::publish(&model.entry);
     drop(model);
-    published?;
-    memory::raise_oom_score(server.0.id())?;
-    let uri = url::Url::from_directory_path(&request.root)
+    let result = published.and_then(|()| initialize_and_run(shared, request, epoch, &mut server));
+    if result.is_err() {
+        shared.stop(StopReason::Crashed);
+    }
+    let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+    model.lifetime_peak_kb = model
+        .lifetime_peak_kb
+        .max(memory::tree_peak_kb(server.child.id()));
+    model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
+    if matches!(
+        model.entry.state,
+        State::Dormant {
+            reason: Some(StopReason::Crashed),
+            ..
+        }
+    ) {
+        model.entry.last_crash = Some(server.crash(result.as_ref().err().map(ToString::to_string)));
+    }
+    result.map(|()| true)
+}
+
+pub(crate) fn initialize_params(
+    root: &std::path::Path,
+    config: &crate::config::LspServerConfig,
+) -> Result<Value> {
+    let uri = url::Url::from_directory_path(root)
         .map_err(|()| LspErr::Protocol("invalid checkout URI".into()))?;
-    let folders = json!([{"uri": uri.as_str(), "name": request.root.file_name().unwrap_or_default().to_string_lossy()}]);
-    let options = request.config.init_options.clone().unwrap_or(Value::Null);
+    Ok(json!({
+        "processId": std::process::id(), "rootUri": uri.as_str(),
+        "workspaceFolders": [{"uri": uri.as_str(), "name": root.file_name().unwrap_or_default().to_string_lossy()}],
+        "initializationOptions": config.init_options.clone().unwrap_or(Value::Null),
+        "capabilities": client_capabilities(config)
+    }))
+}
+
+fn initialize_and_run(
+    shared: &Shared,
+    request: &ServeRequest,
+    epoch: u64,
+    server: &mut Server,
+) -> Result<()> {
+    memory::raise_oom_score(server.child.id())?;
+    let params = initialize_params(&request.root, &request.config)?;
     let (messages_tx, messages) = mpsc::channel();
     let sender = shared.router.clone();
     std::thread::spawn(move || {
@@ -374,20 +395,13 @@ fn lifetime(shared: &Shared, request: &ServeRequest, epoch: u64) -> Result<bool>
     });
     // Piped handles were requested on this child and have not yet been taken.
     let transport = Transport::start(
-        server.0.stdout.take().expect("piped stdout"),
-        server.0.stdin.take().expect("piped stdin"),
-        options.clone(),
-        folders.clone(),
+        server.child.stdout.take().expect("piped stdout"),
+        server.child.stdin.take().expect("piped stdin"),
+        params["initializationOptions"].clone(),
+        params["workspaceFolders"].clone(),
         messages_tx,
     );
-    let (_, initialized) = transport.request(
-        "initialize",
-        json!({
-            "processId": std::process::id(), "rootUri": uri.as_str(), "workspaceFolders": folders,
-            "initializationOptions": options,
-            "capabilities": client_capabilities(&request.config)
-        }),
-    )?;
+    let (_, initialized) = transport.request("initialize", params)?;
     shared
         .model
         .lock()
@@ -401,20 +415,14 @@ fn lifetime(shared: &Shared, request: &ServeRequest, epoch: u64) -> Result<bool>
     watch::register(&mut watcher, &request.root, &|path, error| {
         watch_error(request, path, error)
     })?;
-    let result = run(
+    run(
         shared,
         request,
-        &mut server,
+        server,
         &transport,
         initialized,
         (&mut watcher, events),
-    );
-    let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-    model.lifetime_peak_kb = model
-        .lifetime_peak_kb
-        .max(memory::tree_peak_kb(server.0.id()));
-    model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
-    result.map(|()| true)
+    )
 }
 
 fn run(
@@ -517,7 +525,7 @@ fn run(
                 transport.notify("workspace/didChangeWatchedFiles", changes)?;
             }
         }
-        if server.0.try_wait()?.is_some() {
+        if server.child.try_wait()?.is_some() {
             shared.stop(StopReason::Crashed);
             break;
         }
@@ -593,7 +601,7 @@ fn watch_error(request: &ServeRequest, path: &std::path::Path, error: &str) {
     });
 }
 
-fn record_stop(entry: &Entry, peak_rss_kb: u64, dormant_ms: Option<u64>, error: Option<&str>) {
+fn record_stop(entry: &Entry, peak_rss_kb: u64, dormant_ms: Option<u64>) {
     let (reason, at_ms) = match entry.state {
         State::Stopped { reason, at_ms } => (reason, at_ms),
         State::Dormant {
@@ -616,12 +624,15 @@ fn record_stop(entry: &Entry, peak_rss_kb: u64, dormant_ms: Option<u64>, error: 
         reason,
     });
     if reason == StopReason::Crashed {
+        let mut details = json!(entry.last_crash);
+        details["reason"] = json!(reason);
+        details["peak_rss_kb"] = json!(peak_rss_kb);
         crate::diag::lsp::append(&crate::diag::lsp::Record {
             at: jiff::Timestamp::now(),
             root: entry.root.clone(),
             server: entry.server.clone(),
             event: "crashed".into(),
-            details: json!({"reason": reason, "peak_rss_kb": peak_rss_kb, "error": error}),
+            details,
         });
     }
 }
@@ -633,17 +644,11 @@ mod tests {
 
     #[test]
     fn server_drop_kills_its_descendants() {
-        let mut server = Server(
-            Command::new("sh")
-                .args(["-c", "sleep 60 & echo $!; wait"])
-                .stdout(Stdio::piped())
-                .process_group(0)
-                .spawn()
-                .unwrap(),
-        );
-        let pid = server.0.id();
+        let config = serde_json::from_value(json!({"command": ["sh", "-c", "sleep 60 & echo $!; wait"], "extensions": ["rs"], "root-markers": ["Cargo.toml"]})).unwrap();
+        let mut server = server::spawn(std::path::Path::new("/"), &config).unwrap();
+        let pid = server.child.id();
         let mut line = String::new();
-        BufReader::new(server.0.stdout.take().unwrap())
+        BufReader::new(server.child.stdout.take().unwrap())
             .read_line(&mut line)
             .unwrap();
         let child: u32 = line.trim().parse().unwrap();

@@ -135,7 +135,11 @@ rimz lsp status --server rust --json
 
 Text shows checkout, server name, state, broker and server pids, request count, and lease count. Each attached editor shows its pid, client name (or `unnamed`), and seconds since attachment, followed by indented buffer paths relative to the checkout where possible. `(owner)` marks the holder whose buffer the server uses; `(unsaved in editor)` means changed since open or save, not a comparison with disk. A buffer already unsaved when opened is not detected, and editing back to disk text does not clear the marker.
 
+When a crash cause is retained, text adds `last crash` with the exit code or signal (or error when neither is known) and age, plus `stderr` with up to five trailing lines. The next server start clears the cause. Crashed query errors direct you to this status command.
+
 `--json` returns the server's current registry entry, including `attached`: each editor has `pid`, optional `name`, `since_ms`, and `open`; each open buffer has `uri`, `owner`, and `dirty`. Buffer text is not included. The [editor model](../../internals/lsp.md#editors) defines ownership and marker semantics.
+
+`last_crash` is null or an object with `at_ms`, nullable `exit_code` and `signal`, `stderr_tail` (at most 8 KiB), and nullable `error`. Exit status is absent when the server never spawned or was still alive when a broker-side error ended its lifetime.
 
 ## Exit codes
 

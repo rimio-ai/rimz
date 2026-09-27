@@ -99,6 +99,28 @@ pub struct OpenDocument {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CrashCause {
+    pub at_ms: u64,
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+    pub stderr_tail: String,
+    pub error: Option<String>,
+}
+
+impl CrashCause {
+    /// How the server ended: its exit code or signal, else the lifetime's error.
+    pub fn exit_summary(&self) -> String {
+        if let Some(code) = self.exit_code {
+            return format!("exit code {code}");
+        }
+        if let Some(signal) = self.signal {
+            return format!("signal {signal}");
+        }
+        self.error.clone().unwrap_or_else(|| "unknown cause".into())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Entry {
     pub root: PathBuf,
     pub project: Option<PathBuf>,
@@ -118,6 +140,8 @@ pub struct Entry {
     pub peak_rss_kb: u64,
     #[serde(default)]
     pub restarts: u64,
+    #[serde(default)]
+    pub last_crash: Option<CrashCause>,
     pub leases: Vec<Lease>,
     #[serde(default)]
     pub attached: Vec<AttachedEditor>,
@@ -467,6 +491,7 @@ mod tests {
             last_request_at_ms: None,
             peak_rss_kb: 6,
             restarts: 0,
+            last_crash: None,
             attached: Vec::new(),
             leases: vec![Lease {
                 launch_id: Some("launch-1".to_owned().into()),
@@ -480,6 +505,8 @@ mod tests {
             entry
         );
         let mut legacy = serde_json::to_value(&entry).unwrap();
+        assert!(legacy.as_object().unwrap().contains_key("last_crash"));
+        legacy.as_object_mut().unwrap().remove("last_crash");
         legacy.as_object_mut().unwrap().remove("attached");
         let parsed = serde_json::from_value::<Entry>(legacy);
         assert!(

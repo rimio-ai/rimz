@@ -1120,7 +1120,7 @@ fn unavailable_and_indexing_errors_preserve_skill_exit_contract() {
     no language server for /checkout (none configured); use grep
     no language server for /checkout (not started: memory short); use grep
     no language server for /checkout (stopped: memory pressure); use grep
-    no language server for /checkout (stopped: crashed); use grep
+    no language server for /checkout (stopped: crashed; see rimz lsp status); use grep
     no language server for /checkout (stopped: checkout removed); use grep
     no language server for /checkout (stopped by hand); use grep
     no language server for /checkout (stopped: idle); use grep

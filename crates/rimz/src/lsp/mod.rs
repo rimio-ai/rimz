@@ -10,6 +10,7 @@ pub mod memory;
 pub mod protocol;
 pub mod query;
 pub mod registry;
+mod server;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LspErr {
