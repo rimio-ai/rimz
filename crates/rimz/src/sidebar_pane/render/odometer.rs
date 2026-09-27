@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 /// configured base render grid; the roll clicks on every second phase, so the
 /// default 100ms grid yields a 200ms click — and a room where only money moves
 /// rides the serve loop's matching money grid rather than the fast one.
-pub(in crate::sidebar_pane) const CLICK_PHASES: u64 = 2;
+pub(super) const CLICK_PHASES: u64 = 2;
 
 /// The fixed climb window: every jump completes within this many clicks
 /// (1.2s), the bounded-duration contract that keeps a $5 turn from crawling

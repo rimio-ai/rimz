@@ -158,7 +158,7 @@ impl UiState {
         theme
     }
 
-    pub(in crate::sidebar_pane) fn cached_theme(&self, config: &ThemeConfig) -> Option<Rc<Theme>> {
+    pub(super) fn cached_theme(&self, config: &ThemeConfig) -> Option<Rc<Theme>> {
         let (cached_config, theme) = self.theme_cache.as_ref()?;
         (cached_config == config).then(|| Rc::clone(theme))
     }

@@ -1,4 +1,494 @@
 use super::*;
+use crate::sidebar_pane::app::fixtures::{agent_snapshot, pane, snapshot, workspace};
+
+#[test]
+fn animation_gate_uses_observed_phase_for_money_and_scrollbar() {
+    let ws = workspace();
+    let snapshot = snapshot(&ws);
+    let mut ui = UiState::default();
+    ui.theme(&snapshot.theme);
+    ui.tally.observe(1.0, 0);
+    ui.tally.observe(5.0, 1);
+    assert!(animation_interval(&snapshot, &ui, 1, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, 100, false).is_none());
+    ui.animation_phase = 100;
+    assert!(animation_interval(&snapshot, &ui, 1, false).is_some());
+
+    ui.tally = Default::default();
+    ui.cost_rolls
+        .observe(std::iter::once(("agent".to_owned(), 1.0)), 0);
+    ui.cost_rolls
+        .observe(std::iter::once(("agent".to_owned(), 5.0)), 1);
+    assert!(animation_interval(&snapshot, &ui, 1, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, 100, false).is_none());
+
+    ui.cost_rolls = Default::default();
+    ui.scrollbar.observe(0, 0);
+    ui.scrollbar.observe(1, 1);
+    assert!(animation_interval(&snapshot, &ui, 1, false).is_some());
+    assert!(animation_interval(&snapshot, &ui, 100, false).is_none());
+    ui.animation_phase = 0;
+    assert!(animation_interval(&snapshot, &ui, 100, false).is_none());
+}
+
+#[test]
+fn pet_cadence_beats_breath_but_yields_to_fast_and_money() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    snapshot.theme.pets.enabled = true;
+    snapshot.theme.animations.waiting =
+        Some(toml::from_str("effect = \"breathe\"\n").expect("animation spec"));
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    let mut ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            body: None,
+            caption: None,
+            frame_interval: Some(Duration::from_millis(625)),
+        }),
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+    assert_eq!(
+        animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
+        Duration::from_millis(625)
+    );
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Running;
+    assert_eq!(
+        animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
+        crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
+    );
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    ui.tally.observe(1.0, 0);
+    ui.tally.observe(5.0, 1);
+    ui.animation_phase = 1;
+    let money = crate::sidebar::timing::money_animation_frame(
+        snapshot.theme.display.resolved_refresh_ms(),
+        CLICK_PHASES,
+    );
+    for pet in [Duration::from_millis(625), Duration::from_millis(50)] {
+        ui.pet.as_mut().unwrap().frame_interval = Some(pet);
+        assert_eq!(
+            animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
+            pet.min(money)
+        );
+    }
+}
+
+#[test]
+fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
+    let ws = workspace();
+    let mut slow = snapshot(&ws);
+    slow.theme.animations.waiting =
+        Some(toml::from_str("effect = \"breathe\"\n").expect("animation spec"));
+    slow.worktree_groups = vec![crate::store::snapshot::SidebarWorktreeGroup {
+        pr_stack: Default::default(),
+        key: "/repo/main".to_owned(),
+        label: "main".to_owned(),
+        label_qualifier: None,
+        kind: crate::store::snapshot::SidebarWorktreeKind::Worktree,
+        team: None,
+        cohort_effort: None,
+        pipeline: None,
+        status_counts: Vec::new(),
+        rows: vec![crate::store::snapshot::SidebarRow {
+            id: "claude-1".to_owned(),
+            name: "claude".to_owned(),
+            pane: None,
+            worktree_path: Some("/repo/main".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            channel: None,
+            unread: false,
+            inactive: false,
+            archived: false,
+            attention_score: 0,
+            last_activity: Timestamp::now(),
+            card: crate::store::snapshot::RowCard::Agent(Box::new(
+                crate::store::snapshot::AgentCard {
+                    status: crate::agents::AgentStatus::Waiting,
+                    phase: crate::agents::TurnPhase::Idle,
+                    task: Some("allow cargo fmt".to_owned()),
+                    ..crate::store::snapshot::AgentCard::default()
+                },
+            )),
+        }],
+        diff_added: None,
+        diff_removed: None,
+        commits_ahead: None,
+        commits_behind: None,
+        trunk: None,
+        worktree_backed: false,
+        finished: false,
+        clean: None,
+        landed: None,
+        trunk_sync: None,
+        pr_state: None,
+        ci: None,
+        pr_number: None,
+        pr_url: None,
+    }];
+    assert!(animation_interval(&slow, &UiState::default(), 0, false).is_some());
+    assert_eq!(
+        animation_interval(&slow, &UiState::default(), 0, false).expect("animated"),
+        crate::sidebar::timing::animation_frame(
+            crate::config::DisplayConfig::default().resolved_refresh_ms()
+        ),
+        "a cold theme cache stays on the safe base grid until the first paint warms it"
+    );
+
+    let mut ui = UiState::default();
+    ui.theme(&slow.theme);
+
+    assert_eq!(
+        animation_interval(&slow, &ui, ui.animation_phase, false).expect("animated"),
+        crate::sidebar::timing::BREATH_ANIMATION_FRAME
+    );
+
+    slow.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Running;
+    assert_eq!(
+        animation_interval(&slow, &ui, ui.animation_phase, false).expect("animated"),
+        crate::sidebar::timing::animation_frame(
+            crate::config::DisplayConfig::default().resolved_refresh_ms()
+        )
+    );
+}
+
+/// Shell jobs and live children animate inside an open delegation section
+/// whatever the parent's status; timers and signals stay static, and a closed
+/// or resting section holds nothing in motion.
+#[test]
+fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    agent.status = crate::agents::AgentStatus::Sleeping;
+    agent.user_turn_started_at = Some(snapshot.now);
+    agent
+        .background_shells
+        .push(crate::agents::BackgroundShell {
+            id: "b1".to_owned(),
+            command: Some("cargo test".to_owned()),
+            description: None,
+            started_at: snapshot.now,
+        });
+    let mut ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+    let fast = animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated");
+    assert_eq!(
+        animation_cadence(
+            &snapshot,
+            &ui.cached_theme(&snapshot.theme).unwrap().animations
+        ),
+        AnimationCadence::None
+    );
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+    assert_eq!(
+        fast,
+        crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
+    );
+
+    ui.delegation_overrides.insert(row_id.clone(), false);
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_none());
+    ui.delegation_overrides.clear();
+    ui.selected_index = usize::MAX;
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_none());
+    ui.delegation_overrides.insert(row_id, true);
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+
+    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    agent.background_shells.clear();
+    for (trigger, moves) in [
+        (
+            crate::agents::PendingWaitTrigger::Command {
+                command: "cargo test".to_owned(),
+            },
+            true,
+        ),
+        (crate::agents::PendingWaitTrigger::Pid { pid: 16776 }, true),
+        (
+            crate::agents::PendingWaitTrigger::Check {
+                command: "nc -z localhost 3000".to_owned(),
+            },
+            true,
+        ),
+        (
+            crate::agents::PendingWaitTrigger::File {
+                path: "/repo/app.log".into(),
+                grep: None,
+            },
+            true,
+        ),
+        (
+            crate::agents::PendingWaitTrigger::Timer {
+                due: snapshot.now,
+                delay: None,
+            },
+            false,
+        ),
+        (
+            crate::agents::PendingWaitTrigger::Signal {
+                selector: "pr.merged".to_owned(),
+            },
+            false,
+        ),
+    ] {
+        let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+        agent.pending_waits = vec![crate::agents::PendingWait {
+            name: "wait".to_owned(),
+            trigger,
+            armed_at: None,
+        }];
+        assert_eq!(
+            animation_interval(&snapshot, &ui, 0, false).is_some(),
+            moves
+        );
+    }
+
+    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    agent.pending_waits.clear();
+    agent.sub_agent_count = 1;
+    agent.sub_agents = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "child", "name": "child", "status": "running",
+            "last_activity": snapshot.now,
+        }))
+        .unwrap(),
+    ];
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+    // Only a running child's head moves on the fast grid; a live child resting
+    // in any other status, like a finished one, leaves the open section cold.
+    for status in [
+        crate::agents::AgentStatus::Idle,
+        crate::agents::AgentStatus::Sleeping,
+        crate::agents::AgentStatus::Waiting,
+        crate::agents::AgentStatus::Paused,
+        crate::agents::AgentStatus::Success,
+    ] {
+        snapshot.worktree_groups[0].rows[0]
+            .as_agent_mut()
+            .unwrap()
+            .sub_agents[0]
+            .status = status;
+        assert!(
+            animation_interval(&snapshot, &ui, 0, false).is_none(),
+            "{status:?}"
+        );
+    }
+}
+
+#[test]
+fn selected_blank_idle_agent_keeps_breath_grid_awake() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    agent.task = None;
+    agent.description = None;
+    agent.prompt = None;
+
+    let mut selected = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    selected.theme(&snapshot.theme);
+    assert!(animation_interval(&snapshot, &selected, 0, false).is_some());
+    assert_eq!(
+        animation_interval(&snapshot, &selected, selected.animation_phase, false)
+            .expect("animated"),
+        crate::sidebar::timing::BREATH_ANIMATION_FRAME
+    );
+
+    let mut off_selection = UiState {
+        selected_index: 99,
+        ..Default::default()
+    };
+    off_selection.theme(&snapshot.theme);
+    assert!(animation_interval(&snapshot, &off_selection, 0, false).is_none());
+
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .task = Some("warm up".to_owned());
+    selected.theme(&snapshot.theme);
+    assert!(animation_interval(&snapshot, &selected, 0, false).is_none());
+}
+
+#[test]
+fn expanded_blank_team_member_keeps_breath_grid_awake() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    let group = &mut snapshot.worktree_groups[0];
+    group.rows[0].as_agent_mut().unwrap().team = Some("forge".to_owned());
+
+    let mut teammate = group.rows[0].clone();
+    teammate.id = "agent-2".to_owned();
+    teammate.pane = Some(pane("terminal_10", "tab_0", false));
+    let teammate_card = teammate.as_agent_mut().unwrap();
+    teammate_card.team = Some("forge".to_owned());
+    teammate_card.task = None;
+    teammate_card.description = None;
+    teammate_card.prompt = None;
+    group.rows.push(teammate);
+
+    let mut ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+    assert_eq!(
+        animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
+        crate::sidebar::timing::BREATH_ANIMATION_FRAME
+    );
+}
+
+#[test]
+fn help_popup_keeps_animation_grid_hot() {
+    let ws = workspace();
+    let snapshot = snapshot(&ws);
+    let mut ui = UiState {
+        help_visible: true,
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+    assert_eq!(
+        animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
+        crate::sidebar::timing::animation_frame(
+            crate::config::DisplayConfig::default().resolved_refresh_ms()
+        )
+    );
+}
+
+#[test]
+fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
+    let ws = workspace();
+    let mut snapshot = snapshot(&ws);
+    snapshot.theme.pets.enabled = true;
+    let mut ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
+                crate::sidebar_pane::pets::PetCell {
+                    ch: '▀',
+                    fg: ratatui::style::Color::White,
+                    bg: ratatui::style::Color::Black,
+                },
+            ]])),
+            caption: Some("resting".to_owned()),
+            frame_interval: Some(Duration::from_millis(625)),
+        }),
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+
+    if ui.cached_theme(&snapshot.theme).unwrap().pet_body_enabled() {
+        assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+        assert_eq!(
+            animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
+            Duration::from_millis(625)
+        );
+
+        let mut jumping_ui = ui.clone();
+        jumping_ui.pet.as_mut().expect("pet").frame_interval = Some(Duration::from_millis(286));
+        assert_eq!(
+            animation_interval(&snapshot, &jumping_ui, jumping_ui.animation_phase, false)
+                .expect("animated"),
+            Duration::from_millis(286)
+        );
+    } else {
+        assert!(
+            animation_interval(&snapshot, &ui, 0, false).is_none(),
+            "NO_COLOR suppresses pet body animation"
+        );
+        let mut loading_ui = ui.clone();
+        let pet = loading_ui.pet.as_mut().expect("pet");
+        pet.body = None;
+        pet.frame_interval = Some(crate::sidebar::timing::animation_frame(
+            crate::config::DisplayConfig::default().resolved_refresh_ms(),
+        ));
+        assert!(animation_interval(&snapshot, &loading_ui, 0, false).is_some());
+        assert_eq!(
+            animation_interval(&snapshot, &loading_ui, loading_ui.animation_phase, false)
+                .expect("animated"),
+            crate::sidebar::timing::animation_frame(
+                crate::config::DisplayConfig::default().resolved_refresh_ms()
+            )
+        );
+    }
+
+    snapshot.theme.animations.idle =
+        Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
+    ui.theme(&snapshot.theme);
+    ui.pet.as_mut().expect("pet").frame_interval = None;
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_none());
+
+    snapshot.theme.animations.thinking =
+        Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
+    ui.theme(&snapshot.theme);
+    assert!(
+        animation_interval(&snapshot, &ui, 0, false).is_none(),
+        "a static effect with omitted frames quiets spinner-role pets too"
+    );
+}
+
+#[test]
+fn active_alert_suppresses_hidden_pet_animation_cadence() {
+    let ws = workspace();
+    let mut snapshot = snapshot(&ws);
+    snapshot.theme.pets.enabled = true;
+    let mut ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            body: Some(crate::sidebar_pane::pets::PetBody::Cell(vec![vec![
+                crate::sidebar_pane::pets::PetCell {
+                    ch: '▀',
+                    fg: ratatui::style::Color::White,
+                    bg: ratatui::style::Color::Black,
+                },
+            ]])),
+            caption: Some("resting".to_owned()),
+            frame_interval: Some(Duration::from_millis(625)),
+        }),
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+    let alert_active = Alert::active("snapshot failed", snapshot.now).is_active();
+
+    assert!(dashboard_present(&snapshot, false));
+    assert!(!dashboard_present(&snapshot, alert_active));
+    assert!(animation_interval(&snapshot, &ui, 0, alert_active).is_none());
+    assert_eq!(
+        animation_interval(&snapshot, &ui, ui.animation_phase, alert_active).unwrap_or(
+            crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
+        ),
+        crate::sidebar::timing::animation_frame(
+            crate::config::DisplayConfig::default().resolved_refresh_ms()
+        )
+    );
+
+    if ui.cached_theme(&snapshot.theme).unwrap().pet_body_enabled() {
+        assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+        assert_eq!(
+            animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
+            Duration::from_millis(625)
+        );
+    }
+}
 
 #[test]
 fn animation_cadence_separates_fast_work_from_breath_motion() {

@@ -40,7 +40,7 @@ const BLINK_PEAK_LIFT: f32 = 0.08;
 /// resting breathe, sampled near the base grid without paying the full spinner
 /// cadence for calm rooms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::sidebar_pane) enum AnimationCadence {
+pub(super) enum AnimationCadence {
     None,
     Breath,
     Fast,
@@ -61,7 +61,7 @@ pub(in crate::sidebar_pane) enum AnimationCadence {
 /// Deliberately unfiltered by the make-up filter: the cockpit's attention
 /// buckets still animate (and the counts still tick) for rows a filter hides,
 /// so the gate must track the whole room, not the narrowed body.
-pub(in crate::sidebar_pane) fn animation_cadence(
+pub(super) fn animation_cadence(
     snapshot: &SidebarSnapshot,
     animations: &ResolvedAnimations,
 ) -> AnimationCadence {
