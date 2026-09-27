@@ -436,7 +436,7 @@ surface-budget = 233
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
-surface-budget = 78
+surface-budget = 59
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
@@ -1062,6 +1062,16 @@ reason = "Provider header wrappers sit over the shared credits transport; a comm
 kind = "item"
 key = "agents::adapters::codex::rollout::decode_line"
 reason = "Null versus absent and the reported-field mask preserve cache-write presence (5951e11bd); these are distinct wire states."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::SidebarAppErr"
+reason = "Public supervise::run_worker returns app::Result, whose alias names this error; pub is the signature floor (atlas caveat 13, pass 26b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::render_fixed"
+reason = "Read by benches/hotpath.rs in a separate crate, so pub is the floor, refuting the atlas pub(crate) proposal (pass 26b)."
 
 [[verdict]]
 kind = "item"
