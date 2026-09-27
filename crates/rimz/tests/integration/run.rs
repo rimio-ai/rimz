@@ -2798,6 +2798,7 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
                 (
                     "agent conversation",
                     MessageSender::Agent {
+                        agent_id: None,
                         kind: AgentKind::new_unchecked("codex"),
                         name: Some("planner".to_owned()),
                         profile: None,

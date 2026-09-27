@@ -849,6 +849,7 @@ mod tests {
 
     fn agent_sender(role: &str, channel: Option<&str>) -> MessageSender {
         MessageSender::Agent {
+            agent_id: None,
             kind: AgentKind::new_unchecked("codex"),
             name: None,
             profile: None,

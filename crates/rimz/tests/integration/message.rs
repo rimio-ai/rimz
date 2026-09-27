@@ -1844,6 +1844,7 @@ fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
     )
     .with_address(Some("@coder".to_owned()))
     .with_sender(MessageSender::Agent {
+        agent_id: None,
         kind: AgentKind::new_unchecked("claude"),
         name: Some("reviewer-agent".to_owned()),
         profile: None,
@@ -4246,6 +4247,7 @@ fn queued_delivery_batches_compatible_prompts() {
         )
         .with_channel(Some("feature-batch".to_owned()))
         .with_sender(MessageSender::Agent {
+            agent_id: None,
             kind: AgentKind::new_unchecked("codex"),
             name: None,
             profile: None,

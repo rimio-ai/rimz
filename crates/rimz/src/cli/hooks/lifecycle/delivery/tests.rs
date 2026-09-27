@@ -108,6 +108,7 @@ fn turn_started_records_only_unsupervised_user_inputs() {
     let agent_message = human
         .clone()
         .with_sender(rimz::store::message::MessageSender::Agent {
+            agent_id: None,
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
             name: None,
             profile: None,

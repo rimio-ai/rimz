@@ -24,8 +24,9 @@ pub enum LaunchAncestry {
 
 /// Stable identity for the agent calling a RimZ command.
 ///
-/// A launch id is authoritative when present. Agents launched before that id
-/// was exported retain the legacy unambiguous-pane fallback.
+/// A launch id is authoritative when present; process ancestry may supply a
+/// legacy session-id alias. Older launch environments without either retain
+/// the unambiguous-pane fallback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallerIdentity {
     pub kind: AgentKind,
@@ -61,7 +62,12 @@ impl CallerIdentity {
     ) -> Self {
         Self {
             kind: agent.kind.clone(),
-            launch_id: agent.launch_id.clone(),
+            launch_id: Some(
+                agent
+                    .launch_id
+                    .clone()
+                    .unwrap_or_else(|| agent.agent_id.clone()),
+            ),
             pane_id: agent
                 .launch_id
                 .is_none()

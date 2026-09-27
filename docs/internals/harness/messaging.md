@@ -48,7 +48,7 @@ A record is keyed on a card, the logical agent identity the [rollup](../agents/m
 | `kind`, `agent_id`, `agent_name` | Receiver card; the name folds provisional ids into the registered queue |
 | `address` | Receiver handle as resolved at enqueue, rendered by `list` and `show` after the live card is gone |
 | `channel` | Receiver lane at enqueue |
-| `sender` | `Human`; `Agent { kind, name, profile, role, channel }`; `Harness { notice }`, rendered as `@rimz`; `System`, rendered as `rimz`. `Subagent { kind, name }` still decodes but nothing writes it |
+| `sender` | `Human`; `Agent { kind, agent_id, name, profile, role, channel }`; `Harness { notice }`, rendered as `@rimz`; `System`, rendered as `rimz`. `Subagent { kind, name }` still decodes but nothing writes it |
 | `automated` | Background orchestration traffic; never earns a dollar-budget waiver |
 | `reply_wait` | A CLI is blocked on this record's reply ([Reply waits](#reply-waits)) |
 | `in_reply_to` | The messages that opened the sender's authoring turn; empty starts a new conversation ([transcript.md § Causality](./transcript.md#causality)) |
@@ -143,6 +143,8 @@ The six terminal states are final. A terminal transition removes the record from
 ### Caller identity
 
 The caller resolver decides whether an invocation is agent-authored before dispatch builds its `MessageSender`. It first reads the stable RimZ launch identity from the inherited environment. Without one, it walks the invoking process's ancestry and matches each ancestor's PID and process-start token against a live durable agent `RuntimeOwner`. The nearest match supplies that agent's durable card, even for a provider RimZ did not launch, preferring the current pane when several rows share the owner. No match means a human sender.
+
+The agent sender's optional `agent_id` uses the same identity as `LaunchedBy.agent_id`: the caller's launch id, or its session id for a legacy row without a launch id. Legacy environment callers resolve their unambiguous pane before stamping it. Old message records without this field still decode and omit it on rewrite; names do not supply a missing identity. The field does not change the rendered message header.
 
 Daemon-routed adapters, such as Codex 0.137 and later, stay unattributed on the ancestry path: their tool commands run below the shared app-server, whose `RuntimeOwner` cannot say which agent invoked the command.
 
