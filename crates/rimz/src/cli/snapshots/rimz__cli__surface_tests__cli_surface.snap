@@ -1665,10 +1665,12 @@ rimz lsp attach
 
 rimz lsp callees
     <targets>  [action=append takes=1..=inf required]
+    --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --external  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
+    --limit <LIMIT>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --server <SERVER>  [action=set takes=1..=1]
@@ -1677,10 +1679,12 @@ rimz lsp callees
 
 rimz lsp callers
     <targets>  [action=append takes=1..=inf required]
+    --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --external  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
+    --limit <LIMIT>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --server <SERVER>  [action=set takes=1..=1]
@@ -1710,10 +1714,12 @@ rimz lsp def
 
 rimz lsp find
     <targets>  [action=append takes=1..=inf required]
+    --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --external  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
+    --limit <LIMIT>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --server <SERVER>  [action=set takes=1..=1]
@@ -1767,10 +1773,12 @@ rimz lsp hover
 
 rimz lsp impl
     <targets>  [action=append takes=1..=inf required]
+    --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --external  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
+    --limit <LIMIT>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --server <SERVER>  [action=set takes=1..=1]
@@ -1788,10 +1796,12 @@ rimz lsp list
 
 rimz lsp refs
     <targets>  [action=append takes=1..=inf required]
+    --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --external  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
+    --limit <LIMIT>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --server <SERVER>  [action=set takes=1..=1]

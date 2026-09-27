@@ -10,6 +10,7 @@ use rimz::lsp::{
     registry::{self, State},
 };
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -105,20 +106,35 @@ struct ListQuery {
     /// Include results outside the checkout.
     #[arg(long)]
     external: bool,
+    /// Maximum locations to show (default: 50).
+    #[arg(long, conflicts_with_all = ["all", "json"])]
+    limit: Option<NonZeroUsize>,
+    /// Show every location in the selected scope.
+    #[arg(long, conflicts_with_all = ["limit", "json"])]
+    all: bool,
 }
 
 pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
-    let scope = match &args.command {
+    let options = match &args.command {
         Command::Refs(args)
         | Command::Impl(args)
         | Command::Callers(args)
         | Command::Callees(args)
-        | Command::Find(args)
-            if args.external =>
-        {
-            query::Scope::External
+        | Command::Find(args) => {
+            let scope = if args.external {
+                query::Scope::External
+            } else {
+                query::Scope::Checkout
+            };
+            let mut options = query::ListOptions::from(scope);
+            options.limit = if args.all {
+                None
+            } else {
+                args.limit.or(options.limit)
+            };
+            options
         }
-        _ => query::Scope::Checkout,
+        _ => query::Scope::Checkout.into(),
     };
     let (verb, args) = match args.command {
         Command::Attach {
@@ -236,7 +252,9 @@ pub fn run(args: LspArgs, globals: &GlobalFlags) -> Result<()> {
                     query::Output::Answer {
                         result,
                         document_uri,
-                    } => query::render(verb, root, document_uri.as_deref(), result, scope, &dirty)?,
+                    } => {
+                        query::render(verb, root, document_uri.as_deref(), result, options, &dirty)?
+                    }
                     output => query::render_outcome(root, &output, args.json)?,
                 }
             }

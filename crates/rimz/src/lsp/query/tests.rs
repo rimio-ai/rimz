@@ -112,7 +112,7 @@ fn missing_source_does_not_discard_locations() {
         Path::new("/checkout"),
         None,
         json!([{"uri": "file:///checkout/gone.rs", "range": range()}]),
-        Scope::Checkout,
+        Scope::Checkout.into(),
         &BTreeSet::new(),
         |_, _| Err(LspErr::Protocol("missing line".into())),
     );
@@ -129,7 +129,7 @@ fn dirty_locations_never_read_disk_source() {
             Path::new("/checkout"),
             None,
             json!([{"uri": "file:///checkout/clean.rs", "range": range()}, {"uri": "file:///checkout/gone.rs", "range": range()}]),
-            Scope::Checkout,
+            Scope::Checkout.into(),
             &dirty,
             |uri, _| {
                 consulted.push(uri.to_owned());
@@ -190,7 +190,7 @@ fn dirty_locations_match_equivalent_uri_spellings() {
                 Path::new("/checkout"),
                 None,
                 json!([{"uri": location, "range": range()}]),
-                Scope::Checkout,
+                Scope::Checkout.into(),
                 &BTreeSet::from([dirty.to_owned()]),
                 |_, _| panic!("dirty location must not read disk"),
             )
@@ -390,7 +390,7 @@ fn find_ranks_exact_prefix_contains_then_other() {
             root,
             None,
             result,
-            Scope::Checkout,
+            Scope::Checkout.into(),
             &BTreeSet::new()
         )
         .unwrap(),
@@ -697,6 +697,97 @@ fn collapsed_candidates_keep_names_accepted_by_workspace_search() {
 }
 
 #[test]
+fn list_caps_count_locations_and_only_read_displayed_source() {
+    for (verb, noun) in [
+        (Verb::Refs, "references"),
+        (Verb::Impl, "implementations"),
+        (Verb::Callers, "callers"),
+        (Verb::Callees, "callees"),
+        (Verb::Find, "symbols"),
+    ] {
+        let item = |line, uri| {
+            let range =
+                json!({"start":{"line":line,"character":0},"end":{"line":line,"character":1}});
+            let location = json!({"uri":uri,"range":range});
+            let call =
+                json!({"name":"work","kind":12,"uri":uri,"range":range,"selectionRange":range});
+            match verb {
+                Verb::Refs | Verb::Impl => location,
+                Verb::Find => json!({"name":"work","kind":12,"location":location}),
+                Verb::Callers => json!({"from":call}),
+                Verb::Callees => json!({"to":call}),
+                _ => unreachable!(),
+            }
+        };
+        let items: Vec<_> = std::iter::once(item(0, "file:///external/a.rs"))
+            .chain((0..52).map(|line| item(line, "file:///checkout/z.rs")))
+            .collect();
+        for (limit, shown) in [
+            (NonZeroUsize::new(50), 50),
+            (NonZeroUsize::new(3), 3),
+            (None, 52),
+        ] {
+            let mut reads = Vec::new();
+            let rendered = render_with_source(
+                verb,
+                Path::new("/checkout"),
+                None,
+                json!(items),
+                ListOptions {
+                    scope: Scope::Checkout,
+                    limit,
+                },
+                &BTreeSet::new(),
+                |uri, line| {
+                    reads.push((uri.to_owned(), line));
+                    Ok("source".into())
+                },
+            )
+            .unwrap();
+            if shown < 52 {
+                assert!(
+                    rendered.starts_with(&format!("52 {noun} (showing {shown})\n")),
+                    "{rendered}"
+                );
+                assert!(rendered.ends_with(&format!("{} more; add --limit N or --all\n1 outside the checkout hidden; add --external to show them\n", 52 - shown)));
+            } else {
+                assert!(!rendered.contains("showing"));
+                assert!(!rendered.contains("more;"));
+            }
+            assert_eq!(
+                rendered
+                    .lines()
+                    .filter(|line| line.starts_with("  ") || line.starts_with("function "))
+                    .count(),
+                shown
+            );
+            if matches!(verb, Verb::Refs | Verb::Impl) {
+                assert_eq!(reads.len(), shown);
+                assert!(
+                    reads
+                        .iter()
+                        .all(|(uri, line)| uri == "file:///checkout/z.rs" && *line < shown as u32)
+                );
+            } else {
+                assert!(reads.is_empty());
+            }
+        }
+        let rendered = render(
+            verb,
+            Path::new("/checkout"),
+            None,
+            json!(items),
+            Scope::External.into(),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(rendered.starts_with(&format!("53 {noun} (showing 50)\n")));
+        assert!(!rendered.contains("/external/"));
+        assert!(rendered.ends_with("3 more; add --limit N or --all\n"));
+    }
+}
+
+#[test]
 fn grouped_locations_trim_unicode_snippets_and_sort_positions() {
     let location = |uri, line| json!({"uri":uri,"range":{"start":{"line":line,"character":2},"end":{"line":line,"character":3}}});
     let text = format!("  {}é{}  ", "a".repeat(98), "z".repeat(51));
@@ -709,7 +800,7 @@ fn grouped_locations_trim_unicode_snippets_and_sort_positions() {
             location("file:///checkout/z.rs", 3),
             location("file:///checkout/z.rs", 1)
         ]),
-        Scope::External,
+        Scope::External.into(),
         &BTreeSet::new(),
         |_, _| Ok(text.clone()),
     )
@@ -732,7 +823,7 @@ fn verb_text_renderers() {
             root,
             Some(uri),
             result,
-            Scope::Checkout,
+            Scope::Checkout.into(),
             &BTreeSet::new(),
             |_, _| Ok("  fn work() {}  ".into()),
         )
@@ -821,7 +912,7 @@ fn list_verbs_hide_external_items() {
                 Path::new("/checkout"),
                 None,
                 calls.clone(),
-                Scope::Checkout,
+                Scope::Checkout.into(),
                 &BTreeSet::new()
             )
             .unwrap(),
@@ -836,7 +927,7 @@ fn list_verbs_hide_external_items() {
                 Path::new("/checkout"),
                 None,
                 calls,
-                Scope::External,
+                Scope::External.into(),
                 &BTreeSet::new()
             )
             .unwrap(),
@@ -863,7 +954,7 @@ fn list_verbs_hide_external_items() {
                 Path::new("/checkout"),
                 None,
                 json!([outside]),
-                Scope::Checkout,
+                Scope::Checkout.into(),
                 &BTreeSet::new()
             )
             .unwrap(),
@@ -894,7 +985,7 @@ fn find_scope_preserves_ranked_order() {
             root,
             None,
             ranked.clone(),
-            Scope::External,
+            Scope::External.into(),
             &BTreeSet::new()
         )
         .unwrap(),
@@ -906,7 +997,7 @@ fn find_scope_preserves_ranked_order() {
             root,
             None,
             ranked,
-            Scope::Checkout,
+            Scope::Checkout.into(),
             &BTreeSet::new()
         )
         .unwrap(),
@@ -933,7 +1024,7 @@ fn single_answer_verbs_ignore_scope() {
                     Path::new("/checkout"),
                     None,
                     result.clone(),
-                    scope,
+                    scope.into(),
                     &BTreeSet::new()
                 )
                 .unwrap(),

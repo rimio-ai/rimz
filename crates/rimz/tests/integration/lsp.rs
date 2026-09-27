@@ -1082,6 +1082,45 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         "==> alias <==\n/fixture/definition.rs:1:1\n\n==> x.py:1:1 <==\nerror: no language server for {} (not running); use grep\n",
         env.project_root.display()
     ));
+    env.rimz().args(["lsp", "find", "work", "--limit", "1"]).assert().success().stdout("4 symbols (showing 1)\nfunction w::work  src/w.rs:1:1\n3 more; add --limit N or --all\n");
+    for verb in ["refs", "impl", "callers", "callees", "find"] {
+        for flags in [
+            &["--limit", "1", "--json"][..],
+            &["--all", "--json"],
+            &["--limit", "1", "--all"],
+            &["--limit", "0"],
+        ] {
+            env.rimz()
+                .args(["lsp", verb, "work"])
+                .args(flags)
+                .assert()
+                .code(2);
+        }
+    }
+    for verb in ["def", "hover", "symbols"] {
+        for flags in [&["--limit", "1"][..], &["--all"]] {
+            env.rimz()
+                .args(["lsp", verb, "work"])
+                .args(flags)
+                .assert()
+                .code(2);
+        }
+    }
+    let output = env
+        .rimz()
+        .args(["lsp", "find", "work", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    env.rimz().args(["lsp", "find", "work", "--all"]).assert().success().stdout("function w::work  src/w.rs:1:1\nfunction w::worker  src/w.rs:1:1\nfunction r::rework  src/r.rs:1:1\nfunction u::unrelated  src/u.rs:1:1\n");
     for args in [
         &["lsp", "find", "work"][..],
         &["lsp", "def", "nosuch"],
