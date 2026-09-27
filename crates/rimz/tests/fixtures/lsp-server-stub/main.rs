@@ -8,11 +8,13 @@ fn main() {
     let mut sections = Vec::<String>::new();
     let mut adaptable = false;
     let mut hold_index = false;
+    let mut reload_configuration = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--configuration-section" => sections.push(args.next().expect("section argument")),
             "--adaptable-replies" => adaptable = true,
             "--hold-index-progress" => hold_index = true,
+            "--reload-configuration" => reload_configuration = true,
             _ => panic!("unknown stub argument: {arg}"),
         }
     }
@@ -31,6 +33,7 @@ fn main() {
     let mut request_ids = Vec::new();
     let mut requests = Vec::new();
     let mut cancellations = Vec::new();
+    let mut configuration_changes = 0;
     let alias_location = |file| json!({"uri": format!("file:///fixture/{file}.rs"), "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}}});
     while let Ok(message) = read_frame(&mut input) {
         if let Some(id) = message.get("id") {
@@ -46,6 +49,12 @@ fn main() {
             continue;
         }
         let result = match method {
+            "workspace/didChangeConfiguration" if reload_configuration => {
+                requests.push(message.clone());
+                configuration_changes += 1;
+                write_frame(&mut output, &json!({"jsonrpc":"2.0","id":format!("configuration-change:{configuration_changes}"),"method":"workspace/configuration","params":{"items":[{"section":"rust-analyzer"}]}})).unwrap();
+                continue;
+            }
             "$/cancelRequest" => {
                 cancellations.push(message["params"]["id"].clone());
                 continue;

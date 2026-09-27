@@ -58,6 +58,9 @@ pub fn settings_hash(config: &crate::config::LspServerConfig) -> String {
     use sha2::{Digest, Sha256};
     let mut value =
         serde_json::json!({"command": config.command, "init-options": config.init_options});
+    if config.editor_check_on_save {
+        value["editor-check-on-save"] = serde_json::json!(true);
+    }
     value.sort_all_objects();
     hex::encode(Sha256::digest(value.to_string().as_bytes()))
 }
@@ -65,6 +68,27 @@ pub fn settings_hash(config: &crate::config::LspServerConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_checks_have_separate_history_without_changing_default_hash() {
+        let raw = serde_json::json!({"command":["rust-analyzer"],"extensions":["rs"],"root-markers":["Cargo.toml"],"init-options":{"checkOnSave":false}});
+        let original = settings_hash(&serde_json::from_value(raw.clone()).unwrap());
+        assert_eq!(
+            original,
+            "4dbbe4344d3ecc40ae672d1234167724fc5a4471e739e297d5763f5cef87b976"
+        );
+        let mut changed = raw;
+        changed["editor-check-on-save"] = serde_json::json!(false);
+        assert_eq!(
+            settings_hash(&serde_json::from_value(changed.clone()).unwrap()),
+            original
+        );
+        changed["editor-check-on-save"] = serde_json::json!(true);
+        assert_ne!(
+            settings_hash(&serde_json::from_value(changed).unwrap()),
+            original
+        );
+    }
 
     #[test]
     fn learned_peak_uses_last_five_matching_records_and_new_settings_start_fresh() {

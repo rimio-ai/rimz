@@ -37,6 +37,8 @@ pub struct LspServerConfig {
     #[serde(default)]
     pub init_options: Option<serde_json::Value>,
     #[serde(default)]
+    pub editor_check_on_save: bool,
+    #[serde(default)]
     pub policy: LspPolicy,
     #[serde(default = "default_wait_timeout")]
     pub wait_timeout: String,

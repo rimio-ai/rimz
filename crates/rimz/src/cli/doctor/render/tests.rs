@@ -137,6 +137,7 @@ fn shared_language_servers_read_like_lsp_list() {
     let server = |root: &str, name: &str, state| super::super::model::LspServer {
         entry: rimz::lsp::registry::Entry {
             kind: None,
+            editor_check_on_save: None,
             root: root.into(),
             project: None,
             server: name.into(),

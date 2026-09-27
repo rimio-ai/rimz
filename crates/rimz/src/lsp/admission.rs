@@ -442,6 +442,13 @@ fn committed_growth(estimate: u64, rss: u64) -> u64 {
 }
 
 fn validate_options(server: &str, config: &crate::config::LspServerConfig) -> Result<()> {
+    use crate::config::LspServerKind;
+    let kind = config.resolved_kind();
+    if config.editor_check_on_save && kind != LspServerKind::RustAnalyzer {
+        return Err(LspErr::Configuration(format!(
+            "language server {server}: editor-check-on-save needs rust-analyzer; set kind = \"rust-analyzer\" or remove it"
+        )));
+    }
     let Some(options) = &config.init_options else {
         return Ok(());
     };
@@ -450,8 +457,6 @@ fn validate_options(server: &str, config: &crate::config::LspServerConfig) -> Re
             "language server {server}: init-options must be a table"
         ))
     })?;
-    use crate::config::LspServerKind;
-    let kind = config.resolved_kind();
     let keys: &[&str] = match kind {
         LspServerKind::Pyright => &["python", "pyright"],
         LspServerKind::Basedpyright => &["python", "basedpyright", "pyright"],
@@ -803,6 +808,27 @@ mod tests {
                     "{error:?}"
                 ),
                 None => assert!(error.is_none(), "{error:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn editor_check_on_save_requires_rust_analyzer() {
+        for kind in [
+            "pyright",
+            "basedpyright",
+            "ruff",
+            "generic",
+            "rust-analyzer",
+        ] {
+            let config = serde_json::from_value(serde_json::json!({"kind":kind,"command":["stub"],"extensions":["rs"],"root-markers":["Cargo.toml"],"editor-check-on-save":true})).unwrap();
+            let error = validate_options("rust", &config)
+                .err()
+                .map(|e| e.to_string());
+            if kind == "rust-analyzer" {
+                assert!(error.is_none());
+            } else {
+                assert!(error.as_deref().is_some_and(|e| e.contains("language server rust: editor-check-on-save needs rust-analyzer; set kind = \"rust-analyzer\" or remove it")), "{kind}: {error:?}");
             }
         }
     }

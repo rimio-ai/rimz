@@ -403,6 +403,18 @@ fn agent_env_blocks_untrusted_and_stale_workspaces() {
 }
 
 #[test]
+fn lsp_default_trust_hash_is_unchanged() {
+    let config: ProjectConfig = toml::from_str(
+        "[lsp.servers.rust]\ncommand = ['rust-analyzer']\ninit-options = { checkOnSave = false }\n",
+    )
+    .unwrap();
+    assert_eq!(
+        executable_surface_hash(&config),
+        "sha256:b26eeae37bb888c6b1c2c6436b95a0f68fb1b552279bb4ea56d507d59bae84c9"
+    );
+}
+
+#[test]
 fn hash_covers_every_documented_surface_field() {
     // One config per documented executable-surface field. Any two must
     // hash to distinct values; if a future refactor drops a field from
@@ -423,6 +435,8 @@ fn hash_covers_every_documented_surface_field() {
         "[lsp.servers.x]\ncommand = ['other']\n",
         "[lsp.servers.x]\ninit-options = { checkOnSave = false }\n",
         "[lsp.servers.x]\ninit-options = { checkOnSave = true }\n",
+        "[lsp.servers.x]\neditor-check-on-save = false\n",
+        "[lsp.servers.x]\neditor-check-on-save = true\n",
         "[[agents]]\nname = \"claude\"\n",
         "[[agents]]\nname = \"claude\"\nlaunch_command = \"claude code\"\n",
         "[[agents]]\nname = \"codex\"\nlaunch_command = \"claude code\"\n",

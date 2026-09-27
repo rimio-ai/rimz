@@ -462,6 +462,16 @@ fn status(
     let mut facts = render::KeyVals::new();
     facts.push("checkout", render::cell(entry.root.display().to_string()));
     facts.push("server", render::cell(&entry.server));
+    if let Some(enabled) = entry.editor_check_on_save {
+        facts.push(
+            "check on save",
+            render::cell(if enabled {
+                "on (editor attached)"
+            } else {
+                "off (no editor attached)"
+            }),
+        );
+    }
     facts.push(
         "kind",
         render::cell(
@@ -757,6 +767,7 @@ mod tests {
     fn entry(root: &str, server: &str, state: State) -> registry::Entry {
         registry::Entry {
             kind: None,
+            editor_check_on_save: None,
             root: root.into(),
             project: None,
             server: server.into(),

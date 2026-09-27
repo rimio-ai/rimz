@@ -27,7 +27,7 @@ pub(super) enum RouterEvent {
     Message(u64, Value),
     Reply(u64, ClientId, Value, Result<Value>),
     Starting(u64),
-    Started(Arc<Transport>, Value, mpsc::Sender<()>),
+    Started(Arc<Transport>, Value, mpsc::Sender<()>, Option<bool>),
     Ended(StopReason),
     Refused(Shortfall),
     Close(StopReason),
@@ -145,7 +145,18 @@ impl Router {
                     .retain(|(client, request, _)| *client != id || *request != original);
                 Event::ServerReply(id, original, frame)
             }
-            RouterEvent::Started(transport, initialize_result, replayed) => {
+            RouterEvent::Started(transport, initialize_result, replayed, initial_check_on_save) => {
+                let current = shared
+                    .settings
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .editor_check_on_save;
+                if current != initial_check_on_save {
+                    transport.notify(
+                        "workspace/didChangeConfiguration",
+                        serde_json::json!({"settings":null}),
+                    )?;
+                }
                 self.transport = Some(transport);
                 let actions = self
                     .clients
@@ -284,8 +295,25 @@ impl Router {
                     actions.push_back(Action::Publish);
                 }
                 Action::Publish => {
+                    let (check_on_save, changed) = {
+                        let mut settings =
+                            shared.settings.lock().unwrap_or_else(|e| e.into_inner());
+                        let next = settings
+                            .editor_check_on_save
+                            .map(|_| !self.connections.is_empty());
+                        let changed = next != settings.editor_check_on_save;
+                        settings.editor_check_on_save = next;
+                        (next, changed)
+                    };
+                    if changed && let Some(transport) = &self.transport {
+                        transport.notify(
+                            "workspace/didChangeConfiguration",
+                            serde_json::json!({"settings":null}),
+                        )?;
+                    }
                     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
                     model.entry.attached = self.clients.attached();
+                    model.entry.editor_check_on_save = check_on_save;
                     if let Err(error) = registry::publish(&model.entry) {
                         tracing::warn!(%error, "cannot publish attached editors");
                     }

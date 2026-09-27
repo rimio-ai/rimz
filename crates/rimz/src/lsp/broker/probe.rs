@@ -153,6 +153,7 @@ fn probe(root: &Path, name: &str, config: &LspServerConfig) -> Outcome {
         std::sync::Arc::new(std::sync::Mutex::new(super::Settings {
             kind: config.resolved_kind(),
             options: config.init_options.clone().unwrap_or(Value::Null),
+            editor_check_on_save: config.editor_check_on_save.then_some(false),
         })),
         params
             .as_ref()

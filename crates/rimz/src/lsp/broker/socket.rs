@@ -332,6 +332,7 @@ mod tests {
             settings: Arc::new(Mutex::new(super::super::Settings {
                 kind: crate::config::LspServerKind::Generic,
                 options: Value::Null,
+                editor_check_on_save: None,
             })),
             router: std::sync::mpsc::channel().0,
             model: Mutex::new(Model {
