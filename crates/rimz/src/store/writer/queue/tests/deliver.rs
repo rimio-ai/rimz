@@ -340,6 +340,16 @@ fn confirm_delivered_for_card_selects_oldest_matching_batch() {
             survivors: &[3],
         },
         Case {
+            name: "a batch member with another body stays",
+            sent: &[
+                (1, Some(1), MessageBody::Prompt),
+                (2, Some(1), MessageBody::Command),
+            ],
+            confirmed: MessageBody::Prompt,
+            delivered: &[1],
+            survivors: &[2],
+        },
+        Case {
             name: "a mismatched body is skipped",
             sent: &[
                 (1, None, MessageBody::Prompt),
@@ -434,6 +444,31 @@ fn correlated_ack_confirms_matching_prompt_instead_of_oldest_sent() {
     assert_eq!(delivered.len(), 1);
     assert_eq!(delivered[0].message_id, matching.message_id);
     assert_eq!(q.live(), vec![oldest]);
+}
+
+#[test]
+fn correlated_ack_settles_before_only_mixed_submit_with_reason() {
+    let q = Queue::new();
+    let sent = q.sent_with(1, |message| message.text = "rimz prompt".to_owned());
+
+    let delivered = q
+        .confirm_delivered_for_card(
+            &sent.kind,
+            &sent.agent_id,
+            None,
+            DeliveryAck::TurnStarted {
+                prompt: Some(&format!("before{}", user_message("rimz prompt"))),
+            },
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].message_id, sent.message_id);
+    assert_eq!(
+        q.reason("message.delivered"),
+        "confirmed inside a mixed submit; 6 stray bytes before"
+    );
 }
 
 #[test]
