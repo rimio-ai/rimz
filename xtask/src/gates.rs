@@ -321,12 +321,13 @@ pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
             report_gate_failure(name, &detail, &invocation);
             bail!("gate failed at {name}");
         }
-        let compile_failed = could_not_compile(&detail);
-        let detail = collapse_compile_cascade(detail, first_compile_failure);
-        if compile_failed {
+        match compile_cascade_source(&detail, first_compile_failure) {
+            Some(earlier) => report_gate_blocked(name, earlier),
+            None => report_gate_failure(name, &detail, &invocation),
+        }
+        if could_not_compile(&detail) {
             first_compile_failure.get_or_insert(name);
         }
-        report_gate_failure(name, &detail, &invocation);
         failed.push(name);
     }
     report_gate_complete(&failed);
@@ -365,16 +366,14 @@ fn gate_invocation(options: GateOptions) -> String {
 }
 
 /// Under `--keep-going`, a later step that fails because the workspace does
-/// not compile repeats errors an earlier step already reported; one pointer
-/// line replaces them. Rustdoc's own failures say `could not document`, so a
-/// doc failure keeps its detail.
-fn collapse_compile_cascade(detail: String, first_compile_failure: Option<&str>) -> String {
-    match first_compile_failure {
-        Some(earlier) if could_not_compile(&detail) => {
-            format!("blocked by compile errors (see {earlier})")
-        }
-        _ => detail,
-    }
+/// not compile repeats errors an earlier step already reported; this names
+/// that earlier step so one pointer line replaces them. Rustdoc's own failures
+/// say `could not document`, so a doc failure keeps its detail.
+fn compile_cascade_source<'a>(
+    detail: &str,
+    first_compile_failure: Option<&'a str>,
+) -> Option<&'a str> {
+    first_compile_failure.filter(|_| could_not_compile(detail))
 }
 
 fn could_not_compile(output: &str) -> bool {
@@ -684,6 +683,17 @@ fn report_gate_pass(name: &str, note: Option<&str>) {
 
 fn report_gate_failure(name: &str, detail: &str, invocation: &str) {
     report_failure("gate", name, detail, invocation);
+}
+
+/// A step blocked by an earlier step's compile errors has nothing of its own
+/// to fix, so it carries no `NEXT:` hint; the earlier step's hint covers it.
+#[expect(
+    clippy::print_stderr,
+    reason = "xtask prints compact failures and the next action to stderr"
+)]
+fn report_gate_blocked(name: &str, earlier: &str) {
+    eprintln!("gate: fail at {name}");
+    eprintln!("blocked by compile errors (see {earlier})");
 }
 
 fn report_task_failure(name: &str, detail: &str, invocation: &str) {
@@ -1324,21 +1334,12 @@ mod tests {
     #[test]
     fn keep_going_reports_a_compile_failure_once() {
         let compile = "error[E0308]: mismatched types\nerror: could not compile `rimz` (lib) due to 1 previous error";
-        assert_eq!(
-            collapse_compile_cascade(compile.to_owned(), Some("lint")),
-            "blocked by compile errors (see lint)"
-        );
-        assert_eq!(collapse_compile_cascade(compile.to_owned(), None), compile);
+        assert_eq!(compile_cascade_source(compile, Some("lint")), Some("lint"));
+        assert_eq!(compile_cascade_source(compile, None), None);
         let document = "error: could not document `rimz`";
-        assert_eq!(
-            collapse_compile_cascade(document.to_owned(), Some("lint")),
-            document
-        );
+        assert_eq!(compile_cascade_source(document, Some("lint")), None);
         let test_failure = "FAIL [ 0.1s] rimz::a\nerror: test run failed";
-        assert_eq!(
-            collapse_compile_cascade(test_failure.to_owned(), Some("lint")),
-            test_failure
-        );
+        assert_eq!(compile_cascade_source(test_failure, Some("lint")), None);
     }
 
     #[test]
