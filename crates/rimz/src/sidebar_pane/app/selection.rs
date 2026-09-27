@@ -107,7 +107,7 @@ impl InputOutcome {
 /// that need you in the visible roster, oldest episode first. A walk with
 /// nothing to triage does nothing.
 fn inbox_jump(ui: &mut UiState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
-    let roster = active_roster(snapshot, ui);
+    let roster = ui.visible_roster(snapshot);
     if let Some(index) = step_attention_in(&roster, ui.selected_index, forward)
         && let Some(pane) = roster.pane_at_ordinal(index)
     {
@@ -126,7 +126,7 @@ enum End {
 /// jump. Selection only, no focus, over the same filtered row universe ordinary
 /// selection walks. A no-op when already there or the body is empty.
 fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
-    let roster = active_roster(snapshot, ui);
+    let roster = ui.visible_roster(snapshot);
     let len = roster.len();
     if len == 0 {
         return InputOutcome::default();
@@ -139,7 +139,7 @@ fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> Inp
 }
 
 fn select_to_index(ui: &mut UiState, snapshot: &SidebarSnapshot, target: usize) -> InputOutcome {
-    let roster = active_roster(snapshot, ui);
+    let roster = ui.visible_roster(snapshot);
     select_to_index_in(ui, &roster, target)
 }
 
@@ -191,7 +191,7 @@ pub(super) fn handle_key(
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
         KeyAction::Up => {
             if ui.selected_index > 0 {
-                let roster = active_roster(snapshot, ui);
+                let roster = ui.visible_roster(snapshot);
                 select_row_in(ui, &roster, ui.selected_index - 1);
                 begin_or_continue_browse(ui);
                 return InputOutcome::redraw();
@@ -199,7 +199,7 @@ pub(super) fn handle_key(
             InputOutcome::default()
         }
         KeyAction::Down => {
-            let roster = active_roster(snapshot, ui);
+            let roster = ui.visible_roster(snapshot);
             let len = roster.len();
             if ui.selected_index + 1 < len {
                 select_row_in(ui, &roster, ui.selected_index + 1);
@@ -241,7 +241,7 @@ pub(super) fn handle_key(
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
-            if let Some(pane) = active_roster(snapshot, ui).pane_at_ordinal(index) {
+            if let Some(pane) = ui.visible_roster(snapshot).pane_at_ordinal(index) {
                 return InputOutcome::focus(pane);
             }
             InputOutcome::default()
@@ -322,7 +322,8 @@ pub(super) fn handle_mouse_click(
             toggle_delegation_history(ui, snapshot, row_id);
             InputOutcome::redraw()
         }
-        Some(HitTarget::Row(index)) => active_roster(snapshot, ui)
+        Some(HitTarget::Row(index)) => ui
+            .visible_roster(snapshot)
             .pane_at_ordinal(index)
             .map_or_else(InputOutcome::default, InputOutcome::focus),
         Some(HitTarget::Hyperlink(_)) => InputOutcome::default(),
@@ -458,7 +459,7 @@ fn select_adjacent_worktree(
     snapshot: &SidebarSnapshot,
     step: isize,
 ) -> InputOutcome {
-    let roster = active_roster(snapshot, ui);
+    let roster = ui.visible_roster(snapshot);
     let selected = ui.selected_index.min(roster.len().saturating_sub(1));
     let Some(target) = roster.neighboring_group_head(selected, step) else {
         return InputOutcome::default();
@@ -494,7 +495,7 @@ fn agent_row_mark_target_at(
     ui: &UiState,
     index: usize,
 ) -> Option<RowMarkTarget> {
-    active_roster(snapshot, ui)
+    ui.visible_roster(snapshot)
         .row(index)
         .filter(|row| row.status().is_some())
         .map(|row| RowMarkTarget {
@@ -605,7 +606,7 @@ fn reconcile_browse_and_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) 
     {
         ui.baseline_pane = None;
     }
-    let roster = active_roster(snapshot, ui);
+    let roster = ui.visible_roster(snapshot);
     if let Some(browse) = &ui.browse
         && roster.ordinal_of_pane(&browse.pane).is_none()
     {
@@ -642,7 +643,7 @@ fn reconcile_dashboard(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// the dangling identity and clamp the index; the held baseline or the next
 /// pick re-seats it.
 pub(super) fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
-    let roster = active_roster(snapshot, ui);
+    let roster = ui.visible_roster(snapshot);
     anchor_selection_in(ui, &roster);
 }
 
@@ -713,7 +714,7 @@ fn step_attention_in(roster: &VisibleRoster<'_>, selected: usize, forward: bool)
 
 #[cfg(test)]
 fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
-    let roster = active_roster(snapshot, ui);
+    let roster = ui.visible_roster(snapshot);
     select_row_in(ui, &roster, index);
 }
 
@@ -727,15 +728,6 @@ fn step_attention_index(
 ) -> Option<usize> {
     let roster = VisibleRoster::new(snapshot, filter, expanded_groups, None);
     step_attention_in(&roster, selected, forward)
-}
-
-fn active_roster<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> VisibleRoster<'a> {
-    VisibleRoster::new(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    )
 }
 
 #[cfg(test)]

@@ -87,12 +87,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     // width and opened with a blank gutter, reserving the trailing right rail —
     // the same frame the cards carry (see `with_gutter`).
     let inner = content_width(cells);
-    let roster = VisibleRoster::new(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    );
+    let roster = ui.visible_roster(snapshot);
     let mut top = top_lines(snapshot, ui, cells, theme);
     let scroll = scroll_lines(
         snapshot,

@@ -336,25 +336,14 @@ fn prune_delegation_state(snapshot: &SidebarSnapshot, ui: &mut UiState) {
 }
 
 fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a SidebarRow> {
-    VisibleRoster::new(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    )
-    .row(ui.selected_index)
+    ui.visible_roster(snapshot).row(ui.selected_index)
 }
 
 /// Selection expands a bare, not-yet-prompted idle card whose compose
 /// affordance needs the breath animation grid. This can be the selected row
 /// itself or a visible named teammate expanded alongside it.
 pub(crate) fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
-    let roster = VisibleRoster::new(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    );
+    let roster = ui.visible_roster(snapshot);
     roster.groups().iter().any(|group| {
         group
             .range()
@@ -374,12 +363,7 @@ pub(in crate::sidebar_pane) fn visible_delegation_motion(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
 ) -> bool {
-    let roster = VisibleRoster::new(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    );
+    let roster = ui.visible_roster(snapshot);
     let density = snapshot.theme.display.card_density;
     roster.groups().iter().any(|group| {
         group

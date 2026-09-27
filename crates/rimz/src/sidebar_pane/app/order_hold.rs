@@ -12,7 +12,6 @@ use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar::timing::REORDER_HOLD;
 use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, OrderHold, UiState};
-use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::SidebarSnapshot;
 
 /// The focused row leaving the attention class or entering `Running` is the
@@ -69,12 +68,7 @@ pub(super) fn apply_order_hold(
 }
 
 pub(super) fn capture_order(current: &SidebarSnapshot, ui: &UiState) -> FrozenOrder {
-    let roster = VisibleRoster::new(
-        current,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    );
+    let roster = ui.visible_roster(current);
     let visible: HashSet<String> = roster
         .rows()
         .iter()
