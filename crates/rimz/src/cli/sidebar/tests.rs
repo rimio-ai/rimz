@@ -333,7 +333,7 @@ fn assert_fixture_frame_snapshot(state: SidebarFixtureState, snapshot_name: &str
     let snapshot = sidebar_fixture_snapshot(state).unwrap();
 
     let mut ansi = Vec::new();
-    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 54, 34).unwrap();
+    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, 54, 34).unwrap();
 
     let rendered = strip_sgr(&ansi);
     if matches!(
@@ -783,7 +783,7 @@ fn agent_cards(
 fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {
     let snapshot = sidebar_fixture_snapshot(state).unwrap();
     let mut ansi = Vec::new();
-    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 80, 60).unwrap();
+    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, 80, 60).unwrap();
     let frame = strip_sgr(&ansi);
     for marker in markers {
         assert!(
@@ -797,7 +797,7 @@ fn assert_fixture_frame_contains(state: SidebarFixtureState, markers: &[&str]) {
 fn assert_fixture_frame_lacks(state: SidebarFixtureState, markers: &[&str]) {
     let snapshot = sidebar_fixture_snapshot(state).unwrap();
     let mut ansi = Vec::new();
-    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 80, 60).unwrap();
+    rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, 80, 60).unwrap();
     let frame = strip_sgr(&ansi);
     for marker in markers {
         assert!(

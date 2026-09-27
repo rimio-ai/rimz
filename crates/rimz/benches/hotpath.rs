@@ -719,7 +719,7 @@ fn render_fixed(bencher: Bencher) {
     bencher
         .with_inputs(snapshot_fixture)
         .bench_local_values(|fixture| {
-            rimz::sidebar_pane::render::render_fixed(io::sink(), &fixture.snapshot, None, 54, 200)
+            rimz::sidebar_pane::render::render_fixed(io::sink(), &fixture.snapshot, 54, 200)
                 .expect("render");
         });
 }

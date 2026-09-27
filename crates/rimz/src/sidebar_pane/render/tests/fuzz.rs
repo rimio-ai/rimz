@@ -46,7 +46,7 @@ proptest! {
 
         if width > 0 && height > 0 {
             let mut out = Vec::new();
-            render_fixed(&mut out, &snapshot, None, width, height)
+            render_fixed(&mut out, &snapshot, width, height)
                 .expect("fixed render succeeds");
         }
 

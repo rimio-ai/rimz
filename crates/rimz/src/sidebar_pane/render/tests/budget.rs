@@ -246,7 +246,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
 fn render_n(snapshot: &SidebarSnapshot, rounds: u32) -> Duration {
     let start = Instant::now();
     for _ in 0..rounds {
-        render_fixed(io::sink(), snapshot, None, 54, 200).expect("render");
+        render_fixed(io::sink(), snapshot, 54, 200).expect("render");
     }
     start.elapsed()
 }
@@ -258,7 +258,7 @@ fn render_n(snapshot: &SidebarSnapshot, rounds: u32) -> Duration {
 #[test]
 fn the_synthetic_fleet_pays_the_loop_heavy_paths() {
     let mut out = Vec::new();
-    render_fixed(&mut out, &fleet(10, 5, 8), None, 54, 200).expect("render");
+    render_fixed(&mut out, &fleet(10, 5, 8), 54, 200).expect("render");
     let frame = String::from_utf8_lossy(&out);
     assert!(
         frame.contains("subagents (3)"),

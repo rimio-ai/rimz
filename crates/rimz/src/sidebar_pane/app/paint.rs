@@ -188,7 +188,7 @@ impl FramePainter {
             let now_ms = u64::from(snapshot.theme.display.resolved_refresh_ms())
                 .saturating_mul(ui.animation_phase);
             self.ensure_pixel_transmitted(terminal.backend_mut(), ui, now_ms)?;
-            render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
+            render::draw_to_terminal(terminal, snapshot, alert, ui)?;
             self.ensure_meters_transmitted(terminal.backend_mut(), ui, now_ms)?;
             Ok(())
         })();
