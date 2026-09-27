@@ -221,9 +221,9 @@ fn runtime_paths_follow_lifetime_classes() {
         }
         let relative = path.strip_prefix(&paths.root).unwrap();
         assert!(
-            Class::RUNTIME.iter().any(
-                |class| class.tier() == Tier::Runtime && relative.starts_with(class.dir_name())
-            ),
+            Class::RUNTIME
+                .iter()
+                .any(|class| relative.starts_with(class.dir_name())),
             "unclassified runtime path: {}",
             path.display()
         );
@@ -627,8 +627,7 @@ fn state_paths_resolve_under_the_home() {
                 || relative == Path::new("rimz")
                 || Class::STATE
                     .iter()
-                    .any(|class| class.tier() == Tier::State
-                        && relative.starts_with(class.dir_name())),
+                    .any(|class| relative.starts_with(class.dir_name())),
             "unclassified state path: {}",
             path.display()
         );
