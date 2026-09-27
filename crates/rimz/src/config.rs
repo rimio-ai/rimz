@@ -373,6 +373,8 @@ pub struct ConfigNotices {
     pub unknown_keys: Vec<UnknownConfigKey>,
     pub definition_errors: Vec<definitions::DefinitionErr>,
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
+    /// One warning per setting that asked for sandbox isolation on a machine without it, now running on the host.
+    pub host_isolation_fallback: Vec<String>,
 }
 
 /// A key ignored while loading a per-machine config file.
@@ -676,6 +678,10 @@ impl MachineConfig {
         env: &BTreeMap<String, String>,
         notices: &mut ConfigNotices,
     ) -> AgentSpecSources {
+        let host_only = !cfg!(target_os = "linux");
+        if host_only {
+            self.fall_back_to_host_isolation(notices);
+        }
         let library = agents_home.join("skills");
         let check = if Isolation::ambient(env) != Some(Isolation::Sandbox) {
             definitions::SkillCheck::Check {
@@ -707,7 +713,35 @@ impl MachineConfig {
                 .keys()
                 .map(|name| (name.clone(), config_path.to_path_buf())),
         );
+        if host_only {
+            self.fall_back_to_host_isolation(notices);
+        }
         sources
+    }
+
+    /// Sandbox isolation is Linux bubblewrap, so elsewhere a configured `sandbox` falls back to `host` with a notice rather than refusing every launch. Idempotent: it runs before definitions load, so the skill check sees the effective machine policy, and again after, for the loaded profiles.
+    fn fall_back_to_host_isolation(&mut self, notices: &mut ConfigNotices) {
+        let mut warn = |setting: &str| {
+            notices.host_isolation_fallback.push(format!(
+                "warning: {setting} = \"sandbox\" needs Linux bubblewrap; running agents on the host instead"
+            ));
+        };
+        if self.agents.isolation == Isolation::Sandbox {
+            self.agents.isolation = Isolation::Host;
+            warn("agents.isolation");
+        }
+        let profiles = self
+            .agents
+            .profiles
+            .0
+            .iter_mut()
+            .chain(self.subagents.profiles.0.iter_mut());
+        for (name, profile) in profiles {
+            if profile.isolation == Some(Isolation::Sandbox) {
+                profile.isolation = Some(Isolation::Host);
+                warn(&format!("profile `{name}` isolation"));
+            }
+        }
     }
 
     pub fn time_zone(&self) -> jiff::tz::TimeZone {

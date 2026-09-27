@@ -931,6 +931,9 @@ pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -
             notice.path.display(),
         )?;
     }
+    for warning in &config.notices.host_isolation_fallback {
+        writeln!(stderr, "rimz: {warning}")?;
+    }
     Ok(())
 }
 

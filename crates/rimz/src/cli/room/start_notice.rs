@@ -146,19 +146,15 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
             .filter(|error| !matches!(error, rimz::config::ConfigErr::Definition(_)))
             .map(broken_config_notice),
     );
-    notices.extend(
-        rimz::config::MachineConfig::load_lenient()
-            .notices
-            .unknown_keys
-            .iter()
-            .map(|notice| {
-                format!(
-                    "unknown config key `{}` in {} — ignored; run `rimz setup` to remove it",
-                    notice.key,
-                    notice.path.display(),
-                )
-            }),
-    );
+    let machine = rimz::config::MachineConfig::load_lenient();
+    notices.extend(machine.notices.unknown_keys.iter().map(|notice| {
+        format!(
+            "unknown config key `{}` in {} — ignored; run `rimz setup` to remove it",
+            notice.key,
+            notice.path.display(),
+        )
+    }));
+    notices.extend(machine.notices.host_isolation_fallback.iter().cloned());
     notices.extend(root_class_notice(workspace));
     if notices.is_empty() {
         return Ok(());
