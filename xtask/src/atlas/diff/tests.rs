@@ -222,6 +222,98 @@ fn diff_expect_enforces_negative_sloc_budget() {
 }
 
 #[test]
+fn diff_expect_positive_module_ceiling_accepts_falling_esc() {
+    let mut contract = contract(2);
+    contract.esc.push(EscExpectation {
+        path: PathBuf::from("src/message"),
+        max: 2,
+    });
+    let checks = [EscCheck {
+        expectation: contract.esc[0].clone(),
+        base: 3,
+        current: 2,
+    }];
+    let rows = expectation_rows(
+        &contract,
+        2,
+        ExpectationChecks {
+            esc: &checks,
+            ..ExpectationChecks::default()
+        },
+        &[],
+        true,
+    );
+
+    assert!(rows.iter().any(|row| row.assertion == "module narrowing"));
+    assert!(rows.iter().all(|row| row.landed));
+}
+
+#[test]
+fn diff_expect_positive_module_ceiling_rejects_no_falling_esc() {
+    for max in [None, Some(3), Some(4)] {
+        let mut contract = contract(2);
+        contract.esc = max
+            .map(|max| EscExpectation {
+                path: PathBuf::from("src/message"),
+                max,
+            })
+            .into_iter()
+            .collect();
+        let checks: Vec<_> = contract
+            .esc
+            .iter()
+            .map(|expectation| EscCheck {
+                expectation: expectation.clone(),
+                base: 3,
+                current: 2,
+            })
+            .collect();
+        let rows = expectation_rows(
+            &contract,
+            -1,
+            ExpectationChecks {
+                esc: &checks,
+                ..ExpectationChecks::default()
+            },
+            &[],
+            true,
+        );
+        let row = rows
+            .iter()
+            .find(|row| row.assertion == "module narrowing")
+            .unwrap();
+
+        assert!(!row.landed);
+        assert!(
+            row.detail
+                .contains("a positive ceiling needs an esc max below its base")
+        );
+        match max {
+            Some(max) => assert!(
+                row.detail
+                    .contains(&format!("`src/message` at {max} over base 3"))
+            ),
+            None => assert!(row.detail.contains("the contract has no esc rows")),
+        }
+        assert!(
+            rows.iter()
+                .filter(|row| row.assertion != "module narrowing")
+                .all(|row| row.landed)
+        );
+    }
+}
+
+#[test]
+fn diff_expect_positive_seam_ceiling_needs_no_falling_esc() {
+    let mut contract = contract(2);
+    contract.kind = PassKind::Seam;
+    let rows = expectation_rows(&contract, 2, ExpectationChecks::default(), &[], true);
+
+    assert!(!rows.iter().any(|row| row.assertion == "module narrowing"));
+    assert!(rows.iter().all(|row| row.landed));
+}
+
+#[test]
 fn diff_expect_rejects_esc_excess() {
     let mut contract = contract(-1);
     contract.esc.push(EscExpectation {

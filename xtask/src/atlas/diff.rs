@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 use super::conform::{self, Direction};
 use super::contract::{
     AssemblyExpectation, DeleteExpectation, DependencyExpectation, EscExpectation, PassContract,
-    RehomeExpectation,
+    PassKind, RehomeExpectation,
 };
 use super::facts::{Facets, Facts};
 use super::inspect;
@@ -997,6 +997,28 @@ fn definition_sites(
         .collect()
 }
 
+/// Name the `[[esc]]` rows a positive module ceiling could have narrowed.
+fn describe_unnarrowed(checks: &[EscCheck]) -> String {
+    if checks.is_empty() {
+        return "the contract has no esc rows".to_owned();
+    }
+    let sitting = checks
+        .iter()
+        .map(|check| {
+            format!(
+                "`{}` at {} over base {}",
+                check.expectation.path.display(),
+                check.expectation.max,
+                check.base
+            )
+        })
+        .collect::<Vec<_>>();
+    format!(
+        "every esc row sits at or above its base: {}",
+        sitting.join(", ")
+    )
+}
+
 fn expectation_rows(
     contract: &PassContract,
     production_delta: i64,
@@ -1012,6 +1034,34 @@ fn expectation_rows(
             contract.max_production_sloc_delta
         ),
     }];
+    // A module pass that grants itself room to grow has to pay for it with a
+    // narrowing, or it asserts nothing at all.
+    if contract.kind == PassKind::Module && contract.max_production_sloc_delta > 0 {
+        let narrowing = checks
+            .esc
+            .iter()
+            .find(|check| check.expectation.max < check.base);
+        rows.push(ExpectationRow {
+            assertion: "module narrowing".to_owned(),
+            landed: narrowing.is_some(),
+            detail: narrowing.map_or_else(
+                || {
+                    format!(
+                        "a positive ceiling needs an esc max below its base; {}",
+                        describe_unnarrowed(checks.esc)
+                    )
+                },
+                |check| {
+                    format!(
+                        "esc `{}` narrows {} → {}",
+                        check.expectation.path.display(),
+                        check.base,
+                        check.expectation.max
+                    )
+                },
+            ),
+        });
+    }
     rows.extend(checks.esc.iter().map(|check| {
         let landed = check.current <= check.expectation.max;
         let excess = check.current.saturating_sub(check.expectation.max);
