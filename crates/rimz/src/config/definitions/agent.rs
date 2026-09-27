@@ -287,7 +287,9 @@ impl Resolver<'_> {
         let skill_check = match self.skills {
             SkillCheck::Check {
                 machine_isolation, ..
-            } if Isolation::resolve(None, fm.isolation, machine_isolation) == Isolation::Host
+            } if (!cfg!(target_os = "linux")
+                || Isolation::resolve(None, fm.isolation, machine_isolation)
+                    == Isolation::Host)
                 && !agents::find_definition(kind).is_some_and(|definition| {
                     matches!(
                         definition.spec().host_skills,
