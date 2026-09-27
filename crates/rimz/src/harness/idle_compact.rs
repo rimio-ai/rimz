@@ -98,7 +98,7 @@ fn eligible_seat(agent: &AgentState) -> bool {
         && !agent.is_awaiting_input()
         && matches!(
             agent.effective_status(),
-            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
+            AgentStatus::Idle | AgentStatus::Success
         )
         && agent.occupied_context_tokens().is_some_and(|tokens| {
             tokens >= IDLE_COMPACT_MIN_TOKENS && agent.last_compact_command_tokens != Some(tokens)
@@ -519,7 +519,7 @@ mod tests {
             armed_at: Some(ts(6_000)),
         });
         assert_eq!(sleeping.effective_status(), AgentStatus::Sleeping);
-        assert!(due(&sleeping));
+        assert!(!due(&sleeping));
 
         for status in [
             AgentStatus::Running,
