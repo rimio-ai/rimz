@@ -593,7 +593,7 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             trunk_sync: Some(WorktreeTrunkSync::Reconciling),
             pr_state: Some(WorktreePrState::Open),
             ci: Some(WorktreeCi::Failing),
-            pr_number: Some(91),
+            pr_number: Some(94),
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1021,7 +1021,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
             ci: Some(WorktreeCi::Pending),
-            pr_number: Some(91),
+            pr_number: Some(94),
             ..WorktreeGroupSpec::default()
         },
     ]
@@ -1354,7 +1354,7 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             commits_behind: Some(0),
             pr_state: Some(WorktreePrState::Open),
             ci: Some(WorktreeCi::Pending),
-            pr_number: Some(91),
+            pr_number: Some(94),
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
