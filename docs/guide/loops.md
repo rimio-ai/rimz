@@ -89,6 +89,8 @@ A timer has to be shorter than 24 hours. Everything else runs in a detached watc
 
 A long command checks in rather than disappearing. After 30 minutes, or the `--timeout` you set instead, the agent gets a `still running after 30m` notice carrying the output file's line count and estimated tokens so far; the command keeps running and its exit verdict follows later. `rimz wait list` shows what is pending, `rimz wait cancel <name>` drops one row, and `rimz wait cancel --all` drops the caller's whole list and stops its watched commands with them. The [wait reference](../reference/cli/wait.md) owns every flag and the exact message each trigger delivers.
 
+Long waits can also outlive the provider's prompt cache, making the eventual wake pay for a fresh cache write. While the agent sleeps, RimZ sends one neutral keepalive listing all pending waits shortly before the configured cache expiry. The agent chooses whether to act or rest again; each completed ping turn starts another cache window. This is best-effort and needs a running sidebar. The [configuration guide](./configuration.md) covers the provider TTL overrides and the switch to disable it.
+
 Only an agent RimZ can identify may arm or cancel its own waits, and a self wait steers that agent the moment it fires. For a teammate, a recurring reminder, or a signal, use `rimz loop add --wait`, whose deliveries land at the target's next turn boundary instead:
 
 ```sh

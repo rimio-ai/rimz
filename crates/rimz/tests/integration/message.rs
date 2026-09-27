@@ -1329,6 +1329,179 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
 }
 
 #[test]
+fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
+    use crate::common::wait::{register_calling_agent, wait_ok};
+    use rimz::harness::cache_keepalive::CacheKeepaliveRequest;
+    for blocked in [false, true] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        register_calling_agent(&env);
+        wait_ok(
+            &env,
+            &["config", "set", "harness.prompt_cache_ttl.claude", "61s"],
+        );
+        wait_ok(&env, &["wait", "--in", "5m"]);
+        let store = env.store();
+        let anchor = jiff::Timestamp::now();
+        for (offset, signal) in [
+            (0, LifecycleSignal::TurnStarted { turn_id: None }),
+            (
+                0,
+                LifecycleSignal::TurnEnded {
+                    errored: false,
+                    parked_on_background: false,
+                    turn_id: None,
+                },
+            ),
+        ] {
+            let mut observation =
+                AgentLifecycleObservation::new(Some("provider-session".into()), signal);
+            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+            let mut event = EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "test",
+                &observation,
+            );
+            event.timestamp = anchor + Duration::from_secs(offset);
+            store.append_event(&event).unwrap();
+        }
+        let session = rimz::workspace::record::read(&store.paths().workspace_record)
+            .unwrap()
+            .session_name;
+        let mut pane = agent_pane(&env, "claude");
+        pane.session_name = session.clone();
+        let fixture = env.write_pane_fixture(if blocked {
+            &[]
+        } else {
+            std::slice::from_ref(&pane)
+        });
+        let frame = rimz::sidebar::frame::assemble_frame(
+            vec![pane],
+            rimz::utils::time::unix_now_ms(),
+            session.clone(),
+        );
+        rimz::disk::atomic::write_temp_then_rename_cache(
+            &store.runtime_paths().pane_frame_path(),
+            &frame,
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let mut request = CacheKeepaliveRequest {
+            workspace_id: env.workspace_id.clone(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "provider-session".into(),
+            pane_id: PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
+            anchor: anchor - Duration::from_secs(1),
+            label: "@planner".into(),
+        };
+        let send = |request: &CacheKeepaliveRequest| {
+            run_success(
+                traced_rimz(&env, "keepalive-trace.log")
+                    .env("RIMZ_TEST_PANE_LIST", &fixture)
+                    .args(rimz::child_process::agent_helper_argv(
+                        "cache-keepalive",
+                        request,
+                    )),
+                "cache keepalive",
+            )
+        };
+        send(&request);
+        assert!(
+            store.list_messages().unwrap().is_empty(),
+            "moved anchor must not send"
+        );
+        request.anchor = anchor;
+        let current = run_success(
+            env.rimz()
+                .args(["sidebar", "snapshot", "--no-produce", "--json"]),
+            "published snapshot",
+        );
+        let current: rimz::store::snapshot::SidebarSnapshot =
+            serde_json::from_slice(&current.stdout).unwrap();
+        assert!(
+            request
+                .target(
+                    &current,
+                    &toml::from_str("[prompt_cache_ttl]\nclaude = \"61s\"").unwrap(),
+                    jiff::Timestamp::now()
+                )
+                .is_some(),
+            "fixture must be eligible: agents {:?}, panes {:?}",
+            current
+                .agents
+                .iter()
+                .map(|agent| (
+                    &agent.agent_id,
+                    agent.effective_status(),
+                    agent.last_request_at(),
+                    &agent.pending_waits
+                ))
+                .collect::<Vec<_>>(),
+            current.agent_panes
+        );
+        send(&request);
+        let mut messages = store.list_messages().unwrap();
+        messages.extend(store.list_message_history().unwrap());
+        let ping = messages
+            .iter()
+            .find(|message| {
+                matches!(
+                    message.sender,
+                    MessageSender::Harness {
+                        notice: HarnessNotice::CacheKeepalive
+                    }
+                )
+            })
+            .expect("keepalive record");
+        assert_eq!(
+            ping.status,
+            if blocked {
+                MessageStatus::Errored
+            } else {
+                MessageStatus::Sent
+            }
+        );
+        assert!(ping.text.contains("timer"));
+        assert_eq!(ping.gate, DeliveryGate::Done);
+        let output = run_success(env.rimz().args(["stats", "--json"]), "assist stats");
+        let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let assist = stats["assists"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["assist"] == "cache_keepalive")
+            .expect("keepalive assist");
+        assert_eq!(assist["delivered"], !blocked);
+        assert_eq!(assist["waits"], 1);
+        if blocked {
+            assert!(
+                !store
+                    .list_pending_messages()
+                    .unwrap()
+                    .iter()
+                    .any(|message| message.message_id == ping.message_id),
+                "miss cannot deliver at a later boundary"
+            );
+        } else {
+            assert!(
+                trace_lines(&env.project_root.join("keepalive-trace.log"))
+                    .iter()
+                    .any(|line| is_paste(
+                        line,
+                        &format!(
+                            "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\n{}",
+                            ping.text
+                        )
+                    )),
+                "typed header reached the pane"
+            );
+        }
+    }
+}
+
+#[test]
 fn deliver_helper_settles_before_reading_state() {
     let env = Env::new();
     env.install_agent_hooks("claude");

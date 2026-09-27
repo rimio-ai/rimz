@@ -675,6 +675,11 @@ fn message_header_parser_round_trips_attributed_senders() {
         (HarnessNotice::Wait, HeaderKind::Wait, "WAIT"),
         (HarnessNotice::Signal, HeaderKind::Signal, "SIGNAL"),
         (HarnessNotice::Stage, HeaderKind::Stage, "STAGE"),
+        (
+            HarnessNotice::CacheKeepalive,
+            HeaderKind::CacheKeepalive,
+            "CACHE_KEEPALIVE",
+        ),
     ] {
         let sender = MessageSender::Harness { notice };
         let prompt = message_header(&sender, &[], None).unwrap() + body;

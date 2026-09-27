@@ -7,6 +7,7 @@ pub mod auto_gc;
 pub mod auto_redeem;
 pub mod board;
 pub mod budget;
+pub mod cache_keepalive;
 pub mod deadline;
 pub mod fleet;
 pub mod idle_compact;

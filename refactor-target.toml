@@ -309,7 +309,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Locked board records expose their section, request, receipt, and typed errors to the CLI.
 # Room GC reaps only its instance rows; unattended GC elects and stamps machine sweeps.
 # GC scope is shared by the helper, durable assists, and stats projection.
-surface-budget = 565
+# Cache keepalive shares its request, helper recheck, prompt and producer entry across the CLI/sidebar seam.
+surface-budget = 570
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -342,7 +343,8 @@ upward-dependencies = [
 # Its wake-in-flight predicate is shared with the supervised run's owed-wake read.
 # The no-pane blocker sentence is one formatter for the durable record and `message show`.
 # Typed delivery timing and its dispatch accessor are shared with CLI reporting.
-surface-budget = 74
+# Attributed boundary nudges share queue-and-deliver with system nudges and retain their id on failure.
+surface-budget = 75
 
 [[module]]
 path = "crates/rimz/src/mux"

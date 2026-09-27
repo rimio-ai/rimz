@@ -21,6 +21,7 @@ pub(super) struct AssistRollup {
     pub(super) resumes: usize,
     pub(super) recovered_secs: u64,
     pub(super) compacts: usize,
+    pub(super) keepalives: usize,
     pub(super) restores: usize,
     pub(super) restored_sessions: usize,
     pub(super) sweeps: usize,
@@ -72,6 +73,19 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         occupied_tokens: Option<u64>,
         message_id: String,
+    },
+    CacheKeepalive {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        idle_secs: u64,
+        waits: usize,
+        message_id: String,
+        delivered: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     #[serde(rename = "idle_compact")]
     IdleCompact {
@@ -166,6 +180,9 @@ impl AssistStats {
                     }
                 }
                 AssistEvent::Compact { .. } => rollup.compacts += 1,
+                AssistEvent::CacheKeepalive { delivered, .. } => {
+                    rollup.keepalives += usize::from(*delivered)
+                }
                 AssistEvent::IdleCompact { delivered, .. }
                 | AssistEvent::FlipCompact { delivered, .. } => {
                     rollup.compacts += usize::from(*delivered);
@@ -258,6 +275,26 @@ impl AssistEvent {
                 threshold,
                 occupied_tokens,
                 message_id,
+            },
+            Assist::CacheKeepalive {
+                kind,
+                agent_id,
+                label,
+                idle_secs,
+                waits,
+                message_id,
+                delivered,
+                error,
+            } => Self::CacheKeepalive {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                idle_secs,
+                waits,
+                message_id,
+                delivered,
+                error,
             },
             Assist::IdleCompact {
                 kind,
@@ -353,6 +390,7 @@ impl AssistEvent {
             | Self::Continue { at, .. }
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
+            | Self::CacheKeepalive { at, .. }
             | Self::FlipCompact { at, .. }
             | Self::Resume { at, .. }
             | Self::Gc { at, .. } => *at,
@@ -435,6 +473,9 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     }
     if rollup.compacts > 0 {
         rows.push(("Auto-compact:", rollup.compacts.to_string()));
+    }
+    if rollup.keepalives > 0 {
+        rows.push(("Keepalive:", rollup.keepalives.to_string()));
     }
     if rollup.redeems > 0 {
         let mut value = rollup.redeems.to_string();
@@ -529,6 +570,23 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 })
                 .unwrap_or_default();
             format!("{time} ⌁ {agent} auto-compact{detail}")
+        }
+        AssistEvent::CacheKeepalive {
+            kind,
+            label,
+            idle_secs,
+            waits,
+            error,
+            ..
+        } => {
+            let agent = label.as_deref().unwrap_or(kind.as_str());
+            let idle = rimz::utils::time::format_duration_compact(Duration::from_secs(*idle_secs));
+            let error = error
+                .as_deref()
+                .map(|error| format!(" ({})", first_line(error)))
+                .unwrap_or_default();
+            let noun = if *waits == 1 { "wait" } else { "waits" };
+            format!("{time} ◷ {agent} cache keepalive after {idle} — {waits} {noun} pending{error}")
         }
         AssistEvent::IdleCompact {
             kind,
@@ -675,6 +733,12 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             message_id,
             delivered,
             ..
+        }
+        | AssistEvent::CacheKeepalive {
+            agent_id,
+            message_id,
+            delivered,
+            ..
         } => format!(
             "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
         ),
@@ -814,6 +878,39 @@ fn first_line(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keepalive_stats_count_deliveries_and_preserve_failures() {
+        let records = [true, false]
+            .into_iter()
+            .map(|delivered| {
+                serde_json::from_value::<AssistRecord>(serde_json::json!({
+                "at": "2026-01-01T00:00:00Z", "assist": "cache_keepalive",
+                "kind": "claude", "agent_id": "session-1", "label": "@coder",
+                "idle_secs": 3540, "waits": 2, "message_id": "msg_1",
+                "delivered": delivered, "error": if delivered { None } else { Some("gate closed") }
+            })).expect("keepalive assist wire format")
+            })
+            .collect();
+        let stats = AssistStats::from_records("all", records);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["rollup"]["keepalives"], 1);
+        assert_eq!(json["events"][0]["assist"], "cache_keepalive");
+        assert!(
+            category_rows(&stats.rollup)
+                .join(" ")
+                .contains("Keepalive:")
+        );
+        let lines = stats
+            .events
+            .iter()
+            .map(|event| forensic_line(event, &jiff::tz::TimeZone::UTC))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(lines.contains("@coder cache keepalive after 59m — 2 waits pending"));
+        assert!(lines.contains("message msg_1 · delivered true"));
+        assert!(lines.contains("gate closed"));
+    }
 
     #[test]
     fn flip_compaction_fold_and_render_preserve_skipped_attempts() {

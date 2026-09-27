@@ -39,6 +39,8 @@ Give exactly one trigger: `--in`, `--pid`, `--check`, `--file`, or a command aft
 
 Durations take `s`, `m`, `h`, or `d` units (`90s`, `30m`, `1h`).
 
+While an agent sleeps with waits pending, RimZ sends a neutral prompt-cache keepalive shortly before its provider TTL expires. One ping lists all pending waits, including timers, with their elapsed times when known. Pings recur after each completed ping turn, with no cap or instructions. The [configuration guide](../../guide/configuration.md) sets the switch and provider TTLs; delivery is best-effort and does not replace a wait's final wake.
+
 Each arm mints a name of the form `wait-<adjective>-<noun>`, unique in the workspace (a collision appends `-<N>`). The receipt names the wait, its trigger, and its target, then lists every pending row for the caller:
 
 ```console

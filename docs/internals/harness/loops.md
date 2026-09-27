@@ -487,6 +487,14 @@ The elder's tick also drives unattended recovery that is not a loop task. Each i
 
 Each decides on the producer tick and acts through a detached helper, which keeps store-writing code out of the sidebar's import graph ([sidebar.md](../sidebar/sidebar.md)).
 
+## Prompt-cache keepalive
+
+`harness/cache_keepalive.rs` runs beside idle compaction on the heavy refresh lane. A Sleeping root agent with a live pane, a completed request, and a configured provider TTL qualifies during `[TTL - 60s, TTL)`, measured from `AgentState::last_request_at`. No team or context-size gate applies; timer waits qualify too. Budget parks, compaction, and awaiting input exclude it. `harness.cache_keepalive = false` disables it.
+
+The producer takes a runtime advisory lock and records the anchor before spawning the hidden `agents cache-keepalive` helper. The sidebar and one-shot refresh paths therefore share one claim per session and anchor, even when they race. A failed spawn consumes that claim. The helper rechecks the anchor, eligibility, and pane on `Ctx::published_snapshot`, including pending waits and the activity heartbeat. It sends a neutral `CACHE_KEEPALIVE` notice listing each wait's name, trigger, and elapsed time when known, with no instructions. Delivery uses the `Done` gate; a miss is finalized as `Errored`, never left for a later boundary. Every attempted delivery appends a `CacheKeepalive` assist, including failures. A ping turn advances the anchor, allowing another ping one window later without a cap.
+
+This is best-effort cache retention, not durable correctness. The activity heartbeat is a latency hint. A slow refresh, no elected sidebar, or early provider eviction can cost one cache write, but cannot lose a wait or its eventual wake. The shared one-minute margin covers refresh, helper spawn, and submission, not an end-of-response clock.
+
 ## The assist log
 
 > **Automation is accountable.** User-benefiting automation appends a durable record of its trigger, evidence, and outcome, and surfaces in `rimz stats`; internal repairs keep durable diagnostic records ([diagnostics.md](../diagnostics.md)).
@@ -499,11 +507,12 @@ The assist log is that invariant's record: `~/.rimz/logs/assists.log.jsonl`, acc
 | `auto_continue` | the detached continue helper | typed provider and session ids, display handle, park class, original park timestamp, delivery verdict, and the durable message id |
 | `auto_compact` | the message delivery path, after a compact command lands | target session, display handle, threshold, occupied context when known, and the durable compact-command message id |
 | `idle_compact` | the detached idle-compaction helper | target provider and session, display handle, idle duration, resolved threshold (`idle_after_secs`, absent in old records), occupied context, durable compact-command message id, delivery verdict, and error when present |
+| `cache_keepalive` | the detached cache-keepalive helper | target provider and session, display handle, idle duration, pending-wait count, message id, delivery verdict, and error when present |
 | `flip_compact` | `rimz teams flip` | flipper provider and session, role, previous and target stages, occupied context when known, effective threshold, the attempted compact-command message id (which may not resolve if a store error prevented publication), delivery verdict, and error when present |
 | `auto_resume` | rebirth recovery, after materialization restores at least one pane | workspace, session, death cause, recovered pane count, and planned tab labels |
 | `auto_gc` | `rimz gc --unattended`, after every attempt | workspace, `scope` (`room` or `machine`, legacy records default to `machine`), cutoff, own-room `class_bytes`, and scope-wide totals: reclaimed bytes, removed worktrees, pruned workspaces, removed runtime and temp files, archived messages, problem count, and error when the sweep failed |
 
-`rimz stats` folds both generations, scoped to the active dashboard window, into one rollup: delivered continues and their summed recovered time (`recorded_at - parked_since`), compact commands sent, redeem attempts and `reset` outcomes, rebirths with restored panes, and completed gc sweeps with their reclaimed bytes. The dashboard shows whichever of those five categories are non-zero, `rimz stats --assists` renders the merged event stream newest first, and `rimz stats --json` publishes both.
+`rimz stats` folds both generations, scoped to the active dashboard window, into one rollup: delivered continues and their summed recovered time (`recorded_at - parked_since`), compact commands sent, delivered keepalives, redeem attempts and `reset` outcomes, rebirths with restored panes, and completed gc sweeps with their reclaimed bytes. The dashboard shows whichever categories are non-zero, `rimz stats --assists` renders the merged event stream newest first, and `rimz stats --json` publishes both.
 
 A flip compaction reads `flip compaction` in the event stream and counts toward compact commands sent only when the command was sent; a flip completing does not count a queued command. Only a member leaving its own stage for one another role owns is eligible; `Done` has no owner and never compacts. The effective `[harness] flip_compact` or role `flip-compact` threshold is evaluated before pane availability: a flip below it, or with unknown occupancy, makes no attempt and writes no record. Every attempt records the threshold, including errors and missing-pane skips, and none of these failures fails the flip.
 

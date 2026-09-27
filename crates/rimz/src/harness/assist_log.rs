@@ -64,6 +64,18 @@ pub enum Assist {
         occupied_tokens: Option<u64>,
         message_id: String,
     },
+    CacheKeepalive {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        idle_secs: u64,
+        waits: usize,
+        message_id: String,
+        delivered: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     IdleCompact {
         kind: AgentKind,
         agent_id: AgentSessionId,
@@ -276,6 +288,19 @@ mod tests {
             resumed(20),
             compacted(20),
             idle_compacted(20),
+            AssistRecord {
+                at: ts(20),
+                assist: Assist::CacheKeepalive {
+                    kind: AgentKind::new_unchecked("claude"),
+                    agent_id: "session-1".into(),
+                    label: Some("@coder".into()),
+                    idle_secs: 3540,
+                    waits: 2,
+                    message_id: "msg_1".into(),
+                    delivered: true,
+                    error: None,
+                },
+            },
             restored(20),
         ] {
             let json = serde_json::to_string(&record).expect("serialize");

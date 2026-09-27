@@ -119,7 +119,9 @@ $ rimz stats --json
 
 An `auto_gc` event carries `scope` (`room` or `machine`); records written before scopes existed read as `machine`. Totals cover the whole sweep's scope. The durable assist record additionally holds own-room `class_bytes`, which this JSON projection does not expose ([GC report](./maintenance.md#the-report)).
 
-The `assists.rollup` object holds `redeems` and `resets` (credit redemptions, and those that reset the budget), `resumes` and `recovered_secs` (delivered auto-continues, and the parked time they recovered), `compacts`, `restores` and `restored_sessions` (room restores, and the agents they brought back), and `sweeps` and `reclaimed_bytes` (completed automatic gc sweeps, and the bytes they freed). Each event carries an `assist` type (`auto_continue`, `auto_compact`, `idle_compact`, `flip_compact`, `auto_redeem`, `auto_resume`, or `auto_gc`), its `at` time in UTC, and the fields of that type. What each assist is lives in [the assist log](../../internals/harness/loops.md#the-assist-log).
+The `assists.rollup` object holds `redeems` and `resets` (credit redemptions, and those that reset the budget), `resumes` and `recovered_secs` (delivered auto-continues, and the parked time they recovered), `compacts`, `keepalives` (delivered prompt-cache pings), `restores` and `restored_sessions` (room restores, and the agents they brought back), and `sweeps` and `reclaimed_bytes` (completed automatic gc sweeps, and the bytes they freed). Each event carries an `assist` type (`auto_continue`, `auto_compact`, `idle_compact`, `cache_keepalive`, `flip_compact`, `auto_redeem`, `auto_resume`, or `auto_gc`), its `at` time in UTC, and the fields of that type. What each assist is lives in [the assist log](../../internals/harness/loops.md#the-assist-log).
+
+The `Keepalive: N` category counts delivered pings. Each `cache_keepalive` event carries `kind`, `agent_id`, optional `label`, `idle_secs`, `waits`, `message_id`, `delivered`, and optional `error`. Failed attempts remain in the timeline without increasing the count.
 
 ## The assist timeline
 
@@ -139,6 +141,7 @@ assists (all) — Auto-continue: 110 (+77.0h) · Auto-compact: 340 · Auto-redee
 | Mark | Assist |
 | --- | --- |
 | `▶` | Auto-continue: a parked agent resumed, or `resume held` when delivery did not happen. |
+| `◷` | Cache keepalive: idle duration and pending-wait count, followed by agent, message, and delivery verdict. |
 | `⌁` | Compaction: before a delivery (`auto-compact`), after an idle gap (`idle compacted`), or at a team stage flip (`flip compaction`). `held` means it was not delivered. |
 | `↻` | Credit redemption for a provider account, with its outcome. |
 | `⟲` | Room restore after a crash or reboot, with the channels it brought back. |
