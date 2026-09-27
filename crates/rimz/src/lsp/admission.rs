@@ -8,33 +8,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Decision {
-    Admit,
-    RefusedOptional,
-    WaitForRequired,
-}
-
-pub fn decide(
-    available: u64,
-    committed: u64,
-    estimate: u64,
-    reserve: u64,
-    policy: LspPolicy,
-) -> Decision {
-    if committed
-        .checked_add(estimate)
-        .and_then(|used| used.checked_add(reserve))
-        .is_some_and(|needed| needed <= available)
-    {
-        return Decision::Admit;
-    }
-    match policy {
-        LspPolicy::Optional => Decision::RefusedOptional,
-        LspPolicy::Required => Decision::WaitForRequired,
-    }
-}
-
 pub fn reserve_bytes(total: u64, percent: u8, minimum: u64) -> u64 {
     ((u128::from(total) * u128::from(percent) / 100).min(u128::from(u64::MAX)) as u64).max(minimum)
 }
@@ -68,6 +41,42 @@ pub struct Shortfall {
     pub committed_bytes: u64,
     pub reserve_bytes: u64,
     pub holders: Vec<Holder>,
+}
+
+impl Shortfall {
+    pub fn fits(&self) -> bool {
+        self.committed_bytes
+            .checked_add(self.estimate_bytes)
+            .and_then(|used| used.checked_add(self.reserve_bytes))
+            .is_some_and(|needed| needed <= self.available_bytes)
+    }
+
+    pub fn free_bytes(&self) -> u64 {
+        self.available_bytes
+            .saturating_sub(self.committed_bytes)
+            .saturating_sub(self.reserve_bytes)
+    }
+}
+
+fn measure_shortfall(
+    root: &Path,
+    server: &str,
+    estimate_bytes: u64,
+    entries: &[registry::Entry],
+    policy: &crate::config::LspConfig,
+    minimum: u64,
+) -> Result<Shortfall> {
+    let memory = memory::sample()?;
+    let (committed_bytes, holders) = committed_bytes(entries);
+    Ok(Shortfall {
+        root: root.to_owned(),
+        server: server.to_owned(),
+        estimate_bytes,
+        available_bytes: memory.available_bytes,
+        committed_bytes,
+        reserve_bytes: reserve_bytes(memory.total_bytes, policy.reserve_percent, minimum),
+        holders,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -170,7 +179,7 @@ enum RequiredDecision {
 }
 
 fn required_decision(
-    memory: Decision,
+    fits: bool,
     position: usize,
     elapsed: Duration,
     timeout: Duration,
@@ -178,18 +187,11 @@ fn required_decision(
     if elapsed >= timeout {
         return RequiredDecision::Timeout;
     }
-    if memory == Decision::Admit && position == 1 {
+    if fits && position == 1 {
         RequiredDecision::Admit
     } else {
         RequiredDecision::Wait
     }
-}
-
-fn queue_timeout(wait_timeout: &str, shortfall: &Shortfall) -> LspErr {
-    LspErr::QueueTimeout(Box::new(QueueTimeout {
-        wait_timeout: wait_timeout.to_owned(),
-        shortfall: shortfall.clone(),
-    }))
 }
 
 #[derive(Debug)]
@@ -221,17 +223,13 @@ impl std::fmt::Display for QueueTimeout {
         } else {
             format!(", held by {holders}")
         };
-        let free = shortfall
-            .available_bytes
-            .saturating_sub(shortfall.committed_bytes)
-            .saturating_sub(shortfall.reserve_bytes);
         write!(
             formatter,
             "language server {} is required but memory stayed short for {}: needs {}, {} free{held_by}; stop one with rimz lsp stop, or lower [lsp] reserve-percent",
             shortfall.server,
             self.wait_timeout,
             decimal_bytes(shortfall.estimate_bytes),
-            decimal_bytes(free)
+            decimal_bytes(shortfall.free_bytes())
         )
     }
 }
@@ -345,30 +343,18 @@ pub(super) fn admit_query(
     .into_iter();
     loop {
         let entries = registry::read_entries()?;
-        let memory = memory::sample()?;
-        let (committed_bytes, holders) = committed_bytes(&entries);
-        let reserve_bytes =
-            reserve_bytes(memory.total_bytes, request.policy.reserve_percent, minimum);
-        if decide(
-            memory.available_bytes,
-            committed_bytes,
+        let shortfall = measure_shortfall(
+            &request.root,
+            &request.server,
             estimate_bytes,
-            reserve_bytes,
-            LspPolicy::Optional,
-        ) == Decision::Admit
-        {
+            &entries,
+            &request.policy,
+            minimum,
+        )?;
+        if shortfall.fits() {
             return Ok(None);
         }
         let Some(victim) = candidates.next() else {
-            let shortfall = Shortfall {
-                root: request.root.clone(),
-                server: request.server.clone(),
-                estimate_bytes,
-                available_bytes: memory.available_bytes,
-                committed_bytes,
-                reserve_bytes,
-                holders,
-            };
             record_shortfall("refused", &shortfall)?;
             return Ok(Some(shortfall));
         };
@@ -396,7 +382,7 @@ pub(super) fn admit_query(
                 server: victim.server,
                 event: "evicted".into(),
                 details: serde_json::json!({"reason": registry::StopReason::Evicted, "peak_rss_kb": victim.peak_rss_kb,
-                    "free_before_bytes": memory.available_bytes, "free_after_bytes": memory::sample()?.available_bytes,
+                    "free_before_bytes": shortfall.available_bytes, "free_after_bytes": memory::sample()?.available_bytes,
                     "victim_rss_kb": rss, "for": {"root": request.root, "server": request.server}}),
             });
         }
@@ -422,7 +408,7 @@ fn committed_bytes(entries: &[registry::Entry]) -> (u64, Vec<Holder>) {
             .server_pid
             .and_then(crate::proc::tree_totals)
             .map_or(0, |totals| totals.rss_kb.saturating_mul(1024));
-        committed = committed.saturating_add(committed_growth(entry.estimate_bytes, rss_bytes));
+        committed = committed.saturating_add(entry.estimate_bytes.saturating_sub(rss_bytes));
         holders.push(Holder {
             root: entry.root.clone(),
             server: entry.server.clone(),
@@ -430,10 +416,6 @@ fn committed_bytes(entries: &[registry::Entry]) -> (u64, Vec<Holder>) {
         });
     }
     (committed, holders)
-}
-
-fn committed_growth(estimate: u64, rss: u64) -> u64 {
-    estimate.saturating_sub(rss)
 }
 
 fn validate_options(server: &str, config: &crate::config::LspServerConfig) -> Result<()> {
@@ -595,37 +577,29 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             continue;
         }
         if config.policy == LspPolicy::Required {
-            let memory = memory::sample()?;
-            let (committed_bytes, holders) = committed_bytes(&entries);
-            let reserve_bytes =
-                reserve_bytes(memory.total_bytes, request.policy.reserve_percent, minimum);
-            let shortfall = Shortfall {
-                root: root.clone(),
-                server: server.clone(),
+            let shortfall = measure_shortfall(
+                &root,
+                server,
                 estimate_bytes,
-                available_bytes: memory.available_bytes,
-                committed_bytes,
-                reserve_bytes,
-                holders,
-            };
-            let decision = decide(
-                memory.available_bytes,
-                committed_bytes,
-                estimate_bytes,
-                reserve_bytes,
-                config.policy,
-            );
-            if decision != Decision::Admit || !queue_paths()?.is_empty() {
+                &entries,
+                request.policy,
+                minimum,
+            )?;
+            let fits = shortfall.fits();
+            if !fits || !queue_paths()?.is_empty() {
                 let ticket = enqueue(required_need, queue)?;
                 let position = queue_paths()?
                     .iter()
                     .position(|path| path == &ticket.path)
                     .map_or(1, |position| position + 1);
                 let required =
-                    required_decision(decision, position, ticket.started.elapsed(), wait_timeout);
+                    required_decision(fits, position, ticket.started.elapsed(), wait_timeout);
                 if required == RequiredDecision::Timeout {
                     record_shortfall("queue_timeout", &shortfall)?;
-                    return Err(queue_timeout(&config.wait_timeout, &shortfall));
+                    return Err(LspErr::QueueTimeout(Box::new(QueueTimeout {
+                        wait_timeout: config.wait_timeout.clone(),
+                        shortfall,
+                    })));
                 }
                 if required == RequiredDecision::Wait {
                     result.wait_for_required.push(Wait {
@@ -934,20 +908,20 @@ mod tests {
         let limit = Duration::from_secs(20);
         for position in [1, 2] {
             assert_eq!(
-                required_decision(Decision::WaitForRequired, position, Duration::ZERO, limit),
+                required_decision(false, position, Duration::ZERO, limit),
                 RequiredDecision::Wait
             );
         }
         assert_eq!(
-            required_decision(Decision::Admit, 1, Duration::from_secs(5), limit),
+            required_decision(true, 1, Duration::from_secs(5), limit),
             RequiredDecision::Admit
         );
         assert_eq!(
-            required_decision(Decision::Admit, 2, Duration::from_secs(5), limit),
+            required_decision(true, 2, Duration::from_secs(5), limit),
             RequiredDecision::Wait
         );
         assert_eq!(
-            required_decision(Decision::Admit, 1, limit, limit),
+            required_decision(true, 1, limit, limit),
             RequiredDecision::Timeout
         );
         let shortfall = Shortfall {
@@ -964,7 +938,11 @@ mod tests {
             }],
         };
         assert_eq!(
-            queue_timeout("20s", &shortfall).to_string(),
+            LspErr::QueueTimeout(Box::new(QueueTimeout {
+                wait_timeout: "20s".into(),
+                shortfall: shortfall.clone(),
+            }))
+            .to_string(),
             "language server rust is required but memory stayed short for 20s: needs 8 KB, 2 KB free, held by /held rust (6 KB); stop one with rimz lsp stop, or lower [lsp] reserve-percent"
         );
         let record = serde_json::to_value(&shortfall).unwrap();
@@ -973,24 +951,42 @@ mod tests {
     }
 
     #[test]
-    fn memory_admission_preserves_reserve_and_distinguishes_policies() {
-        assert_eq!(committed_growth(8, 6), 2);
-        assert_eq!(committed_growth(8, 10), 0);
+    fn memory_admission_preserves_reserve_and_rejects_overflow() {
+        let pid = std::process::id();
+        let unmeasured: registry::Entry = serde_json::from_value(serde_json::json!({
+            "root": "/held", "server": "rust", "nonce": "n", "broker_pid": pid,
+            "broker_start_token": "t", "server_pid": null, "server_start_token": null,
+            "state": "ready", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 100,
+            "settings_hash": "s", "request_count": 0, "last_request_at_ms": null,
+            "peak_rss_kb": 0, "leases": []
+        }))
+        .unwrap();
+        let mut over_estimate = unmeasured.clone();
+        over_estimate.server_pid = Some(pid);
+        over_estimate.estimate_bytes = 1;
+        assert_eq!(committed_bytes(&[unmeasured, over_estimate]).0, 100);
         assert_eq!(reserve_bytes(100, 10, 8), 10);
         assert_eq!(reserve_bytes(100, 10, 20), 20);
         for (available, committed, estimate, reserve, expected) in [
-            (50, 10, 20, 20, Decision::Admit),
-            (49, 10, 20, 20, Decision::RefusedOptional),
-            (1, 10, 20, 0, Decision::RefusedOptional),
+            (50, 10, 20, 20, true),
+            (49, 10, 20, 20, false),
+            (1, 10, 20, 0, false),
+            (1, 0, 2, 0, false),
+            (u64::MAX, u64::MAX, 1, 0, false),
         ] {
             assert_eq!(
-                decide(available, committed, estimate, reserve, LspPolicy::Optional),
+                Shortfall {
+                    root: "/new".into(),
+                    server: "rust".into(),
+                    available_bytes: available,
+                    committed_bytes: committed,
+                    estimate_bytes: estimate,
+                    reserve_bytes: reserve,
+                    holders: Vec::new(),
+                }
+                .fits(),
                 expected
             );
         }
-        assert_eq!(
-            decide(1, 0, 2, 0, LspPolicy::Required),
-            Decision::WaitForRequired
-        );
     }
 }

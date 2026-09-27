@@ -1,7 +1,7 @@
 //! Pre-pane admission and required-server waits in the launcher's terminal.
 
 use anyhow::Result;
-use rimz::lsp::admission::{self, AdmissionRequest, Shortfall, Wait, WaitQueue};
+use rimz::lsp::admission::{self, AdmissionRequest, Wait, WaitQueue};
 use rimz::utils::size::decimal_bytes as bytes;
 use std::io::Write;
 use std::path::Path;
@@ -75,16 +75,9 @@ pub(super) fn write_wait(wait: &Wait) -> Result<()> {
         "rimz: waiting to start language server {}: needs {}, {} free; position {} in the queue; giving up in {}",
         wait.shortfall.server,
         bytes(wait.shortfall.estimate_bytes),
-        bytes(free(&wait.shortfall)),
+        bytes(wait.shortfall.free_bytes()),
         wait.position,
         rimz::utils::time::format_duration_compact(wait.remaining)
     )?;
     Ok(())
-}
-
-fn free(shortfall: &Shortfall) -> u64 {
-    shortfall
-        .available_bytes
-        .saturating_sub(shortfall.committed_bytes)
-        .saturating_sub(shortfall.reserve_bytes)
 }
