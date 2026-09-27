@@ -463,7 +463,8 @@ path = "crates/rimz/src/store"
 # Room-local class and orphan-temp collectors expose the scoped maintenance seam.
 # Child token figures share their window-versus-total vocabulary with both renderers.
 # Shared PrStack and StackPr are carried by both PR links and sidebar groups.
-surface-budget = 328
+# append_signal moved from writer/signal.rs into writer.rs; atlas now counts the method it under-counted there (pass 27b); real visibility unchanged.
+surface-budget = 329
 
 [[module]]
 path = "crates/rimz/src/theme"
