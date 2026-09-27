@@ -199,8 +199,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "gate",
-        summary: "Run the fast pre-PR gate stack; --check verifies formatting instead of applying it.",
-        runs: "fmt --all (fix, or check-only under --check), invariants, docs-links, all-feature + install-host lint, doc, test (nextest -P gate)",
+        summary: "Run the fast pre-PR gate stack; --check verifies formatting instead of applying it, --keep-going runs every step and reports all failures.",
+        runs: "fmt --all (fix, or check-only under --check), invariants, conform, docs-links, all-feature + install-host lint, doc, test (nextest -P gate)",
     },
     TaskInfo {
         name: "checks",

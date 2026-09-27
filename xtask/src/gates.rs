@@ -87,6 +87,7 @@ const CARGO_PROGRESS_VERBS: &[&str] = &[
 ];
 const NEXTEST_PROGRESS_PREFIXES: &[&str] = &["PASS [", "START [", "SLOW [", "TRY [", "LEAK ["];
 const TRIMMED_OUTPUT_MAX_CHARS: usize = 12_000;
+const COULD_NOT_COMPILE: &str = "error: could not compile `";
 
 pub(crate) fn fmt(root: &Path) -> Result<()> {
     run(root, "cargo", ["fmt", "--all", "--", "--check"])
@@ -250,7 +251,7 @@ const COVERAGE_LCOV_PATH: &str = "target/ci/coverage/lcov.info";
 // standalone CI job (see `externals`). `semver` is advisory and gates nothing.
 type Gate = fn(&Path) -> Result<()>;
 
-type CompactGate = fn(&Path, &mut dyn FnMut(&str)) -> Result<GateResult>;
+type CompactGate<'a> = &'a dyn Fn(&Path, &mut dyn FnMut(&str)) -> Result<GateResult>;
 
 enum GateResult {
     Pass { note: Option<String> },
@@ -266,22 +267,37 @@ pub(crate) enum FmtMode {
     Check,
 }
 
+/// `keep_going` trades fail-fast for one complete report: every step runs, and
+/// the lint and test steps run past their own first failure.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct GateOptions {
+    fmt: FmtMode,
+    keep_going: bool,
+}
+
 pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
-    let mode = parse_gate_mode(args)?;
-    let fmt_step: CompactGate = match mode {
+    let options = parse_gate_options(args)?;
+    let invocation = gate_invocation(options);
+    let fmt_step = match options.fmt {
         FmtMode::Fix => gate_fmt_fix,
         FmtMode::Check => gate_fmt_check,
     };
-    let steps = [
-        ("fmt", fmt_step),
-        ("invariants", gate_invariants),
-        ("conform", gate_conform),
-        ("docs-links", gate_docs_links),
-        ("lint", gate_lint),
-        ("doc", gate_doc),
-        ("test", gate_test),
+    let lint_step =
+        |root: &Path, progress: &mut dyn FnMut(&str)| gate_lint(root, options.keep_going, progress);
+    let test_step =
+        |root: &Path, progress: &mut dyn FnMut(&str)| gate_test(root, options.keep_going, progress);
+    let steps: [(&str, CompactGate); 7] = [
+        ("fmt", &fmt_step),
+        ("invariants", &gate_invariants),
+        ("conform", &gate_conform),
+        ("docs-links", &gate_docs_links),
+        ("lint", &lint_step),
+        ("doc", &gate_doc),
+        ("test", &test_step),
     ];
     let total = steps.len();
+    let mut failed = Vec::new();
+    let mut first_compile_failure = None;
     for (index, (name, step)) in steps.into_iter().enumerate() {
         let base_label = format!("gate [{}/{}] {name}", index + 1, total);
         let spinner = Spinner::new(&base_label);
@@ -294,31 +310,77 @@ pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
         };
         let result = step(root, &mut progress);
         drop(spinner);
-        match result? {
-            GateResult::Pass { note } => report_gate_pass(name, note.as_deref()),
-            GateResult::Fail { detail } => {
-                report_gate_failure(name, &detail, gate_invocation(mode));
-                bail!("gate failed at {name}");
+        let detail = match result? {
+            GateResult::Pass { note } => {
+                report_gate_pass(name, note.as_deref());
+                continue;
             }
+            GateResult::Fail { detail } => detail,
+        };
+        if !options.keep_going {
+            report_gate_failure(name, &detail, &invocation);
+            bail!("gate failed at {name}");
         }
+        let compile_failed = could_not_compile(&detail);
+        let detail = collapse_compile_cascade(detail, first_compile_failure);
+        if compile_failed {
+            first_compile_failure.get_or_insert(name);
+        }
+        report_gate_failure(name, &detail, &invocation);
+        failed.push(name);
     }
-    report_gate_complete();
+    report_gate_complete(&failed);
+    if !failed.is_empty() {
+        bail!("gate failed at {}", failed.join(", "));
+    }
     Ok(())
 }
 
-fn parse_gate_mode(args: &[String]) -> Result<FmtMode> {
-    match args {
-        [] => Ok(FmtMode::Fix),
-        [flag] if flag == "--check" => Ok(FmtMode::Check),
-        _ => bail!("cargo xtask gate takes at most `--check`; run `cargo xtask gate --help`"),
+fn parse_gate_options(args: &[String]) -> Result<GateOptions> {
+    let mut options = GateOptions {
+        fmt: FmtMode::Fix,
+        keep_going: false,
+    };
+    for arg in args {
+        match arg.as_str() {
+            "--check" if options.fmt == FmtMode::Fix => options.fmt = FmtMode::Check,
+            "--keep-going" if !options.keep_going => options.keep_going = true,
+            _ => bail!(
+                "cargo xtask gate takes `--check` and `--keep-going`, each at most once; run `cargo xtask gate --help`"
+            ),
+        }
+    }
+    Ok(options)
+}
+
+fn gate_invocation(options: GateOptions) -> String {
+    let mut invocation = "cargo xtask gate".to_owned();
+    if options.fmt == FmtMode::Check {
+        invocation.push_str(" --check");
+    }
+    if options.keep_going {
+        invocation.push_str(" --keep-going");
+    }
+    invocation
+}
+
+/// Under `--keep-going`, a later step that fails because the workspace does
+/// not compile repeats errors an earlier step already reported; one pointer
+/// line replaces them. Rustdoc's own failures say `could not document`, so a
+/// doc failure keeps its detail.
+fn collapse_compile_cascade(detail: String, first_compile_failure: Option<&str>) -> String {
+    match first_compile_failure {
+        Some(earlier) if could_not_compile(&detail) => {
+            format!("blocked by compile errors (see {earlier})")
+        }
+        _ => detail,
     }
 }
 
-fn gate_invocation(mode: FmtMode) -> &'static str {
-    match mode {
-        FmtMode::Fix => "cargo xtask gate",
-        FmtMode::Check => "cargo xtask gate --check",
-    }
+fn could_not_compile(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim_start().starts_with(COULD_NOT_COMPILE))
 }
 
 fn gate_fmt_fix(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
@@ -348,14 +410,31 @@ fn gate_docs_links(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateR
     Ok(in_process_gate(|| docs_links(root)))
 }
 
-fn gate_lint(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+/// Under `keep_going`, every lint set runs and cargo's own `--keep-going`
+/// stops one crate's compile failure from hiding its workspace siblings'.
+fn gate_lint(root: &Path, keep_going: bool, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+    let mut failures = Vec::new();
     for args in LINT_ARG_SETS {
-        let result = captured_cargo_gate(root, args.iter().copied(), &[], &[], None, progress)?;
-        if matches!(result, GateResult::Fail { .. }) {
-            return Ok(result);
+        let mut args = args.to_vec();
+        if keep_going {
+            let cargo_flags_end = args.iter().position(|arg| *arg == "--");
+            args.insert(cargo_flags_end.unwrap_or(args.len()), "--keep-going");
         }
+        let result = captured_cargo_gate(root, args.iter().copied(), &[], &[], None, progress)?;
+        let GateResult::Fail { detail } = result else {
+            continue;
+        };
+        if !keep_going {
+            return Ok(GateResult::Fail { detail });
+        }
+        failures.push(format!("== cargo {} ==\n{detail}", args.join(" ")));
     }
-    Ok(GateResult::Pass { note: None })
+    if failures.is_empty() {
+        return Ok(GateResult::Pass { note: None });
+    }
+    Ok(GateResult::Fail {
+        detail: failures.join("\n\n"),
+    })
 }
 
 fn gate_doc(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
@@ -369,13 +448,14 @@ fn gate_doc(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     )
 }
 
-fn gate_test(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+fn gate_test(root: &Path, keep_going: bool, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     let sandbox = HostSandbox::for_tests(root)?;
     let env = sandbox.command_env();
     let removed = sandbox.removed_test_env();
+    let no_fail_fast = keep_going.then_some("--no-fail-fast");
     captured_cargo_gate(
         root,
-        GATE_TEST_ARGS.iter().copied(),
+        GATE_TEST_ARGS.iter().copied().chain(no_fail_fast),
         &env,
         &str_refs(&removed),
         Some(extract_test_summary),
@@ -634,7 +714,7 @@ fn report_failure(prefix: &str, name: &str, detail: &str, invocation: &str) {
 fn compiler_died_without_diagnostic(output: &str) -> bool {
     let mut compile_failures = output
         .lines()
-        .filter(|line| line.trim_start().starts_with("error: could not compile `"))
+        .filter(|line| line.trim_start().starts_with(COULD_NOT_COMPILE))
         .peekable();
     compile_failures.peek().is_some() && compile_failures.all(|line| !line.contains(" due to "))
 }
@@ -643,8 +723,12 @@ fn compiler_died_without_diagnostic(output: &str) -> bool {
     clippy::print_stderr,
     reason = "xtask prints compact gate completion to the operator's stderr"
 )]
-fn report_gate_complete() {
-    eprintln!("gate: pass");
+fn report_gate_complete(failed: &[&str]) {
+    if failed.is_empty() {
+        eprintln!("gate: pass");
+    } else {
+        eprintln!("gate: fail ({})", failed.join(", "));
+    }
 }
 
 fn failure_detail(output: &str) -> String {
@@ -1199,22 +1283,62 @@ mod tests {
     }
 
     #[test]
-    fn gate_defaults_to_fixing_and_check_only_verifies() {
-        assert_eq!(parse_gate_mode(&[]).unwrap(), FmtMode::Fix);
+    fn gate_defaults_to_fixing_and_failing_fast() {
+        let parse = |args: &[&str]| {
+            parse_gate_options(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        };
+        let options = |fmt, keep_going| GateOptions { fmt, keep_going };
+        assert_eq!(parse(&[]).unwrap(), options(FmtMode::Fix, false));
+        assert_eq!(parse(&["--check"]).unwrap(), options(FmtMode::Check, false));
         assert_eq!(
-            parse_gate_mode(&["--check".to_owned()]).unwrap(),
-            FmtMode::Check
+            parse(&["--keep-going"]).unwrap(),
+            options(FmtMode::Fix, true)
         );
-        let err = parse_gate_mode(&["--fix".to_owned()])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("takes at most `--check`"), "{err}");
+        for both in [["--check", "--keep-going"], ["--keep-going", "--check"]] {
+            assert_eq!(parse(&both).unwrap(), options(FmtMode::Check, true));
+        }
+        for rejected in [
+            &["--fix"][..],
+            &["--check", "--check"],
+            &["--keep-going", "--keep-going"],
+        ] {
+            let err = parse(rejected).unwrap_err().to_string();
+            assert!(err.contains("each at most once"), "{rejected:?}: {err}");
+        }
     }
 
     #[test]
     fn gate_failure_hint_repeats_the_invocation_that_ran() {
-        assert_eq!(gate_invocation(FmtMode::Fix), "cargo xtask gate");
-        assert_eq!(gate_invocation(FmtMode::Check), "cargo xtask gate --check");
+        let invocation = |fmt, keep_going| gate_invocation(GateOptions { fmt, keep_going });
+        assert_eq!(invocation(FmtMode::Fix, false), "cargo xtask gate");
+        assert_eq!(
+            invocation(FmtMode::Check, false),
+            "cargo xtask gate --check"
+        );
+        assert_eq!(
+            invocation(FmtMode::Check, true),
+            "cargo xtask gate --check --keep-going"
+        );
+    }
+
+    #[test]
+    fn keep_going_reports_a_compile_failure_once() {
+        let compile = "error[E0308]: mismatched types\nerror: could not compile `rimz` (lib) due to 1 previous error";
+        assert_eq!(
+            collapse_compile_cascade(compile.to_owned(), Some("lint")),
+            "blocked by compile errors (see lint)"
+        );
+        assert_eq!(collapse_compile_cascade(compile.to_owned(), None), compile);
+        let document = "error: could not document `rimz`";
+        assert_eq!(
+            collapse_compile_cascade(document.to_owned(), Some("lint")),
+            document
+        );
+        let test_failure = "FAIL [ 0.1s] rimz::a\nerror: test run failed";
+        assert_eq!(
+            collapse_compile_cascade(test_failure.to_owned(), Some("lint")),
+            test_failure
+        );
     }
 
     #[test]
