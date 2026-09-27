@@ -49,6 +49,12 @@ pub enum DeliveryAck<'a> {
     Compaction,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryAckMatch {
+    PromptCorrelated,
+    OldestSentBatch,
+}
+
 fn same_submitted_batch(first: &MessageRecord, candidate: &MessageRecord) -> bool {
     if first.message_id == candidate.message_id {
         return true;
@@ -712,6 +718,18 @@ impl Store {
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
+        self.confirm_delivered_for_card_with(card, ack, session_name, |_, _| {})
+    }
+
+    /// Observe the exact selection under the workspace lock, before the queue write. The callback must not acquire that lock again; enrichment errors belong to the caller and must not fail acknowledgment.
+    #[must_use = "durability barrier; check the result"]
+    pub fn confirm_delivered_for_card_with(
+        &self,
+        card: AgentCardRef<'_>,
+        ack: DeliveryAck<'_>,
+        session_name: &str,
+        before_commit: impl FnOnce(&[MessageRecord], DeliveryAckMatch),
+    ) -> Result<Vec<MessageRecord>> {
         self.commit_queue(|queue| {
             let now = Timestamp::now();
             let oldest_sent_batch = |body| {
@@ -774,14 +792,29 @@ impl Store {
                             break;
                         }
                     }
-                    selected
+                    (selected.0, selected.1, DeliveryAckMatch::PromptCorrelated)
                 }
-                DeliveryAck::TurnStarted { .. } => (oldest_sent_batch(MessageBody::Prompt), None),
-                DeliveryAck::Compaction => (oldest_sent_batch(MessageBody::Command), None),
+                DeliveryAck::TurnStarted { .. } => (
+                    oldest_sent_batch(MessageBody::Prompt),
+                    None,
+                    DeliveryAckMatch::OldestSentBatch,
+                ),
+                DeliveryAck::Compaction => (
+                    oldest_sent_batch(MessageBody::Command),
+                    None,
+                    DeliveryAckMatch::OldestSentBatch,
+                ),
             };
             if selected.0.is_empty() {
                 return Ok(Vec::new());
             }
+            let records = queue
+                .live()
+                .iter()
+                .filter(|message| selected.0.contains(message.message_id.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            before_commit(&records, selected.2);
             let delivered = queue.apply_all(session_name, now, |message| {
                 if !selected.0.contains(message.message_id.as_str()) {
                     return MessageUpdate::Keep;

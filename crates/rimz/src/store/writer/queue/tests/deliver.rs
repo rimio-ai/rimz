@@ -523,23 +523,25 @@ fn assert_later_human_turn_does_not_confirm_launcher_steer(prompt: Option<&str>)
     });
     append_lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
 
+    let mut selection = None;
     let delivered = q
-        .confirm_delivered_for_card(
-            &sent[0].kind,
-            &sent[0].agent_id,
-            None,
+        .confirm_delivered_for_card_with(
+            AgentCardRef::new(&sent[0].kind, &sent[0].agent_id, None),
             DeliveryAck::TurnStarted { prompt },
             "session",
+            |_, selected| selection = Some(selected),
         )
         .unwrap();
 
     if prompt.is_some() {
+        assert_eq!(selection, None);
         assert!(
             delivered.is_empty(),
             "later human turn confirmed the mid-turn steer: {delivered:?}"
         );
         assert_eq!(q.live(), sent);
     } else {
+        assert_eq!(selection, Some(DeliveryAckMatch::OldestSentBatch));
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].message_id, sent[0].message_id);
         assert_eq!(delivered[0].status, MessageStatus::Delivered);
