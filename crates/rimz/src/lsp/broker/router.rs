@@ -30,7 +30,7 @@ pub(super) enum RouterEvent {
     Started(Arc<Transport>, Value, mpsc::Sender<()>),
     Ended(StopReason),
     Refused(Shortfall),
-    Close,
+    Close(StopReason),
 }
 
 struct Connection {
@@ -57,7 +57,8 @@ pub(super) fn run(shared: Arc<Shared>, events: mpsc::Receiver<RouterEvent>) {
         next_client: 0,
     };
     for event in events {
-        if matches!(event, RouterEvent::Close) {
+        if let RouterEvent::Close(reason) = event {
+            let stopped = serde_json::json!({"jsonrpc": "2.0", "method": protocol::STOPPED, "params": {"reason": reason}});
             for connection in std::mem::take(&mut router.connections).into_values() {
                 if connection
                     .stream
@@ -66,6 +67,8 @@ pub(super) fn run(shared: Arc<Shared>, events: mpsc::Receiver<RouterEvent>) {
                 {
                     let _ = connection.stream.shutdown(Shutdown::Both);
                 }
+                // The timeout bounds this send: a stalled writer fails and drops its queue.
+                let _ = connection.outbound.send(stopped.clone());
                 drop(connection.outbound);
                 let _ = connection.writer.join();
                 let _ = connection.stream.shutdown(Shutdown::Both);
@@ -162,7 +165,7 @@ impl Router {
                 Event::LifetimeEnded(reason)
             }
             RouterEvent::Refused(shortfall) => Event::Refused(shortfall),
-            RouterEvent::Close => return Ok(()),
+            RouterEvent::Close(_) => return Ok(()),
         };
         let actions = self.clients.event(event);
         self.actions(shared, actions)
@@ -331,5 +334,69 @@ impl Router {
             transport.notify(method, frame["params"].clone())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp::broker::{Lifecycle, Model, Readiness};
+    use std::io::BufReader;
+    use std::sync::{Condvar, Mutex};
+
+    #[test]
+    fn close_sends_every_editor_the_stop_reason_before_closing() {
+        let entry = serde_json::from_value(serde_json::json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "ready", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 0, "leases": []})).unwrap();
+        let (router, events) = mpsc::channel();
+        let shared = Arc::new(Shared {
+            router: router.clone(),
+            model: Mutex::new(Model {
+                entry,
+                lifecycle: Lifecycle::default(),
+                readiness: Readiness::default(),
+                transport: None,
+                request_phase: RequestPhase::Serving,
+                start_requested: false,
+                refusal_epoch: 0,
+                stop_epoch: 0,
+                refusal: None,
+                lifetime_peak_kb: 0,
+                dormant_ms: None,
+            }),
+            changed: Condvar::new(),
+            started: std::time::Instant::now(),
+            in_flight: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let running = std::thread::spawn({
+            let shared = shared.clone();
+            move || run(shared, events)
+        });
+        let (editor, stream) = UnixStream::pair().unwrap();
+        let pid = std::process::id();
+        let (reply, attached) = mpsc::channel();
+        router
+            .send(RouterEvent::Attach {
+                stream,
+                pid,
+                start_token: crate::proc::process_start_token(pid).unwrap(),
+                reply,
+            })
+            .unwrap();
+        attached.recv().unwrap().unwrap();
+        router
+            .send(RouterEvent::Close(StopReason::CheckoutRemoved))
+            .unwrap();
+        running.join().unwrap();
+        let mut editor = BufReader::new(editor);
+        let mut last = None;
+        while let Ok(frame) = protocol::read_frame(&mut editor) {
+            last = Some(frame);
+        }
+        assert_eq!(
+            last,
+            Some(
+                serde_json::json!({"jsonrpc": "2.0", "method": protocol::STOPPED, "params": {"reason": "checkout removed"}})
+            )
+        );
     }
 }

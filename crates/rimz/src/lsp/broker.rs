@@ -207,17 +207,21 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     let mut eager = request.eager;
     let mut lifetime_epoch = 0;
     let mut last_housekeeping = Instant::now();
-    loop {
+    let reason = loop {
         if last_housekeeping.elapsed() >= Duration::from_secs(5) {
             housekeeping(&shared, &request)?;
             last_housekeeping = Instant::now();
         }
         {
             let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-            if matches!(model.entry.state, State::Stopped { .. }) {
+            if let State::Stopped { reason, .. } = model.entry.state {
+                // A stop that landed between lifetimes has not been published yet.
                 model.request_phase = RequestPhase::Closing;
+                if let Err(error) = registry::publish(&model.entry) {
+                    tracing::warn!(%error, "cannot publish the terminal stop");
+                }
                 shared.changed.notify_all();
-                break;
+                break reason;
             }
             if !eager && !model.start_requested {
                 drop(model);
@@ -268,8 +272,8 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         record_stop(&model.entry, model.lifetime_peak_kb, model.dormant_ms);
         registry::publish(&model.entry)?;
         shared.changed.notify_all();
-    }
-    let _ = shared.router.send(router::RouterEvent::Close);
+    };
+    let _ = shared.router.send(router::RouterEvent::Close(reason));
     let _ = router.join();
     let _lock = registry::lock()?;
     drop(_socket);

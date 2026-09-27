@@ -117,6 +117,9 @@ pub enum QueryRequest {
     OutgoingCalls { item: CallHierarchyItem },
 }
 
+/// The broker's last frame on an editor connection after a terminal stop; attach consumes it.
+pub(super) const STOPPED: &str = "rimz/stopped";
+
 pub fn read_frame(reader: &mut impl BufRead) -> Result<Value> {
     let mut length = None;
     let mut header_bytes = 0;

@@ -166,11 +166,16 @@ fn respond(operation: Operation, shared: &Shared) -> Result<Value> {
         return query(shared, &method, params, wait_ms);
     }
     if let Operation::Stop { reason } = operation {
-        shared.stop(reason);
-        let model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
-        if model.request_phase == RequestPhase::Serving {
-            registry::publish(&model.entry)?;
-        }
+        // Publish under the stop's lock, before notifying: no waiter sees the stop ahead of the registry.
+        let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+        model.stop(reason);
+        let published = if model.request_phase == RequestPhase::Serving {
+            registry::publish(&model.entry)
+        } else {
+            Ok(())
+        };
+        shared.changed.notify_all();
+        published?;
         return Ok(json!({"ok": true}));
     }
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());

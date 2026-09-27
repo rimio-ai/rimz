@@ -176,7 +176,6 @@ pub fn bridge(
     let editor_exit = exit_forwarded.clone();
     let mut writer = stream.try_clone()?;
     let editor_done = send.clone();
-    let (root, server) = (entry.root.clone(), entry.server.clone());
     std::thread::Builder::new()
         .name("lsp-editor-input".into())
         .spawn(move || {
@@ -207,21 +206,7 @@ pub fn bridge(
         .name("lsp-editor-output".into())
         .spawn(move || {
             let mut output = output;
-            let mut buffer = [0; 64 * 1024];
-            let closed = loop {
-                let count = match reader.read(&mut buffer) {
-                    Ok(0) => break Outcome::BrokerClosed(closed_reason(&root, &server)),
-                    Ok(count) => count,
-                    Err(error) => break Outcome::BrokerClosed(error.to_string()),
-                };
-                // Stdout is line-buffered, but a JSON body need not end with a newline.
-                if let Err(error) = output
-                    .write_all(&buffer[..count])
-                    .and_then(|()| output.flush())
-                {
-                    break Outcome::EditorFailed(error.to_string());
-                }
-            };
+            let closed = relay(&mut reader, &mut output);
             let outcome = if *exit_forwarded.lock().unwrap_or_else(|e| e.into_inner()) {
                 Outcome::EditorClosed
             } else {
@@ -236,18 +221,33 @@ pub fn bridge(
     Ok(outcome)
 }
 
-/// A terminal stop publishes its reason before the broker closes editor connections.
-fn closed_reason(root: &Path, server: &str) -> String {
-    registry::read_entries()
-        .ok()
-        .into_iter()
-        .flatten()
-        .find(|entry| entry.root == root && entry.server == server)
-        .and_then(|entry| match entry.state {
-            registry::State::Stopped { reason, .. } => Some(format!("stopped: {reason}")),
-            _ => None,
-        })
-        .unwrap_or_else(|| "closed".into())
+/// Copies broker frames to the editor until one side fails. A terminal stop
+/// sends its reason as the connection's last frame, before the broker closes it.
+fn relay(reader: &mut impl BufRead, output: &mut impl Write) -> Outcome {
+    let mut stopped = None;
+    loop {
+        let frame = match reader.fill_buf() {
+            Ok([]) => {
+                return Outcome::BrokerClosed(
+                    stopped.map_or_else(|| "closed".into(), |reason| format!("stopped: {reason}")),
+                );
+            }
+            Ok(_) => match protocol::read_frame(reader) {
+                Ok(frame) => frame,
+                Err(error) => return Outcome::BrokerClosed(error.to_string()),
+            },
+            Err(error) => return Outcome::BrokerClosed(error.to_string()),
+        };
+        if frame["method"] == protocol::STOPPED {
+            stopped =
+                serde_json::from_value::<registry::StopReason>(frame["params"]["reason"].clone())
+                    .ok();
+            continue;
+        }
+        if let Err(error) = protocol::write_frame(output, &frame) {
+            return Outcome::EditorFailed(error.to_string());
+        }
+    }
 }
 
 fn editor_root(root: Option<&Path>, first: &Value, cwd: &Path) -> Result<PathBuf> {
@@ -357,6 +357,27 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn relay_reports_the_stop_reason_the_broker_sent_last() {
+        let reply = json!({"jsonrpc":"2.0","id":1,"result":null});
+        let mut broker = Vec::new();
+        protocol::write_frame(&mut broker, &reply).unwrap();
+        let mut output = Vec::new();
+        let closed = relay(&mut broker.clone().as_slice(), &mut output);
+        assert!(matches!(closed, Outcome::BrokerClosed(reason) if reason == "closed"));
+        assert_eq!(output, broker);
+
+        protocol::write_frame(&mut broker, &json!({"jsonrpc":"2.0","method":protocol::STOPPED,"params":{"reason":"checkout removed"}})).unwrap();
+        let mut output = Vec::new();
+        let closed = relay(&mut broker.as_slice(), &mut output);
+        assert!(
+            matches!(&closed, Outcome::BrokerClosed(reason) if reason == "stopped: checkout removed")
+        );
+        let mut forwarded = output.as_slice();
+        assert_eq!(protocol::read_frame(&mut forwarded).unwrap(), reply);
+        assert!(forwarded.is_empty(), "the stop frame stays with attach");
     }
 
     #[test]
